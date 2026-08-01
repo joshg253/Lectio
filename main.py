@@ -18182,8 +18182,14 @@ def read_offline_manifest(
     tag: str | None = Query(default=None),
     kept: str | None = Query(default=None),
     n: int = Query(default=20),
+    offset: int = Query(default=0),
 ):
-    """The URLs a device should precache to read the next *n* Inbox items offline.
+    """The URLs a device should precache to read the next *n* items offline.
+
+    *offset* is what makes "Save 20 more" work: the next press skips what the
+    last one already saved rather than re-fetching the same articles. It has to
+    slice the SAME ordering the browse list uses, or the second batch is not the
+    continuation of the first.
 
     The page cannot work this out for itself: the browse list holds hrefs, but an
     article also needs its images, and those live inside the rendered HTML.
@@ -18192,6 +18198,9 @@ def read_offline_manifest(
     "cache the Inbox" on a 9,979-item backlog is not a request anyone means.
     """
     n = max(1, min(int(n), 50))
+    # Bounded like n is: an unbounded offset is a way to ask the server to walk a
+    # 24,000-item backlog one press at a time.
+    _offset = max(0, min(int(offset), 500))
     is_all = kept == "all"
     tag_val = normalize_tag_value(tag)
     # The save set must be exactly what the node LISTS, or you precache a
@@ -18211,8 +18220,8 @@ def read_offline_manifest(
         # date. Everywhere else most items were never starred, so that order put
         # exactly the articles a folder is full of at the very back of the save.
         tag=tag_val, sort_by=("starred" if _is_inbox else "post"),
-        sort_dir="desc", search_query=None, archived=False, limit=n,
-    )[:n]
+        sort_dir="desc", search_query=None, archived=False, limit=n + _offset,
+    )[_offset:_offset + n]
 
     urls: list[str] = []
     for it in items:
