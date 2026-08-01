@@ -1,13 +1,15 @@
-/* Offline probe UI — EXPERIMENT (2026-07-29), not committed.
+/* Save articles to read without a connection.
  *
- * Answers, on the actual device, the questions a capability table cannot:
- *   1. does a service worker REGISTER in this WebView at all;
- *   2. does precaching succeed, and how much quota is there;
- *   3. does the saved hyperlink still open with WiFi off — the real test, and
- *      the one that matters, because the Supernote browser has no launcher.
+ * Began as a probe (2026-07-29) asking whether a service worker would register
+ * at all in the Supernote's WebView. It does, and precaching works, so the copy
+ * here reads as a feature's rather than an experiment's — it no longer tells the
+ * reader to go and test it. It still reports failure loudly, and still states
+ * articles separately from images, because the two are not equally important:
+ * images failing is a degraded read, articles failing is no feature.
  *
- * Reports failure loudly. A probe that quietly claims success is worse than no
- * probe, since the next step is a multi-day build resting on its answer.
+ * That device's browser has no launcher, so offline reading starts from a saved
+ * hyperlink — which is why the article page itself has to be cached, not just
+ * the pieces it is built from.
  */
 (function () {
   "use strict";
@@ -29,7 +31,7 @@
   if (!("caches" in window)) missing.push("caches");
   if (!("indexedDB" in window)) missing.push("indexedDB");
   if (missing.length) {
-    say("Not supported here: " + missing.join(", ") + ". Offline reading in this browser is out.");
+    say("This browser can't save articles offline (no " + missing.join(", ") + ").");
     btn.disabled = true;
     return;
   }
@@ -37,10 +39,10 @@
   let reg = null;
   navigator.serviceWorker.register("/sw.js", { scope: "/" }).then((r) => {
     reg = r;
-    say("Worker registered (scope " + r.scope + "). Tap to save the next 20 for offline.");
+    say("Ready — save the next " + OFFLINE_ARTICLE_COUNT + " articles to read without a connection.");
   }).catch((err) => {
     // The likeliest failure on a locked-down WebView, and the answer we came for.
-    say("Worker registration FAILED: " + err + " — offline reading in this browser is out.");
+    say("Couldn't set up offline saving: " + err);
     btn.disabled = true;
   });
 
@@ -57,7 +59,7 @@
     if (m.quota && m.quota.quota) {
       line += " · " + (m.quota.usage / 1048576).toFixed(1) + " MB used";
     }
-    line += ". Now turn WiFi off and reopen this page.";
+    line += ". Ready to read offline.";
     say(line);
     if (m.examples && m.examples.length) {
       const pre = document.getElementById("rm-offline-detail");
@@ -70,7 +72,7 @@
   btn.addEventListener("click", async () => {
     btn.disabled = true;
     btn.textContent = "Saving…";
-    say("Fetching the list…");
+    say("Working out what to save…");
     let data;
     try {
       const qs = new URLSearchParams(location.search);
@@ -83,7 +85,7 @@
       if (!resp.ok) throw new Error("HTTP " + resp.status);
       data = await resp.json();
     } catch (err) {
-      say("Could not get the list: " + err);
+      say("Couldn't fetch the article list: " + err);
       btn.disabled = false;
       btn.textContent = "Save 20 for offline";
       return;
@@ -107,11 +109,16 @@
     const urls = [location.pathname + location.search]
       .concat(domHrefs)
       .concat(imageUrls);
-    say("Saving " + urls.length + " file(s)…");
+    // Articles and images, not "files": one is what you asked for, the other
+    // is what it needs. 54 files means nothing to the person who tapped Save.
+    const _articles = urls.filter((u) => u.indexOf("/read") === 0).length;
+    const _images = urls.length - _articles;
+    say("Saving " + _articles + " article" + (_articles === 1 ? "" : "s") +
+        (_images ? " and " + _images + " image" + (_images === 1 ? "" : "s") : "") + "\u2026");
     const target = navigator.serviceWorker.controller ||
                    (reg && (reg.active || reg.installing || reg.waiting));
     if (!target) {
-      say("No active worker to save with — registration succeeded but nothing is controlling this page.");
+      say("Offline saving isn't ready on this page yet — reload and try again.");
       btn.disabled = false;
       btn.textContent = "Save 20 for offline";
       return;

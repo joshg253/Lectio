@@ -105,13 +105,12 @@
           {% endfor %}
         </div>
         {% endif %}
-        {# EXPERIMENT (uncommitted): offline probe. The Supernote browser has no
-           download handler at all, so a service worker is the only in-browser
-           route left — it can serve the NAVIGATION, which is what the saved
-           hyperlink needs when WiFi is off. #}
+        {# Offline saving. The Supernote browser has no download handler at all,
+           so a service worker is the only in-browser route left — it can serve
+           the NAVIGATION, which is what a saved hyperlink needs with WiFi off. #}
         <div class="rm-offline">
           <button type="button" id="rm-offline-btn" class="rm-sort-opt">Save 20 for offline</button>
-          <span id="rm-offline-status" class="rm-offline-status">Checking support…</span>
+          <span id="rm-offline-status" class="rm-offline-status">Checking…</span>
           <pre id="rm-offline-detail" class="rm-offline-detail" hidden></pre>
         </div>
 

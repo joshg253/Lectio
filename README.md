@@ -178,6 +178,12 @@ The short version:
   and the article at 40/60 rather than an even split, resizable by fingertip and
   remembered separately from the desktop's three-pane widths.
 - **Swipe left or right in an article** to move through the list.
+- **Save articles to read without a connection** — Read Mode's *Save 20 for
+  offline* precaches the next articles in the current node, images included, and
+  reports articles and images separately (images failing is a degraded read;
+  articles failing is no feature). Built for the Supernote, whose browser has no
+  download handler at all, so a service worker serving the navigation is the only
+  in-browser route left.
 - **Folders are a drawer on a phone** — a hamburger top-left slides the tree over
   the post list rather than replacing it, so you can see what you are leaving.
   Tapping the dimmed list, or picking a folder, closes it.
