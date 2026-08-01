@@ -405,3 +405,30 @@ def test_srcset_is_dropped_so_the_browser_cannot_route_around_the_proxy():
 
     assert "srcset" not in out
     assert "/api/img?u=https%3A%2F%2Fx.test%2Fa.jpg" in out
+
+
+def test_the_offline_save_set_matches_what_the_node_lists(configured):
+    """The manifest was pinned to starred-only, matching the Inbox. Saving a saved
+    *folder* then skipped every tagged-but-unstarred item — 11 of Booze's 67 — and
+    no amount of re-saving could fetch an article that was never in the set.
+
+    Asserted on the shared helper both paths use: only the Inbox narrows to stars.
+    """
+    root = 1
+    assert main._read_is_inbox_node(root, None, False, None, "saved", root)
+    assert not main._read_is_inbox_node(5, None, False, None, "saved", root)
+
+
+def test_dead_feed_beacons_are_dropped_rather_than_proxied():
+    """FeedBurner counters and share icons are invisible, and the service is dead —
+    the URLs answer 404 with an HTML error page. Proxying them turned each into a
+    fetch that could only fail, and /api/img rejecting the non-image response
+    logged a 422 per beacon per article view."""
+    for u in ("http://feeds.feedburner.com/~ff/Blog?d=yIl2AUoC8zA",
+              "http://feedproxy.google.com/~r/Blog/~4/abc"):
+        assert main._drop_feed_beacon_images(f'<img src="{u}">') == ""
+
+
+def test_dropping_beacons_leaves_real_images_alone():
+    tag = '<img src="https://3.bp.blogspot.com/x/Boil.JPG">'
+    assert main._drop_feed_beacon_images(tag) == tag

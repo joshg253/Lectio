@@ -17076,6 +17076,31 @@ def _reader_copy_is_richer(candidate: str, current: str) -> bool:
     return cand > cur
 
 
+_BEACON_IMG_RE = re.compile(
+    r"""<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["'][^>]*>""",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _drop_feed_beacon_images(content: str) -> str:
+    """Remove FeedBurner-style tracking beacons and share icons from a body.
+
+    They are invisible counters, and the services behind them are dead —
+    feeds.feedburner.com/~ff/... answers 404 with an HTML error page. Left in,
+    every one becomes a proxied fetch that can only ever fail: /api/img rejects
+    the non-image response with a 422, so a single article logged four of them on
+    every view. Nothing is lost by dropping them; they were never visible.
+    """
+    if "<img" not in content.lower():
+        return content
+
+    def _drop(m: re.Match) -> str:
+        src = html.unescape(m.group(1))
+        return "" if link_canonical.is_redirector_link(src) else m.group(0)
+
+    return _BEACON_IMG_RE.sub(_drop, content)
+
+
 _READER_IMG_SRC_RE = re.compile(r'(<img\b[^>]*?\bsrc\s*=\s*)(["\'])(.*?)\2', re.IGNORECASE | re.DOTALL)
 
 
@@ -17107,6 +17132,7 @@ def proxy_reader_images(content: str) -> str:
             return m.group(0)
         return f'{prefix}{quote_ch}/api/img?u={quote(src, safe="")}{quote_ch}'
 
+    content = _drop_feed_beacon_images(content)
     out = _READER_IMG_SRC_RE.sub(_rewrite, content)
     return re.sub(
         r'\s+(?:srcset|data-srcset|data-src|data-lazy-src)\s*=\s*(?:"[^"]*"|\'[^\']*\')',
@@ -18168,11 +18194,24 @@ def read_offline_manifest(
     n = max(1, min(int(n), 50))
     is_all = kept == "all"
     tag_val = normalize_tag_value(tag)
+    # The save set must be exactly what the node LISTS, or you precache a
+    # different set of articles than the one on screen. It was pinned to
+    # starred-only, matching the Inbox: saving a saved *folder* then skipped every
+    # tagged-but-unstarred item — 11 of Booze's 67 — and no amount of re-saving
+    # could fetch an article that was never in the set. Only the Inbox narrows to
+    # stars; see _load_backlog, which this mirrors.
+    with get_meta_connection() as _mconn:
+        _manifest_root_id = get_root_folder_id(_mconn)
+    _is_inbox = (not is_all) and _read_is_inbox_node(
+        folder_id, tag_val, False, None, "saved", _manifest_root_id)
     items = resolve_reader_backlog(
         folder_id=folder_id, list_feed_url=None, read_filter="all", star_only=True,
-        tag=tag_val, sort_by=("starred" if not (tag_val or is_all) else "post"),
+        kept_scope=("starred" if _is_inbox else "kept"),
+        # Order mirrors the browse list too: only the Inbox is ordered by star
+        # date. Everywhere else most items were never starred, so that order put
+        # exactly the articles a folder is full of at the very back of the save.
+        tag=tag_val, sort_by=("starred" if _is_inbox else "post"),
         sort_dir="desc", search_query=None, archived=False, limit=n,
-        kept_scope=("kept" if (tag_val or is_all) else "starred"),
     )[:n]
 
     urls: list[str] = []
