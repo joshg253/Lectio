@@ -5,6 +5,69 @@ this file only tracks what's still open.
 
 ## Now
 
+### Offline actions: apply locally, sync on reconnect — NEXT (2026-08-01)
+
+Offline *reading* works on the Supernote (verified: 21 articles, 26 images, 9 MB,
+read with WiFi off). Offline *acting* does not. Archive and Delete are ordinary
+POSTs; with no connection they simply fail. Josh's expectation, and the right
+design: "do what I said locally, then sync that info back to server upon online
+again."
+
+**Scope.** The three actions that matter while reading are Archive, Delete and
+star/unstar; tagging is a stretch goal (it needs the tag list, which is a bigger
+offline payload). Read/unread is already implicit in Archive.
+
+**Design.**
+
+1. **An outbox in IndexedDB**, not in the Cache API — these are mutations, and
+   they must survive a browser kill. One record per action:
+   `{id, ts, verb, feed_url, entry_id, payload}`. `id` is a client-generated
+   UUID so a replayed action is idempotent server-side.
+2. **Apply optimistically in the DOM** the moment it is tapped: the row leaves
+   the list, the glyph fills. The reader must not be able to tell whether it was
+   online, which is the whole point.
+3. **Replay on reconnect.** Background Sync where it exists, plus a flush on the
+   next page load, because Chrome 96 on the Supernote may not have Background
+   Sync and a feature that only works on modern browsers is no use on the device
+   this is for. Flush oldest-first, drop a record only on 2xx or a definitive
+   4xx (409/410 = the server already agrees).
+4. **Conflict rule: last-writer-wins, with the device losing ties it cannot
+   see.** If the server state already moved (archived elsewhere, entry deleted),
+   accept the server's version silently — the alternative is a merge dialogue on
+   an e-ink screen, which nobody wants. Log discarded actions so a surprising
+   loss is at least explicable.
+5. **A visible queue depth** — "3 changes waiting to sync" in the Read Mode
+   footer, cleared when it drains. Silent queues that never drain are how people
+   lose work without noticing.
+
+**Server side.** `POST /entries/discard` and the archive routes already exist and
+are the right granularity. What they need is idempotency: accept a client action
+id and no-op a repeat, so a flush that half-succeeded before the connection died
+can be retried whole. A small `synced_actions(action_id, applied_at)` table in
+the meta DB is enough; it needs the startup per-user migration (see
+`project_per_user_schema_migration` — adding a meta-DB table without it 500s
+existing tenants).
+
+**Adjacent, smaller, do it at the same time: make "Save 20 more" cache-aware.**
+The cursor currently skips by POSITION (`localStorage` offset per node), not by
+what is already stored. Press once for items 1–20, again for 21–40. If new
+articles arrive at the top between presses the list has shifted underneath the
+cursor, so a few get re-saved and a few get missed. Rare in a backlog folder,
+likely in the Inbox — where new stars land at the top, which is the entire point
+of the Inbox. The service worker can query its own cache, so the honest version
+is "save the next 20 I do not already have" rather than "the next 20 by index".
+
+**Existing pieces to build on:** `static/sw.js` (fetch handler, `_worthCaching`,
+precache message), `static/offline-probe.js` (button, cursor, status line),
+`GET /read/offline/manifest` (now takes `offset`), `archived_entries`,
+`POST /entries/discard`.
+
+**Device constraints, learned the hard way:** the Supernote browser has no
+download handler at all, so a service worker serving the NAVIGATION is the only
+in-browser route; it is Android 11 WebView / Chrome 96; and it caches `/static`,
+so anything shipped there needs a moving `?v=` (fixed 2026-08-01 — the version
+hashed a hand-kept list that omitted `offline-probe.js`).
+
 ### Phone layout revived (2026-07-31)
 
 Single-pane mode is back as a third mode in the main app's layout shell (≤720px).
