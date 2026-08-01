@@ -524,13 +524,24 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$")
 def _static_asset_version() -> str:
+    """Cache-buster for every ?v=-versioned static asset.
+
+    Hashes ALL css/js under static/ rather than a hand-kept list. The list went
+    stale exactly as you would expect: offline-probe.js and js/cleanup.js are
+    both served with ?v={{ static_asset_version }} and neither was in it, so
+    editing them left the version unchanged and browsers — and the service
+    worker, which caches /static by design — kept serving the previous file.
+    Deploying a fix and watching the old copy run is a bad way to spend an hour.
+
+    Sorted so the digest is stable across filesystems.
+    """
     try:
         _static = Path(__file__).parent / "static"
-        combined = b"".join(
-            (_static / name).read_bytes()
-            for name in ("style.css", "themes/dark.css", "media-player.js",
-                         "reader.css", "reader.js", "js/app.js")
+        paths = sorted(
+            p for p in _static.rglob("*")
+            if p.is_file() and p.suffix in (".css", ".js")
         )
+        combined = b"".join(p.read_bytes() for p in paths)
         return hashlib.md5(combined).hexdigest()[:10]
     except Exception:
         return "dev"
