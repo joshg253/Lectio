@@ -64,7 +64,8 @@ The short version:
   whole one). Oversized images are re-encoded rather than served whole: a 4K PNG
   is within the dimension cap yet can still weigh 12 MB, so anything past a byte
   budget becomes WebP — losslessly for logos, diagrams and line art, where lossy
-  compression would smear the edges.
+  compression would smear the edges. The budget lives in **Administration → Image
+  cache**, beside retention and max dimension.
 - **Automation** — highlight, mark-as-read, tag-filter, deduplicate,
   email-article, outbound-webhook, save-to-Instapaper, **save/star-article**
   (auto-saves into a pinned Saved **Inbox**), add-to-YouTube-playlist, and

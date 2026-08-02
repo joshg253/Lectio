@@ -46,6 +46,23 @@ _OG_IMAGE_RE_REVERSED = re.compile(
 )
 
 
+def _same_file_key(url: str) -> str:
+    """Host and path only, lowercased — "is this the same file?" without the
+    parts that vary while the file does not.
+
+    Two things defeat an exact string compare on the same image. A cache-busting
+    query (`?v=1785135600`) is one. The **scheme** is the other, and it is the
+    subtler one: a URL derived from an entry link inherits that link's scheme, so
+    a feed still publishing `http://` links yields an `http://` guess for an
+    image the site serves over `https://`.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return url
+    return f"{parsed.netloc.lower()}{parsed.path}"
+
+
 class LeadImagePlugin(Protocol):
     def should_bypass_cached_url(self, *, entry_link: str, cached_url: str) -> bool: ...
 
@@ -238,7 +255,18 @@ class GunnerkriggPlugin:
         preferred = self._comic_url(entry_link)
         if not preferred:
             return False
-        return cached_url != preferred
+        # Compare without the query string. Gunnerkrigg serves the panel with a
+        # `?v=<timestamp>` cache-buster, so an exact string compare called the
+        # very image this plugin derives "not the preferred one" and bypassed it.
+        # The article still showed it (that path does not consult the bypass)
+        # while the list thumbnail came back empty — a post with a picture and no
+        # thumbnail, which is how it was reported.
+        #
+        # Only the comparison ignores the query; the cached URL is still served
+        # as-is, cache-buster and all. Dropping it from the URL itself would be
+        # the ComicControl mistake in _promote_known_thumbnail: a rewritten URL
+        # can name a file that does not exist and get a 200 placeholder back.
+        return _same_file_key(cached_url) != _same_file_key(preferred)
 
     def extra_candidate_attrs(self, *, source_url: str) -> tuple[str, ...]:
         return ()

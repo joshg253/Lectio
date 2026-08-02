@@ -204,7 +204,35 @@ def _page_is_a_different_article(source_url: str, new_title: str, *,
         if old_title and looks_like_a_link_index(new_html):
             return not (_title_words(old_title) & title_words)
         return False
-    return not (slug_words & title_words)
+    if slug_words & title_words:
+        return False
+    # The title alone is too thin a reference. Plenty of URLs describe the
+    # article generically while the page titles itself something specific:
+    # whiskyadvocate.com/peated-whisky-cocktail-for-summer is headed "Charred
+    # Garden Smash" — the drink's name, sharing not one word with its own slug.
+    # Judging on the title alone refused that re-fetch outright, and refused the
+    # automatic one on tagging too.
+    #
+    # So consult the fetched BODY before refusing. This does not weaken the
+    # guard it was built for: a parked "Empowering Relationships" page does not
+    # mention ornaments, dingbats or decorative fonts either, and a section index
+    # does not discuss the article it replaced. Zero overlap across BOTH the
+    # title and the body is a much stronger signal of a genuinely different page
+    # than zero overlap with the title, which is routine.
+    return not (slug_words & _title_words(_visible_text(new_html)))
+
+
+def _visible_text(html_text: str) -> str:
+    """Tag-stripped text of a fetched page body, capped.
+
+    The cap is a cost guard, not a correctness one: a slug word that appears
+    nowhere in the first several thousand characters of an article is not what
+    "this page is about" looks like, and scanning a whole page for every
+    re-fetch buys nothing.
+    """
+    if not html_text:
+        return ""
+    return re.sub(r"<[^>]+>", " ", html_text[:20000])
 
 
 def _has_manual_tag(reader, feed_url: str, entry_id: str) -> bool:

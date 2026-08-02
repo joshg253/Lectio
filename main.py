@@ -355,6 +355,7 @@ SETTING_PORTRAIT_IMG_MAX_WIDTH = "portrait_img_max_width"
 SETTING_MAINTENANCE_HOUR = "maintenance_hour"
 SETTING_IMG_CACHE_DAYS = "img_cache_days"
 SETTING_IMG_CACHE_MAX_DIM = "img_cache_max_dim"
+SETTING_IMG_TARGET_BYTES = "img_target_bytes"
 SETTING_YT_API_KEY = "yt_api_key"
 SETTING_YT_CHANNEL_ID = "yt_channel_id"
 SETTING_YT_FOLDER_NAME = "yt_folder_name"
@@ -1630,6 +1631,25 @@ def get_img_cache_max_dim() -> int:
         except ValueError:
             pass
     return _ENV_IMG_CACHE_MAX_DIM
+
+
+def get_img_target_bytes() -> int:
+    """Byte budget for a cached image, above which it is re-encoded to WebP.
+
+    Separate from the max dimension because the two answer different questions:
+    an image can sit exactly at the dimension cap and still weigh 12 MB (a 4K
+    RGBA PNG does), and it is the bytes that make it slow to load.
+    0 = leave every image at whatever size it arrives.
+    """
+    val = get_instance_setting(SETTING_IMG_TARGET_BYTES, "")
+    if val:
+        try:
+            n = int(val)
+            if n >= 0:
+                return n
+        except ValueError:
+            pass
+    return _ENV_IMG_TARGET_BYTES
 
 # --- Auth config ---
 # When set, skip the login form and auto-authenticate as the admin on every request.
@@ -18638,6 +18658,7 @@ def administration_page(request: Request, msg: str | None = None, error: str | N
             "maintenance_last": maint_last,
             "img_cache_days": get_img_cache_days(),
             "img_cache_max_dim": get_img_cache_max_dim(),
+            "img_target_bytes": get_img_target_bytes(),
             # Shared OAuth apps (stored in admin's own app_settings).
             "shared_yt_oauth_client_id": get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_ID, ""),
             "shared_yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)),
@@ -23621,7 +23642,7 @@ async def save_all_settings(request: Request):
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
         SETTING_TZ_DISPLAY, SETTING_PORTRAIT_IMG_MAX_WIDTH, SETTING_MAINTENANCE_HOUR,
-        SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
+        SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
         SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL, SETTING_YT_QUOTA_CAP,
         SETTING_YT_OAUTH_CLIENT_ID, SETTING_YT_OAUTH_CLIENT_SECRET,
@@ -23656,7 +23677,7 @@ async def save_all_settings(request: Request):
     _ADMIN_ONLY = {
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_MAINTENANCE_HOUR,
-        SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
+        SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
@@ -26998,6 +27019,40 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
 CAPTURE_MODE_FULL = "full"
 
 
+# Hosts whose last automatic re-fetch failed, and when. Auto-refetch is a
+# side effect of tagging, so a host that refuses us must not be re-asked on every
+# tag: DeviantArt answers this server with 403 every time, and a tagging session
+# across a watchlist would be dozens of requests it has already declined. Manual
+# Re-fetch ignores this entirely — that is a person asking on purpose.
+_AUTOFETCH_HOST_COOLDOWN_S = 6 * 3600
+_autofetch_failed_hosts: dict[str, float] = {}
+_autofetch_hosts_lock = threading.Lock()
+
+
+def _autofetch_host_in_cooldown(host: str) -> bool:
+    if not host:
+        return False
+    with _autofetch_hosts_lock:
+        until = _autofetch_failed_hosts.get(host)
+        if until is None:
+            return False
+        if time.time() >= until:
+            del _autofetch_failed_hosts[host]
+            return False
+        return True
+
+
+def _mark_autofetch_host_failed(host: str) -> None:
+    if not host:
+        return
+    with _autofetch_hosts_lock:
+        _autofetch_failed_hosts[host] = time.time() + _AUTOFETCH_HOST_COOLDOWN_S
+        # Bounded: this is a politeness memo, not a record.
+        if len(_autofetch_failed_hosts) > 512:
+            for stale in sorted(_autofetch_failed_hosts, key=_autofetch_failed_hosts.get)[:128]:
+                del _autofetch_failed_hosts[stale]
+
+
 def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
     """Re-fetch a *stub* article in the background when it is starred or tagged.
 
@@ -27034,6 +27089,9 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
         stored = (entry.content[0].value if entry.content else None) or entry.summary or ""
         if _archived_copy_is_plausible(stored):
             return          # a real article already — leave it alone
+        host = urlparse(entry.link).netloc.lower()
+        if _autofetch_host_in_cooldown(host):
+            return          # this host already refused us; don't keep asking
     except Exception:  # noqa: BLE001 — never let this break the star/tag itself
         LOGGER.debug("auto-refetch precheck failed for %s/%s", feed_url, entry_id, exc_info=True)
         return
@@ -27043,9 +27101,17 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
     def _work() -> None:
         try:
             result = _refresh_captured_article_for_current_user(feed_url, entry_id)
-            LOGGER.info("[auto-refetch] %s/%s -> %s", feed_url, entry_id,
-                        "refreshed" if result.get("refreshed") else result.get("error", "no change"))
+            if result.get("ok"):
+                LOGGER.info("[auto-refetch] %s/%s -> refreshed", feed_url, entry_id)
+                return
+            # A failure here is about the SITE, not this article — blocked,
+            # unreachable, or serving something else entirely — so remember the
+            # host rather than rediscovering it on the next tag.
+            _mark_autofetch_host_failed(host)
+            LOGGER.info("[auto-refetch] %s/%s -> %s (pausing %s for %dh)", feed_url, entry_id,
+                        result.get("error", "no change"), host, _AUTOFETCH_HOST_COOLDOWN_S // 3600)
         except Exception:  # noqa: BLE001
+            _mark_autofetch_host_failed(host)
             LOGGER.warning("[auto-refetch] failed for %s/%s", feed_url, entry_id, exc_info=True)
 
     # Off-request so the star stays instant, and through the tenancy helper
@@ -29326,13 +29392,18 @@ async def api_img_proxy(u: str) -> Response:
     # hundreds of milliseconds. This is an async route, so running them inline
     # blocks the event loop — every other request on the worker waits behind one
     # large image.
+    # Both settings are read HERE, on the request path, so the threadpool call
+    # below is pure CPU with no DB access and no tenancy context to carry.
+    _max_dim = get_img_cache_max_dim()
+    _target_bytes = get_img_target_bytes()
+
     def _recompress(raw: bytes, ct: str) -> tuple[bytes, str]:
-        downscaled, new_ct = _maybe_downscale_image(raw, get_img_cache_max_dim())
+        downscaled, new_ct = _maybe_downscale_image(raw, _max_dim)
         if new_ct is not None:
             raw, ct = downscaled, new_ct
         # The dimension cap is not a size cap: an image already at max_dim comes
         # through untouched however many megabytes it weighs.
-        return _maybe_shrink_oversized_image(raw, ct, _ENV_IMG_TARGET_BYTES)
+        return _maybe_shrink_oversized_image(raw, ct, _target_bytes)
 
     body, content_type = await run_in_threadpool(_recompress, body, content_type)
     _img_cache_store(cache_key, body, content_type)

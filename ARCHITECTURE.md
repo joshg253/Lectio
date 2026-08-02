@@ -1556,7 +1556,13 @@ verified pixel-identical.
 
 Both re-encoders now run via `run_in_threadpool`. `/api/img` is an async route, so
 running a multi-hundred-millisecond bitmap decode inline blocks the event loop and
-every other request on the worker queues behind one large image.
+every other request on the worker queues behind one large image. Both settings are
+read *before* entering the pool, so the threaded call is pure CPU with no DB access
+and no tenancy context to carry.
+
+The budget is an instance setting (**Administration → Image cache**), with the env
+var as its default — the same shape as `LECTIO_IMG_CACHE_MAX_DIM` beside it, and
+admin-only for the same reason: it decides how every user's images are stored.
 
 ## Thumbnails must reuse the image proxy's bytes
 
@@ -1572,6 +1578,19 @@ The proxy cache is now consulted first, and — importantly — **before** the
 recently-failed short-circuit. Ordering it the other way preserves the bug: the
 host *is* failing, which is precisely when the cached bytes are the only way to
 get a thumbnail.
+
+**A related way to lose a thumbnail: comparing two references to the same file.**
+`GunnerkriggPlugin` derives the panel URL from the entry's `?p=` number and
+bypasses any *cached* URL that differs, so a stale site banner cannot win. It
+compared strings exactly, and lost twice over — the site serves the panel with a
+`?v=<timestamp>` cache-buster, and the derived URL inherits the **entry link's**
+scheme, which that feed still publishes as `http://` for an image served over
+`https://`. So the plugin declared the very image it derives "not preferred" and
+suppressed it. The article still rendered the picture, because that path does not
+consult the bypass, which is exactly how it presented: a comic post with an image
+and no thumbnail. Comparison is now on host+path (`_same_file_key`); the cached
+URL is still *served* untouched, cache-buster and all, since rewriting it is the
+ComicControl mistake `_promote_known_thumbnail` documents.
 
 ## Re-fetch on keep
 
@@ -1596,6 +1615,26 @@ stored feed content — so a truncated feed still showed its teaser there.
 
 It runs off-request through `_run_in_user_context`, since a bare thread would lose
 the tenancy user and fetch as the default one.
+
+**A refusing host is remembered.** Because this is a side effect of tagging rather
+than a request, a site that declines us must not be re-asked on every tag —
+DeviantArt answers this server with 403 every time, and tagging across a watchlist
+would be dozens of requests it has already refused. After a failed automatic
+re-fetch the host is paused for six hours (in memory; it is a politeness memo, not
+a record, and it is bounded). Manual Re-fetch ignores the pause entirely: that is
+a person asking on purpose.
+
+**The mismatch guard was too blunt, and it broke this feature on arrival.**
+`_page_is_a_different_article` compared the URL slug against the fetched *title*
+only, and refused on zero overlap. But a descriptive slug and a specific title
+disagree routinely: whiskyadvocate.com/peated-whisky-cocktail-for-summer is headed
+"Charred Garden Smash", the drink's name, sharing not one word with its own slug.
+That refused the manual re-fetch and the automatic one alike — one bug reported as
+two. The guard now also consults the fetched **body** before refusing, which does
+not weaken what it was built for: a parked "Empowering Relationships" page does not
+mention ornaments or dingbats either, and a section index does not discuss the
+article it replaced. Zero overlap across title *and* body is a far stronger signal
+than zero overlap with a title, which is normal.
 
 Separately, the right-click **Re-fetch** items gate on `data-post-kept`, and only
 starring kept that attribute current: tagging re-rendered the entry *pane* and
