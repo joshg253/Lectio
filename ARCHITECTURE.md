@@ -1541,6 +1541,16 @@ would appear twice. Only the *article* lead is dropped: the list thumbnail is
 resolved on its own path, so the post keeps it. "Don't show the lead image in the
 article" still outranks the author's layout — that is an explicit instruction.
 
+**⚠ `lead_image_url` after the dedup is a RENDERING decision, not a fact about
+the entry.** Every branch that sets it to `None` means "don't draw this twice" —
+the lead is already visible in the body, or the author floated it and it stays in
+the flow. `get_entry_detail` used to persist that `None` into `entry_lead_images`,
+which is where the **list thumbnail** reads from, so an article opened after the
+floated-opener change recorded itself as imageless and lost its thumb. 130 live
+entries before it was caught. The resolved value is now captured *before* the
+dedup (`_resolved_lead_for_cache`) and persisted instead. Anything added to that
+function has the same trap.
+
 ## Image bytes: the dimension cap is not a size cap
 
 `/api/img` downscales a cached image to `LECTIO_IMG_CACHE_MAX_DIM` (3840) on the
