@@ -546,3 +546,46 @@ def test_one_or_two_years_on_a_page_survive():
     # (the bare-numeric page rule still drops "1985" itself; the point here is that
     # the archive-run rule does not fire and take the real tag with it)
     assert "synthpop" in extract_page_tags(page)
+
+
+# ── tag_vocabulary: the source for the rule form's autocomplete ────────────
+
+
+def test_vocabulary_counts_entries_and_orders_by_use(service):
+    service.record_entry_tags(FEED, [
+        ("e1", ["Python", "AI"]),
+        ("e2", ["Python"]),
+        ("e3", ["Python", "Rust"]),
+    ])
+    assert service.tag_vocabulary([FEED]) == [("Python", 3), ("AI", 1), ("Rust", 1)]
+
+
+def test_vocabulary_merges_casing_variants(service):
+    """A publisher that switches "AI" to "ai" must not produce two suggestions
+    with half the count each — the filter matches case-insensitively."""
+    service.record_entry_tags(FEED, [("e1", ["AI"]), ("e2", ["ai"]), ("e3", ["Ai"])])
+    vocab = service.tag_vocabulary([FEED])
+    assert len(vocab) == 1
+    assert vocab[0][1] == 3
+
+
+def test_vocabulary_is_scoped_to_the_given_feeds(service):
+    other = "https://y.test/feed"
+    service.record_entry_tags(FEED, [("e1", ["Python"])])
+    service.record_entry_tags(other, [("e1", ["Rust"])])
+    assert service.tag_vocabulary([FEED]) == [("Python", 1)]
+    assert service.tag_vocabulary([other]) == [("Rust", 1)]
+    # None is global scope: every feed, which is what a global rule matches.
+    assert sorted(service.tag_vocabulary(None)) == [("Python", 1), ("Rust", 1)]
+
+
+def test_an_empty_feed_list_is_not_global(service):
+    """A 'feeds' rule whose picks resolved to nothing must suggest nothing —
+    falling through to every tag in the library would be the opposite of scope."""
+    service.record_entry_tags(FEED, [("e1", ["Python"])])
+    assert service.tag_vocabulary([]) == []
+
+
+def test_vocabulary_honors_the_limit(service):
+    service.record_entry_tags(FEED, [("e1", [f"t{i}" for i in range(20)])])
+    assert len(service.tag_vocabulary([FEED], limit=5)) == 5

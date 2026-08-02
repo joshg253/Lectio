@@ -1676,16 +1676,26 @@ cannot — it is fixed vocabulary, not per-feed frequency.
 
 ### 8. Small daily-friction items (cheap; slot between the bigger pieces)
 
-- **Tag autocomplete while typing** — auto-list matching existing tags during tag
-  entry. Build **one shared control** and use it for both normal per-entry tagging
-  and the rule form (see "Tag filtering for firehose feeds" in Later, which wants
-  the same thing fed from `entry_feed_tags`). Don't build two.
+- ~~**Tag autocomplete while typing**~~ — **DONE 2026-08-02.** One control,
+  `attachTagAutocomplete`, now serves both callers as the plan required. The
+  per-entry input was already on it; the rule form's tag_filter field now is
+  too, fed by `GET /rules/tag-vocabulary` (scope-resolved through the same
+  `resolve_rule_feed_urls` the rule uses, normalized through
+  `normalize_tag_value`, with per-tag entry counts). The two grammars differ
+  only where they genuinely differ — comma separation and the `-`/`+`/`++`
+  sign, which survives completion while the per-entry `#` is overwritten. See
+  ARCHITECTURE "Feed-provided tag suggestions" for why the control consumes
+  Enter with `stopImmediatePropagation`.
 - **Batch-align Uncategorized saved items into Feeds** — *promoted out of this
   list; see Now #4.* Measured 2026-07-21 and it turned out far higher-yield than
   a "small item."
 - **Set up the four verified firehose tag_filter rules** — config, not code; the
   engine already ships. Vocabularies verified 2026-07-21, see "Tag filtering for
   firehose feeds" in Later for the per-feed data and suggested rule shapes.
+  **The rule form now autocompletes the tag list from each feed's own captured
+  vocabulary with post counts (above), so this is now typing four short specs
+  against a visible list rather than against a guess.** Still Josh's call: which
+  tags to drop is a taste judgement, not a derivable one.
 
 ### 8b. Publish dates a re-fetch overwrote — FIXED + REPAIRED 2026-07-25
 
@@ -2341,9 +2351,10 @@ Remaining follow-ups:
   if include-list recall from the main feed's window is insufficient.
 - Multi-word tags are *stored* hyphenated (`windows-11`) but can be **typed
   naturally** in rule lists (comma-separated; see the parser note above) — the
-  earlier "must hyphenate" reading was wrong. Still worth a tag autocomplete in
-  the rule form fed from `entry_feed_tags`; see the broader "autocomplete while
-  typing" request now at Now #8 — build one shared control, not two.
+  earlier "must hyphenate" reading was wrong. ~~Still worth a tag autocomplete
+  in the rule form fed from `entry_feed_tags`~~ — **DONE 2026-08-02** (Now #8),
+  one shared control as required, and it fills in the hyphenated stored form
+  from whatever you type.
 
 ### New subscription missing from feed tree (but posts show)
 

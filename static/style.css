@@ -3294,6 +3294,20 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
 .tag-autocomplete-item:hover {
   background: var(--accent-soft, rgba(127, 127, 127, 0.18));
 }
+/* Entry count, shown only where the source supplies one (the rule form).
+   Right-aligned and dimmed: it decides which tag is worth filtering on, but
+   the tag name is still what you are reading. */
+.tag-autocomplete-item {
+  display: flex;
+  gap: 1.2rem;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.tag-autocomplete-count {
+  color: var(--muted, #888);
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+}
 
 .entry-tags-input {
   width: 12ch;

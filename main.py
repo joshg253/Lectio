@@ -21382,6 +21382,36 @@ def webhook_test_route(
     return JSONResponse({"ok": False, "error": err or "send failed"}, status_code=400)
 
 
+@app.get("/rules/tag-vocabulary")
+def rules_tag_vocabulary_route(
+    scope: str = Query("global"),
+    scope_id: str = Query(""),
+    limit: int = Query(400),
+):
+    """The feed-provided tags available to a tag_filter rule in this scope.
+
+    Feeds the rule form's autocomplete. A tag_filter spec can only ever match
+    what ingest captured into ``entry_feed_tags``, so typing blind against a
+    140-tag long tail (HackerNoon) or a hyphenated stored form (`windows-11`)
+    is guesswork; this turns it into a list.
+
+    Tags come back **normalized**, the same transform ``parse_tag_filter_spec``
+    applies to what the user types — so completing a suggestion produces a
+    token that matches by construction. Counts are entry counts, merged across
+    casing variants, and are the reason to pick one tag over another.
+    """
+    with get_meta_connection() as conn:
+        feed_urls = resolve_rule_feed_urls(conn, scope, scope_id)
+    raw = feed_tag_service.tag_vocabulary(feed_urls, limit=max(1, min(limit, 2000)))
+    merged: dict[str, int] = {}
+    for tag, count in raw:
+        normalized = normalize_tag_value(tag)
+        if normalized:
+            merged[normalized] = merged.get(normalized, 0) + count
+    tags = sorted(merged.items(), key=lambda kv: (-kv[1], kv[0]))
+    return JSONResponse({"tags": [{"tag": t, "count": n} for t, n in tags]})
+
+
 @app.get("/rules/dry-run")
 def rules_dry_run_route(
     type: str = Query("highlight"),
