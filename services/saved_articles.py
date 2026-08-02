@@ -393,12 +393,24 @@ def refresh_captured_article(
     such an article instead of updating it in place would resurrect the
     Uncategorized duplicate that filing removed.
 
-    Also enriches a **starred feed entry**: a feed whose content is text-only or
-    truncated (paizo, guitarplayer) leaves a starred article missing its images.
+    Also enriches an **ordinary feed entry**: a feed whose content is text-only or
+    truncated (paizo, guitarplayer) leaves an article missing its images.
     Re-fetching pulls the full source and *pins* it (entry_content_overrides), so
     the feed re-serving its thinner copy can't clobber it. A feed entry keeps its
-    chronological position (no date bump). Refuses an entry that is neither a
-    capture nor starred — a plain feed entry's content is the publisher's.
+    chronological position (no date bump).
+
+    **Available on any entry with a link** (2026-08-02). It used to require the
+    entry to be a capture, starred or tagged, on the reasoning that a plain feed
+    entry's content is the publisher's — but the practical effect was that fixing
+    a truncated post meant first tagging it, which files something you may not
+    want filed just to read it properly. The safety that gate was really standing
+    in for is the **pin**, and the pin is applied to every non-capture entry
+    regardless of whether anything keeps it (``pin_content=not is_capture``
+    below), so the refresh cannot silently undo the re-fetch either way.
+
+    The real protections are unconditional and stay: the mismatch guard refuses a
+    page that is plainly a different article, and the pre-replacement snapshot in
+    ``entry_content_edits`` makes any re-fetch one click to Revert.
     """
     result: dict = {
         "ok": False,
@@ -421,16 +433,13 @@ def refresh_captured_article(
         "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ? LIMIT 1",
         (feed_url, entry_id),
     ).fetchone() is not None
-    # KEPT, not starred. Tag-as-keep made a manual tag a keep signal everywhere
-    # else, and this gate never followed: a tagged-but-unstarred post shows in the
-    # Saved view with no way to re-fetch its content. 14,695 items on the live
-    # library. The pin below (pin_content for a feed entry) is what makes it safe
-    # — without that the refresh would silently undo the re-fetch, which is the
-    # reason an unkept feed entry is still refused.
+    # Kept-ness no longer gates the re-fetch itself — see the docstring. It still
+    # decides whether the result is worth ARCHIVING: the offline capture exists to
+    # preserve things you are keeping, and enqueuing one for an entry nothing keeps
+    # would leave a capture with no keep signal holding it, which the unstar path
+    # then has to clean up.
     is_tagged = _has_manual_tag(reader, feed_url, entry_id)
-    if not (is_capture or is_starred or is_tagged):
-        result["error"] = "Re-fetch is available for captured, starred or tagged articles."
-        return result
+    is_kept = is_capture or is_starred or is_tagged
 
     result["title"] = entry.title or entry_id
     source_url = normalize_article_url(str(getattr(entry, "link", "") or "") or entry_id)
@@ -527,7 +536,7 @@ def refresh_captured_article(
         result["error"] = "Could not store the re-fetched content."
         return result
 
-    if enqueue_archive is not None:
+    if enqueue_archive is not None and is_kept:
         try:
             enqueue_archive(feed_url, entry_id)
         except Exception as exc:  # noqa: BLE001

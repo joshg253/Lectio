@@ -121,7 +121,10 @@ The short version:
   article in place to repair a bad initial capture — available for any article
   Lectio captured, including ones already filed onto a real feed, and worth
   trying when a capture came out wrong, since a page that extracted badly once
-  often extracts correctly later (a re-fetch updates the article's **Received**
+  often extracts correctly later. It's available on **any post with a link**, not
+  just saved ones — a truncated feed post can be repaired without first tagging
+  it, and the re-fetched copy is pinned so the next refresh can't put the thin
+  version back (a re-fetch updates the article's **Received**
   date, never its **Pub** date — Pub stays the date it was published).
   For a page the reader mangles outright — a manual or docs-style page whose
   text is scattered rather than sitting in one article body — **Capture the

@@ -169,12 +169,15 @@ def test_a_pinned_title_survives_the_refresh(reader, meta_conn):
     assert "familiar story" in _stored_content(reader, REAL_FEED, ARTICLE)
 
 
-def test_refuses_an_unkept_feed_entry(reader, meta_conn):
-    """A publisher's own entry that Lectio is not keeping gets re-written by the
-    next feed refresh, so replacing its content would be silently undone.
+def test_refetches_an_unkept_feed_entry_and_pins_it(reader, meta_conn):
+    """Re-fetch is available on ANY entry with a link (2026-08-02).
 
-    Kept entries (starred OR tagged) are allowed, because those pin the result —
-    see test_tagged_feed_entry_is_refetched_and_pinned."""
+    It used to require the entry to be kept, on the reasoning that the next feed
+    refresh would silently undo the replacement. But the pin is what prevents
+    that, and the pin is applied to every non-capture entry regardless of whether
+    anything keeps it — so the gate was protecting against a hazard that had
+    already been handled. Requiring a tag first meant filing an article you may
+    not want filed just to read it properly."""
     reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
     reader.disable_feed_updates(REAL_FEED)
     reader.add_entry({
@@ -193,8 +196,36 @@ def test_refuses_an_unkept_feed_entry(reader, meta_conn):
 
     result = refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
 
-    assert result["ok"] is False
-    assert "captured" in result["error"]
+    assert result["ok"] is True
+    assert result["refreshed"] is True
+    # Pinned, or the next refresh would put the publisher's thin copy back.
+    assert meta_conn.execute(
+        "SELECT 1 FROM entry_content_overrides WHERE feed_url = ? AND entry_id = ?",
+        (REAL_FEED, ARTICLE),
+    ).fetchone() is not None
+
+
+def test_an_unkept_entry_is_not_archived_by_a_refetch(reader, meta_conn):
+    """The offline capture exists to preserve what you are KEEPING. Enqueuing one
+    for an entry nothing keeps would leave a capture with no keep signal holding
+    it — exactly the husk the unstar path then has to clean up."""
+    reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
+    reader.disable_feed_updates(REAL_FEED)
+    reader.add_entry({
+        "feed_url": REAL_FEED, "id": ARTICLE, "link": ARTICLE,
+        "title": "Publisher Entry", "published": datetime.now(timezone.utc),
+    })
+    db = reader._storage.get_db()
+    db.execute("UPDATE entries SET added_by = 'feed' WHERE feed = ? AND id = ?", (REAL_FEED, ARTICLE))
+    db.commit()
+
+    archived: list[tuple[str, str]] = []
+    result = refresh_captured_article(
+        reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok,
+        enqueue_archive=lambda f, e: archived.append((f, e)),
+    )
+    assert result["ok"] is True
+    assert archived == [], "an unkept entry must not be queued for offline capture"
 
 
 def _add_starred_feed_entry(reader, meta_conn, *, published=None):

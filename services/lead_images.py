@@ -206,7 +206,25 @@ class LeadImageService:
     _PLACEHOLDER_URL_PATTERNS = re.compile(
         # "blank.<ext>" covers the WordPress.com placeholder (s0.wp.com/i/blank.jpg)
         # that ships as the og:image on image-less posts — a 200x200 white box.
-        r"(?:grey-placeholder|image-unavailable|placeholder(?:[._-]|$)|no-image(?:[._-]|$)|fallback(?:[._-]|$)|bg_transparency|blank\.(?:gif|jpe?g|png|webp)|spinner(?:\.|$)|spacer(?:[0-9._-]|$))",
+        #
+        # Loading indicators belong here too, and they are the same failure in a
+        # different costume: a page with no picture of its own leaves the spinner
+        # as the best-scoring image on it. commandlinefu shipped
+        # /images/tag-loader.gif as the thumbnail for a shell one-liner.
+        # `spinner` was already listed but only as a whole filename, so
+        # `tag-loader.gif` and `ajax-loader.gif` both walked straight past it.
+        #
+        # The word must sit immediately before the EXTENSION, which is what
+        # separates a spinner from an article about one. Loading indicators are
+        # named for what they are, with any qualifier in front — `tag-loader.gif`,
+        # `ajax-loader.gif`, `preloader.png`. A photograph is named for its
+        # subject and carries on afterwards: `front-loader-review.jpg` ends in
+        # "review", and a bare substring rule rejected it.
+        r"(?:grey-placeholder|image-unavailable|placeholder(?:[._-]|$)|no-image(?:[._-]|$)"
+        r"|fallback(?:[._-]|$)|bg_transparency|blank\.(?:gif|jpe?g|png|webp)"
+        r"|(?:^|[/._-])(?:spinner|loader|loading|throbber|preloader|busy)"
+        r"(?=\.[a-z0-9]{2,5}(?:$|[?#]))"
+        r"|spacer(?:[0-9._-]|$))",
         re.IGNORECASE,
     )
     # Social/share icons. A post with no images of its own leaves the site's

@@ -2670,18 +2670,22 @@ const CAPTURE_MODE_FULL = 'full';
     const postEditLinkButton = document.getElementById('ctx-post-edit-link');
     const postRefetchButton = document.getElementById('ctx-post-refetch');
     const postRefetchFullButton = document.getElementById('ctx-post-refetch-full');
-    // Both re-fetch items appear under the same condition: the post has to be one
-    // Lectio is keeping, so there is a stored copy worth replacing. Read at call
-    // time, so it picks up whichever post the menu was opened on.
+    // Both re-fetch items appear on ANY post with a link. Read at call time, so
+    // it picks up whichever post the menu was opened on.
     //
-    // KEPT, not starred. This gated on contextPostSaved — the star flag alone —
-    // so a tagged-but-unstarred post appeared in the Saved view with no way to
-    // re-fetch its content. Tag-as-keep made a tag a keep signal everywhere else
-    // and this condition never followed; 14,695 items were affected.
+    // This used to require the post to be kept (a capture, starred or tagged).
+    // The effect was that repairing a truncated post meant tagging it first —
+    // filing something you may not want filed just to read it properly. The
+    // safety that gate stood in for is the server's content PIN, which is applied
+    // to every non-capture entry whether or not anything keeps it, so a re-fetch
+    // survives the next refresh either way. The mismatch guard and the Revert
+    // snapshot are likewise unconditional.
+    //
+    // A link is required because it is what gets fetched: without one the server
+    // can only answer "no usable source URL", and offering the item would be a
+    // menu entry that never works.
     const postCanRefetch = () =>
-      (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured
-       || contextPostSaved || contextPostKept)
-      && Boolean(contextPostFeedUrl && contextPostEntryId);
+      Boolean(contextPostFeedUrl && contextPostEntryId && contextPostLink);
     const postClearImgCacheButton = document.getElementById('ctx-post-clear-img-cache');
     const postReadForm = document.getElementById('context-post-read-form');
     const postRangeReadForm = document.getElementById('context-post-range-read-form');
@@ -2818,7 +2822,10 @@ const CAPTURE_MODE_FULL = 'full';
     // Whether the entry is starred — starred feed entries are re-fetchable too
     // (enrich a truncated/imageless feed post; the content is pinned).
     let contextPostSaved = false;
-    let contextPostKept = false;      // starred OR tagged — see postCanRefetch
+    // Starred OR tagged. No longer gates Re-fetch (that is available on any post
+    // with a link); kept here because it mirrors server-rendered row state that
+    // applyPostItemKeptState keeps honest after a tag change.
+    let contextPostKept = false;
     let contextPostLink = '';
     let contextPostTitle = '';
     let contextPostFolderId = null;
@@ -9061,9 +9068,28 @@ const CAPTURE_MODE_FULL = 'full';
         } catch { /* non-fatal */ }
       }
 
+      /* Find whatever actually scrolls above an element. The rules list itself
+       * has no overflow — the settings modal body is what moves — so preserving
+       * position means walking up to the real scroller rather than guessing. */
+      function hlScrollParent(el) {
+        for (let n = el && el.parentElement; n && n !== document.body; n = n.parentElement) {
+          const oy = getComputedStyle(n).overflowY;
+          if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight) return n;
+        }
+        return null;
+      }
+
       function hlRenderRules() {
         const listEl = document.getElementById('hl-rules-list');
         if (!listEl) return;
+        // Every re-render rebuilds the whole list, which drops the scroll
+        // position — so toggling a rule half way down threw you back to the top
+        // and you had to find your place again. Restored after the rebuild.
+        const scroller = hlScrollParent(listEl);
+        const keepScrollTop = scroller ? scroller.scrollTop : 0;
+        const restoreScroll = () => {
+          if (scroller && scroller.scrollTop !== keepScrollTop) scroller.scrollTop = keepScrollTop;
+        };
         hlLoadServerFeedTitles();  // async; re-renders once titles arrive
         listEl.querySelectorAll('.hl-rule-row, .hl-empty, .hl-rule-dryrun-panel, .hl-rule-hist-panel, .hl-section-label').forEach(el => el.remove());
         hlActiveDryRun = null;
@@ -9073,6 +9099,7 @@ const CAPTURE_MODE_FULL = 'full';
           empty.className = 'hl-empty';
           empty.textContent = 'No automation rules yet. Click "+ Add Rule" to create one.';
           listEl.appendChild(empty);
+          restoreScroll();
           return;
         }
         const TYPE_ORDER = ['highlight', 'mark_as_read', 'tag_filter', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist', 'instapaper', 'save_article', 'quire'];
@@ -9526,6 +9553,7 @@ const CAPTURE_MODE_FULL = 'full';
           listEl.appendChild(row);
           } // end sectionRules loop
         } // end TYPE_ORDER loop
+        restoreScroll();
       }
 
       function hlRenderDedupGroups(panel, groups, maxShown) {

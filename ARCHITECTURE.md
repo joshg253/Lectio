@@ -1658,6 +1658,19 @@ mention ornaments or dingbats either, and a section index does not discuss the
 article it replaced. Zero overlap across title *and* body is a far stronger signal
 than zero overlap with a title, which is normal.
 
+**Re-fetch is available on any entry with a link** (2026-08-02). It used to
+require a capture, star or tag, on the reasoning that the next feed refresh would
+undo the replacement — but the **pin** is what prevents that, and
+`refresh_captured_article` applies it to every non-capture entry
+(`pin_content=not is_capture`) regardless of whether anything keeps it. The gate
+was guarding a hazard already handled, and its practical effect was that repairing
+a truncated post meant tagging it first, filing something you may not want filed
+just to read it properly. The real protections are unconditional and stay: the
+mismatch guard, and the pre-replacement snapshot in `entry_content_edits` that
+makes any re-fetch one click to Revert. Kept-ness still decides one thing — the
+offline **archive** enqueue, since a capture with no keep signal holding it is
+precisely the husk the unstar path has to clean up.
+
 Separately, the right-click **Re-fetch** items gate on `data-post-kept`, and only
 starring kept that attribute current: tagging re-rendered the entry *pane* and
 left the list row — the thing actually right-clicked — stale until a reload. The

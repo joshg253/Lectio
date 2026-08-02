@@ -193,3 +193,62 @@ def test_the_env_value_is_the_fallback_not_the_authority():
     src = inspect.getsource(main.get_img_target_bytes)
     assert "get_instance_setting" in src
     assert "_ENV_IMG_TARGET_BYTES" in src
+
+
+# --- loading spinners are not lead images --------------------------------
+
+
+def test_a_loading_spinner_is_rejected():
+    """commandlinefu shipped /images/tag-loader.gif as the thumbnail for a shell
+    one-liner: the post has no picture of its own, so the spinner was the
+    best-scoring image on the page. `spinner` was already listed but only as a
+    whole filename, so every `*-loader.gif` walked past it."""
+    svc = main.lead_image_service
+    for url in ("https://www.commandlinefu.com/images/tag-loader.gif",
+                "https://x.com/img/ajax-loader.gif",
+                "https://x.com/i/spinner.svg",
+                "https://x.com/assets/loading.gif",
+                "https://x.com/assets/preloader.png",
+                "https://x.com/i/loader.gif?v=3"):
+        assert svc._is_image_url_acceptable(url, None, None) is False, url
+
+
+def test_a_real_photo_that_merely_contains_the_word_is_kept():
+    """The discriminator is position, not presence: a loading indicator is named
+    for what it is and the word sits against the extension, while a photograph is
+    named for its subject and carries on afterwards. A bare substring rule
+    rejected `front-loader-review.jpg`, which is a picture of a tractor."""
+    svc = main.lead_image_service
+    for url in ("https://x.com/2026/front-loader-review.jpg",
+                "https://x.com/photos/downloading-vinyl.jpg",
+                "https://x.com/img/uploader-guide.png",
+                "https://x.com/a/busy-street-market.jpg",
+                "https://x.com/media/cover-art.jpg"):
+        assert svc._is_image_url_acceptable(url, None, None) is True, url
+
+
+# --- re-fetch is available everywhere ------------------------------------
+
+
+def test_the_refetch_menu_gate_is_link_only():
+    """It used to require the post to be kept, so repairing a truncated article
+    meant tagging it first — filing something you may not want filed just to read
+    it. The pin that makes a re-fetch stick is applied whether or not anything
+    keeps the entry, so the gate was guarding an already-handled hazard."""
+    js = (main.BASE_DIR / "static" / "js" / "app.js").read_text()
+    fn = js[js.index("const postCanRefetch ="):]
+    fn = fn[:fn.index(";")]
+    assert "contextPostLink" in fn, "a link is required — it is what gets fetched"
+    for stale in ("contextPostSaved", "contextPostKept", "contextPostCaptured", "SAVED_FEED_URL"):
+        assert stale not in fn, f"{stale} should no longer gate re-fetch"
+
+
+def test_the_rules_list_keeps_its_scroll_position():
+    """Toggling a rule half way down the list rebuilt the whole list and threw
+    you back to the top. The rules list has no overflow of its own — the settings
+    panel is the scroller — so the fix has to walk up to the real one."""
+    js = (main.BASE_DIR / "static" / "js" / "app.js").read_text()
+    assert "function hlScrollParent" in js
+    fn = js[js.index("function hlRenderRules"):]
+    assert "const keepScrollTop" in fn[:1200]
+    assert fn.count("restoreScroll()") >= 2, "the empty-list early return needs it too"
