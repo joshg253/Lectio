@@ -9068,6 +9068,70 @@ const CAPTURE_MODE_FULL = 'full';
         } catch { /* non-fatal */ }
       }
 
+      // Rule types, in the order they are grouped and offered. Hoisted out of
+      // hlRenderRules so the type filter above the list can share them — two
+      // copies would drift the moment a rule type is added.
+      const HL_TYPE_ORDER = ['highlight', 'mark_as_read', 'tag_filter', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist', 'instapaper', 'save_article', 'quire'];
+      const HL_TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', tag_filter: 'Tag Filter', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook', youtube_playlist: 'Add to YT Playlist', instapaper: 'Save to Instapaper', save_article: 'Save/Star Article', quire: 'Add to Quire' };
+
+      /* Which rule type the list is filtered to, or '' for all.
+       *
+       * A flat list stopped scaling: 63 rules across 7 types, 37 of them tag
+       * filters, so finding one meant scrolling past everything else. Persisted
+       * because the type you were working in is almost always the one you come
+       * back to. */
+      const HL_TYPE_FILTER_KEY = 'lectio-rule-type-filter';
+      let hlTypeFilter = (() => {
+        try { return window.localStorage.getItem(HL_TYPE_FILTER_KEY) || ''; }
+        catch { return ''; }
+      })();
+
+      function hlSetTypeFilter(value) {
+        hlTypeFilter = value || '';
+        try { window.localStorage.setItem(HL_TYPE_FILTER_KEY, hlTypeFilter); } catch { /* private mode */ }
+        hlRenderRules();
+      }
+
+      /* The chip row above the list. Only types that actually have rules get a
+       * chip — offering all ten when six are empty is the clutter this is
+       * meant to remove — and each carries its count, so the row doubles as a
+       * summary of what the library is made of. */
+      function hlRenderTypeFilter() {
+        const bar = document.getElementById('hl-rule-type-filter');
+        if (!bar) return;
+        bar.textContent = '';
+        const counts = new Map();
+        for (const r of hlRules) {
+          const t = r.type || 'highlight';
+          counts.set(t, (counts.get(t) || 0) + 1);
+        }
+        // A filter pinned to a type whose last rule was just deleted would show
+        // an empty list with no way back, so fall back to All.
+        if (hlTypeFilter && !counts.has(hlTypeFilter)) hlTypeFilter = '';
+        if (hlRules.length === 0) return;
+
+        const mk = (value, label, count) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'hl-type-chip' + (hlTypeFilter === value ? ' hl-type-chip--active' : '');
+          b.setAttribute('role', 'tab');
+          b.setAttribute('aria-selected', hlTypeFilter === value ? 'true' : 'false');
+          b.innerHTML = '';
+          b.appendChild(document.createTextNode(label));
+          const c = document.createElement('span');
+          c.className = 'hl-type-chip-count';
+          c.textContent = String(count);
+          b.appendChild(c);
+          b.addEventListener('click', () => hlSetTypeFilter(value));
+          return b;
+        };
+        bar.appendChild(mk('', 'All', hlRules.length));
+        for (const t of HL_TYPE_ORDER) {
+          if (!counts.has(t)) continue;
+          bar.appendChild(mk(t, HL_TYPE_LABELS[t] || t, counts.get(t)));
+        }
+      }
+
       /* Find whatever actually scrolls above an element. The rules list itself
        * has no overflow — the settings modal body is what moves — so preserving
        * position means walking up to the real scroller rather than guessing. */
@@ -9091,6 +9155,7 @@ const CAPTURE_MODE_FULL = 'full';
           if (scroller && scroller.scrollTop !== keepScrollTop) scroller.scrollTop = keepScrollTop;
         };
         hlLoadServerFeedTitles();  // async; re-renders once titles arrive
+        hlRenderTypeFilter();
         listEl.querySelectorAll('.hl-rule-row, .hl-empty, .hl-rule-dryrun-panel, .hl-rule-hist-panel, .hl-section-label').forEach(el => el.remove());
         hlActiveDryRun = null;
         hlActiveHistPanel = null;
@@ -9102,15 +9167,21 @@ const CAPTURE_MODE_FULL = 'full';
           restoreScroll();
           return;
         }
-        const TYPE_ORDER = ['highlight', 'mark_as_read', 'tag_filter', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist', 'instapaper', 'save_article', 'quire'];
-        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', tag_filter: 'Tag Filter', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook', youtube_playlist: 'Add to YT Playlist', instapaper: 'Save to Instapaper', save_article: 'Save/Star Article', quire: 'Add to Quire' };
+        const TYPE_ORDER = HL_TYPE_ORDER;
+        const TYPE_LABELS = HL_TYPE_LABELS;
         for (const sectionType of TYPE_ORDER) {
+          // Filtered to one type: skip every other section entirely.
+          if (hlTypeFilter && sectionType !== hlTypeFilter) continue;
           const sectionRules = hlRules.map((r, i) => ({ r, i })).filter(({ r }) => (r.type || 'highlight') === sectionType);
           if (sectionRules.length === 0) continue;
-          const labelEl = document.createElement('div');
-          labelEl.className = 'hl-section-label';
-          labelEl.textContent = TYPE_LABELS[sectionType] || sectionType;
-          listEl.appendChild(labelEl);
+          // The section heading is the chip you just clicked — repeating it
+          // under the filter row says nothing.
+          if (!hlTypeFilter) {
+            const labelEl = document.createElement('div');
+            labelEl.className = 'hl-section-label';
+            labelEl.textContent = TYPE_LABELS[sectionType] || sectionType;
+            listEl.appendChild(labelEl);
+          }
           for (const { r: rule, i } of sectionRules) {
           const enabled = rule.enabled !== 0;
           const row = document.createElement('div');

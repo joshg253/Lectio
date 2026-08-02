@@ -70,7 +70,10 @@ The short version:
   email-article, outbound-webhook, save-to-Instapaper, **save/star-article**
   (auto-saves into a pinned Saved **Inbox**), add-to-YouTube-playlist, and
   add-to-Quire rules; scoped to all feeds, a folder, a feed, or a
-  multi-selected set; run history shows exactly what each run touched.
+  multi-selected set; run history shows exactly what each run touched. Once the
+  list grows past a screenful, a **type filter** above it narrows to one kind of
+  rule — chips for the types you actually use, each with its count — and the list
+  keeps its scroll position when you toggle a rule rather than jumping to the top.
 - **Keep vs. to-do** — **tagging a post keeps it forever**: it triggers a full
   offline capture (page + images) so tagged posts survive a dead feed, while
   **starring** is the lightweight "needs dealing with" marker. A post is kept

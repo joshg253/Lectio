@@ -252,3 +252,44 @@ def test_the_rules_list_keeps_its_scroll_position():
     fn = js[js.index("function hlRenderRules"):]
     assert "const keepScrollTop" in fn[:1200]
     assert fn.count("restoreScroll()") >= 2, "the empty-list early return needs it too"
+
+
+# --- rules are filterable by type ----------------------------------------
+
+
+def test_the_rule_type_list_has_one_definition():
+    """The filter row and the grouped list must offer the same types in the same
+    order; two copies would drift the moment a rule type is added."""
+    js = (main.BASE_DIR / "static" / "js" / "app.js").read_text()
+    assert js.count("const HL_TYPE_ORDER =") == 1
+    assert js.count("const HL_TYPE_LABELS =") == 1
+    assert "const TYPE_ORDER = HL_TYPE_ORDER" in js
+    assert "const TYPE_LABELS = HL_TYPE_LABELS" in js
+
+
+def test_only_types_with_rules_get_a_chip():
+    """Offering all ten when six are empty is the clutter this removes."""
+    js = (main.BASE_DIR / "static" / "js" / "app.js").read_text()
+    fn = js[js.index("function hlRenderTypeFilter"):]
+    fn = fn[:fn.index("\n      /*")]
+    assert "if (!counts.has(t)) continue;" in fn
+
+
+def test_a_filter_pinned_to_a_vanished_type_falls_back_to_all():
+    """Deleting the last rule of the filtered type would otherwise leave an empty
+    list with no visible way back."""
+    js = (main.BASE_DIR / "static" / "js" / "app.js").read_text()
+    fn = js[js.index("function hlRenderTypeFilter"):]
+    assert "if (hlTypeFilter && !counts.has(hlTypeFilter)) hlTypeFilter = '';" in fn[:1600]
+
+
+def test_the_chosen_type_persists():
+    """The type you were working in is almost always the one you come back to."""
+    js = (main.BASE_DIR / "static" / "js" / "app.js").read_text()
+    assert "lectio-rule-type-filter" in js
+    assert "localStorage.setItem(HL_TYPE_FILTER_KEY" in js
+
+
+def test_the_filter_row_exists_in_the_template():
+    tpl = (main.BASE_DIR / "templates" / "index.html").read_text()
+    assert 'id="hl-rule-type-filter"' in tpl

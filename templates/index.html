@@ -2456,6 +2456,10 @@
         </div>
         <div id="hl-tab-rules" class="hl-tab-panel">
           <p class="highlights-hint">Rules match article titles (or body) and trigger actions automatically. Matches are case-insensitive. Enable <strong>.*</strong> for regex.</p>
+          {# Filter the list to one rule type. Populated by hlRenderTypeFilter —
+             only types that actually have rules get a chip, so the row stays
+             short on a library that only uses three of them. #}
+          <div id="hl-rule-type-filter" class="hl-type-filter" role="tablist" aria-label="Filter rules by type"></div>
           <div id="hl-rules-list" class="hl-rules-list"></div>
           <button type="button" id="hl-add-rule-btn" class="hl-add-rule-btn">+ Add Rule</button>
         </div>
