@@ -1562,6 +1562,17 @@ source-fetch fills the tags in with no work from us.
 ⚠ Knock-on to check if Behance thumbnails ever look wrong: lead-image extraction
 uses the same source-page fetch, so it went blind on the same date.
 
+**Behance titles arrive mangled, and that is upstream too** (checked 2026-08-02).
+Titles render as `City Identity for Gy?r` and `Portrait Collection ? July 2026`;
+one is `?ONEFANS????????`. Those are literal `0x3F` bytes **in the feed FeedBurner
+serves** — verified against the raw bytes, and the feed declares `encoding="utf-8"`
+while containing them, so something upstream encoded non-ASCII with
+`errors="replace"` before we ever fetch it. Nothing to fix on our side, and no
+amount of re-parsing recovers characters that were destroyed at the source. The
+only remedies are a **Re-fetch content** per entry (the gallery page has the real
+title, when the JS wall lets us at it) or finding a non-FeedBurner Behance feed.
+Do not re-investigate this as an encoding bug in our parser.
+
 ### 7e. Batch re-fetch over a folder or feed — script + UI, 2026-07-30
 
 `scripts/refetch_scope.py`. Josh: "Needs to be gentle!" — so pacing is the design:

@@ -120,15 +120,15 @@ The short version:
   same-article-different-URL saves — it never pre-selects anything, and only
   **Check URLs** arms a copy for deletion, and only when that copy's link is
   provably dead. Titles are editable inline in the dialog (✎), for saved copies
-  whose title has drifted from the live post; **Re-fetch content** re-extracts a saved
-  article in place to repair a bad initial capture — available for any article
-  Lectio captured, including ones already filed onto a real feed, and worth
-  trying when a capture came out wrong, since a page that extracted badly once
-  often extracts correctly later. It's available on **any post with a link**, not
-  just saved ones — a truncated feed post can be repaired without first tagging
-  it, and the re-fetched copy is pinned so the next refresh can't put the thin
-  version back (a re-fetch updates the article's **Received**
-  date, never its **Pub** date — Pub stays the date it was published).
+  whose title has drifted from the live post; **Re-fetch content** re-extracts an
+  article in place, to repair a bad initial capture or to pull the full text of a
+  post whose feed only sent a teaser. It works on **any post with a link** —
+  captures (including ones already filed onto a real feed) and ordinary feed posts
+  alike, so a truncated article can be fixed without first tagging it — and the
+  result is pinned, so the next refresh can't put the thin version back. Worth
+  trying whenever a capture came out wrong, since a page that extracted badly once
+  often extracts correctly later. A re-fetch updates the article's **Received**
+  date, never its **Pub** date — Pub stays the date it was published.
   For a page the reader mangles outright — a manual or docs-style page whose
   text is scattered rather than sitting in one article body — **Capture the
   whole page** (a checkbox on Save Article, and **Re-fetch full page** in the
