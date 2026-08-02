@@ -2670,18 +2670,22 @@ const CAPTURE_MODE_FULL = 'full';
     const postEditLinkButton = document.getElementById('ctx-post-edit-link');
     const postRefetchButton = document.getElementById('ctx-post-refetch');
     const postRefetchFullButton = document.getElementById('ctx-post-refetch-full');
-    // Both re-fetch items appear under the same condition: the post has to be one
-    // Lectio is keeping, so there is a stored copy worth replacing. Read at call
-    // time, so it picks up whichever post the menu was opened on.
+    // Both re-fetch items appear on ANY post with a link. Read at call time, so
+    // it picks up whichever post the menu was opened on.
     //
-    // KEPT, not starred. This gated on contextPostSaved — the star flag alone —
-    // so a tagged-but-unstarred post appeared in the Saved view with no way to
-    // re-fetch its content. Tag-as-keep made a tag a keep signal everywhere else
-    // and this condition never followed; 14,695 items were affected.
+    // This used to require the post to be kept (a capture, starred or tagged).
+    // The effect was that repairing a truncated post meant tagging it first —
+    // filing something you may not want filed just to read it properly. The
+    // safety that gate stood in for is the server's content PIN, which is applied
+    // to every non-capture entry whether or not anything keeps it, so a re-fetch
+    // survives the next refresh either way. The mismatch guard and the Revert
+    // snapshot are likewise unconditional.
+    //
+    // A link is required because it is what gets fetched: without one the server
+    // can only answer "no usable source URL", and offering the item would be a
+    // menu entry that never works.
     const postCanRefetch = () =>
-      (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured
-       || contextPostSaved || contextPostKept)
-      && Boolean(contextPostFeedUrl && contextPostEntryId);
+      Boolean(contextPostFeedUrl && contextPostEntryId && contextPostLink);
     const postClearImgCacheButton = document.getElementById('ctx-post-clear-img-cache');
     const postReadForm = document.getElementById('context-post-read-form');
     const postRangeReadForm = document.getElementById('context-post-range-read-form');
@@ -2818,7 +2822,10 @@ const CAPTURE_MODE_FULL = 'full';
     // Whether the entry is starred — starred feed entries are re-fetchable too
     // (enrich a truncated/imageless feed post; the content is pinned).
     let contextPostSaved = false;
-    let contextPostKept = false;      // starred OR tagged — see postCanRefetch
+    // Starred OR tagged. No longer gates Re-fetch (that is available on any post
+    // with a link); kept here because it mirrors server-rendered row state that
+    // applyPostItemKeptState keeps honest after a tag change.
+    let contextPostKept = false;
     let contextPostLink = '';
     let contextPostTitle = '';
     let contextPostFolderId = null;
@@ -7815,6 +7822,39 @@ const CAPTURE_MODE_FULL = 'full';
       return true;
     }
 
+    /* Keep the LIST ROW's kept flag in step with a tag change.
+     *
+     * Kept = starred OR tagged, and the right-click menu's Re-fetch items gate
+     * on it (postCanRefetch). Starring already syncs its own attribute via
+     * applyPostItemSavedState, so Re-fetch appears the moment you star. Tagging
+     * only called loadEntryPaneWithoutFullRefresh, which re-renders the entry
+     * PANE — leaving data-post-kept stale on the row you actually right-click,
+     * so a freshly tagged post offered no Re-fetch until a full reload. The
+     * menu reads the attribute at open time, so writing it here is the fix.
+     */
+    function applyPostItemKeptState(feedUrl, entryId, hasTags) {
+      if (!feedUrl || !entryId) return;
+      const esc = (v) => (window.CSS && CSS.escape ? CSS.escape(v) : v);
+      const postItem = document.querySelector(
+        `.post-item[data-post-feed-url="${esc(feedUrl)}"][data-post-entry-id="${esc(entryId)}"]`
+      );
+      if (!postItem) return;
+      // OR the star back in: removing the last tag from a still-starred post
+      // must not un-keep it.
+      const kept = hasTags || postItem.getAttribute('data-post-saved') === '1';
+      postItem.setAttribute('data-post-kept', kept ? '1' : '0');
+    }
+
+    /* Read the entry the tag form is bound to, and sync the row from the
+     * server's reply. `data.tags` is authoritative — it is the normalized,
+     * capped set the server actually stored, not what was typed. */
+    function syncKeptFromTagResponse(form, data) {
+      if (!(form instanceof HTMLFormElement)) return;
+      const feedUrl = form.querySelector('input[name="feed_url"]')?.value || '';
+      const entryId = form.querySelector('input[name="entry_id"]')?.value || '';
+      applyPostItemKeptState(feedUrl, entryId, Array.isArray(data?.tags) && data.tags.length > 0);
+    }
+
     function applyEntryPaneSavedState(isSaved) {
       const entrySaveForm = document.querySelector('.entry-save-toggle-form');
       const entrySaveInput = entrySaveForm?.querySelector('input[name="saved"]');
@@ -9028,10 +9068,94 @@ const CAPTURE_MODE_FULL = 'full';
         } catch { /* non-fatal */ }
       }
 
+      // Rule types, in the order they are grouped and offered. Hoisted out of
+      // hlRenderRules so the type filter above the list can share them — two
+      // copies would drift the moment a rule type is added.
+      const HL_TYPE_ORDER = ['highlight', 'mark_as_read', 'tag_filter', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist', 'instapaper', 'save_article', 'quire'];
+      const HL_TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', tag_filter: 'Tag Filter', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook', youtube_playlist: 'Add to YT Playlist', instapaper: 'Save to Instapaper', save_article: 'Save/Star Article', quire: 'Add to Quire' };
+
+      /* Which rule type the list is filtered to, or '' for all.
+       *
+       * A flat list stopped scaling: 63 rules across 7 types, 37 of them tag
+       * filters, so finding one meant scrolling past everything else. Persisted
+       * because the type you were working in is almost always the one you come
+       * back to. */
+      const HL_TYPE_FILTER_KEY = 'lectio-rule-type-filter';
+      let hlTypeFilter = (() => {
+        try { return window.localStorage.getItem(HL_TYPE_FILTER_KEY) || ''; }
+        catch { return ''; }
+      })();
+
+      function hlSetTypeFilter(value) {
+        hlTypeFilter = value || '';
+        try { window.localStorage.setItem(HL_TYPE_FILTER_KEY, hlTypeFilter); } catch { /* private mode */ }
+        hlRenderRules();
+      }
+
+      /* The chip row above the list. Only types that actually have rules get a
+       * chip — offering all ten when six are empty is the clutter this is
+       * meant to remove — and each carries its count, so the row doubles as a
+       * summary of what the library is made of. */
+      function hlRenderTypeFilter() {
+        const bar = document.getElementById('hl-rule-type-filter');
+        if (!bar) return;
+        bar.textContent = '';
+        const counts = new Map();
+        for (const r of hlRules) {
+          const t = r.type || 'highlight';
+          counts.set(t, (counts.get(t) || 0) + 1);
+        }
+        // A filter pinned to a type whose last rule was just deleted would show
+        // an empty list with no way back, so fall back to All.
+        if (hlTypeFilter && !counts.has(hlTypeFilter)) hlTypeFilter = '';
+        if (hlRules.length === 0) return;
+
+        const mk = (value, label, count) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'hl-type-chip' + (hlTypeFilter === value ? ' hl-type-chip--active' : '');
+          b.setAttribute('role', 'tab');
+          b.setAttribute('aria-selected', hlTypeFilter === value ? 'true' : 'false');
+          b.innerHTML = '';
+          b.appendChild(document.createTextNode(label));
+          const c = document.createElement('span');
+          c.className = 'hl-type-chip-count';
+          c.textContent = String(count);
+          b.appendChild(c);
+          b.addEventListener('click', () => hlSetTypeFilter(value));
+          return b;
+        };
+        bar.appendChild(mk('', 'All', hlRules.length));
+        for (const t of HL_TYPE_ORDER) {
+          if (!counts.has(t)) continue;
+          bar.appendChild(mk(t, HL_TYPE_LABELS[t] || t, counts.get(t)));
+        }
+      }
+
+      /* Find whatever actually scrolls above an element. The rules list itself
+       * has no overflow — the settings modal body is what moves — so preserving
+       * position means walking up to the real scroller rather than guessing. */
+      function hlScrollParent(el) {
+        for (let n = el && el.parentElement; n && n !== document.body; n = n.parentElement) {
+          const oy = getComputedStyle(n).overflowY;
+          if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight) return n;
+        }
+        return null;
+      }
+
       function hlRenderRules() {
         const listEl = document.getElementById('hl-rules-list');
         if (!listEl) return;
+        // Every re-render rebuilds the whole list, which drops the scroll
+        // position — so toggling a rule half way down threw you back to the top
+        // and you had to find your place again. Restored after the rebuild.
+        const scroller = hlScrollParent(listEl);
+        const keepScrollTop = scroller ? scroller.scrollTop : 0;
+        const restoreScroll = () => {
+          if (scroller && scroller.scrollTop !== keepScrollTop) scroller.scrollTop = keepScrollTop;
+        };
         hlLoadServerFeedTitles();  // async; re-renders once titles arrive
+        hlRenderTypeFilter();
         listEl.querySelectorAll('.hl-rule-row, .hl-empty, .hl-rule-dryrun-panel, .hl-rule-hist-panel, .hl-section-label').forEach(el => el.remove());
         hlActiveDryRun = null;
         hlActiveHistPanel = null;
@@ -9040,17 +9164,24 @@ const CAPTURE_MODE_FULL = 'full';
           empty.className = 'hl-empty';
           empty.textContent = 'No automation rules yet. Click "+ Add Rule" to create one.';
           listEl.appendChild(empty);
+          restoreScroll();
           return;
         }
-        const TYPE_ORDER = ['highlight', 'mark_as_read', 'tag_filter', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist', 'instapaper', 'save_article', 'quire'];
-        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', tag_filter: 'Tag Filter', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook', youtube_playlist: 'Add to YT Playlist', instapaper: 'Save to Instapaper', save_article: 'Save/Star Article', quire: 'Add to Quire' };
+        const TYPE_ORDER = HL_TYPE_ORDER;
+        const TYPE_LABELS = HL_TYPE_LABELS;
         for (const sectionType of TYPE_ORDER) {
+          // Filtered to one type: skip every other section entirely.
+          if (hlTypeFilter && sectionType !== hlTypeFilter) continue;
           const sectionRules = hlRules.map((r, i) => ({ r, i })).filter(({ r }) => (r.type || 'highlight') === sectionType);
           if (sectionRules.length === 0) continue;
-          const labelEl = document.createElement('div');
-          labelEl.className = 'hl-section-label';
-          labelEl.textContent = TYPE_LABELS[sectionType] || sectionType;
-          listEl.appendChild(labelEl);
+          // The section heading is the chip you just clicked — repeating it
+          // under the filter row says nothing.
+          if (!hlTypeFilter) {
+            const labelEl = document.createElement('div');
+            labelEl.className = 'hl-section-label';
+            labelEl.textContent = TYPE_LABELS[sectionType] || sectionType;
+            listEl.appendChild(labelEl);
+          }
           for (const { r: rule, i } of sectionRules) {
           const enabled = rule.enabled !== 0;
           const row = document.createElement('div');
@@ -9493,6 +9624,7 @@ const CAPTURE_MODE_FULL = 'full';
           listEl.appendChild(row);
           } // end sectionRules loop
         } // end TYPE_ORDER loop
+        restoreScroll();
       }
 
       function hlRenderDedupGroups(panel, groups, maxShown) {
@@ -13693,6 +13825,7 @@ const CAPTURE_MODE_FULL = 'full';
             const data = await resp.json();
             if (data.ok) {
               entryTagsInput.value = '';
+              syncKeptFromTagResponse(entryTagsForm, data);
               loadEntryPaneWithoutFullRefresh(window.location.href, false);
             } else {
               showToastMessage(data.error || 'Failed to save tags.');
@@ -13836,6 +13969,7 @@ const CAPTURE_MODE_FULL = 'full';
             });
             const data = await resp.json();
             if (data.ok) {
+              syncKeptFromTagResponse(entryTagsForm, data);
               loadEntryPaneWithoutFullRefresh(window.location.href, false);
             } else {
               removeBtn.disabled = false;

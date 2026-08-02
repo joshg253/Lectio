@@ -3805,6 +3805,42 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
 .entry-content [align="right"] { text-align: right; }
 .entry-content [align="left"]  { text-align: left; }
 
+/* Floated images, with the text wrapping around them the way the author wrote
+   it. The sanitizer keeps an enumerated `float`/`clear` but deliberately drops
+   the author's `margin-*` (free-form lengths have no place in a literal-value
+   allowlist), so the gutter is supplied here — matching the normalized output
+   the sanitizer emits, which is why the spacing in these selectors is fixed.
+
+   A float has to be sized to leave room for text beside it; at full column width
+   there is nothing to wrap. Half the column, and below that the float is dropped
+   entirely — on a narrow pane a 45%-wide image with three words beside it reads
+   far worse than the same image full-width. */
+.entry-content [style*="float: left"],
+.entry-content [style*="float: right"] {
+  max-width: 45%;
+}
+.entry-content [style*="float: left"]  { float: left;  margin: 0 1em 0.75em 0; }
+.entry-content [style*="float: right"] { float: right; margin: 0 0 0.75em 1em; }
+.entry-content [style*="clear: left"]  { clear: left; }
+.entry-content [style*="clear: right"] { clear: right; }
+.entry-content [style*="clear: both"]  { clear: both; }
+/* A float taller than its text leaves the next block riding up beside it, and
+   an all-float container collapses to zero height. */
+.entry-content::after { content: ""; display: block; clear: both; }
+
+@media (max-width: 620px) {
+  /* !important is required, not stylistic: the float arrives as an INLINE style
+     (that is how the sanitizer preserves it), and an inline declaration outranks
+     any stylesheet rule. Without it this override silently does nothing and a
+     45%-wide image stays floated on a 390px phone. */
+  .entry-content [style*="float: left"],
+  .entry-content [style*="float: right"] {
+    float: none !important;
+    max-width: 100%;
+    margin: 0 0 0.75em;
+  }
+}
+
 /* Inline emoji glyphs embedded in post bodies: WordPress wp-smiley (s.w.org),
    IP.Board ipsEmoji, and twemoji's "emoji" class. The source sites size these
    to ~1em via their own CSS; without it the general .entry-content img rule
@@ -6625,6 +6661,43 @@ mark.highlight-mark {
 }
 .hl-section-label:first-child {
   padding-top: 0.1rem;
+}
+
+/* Rule-type filter row. Sits between the Rules/History tabs and the list, so it
+   reads as a second level rather than competing with them: chips, not tabs. */
+.hl-type-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0 0 0.6rem;
+}
+.hl-type-filter:empty { display: none; }
+.hl-type-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  padding: 0.22rem 0.55rem;
+  font-size: 0.74rem;
+  line-height: 1.3;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.hl-type-chip:hover { color: var(--fg); border-color: var(--fg); }
+.hl-type-chip--active {
+  background: var(--accent, #2f6fd0);
+  border-color: var(--accent, #2f6fd0);
+  color: #fff;
+  font-weight: 600;
+}
+/* The count is secondary to the label, and must stay legible when the chip
+   inverts — so it dims relative to whatever the chip's own colour is. */
+.hl-type-chip-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.68rem;
+  opacity: 0.7;
 }
 .hl-rule-type-chip {
   font-size: 0.7rem;

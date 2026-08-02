@@ -355,6 +355,7 @@ SETTING_PORTRAIT_IMG_MAX_WIDTH = "portrait_img_max_width"
 SETTING_MAINTENANCE_HOUR = "maintenance_hour"
 SETTING_IMG_CACHE_DAYS = "img_cache_days"
 SETTING_IMG_CACHE_MAX_DIM = "img_cache_max_dim"
+SETTING_IMG_TARGET_BYTES = "img_target_bytes"
 SETTING_YT_API_KEY = "yt_api_key"
 SETTING_YT_CHANNEL_ID = "yt_channel_id"
 SETTING_YT_FOLDER_NAME = "yt_folder_name"
@@ -563,6 +564,11 @@ def _env_int(name: str, default: int) -> int:
 #   LECTIO_IMG_CACHE_MAX_DIM longest-side px to downscale stored images to (default 3840)
 _ENV_IMG_CACHE_DAYS = _env_int("LECTIO_IMG_CACHE_DAYS", 90)
 _ENV_IMG_CACHE_MAX_DIM = _env_int("LECTIO_IMG_CACHE_MAX_DIM", 3840)
+# Byte budget for a cached image. The dimension cap above is not a size cap — a
+# 4K RGBA PNG sits exactly at MAX_DIM and still weighs ~12 MB, which is then
+# served whole on every view. Over this, the image is re-encoded to WebP
+# (lossless first, so screenshots and line art keep their edges). 0 disables.
+_ENV_IMG_TARGET_BYTES = _env_int("LECTIO_IMG_TARGET_BYTES", 1_500_000)
 # Max width (px) for portrait (taller-than-wide) article images; 0 = disabled.
 _ENV_PORTRAIT_IMG_MAX_WIDTH = _env_int("LECTIO_PORTRAIT_IMG_MAX_WIDTH", 650)
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
@@ -1625,6 +1631,25 @@ def get_img_cache_max_dim() -> int:
         except ValueError:
             pass
     return _ENV_IMG_CACHE_MAX_DIM
+
+
+def get_img_target_bytes() -> int:
+    """Byte budget for a cached image, above which it is re-encoded to WebP.
+
+    Separate from the max dimension because the two answer different questions:
+    an image can sit exactly at the dimension cap and still weigh 12 MB (a 4K
+    RGBA PNG does), and it is the bytes that make it slow to load.
+    0 = leave every image at whatever size it arrives.
+    """
+    val = get_instance_setting(SETTING_IMG_TARGET_BYTES, "")
+    if val:
+        try:
+            n = int(val)
+            if n >= 0:
+                return n
+        except ValueError:
+            pass
+    return _ENV_IMG_TARGET_BYTES
 
 # --- Auth config ---
 # When set, skip the login form and auto-authenticate as the admin on every request.
@@ -13639,6 +13664,12 @@ _LEAD_IMG_OPENER_RE = re.compile(
     r"<img\b[^>]*/?>",
     re.IGNORECASE | re.DOTALL,
 )
+
+# A float the sanitizer preserved, in its normalized form. Matched against the
+# opener markup — the float usually sits on the wrapping <a> or <div>, not the
+# <img> — so an author-floated opener can be left in the flow instead of being
+# hoisted into a full-width hero. See _strip_lead_image_opener.
+_FLOAT_STYLE_RE = re.compile(r"float:\s*(?:left|right)", re.IGNORECASE)
 _CLOSE_A_RE = re.compile(r"</a\s*>", re.IGNORECASE)
 _TUMBLR_MEDIA_PREFIX_RE = re.compile(r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/", re.IGNORECASE)
 
@@ -13826,6 +13857,24 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
         return content_html, lead_image_url
 
     _m = _LEAD_IMG_OPENER_RE.match(content_html)
+    if _m and _FLOAT_STYLE_RE.search(_m.group(0)):
+        # The author FLOATED this image, so the text is written to wrap around
+        # it. Hoisting it to a full-width hero above the article destroys exactly
+        # the layout it was given — the post reads as a centred block with all
+        # its text pushed below, which is how it was reported (2026-08-02, a
+        # Blogger review whose cover sits right with the review beside it).
+        #
+        # This is the same rule the branch below already applies to an image
+        # further down the body: an image the author placed in the flow is
+        # content, not a header. A float is that placement stated explicitly, and
+        # it happens to be at the top. So leave the body untouched and drop the
+        # separate lead, or the picture appears twice.
+        #
+        # Only the ARTICLE lead is dropped. The list thumbnail is resolved
+        # independently (get_cached_entry_thumbnail), so the post keeps its
+        # thumbnail either way.
+        return content_html, None
+
     if _m:
         # BS4 removes the opener <img> and its now-empty ancestor containers without
         # touching sibling figures or anchored link text ("New comic!").
@@ -14512,6 +14561,14 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # image URL still appears in what remains.  This prevents the case where
         # the lead image IS the opener thumbnail (e.g. comicsthumbs) from being
         # incorrectly suppressed just because it appears at the top of content.
+        # Keep what the lead image RESOLVED to, before the dedup below decides
+        # whether to render it separately. The two are different questions, and
+        # conflating them blanks thumbnails: everything the dedup does — a lead
+        # already shown inline, a floated opener left in the flow — sets
+        # lead_image_url to None meaning "don't draw it twice", not "this entry
+        # has no image". That None used to be what got persisted to
+        # entry_lead_images, which is where the LIST reads its thumbnail from.
+        _resolved_lead_for_cache = lead_image_url
         content_html, lead_image_url = _strip_lead_image_opener(
             content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article
         )
@@ -14614,9 +14671,16 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # preview used as the list thumbnail, while the article shows the full
         # inline strip — persisting the article's full image here would clobber
         # the preview thumbnail. The webcomic source-scrape owns that cache.
+        #
+        # Persist what the lead image RESOLVED to, not what survived the dedup —
+        # see _resolved_lead_for_cache above. The list thumbnail reads this cache,
+        # so persisting the dedup's None takes the thumbnail away from every post
+        # whose image is shown inline instead of hoisted.
         _persist_strategy, _, _ = lead_image_service.get_feed_strategy(str(entry.feed_url))
         if _persist_strategy != "webcomic":
-            lead_image_service.persist_lead_image_async(str(entry.feed_url), str(entry.id), lead_image_url)
+            lead_image_service.persist_lead_image_async(
+                str(entry.feed_url), str(entry.id), _resolved_lead_for_cache
+            )
 
         # If this entry is starred and the archive worker has captured assets,
         # swap inline image URLs to the local /starred-asset route so the
@@ -18633,6 +18697,7 @@ def administration_page(request: Request, msg: str | None = None, error: str | N
             "maintenance_last": maint_last,
             "img_cache_days": get_img_cache_days(),
             "img_cache_max_dim": get_img_cache_max_dim(),
+            "img_target_bytes": get_img_target_bytes(),
             # Shared OAuth apps (stored in admin's own app_settings).
             "shared_yt_oauth_client_id": get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_ID, ""),
             "shared_yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)),
@@ -19993,34 +20058,58 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
                 pass
             return Response(content=jpeg_bytes, media_type="image/jpeg", headers=cached_headers)
 
+    # The image proxy's byte cache first — it very often already holds these
+    # bytes, since the article view fetches the same URL through /api/img.
+    #
+    # This matters most for images behind short-lived signed URLs. That cache
+    # keys on the URL with its signing params stripped (_img_cache_key_url), so
+    # a copy fetched under any valid token answers forever — which is exactly
+    # what keeps an expired DeviantArt URL rendering in the article. The
+    # thumbnail path never consulted it, so it re-fetched the dead URL, got a
+    # 401, and marked the host failed. The result was a post whose image
+    # displayed fine and whose thumbnail never appeared, permanently, with a
+    # slow failing fetch on every list render.
+    raw: bytes | None = None
+    src_content_type = ""
+    try:
+        _cached_src = _img_cache_get(
+            hashlib.sha256(_img_cache_key_url(url).encode("utf-8")).hexdigest()
+        )
+    except Exception:  # noqa: BLE001 — a cache miss is the safe answer
+        _cached_src = None
+    if _cached_src is not None:
+        raw, src_content_type = _cached_src
+
     # Short-circuit hosts that just failed: avoids re-hitting (and blocking a worker
-    # on) a folder full of server-blocked images on every page load.
-    if _thumb_fetch_recently_failed(url):
+    # on) a folder full of server-blocked images on every page load. Checked after
+    # the cache, so a cached image is still thumbnailed while its host is down.
+    if raw is None and _thumb_fetch_recently_failed(url):
         return Response(status_code=502)
 
-    try:
-        # follow_redirects=False so url_guard.safe_get validates every hop
-        # (SSRF: a public thumbnail URL must not redirect to an internal target).
-        with url_guard.build_client(timeout=_THUMB_FETCH_TIMEOUT, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
-            _headers = {"User-Agent": READABILITY_USER_AGENT}
-            resp = url_guard.safe_get(client, url, headers=_headers)
-            # Hotlink protection: retry once with a same-origin Referer only after
-            # an honest request is refused (see api_img_proxy / lead_images).
-            if resp.status_code in _HOTLINK_REFUSAL_CODES:
-                _referer = _same_origin_referer(url)
-                if _referer:
-                    resp = url_guard.safe_get(client, url, headers={**_headers, "Referer": _referer})
-            if resp.status_code in (404, 410):
-                # Image is permanently gone — null it out so it isn't re-attempted
-                lead_image_service.invalidate_image_url(url)
-            resp.raise_for_status()
-            raw = resp.content
-            src_content_type = resp.headers.get("content-type", "")
-    except url_guard.UnsafeURLError:
-        return Response(status_code=403)
-    except Exception:
-        _mark_thumb_fetch_failed(url)
-        return Response(status_code=502)
+    if raw is None:
+        try:
+            # follow_redirects=False so url_guard.safe_get validates every hop
+            # (SSRF: a public thumbnail URL must not redirect to an internal target).
+            with url_guard.build_client(timeout=_THUMB_FETCH_TIMEOUT, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+                _headers = {"User-Agent": READABILITY_USER_AGENT}
+                resp = url_guard.safe_get(client, url, headers=_headers)
+                # Hotlink protection: retry once with a same-origin Referer only after
+                # an honest request is refused (see api_img_proxy / lead_images).
+                if resp.status_code in _HOTLINK_REFUSAL_CODES:
+                    _referer = _same_origin_referer(url)
+                    if _referer:
+                        resp = url_guard.safe_get(client, url, headers={**_headers, "Referer": _referer})
+                if resp.status_code in (404, 410):
+                    # Image is permanently gone — null it out so it isn't re-attempted
+                    lead_image_service.invalidate_image_url(url)
+                resp.raise_for_status()
+                raw = resp.content
+                src_content_type = resp.headers.get("content-type", "")
+        except url_guard.UnsafeURLError:
+            return Response(status_code=403)
+        except Exception:
+            _mark_thumb_fetch_failed(url)
+            return Response(status_code=502)
 
     try:
         img = _PILImage.open(io.BytesIO(raw)).convert("RGB")
@@ -23592,7 +23681,7 @@ async def save_all_settings(request: Request):
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
         SETTING_TZ_DISPLAY, SETTING_PORTRAIT_IMG_MAX_WIDTH, SETTING_MAINTENANCE_HOUR,
-        SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
+        SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
         SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL, SETTING_YT_QUOTA_CAP,
         SETTING_YT_OAUTH_CLIENT_ID, SETTING_YT_OAUTH_CLIENT_SECRET,
@@ -23627,7 +23716,7 @@ async def save_all_settings(request: Request):
     _ADMIN_ONLY = {
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_MAINTENANCE_HOUR,
-        SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
+        SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
@@ -26700,6 +26789,8 @@ def toggle_entry_saved(
 ):
     normalized_tag = normalize_tag_value(tag)
     apply_star_state(feed_url, entry_id, bool(saved))
+    if saved:
+        _maybe_autofetch_on_keep(feed_url, entry_id)
 
     if is_async_action_request(request, "lectio-post-save-toggle"):
         return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved)})
@@ -26965,6 +27056,106 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
 # compared in two places here and sent from two more in static/js/app.js — a
 # typo on any of them silently falls back to readability rather than erroring.
 CAPTURE_MODE_FULL = "full"
+
+
+# Hosts whose last automatic re-fetch failed, and when. Auto-refetch is a
+# side effect of tagging, so a host that refuses us must not be re-asked on every
+# tag: DeviantArt answers this server with 403 every time, and a tagging session
+# across a watchlist would be dozens of requests it has already declined. Manual
+# Re-fetch ignores this entirely — that is a person asking on purpose.
+_AUTOFETCH_HOST_COOLDOWN_S = 6 * 3600
+_autofetch_failed_hosts: dict[str, float] = {}
+_autofetch_hosts_lock = threading.Lock()
+
+
+def _autofetch_host_in_cooldown(host: str) -> bool:
+    if not host:
+        return False
+    with _autofetch_hosts_lock:
+        until = _autofetch_failed_hosts.get(host)
+        if until is None:
+            return False
+        if time.time() >= until:
+            del _autofetch_failed_hosts[host]
+            return False
+        return True
+
+
+def _mark_autofetch_host_failed(host: str) -> None:
+    if not host:
+        return
+    with _autofetch_hosts_lock:
+        _autofetch_failed_hosts[host] = time.time() + _AUTOFETCH_HOST_COOLDOWN_S
+        # Bounded: this is a politeness memo, not a record.
+        if len(_autofetch_failed_hosts) > 512:
+            for stale in sorted(_autofetch_failed_hosts, key=_autofetch_failed_hosts.get)[:128]:
+                del _autofetch_failed_hosts[stale]
+
+
+def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
+    """Re-fetch a *stub* article in the background when it is starred or tagged.
+
+    Keeping something is the moment you find out its feed only ever shipped a
+    teaser. This closes that gap — but only for teasers, and that restraint is
+    the whole design:
+
+    - **Only when the stored copy is thin.** ``_archived_copy_is_plausible`` is
+      the same test the reader uses to reject a failed extraction, so "not
+      plausible" here means summary-only or truncated. A feed that ships full
+      posts is left alone, because re-fetching one can only make it worse: the
+      live page may now be a paywall, a cookie wall, a 404, or a readability
+      miss that locks onto a sidebar. Overwriting a good copy at the exact moment
+      the reader marked it worth keeping is the failure to avoid.
+    - **Only from a single, user-initiated action.** This is called from the star
+      and tag ROUTES, never from ``set_manual_tags_for_entry`` — which the feed
+      auto-taggers also drive, at ingest, across everything a feed just
+      delivered. Hooking the service would turn one refresh into a burst of
+      outbound requests at one host.
+    - **Never for a Lectio capture.** Those were fetched from the page already;
+      there is no feed teaser to improve on.
+
+    The offline archive capture (``enqueue_archive``) already fires on both star
+    and tag and is what Read Mode reads. This is the other half: it replaces the
+    stub in the *entry pane*, which shows stored feed content.
+    """
+    try:
+        if saved_articles_service.is_saved_articles_feed(feed_url):
+            return
+        with get_reader() as reader:
+            entry = reader.get_entry((feed_url, entry_id), None)
+        if entry is None or not (entry.link or "").startswith(("http://", "https://")):
+            return
+        stored = (entry.content[0].value if entry.content else None) or entry.summary or ""
+        if _archived_copy_is_plausible(stored):
+            return          # a real article already — leave it alone
+        host = urlparse(entry.link).netloc.lower()
+        if _autofetch_host_in_cooldown(host):
+            return          # this host already refused us; don't keep asking
+    except Exception:  # noqa: BLE001 — never let this break the star/tag itself
+        LOGGER.debug("auto-refetch precheck failed for %s/%s", feed_url, entry_id, exc_info=True)
+        return
+
+    _uid = tenancy.current_user_id()
+
+    def _work() -> None:
+        try:
+            result = _refresh_captured_article_for_current_user(feed_url, entry_id)
+            if result.get("ok"):
+                LOGGER.info("[auto-refetch] %s/%s -> refreshed", feed_url, entry_id)
+                return
+            # A failure here is about the SITE, not this article — blocked,
+            # unreachable, or serving something else entirely — so remember the
+            # host rather than rediscovering it on the next tag.
+            _mark_autofetch_host_failed(host)
+            LOGGER.info("[auto-refetch] %s/%s -> %s (pausing %s for %dh)", feed_url, entry_id,
+                        result.get("error", "no change"), host, _AUTOFETCH_HOST_COOLDOWN_S // 3600)
+        except Exception:  # noqa: BLE001
+            _mark_autofetch_host_failed(host)
+            LOGGER.warning("[auto-refetch] failed for %s/%s", feed_url, entry_id, exc_info=True)
+
+    # Off-request so the star stays instant, and through the tenancy helper
+    # because a bare thread would run the fetch as the default user.
+    threading.Thread(target=lambda: _run_in_user_context(_uid, _work), daemon=True).start()
 
 
 def _refresh_captured_article_for_current_user(
@@ -27355,6 +27546,13 @@ def set_entry_manual_tags(
     else:
         tags = set_manual_tags_for_entry(feed_url, entry_id, tags_text)
     normalized_tag = normalize_tag_value(tag)  # `tag` = the active tag filter, not the loop var
+
+    # Tagging is a keep signal, so a stub gets the same treatment as a star.
+    # Only when tags remain: clearing the last tag is the opposite of keeping.
+    # Deliberately here and not in set_manual_tags_for_entry, which the feed
+    # auto-taggers also drive across a whole refresh — see _maybe_autofetch_on_keep.
+    if tags:
+        _maybe_autofetch_on_keep(feed_url, entry_id)
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
@@ -28975,6 +29173,77 @@ _IMG_CACHE_CONTROL = "public, max-age=86400"
 #    MAX_IMAGE_PIXELS (only trips at ~2x ~89 Mpx) leaves open.
 _IMG_CACHE_MAX_BYTES = 16 * 1024 * 1024   # 16 MB
 _IMG_MAX_DECODE_PIXELS = 40_000_000       # 40 megapixels
+# Ceilings for the lossless-WebP path in _maybe_shrink_oversized_image. 2 MP
+# keeps the lossless encoder inside a few hundred ms; 4096 colours is well below
+# what painted or photographic art carries and comfortably above logos, pixel
+# art and flat-colour diagrams.
+_IMG_LOSSLESS_MAX_PIXELS = 2_000_000
+_IMG_LOSSLESS_MAX_COLORS = 4096
+
+
+def _maybe_shrink_oversized_image(raw: bytes, content_type: str, budget: int) -> tuple[bytes, str]:
+    """Re-encode an image that is under the dimension cap but still enormous.
+
+    The dimension cap alone is not a size cap. A 3840x2160 RGBA **PNG** is
+    already at LECTIO_IMG_CACHE_MAX_DIM, so ``_maybe_downscale_image`` returns it
+    untouched — at 11.6 MB, which is then served in full on every article view.
+    Measured on a DeviantArt deviation: exactly that, and it read as "the image
+    loads slowly every time" because it does. PNG is simply the wrong container
+    for a photographic or painted 4K image; nothing about the pixels needs it.
+
+    Lossless WebP is used only for small, few-colour images — logos, pixel art,
+    diagrams, screenshots — where lossy compression visibly damages hard edges
+    and text, and where the encoder is cheap enough to afford. Everything else
+    gets lossy WebP, on the reasoning that a large full-colour image is
+    photographic or painted, which is the case lossy handles best.
+
+    **Both gates are load-bearing, and both were measured** on the 3840x2160
+    deviation above. Trying lossless first and falling back cost **12.3s** in the
+    request path; lossless alone on that image is 6s and still 7.9 MB. Its colour
+    count is 42,082 — low enough that a naive "few colours means line art" test
+    classifies painted artwork as line art and takes exactly that slow path. So
+    pixels are checked first (cheap, and it is the pixel count that makes the
+    encoder slow), and the colour scan only runs on images small enough for the
+    answer to be both fast and true. Lossy q85/method=2 on that image: **0.25s,
+    11.6 MB -> 0.17 MB.**
+
+    Returns the original bytes and content-type unchanged on any failure, if the
+    image is already within budget, or if it is animated (re-encoding would
+    flatten it).
+    """
+    if budget <= 0 or len(raw) <= budget:
+        return raw, content_type
+    try:
+        img = _PILImage.open(io.BytesIO(raw))
+        if (img.format or "").upper() not in _IMG_DOWNSCALE_FORMATS:
+            return raw, content_type
+        if getattr(img, "is_animated", False):
+            return raw, content_type
+        w, h = img.size
+        if w * h > _IMG_MAX_DECODE_PIXELS:
+            return raw, content_type
+        if img.mode == "P":
+            img = img.convert("RGBA")
+
+        lossless = False
+        if w * h <= _IMG_LOSSLESS_MAX_PIXELS:
+            # getcolors returns None once the cap is exceeded, so this bails
+            # early on anything full-colour rather than counting all of them.
+            lossless = img.convert("RGB").getcolors(maxcolors=_IMG_LOSSLESS_MAX_COLORS) is not None
+
+        buf = io.BytesIO()
+        if lossless:
+            img.save(buf, format="WEBP", lossless=True, method=0)
+        else:
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGBA" if "A" in img.mode else "RGB")
+            img.save(buf, format="WEBP", quality=85, method=2)
+        out = buf.getvalue()
+        # Never hand back something bigger than what arrived — a small PNG can
+        # beat WebP, and the point here is bytes, not format.
+        return (out, "image/webp") if len(out) < len(raw) else (raw, content_type)
+    except Exception:  # noqa: BLE001 — serving the original is always acceptable
+        return raw, content_type
 
 
 def _maybe_downscale_image(raw: bytes, max_dim: int) -> tuple[bytes, str | None]:
@@ -29158,9 +29427,24 @@ async def api_img_proxy(u: str) -> Response:
         # Too large to cache/re-encode; pass the original through untouched so it
         # still displays, but don't decode or store it.
         return Response(content=body, media_type=content_type, headers={"Cache-Control": cache_ctrl})
-    downscaled, new_ct = _maybe_downscale_image(body, get_img_cache_max_dim())
-    if new_ct is not None:
-        body, content_type = downscaled, new_ct
+    # Both steps decode and re-encode a full bitmap, which on a 4K image is
+    # hundreds of milliseconds. This is an async route, so running them inline
+    # blocks the event loop — every other request on the worker waits behind one
+    # large image.
+    # Both settings are read HERE, on the request path, so the threadpool call
+    # below is pure CPU with no DB access and no tenancy context to carry.
+    _max_dim = get_img_cache_max_dim()
+    _target_bytes = get_img_target_bytes()
+
+    def _recompress(raw: bytes, ct: str) -> tuple[bytes, str]:
+        downscaled, new_ct = _maybe_downscale_image(raw, _max_dim)
+        if new_ct is not None:
+            raw, ct = downscaled, new_ct
+        # The dimension cap is not a size cap: an image already at max_dim comes
+        # through untouched however many megabytes it weighs.
+        return _maybe_shrink_oversized_image(raw, ct, _target_bytes)
+
+    body, content_type = await run_in_threadpool(_recompress, body, content_type)
     _img_cache_store(cache_key, body, content_type)
     return Response(
         content=body,

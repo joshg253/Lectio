@@ -106,6 +106,21 @@ _ALLOWED_STYLE_VALUES: dict[str, frozenset[str]] = {
     "text-decoration": frozenset({"none", "underline", "line-through", "overline"}),
     "text-transform": frozenset({"none", "uppercase", "lowercase", "capitalize"}),
     "font-variant": frozenset({"normal", "small-caps"}),
+    # Floated images with text wrapping around them. This is ordinary prose
+    # layout, not a layout escape: a float stays inside its container, so unlike
+    # `position`/`z-index` above it cannot overlay the app's own UI. Blogger
+    # emits it for every side-set image (`clear: right; float: right`), and
+    # without it a post that was written around a right-set cover reflows into a
+    # centred block with the text pushed below — a visibly different article.
+    #
+    # The author's accompanying `margin-*` is deliberately NOT kept: margins are
+    # free-form lengths, and taking them would mean matching a value *pattern*
+    # rather than a literal, which is the one thing this table promises never to
+    # do. The spacing a float needs comes from our own stylesheet instead, keyed
+    # off the normalized output below — the same arrangement `text-align:
+    # center` already uses, which is why the spacing in these strings matters.
+    "float": frozenset({"left", "right", "none"}),
+    "clear": frozenset({"left", "right", "both", "none"}),
 }
 
 

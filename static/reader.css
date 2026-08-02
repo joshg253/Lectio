@@ -181,17 +181,34 @@ body {
 /* Respect WordPress alignment classes: these images were small floats with text
  * wrapping on the source page, but readability strips the sizing CSS so they'd
  * otherwise render full-column ("huge"). The id+element+class selectors beat the
- * generic `#reader-columns img` block rule above. */
-#reader-columns img.alignleft {
+ * generic `#reader-columns img` block rule above.
+ *
+ * The `[style*=…]` selectors are the same idea arriving by a different route:
+ * Blogger and friends float via an inline style rather than a class, and the
+ * sanitizer now keeps an enumerated float/clear. It drops the author's margins,
+ * so the gutter comes from here. Matching the sanitizer's NORMALIZED output is
+ * what makes this work — the spacing in those strings is fixed on purpose. The
+ * float usually sits on the wrapping <a>, not the <img>, so these are not
+ * element-qualified. */
+#reader-columns img.alignleft,
+#reader-columns [style*="float: left"] {
   float: left;
   max-width: 48%;
   margin: 0.2em 1em 0.6em 0;
 }
-#reader-columns img.alignright {
+#reader-columns img.alignright,
+#reader-columns [style*="float: right"] {
   float: right;
   max-width: 48%;
   margin: 0.2em 0 0.6em 1em;
 }
+/* A floated <a> is a block wrapper; its image must fill it rather than re-apply
+   the auto side margins the generic img rule above sets. */
+#reader-columns [style*="float: left"] img,
+#reader-columns [style*="float: right"] img { margin: 0; max-width: 100%; }
+#reader-columns [style*="clear: left"]  { clear: left; }
+#reader-columns [style*="clear: right"] { clear: right; }
+#reader-columns [style*="clear: both"]  { clear: both; }
 #reader-columns img.aligncenter {
   display: block;
   margin: 0.9em auto;
@@ -202,8 +219,13 @@ body {
 /* Narrow screens (phone / portrait): floats are too tight — stack full width. */
 @media (max-width: 620px) {
   #reader-columns img.alignleft,
-  #reader-columns img.alignright {
-    float: none;
+  #reader-columns img.alignright,
+  #reader-columns [style*="float: left"],
+  #reader-columns [style*="float: right"] {
+    /* !important only matters for the [style*=] pair — that float is an INLINE
+       style, which outranks any stylesheet rule. The class-based ones do not
+       need it and are not harmed by it. */
+    float: none !important;
     max-width: 100%;
     margin: 0.9em auto;
   }

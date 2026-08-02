@@ -55,12 +55,25 @@ The short version:
   comparison, smart crop/fit tuning, caption sourcing, junk-image rejection,
   and full-resolution webcomic panels. A configurable **portrait-image max
   width** (Settings → Appearance) keeps tall images from dominating the pane
-  while wide images stay full-width.
+  while wide images stay full-width. Feeds that carry no image at all still get
+  a cover when the page nominates one, so an entry that is pure prose plus a
+  download link isn't left blank.
+- **Images keep the author's layout, and stay a sane size** — an image the author
+  set left or right keeps its float, with the text wrapping around it as written
+  (it stacks full-width on a phone, where a half-column image reads worse than a
+  whole one). Oversized images are re-encoded rather than served whole: a 4K PNG
+  is within the dimension cap yet can still weigh 12 MB, so anything past a byte
+  budget becomes WebP — losslessly for logos, diagrams and line art, where lossy
+  compression would smear the edges. The budget lives in **Administration → Image
+  cache**, beside retention and max dimension.
 - **Automation** — highlight, mark-as-read, tag-filter, deduplicate,
   email-article, outbound-webhook, save-to-Instapaper, **save/star-article**
   (auto-saves into a pinned Saved **Inbox**), add-to-YouTube-playlist, and
   add-to-Quire rules; scoped to all feeds, a folder, a feed, or a
-  multi-selected set; run history shows exactly what each run touched.
+  multi-selected set; run history shows exactly what each run touched. Once the
+  list grows past a screenful, a **type filter** above it narrows to one kind of
+  rule — chips for the types you actually use, each with its count — and the list
+  keeps its scroll position when you toggle a rule rather than jumping to the top.
 - **Keep vs. to-do** — **tagging a post keeps it forever**: it triggers a full
   offline capture (page + images) so tagged posts survive a dead feed, while
   **starring** is the lightweight "needs dealing with" marker. A post is kept
@@ -111,7 +124,10 @@ The short version:
   article in place to repair a bad initial capture — available for any article
   Lectio captured, including ones already filed onto a real feed, and worth
   trying when a capture came out wrong, since a page that extracted badly once
-  often extracts correctly later (a re-fetch updates the article's **Received**
+  often extracts correctly later. It's available on **any post with a link**, not
+  just saved ones — a truncated feed post can be repaired without first tagging
+  it, and the re-fetched copy is pinned so the next refresh can't put the thin
+  version back (a re-fetch updates the article's **Received**
   date, never its **Pub** date — Pub stays the date it was published).
   For a page the reader mangles outright — a manual or docs-style page whose
   text is scattered rather than sitting in one article body — **Capture the
@@ -119,6 +135,11 @@ The short version:
   post menu) keeps everything instead of extracting. It's off by default on
   purpose: on a normal blog post it also keeps the nav and sidebars that
   extraction strips, so it's the escape hatch, not the better setting.
+  Starring or tagging a post whose feed only sent a **teaser** re-fetches it
+  automatically — a full article is never re-fetched, because the live page may
+  since have become a paywall or a 404 and overwriting a good copy at the moment
+  you decided to keep it is the worst possible trade. Bulk auto-tagging never
+  triggers it; only starring or tagging something yourself does.
   **File saved articles** matches
   unfiled saves to the subscribed feed they came from (grouped by host, reviewed
   per host before anything moves) — the usual case after importing a read-later

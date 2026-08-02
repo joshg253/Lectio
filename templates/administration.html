@@ -129,7 +129,14 @@
           <label class="fld">Max dimension (px, 0 = originals)
             <input type="number" id="adm-img-cache-max-dim" min="0" value="{{ img_cache_max_dim }}" placeholder="3840" />
           </label>
+          {# Separate from max dimension because they answer different questions:
+             a 4K PNG sits exactly at the dimension cap and still weighs ~12 MB,
+             and it is the bytes that make it slow to load. #}
+          <label class="fld">Size budget (bytes, 0 = as delivered)
+            <input type="number" id="adm-img-target-bytes" min="0" value="{{ img_target_bytes }}" placeholder="1500000" />
+          </label>
         </div>
+        <p class="account-hint">An image over the size budget is re-encoded to WebP — losslessly for logos, diagrams and line art, where lossy compression would smear the edges, and lossy otherwise. The dimension cap alone does not bound size.</p>
 
         <h3>Security</h3>
         <p class="account-hint">Repeated failed logins lock the account out for the window.</p>
@@ -326,6 +333,7 @@
           maintenance_hour: $('adm-maint-hour')?.value.trim() || '',
           img_cache_days: $('adm-img-cache-days')?.value.trim() || '',
           img_cache_max_dim: $('adm-img-cache-max-dim')?.value.trim() || '',
+          img_target_bytes: $('adm-img-target-bytes')?.value.trim() || '',
           shared_yt_oauth_client_id: $('adm-yt-oauth-client-id')?.value.trim() || '',
           shared_pinterest_oauth_client_id: $('adm-pinterest-oauth-client-id')?.value.trim() || '',
           fetch_history_keep: $('adm-fetch-history-keep')?.value.trim() || '',

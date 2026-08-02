@@ -206,7 +206,25 @@ class LeadImageService:
     _PLACEHOLDER_URL_PATTERNS = re.compile(
         # "blank.<ext>" covers the WordPress.com placeholder (s0.wp.com/i/blank.jpg)
         # that ships as the og:image on image-less posts — a 200x200 white box.
-        r"(?:grey-placeholder|image-unavailable|placeholder(?:[._-]|$)|no-image(?:[._-]|$)|fallback(?:[._-]|$)|bg_transparency|blank\.(?:gif|jpe?g|png|webp)|spinner(?:\.|$)|spacer(?:[0-9._-]|$))",
+        #
+        # Loading indicators belong here too, and they are the same failure in a
+        # different costume: a page with no picture of its own leaves the spinner
+        # as the best-scoring image on it. commandlinefu shipped
+        # /images/tag-loader.gif as the thumbnail for a shell one-liner.
+        # `spinner` was already listed but only as a whole filename, so
+        # `tag-loader.gif` and `ajax-loader.gif` both walked straight past it.
+        #
+        # The word must sit immediately before the EXTENSION, which is what
+        # separates a spinner from an article about one. Loading indicators are
+        # named for what they are, with any qualifier in front — `tag-loader.gif`,
+        # `ajax-loader.gif`, `preloader.png`. A photograph is named for its
+        # subject and carries on afterwards: `front-loader-review.jpg` ends in
+        # "review", and a bare substring rule rejected it.
+        r"(?:grey-placeholder|image-unavailable|placeholder(?:[._-]|$)|no-image(?:[._-]|$)"
+        r"|fallback(?:[._-]|$)|bg_transparency|blank\.(?:gif|jpe?g|png|webp)"
+        r"|(?:^|[/._-])(?:spinner|loader|loading|throbber|preloader|busy)"
+        r"(?=\.[a-z0-9]{2,5}(?:$|[?#]))"
+        r"|spacer(?:[0-9._-]|$))",
         re.IGNORECASE,
     )
     # Social/share icons. A post with no images of its own leaves the site's
@@ -1603,8 +1621,27 @@ class LeadImageService:
             if plugin_fallback and self._is_image_url_acceptable(plugin_fallback, None, None):
                 return plugin_fallback
 
-        if cached_negative or not entry_link:
-            return None
+        # The inline strategy found nothing — try the source page after all.
+        #
+        # `skip_source` above is an optimization, not a verdict: for feeds whose
+        # images are reliably inline, scraping the page rarely beats the feed and
+        # often picks up site chrome. But a *hint* that yields nothing has to fall
+        # through, or an entry with no inline image at all can never get one.
+        # Standard Ebooks is the clean example: the feed is one sentence of prose
+        # with an epub enclosure and no <img> anywhere, the page carries a proper
+        # og:image cover, and the feed is classified 'inline' — so every release
+        # came through with no cover at all.
+        #
+        # The backfill loop (fetch_and_store_lead_images_for_feed) has always had
+        # this fallback and says so in its comment; this path simply never got it.
+        if not cached_negative and entry_link and skip_source \
+                and not self._plugin_should_skip_source_lookup(entry_link=entry_link):
+            source_image = self._fetch_source_lead_image(
+                entry_link, is_webcomic=self._is_feed_webcomic(feed_url_str)
+            )
+            if source_image:
+                return source_image
+
         return None
 
     def fetch_and_store_lead_images_for_feed(self, feed_url: str, force_retry_negative: bool = False) -> None:

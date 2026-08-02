@@ -1496,6 +1496,188 @@ carry, and the alternative — a merge dialogue on an e-ink screen — is worse 
 the loss it prevents. Discarded actions are logged so a surprising result is at
 least explicable.
 
+## Floated images, and why margins are not kept
+
+The style allowlist (`_ALLOWED_STYLE_VALUES`) keeps `float` and `clear` alongside
+the typographic properties. Blogger emits `clear: right; float: right` on every
+side-set image, and dropping it turned a post written *around* a right-set cover
+into a centred block with all the text pushed below — a visibly different
+article, and the way it was reported (2026-08-02).
+
+Floats are admitted where `position`/`z-index`/`width` are not, and the
+distinction is not arbitrary: a float stays inside its container, so it cannot
+overlay the app's own UI or escape the pane. It is prose layout.
+
+The author's accompanying `margin-*` is **deliberately dropped**. Margins are
+free-form lengths, so keeping them would mean matching a value *pattern* rather
+than a literal — the one thing this table promises never to do, and the property
+that makes it auditable. The gutter comes from `static/style.css` and
+`static/reader.css` instead, keyed off the sanitizer's **normalized** output.
+That is why the spacing inside `"float: right"` is load-bearing: the stylesheets
+select on `[style*="float: right"]`, and an emitter that ever wrote `float:right`
+would silently stop matching every rule with nothing failing.
+
+**The narrow-screen override needs `!important`, and this is not stylistic.** The
+float survives as an *inline* style — that is how the sanitizer preserves it —
+and an inline declaration outranks any stylesheet rule. Without `!important` the
+`max-width: 620px` block is inert and a 45%-wide image stays floated on a phone.
+It shipped that way and was caught in a browser at 390px, not by a test; the test
+now asserts the `!important` specifically, because a plain `float: none` passes a
+naive check while doing nothing.
+
+Read Mode already floated WordPress `alignleft`/`alignright` for the same reason,
+so the inline-style selectors were folded into those existing rules rather than
+added beside them.
+
+**Preserving the float in the sanitizer was only half of it.** The FIRST image in
+a body is also what `_strip_lead_image_opener` hoists into a full-width hero,
+removing it from the flow — so the one image a reader is most likely to be
+pointing at was the one still losing its wrap. That function already had the
+right rule for images further down (*"an occurrence further down is the author
+placing it in the flow, which is content rather than a header"*); a float is that
+same placement stated explicitly, and it happens to be at the top. A floated
+opener is now left where it is and the separate lead is dropped, or the picture
+would appear twice. Only the *article* lead is dropped: the list thumbnail is
+resolved on its own path, so the post keeps it. "Don't show the lead image in the
+article" still outranks the author's layout — that is an explicit instruction.
+
+**⚠ `lead_image_url` after the dedup is a RENDERING decision, not a fact about
+the entry.** Every branch that sets it to `None` means "don't draw this twice" —
+the lead is already visible in the body, or the author floated it and it stays in
+the flow. `get_entry_detail` used to persist that `None` into `entry_lead_images`,
+which is where the **list thumbnail** reads from, so an article opened after the
+floated-opener change recorded itself as imageless and lost its thumb. 130 live
+entries before it was caught. The resolved value is now captured *before* the
+dedup (`_resolved_lead_for_cache`) and persisted instead. Anything added to that
+function has the same trap.
+
+## Image bytes: the dimension cap is not a size cap
+
+`/api/img` downscales a cached image to `LECTIO_IMG_CACHE_MAX_DIM` (3840) on the
+longest side. That says nothing about how many bytes it weighs. A 3840x2160 RGBA
+**PNG** is exactly at the cap, so `_maybe_downscale_image` returns it untouched —
+at 11.6 MB, shipped whole on every article view. Reported as "this image loads
+slowly every time", which it did, because it does.
+
+`_maybe_shrink_oversized_image` adds a byte budget (`LECTIO_IMG_TARGET_BYTES`,
+default 1.5 MB, 0 disables). Over it, the image is re-encoded to WebP:
+
+- **Lossless** for small, few-colour images — logos, pixel art, diagrams,
+  screenshots — where lossy compression visibly damages hard edges and text.
+- **Lossy q85** for everything else, on the reasoning that a large full-colour
+  image is photographic or painted, which is the case lossy handles best.
+
+**Both gates were measured, and the obvious implementations are wrong.** Trying
+lossless first and falling back cost **12.3s** in the request path; lossless alone
+on that image is 6s and still 7.9 MB. Its colour count is 42,082 — low enough
+that a naive "few colours means line art" test sends painted artwork down exactly
+that slow path. So pixels are checked first (cheap, and pixel count is what makes
+the encoder slow) and the colour scan only runs where the answer is both fast and
+true. Result on the reported image: **11.6 MB → 0.17 MB in 0.54s**, with line art
+verified pixel-identical.
+
+Both re-encoders now run via `run_in_threadpool`. `/api/img` is an async route, so
+running a multi-hundred-millisecond bitmap decode inline blocks the event loop and
+every other request on the worker queues behind one large image. Both settings are
+read *before* entering the pool, so the threaded call is pure CPU with no DB access
+and no tenancy context to carry.
+
+The budget is an instance setting (**Administration → Image cache**), with the env
+var as its default — the same shape as `LECTIO_IMG_CACHE_MAX_DIM` beside it, and
+admin-only for the same reason: it decides how every user's images are stored.
+
+## Thumbnails must reuse the image proxy's bytes
+
+`/thumb` fetched its source URL directly and never consulted `img_cache`. For an
+image behind a short-lived signed URL that is fatal: the article renders fine
+(`/api/img` holds the bytes under a token-stripped key — see the DeviantArt
+section above) while the thumbnail re-requests the dead URL, gets a 401, and is
+recorded in the recently-failed set. The result is a post with a working image and
+no thumbnail, permanently, plus a failing fetch on every list render. Found on a
+deviation whose token expired two days earlier.
+
+The proxy cache is now consulted first, and — importantly — **before** the
+recently-failed short-circuit. Ordering it the other way preserves the bug: the
+host *is* failing, which is precisely when the cached bytes are the only way to
+get a thumbnail.
+
+**A related way to lose a thumbnail: comparing two references to the same file.**
+`GunnerkriggPlugin` derives the panel URL from the entry's `?p=` number and
+bypasses any *cached* URL that differs, so a stale site banner cannot win. It
+compared strings exactly, and lost twice over — the site serves the panel with a
+`?v=<timestamp>` cache-buster, and the derived URL inherits the **entry link's**
+scheme, which that feed still publishes as `http://` for an image served over
+`https://`. So the plugin declared the very image it derives "not preferred" and
+suppressed it. The article still rendered the picture, because that path does not
+consult the bypass, which is exactly how it presented: a comic post with an image
+and no thumbnail. Comparison is now on host+path (`_same_file_key`); the cached
+URL is still *served* untouched, cache-buster and all, since rewriting it is the
+ComicControl mistake `_promote_known_thumbnail` documents.
+
+## Re-fetch on keep
+
+Both Star and Tag already `enqueue_archive`, so an offline capture (page +
+readability) is taken on either. That capture is what Read Mode and
+`/entries/readability` read. It does **not** touch the entry pane, which shows
+stored feed content — so a truncated feed still showed its teaser there.
+
+`_maybe_autofetch_on_keep` closes that, narrowly:
+
+- **Only when the stored copy is thin**, judged by `_archived_copy_is_plausible`,
+  the same test the reader uses to reject a failed extraction. Re-fetching a good
+  copy can only make it worse — the live page may now be a paywall, a cookie wall,
+  a 404, or a readability miss that locks onto a sidebar (the illogicalcontraption
+  case documented above). Overwriting a good article at the exact moment the
+  reader marked it worth keeping is the failure being avoided.
+- **Only from the star and tag ROUTES**, never from `set_manual_tags_for_entry`.
+  That service is also driven by the feed auto-taggers, at ingest, across
+  everything a refresh just delivered — hooking it would turn one refresh into a
+  burst of outbound requests at a single host.
+- **Never for a `lectio:saved` capture**, which was fetched from the page already.
+
+It runs off-request through `_run_in_user_context`, since a bare thread would lose
+the tenancy user and fetch as the default one.
+
+**A refusing host is remembered.** Because this is a side effect of tagging rather
+than a request, a site that declines us must not be re-asked on every tag —
+DeviantArt answers this server with 403 every time, and tagging across a watchlist
+would be dozens of requests it has already refused. After a failed automatic
+re-fetch the host is paused for six hours (in memory; it is a politeness memo, not
+a record, and it is bounded). Manual Re-fetch ignores the pause entirely: that is
+a person asking on purpose.
+
+**The mismatch guard was too blunt, and it broke this feature on arrival.**
+`_page_is_a_different_article` compared the URL slug against the fetched *title*
+only, and refused on zero overlap. But a descriptive slug and a specific title
+disagree routinely: whiskyadvocate.com/peated-whisky-cocktail-for-summer is headed
+"Charred Garden Smash", the drink's name, sharing not one word with its own slug.
+That refused the manual re-fetch and the automatic one alike — one bug reported as
+two. The guard now also consults the fetched **body** before refusing, which does
+not weaken what it was built for: a parked "Empowering Relationships" page does not
+mention ornaments or dingbats either, and a section index does not discuss the
+article it replaced. Zero overlap across title *and* body is a far stronger signal
+than zero overlap with a title, which is normal.
+
+**Re-fetch is available on any entry with a link** (2026-08-02). It used to
+require a capture, star or tag, on the reasoning that the next feed refresh would
+undo the replacement — but the **pin** is what prevents that, and
+`refresh_captured_article` applies it to every non-capture entry
+(`pin_content=not is_capture`) regardless of whether anything keeps it. The gate
+was guarding a hazard already handled, and its practical effect was that repairing
+a truncated post meant tagging it first, filing something you may not want filed
+just to read it properly. The real protections are unconditional and stay: the
+mismatch guard, and the pre-replacement snapshot in `entry_content_edits` that
+makes any re-fetch one click to Revert. Kept-ness still decides one thing — the
+offline **archive** enqueue, since a capture with no keep signal holding it is
+precisely the husk the unstar path has to clean up.
+
+Separately, the right-click **Re-fetch** items gate on `data-post-kept`, and only
+starring kept that attribute current: tagging re-rendered the entry *pane* and
+left the list row — the thing actually right-clicked — stale until a reload. The
+tag handlers now sync the row from the server's reply (`data.tags`, the normalized
+and capped set), OR-ing the star back in so clearing the last tag off a starred
+post does not un-keep it.
+
 ## Hard-deleting a single entry (tombstones)
 
 The entry context menu's **Delete post…** (`POST /entries/delete`) hard-removes one garbage entry (spam, corrupted post). reader's public `delete_entry` only covers user-added entries, so feed-provided ones go through the storage-level delete — the same API reader's own `entry_dedupe` plugin uses. A tombstone row in the meta DB (`deleted_entries`, keyed feed_url + entry_id) records the deletion, and the refresh service purges any tombstoned entry a refresh re-ingested (`purge_tombstoned_entries`, runs after every update batch, before enhancement) — otherwise the entry would resurrect on every fetch while still inside the publisher's feed window. Tombstones are kept forever (tiny rows; the guid could reappear any time the publisher republishes).
