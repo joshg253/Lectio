@@ -432,16 +432,3 @@ def test_dead_feed_beacons_are_dropped_rather_than_proxied():
 def test_dropping_beacons_leaves_real_images_alone():
     tag = '<img src="https://3.bp.blogspot.com/x/Boil.JPG">'
     assert main._drop_feed_beacon_images(tag) == tag
-
-
-def test_the_offline_manifest_takes_an_offset(configured):
-    """"Save 20 more" has to skip what the last press saved rather than re-fetch
-    it, and must slice the SAME ordering the browse list uses — otherwise the
-    second batch is not a continuation of the first."""
-    import inspect
-    src = inspect.getsource(main.read_offline_manifest)
-
-    assert "offset: int = Query(default=0)" in src
-    assert "[_offset:_offset + n]" in src
-    # Bounded like n: an unbounded offset walks a 24,000-item backlog by hand.
-    assert "min(int(offset), 500)" in src

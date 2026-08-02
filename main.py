@@ -17445,9 +17445,10 @@ def build_reader_page(
         "<button class='reader-ctl' id='reader-tag-btn' type='button'"
         f" aria-expanded='false' title='Tags'>#{len(manual_tags) or ''}</button>"
     )
-    # EXPERIMENT (uncommitted): download this article as a self-contained file,
-    # to test whether the Supernote can reach saved articles with WiFi off. A
-    # plain <a download> — no JS, so nothing to fail on an old WebView. ⤓ (U+2913)
+    # Download this article as a self-contained file. A spare route, not the main
+    # one — the service worker is what offline reading runs on — but a plain
+    # <a download> with no JS is the one thing that cannot break on an old
+    # WebView, so it stays. ⤓ (U+2913)
     offline_btn = (
         "<a class='reader-ctl' id='reader-offline-btn'"
         f" href='/read/offline?feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}'"
@@ -17508,6 +17509,11 @@ def build_reader_page(
         f"<a class='reader-ctl' href='{esc_back}' title='Back to list'>&#10005;</a>"
         f"<span class='reader-title'>{esc_title}</span>"
         "<span class='reader-pageinfo' id='reader-pageinfo'>1 / 1</span>"
+        # Offline queue depth, filled by outbox.js wherever data-outbox-depth
+        # appears. A queue nobody can see is how work gets lost without anyone
+        # noticing; on a device that is offline by default, that is not a rare
+        # case. Hidden when it is empty, which is almost always.
+        "<span class='reader-outbox' data-outbox-depth hidden></span>"
         "<button class='reader-ctl' id='reader-fs-minus' type='button' title='Smaller text'>A&#8722;</button>"
         "<button class='reader-ctl' id='reader-fs-plus' type='button' title='Larger text'>A+</button>"
         f"{saved_actions}"
@@ -17522,6 +17528,8 @@ def build_reader_page(
         f"{tag_panel}"
         f"<script>window.__READER_TAGS__={tags_json};</script>"
         f"<script>window.__READER_NAV__={nav_json};</script>"
+        # Before reader.js, which calls into it.
+        f"<script src='/static/outbox.js?v={STATIC_ASSET_VERSION}'></script>"
         f"<script src='/static/reader.js?v={STATIC_ASSET_VERSION}'></script>"
         "</body></html>"
     )
@@ -18046,7 +18054,9 @@ def _fetch_image_for_offline(url: str) -> tuple[bytes, str] | None:
 def _inline_images_as_data_uris(article_html: str) -> tuple[str, int, int]:
     """Rewrite <img src> to data: URIs so the document needs no network at all.
 
-    EXPERIMENT (2026-07-29), not committed yet. The Supernote has no browser
+    Serves the single-file download route below, which remains a SPARE — the
+    service worker is what offline reading actually runs on. It is kept because
+    it fails differently: the Supernote has no browser
     launcher — Read Mode is reached from a saved hyperlink — so with WiFi off the
     navigation itself fails and nothing cached is reachable. A downloaded,
     self-contained file sidesteps the entry-point problem entirely, which is the
@@ -18113,10 +18123,10 @@ def read_offline_copy(
 ):
     """Download one article as a single self-contained HTML file.
 
-    EXPERIMENT — the cheapest possible test of offline reading on the Supernote,
-    and deliberately not a design commitment. It answers the two questions a
-    capability probe cannot: can that WebView download a file at all, and can the
-    file be found and opened with WiFi off.
+    A SPARE, not the main route. Offline reading runs on the service worker,
+    which the Supernote's browser turned out to support; this was the cheap probe
+    that ran first, and it is kept because it fails differently — no JS at all,
+    so nothing here can break on an old WebView.
 
     No JS, no external references, CSS inlined, images as data: URIs. Nothing in
     it can phone home, so if it opens offline it works offline.
@@ -18167,7 +18177,7 @@ def read_offline_copy(
 
 @app.get("/sw.js")
 def offline_service_worker():
-    """Serve the probe worker from the ROOT path — EXPERIMENT, uncommitted.
+    """Serve the offline worker from the ROOT path.
 
     A worker's default scope is its own directory, so /static/sw.js could only
     ever control /static/*. Read Mode lives at /read, so it has to be served from
@@ -18185,75 +18195,6 @@ def offline_service_worker():
         "Service-Worker-Allowed": "/",
         "Cache-Control": "no-store",
     })
-
-
-@app.get("/read/offline/manifest")
-def read_offline_manifest(
-    folder_id: int | None = Query(default=None),
-    tag: str | None = Query(default=None),
-    kept: str | None = Query(default=None),
-    n: int = Query(default=20),
-    offset: int = Query(default=0),
-):
-    """The URLs a device should precache to read the next *n* items offline.
-
-    *offset* is what makes "Save 20 more" work: the next press skips what the
-    last one already saved rather than re-fetching the same articles. It has to
-    slice the SAME ordering the browse list uses, or the second batch is not the
-    continuation of the first.
-
-    The page cannot work this out for itself: the browse list holds hrefs, but an
-    article also needs its images, and those live inside the rendered HTML.
-
-    Assembled server-side and capped, because the whole point is a bounded set —
-    "cache the Inbox" on a 9,979-item backlog is not a request anyone means.
-    """
-    n = max(1, min(int(n), 50))
-    # Bounded like n is: an unbounded offset is a way to ask the server to walk a
-    # 24,000-item backlog one press at a time.
-    _offset = max(0, min(int(offset), 500))
-    is_all = kept == "all"
-    tag_val = normalize_tag_value(tag)
-    # The save set must be exactly what the node LISTS, or you precache a
-    # different set of articles than the one on screen. It was pinned to
-    # starred-only, matching the Inbox: saving a saved *folder* then skipped every
-    # tagged-but-unstarred item — 11 of Booze's 67 — and no amount of re-saving
-    # could fetch an article that was never in the set. Only the Inbox narrows to
-    # stars; see _load_backlog, which this mirrors.
-    with get_meta_connection() as _mconn:
-        _manifest_root_id = get_root_folder_id(_mconn)
-    _is_inbox = (not is_all) and _read_is_inbox_node(
-        folder_id, tag_val, False, None, "saved", _manifest_root_id)
-    items = resolve_reader_backlog(
-        folder_id=folder_id, list_feed_url=None, read_filter="all", star_only=True,
-        kept_scope=("starred" if _is_inbox else "kept"),
-        # Order mirrors the browse list too: only the Inbox is ordered by star
-        # date. Everywhere else most items were never starred, so that order put
-        # exactly the articles a folder is full of at the very back of the save.
-        tag=tag_val, sort_by=("starred" if _is_inbox else "post"),
-        sort_dir="desc", search_query=None, archived=False, limit=n + _offset,
-    )[_offset:_offset + n]
-
-    urls: list[str] = []
-    for it in items:
-        feed_u, eid = str(it["feed_url"]), str(it["id"])
-        urls.append(_reader_href(feed_u, eid, folder_id=folder_id, tag=tag_val,
-                                 archived=False, q=None, kept_all=is_all))
-        # Same-origin image URLs from the rendered article. Cross-origin ones are
-        # skipped: a no-cors response is opaque, so caching one stores a result
-        # the worker cannot tell apart from a failure.
-        article = resolve_reader_article_html(feed_u, eid, str(it.get("link") or ""))
-        if article and "<img" in article.lower():
-            from bs4 import BeautifulSoup
-            for img in BeautifulSoup(article, "html.parser").find_all("img"):
-                src = str(img.get("src") or "")
-                if src.startswith("/"):
-                    urls.append(src)
-    # Dedupe, order preserved: articles first, so a quota cut-off loses images
-    # rather than whole articles.
-    seen: set[str] = set()
-    deduped = [u for u in urls if not (u in seen or seen.add(u))]
-    return JSONResponse({"ok": True, "count": len(items), "urls": deduped})
 
 
 # Distinct User-Agents seen on /read, logged once each (capped) so we can learn

@@ -14,8 +14,7 @@
 (function () {
   "use strict";
 
-  // Articles saved for offline, and the number of articles the manifest is asked
-  // to supply images for. These MUST agree: they are two halves of one set.
+  // How many articles one press saves.
   const OFFLINE_ARTICLE_COUNT = 20;
 
   const statusEl = document.getElementById("rm-offline-status");
@@ -23,36 +22,6 @@
   if (!statusEl || !btn) return;
 
   const say = (msg) => { statusEl.textContent = msg; };
-
-  // How far into the current list we have already saved. Per node, because "20
-  // more" in a different folder would otherwise skip 20 arbitrary articles, and
-  // persisted because the cache survives a reload — without it the button offers
-  // to re-save what is already there.
-  //
-  // Josh, on where this ends up: "once I'm caught up (may be years...), I'd
-  // likely only be caching the Inbox stuff" — the cursor matters most now, while
-  // a folder holds more than one press can take.
-  const nodeKey = (() => {
-    const qs = new URLSearchParams(location.search);
-    return ["folder_id", "tag", "kept"].map((k) => k + "=" + (qs.get(k) || "")).join("&");
-  })();
-  const OFFSET_KEY = "lectio-offline-offset:" + nodeKey;
-
-  function savedSoFar() {
-    try { return Math.max(0, parseInt(window.localStorage.getItem(OFFSET_KEY), 10) || 0); }
-    catch (e) { return 0; }
-  }
-
-  function rememberSaved(n) {
-    try { window.localStorage.setItem(OFFSET_KEY, String(Math.max(0, n))); }
-    catch (e) { /* private mode: the button just starts from 0 again */ }
-  }
-
-  function saveLabel() {
-    return savedSoFar()
-      ? "Save " + OFFLINE_ARTICLE_COUNT + " more"
-      : "Save " + OFFLINE_ARTICLE_COUNT + " for offline";
-  }
 
   // Feature report first, so even a total failure leaves a useful answer on
   // screen. This is the whole point of running it on the device.
@@ -66,18 +35,89 @@
     return;
   }
 
-  // The template ships a static label; correct it before anything else, or a
-  // return visit with 40 already saved still offers "Save 20 for offline".
-  btn.textContent = saveLabel();
+  /* Every article link this page lists, in display order.
+   *
+   * The set to save is chosen from these hrefs and nowhere else. The server used
+   * to propose article URLs too, built by _reader_href without the active sort,
+   * while the real links carry sort=starred — so every cached article sat under
+   * a URL nothing navigates to. Reading the hrefs the page actually has makes a
+   * mismatch impossible. */
+  function listedHrefs() {
+    return Array.from(document.querySelectorAll(".rm-item-link"))
+      .map((a) => a.getAttribute("href"))
+      .filter((h) => h && h.indexOf("/read") === 0);
+  }
 
   let reg = null;
+  let cachedResolve = null;
+
+  function workerTarget() {
+    return navigator.serviceWorker.controller ||
+           (reg && (reg.active || reg.installing || reg.waiting));
+  }
+
+  /* Which of these are already stored? Asked of the worker, because the worker
+   * owns the cache and is the only thing that can answer truthfully.
+   *
+   * This replaces a localStorage cursor that counted POSITIONS — press once for
+   * items 1-20, again for 21-40. If new articles arrive at the top between
+   * presses, the list has shifted underneath the cursor: a few get re-saved and
+   * a few are skipped and never offered again. Rare in a backlog folder, routine
+   * in the Inbox, where new stars landing at the top is the whole point.
+   *
+   * Falls back to "nothing is cached" if the worker does not answer, which
+   * degrades to re-saving rather than to skipping. Re-saving costs bandwidth;
+   * skipping costs an article you thought you had. */
+  function alreadyCached(urls) {
+    const target = workerTarget();
+    if (!target) return Promise.resolve([]);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { cachedResolve = null; resolve([]); }, 5000);
+      cachedResolve = (have) => { clearTimeout(timer); resolve(have); };
+      target.postMessage({ type: "cached", urls: urls });
+    });
+  }
+
+  /* Re-read the cache and restate what is left to do.
+   *
+   * `quiet` keeps the status line as it is and updates only the button. It is
+   * used after a save, where the line holds the run's report — how many articles
+   * and images landed, how many failed, how much space it took. That report is
+   * the whole reason this feature states failure loudly, and overwriting it a
+   * moment later with "everything is saved" would hide precisely the runs worth
+   * looking at. */
+  function refreshReadiness(quiet) {
+    const hrefs = listedHrefs();
+    if (!hrefs.length) {
+      if (!quiet) say("Nothing here to save.");
+      btn.disabled = true;
+      return;
+    }
+    alreadyCached(hrefs).then((have) => {
+      const todo = hrefs.length - have.length;
+      const batch = Math.min(todo, OFFLINE_ARTICLE_COUNT);
+      btn.disabled = !todo;
+      btn.textContent = todo
+        ? (have.length ? "Save " + batch + " more" : "Save " + batch + " for offline")
+        : "Saved";
+      if (quiet) return;
+      if (!todo) { say(have.length + " saved — everything in this list is available offline."); return; }
+      say(have.length
+        ? have.length + " saved here, " + todo + " to go — save " + batch +
+          " more to read without a connection."
+        : "Ready — save the next " + batch + " articles to read without a connection.");
+    });
+  }
+
   navigator.serviceWorker.register("/sw.js", { scope: "/" }).then((r) => {
     reg = r;
-    const done = savedSoFar();
-    say(done
-      ? done + " saved here — save " + OFFLINE_ARTICLE_COUNT + " more to read without a connection."
-      : "Ready — save the next " + OFFLINE_ARTICLE_COUNT + " articles to read without a connection.");
-  }).catch((err) => {
+    // A freshly-installed worker is not yet controlling this page, so it cannot
+    // be messaged about the cache. Wait for one that can.
+    return navigator.serviceWorker.ready;
+    // Wrapped, not passed by reference: .then hands the resolved registration
+    // to its callback, which would arrive as a truthy `quiet` and suppress the
+    // status line this call exists to write.
+  }).then(() => refreshReadiness(false)).catch((err) => {
     // The likeliest failure on a locked-down WebView, and the answer we came for.
     say("Couldn't set up offline saving: " + err);
     btn.disabled = true;
@@ -85,6 +125,10 @@
 
   navigator.serviceWorker.addEventListener("message", (ev) => {
     const m = ev.data || {};
+    if (m.type === "cached-result") {
+      if (cachedResolve) { const f = cachedResolve; cachedResolve = null; f(m.have || []); }
+      return;
+    }
     if (m.type !== "precache-done") return;
     const d = m.detail || {};
     // Articles first and stated separately: they are the pass/fail criterion.
@@ -102,75 +146,40 @@
       const pre = document.getElementById("rm-offline-detail");
       if (pre) { pre.hidden = false; pre.textContent = m.examples.join("\n"); }
     }
-    // Advance by what actually landed, so a partial save is resumed rather than
-    // skipped over.
-    if (d.articles_ok) rememberSaved(savedSoFar() + d.articles_ok);
-    btn.disabled = false;
-    btn.textContent = saveLabel();
+    // Re-ask the cache rather than assuming the batch landed whole: a partial
+    // save now resumes exactly where it stopped, with no bookkeeping to drift.
+    // Quietly, so the report above survives to be read.
+    refreshReadiness(true);
   });
 
   btn.addEventListener("click", async () => {
     btn.disabled = true;
     btn.textContent = "Saving…";
     say("Working out what to save…");
-    let data;
-    try {
-      const qs = new URLSearchParams(location.search);
-      const params = new URLSearchParams({ n: String(OFFLINE_ARTICLE_COUNT),
-                                           offset: String(savedSoFar()) });
-      for (const k of ["folder_id", "tag", "kept"]) {
-        if (qs.get(k)) params.set(k, qs.get(k));
-      }
-      const resp = await fetch("/read/offline/manifest?" + params.toString(),
-                               { credentials: "same-origin" });
-      if (!resp.ok) throw new Error("HTTP " + resp.status);
-      data = await resp.json();
-    } catch (err) {
-      say("Couldn't fetch the article list: " + err);
-      btn.disabled = false;
-      btn.textContent = saveLabel();
-      return;
-    }
-    // Article URLs come from the DOM, not the server. The server built them
-    // from _reader_href without the active sort, while the real links carry
-    // sort=starred — so every cached article sat under a URL nothing navigates
-    // to. Reading the hrefs the page actually has makes a mismatch impossible.
-    // Capped to the SAME count the manifest was asked for. The list renders up to
-    // 150 rows, so taking every href cached 150 articles while asking for images
-    // from only the first 20 — the rest went offline with no pictures at all,
-    // which is exactly what "images weren't included" looked like on the device.
-    const _from = savedSoFar();
-    const domHrefs = Array.from(document.querySelectorAll(".rm-item-link"))
-      .map((a) => a.getAttribute("href"))
-      .filter((h) => h && h.indexOf("/read") === 0)
-      .slice(_from, _from + OFFLINE_ARTICLE_COUNT);
-    if (!domHrefs.length) {
+
+    const hrefs = listedHrefs();
+    const have = new Set(await alreadyCached(hrefs));
+    const todo = hrefs.filter((h) => !have.has(h)).slice(0, OFFLINE_ARTICLE_COUNT);
+    if (!todo.length) {
       // The list renders a bounded number of rows, so this is the end of what is
       // reachable here — not necessarily the end of the node.
       say("Everything in this list is saved.");
-      btn.disabled = true;
       btn.textContent = "Saved";
       return;
     }
-    // Keep only the server's image URLs; its article guesses are superseded.
-    const imageUrls = (data.urls || []).filter((u) => u.indexOf("/read") !== 0);
     // This page first: it is the entry point, and without it the saved hyperlink
     // lands nowhere no matter how many articles are cached.
-    const urls = [location.pathname + location.search]
-      .concat(domHrefs)
-      .concat(imageUrls);
-    // Articles and images, not "files": one is what you asked for, the other
-    // is what it needs. 54 files means nothing to the person who tapped Save.
-    const _articles = urls.filter((u) => u.indexOf("/read") === 0).length;
-    const _images = urls.length - _articles;
-    say("Saving " + _articles + " article" + (_articles === 1 ? "" : "s") +
-        (_images ? " and " + _images + " image" + (_images === 1 ? "" : "s") : "") + "\u2026");
-    const target = navigator.serviceWorker.controller ||
-                   (reg && (reg.active || reg.installing || reg.waiting));
+    //
+    // Articles only. The worker derives each article's images from the article
+    // it just stored, so there is no second list to fall out of step with this
+    // one — which is what a server manifest sliced by position always did.
+    const urls = [location.pathname + location.search].concat(todo);
+    say("Saving " + todo.length + " article" + (todo.length === 1 ? "" : "s") +
+        " and their images…");
+    const target = workerTarget();
     if (!target) {
       say("Offline saving isn't ready on this page yet — reload and try again.");
-      btn.disabled = false;
-      btn.textContent = saveLabel();
+      refreshReadiness(true);
       return;
     }
     target.postMessage({ type: "precache", urls: urls });
