@@ -5,14 +5,15 @@ this file only tracks what's still open.
 
 ## Now
 
-### Offline actions — SHIPPED 2026-08-01, unverified on the device
+### Offline actions — SHIPPED 2026-08-01, CONFIRMED ON THE DEVICE 2026-08-02
 
 Built and verified in Chromium (queue an Archive with the network off, confirm it
-persists across a reload, reconnect, watch it drain). **Not yet run on the
-Supernote**, which is the only test that counts — Chrome 96 in an Android WebView
-is where storage persistence and service-worker lifetime are the host app's call,
-not the web platform's. Design rationale is in ARCHITECTURE.md ("Offline reading
-and offline acting"); what follows is only what was left undone.
+persists across a reload, reconnect, watch it drain), then **confirmed on the
+Supernote itself — "works as expected"**. That was the test that counted: Chrome
+96 in an Android WebView is where storage persistence and service-worker lifetime
+are the host app's call rather than the web platform's, so nothing about the
+Chromium run guaranteed it. Design rationale is in ARCHITECTURE.md ("Offline
+reading and offline acting"); what follows is only what was left undone.
 
 **Deliberately not built: the `synced_actions` idempotency table.** The four
 routes the outbox drives are already idempotent set-state operations
@@ -42,8 +43,9 @@ Deliberately *not* revived alongside it: swipe gestures and pull-to-refresh, whi
 read on my phone". Their `bindSwipeGestures` / `bindSinglePanePullToRefresh` call
 sites remain as no-ops, so either can come back on its own.
 
-Untested on real hardware: verified with Playwright at 390x844 (levels step 0→1→2,
-back controls, 44px touch targets), but not on Josh's actual phone. (priority order)
+Verified with Playwright at 390x844 (levels step 0→1→2, back controls, 44px touch
+targets), and **confirmed on Josh's actual phone 2026-08-02** — "still awesome".
+Nothing outstanding here.
 
 **Rule-management UI shipped 2026-07-25** — Feed Properties → **Other domains**
 lists a feed's declared domain aliases with add/remove (`POST
@@ -1789,7 +1791,7 @@ rows (qwantz 44, birdandmoon 4); they re-derive on next view. **Run order
 matters** — the script's own docstring says to fix the picker first, or
 re-derivation just reproduces the bad pick.
 
-### 8f. DeviantArt mature images expire in ~15 minutes — needs render-time re-signing
+### 8f. DeviantArt mature images expire in ~15 minutes — FIXED: render-time re-signing
 
 Measured 2026-07-26, correcting two earlier wrong readings. DA signs *mature*
 deviations' wixmp URLs with a very short life: a freshly-signed URL expires in
