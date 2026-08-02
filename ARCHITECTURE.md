@@ -1396,6 +1396,106 @@ tablet whose UA contains `supernote` hitting `/` is redirected to
 `/read?scope=feeds`; the Read Mode exit link (`/?full=1`) opts back into the full
 app and sets a `lectio_full_app` cookie so in-app navigation isn't re-redirected.
 
+## Offline reading and offline acting (`static/sw.js`, `static/outbox.js`)
+
+The Supernote's browser has **no download handler at all** — no `<a download>`,
+no long-press "save link" — so every file-based route to offline reading is
+closed. A service worker is the only remaining in-browser option, and the reason
+it works where a plain cache cannot is that it intercepts the **navigation**: a
+saved hyperlink to `/read?…` still resolves with WiFi off. The worker is served
+from `/sw.js` (not `/static/`) because a worker's default scope is its own
+directory, and Read Mode lives at `/read`.
+
+Fetch handling is deliberately **network-first**. Lectio is a live app; serving a
+stale Inbox to a device that has WiFi would be a worse bug than not working
+offline. The cache is a fallback, never the primary. On a miss, `/read` is matched
+**exactly** — its query string *is* the article's identity, and an `ignoreSearch`
+match there returned the cached browse page for every article, a cache miss that
+looked like a successful navigation going nowhere. `ignoreSearch` is for
+`/static` assets whose `?v=` moved, and nothing else.
+
+**Precaching is driven by the page, but images are derived by the worker.** The
+page sends articles only — the hrefs the list actually renders, never
+server-proposed URLs, since the server built those without the active sort and
+every cached article sat under a URL nothing navigates to. The worker then
+harvests each article's images *out of the bytes it just stored*. This replaced a
+server manifest that sliced the node by position and returned images for items
+`[offset, offset+n)`: because the article set was chosen from the DOM and the
+image set by index, the two could disagree, and articles went offline with no
+pictures. Deriving images from the stored article makes that mismatch
+unrepresentable, and it deleted `GET /read/offline/manifest`, which had been
+rendering every candidate article through BeautifulSoup to guess. The harvest
+regex must undo `&amp;` — src attributes are HTML-escaped and `/api/img` URLs
+carry several parameters, so the escaped form caches a response nothing ever
+requests again: a counted success with the image still missing.
+
+**"Save 20 more" asks the cache, not a counter.** The cursor was a per-node
+`localStorage` offset — press once for items 1–20, again for 21–40. When new
+articles arrive at the top between presses the list shifts underneath it, so some
+are re-saved and some are skipped and never offered again: rare in a backlog
+folder, routine in the Inbox, where new stars landing at the top is the entire
+point of the Inbox. The page now asks the worker which hrefs it already holds
+(`{type:"cached"}`) and takes the first 20 that are missing. If the worker does
+not answer it falls back to "nothing is cached" — which degrades to re-saving
+rather than to skipping, because re-saving costs bandwidth and skipping costs an
+article you thought you had.
+
+**Acting offline: an outbox, not a retry.** Archive, Delete, tagging and
+mark-read were ordinary POSTs, so with no connection they failed and the tap was
+gone. `static/outbox.js` persists each one to **IndexedDB** — not the Cache API,
+because these are mutations and must survive the browser being killed, which on
+that device is how reading sessions normally end.
+
+Three decisions carry the design:
+
+- **Enqueue first, then send** — even when online. The failure that actually
+  loses work is not "offline", which the page can see, but the connection dying
+  *mid-POST*; and every Read Mode action is immediately followed by a navigation,
+  which cancels the request in flight. Post-first-then-queue-on-failure never
+  learns about those. This is affordable only because the four target routes are
+  **idempotent set-state operations** (`archived=0/1`, discard, the full tag set
+  with `append_mode=0`, `read=1`), so a record retried after a half-finished
+  flush is a no-op. That is also why there is no `synced_actions` dedupe table:
+  it would buy a schema change plus a per-user migration for no behavior change.
+- **The caller awaits the durable write, not the send.** An IndexedDB transaction
+  still open at unload is aborted, so navigating without waiting would lose the
+  very record that exists to stop the action being lost. The flush is left
+  dangling on purpose; if the navigation kills it, the next page load picks it up.
+- **403 is never dropped.** Replay drops a record on 2xx or a definitive 4xx
+  (400/404/409/410/422 — the entry is gone, or the request can never apply, and
+  retrying forever would wedge every later action behind it). A 403 here is an
+  expired session or a CSRF token from a page cached hours ago, neither of which
+  is a verdict on the action.
+
+Replay is serial and oldest-first, stopping at the first record that neither
+succeeded nor died definitively — pushing past it would reorder the rest, and an
+archive-then-unarchive replayed backwards brings the item back. Triggers are page
+load and the `online` event, **plus** Background Sync where it exists; Sync cannot
+be the only path, because the device this is for runs Chrome 96 in an Android
+WebView, where it is absent. The same file runs in both places (every DOM touch
+is guarded, and `sw.js` pulls it in with `importScripts`), so there is one
+implementation rather than two that drift. The CSRF token is captured **at enqueue
+time** and stored on the record: a worker replaying under Background Sync has no
+document, and therefore no `<meta name=csrf-token>` to read.
+
+Tagging is the deliberate exception — it posts directly and queues only on
+failure, because it is the one action whose **reply** matters (the server
+normalizes the name and enforces the cap, and the panel re-renders from what came
+back), and nothing navigates away, so there is no cancellation race to protect
+against.
+
+Pending depth renders into any `[data-outbox-depth]` element — the Read Mode
+footer and the reader's control bar. A queue nobody can see is how work gets lost
+without anyone noticing, and on a device that is offline by default that is not a
+rare case.
+
+**Conflict rule: last-writer-wins, and the device loses ties it cannot see.** A
+replayed action overwrites whatever the server now holds. Detecting "the server
+already moved on" would need per-entry modification times the schema does not
+carry, and the alternative — a merge dialogue on an e-ink screen — is worse than
+the loss it prevents. Discarded actions are logged so a surprising result is at
+least explicable.
+
 ## Hard-deleting a single entry (tombstones)
 
 The entry context menu's **Delete post…** (`POST /entries/delete`) hard-removes one garbage entry (spam, corrupted post). reader's public `delete_entry` only covers user-added entries, so feed-provided ones go through the storage-level delete — the same API reader's own `entry_dedupe` plugin uses. A tombstone row in the meta DB (`deleted_entries`, keyed feed_url + entry_id) records the deletion, and the refresh service purges any tombstoned entry a refresh re-ingested (`purge_tombstoned_entries`, runs after every update batch, before enhancement) — otherwise the entry would resurrect on every fetch while still inside the publisher's feed window. Tombstones are kept forever (tiny rows; the guid could reappear any time the publisher republishes).

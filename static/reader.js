@@ -70,7 +70,9 @@
     // Fire-and-forget: nothing on screen depends on the reply, and a failure
     // should not interrupt reading. The header asks for the JSON reply and the
     // read-history append, matching what the server used to do on render.
-    post("/entries/read", {
+    // Queued rather than posted, so a session read with WiFi off still comes
+    // back marked read — otherwise offline reading silently un-does itself.
+    submit("/entries/read", {
       folder_id: "0", feed_url: feed, entry_id: entry, read: "1", select_entry: "0",
     }, "lectio-entry-read-toggle");
   }
@@ -192,8 +194,23 @@
       credentials: "same-origin",
     });
   }
+  /* Mutations go through the offline outbox (static/outbox.js), which persists
+   * them and replays them when the connection returns. Archive, Delete and
+   * mark-read are all "do what I said locally, sync it back later" — with no
+   * network they used to be plain POSTs that simply failed, and the tap was
+   * gone.
+   *
+   * If outbox.js did not load, or IndexedDB is unavailable, this is the old
+   * direct POST. Losing the queue must not lose the ability to act. */
+  function submit(url, params, requestedWith) {
+    if (window.LectioOutbox) return window.LectioOutbox.submit(url, params, requestedWith);
+    return post(url, params, requestedWith);
+  }
   function postAction(url, params, requestedWith) {
-    post(url, params, requestedWith).then(afterAction, afterAction);
+    // afterAction on both paths: the article leaves the screen whether or not
+    // the server has heard about it yet. That is the whole point — the reader
+    // should not be able to tell whether they were online.
+    submit(url, params, requestedWith).then(afterAction, afterAction);
   }
   var archiveBtn = document.getElementById("reader-archive-btn");
   if (archiveBtn) archiveBtn.addEventListener("click", function (e) {
@@ -326,11 +343,18 @@
   function applyTags(next) {
     // Full desired set with append_mode=0, so a removal is the same request as
     // an addition. The server normalizes and caps, and its reply is the truth.
-    return post("/entries/tags", {
+    var params = {
       folder_id: "0", feed_url: TAGS.feed_url, entry_id: TAGS.entry_id,
       tags_text: next.map(function (t) { return "#" + t; }).join(" "),
       append_mode: "0", select_entry: "0",
-    }, "lectio-ajax")
+    };
+    // Posted directly rather than through the outbox, and queued only if that
+    // fails — the opposite of Archive/Delete, for a specific reason: tagging is
+    // the one action whose REPLY matters (the server normalizes "Guitar Lessons"
+    // to "guitar-lessons" and enforces the cap, and the panel re-renders from
+    // what came back). Nothing navigates away here either, so there is no
+    // request-cancelled-by-unload race to protect against.
+    return post("/entries/tags", params, "lectio-ajax")
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
         if (data && data.tags) {
@@ -341,7 +365,13 @@
           });
         }
         renderTags();
-      }, function () { renderTags(); });
+      }, function () {
+        // Offline. The optimistic render already stands; queue the write so it
+        // lands when the connection does. Tags replay as a full set, so the
+        // last queued state for an entry wins, which is what tapping meant.
+        if (window.LectioOutbox) window.LectioOutbox.submit("/entries/tags", params, "lectio-ajax");
+        renderTags();
+      });
   }
 
   function toggleTag(name) {

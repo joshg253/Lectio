@@ -183,7 +183,17 @@ The short version:
   reports articles and images separately (images failing is a degraded read;
   articles failing is no feature). Built for the Supernote, whose browser has no
   download handler at all, so a service worker serving the navigation is the only
-  in-browser route left.
+  in-browser route left. Pressing it again saves the next 20 you *don't already
+  have*, not the next 20 by position — so new arrivals at the top of the Inbox
+  can't shift the list out from under the cursor and leave a gap.
+- **Archive, Delete and mark-read work offline too** — the action applies on the
+  spot and is queued on the device, then replayed when the connection returns, so
+  reading on a train is not read-only. A badge shows *"3 changes waiting to sync"*
+  in both the reader and the article list while anything is still pending, and
+  the queue survives the browser being killed. Tagging queues too; the only
+  difference offline is cosmetic — a tag you type is shown exactly as typed until
+  it syncs, because the tidied-up name (`Guitar Lessons` → `guitar-lessons`) comes
+  back from the server.
 - **Folders are a drawer on a phone** — a hamburger top-left slides the tree over
   the post list rather than replacing it, so you can see what you are leaving.
   Tapping the dimmed list, or picking a folder, closes it.

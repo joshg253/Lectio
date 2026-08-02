@@ -111,6 +111,11 @@
         <div class="rm-offline">
           <button type="button" id="rm-offline-btn" class="rm-sort-opt">Save 20 for offline</button>
           <span id="rm-offline-status" class="rm-offline-status">Checking…</span>
+          {# Offline action queue depth, filled by outbox.js. Shown here as well
+             as in the reader bar: actions are taken inside an article, but the
+             list is where you come back to, and a queue that never drains has to
+             be visible somewhere you actually look. #}
+          <span class="rm-offline-queue" data-outbox-depth hidden></span>
           <pre id="rm-offline-detail" class="rm-offline-detail" hidden></pre>
         </div>
 
@@ -173,6 +178,10 @@
       {% endif %}
     </main>
   </div>
+  {# outbox.js flushes any actions queued while offline on load, and renders the
+     queue depth above. It is loaded here, not only in the reader, because the
+     list is the page most likely to be open when the connection returns. #}
+  <script src="/static/outbox.js?v={{ static_asset_version }}"></script>
   <script src="/static/offline-probe.js?v={{ static_asset_version }}"></script>
 </body>
 </html>
