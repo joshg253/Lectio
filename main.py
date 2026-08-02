@@ -13664,6 +13664,12 @@ _LEAD_IMG_OPENER_RE = re.compile(
     r"<img\b[^>]*/?>",
     re.IGNORECASE | re.DOTALL,
 )
+
+# A float the sanitizer preserved, in its normalized form. Matched against the
+# opener markup — the float usually sits on the wrapping <a> or <div>, not the
+# <img> — so an author-floated opener can be left in the flow instead of being
+# hoisted into a full-width hero. See _strip_lead_image_opener.
+_FLOAT_STYLE_RE = re.compile(r"float:\s*(?:left|right)", re.IGNORECASE)
 _CLOSE_A_RE = re.compile(r"</a\s*>", re.IGNORECASE)
 _TUMBLR_MEDIA_PREFIX_RE = re.compile(r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/", re.IGNORECASE)
 
@@ -13851,6 +13857,24 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
         return content_html, lead_image_url
 
     _m = _LEAD_IMG_OPENER_RE.match(content_html)
+    if _m and _FLOAT_STYLE_RE.search(_m.group(0)):
+        # The author FLOATED this image, so the text is written to wrap around
+        # it. Hoisting it to a full-width hero above the article destroys exactly
+        # the layout it was given — the post reads as a centred block with all
+        # its text pushed below, which is how it was reported (2026-08-02, a
+        # Blogger review whose cover sits right with the review beside it).
+        #
+        # This is the same rule the branch below already applies to an image
+        # further down the body: an image the author placed in the flow is
+        # content, not a header. A float is that placement stated explicitly, and
+        # it happens to be at the top. So leave the body untouched and drop the
+        # separate lead, or the picture appears twice.
+        #
+        # Only the ARTICLE lead is dropped. The list thumbnail is resolved
+        # independently (get_cached_entry_thumbnail), so the post keeps its
+        # thumbnail either way.
+        return content_html, None
+
     if _m:
         # BS4 removes the opener <img> and its now-empty ancestor containers without
         # touching sibling figures or anchored link text ("New comic!").

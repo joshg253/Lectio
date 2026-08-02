@@ -98,6 +98,53 @@ def test_floats_stack_on_a_narrow_screen():
                 f"{sheet}: an inline float will beat a plain `float: none`"
 
 
+# --- a floated opener is content, not a header ---------------------------
+
+_LEAD = "https://e.com/hero.jpg"
+_FEED = "https://example.com/feed"
+
+
+def test_a_floated_opening_image_stays_in_the_flow():
+    """The actual complaint. Preserving `float: right` in the sanitizer was not
+    enough: the FIRST image is also what the lead-image pipeline hoists into a
+    full-width hero, stripping it from the body — so the one image the reader
+    pointed at was the one that lost its float and its text wrap."""
+    html = ('<div class="separator"><a style="clear: right; float: right" href="x">'
+            '<img src="https://e.com/hero.jpg"/></a></div><p>The review text.</p>')
+    body, lead = main._strip_lead_image_opener(html, _LEAD, _FEED, True)
+    assert "hero.jpg" in body, "the floated image was hoisted out of the body"
+    assert lead is None, "kept inline AND hoisted would show the picture twice"
+
+
+def test_an_ordinary_opening_image_is_still_hoisted():
+    """The existing behaviour, which most feeds rely on: a plain opener is a
+    header image and belongs above the article."""
+    html = ('<div class="separator" style="text-align: center"><a href="x">'
+            '<img src="https://e.com/hero.jpg"/></a></div><p>Body.</p>')
+    body, lead = main._strip_lead_image_opener(html, _LEAD, _FEED, True)
+    assert lead == _LEAD
+    assert "hero.jpg" not in (body or "")
+
+
+def test_hide_lead_in_article_still_wins_over_a_float():
+    """"Don't show the lead image in the article" is an explicit instruction and
+    outranks the author's layout."""
+    html = ('<div><a style="float: left" href="x"><img src="https://e.com/hero.jpg"/></a>'
+            '</div><p>Body.</p>')
+    body, _ = main._strip_lead_image_opener(html, _LEAD, _FEED, False)
+    assert "hero.jpg" not in (body or "")
+
+
+def test_the_float_is_detected_on_the_wrapper_not_just_the_img():
+    """Blogger puts the float on the wrapping <a>, which is why the opener
+    markup is searched rather than the <img> tag alone."""
+    assert main._FLOAT_STYLE_RE.search('<a style="clear: right; float: right">')
+    assert main._FLOAT_STYLE_RE.search('<img style="float: left"/>')
+    assert not main._FLOAT_STYLE_RE.search('<div style="text-align: center">')
+    # float: none is not a placement.
+    assert not main._FLOAT_STYLE_RE.search('<div style="float: none">')
+
+
 # --- oversized images are re-encoded -------------------------------------
 
 

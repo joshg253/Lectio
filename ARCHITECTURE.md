@@ -1529,6 +1529,18 @@ Read Mode already floated WordPress `alignleft`/`alignright` for the same reason
 so the inline-style selectors were folded into those existing rules rather than
 added beside them.
 
+**Preserving the float in the sanitizer was only half of it.** The FIRST image in
+a body is also what `_strip_lead_image_opener` hoists into a full-width hero,
+removing it from the flow — so the one image a reader is most likely to be
+pointing at was the one still losing its wrap. That function already had the
+right rule for images further down (*"an occurrence further down is the author
+placing it in the flow, which is content rather than a header"*); a float is that
+same placement stated explicitly, and it happens to be at the top. A floated
+opener is now left where it is and the separate lead is dropped, or the picture
+would appear twice. Only the *article* lead is dropped: the list thumbnail is
+resolved on its own path, so the post keeps it. "Don't show the lead image in the
+article" still outranks the author's layout — that is an explicit instruction.
+
 ## Image bytes: the dimension cap is not a size cap
 
 `/api/img` downscales a cached image to `LECTIO_IMG_CACHE_MAX_DIM` (3840) on the
