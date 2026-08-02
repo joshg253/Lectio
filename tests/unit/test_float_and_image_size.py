@@ -11,6 +11,7 @@ Two unrelated reports from the same reading session (2026-08-02):
 """
 from __future__ import annotations
 
+import inspect
 import io
 import re
 
@@ -133,6 +134,24 @@ def test_hide_lead_in_article_still_wins_over_a_float():
             '</div><p>Body.</p>')
     body, _ = main._strip_lead_image_opener(html, _LEAD, _FEED, False)
     assert "hero.jpg" not in (body or "")
+
+
+def test_the_dedup_decision_is_not_persisted_as_the_lead_image():
+    """The bug this caused, and the reason it was so wide: every path in
+    _strip_lead_image_opener that sets lead_image_url = None means "don't draw it
+    twice", NOT "this entry has no image" — and that None was what got written to
+    entry_lead_images, which is where the LIST reads its thumbnail. Making a
+    floated opener stay inline therefore blanked the thumbnail of every post it
+    touched (130 live entries).
+
+    The resolved value must be captured before the dedup and persisted instead.
+    """
+    src = inspect.getsource(main.get_entry_detail)
+    assert "_resolved_lead_for_cache = lead_image_url" in src
+    strip_at = src.index("_strip_lead_image_opener(")
+    capture_at = src.index("_resolved_lead_for_cache = lead_image_url")
+    assert capture_at < strip_at, "must be captured BEFORE the dedup rewrites it"
+    assert "persist_lead_image_async(\n                str(entry.feed_url), str(entry.id), _resolved_lead_for_cache\n            )" in src
 
 
 def test_the_float_is_detected_on_the_wrapper_not_just_the_img():

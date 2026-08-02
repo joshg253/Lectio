@@ -14561,6 +14561,14 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # image URL still appears in what remains.  This prevents the case where
         # the lead image IS the opener thumbnail (e.g. comicsthumbs) from being
         # incorrectly suppressed just because it appears at the top of content.
+        # Keep what the lead image RESOLVED to, before the dedup below decides
+        # whether to render it separately. The two are different questions, and
+        # conflating them blanks thumbnails: everything the dedup does — a lead
+        # already shown inline, a floated opener left in the flow — sets
+        # lead_image_url to None meaning "don't draw it twice", not "this entry
+        # has no image". That None used to be what got persisted to
+        # entry_lead_images, which is where the LIST reads its thumbnail from.
+        _resolved_lead_for_cache = lead_image_url
         content_html, lead_image_url = _strip_lead_image_opener(
             content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article
         )
@@ -14663,9 +14671,16 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # preview used as the list thumbnail, while the article shows the full
         # inline strip — persisting the article's full image here would clobber
         # the preview thumbnail. The webcomic source-scrape owns that cache.
+        #
+        # Persist what the lead image RESOLVED to, not what survived the dedup —
+        # see _resolved_lead_for_cache above. The list thumbnail reads this cache,
+        # so persisting the dedup's None takes the thumbnail away from every post
+        # whose image is shown inline instead of hoisted.
         _persist_strategy, _, _ = lead_image_service.get_feed_strategy(str(entry.feed_url))
         if _persist_strategy != "webcomic":
-            lead_image_service.persist_lead_image_async(str(entry.feed_url), str(entry.id), lead_image_url)
+            lead_image_service.persist_lead_image_async(
+                str(entry.feed_url), str(entry.id), _resolved_lead_for_cache
+            )
 
         # If this entry is starred and the archive worker has captured assets,
         # swap inline image URLs to the local /starred-asset route so the
