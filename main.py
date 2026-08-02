@@ -17445,9 +17445,10 @@ def build_reader_page(
         "<button class='reader-ctl' id='reader-tag-btn' type='button'"
         f" aria-expanded='false' title='Tags'>#{len(manual_tags) or ''}</button>"
     )
-    # EXPERIMENT (uncommitted): download this article as a self-contained file,
-    # to test whether the Supernote can reach saved articles with WiFi off. A
-    # plain <a download> — no JS, so nothing to fail on an old WebView. ⤓ (U+2913)
+    # Download this article as a self-contained file. A spare route, not the main
+    # one — the service worker is what offline reading runs on — but a plain
+    # <a download> with no JS is the one thing that cannot break on an old
+    # WebView, so it stays. ⤓ (U+2913)
     offline_btn = (
         "<a class='reader-ctl' id='reader-offline-btn'"
         f" href='/read/offline?feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}'"
@@ -18053,7 +18054,9 @@ def _fetch_image_for_offline(url: str) -> tuple[bytes, str] | None:
 def _inline_images_as_data_uris(article_html: str) -> tuple[str, int, int]:
     """Rewrite <img src> to data: URIs so the document needs no network at all.
 
-    EXPERIMENT (2026-07-29), not committed yet. The Supernote has no browser
+    Serves the single-file download route below, which remains a SPARE — the
+    service worker is what offline reading actually runs on. It is kept because
+    it fails differently: the Supernote has no browser
     launcher — Read Mode is reached from a saved hyperlink — so with WiFi off the
     navigation itself fails and nothing cached is reachable. A downloaded,
     self-contained file sidesteps the entry-point problem entirely, which is the
@@ -18120,10 +18123,10 @@ def read_offline_copy(
 ):
     """Download one article as a single self-contained HTML file.
 
-    EXPERIMENT — the cheapest possible test of offline reading on the Supernote,
-    and deliberately not a design commitment. It answers the two questions a
-    capability probe cannot: can that WebView download a file at all, and can the
-    file be found and opened with WiFi off.
+    A SPARE, not the main route. Offline reading runs on the service worker,
+    which the Supernote's browser turned out to support; this was the cheap probe
+    that ran first, and it is kept because it fails differently — no JS at all,
+    so nothing here can break on an old WebView.
 
     No JS, no external references, CSS inlined, images as data: URIs. Nothing in
     it can phone home, so if it opens offline it works offline.
@@ -18174,7 +18177,7 @@ def read_offline_copy(
 
 @app.get("/sw.js")
 def offline_service_worker():
-    """Serve the probe worker from the ROOT path — EXPERIMENT, uncommitted.
+    """Serve the offline worker from the ROOT path.
 
     A worker's default scope is its own directory, so /static/sw.js could only
     ever control /static/*. Read Mode lives at /read, so it has to be served from

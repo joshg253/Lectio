@@ -1,4 +1,9 @@
-/* Offline probe service worker — EXPERIMENT (2026-07-29), not committed.
+/* Offline service worker — reading without a connection, and acting without one.
+ *
+ * Began as a probe (2026-07-29) asking whether a worker would register at all in
+ * the Supernote's WebView. It does, precaching works, and it now carries the
+ * offline action queue too (see outbox.js), so this is a feature rather than an
+ * experiment.
  *
  * The Supernote's browser is an Android WebView with no download handler at all
  * (no <a download>, no long-press "save link"), so every file-based route to
