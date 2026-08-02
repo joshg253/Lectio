@@ -7815,6 +7815,39 @@ const CAPTURE_MODE_FULL = 'full';
       return true;
     }
 
+    /* Keep the LIST ROW's kept flag in step with a tag change.
+     *
+     * Kept = starred OR tagged, and the right-click menu's Re-fetch items gate
+     * on it (postCanRefetch). Starring already syncs its own attribute via
+     * applyPostItemSavedState, so Re-fetch appears the moment you star. Tagging
+     * only called loadEntryPaneWithoutFullRefresh, which re-renders the entry
+     * PANE — leaving data-post-kept stale on the row you actually right-click,
+     * so a freshly tagged post offered no Re-fetch until a full reload. The
+     * menu reads the attribute at open time, so writing it here is the fix.
+     */
+    function applyPostItemKeptState(feedUrl, entryId, hasTags) {
+      if (!feedUrl || !entryId) return;
+      const esc = (v) => (window.CSS && CSS.escape ? CSS.escape(v) : v);
+      const postItem = document.querySelector(
+        `.post-item[data-post-feed-url="${esc(feedUrl)}"][data-post-entry-id="${esc(entryId)}"]`
+      );
+      if (!postItem) return;
+      // OR the star back in: removing the last tag from a still-starred post
+      // must not un-keep it.
+      const kept = hasTags || postItem.getAttribute('data-post-saved') === '1';
+      postItem.setAttribute('data-post-kept', kept ? '1' : '0');
+    }
+
+    /* Read the entry the tag form is bound to, and sync the row from the
+     * server's reply. `data.tags` is authoritative — it is the normalized,
+     * capped set the server actually stored, not what was typed. */
+    function syncKeptFromTagResponse(form, data) {
+      if (!(form instanceof HTMLFormElement)) return;
+      const feedUrl = form.querySelector('input[name="feed_url"]')?.value || '';
+      const entryId = form.querySelector('input[name="entry_id"]')?.value || '';
+      applyPostItemKeptState(feedUrl, entryId, Array.isArray(data?.tags) && data.tags.length > 0);
+    }
+
     function applyEntryPaneSavedState(isSaved) {
       const entrySaveForm = document.querySelector('.entry-save-toggle-form');
       const entrySaveInput = entrySaveForm?.querySelector('input[name="saved"]');
@@ -13693,6 +13726,7 @@ const CAPTURE_MODE_FULL = 'full';
             const data = await resp.json();
             if (data.ok) {
               entryTagsInput.value = '';
+              syncKeptFromTagResponse(entryTagsForm, data);
               loadEntryPaneWithoutFullRefresh(window.location.href, false);
             } else {
               showToastMessage(data.error || 'Failed to save tags.');
@@ -13836,6 +13870,7 @@ const CAPTURE_MODE_FULL = 'full';
             });
             const data = await resp.json();
             if (data.ok) {
+              syncKeptFromTagResponse(entryTagsForm, data);
               loadEntryPaneWithoutFullRefresh(window.location.href, false);
             } else {
               removeBtn.disabled = false;

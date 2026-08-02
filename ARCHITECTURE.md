@@ -1496,6 +1496,114 @@ carry, and the alternative — a merge dialogue on an e-ink screen — is worse 
 the loss it prevents. Discarded actions are logged so a surprising result is at
 least explicable.
 
+## Floated images, and why margins are not kept
+
+The style allowlist (`_ALLOWED_STYLE_VALUES`) keeps `float` and `clear` alongside
+the typographic properties. Blogger emits `clear: right; float: right` on every
+side-set image, and dropping it turned a post written *around* a right-set cover
+into a centred block with all the text pushed below — a visibly different
+article, and the way it was reported (2026-08-02).
+
+Floats are admitted where `position`/`z-index`/`width` are not, and the
+distinction is not arbitrary: a float stays inside its container, so it cannot
+overlay the app's own UI or escape the pane. It is prose layout.
+
+The author's accompanying `margin-*` is **deliberately dropped**. Margins are
+free-form lengths, so keeping them would mean matching a value *pattern* rather
+than a literal — the one thing this table promises never to do, and the property
+that makes it auditable. The gutter comes from `static/style.css` and
+`static/reader.css` instead, keyed off the sanitizer's **normalized** output.
+That is why the spacing inside `"float: right"` is load-bearing: the stylesheets
+select on `[style*="float: right"]`, and an emitter that ever wrote `float:right`
+would silently stop matching every rule with nothing failing.
+
+**The narrow-screen override needs `!important`, and this is not stylistic.** The
+float survives as an *inline* style — that is how the sanitizer preserves it —
+and an inline declaration outranks any stylesheet rule. Without `!important` the
+`max-width: 620px` block is inert and a 45%-wide image stays floated on a phone.
+It shipped that way and was caught in a browser at 390px, not by a test; the test
+now asserts the `!important` specifically, because a plain `float: none` passes a
+naive check while doing nothing.
+
+Read Mode already floated WordPress `alignleft`/`alignright` for the same reason,
+so the inline-style selectors were folded into those existing rules rather than
+added beside them.
+
+## Image bytes: the dimension cap is not a size cap
+
+`/api/img` downscales a cached image to `LECTIO_IMG_CACHE_MAX_DIM` (3840) on the
+longest side. That says nothing about how many bytes it weighs. A 3840x2160 RGBA
+**PNG** is exactly at the cap, so `_maybe_downscale_image` returns it untouched —
+at 11.6 MB, shipped whole on every article view. Reported as "this image loads
+slowly every time", which it did, because it does.
+
+`_maybe_shrink_oversized_image` adds a byte budget (`LECTIO_IMG_TARGET_BYTES`,
+default 1.5 MB, 0 disables). Over it, the image is re-encoded to WebP:
+
+- **Lossless** for small, few-colour images — logos, pixel art, diagrams,
+  screenshots — where lossy compression visibly damages hard edges and text.
+- **Lossy q85** for everything else, on the reasoning that a large full-colour
+  image is photographic or painted, which is the case lossy handles best.
+
+**Both gates were measured, and the obvious implementations are wrong.** Trying
+lossless first and falling back cost **12.3s** in the request path; lossless alone
+on that image is 6s and still 7.9 MB. Its colour count is 42,082 — low enough
+that a naive "few colours means line art" test sends painted artwork down exactly
+that slow path. So pixels are checked first (cheap, and pixel count is what makes
+the encoder slow) and the colour scan only runs where the answer is both fast and
+true. Result on the reported image: **11.6 MB → 0.17 MB in 0.54s**, with line art
+verified pixel-identical.
+
+Both re-encoders now run via `run_in_threadpool`. `/api/img` is an async route, so
+running a multi-hundred-millisecond bitmap decode inline blocks the event loop and
+every other request on the worker queues behind one large image.
+
+## Thumbnails must reuse the image proxy's bytes
+
+`/thumb` fetched its source URL directly and never consulted `img_cache`. For an
+image behind a short-lived signed URL that is fatal: the article renders fine
+(`/api/img` holds the bytes under a token-stripped key — see the DeviantArt
+section above) while the thumbnail re-requests the dead URL, gets a 401, and is
+recorded in the recently-failed set. The result is a post with a working image and
+no thumbnail, permanently, plus a failing fetch on every list render. Found on a
+deviation whose token expired two days earlier.
+
+The proxy cache is now consulted first, and — importantly — **before** the
+recently-failed short-circuit. Ordering it the other way preserves the bug: the
+host *is* failing, which is precisely when the cached bytes are the only way to
+get a thumbnail.
+
+## Re-fetch on keep
+
+Both Star and Tag already `enqueue_archive`, so an offline capture (page +
+readability) is taken on either. That capture is what Read Mode and
+`/entries/readability` read. It does **not** touch the entry pane, which shows
+stored feed content — so a truncated feed still showed its teaser there.
+
+`_maybe_autofetch_on_keep` closes that, narrowly:
+
+- **Only when the stored copy is thin**, judged by `_archived_copy_is_plausible`,
+  the same test the reader uses to reject a failed extraction. Re-fetching a good
+  copy can only make it worse — the live page may now be a paywall, a cookie wall,
+  a 404, or a readability miss that locks onto a sidebar (the illogicalcontraption
+  case documented above). Overwriting a good article at the exact moment the
+  reader marked it worth keeping is the failure being avoided.
+- **Only from the star and tag ROUTES**, never from `set_manual_tags_for_entry`.
+  That service is also driven by the feed auto-taggers, at ingest, across
+  everything a refresh just delivered — hooking it would turn one refresh into a
+  burst of outbound requests at a single host.
+- **Never for a `lectio:saved` capture**, which was fetched from the page already.
+
+It runs off-request through `_run_in_user_context`, since a bare thread would lose
+the tenancy user and fetch as the default one.
+
+Separately, the right-click **Re-fetch** items gate on `data-post-kept`, and only
+starring kept that attribute current: tagging re-rendered the entry *pane* and
+left the list row — the thing actually right-clicked — stale until a reload. The
+tag handlers now sync the row from the server's reply (`data.tags`, the normalized
+and capped set), OR-ing the star back in so clearing the last tag off a starred
+post does not un-keep it.
+
 ## Hard-deleting a single entry (tombstones)
 
 The entry context menu's **Delete post…** (`POST /entries/delete`) hard-removes one garbage entry (spam, corrupted post). reader's public `delete_entry` only covers user-added entries, so feed-provided ones go through the storage-level delete — the same API reader's own `entry_dedupe` plugin uses. A tombstone row in the meta DB (`deleted_entries`, keyed feed_url + entry_id) records the deletion, and the refresh service purges any tombstoned entry a refresh re-ingested (`purge_tombstoned_entries`, runs after every update batch, before enhancement) — otherwise the entry would resurrect on every fetch while still inside the publisher's feed window. Tombstones are kept forever (tiny rows; the guid could reappear any time the publisher republishes).

@@ -1603,8 +1603,27 @@ class LeadImageService:
             if plugin_fallback and self._is_image_url_acceptable(plugin_fallback, None, None):
                 return plugin_fallback
 
-        if cached_negative or not entry_link:
-            return None
+        # The inline strategy found nothing — try the source page after all.
+        #
+        # `skip_source` above is an optimization, not a verdict: for feeds whose
+        # images are reliably inline, scraping the page rarely beats the feed and
+        # often picks up site chrome. But a *hint* that yields nothing has to fall
+        # through, or an entry with no inline image at all can never get one.
+        # Standard Ebooks is the clean example: the feed is one sentence of prose
+        # with an epub enclosure and no <img> anywhere, the page carries a proper
+        # og:image cover, and the feed is classified 'inline' — so every release
+        # came through with no cover at all.
+        #
+        # The backfill loop (fetch_and_store_lead_images_for_feed) has always had
+        # this fallback and says so in its comment; this path simply never got it.
+        if not cached_negative and entry_link and skip_source \
+                and not self._plugin_should_skip_source_lookup(entry_link=entry_link):
+            source_image = self._fetch_source_lead_image(
+                entry_link, is_webcomic=self._is_feed_webcomic(feed_url_str)
+            )
+            if source_image:
+                return source_image
+
         return None
 
     def fetch_and_store_lead_images_for_feed(self, feed_url: str, force_retry_negative: bool = False) -> None:

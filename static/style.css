@@ -3805,6 +3805,42 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
 .entry-content [align="right"] { text-align: right; }
 .entry-content [align="left"]  { text-align: left; }
 
+/* Floated images, with the text wrapping around them the way the author wrote
+   it. The sanitizer keeps an enumerated `float`/`clear` but deliberately drops
+   the author's `margin-*` (free-form lengths have no place in a literal-value
+   allowlist), so the gutter is supplied here — matching the normalized output
+   the sanitizer emits, which is why the spacing in these selectors is fixed.
+
+   A float has to be sized to leave room for text beside it; at full column width
+   there is nothing to wrap. Half the column, and below that the float is dropped
+   entirely — on a narrow pane a 45%-wide image with three words beside it reads
+   far worse than the same image full-width. */
+.entry-content [style*="float: left"],
+.entry-content [style*="float: right"] {
+  max-width: 45%;
+}
+.entry-content [style*="float: left"]  { float: left;  margin: 0 1em 0.75em 0; }
+.entry-content [style*="float: right"] { float: right; margin: 0 0 0.75em 1em; }
+.entry-content [style*="clear: left"]  { clear: left; }
+.entry-content [style*="clear: right"] { clear: right; }
+.entry-content [style*="clear: both"]  { clear: both; }
+/* A float taller than its text leaves the next block riding up beside it, and
+   an all-float container collapses to zero height. */
+.entry-content::after { content: ""; display: block; clear: both; }
+
+@media (max-width: 620px) {
+  /* !important is required, not stylistic: the float arrives as an INLINE style
+     (that is how the sanitizer preserves it), and an inline declaration outranks
+     any stylesheet rule. Without it this override silently does nothing and a
+     45%-wide image stays floated on a 390px phone. */
+  .entry-content [style*="float: left"],
+  .entry-content [style*="float: right"] {
+    float: none !important;
+    max-width: 100%;
+    margin: 0 0 0.75em;
+  }
+}
+
 /* Inline emoji glyphs embedded in post bodies: WordPress wp-smiley (s.w.org),
    IP.Board ipsEmoji, and twemoji's "emoji" class. The source sites size these
    to ~1em via their own CSS; without it the general .entry-content img rule
