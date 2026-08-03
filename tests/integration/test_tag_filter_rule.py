@@ -421,3 +421,31 @@ def test_a_spec_with_teeth_is_not_flagged_good_only(env):
         require = main._run_tag_filter(conn, "feed", FEED, "++linux", apply=False)
     assert drop["good_only"] is False
     assert require["good_only"] is False
+
+
+# ── Chip row: every tag reaches the page, only the first few are on screen ──
+
+
+def test_more_than_eight_feed_tags_survive_to_the_page(env):
+    """The cap used to be 8, which silently truncated Rock Paper Shotgun's 28
+    tags per post — and the tag worth keeping ("PC") sits tenth, so the row
+    offered every platform to drop and no way to say which to keep."""
+    tags = [f"tag{i}" for i in range(28)]
+    main.feed_tag_service.record_entry_tags(FEED, [("e-linux", tags)])
+    got = main.get_feed_tag_suggestions(FEED, "e-linux")
+    assert len(got) == 28
+    assert "tag9" in got
+
+
+def test_the_hard_cap_still_bounds_a_pathological_feed(env):
+    main.feed_tag_service.record_entry_tags(
+        FEED, [("e-linux", [f"tag{i}" for i in range(120)])]
+    )
+    assert len(main.get_feed_tag_suggestions(FEED, "e-linux")) == main.MAX_FEED_TAG_SUGGESTIONS
+
+
+def test_dismissed_tags_are_still_removed_before_the_cap(env):
+    """Order matters: capping first would let dismissed chips eat the budget."""
+    main.feed_tag_service.record_entry_tags(FEED, [("e-linux", ["Keep Me", "Drop Me"])])
+    main.feed_tag_service.set_tag_suppressed(FEED, "Drop Me", True)
+    assert main.get_feed_tag_suggestions(FEED, "e-linux") == ["Keep Me"]

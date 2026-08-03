@@ -4215,6 +4215,23 @@ const CAPTURE_MODE_FULL = 'full';
       }
     });
 
+    /* Reveal the feed tags past the collapse point.
+     *
+     * A publisher's tag order is its own, and the useful one is often late:
+     * Rock Paper Shotgun ships 28 tags per post with "PC" tenth, so a row
+     * truncated to eight offered every platform to drop and no way to say which
+     * to keep. All of them are rendered, most of them hidden; this uncovers the
+     * rest. One-way — there is no reason to fold them back mid-triage. */
+    document.addEventListener('click', (event) => {
+      const btn = event.target instanceof Element
+        ? event.target.closest('[data-feed-tag-more]') : null;
+      if (!btn) return;
+      event.preventDefault();
+      const wrap = btn.closest('.entry-tag-suggestions');
+      if (wrap) wrap.querySelectorAll('.is-extra-feed-tag').forEach((c) => { c.hidden = false; });
+      btn.remove();
+    });
+
     // Dismiss a suggestion chip from the entry pane.
     document.addEventListener('click', async (event) => {
       const btn = event.target instanceof Element
@@ -14148,9 +14165,13 @@ const CAPTURE_MODE_FULL = 'full';
         const wrap = document.createElement('span');
         wrap.className = 'entry-tag-suggestions';
         wrap.setAttribute('aria-label', 'Feed tags — filter this feed');
-        for (const tag of data.tags) {
+        // Same collapse as the server-rendered row, and for the same reason —
+        // every tag is present, only the first few are on screen.
+        const COLLAPSE_AFTER = 8;
+        data.tags.forEach((tag, i) => {
           const chip = document.createElement('span');
           chip.className = 'entry-tag-chip suggestion feed-tag-filter-chip';
+          if (i >= COLLAPSE_AFTER) { chip.classList.add('is-extra-feed-tag'); chip.hidden = true; }
           if (!manual.has(tag)) {
             const add = document.createElement('button');
             add.type = 'button';
@@ -14179,6 +14200,14 @@ const CAPTURE_MODE_FULL = 'full';
             chip.appendChild(btn);
           }
           wrap.appendChild(chip);
+        });
+        if (data.tags.length > COLLAPSE_AFTER) {
+          const more = document.createElement('button');
+          more.type = 'button';
+          more.className = 'feed-tag-more';
+          more.setAttribute('data-feed-tag-more', '1');
+          more.textContent = '+' + (data.tags.length - COLLAPSE_AFTER) + ' more';
+          wrap.appendChild(more);
         }
         nowForm.insertAdjacentElement('beforebegin', wrap);
         bindEntryTagInteractions();  // boundClick markers keep this idempotent

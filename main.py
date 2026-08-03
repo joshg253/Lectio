@@ -522,7 +522,14 @@ def _is_hotlink_img_host(netloc: str) -> bool:
     return any(host == h or host.endswith("." + h) for h in _HOTLINK_IMG_HOSTS)
 MANUAL_TAG_KEY_PREFIX = "lectio.manual_tag."
 MAX_MANUAL_TAGS = 12
-MAX_FEED_TAG_SUGGESTIONS = 8
+# Hard cap on how many of an entry's feed tags are carried to the page. RPS
+# ships 28 on a single post, so this is generous on purpose — the cost of one
+# extra chip is that it is ignored, and the cost of a missing one is that the
+# tag cannot be filtered on at all.
+MAX_FEED_TAG_SUGGESTIONS = 40
+# How many chips the row shows before the "+N more" expander. Eight fits the
+# header without wrapping; the rest are one click away rather than absent.
+FEED_TAG_CHIPS_COLLAPSED = 8
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$")
 def _static_asset_version() -> str:
     """Cache-buster for every ?v=-versioned static asset.
@@ -12826,6 +12833,7 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "manual_tags": [],
         "manual_tags_text": "",
         "feed_tag_suggestions": [],
+        "feed_tag_chips_collapsed": FEED_TAG_CHIPS_COLLAPSED,
         "feed_tag_filter_signs": {},
         "author_filter_token": None,
         "feed_icon_url": None,
@@ -14819,6 +14827,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "kept": bool(is_saved or manual_tags),
             "manual_tags_text": " ".join(manual_tags),
             "feed_tag_suggestions": feed_tag_suggestions,
+            "feed_tag_chips_collapsed": FEED_TAG_CHIPS_COLLAPSED,
             "feed_tag_filter_signs": feed_tag_filter_signs,
             "author_filter_token": _author_token,
             "feed_icon_url": get_favicon_url(entry.feed_url, getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None),

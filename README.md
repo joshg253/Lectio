@@ -84,7 +84,10 @@ The short version:
   Mac release, and silently matching zero is otherwise indistinguishable from
   working. The same goes for a `+tag`-only filter, which rescues from drops but
   never cuts on its own: the test says so and points at `++tag` (keep only
-  these) and `-tag` (drop these). Opening the rule form from a feed's right-click menu scrolls the
+  these) and `-tag` (drop these). A post's feed-tag chips show the first eight
+  with a **+N more** to reveal the rest — some publishers ship 28 tags a post and
+  bury the useful one, and a tag with no chip can't be filtered on at all.
+  Opening the rule form from a feed's right-click menu scrolls the
   form into view rather than leaving it off-screen at the top of a long list.
 - **Keep vs. to-do** — **tagging a post keeps it forever**: it triggers a full
   offline capture (page + images) so tagged posts survive a dead feed, while

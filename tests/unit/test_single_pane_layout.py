@@ -524,3 +524,20 @@ def test_a_tall_narrow_window_keeps_the_desktop_header():
     block = INDEX[INDEX.index("const compactArticle"):][:400]
     assert "layoutMode === 'medium'" in block
     assert "layoutMode === 'medium')" not in block          # never medium on its own
+
+
+# ── Feed-tag chip overflow (server row and late-injected row must agree) ──
+def test_extra_feed_tag_chips_are_hidden_not_omitted():
+    """An absent chip cannot be filtered on at all, so the row renders every
+    tag and hides the overflow behind a "+N more" control."""
+    assert "is-extra-feed-tag" in ENTRY_PANE
+    assert "data-feed-tag-more" in ENTRY_PANE
+    assert "feed_tag_chips_collapsed" in ENTRY_PANE
+
+
+def test_the_late_injected_chip_row_collapses_the_same_way():
+    """Backlog entries get their chips from /entries/feed-tags after render. If
+    only the server row collapsed, those rows would dump all 28 chips."""
+    assert "const COLLAPSE_AFTER = 8;" in APP_JS
+    assert APP_JS.count("data-feed-tag-more") >= 2
+    assert "is-extra-feed-tag" in APP_JS

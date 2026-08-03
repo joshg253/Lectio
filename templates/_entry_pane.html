@@ -257,9 +257,13 @@
       {% endfor %} {% endif %}
       {% if selected_entry.feed_tag_suggestions %}
       <span class="entry-tag-suggestions" aria-label="Feed tags — filter this feed">
+        {% set collapse_after = selected_entry.feed_tag_chips_collapsed or 8 %}
         {% for tag in selected_entry.feed_tag_suggestions %}
         {% set active_sign = selected_entry.feed_tag_filter_signs.get(tag) %}
-        <span class="entry-tag-chip suggestion feed-tag-filter-chip">
+        {# Past the collapse point the chip is present but hidden, not omitted:
+           a publisher's platform tags sort late (RPS puts "PC" 10th of 28), and
+           an absent chip cannot be filtered on at all. #}
+        <span class="entry-tag-chip suggestion feed-tag-filter-chip{% if loop.index0 >= collapse_after %} is-extra-feed-tag{% endif %}"{% if loop.index0 >= collapse_after %} hidden{% endif %}>
           {% if tag not in selected_entry.manual_tags %}
           <button
             type="button"
@@ -302,6 +306,13 @@
           >×</button>
         </span>
         {% endfor %}
+        {% if selected_entry.feed_tag_suggestions|length > collapse_after %}
+        <button
+          type="button"
+          class="feed-tag-more"
+          data-feed-tag-more="1"
+        >+{{ selected_entry.feed_tag_suggestions|length - collapse_after }} more</button>
+        {% endif %}
       </span>
       {% endif %}
       <form

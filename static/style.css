@@ -3436,6 +3436,24 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   cursor: pointer;
 }
 
+/* The "+N more" expander that ends a truncated feed-tag row. Deliberately
+   quieter than a chip — it is a control on the row, not another tag. */
+.feed-tag-more {
+  border: 1px dashed var(--field-border, var(--line));
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0 0.5em;
+  font: inherit;
+  font-size: 0.82em;
+  line-height: 1.7;
+  cursor: pointer;
+}
+.feed-tag-more:hover {
+  color: var(--ink);
+  border-style: solid;
+}
+
 /* Feed-tag filter chips: [ − tag + ] — the signs toggle ±tag on this feed's
    Tag Filter rule; the name is just a label. */
 .feed-tag-filter-chip {
