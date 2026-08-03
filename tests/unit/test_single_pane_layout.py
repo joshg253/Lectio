@@ -541,3 +541,42 @@ def test_the_late_injected_chip_row_collapses_the_same_way():
     assert "const COLLAPSE_AFTER = 8;" in APP_JS
     assert APP_JS.count("data-feed-tag-more") >= 2
     assert "is-extra-feed-tag" in APP_JS
+
+
+# ── Context menus must outrank the overlay band they are opened on top of ──
+def _z_of(selector_marker: str) -> int:
+    """The z-index of the rule block containing *selector_marker*."""
+    import re
+    i = CSS.index(selector_marker)
+    block = CSS[i:CSS.index("}", i)]
+    m = re.search(r"z-index:\s*(\d+)", block)
+    assert m, f"no z-index in the block for {selector_marker!r}"
+    return int(m.group(1))
+
+
+def test_a_context_menu_outranks_the_phone_folder_drawer():
+    """Long-pressing a folder in the phone drawer opened a menu that painted
+    BEHIND the list it came from: the drawer is fixed at 300, the menu was 50."""
+    drawer = _z_of('body[data-layout-mode="single"] .pane-folders {')
+    assert _z_of(".context-menu {") > drawer
+
+
+def test_a_context_menu_outranks_every_overlay_it_can_open_over():
+    """The medium drawer, both backdrops and the topbar menu are all in the
+    250-320 band, and a context menu can be opened over any of them."""
+    for marker in ('body[data-layout-mode="medium"] .pane-folders {',
+                   ".medium-pane-backdrop {",
+                   ".topbar-menu {"):
+        assert _z_of(".context-menu {") > _z_of(marker), marker
+
+
+def test_the_submenu_is_stacked_at_all_and_sits_above_its_parent():
+    """It had no z-index, so it stacked on DOM order and went behind the drawer
+    in every layout mode, not just on a phone."""
+    assert _z_of(".context-submenu {") > _z_of(".context-menu {")
+
+
+def test_context_menus_stay_below_the_toast_and_popup_menu_layer():
+    """Above the panes, not above everything — a bare 9999 is how the next
+    overlay ends up underneath something it should cover."""
+    assert _z_of(".context-menu {") < 1000

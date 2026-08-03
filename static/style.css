@@ -4433,7 +4433,13 @@ body.resizing {
 
 .context-menu {
   position: fixed;
-  z-index: 50;
+  /* Above the whole overlay band, because that is what a context menu is
+     opened ON TOP OF: the phone folder drawer is fixed at 300 and the medium
+     one at 260, so at the old z-index of 50 a long-press on a folder opened a
+     menu that painted *behind* the list it came from. The backdrops (250/290)
+     and .topbar-menu (320) are in the same band. Stays below the 1000+ popup
+     menus and the 1190/1200 toasts. */
+  z-index: 340;
   /* Grow to fit the widest item (long labels like "Remove tag X from all
      shown" overflowed the old fixed 210px), capped so it stays a menu; items
      longer than the cap wrap rather than run off the side. */
@@ -4502,6 +4508,10 @@ body.resizing {
 
 .context-submenu {
   position: fixed;
+  /* It had none at all — fixed with z-index auto, so it stacked on DOM order
+     and went behind the drawer for the same reason the menu did. One above its
+     parent menu: a submenu opens over it, never under. */
+  z-index: 341;
   left: 0;
   top: 0;
   min-width: 220px;

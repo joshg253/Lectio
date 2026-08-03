@@ -98,6 +98,21 @@ Lectio uses responsive layouts rather than a fixed three-pane assumption:
 
 The priority is fast triage, not always showing three panes.
 
+**Stacking bands.** Once a pane becomes an overlay the z-index ordering stops
+being decorative, so the values are banded and the band is the contract:
+**250–320 = overlays** (`.medium-pane-backdrop` 250, the medium/wide folder
+drawer 260, the single-mode backdrop 290, the phone folder drawer 300,
+`.topbar-menu` 320); **340+ = things opened on top of an overlay**
+(`.context-menu` 340, `.context-submenu` 341); **1000+ = popup pickers**
+(`.lectio-pin-menu`, `.lectio-quire-menu`, …) and **1190/1200 = toasts**. The
+rule that matters: *a control opened from inside an overlay must outrank that
+overlay*. `.context-menu` sat at 50 and `.context-submenu` had no z-index at
+all, which is invisible on desktop — the folder pane is in normal flow there —
+and broke the moment the same markup became a fixed drawer: a long-press on a
+folder opened a menu painted behind the list it came from. Pick the band, not a
+number, and never reach for 9999 — that is how the *next* overlay ends up
+underneath something it should cover.
+
 ## Deployment path
 
 Lectio is designed for VPS deployment behind a reverse proxy. Auth is always active; access requires a user account. See `.env.example` for deployment configuration.
