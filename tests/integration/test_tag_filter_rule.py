@@ -403,3 +403,21 @@ def test_nothing_is_reported_rescued_when_no_drop_tag_was_hit(env):
         result = main._run_tag_filter(conn, "feed", FEED, "-nosuchtag, +linux", apply=False)
     assert result["rescued"] == 0
     assert result["rescued_by"] == []
+
+
+def test_dry_run_flags_a_good_only_spec_as_a_no_op(env):
+    """'+linux' reads as "keep Linux posts" but cuts nothing by design — good
+    tags rescue from drops and whitelist nothing. Flagged so the preview can
+    say what to write instead of reporting a bare zero."""
+    with main.get_meta_connection() as conn:
+        result = main._run_tag_filter(conn, "feed", FEED, "+linux", apply=False)
+    assert result["total_matches"] == 0
+    assert result["good_only"] is True
+
+
+def test_a_spec_with_teeth_is_not_flagged_good_only(env):
+    with main.get_meta_connection() as conn:
+        drop = main._run_tag_filter(conn, "feed", FEED, "+linux, -deals", apply=False)
+        require = main._run_tag_filter(conn, "feed", FEED, "++linux", apply=False)
+    assert drop["good_only"] is False
+    assert require["good_only"] is False

@@ -6350,6 +6350,13 @@ def _run_tag_filter(
             "count": len(to_mark),
             "rescued": rescued,
             "rescued_by": [t for t, _n in rescued_by.most_common(4)],
+            # A spec of nothing but good tags cuts nothing, ever, by design:
+            # good tags rescue from drops and whitelist nothing, so with no
+            # drops to rescue from there is nothing for them to do. It is a
+            # reasonable thing to write ("+wallpapers" reads as "keep these"),
+            # and its result is indistinguishable from a rule that is working,
+            # so the preview names it rather than reporting a bare zero.
+            "good_only": bool(good and not exclude and not require),
         }
     return {"count": len(to_mark), "entries": matched_entries}
 

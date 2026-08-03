@@ -82,7 +82,9 @@ The short version:
   tag-filter test finds **nothing**, it now says why when the cause is a
   rescuing tag — `-mac, +pc` cuts nothing on a feed that tags every PC game's
   Mac release, and silently matching zero is otherwise indistinguishable from
-  working. Opening the rule form from a feed's right-click menu scrolls the
+  working. The same goes for a `+tag`-only filter, which rescues from drops but
+  never cuts on its own: the test says so and points at `++tag` (keep only
+  these) and `-tag` (drop these). Opening the rule form from a feed's right-click menu scrolls the
   form into view rather than leaving it off-screen at the top of a long list.
 - **Keep vs. to-do** — **tagging a post keeps it forever**: it triggers a full
   offline capture (page + images) so tagged posts survive a dead feed, while

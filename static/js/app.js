@@ -9813,6 +9813,17 @@ const CAPTURE_MODE_FULL = 'full';
                 : '.');
             panel.appendChild(note);
           }
+          /* '+tag' alone can never cut anything: a good tag rescues from drops
+           * and whitelists nothing, so with no drops there is nothing for it to
+           * do. It still reads as "keep these", so say what to write instead. */
+          if (data.good_only) {
+            const note = document.createElement('div');
+            note.className = 'hl-rule-dryrun-note';
+            note.textContent = '“+tag” only rescues entries from a “-tag” drop — on its own it ' +
+              'never marks anything read. To keep ONLY these, require them with “++tag”; ' +
+              'to drop something, name it with “-tag”.';
+            panel.appendChild(note);
+          }
           for (const m of matches) {
             const item = document.createElement('div');
             item.className = 'hl-rule-dryrun-item' + (m.read ? ' hl-rule-dryrun-item--read' : '');
