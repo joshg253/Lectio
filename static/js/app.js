@@ -9165,6 +9165,7 @@ const CAPTURE_MODE_FULL = 'full';
           empty.textContent = 'No automation rules yet. Click "+ Add Rule" to create one.';
           listEl.appendChild(empty);
           restoreScroll();
+          hlRevealDraftIfPending();
           return;
         }
         const TYPE_ORDER = HL_TYPE_ORDER;
@@ -9625,6 +9626,7 @@ const CAPTURE_MODE_FULL = 'full';
           } // end sectionRules loop
         } // end TYPE_ORDER loop
         restoreScroll();
+        hlRevealDraftIfPending();
       }
 
       function hlRenderDedupGroups(panel, groups, maxShown) {
@@ -9795,6 +9797,22 @@ const CAPTURE_MODE_FULL = 'full';
             summary.textContent = data.total_matches + ' match' + (data.total_matches === 1 ? '' : 'es') + (data.truncated ? ' (showing first 20)' : '') + ' in last ' + (data.total_scanned || 0) + ' entries (read + unread)';
           }
           panel.appendChild(summary);
+          /* Why a tag filter found nothing. '-mac, +pc' reads as "drop Apple,
+           * keep PC", but on a feed that tags platform availability every Mac
+           * post is a PC post too, so the + cancels the whole rule — and zero
+           * matches looks exactly like a rule that is working. Say so. */
+          if (data.rescued) {
+            const note = document.createElement('div');
+            note.className = 'hl-rule-dryrun-note';
+            const by = (data.rescued_by || []).map(t => '+' + t).join(', ');
+            note.textContent = data.rescued + ' entr' + (data.rescued === 1 ? 'y' : 'ies') +
+              ' hit a drop tag but ' + (data.rescued === 1 ? 'was' : 'were') + ' rescued' +
+              (by ? ' by ' + by : '') +
+              (matches.length === 0
+                ? ' — that is why nothing matched. Drop the rescuing tag from the spec to cut them.'
+                : '.');
+            panel.appendChild(note);
+          }
           for (const m of matches) {
             const item = document.createElement('div');
             item.className = 'hl-rule-dryrun-item' + (m.read ? ' hl-rule-dryrun-item--read' : '');
@@ -9835,6 +9853,32 @@ const CAPTURE_MODE_FULL = 'full';
         addRuleBtn?.removeAttribute('hidden');
       }
 
+      /* Bring the open draft on screen, once.
+       *
+       * A draft appended by hlInsertDraft is often overtaken by hlRenderRules,
+       * which strips every rule row and re-appends them *after* whatever else
+       * is in the list — so a draft opened from a feed's right-click → Automation
+       * ends up at the TOP of a list the modal may have opened scrolled to the
+       * bottom, out of sight, with no sign the form is even open. Scrolling
+       * inside hlInsertDraft alone loses that race.
+       *
+       * So the reveal is re-asserted at the end of hlRenderRules as well — but
+       * only inside a short window after the draft was opened, never as a
+       * standing rule. hlRenderRules also runs on every rule toggle, where
+       * preserving the reader's scroll position was itself a fix; a flag left
+       * standing would undo it. A window expires on its own, which a boolean
+       * cleared by whichever path happens to run first does not. */
+      const HL_DRAFT_REVEAL_MS = 1500;
+      let hlDraftOpenedAt = 0;
+      function hlRevealDraftIfPending() {
+        if (!hlActiveDraft || !hlActiveDraft.isConnected) return;
+        if (Date.now() - hlDraftOpenedAt > HL_DRAFT_REVEAL_MS) return;
+        // 'start', not 'nearest': the draft is taller than a rule row, and
+        // 'nearest' happily leaves its lower half — the tag field and Save —
+        // below the fold.
+        hlActiveDraft.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+
       function hlInsertDraft(draftEl, afterEl) {
         hlHideDraft();
         hlActiveDraft = draftEl;
@@ -9843,7 +9887,8 @@ const CAPTURE_MODE_FULL = 'full';
         if (afterEl) afterEl.insertAdjacentElement('afterend', draftEl);
         else listEl?.appendChild(draftEl);
         draftEl.querySelector('.hl-draft-pattern')?.focus();
-        window.setTimeout(() => draftEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 80);
+        hlDraftOpenedAt = Date.now();
+        window.setTimeout(hlRevealDraftIfPending, 80);
       }
 
       function hlBuildDraft(prefill, saveLabel, onSave) {

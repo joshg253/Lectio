@@ -78,7 +78,12 @@ The short version:
   rule's scope have actually published, **with the number of posts carrying
   each** — so you can see that a tag is on 9 of 10 posts before you filter on it,
   instead of guessing at a vocabulary you've never seen. Type multi-word tags
-  naturally (`+Steam Deck`); the suggestion fills in the stored form.
+  naturally (`+Steam Deck`); the suggestion fills in the stored form. If a
+  tag-filter test finds **nothing**, it now says why when the cause is a
+  rescuing tag — `-mac, +pc` cuts nothing on a feed that tags every PC game's
+  Mac release, and silently matching zero is otherwise indistinguishable from
+  working. Opening the rule form from a feed's right-click menu scrolls the
+  form into view rather than leaving it off-screen at the top of a long list.
 - **Keep vs. to-do** — **tagging a post keeps it forever**: it triggers a full
   offline capture (page + images) so tagged posts survive a dead feed, while
   **starring** is the lightweight "needs dealing with" marker. A post is kept

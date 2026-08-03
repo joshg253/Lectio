@@ -7241,6 +7241,14 @@ textarea.hl-draft-pattern {
   margin-bottom: 0.35rem;
   color: var(--ink, #222);
 }
+/* Why a tag filter matched nothing — a diagnostic, not a result, so it reads
+   below the count without competing with it. */
+.hl-rule-dryrun-note {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--muted, #888);
+  margin-bottom: 0.45rem;
+}
 .hl-rule-dryrun-group {
   border-bottom: 1px solid var(--line, #eee);
   padding-bottom: 0.3rem;

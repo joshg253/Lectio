@@ -6233,6 +6233,10 @@ def _run_tag_filter(
     to_mark: list[tuple[str, str]] = []
     matched_entries: list[dict] = []
     _ENTRY_DETAIL_CAP = 50
+    # Entries a drop tag caught but a good/required tag let through, and which
+    # tags did the rescuing — the dry run's explanation for an empty result.
+    rescued = 0
+    rescued_by: collections.Counter[str] = collections.Counter()
 
     with get_reader() as reader:
         feed_title_cache: dict[str, str] = {}
@@ -6294,7 +6298,15 @@ def _run_tag_filter(
             elif (tags & exclude) and not (tags & saving):
                 pass  # blocked and nothing rescues it
             else:
-                continue  # kept
+                # Kept — but record WHY when a drop tag was overruled. A spec
+                # like '-mac, +pc' reads as "drop Apple, keep PC" and on a feed
+                # that tags platform availability every Mac post is also a PC
+                # post, so the rescue silently cancels the whole rule. Zero
+                # matches then looks identical to a rule that is working.
+                if (tags & exclude) and (tags & saving):
+                    rescued += 1
+                    rescued_by.update(tags & saving)
+                continue
             to_mark.append((fu, eid))
             if apply and len(matched_entries) < _ENTRY_DETAIL_CAP:
                 matched_entries.append({
@@ -6336,6 +6348,8 @@ def _run_tag_filter(
             "total_matches": len(to_mark),
             "truncated": len(to_mark) > _DRY_RESULT_LIMIT,
             "count": len(to_mark),
+            "rescued": rescued,
+            "rescued_by": [t for t, _n in rescued_by.most_common(4)],
         }
     return {"count": len(to_mark), "entries": matched_entries}
 
