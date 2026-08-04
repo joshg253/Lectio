@@ -97,6 +97,28 @@ Changing a feed's URL left three loose ends, all reported from live use:
   seed it itself (rule already present, or a same-host move), carried across the
   navigation in `sessionStorage` and read exactly once.
 
+### what-if.xkcd dates — script ready, NOT YET APPLIED
+
+`scripts/recover_whatif_dates.py`. Dry run 2026-08-04: **45 of 45 matched**,
+real publisher dates (Earth-Moon Fire Pole → 2018-05-21, etc.). Apply with
+`uv run python scripts/recover_whatif_dates.py --apply`, then restart the app
+(the unread-count cache is generation-guarded and will not self-heal from a
+behind-the-back write).
+
+`fetch_missing_publish_dates.py` had recorded what-if as hopeless — 45 entries,
+fetching the article pages returned **zero** dates. That was correct and it was
+about the wrong page: a what-if *article* carries no date metadata at all
+(re-verified against all 50 stored captures — no `article:published_time`, no
+JSON-LD, not even a `<time>`). The *archive index* carries every one of them in
+an `<h3 class="archive-date">`, so the whole back catalogue is **one polite GET**
+keyed by the article URL already stored as the entry id.
+
+**The lesson, which is the reusable part:** check whether a date is published
+somewhere else on the site — an index, an archive, a sitemap — before concluding
+it must be fetched per-article or does not exist. The same note already exists
+for blog.guitar-pro.com, where the per-article fetch would have written a date
+wrong by three and a half years.
+
 ### 0c. CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a
