@@ -27526,6 +27526,25 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
 # compared in two places here and sent from two more in static/js/app.js — a
 # typo on any of them silently falls back to readability rather than erroring.
 CAPTURE_MODE_FULL = "full"
+# Re-fetch the Internet Archive's snapshot instead of the live page. Same
+# reasoning about the spelling being shared with the client.
+CAPTURE_MODE_ARCHIVE = "archive"
+
+
+def _entry_source_url(feed_url: str, entry_id: str) -> str | None:
+    """The address a capture is re-fetched FROM: its current link, falling back
+    to its id (a capture's id is the address it was first saved from)."""
+    try:
+        with get_reader() as reader:
+            entry = reader.get_entry((feed_url, entry_id), None)
+    except Exception:  # noqa: BLE001
+        return None
+    if entry is None:
+        return None
+    link = str(getattr(entry, "link", "") or "")
+    if link.startswith(("http://", "https://")):
+        return link
+    return entry_id if entry_id.startswith(("http://", "https://")) else None
 
 
 # Hosts whose last automatic re-fetch failed, and when. Auto-refetch is a
@@ -27636,17 +27655,31 @@ def _refresh_captured_article_for_current_user(
 
     *mode* ``"full"`` captures the whole page body instead of readability-
     extracting it — the escape hatch for pages readability mangles. See
-    extract_full_page_article."""
+    extract_full_page_article.
+
+    *mode* ``"archive"`` goes straight to the Wayback snapshot instead of the
+    live page. The automatic archive fallback below only triggers when the live
+    fetch is *refused* (parked page, 404), which leaves out the case that sent
+    users to archive.org by hand: a publisher serving a page that passes every
+    guard but is no longer the article — rewritten, truncated, or paywalled."""
+    from_archive: str | None = None
+    if mode == CAPTURE_MODE_ARCHIVE:
+        from_archive = wayback_snapshot_url(_entry_source_url(feed_url, entry_id) or entry_id)
+        if not from_archive:
+            return {"ok": False, "error": "The Internet Archive has no snapshot of this page."}
     _base = fetch_full_page_article if mode == CAPTURE_MODE_FULL else fetch_readability_article
     # Keep the page we already fetched, so a date can be mined from it without a
     # second request. readability strips head metadata, which is where the date is.
     _capture: dict = {}
 
     def extract(url: str):
+        # An explicit archive re-fetch ignores the URL the caller would have
+        # used: the snapshot IS the target.
+        target = from_archive or url
         try:
-            return _base(url, capture=_capture)
+            return _base(target, capture=_capture)
         except TypeError:
-            return _base(url)          # a caller-supplied extractor without the kwarg
+            return _base(target)       # a caller-supplied extractor without the kwarg
 
     reader = get_reader()
     with get_meta_connection() as conn:
@@ -27658,6 +27691,8 @@ def _refresh_captured_article_for_current_user(
             extract=extract,
             enqueue_archive=starred_archive_service.enqueue_archive,
         )
+    if from_archive and result.get("ok"):
+        result["from_archive"] = from_archive
     # The live page was refused as a different article (parked page, section
     # index). Ask the archive for the real one before giving up — the guard
     # protects the stored copy, but on its own it leaves the user stuck.

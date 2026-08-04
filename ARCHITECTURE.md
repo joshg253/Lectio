@@ -333,6 +333,24 @@ dates — and it never touches an entry whose date the user pinned by hand. "Has
 date" means `real_published_date` says so, which is what stops a sentinel from
 counting as one.
 
+### The Internet Archive as a re-fetch source
+
+`wayback_snapshot_url` asks archive.org's availability API — one small JSON call,
+no crawling of a site that already refused us. Re-fetch reaches for it two ways:
+
+- **Automatically**, when the live fetch is *refused*: a parked page, a section
+  index, a 404. The guard is right to refuse those, but on its own it leaves the
+  user with nothing.
+- **On request** (`mode=archive`, "Re-fetch from Internet Archive"), which exists
+  for the case the automatic path cannot see — a publisher serving a page that
+  passes every guard while no longer being the article: rewritten, truncated, or
+  paywalled. That page is indistinguishable from a good one to a guard, so only
+  the reader can say it is wrong.
+
+An archived page is also usually a *better* date source than the live one, since
+the archived copy still carries the byline the publisher has since dropped —
+which is why the date mining runs over whatever the re-fetch actually fetched.
+
 ### Refresh scheduler: why it has a watchdog
 
 The scheduler is one thread running one pass at a time, and every feed in a pass

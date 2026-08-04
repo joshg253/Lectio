@@ -8,6 +8,9 @@
 // in one place because a typo silently falls back to readability rather than
 // erroring; the server-side spelling lives in main.CAPTURE_MODE_FULL.
 const CAPTURE_MODE_FULL = 'full';
+// Re-fetch the Internet Archive's snapshot rather than the live page. Same
+// reason as above for keeping the spelling in one place: main.CAPTURE_MODE_ARCHIVE.
+const CAPTURE_MODE_ARCHIVE = 'archive';
     // Only web-ish schemes may reach an href/src. Entry and feed URLs are
     // feed-controlled: a `javascript:` URL assigned to an anchor's href would
     // run in our origin the moment the user clicks it. The server already
@@ -2670,6 +2673,7 @@ const CAPTURE_MODE_FULL = 'full';
     const postEditLinkButton = document.getElementById('ctx-post-edit-link');
     const postRefetchButton = document.getElementById('ctx-post-refetch');
     const postRefetchFullButton = document.getElementById('ctx-post-refetch-full');
+    const postRefetchArchiveButton = document.getElementById('ctx-post-refetch-archive');
     // Both re-fetch items appear on ANY post with a link. Read at call time, so
     // it picks up whichever post the menu was opened on.
     //
@@ -6869,6 +6873,7 @@ const CAPTURE_MODE_FULL = 'full';
           setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postRefetchButton, postCanRefetch());
           setMenuItemVisible(postRefetchFullButton, postCanRefetch());
+          setMenuItemVisible(postRefetchArchiveButton, postCanRefetch());
           setMenuItemVisible(postMoveVisibleButton, false);
           setMenuItemVisible(postRemoveTagShownButton, false);
           setMenuItemVisible(postMarkAboveReadButton, false);
@@ -7229,6 +7234,7 @@ const CAPTURE_MODE_FULL = 'full';
             setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postRefetchButton, postCanRefetch());
             setMenuItemVisible(postRefetchFullButton, postCanRefetch());
+            setMenuItemVisible(postRefetchArchiveButton, postCanRefetch());
             setMenuItemVisible(postMoveVisibleButton, true);
             // "Remove this tag from all shown": only in the Saved view filtered
             // by a tag. Scoped server-side to the folder+tag, so it clears the
@@ -8345,7 +8351,7 @@ const CAPTURE_MODE_FULL = 'full';
     // A boolean rather than a mode string: only the request body needs the wire
     // value, and the file-scope CAPTURE_MODE_FULL keeps that spelling in one
     // place — a typo there falls back to readability silently.
-    const runPostRefetch = async (event, fullPage) => {
+    const runPostRefetch = async (event, fullPage, modeOverride) => {
       event.preventDefault();
       event.stopPropagation();
       const feedUrl = contextPostFeedUrl;
@@ -8353,12 +8359,16 @@ const CAPTURE_MODE_FULL = 'full';
       hideAllContextMenus();
       if (!feedUrl || !entryId) return;
       if (typeof showToastMessage === 'function') {
-        showToastMessage(fullPage ? 'Re-fetching full page…' : 'Re-fetching content…');
+        showToastMessage(
+          modeOverride === CAPTURE_MODE_ARCHIVE ? 'Asking the Internet Archive…'
+            : (fullPage ? 'Re-fetching full page…' : 'Re-fetching content…')
+        );
       }
       try {
+        const mode = modeOverride || (fullPage ? CAPTURE_MODE_FULL : '');
         const body = new URLSearchParams(
-          fullPage
-            ? { feed_url: feedUrl, entry_id: entryId, mode: CAPTURE_MODE_FULL }
+          mode
+            ? { feed_url: feedUrl, entry_id: entryId, mode }
             : { feed_url: feedUrl, entry_id: entryId }
         );
         const resp = await fetch('/articles/refresh-content', { method: 'POST', body });
@@ -8399,6 +8409,7 @@ const CAPTURE_MODE_FULL = 'full';
 
     postRefetchButton?.addEventListener('click', (ev) => runPostRefetch(ev, false));
     postRefetchFullButton?.addEventListener('click', (ev) => runPostRefetch(ev, true));
+    postRefetchArchiveButton?.addEventListener('click', (ev) => runPostRefetch(ev, false, CAPTURE_MODE_ARCHIVE));
 
     postRemoveTagShownButton?.addEventListener('click', async (event) => {
       event.preventDefault();

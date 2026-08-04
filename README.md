@@ -339,6 +339,10 @@ Posts nothing can date say so instead of quietly showing their arrival time as a
 publication date. You can also correct any post's date by hand, including saved
 posts whose feed you've since unsubscribed from.
 
+When a saved article's page rots, **Re-fetch from Internet Archive** pulls the
+snapshot instead — and because archived copies usually still carry the byline the
+publisher has since dropped, that often recovers the date as well as the text.
+
 Scheduled refresh is watchdogged. Feeds are fetched sequentially, so one host
 that accepts a connection and then goes silent can stall every feed behind it —
 invisibly, since the app keeps serving. Every fetch carries a read deadline, the

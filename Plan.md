@@ -122,6 +122,27 @@ it must be fetched per-article or does not exist. The same note already exists
 for blog.guitar-pro.com, where the per-article fetch would have written a date
 wrong by three and a half years.
 
+### Internet Archive re-fetch — the manual trigger, added 2026-08-04
+
+`wayback_snapshot_url` already existed and re-fetch already used it — but only on
+a *refused* live fetch (parked page, 404). The case that sent Josh to
+archive.org by hand is the one that passes every guard: a publisher serving a
+page that is no longer the article — rewritten, truncated, paywalled. That page
+is indistinguishable from a good one to a guard, so only the reader can call it
+wrong, and nothing let them ask. Added `mode=archive` and a **Re-fetch from
+Internet Archive** post-menu item.
+
+The date half of that manual workflow needed nothing extra: mining already runs
+over whatever the re-fetch fetched, and an archived copy usually still carries
+the byline the publisher dropped — which the new visible-text tier now reads.
+
+**Not done: the Wayback timestamp as a date source.** The availability API
+returns the *closest* snapshot, not the first, so its timestamp is whatever crawl
+happened to be nearest — recent, and nothing to do with publication. A real
+first-capture date needs the CDX API sorted ascending; probed 2026-08-04 and it
+worked (what-if/105 → 2014-07-19) but timed out on 2 of 3 tries. Worth revisiting
+only if a cluster shows up that has no other date source.
+
 ### 0c. CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a
