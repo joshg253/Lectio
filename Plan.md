@@ -1778,6 +1778,19 @@ cannot — it is fixed vocabulary, not per-feed frequency.
 - **Batch-align Uncategorized saved items into Feeds** — *promoted out of this
   list; see Now #4.* Measured 2026-07-21 and it turned out far higher-yield than
   a "small item."
+- **No way to reach a feed in Feeds from a post in Saved** (2026-08-04). Saved
+  is where you notice a feed misbehaving; Feeds is where you fix it, and there
+  is no route between them. Both feed-name links (post list and entry pane)
+  deliberately carry `star_only` through, so they navigate *within* Saved —
+  verified: clicking a post's feed name twice yields the identical URL both
+  times. With ~2,900 feeds, "switch tabs and find it" is not an answer. Josh
+  remembered a second click jumping to Feeds; that behaviour is not in the code
+  — most likely what he saw was the SPA expanding the feed's containing folder
+  in the sidebar tree ([index.html:1133](templates/index.html#L1133)), which
+  looks like a scope switch. Suggested: an **"Open in Feeds"** entry in the post
+  right-click menu, which already holds feed-scoped actions (*Mark Feed as
+  Read*, *Move to feed…*) but nothing that navigates. Cheap, and discoverable
+  where the other feed actions already are.
 - **Set up the four verified firehose tag_filter rules** — config, not code; the
   engine already ships. Vocabularies verified 2026-07-21, see "Tag filtering for
   firehose feeds" in Later for the per-feed data and suggested rule shapes.
