@@ -5,6 +5,95 @@ this file only tracks what's still open.
 
 ## Now
 
+### 0. Next three, in this order (agreed 2026-08-04)
+
+The order is deliberate and is **not** the order they were found in. Reasoning
+in one line each; detail in the sections below.
+
+1. **Refresh scheduler: timeout + watchdog (§0a).** Do this first. It is not a
+   missing feature, it is the reader silently not working — it already cost 34
+   hours of missed feeds across the whole library while `/healthz` stayed green,
+   and nothing in the design stops it recurring tonight. Small, self-contained,
+   protects everything else.
+2. **Saved Inbox = the whole star pile (§0b).** Branch `saved-inbox-wip`.
+   Feature work, and the least urgent: the Inbox works today, it is just showing
+   the wrong set. Blocked on an unexplained chunking bug — read §0b before
+   resuming, and do not ship it without settling that.
+3. **Everything else in this file**, unchanged.
+
+Shipped on the way to this list and now on `rule-tag-autocomplete` (PR open):
+rule-form tag autocomplete, the two dry-run diagnostics, the feed-tag chip
+expander, the context-menu stacking fix, and the sidebar tag-link scope fix.
+
+### 0a. Refresh scheduler stalls silently — NOT FIXED
+
+**Diagnosed 2026-08-04 on the live instance.** Nothing had refreshed for ~34
+hours: library-wide ingest over 30 hours was **6 entries, zero YouTube, zero
+deals**. Per-folder cadence timestamps were frozen at 2026-08-03 06:09 UTC
+against a 30-minute cadence, and feed-update calls fell from 2,531 in one hour
+to 1–4/hour (those few being manual opens, not sweeps).
+
+**Cause: the scheduler thread was alive but hung on a socket read** —
+`tid=46 state=(sched) comm=Thread-1 (sched...) wchan=wait_woken`, with three
+established HTTPS connections. `scheduled_refresh_loop` is strictly sequential,
+so one outbound call with no read deadline stalls every feed behind it. Restored
+by restarting the container; refresh resumed immediately (53 entries in the
+first 10 minutes).
+
+Three things to build:
+
+- **A hard read timeout on every outbound call on the scheduler path.** This is
+  the actual bug. A feed host that accepts a connection and then says nothing
+  must cost one timeout, not the whole cycle.
+- **`try`/`except` around `websub_service.renew_expiring_subscriptions()`**
+  ([main.py:16111](main.py#L16111)). It sits *after* the per-user loop, which is
+  guarded, and is itself unguarded — so an exception there escapes into
+  `scheduled_refresh_loop`, which has no handler either, and **kills the thread
+  permanently**. Same symptom as the hang, different cause, one `try` away.
+- **A watchdog.** `app.state.last_scheduled_refresh_started_at` already exists;
+  compare it against the cadence and log loudly (or restart the thread) when it
+  falls behind. The failure mode that matters here is not that it broke, it is
+  that it broke *invisibly* for 34 hours.
+
+### 0b. Saved Inbox = every star, newest-star-first — PARKED on `saved-inbox-wip`
+
+**What it does.** Saved → Inbox was a pinned link to the `inbox` **tag**, which
+only the save_article automation ever writes — it showed 3 items against 9,577
+stars and disagreed with Read Mode's Inbox for the same word. The branch makes
+it the whole star pile (starred minus archived), most-recently-starred first,
+however the star was made. `kept=starred` is the node marker; `kept_scope` and
+the `starred` sort already existed for Read Mode. Decided 2026-08-03: the
+`inbox` tag keeps being written and stays in the Tags list, it just no longer
+defines the node.
+
+**Verified working** on a seeded instance (publish order deliberately reversed
+against star order so the two can never be confused): all 30 stars listed,
+tagged-but-unstarred excluded, newest-star-first, "All" untouched at 35 kept
+with its own remembered order, the order never persisted as the remembered Saved
+sort, article links keeping the node, "Longest starred" reversing it.
+
+**Two real bugs found and fixed on the branch:**
+
+- `_sorted_star_key_window` had no `starred` branch at all — it fell through to
+  `e.first_updated`. That window runs whenever the star set exceeds the fetch
+  limit, which on a real backlog is *always*, so the Inbox would have picked its
+  visible page by received date.
+- The Inbox's sort **direction** was persisting as the remembered Saved order
+  (the key was guarded, the dir was not), so visiting the Inbox flipped Saved
+  from oldest-first to newest-first and it stayed that way.
+
+**⚠ Unresolved, do not ship without settling it.** Under the star sort, chunk 1
+returns the *oldest* stars and chunk 2 returns page 1; chunk 3 is correct.
+Ordinary sorts chunk perfectly and the feeds scope is fine, so it is specific to
+the star order. Logging confirms the window is called with exactly the right
+arguments (`sort_by='starred' dir='desc' kept_scope='starred' n=30 limit=10`),
+and calling `_sorted_star_key_window`, `list_entries_for_feeds` and
+`merge_orphan_saved_entries` in-process with those same arguments all return the
+correct order — unreconciled. **Next step: log the window's RETURN VALUE
+in-request**, which should settle it in one run. Note this is not merely a
+scrolling bug: with 9,577 stars the unchunked view also exceeds the 250 limit,
+so the same window governs the *first* page.
+
 ### Offline actions — SHIPPED 2026-08-01, CONFIRMED ON THE DEVICE 2026-08-02
 
 Built and verified in Chromium (queue an Archive with the network off, confirm it
