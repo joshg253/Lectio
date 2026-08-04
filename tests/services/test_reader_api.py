@@ -145,3 +145,49 @@ def test_ua_hook_fires_on_real_reader(tmp_path):
                 assert retr.session.headers.get("User-Agent") == _EXPECTED_UA
     finally:
         r.close()
+
+
+def _capture_make_reader_kwargs(monkeypatch) -> dict:
+    """Stub make_reader/storage and return the dict the kwargs land in."""
+    captured: dict = {}
+
+    class FakeParser:
+        lazy_init_funcs: list = []
+        def lazy_init(self, fn):
+            return fn
+
+    class FakeReader:
+        def __init__(self, path, **kwargs):
+            self._parser = FakeParser()
+
+    class FakeStorage:
+        def __init__(self, path, **kwargs):
+            pass
+
+    def fake_make_reader(path: str, **kwargs):
+        captured.update(kwargs)
+        return FakeReader(path)
+
+    monkeypatch.setattr(reader_api, "make_reader", fake_make_reader)
+    monkeypatch.setattr(reader_api, "_LectioReaderStorage", FakeStorage)
+    return captured
+
+
+def test_session_timeout_is_passed_through(monkeypatch):
+    """The scheduler refreshes sequentially, so an unbounded read on one feed
+    delays every feed behind it. See Plan.md §0a."""
+    captured = _capture_make_reader_kwargs(monkeypatch)
+
+    ReaderApi("test.sqlite", session_timeout=(5.0, 20.0)).client()
+
+    assert captured.get("session_timeout") == (5.0, 20.0)
+
+
+def test_session_timeout_omitted_keeps_readers_default(monkeypatch):
+    """Not passing it must leave reader's own default in place, not send None
+    (which would mean "no timeout at all")."""
+    captured = _capture_make_reader_kwargs(monkeypatch)
+
+    ReaderApi("test.sqlite").client()
+
+    assert "session_timeout" not in captured

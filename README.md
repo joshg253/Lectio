@@ -330,6 +330,18 @@ The short version:
 | `lectio_meta.sqlite3` | App state: prefs, automation rules, lead images, read history, failure tracking |
 | `lectio_meta.sqlite` | Starred/saved entry archive |
 
+Scheduled refresh is watchdogged. Feeds are fetched sequentially, so one host
+that accepts a connection and then goes silent can stall every feed behind it —
+invisibly, since the app keeps serving. Every fetch carries a read deadline, the
+scheduler loop cannot be killed by an exception, and a watchdog trips when a pass
+stops *advancing* (not merely when it takes a while — a full-library pass runs for
+an hour legitimately). Past a longer threshold it exits so the container restarts,
+since a thread wedged in a socket read cannot be cancelled. `/healthz` reports the
+stall but keeps returning 200: a reader whose refresh is stuck is still readable,
+and failing the probe would take the whole app out of the reverse proxy. Tunable
+via `LECTIO_FEED_READ_TIMEOUT`, `LECTIO_SCHEDULER_STALL_SECONDS` and
+`LECTIO_SCHEDULER_STALL_RESTART_SECONDS` (see `.env.example`).
+
 Pages stay light at large subscription counts: per-feed row sections (the
 sidebar folder feed lists, the Settings → Feeds table, and the Stale view)
 load as HTML fragments on first open instead of shipping with every page, and

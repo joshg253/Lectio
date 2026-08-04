@@ -578,6 +578,24 @@ _ENV_IMG_CACHE_MAX_DIM = _env_int("LECTIO_IMG_CACHE_MAX_DIM", 3840)
 _ENV_IMG_TARGET_BYTES = _env_int("LECTIO_IMG_TARGET_BYTES", 1_500_000)
 # Max width (px) for portrait (taller-than-wide) article images; 0 = disabled.
 _ENV_PORTRAIT_IMG_MAX_WIDTH = _env_int("LECTIO_PORTRAIT_IMG_MAX_WIDTH", 650)
+
+# --- Scheduler resilience (see ARCHITECTURE "Refresh scheduler") ---
+# Feed fetches are strictly sequential, so one host that accepts a connection and
+# then goes quiet delays every feed behind it. These bound that.
+#   LECTIO_FEED_CONNECT_TIMEOUT  seconds to establish a feed connection
+#   LECTIO_FEED_READ_TIMEOUT     seconds to wait for any single read from a feed host
+FEED_CONNECT_TIMEOUT_SECONDS = float(_env_int("LECTIO_FEED_CONNECT_TIMEOUT", 10))
+FEED_READ_TIMEOUT_SECONDS = float(_env_int("LECTIO_FEED_READ_TIMEOUT", 30))
+# A read deadline is per-socket-read, not total: a host trickling one byte at a
+# time never trips it. The watchdog is the backstop — it watches for PROGRESS,
+# not elapsed time, because a full-library pass legitimately runs for an hour.
+#   LECTIO_SCHEDULER_STALL_SECONDS          no progress for this long => log loudly
+#   LECTIO_SCHEDULER_STALL_RESTART_SECONDS  no progress for this long => exit so the
+#                                           container restarts; 0 disables
+SCHEDULER_STALL_SECONDS = _env_int("LECTIO_SCHEDULER_STALL_SECONDS", 600)
+SCHEDULER_STALL_RESTART_SECONDS = _env_int("LECTIO_SCHEDULER_STALL_RESTART_SECONDS", 1800)
+SCHEDULER_WATCHDOG_POLL_SECONDS = 60
+
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 # Public base URL of this instance (e.g. https://lectio.example.com).
 # Required for WebSub: hubs need a reachable callback URL.  Leave blank to disable WebSub.
@@ -1709,6 +1727,44 @@ manual_refresh_lock = threading.Lock()
 last_manual_refresh_started_at = 0.0
 updating_feeds_lock = threading.Lock()
 updating_feeds: set[str] = set()
+
+# --- Scheduler liveness, read by the watchdog and /healthz ---
+# Written by the scheduler thread, read by the watchdog and by request handlers,
+# so every field is touched under this lock. Kept as module state rather than on
+# app.state because the watchdog must be able to read it during startup, before
+# the first pass has run.
+_scheduler_state_lock = threading.Lock()
+_scheduler_state: dict[str, object] = {
+    # monotonic seconds; None when no pass is in flight
+    "pass_started_at": None,
+    "last_pass_finished_at": None,
+    # Last time the pass advanced at all, and what it was doing. "Advanced" is
+    # the honest liveness signal: elapsed time alone can't distinguish a slow
+    # 2,500-feed pass from a socket read that will never return.
+    "last_progress_at": None,
+    "stage": "idle",
+    "consecutive_stall_logs": 0,
+}
+
+
+def _note_scheduler_progress(stage: str) -> None:
+    """Record that the scheduled refresh advanced, and what it is doing now."""
+    with _scheduler_state_lock:
+        _scheduler_state["last_progress_at"] = time.monotonic()
+        _scheduler_state["stage"] = stage
+
+
+def _scheduler_stall_seconds() -> float | None:
+    """Seconds since the in-flight pass last advanced, or None when idle.
+
+    None while no pass is running: between passes there is nothing to stall.
+    """
+    with _scheduler_state_lock:
+        started = _scheduler_state.get("pass_started_at")
+        last = _scheduler_state.get("last_progress_at")
+    if started is None or last is None:
+        return None
+    return time.monotonic() - float(last)  # ty: ignore[invalid-argument-type]
 class _PerUserDict:
     """Dict-like cache partitioned by the current tenancy user, so per-user cached
     data (folder structure, unread counts, tags, settings) never bleeds across
@@ -2027,9 +2083,19 @@ async def lifespan(app: FastAPI):
         app.state.refresh_stop_event = stop_event
         app.state.refresh_thread = thread
         thread.start()
+        # Shares the refresh loop's stop_event: the watchdog exists only to watch
+        # that loop, so the two start and stop together.
+        watchdog = threading.Thread(
+            target=scheduler_watchdog_loop,
+            args=(stop_event,),
+            daemon=True,
+        )
+        app.state.scheduler_watchdog_thread = watchdog
+        watchdog.start()
     else:
         app.state.refresh_stop_event = stop_event
         app.state.refresh_thread = None
+        app.state.scheduler_watchdog_thread = None
 
     # Backfill durations for any existing YouTube entries not yet stored.
     def _backfill() -> None:
@@ -7974,6 +8040,7 @@ def get_reader():
         ReaderApi(
             tenancy.reader_db_path(uid),
             browser_ua_provider=lambda u=uid: _browser_ua_feeds_for(u),
+            session_timeout=(FEED_CONNECT_TIMEOUT_SECONDS, FEED_READ_TIMEOUT_SECONDS),
         ).client()
     )
     pool[uid] = proxy
@@ -10363,6 +10430,7 @@ feed_refresh_service = FeedRefreshService(
     failed_feed_backoff_base_seconds=FAILED_FEED_BACKOFF_BASE_SECONDS,
     failed_feed_backoff_max_seconds=FAILED_FEED_BACKOFF_MAX_SECONDS,
     on_fetch_refused=_flag_browser_ua_on_refusal,
+    progress_hook=_note_scheduler_progress,
 )
 
 websub_service: WebSubService | None = (
@@ -16057,20 +16125,92 @@ def _rotate_for_fairness(uids: list[str]) -> list[str]:
 def _run_scheduled_refresh_for_all_users() -> None:
     """One scheduled-refresh pass across every background user, each under its
     own tenancy context so the refresh hits that user's databases."""
-    for uid in _rotate_for_fairness(_background_user_ids()):
-        with tenancy.user_context(uid):
+    now = time.monotonic()
+    with _scheduler_state_lock:
+        _scheduler_state["pass_started_at"] = now
+        _scheduler_state["last_progress_at"] = now
+        _scheduler_state["stage"] = "starting"
+        _scheduler_state["consecutive_stall_logs"] = 0
+    try:
+        for uid in _rotate_for_fairness(_background_user_ids()):
+            _note_scheduler_progress(f"user {uid}")
+            with tenancy.user_context(uid):
+                try:
+                    _scheduled_refresh_tick()
+                except Exception:
+                    LOGGER.exception("scheduled refresh failed for user %r", uid)
+        # Renewal is global (shared DB) — run once per scheduler tick, not per user.
+        # Guarded: it sits outside the per-user loop, so an exception here escaped
+        # into scheduled_refresh_loop and killed the scheduler thread permanently —
+        # the same 34-hour silence as a hung socket, one `try` away.
+        if websub_service:
+            _note_scheduler_progress("websub renewal")
             try:
-                _scheduled_refresh_tick()
+                websub_service.renew_expiring_subscriptions()
             except Exception:
-                LOGGER.exception("scheduled refresh failed for user %r", uid)
-    # Renewal is global (shared DB) — run once per scheduler tick, not per user.
-    if websub_service:
-        websub_service.renew_expiring_subscriptions()
+                LOGGER.exception("[websub] subscription renewal failed")
+    finally:
+        with _scheduler_state_lock:
+            _scheduler_state["pass_started_at"] = None
+            _scheduler_state["last_pass_finished_at"] = time.monotonic()
+            _scheduler_state["stage"] = "idle"
 
 
 def scheduled_refresh_loop(stop_event: threading.Event) -> None:
     while not stop_event.wait(SCHEDULER_POLL_SECONDS):
-        _run_scheduled_refresh_for_all_users()
+        # Nothing may escape this loop. An uncaught exception here does not crash
+        # the app — it silently ends the only thread that refreshes feeds, while
+        # /healthz stays green and the UI looks fine.
+        try:
+            _run_scheduled_refresh_for_all_users()
+        except Exception:
+            LOGGER.exception("scheduled refresh pass failed; the loop continues")
+
+
+def scheduler_watchdog_loop(stop_event: threading.Event) -> None:
+    """Watch the scheduler for a pass that has stopped advancing.
+
+    The failure this exists for is not that refresh broke — it is that refresh
+    broke *invisibly*. The scheduler thread stayed alive, blocked on a socket read
+    with no deadline, and nothing refreshed for 34 hours while /healthz answered
+    200 the whole time.
+
+    Progress, not elapsed time, is the signal: a full-library pass legitimately
+    runs for an hour, so "this pass is taking a long time" says nothing. A pass
+    that has not advanced by even one feed for ten minutes is stuck.
+
+    A stuck pass cannot be cancelled — Python has no way to interrupt a thread
+    blocked in a socket read — so the escalation is to exit the process and let
+    the container's restart policy bring it back, which is exactly the manual
+    recovery that worked. Set LECTIO_SCHEDULER_STALL_RESTART_SECONDS=0 to log only.
+    """
+    while not stop_event.wait(SCHEDULER_WATCHDOG_POLL_SECONDS):
+        try:
+            stalled_for = _scheduler_stall_seconds()
+            if stalled_for is None or stalled_for < SCHEDULER_STALL_SECONDS:
+                continue
+            with _scheduler_state_lock:
+                stage = str(_scheduler_state.get("stage") or "?")
+                logs = int(_scheduler_state.get("consecutive_stall_logs") or 0)
+                _scheduler_state["consecutive_stall_logs"] = logs + 1
+            LOGGER.error(
+                "[scheduler] STALLED: no progress for %ds while doing %r. "
+                "Feeds are not refreshing. Restart threshold: %s",
+                int(stalled_for),
+                stage,
+                f"{SCHEDULER_STALL_RESTART_SECONDS}s" if SCHEDULER_STALL_RESTART_SECONDS > 0 else "disabled",
+            )
+            if 0 < SCHEDULER_STALL_RESTART_SECONDS <= stalled_for:
+                LOGGER.error(
+                    "[scheduler] stalled %ds at %r — exiting so the container restarts",
+                    int(stalled_for), stage,
+                )
+                # os._exit, not sys.exit: the point is that a thread is wedged in
+                # a syscall, so an orderly shutdown would block on joining it.
+                logging.shutdown()
+                os._exit(1)
+        except Exception:
+            LOGGER.exception("[scheduler] watchdog iteration failed")
 
 
 def _scheduled_refresh_tick() -> None:
@@ -29599,8 +29739,22 @@ def healthz():
     as the process is serving requests. Intentionally does NOT touch the DB:
     under bulk-refresh load the meta DB can be locked for several seconds, and
     a probe that waits on it will time out and cause the proxy to withdraw the
-    backend even though the app is still functioning."""
-    return JSONResponse({"status": "ok"})
+    backend even though the app is still functioning.
+
+    A stalled scheduler is reported in the body but does NOT fail the probe: this
+    is also the Docker HEALTHCHECK and Traefik's, and a reader whose refresh is
+    stuck is still perfectly usable for reading. Withdrawing the backend would
+    turn a background-work failure into an outage.
+    """
+    body: dict[str, object] = {"status": "ok"}
+    stalled_for = _scheduler_stall_seconds()
+    with _scheduler_state_lock:
+        body["scheduler"] = {
+            "stage": _scheduler_state.get("stage"),
+            "stalled_seconds": int(stalled_for) if stalled_for is not None else None,
+            "stalled": stalled_for is not None and stalled_for >= SCHEDULER_STALL_SECONDS,
+        }
+    return JSONResponse(body)
 
 
 @app.get("/stats")

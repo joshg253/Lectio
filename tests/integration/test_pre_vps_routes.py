@@ -28,7 +28,11 @@ def test_healthz_returns_ok_when_db_reachable(monkeypatch):
         response = client.get("/healthz")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["status"] == "ok"
+    # Scheduler liveness rides along in the body (see Plan.md §0a) but never
+    # changes the verdict — see test_scheduler_watchdog.py.
+    assert "scheduler" in body
 
 
 def test_healthz_returns_ok_even_when_db_unreachable(monkeypatch):
@@ -48,7 +52,7 @@ def test_healthz_returns_ok_even_when_db_unreachable(monkeypatch):
         response = client.get("/healthz")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json()["status"] == "ok"
 
 
 def test_static_assets_get_long_lived_cache_control():
