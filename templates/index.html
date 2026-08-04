@@ -407,7 +407,14 @@
               <li>
                 <a
                   class="tag-link {% if selected_tag == tag_row.name %}active{% endif %}"
-                  href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag_row.name | urlencode }}{{ _tree_sq }}&read_filter=all&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
+                  {# star_only=1, not 0: this whole block only renders in Saved
+                     (see the comment above, and the JS that toggles it on the
+                     same flag), so a tag link that cleared it threw you into
+                     the Feeds scope on "All" — and then showed nothing, because
+                     Feeds drops disabled and kept-but-unsubscribed feeds, which
+                     is where saved-only tagged entries live. A leftover from
+                     when this list was in the Feeds sidebar. #}
+                  href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag_row.name | urlencode }}{{ _tree_sq }}&read_filter=all&star_only=1&resume_read_filter={{ selected_resume_read_filter }}"
                   title="#{{ tag_row.name }}"
                 >
                   <span class="tag-label">#{{ tag_row.name }}</span>

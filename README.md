@@ -87,6 +87,8 @@ The short version:
   these) and `-tag` (drop these). A post's feed-tag chips show the first eight
   with a **+N more** to reveal the rest — some publishers ship 28 tags a post and
   bury the useful one, and a tag with no chip can't be filtered on at all.
+  Clicking a tag in the Saved sidebar stays in Saved, rather than throwing you
+  into the Feeds view with an empty list.
   Opening the rule form from a feed's right-click menu scrolls the
   form into view rather than leaving it off-screen at the top of a long list.
 - **Keep vs. to-do** — **tagging a post keeps it forever**: it triggers a full
