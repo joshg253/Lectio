@@ -32,58 +32,31 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import main  # noqa: E402
 from services import (
+    publish_date as publish_date_service,  # noqa: E402
+)
+from services import (
     tenancy,  # noqa: E402
-    url_guard,  # noqa: E402
 )
 
-ARCHIVE_URL = "https://what-if.xkcd.com/archive/"
 _HOST = "what-if.xkcd.com"
 
-# One archive entry: the article link, then its date in the following <h3>.
-_ARCHIVE_ROW_RE = re.compile(
-    r'<h2[^>]*class="archive-title"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>.*?</h2>\s*'
-    r'<h3[^>]*class="archive-date"[^>]*>\s*([^<]+?)\s*</h3>',
-    re.I | re.S,
-)
-# The article number is the whole identity here: http/https, www or not, trailing
-# slash or not, all name the same piece.
-_NUM_RE = re.compile(r"//(?:www\.)?what-if\.xkcd\.com/(\d+)", re.I)
-
-
-def _article_number(url: str) -> str | None:
-    m = _NUM_RE.search(url or "")
-    return m.group(1) if m else None
+# The index fetch and the URL→number parse live in services/publish_date, so the
+# re-fetch path and this backfill cannot drift apart: re-fetching a single
+# what-if post and running this over the whole backlog must agree on the date.
+_article_number = publish_date_service.whatif_article_number
 
 
 def fetch_archive_dates() -> dict[str, datetime]:
     """``{article_number: published}`` from the archive index. One request."""
-    with url_guard.build_client(
-        timeout=20.0, follow_redirects=True,
-        headers={"User-Agent": main.READABILITY_USER_AGENT},
-    ) as client:
-        resp = url_guard.safe_get(client, ARCHIVE_URL)
-    resp.raise_for_status()
-
-    dates: dict[str, datetime] = {}
-    for href, date_text in _ARCHIVE_ROW_RE.findall(resp.text):
-        number = _article_number(href)
-        if not number:
-            continue
-        try:
-            dt = datetime.strptime(date_text.strip(), "%B %d, %Y").replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-        dates[number] = dt
-    return dates
+    return publish_date_service.fetch_whatif_index(force=True)
 
 
 def recover_for_user(user_id: str, apply: bool) -> int:

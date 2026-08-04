@@ -306,6 +306,33 @@ an entry carrying its own date in its URL still displayed nothing.
 stood for. Any new date source added here must go through it; a raw
 `entry.published or …` reintroduces the bug silently.
 
+### Learning a date on re-fetch
+
+Re-fetch is a free chance to learn a date for an entry that has none, and it
+consults three sources, worst last (`services/publish_date`):
+
+1. **the page's own metadata** — `article:published_time`, JSON-LD
+   `datePublished`, `<time datetime=…>`;
+2. **a date the page prints but never marks up** — hanselman.com ships
+   `<span class="blogMetaDate">February 03, 2026</span>` and nothing
+   machine-readable, so mining metadata correctly found nothing on a page
+   visibly showing its date. Only elements the publisher *labelled*
+   (class/id naming date/publish/posted/byline) count, and the first match
+   wins: a page is full of date-shaped text — comment timestamps, related-post
+   rails, a copyright footer — and matching any of it would reliably pick the
+   wrong one;
+3. **the site's own index**, for sites that publish dates nowhere near the
+   article. what-if.xkcd.com carries no date in any form on an article, while
+   its archive index lists all 162 with theirs. This is a *site adapter*, not a
+   branch in the caller: adding a site means registering a resolver, and the
+   caller keeps asking one question.
+
+Two guards make this safe to run automatically. It **never overwrites a date the
+entry already has** — re-fetch once moved `published` and destroyed 105 real
+dates — and it never touches an entry whose date the user pinned by hand. "Has a
+date" means `real_published_date` says so, which is what stops a sentinel from
+counting as one.
+
 ### Refresh scheduler: why it has a watchdog
 
 The scheduler is one thread running one pass at a time, and every feed in a pass

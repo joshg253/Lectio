@@ -51,6 +51,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from services import bluesky
+from services import publish_date as publish_date_service
 from services import deviantart as deviantart_service
 from services import devto as devto_service
 from services import youtube_oauth as youtube_oauth_service
@@ -27694,11 +27695,20 @@ def _apply_mined_publish_date(feed_url: str, entry_id: str, raw_html: str | None
     Deliberately narrow. Re-fetch used to move `published` and destroyed 105 real
     dates before that was caught, so this never overwrites a date the entry
     already has, and never touches an entry whose date the user pinned by hand.
-    It exists for the ~1,278 entries still sitting at the Unix epoch because their
-    importer had no date to give — a re-fetch is a free chance to learn one.
+    It exists for the entries still sitting on a missing-date sentinel because
+    their importer had no date to give — a re-fetch is a free chance to learn one.
+
+    Three sources, worst last (see services/publish_date):
+      1. the page's own metadata,
+      2. a date the page prints for humans but never marks up — hanselman.com
+         ships `<span class="blogMetaDate">` and nothing machine-readable,
+      3. the site's own index, for sites that publish dates nowhere near the
+         article — what-if.xkcd.com articles carry no date at all.
     """
     if not raw_html:
-        return None
+        # Sources 2 and 3 still need trying: a site index does not need the page,
+        # and this is reached when a fetch produced no HTML to mine.
+        raw_html = None
     with get_meta_connection() as conn:
         if conn.execute(
             "SELECT 1 FROM entry_date_overrides WHERE feed_url = ? AND entry_id = ?",
@@ -27710,11 +27720,24 @@ def _apply_mined_publish_date(feed_url: str, entry_id: str, raw_html: str | None
         row = db.execute(
             "SELECT published FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id)
         ).fetchone()
-        current = str(row[0] or "") if row else ""
-        # Only an absent or epoch date qualifies as "we don't know".
-        if current and not current.startswith("1970-01-01"):
-            return None
+        current_raw = row[0] if row else None
+        # "We don't know" means absent OR a sentinel. This used to test only for
+        # the 1970 prefix, which silently excluded the 129 entries whose importer
+        # wrote year 0001 instead — the same class of value, a different spelling.
+        # real_published_date is the single place that judgement lives.
+        if current_raw is not None:
+            parsed = current_raw
+            if isinstance(parsed, str):
+                try:
+                    parsed = datetime.fromisoformat(parsed)
+                except ValueError:
+                    parsed = None
+            if parsed is not None and real_published_date(parsed) is not None:
+                return None       # a real date already; never overwrite it
+        source = "metadata"
         mined = mine_publish_date(raw_html)
+        if mined is None:
+            mined, source = publish_date_service.resolve(raw_html, entry_id)
         if mined is None:
             return None
         stored = mined.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -27722,7 +27745,7 @@ def _apply_mined_publish_date(feed_url: str, entry_id: str, raw_html: str | None
                    (stored, feed_url, entry_id))
         db.commit()
     invalidate_unread_counts_cache()
-    LOGGER.info("[re-fetch] learned publish date %s for %s", stored, entry_id)
+    LOGGER.info("[re-fetch] learned publish date %s (%s) for %s", stored, source, entry_id)
     return stored
 
 

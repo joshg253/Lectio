@@ -97,13 +97,16 @@ Changing a feed's URL left three loose ends, all reported from live use:
   seed it itself (rule already present, or a same-host move), carried across the
   navigation in `sessionStorage` and read exactly once.
 
-### what-if.xkcd dates — script ready, NOT YET APPLIED
+### what-if.xkcd dates — APPLIED 2026-08-04 (45 entries)
 
-`scripts/recover_whatif_dates.py`. Dry run 2026-08-04: **45 of 45 matched**,
-real publisher dates (Earth-Moon Fire Pole → 2018-05-21, etc.). Apply with
-`uv run python scripts/recover_whatif_dates.py --apply`, then restart the app
-(the unread-count cache is generation-guarded and will not self-heal from a
-behind-the-back write).
+`scripts/recover_whatif_dates.py` — **applied 2026-08-04, 45 of 45**, real
+publisher dates (Earth-Moon Fire Pole → 2018-05-21). Library-wide sentinel count
+went 313 → 267. Log:
+`data/users/<uid>/recovered_whatif_dates_20260804-154117.json`.
+
+The index fetch now lives in `services/publish_date` and the script delegates to
+it, so re-fetching a single what-if post and running the backfill over the whole
+backlog cannot disagree about a date.
 
 `fetch_missing_publish_dates.py` had recorded what-if as hopeless — 45 entries,
 fetching the article pages returned **zero** dates. That was correct and it was
