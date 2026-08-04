@@ -11760,8 +11760,21 @@ def _sorted_star_key_window(
     for just the sort value is milliseconds. Keys whose entry no longer exists
     don't join (same outcome as get_entry -> None). Falls back to the full key
     set on any SQL error."""
+    # "starred" orders by saved_entries.saved_at, which lives in the META DB —
+    # this query only joins the reader DB, so there is no column here to sort
+    # by. Selecting a constant keeps the read-filter and existence join doing
+    # their work, and the star dates are merged in below.
+    #
+    # This mattered the moment the Saved Inbox started using the star order: the
+    # window is only computed when the star set exceeds the fetch limit, which
+    # on any real backlog is always — so falling through to `e.first_updated`
+    # here silently picked the visible page by RECEIVED date and then sorted
+    # that arbitrary page. The unchunked case looked fine, which is exactly what
+    # made it worth checking the chunked one.
+    by_star = sort_by == "starred"
     sort_expr = (
-        "COALESCE(e.published, e.updated, e.first_updated)"
+        "''" if by_star
+        else "COALESCE(e.published, e.updated, e.first_updated)"
         if sort_by == "post" else "e.first_updated"
     )
     read_clause = {
@@ -11791,6 +11804,21 @@ def _sorted_star_key_window(
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("star key window query failed, hydrating all keys: %s", exc)
         return list(keys)
+    if by_star:
+        # Merge the star dates from the meta DB. A key with no row cannot really
+        # happen (the set came from saved_entries) but sorts last rather than
+        # raising, so a race during an unstar degrades to a misplaced row.
+        try:
+            with get_meta_connection() as _mc:
+                _when = {
+                    (str(r[0]), str(r[1])): str(r[2] or "")
+                    for r in _mc.execute(
+                        "SELECT feed_url, entry_id, saved_at FROM saved_entries")
+                }
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("star date lookup failed, keeping key order: %s", exc)
+            _when = {}
+        scored = [(f, i, _when.get((f, i), "")) for f, i, _ in scored]
     scored.sort(key=lambda t: t[2], reverse=(sort_dir != "asc"))
     return [(f, i) for f, i, _sv in scored[:limit]]
 
@@ -12654,6 +12682,22 @@ def get_saved_unread_count() -> int:
                 ).fetchone()
                 count += int(row[0] or 0)
     return count
+
+
+def get_starred_inbox_total() -> int:
+    """How many items the Saved Inbox holds: every star, minus anything archived.
+
+    Stars only — the same narrowing Read Mode's Inbox uses. The sidebar's other
+    Saved counts are *kept* (starred OR tagged) because a tag is filing and the
+    tag tree has to count what it lists; the Inbox is a to-do pile, and filing
+    something is not a to-do.
+    """
+    with get_meta_connection() as conn:
+        return int(conn.execute(
+            "SELECT COUNT(*) FROM saved_entries s WHERE NOT EXISTS ("
+            " SELECT 1 FROM archived_entries a"
+            " WHERE a.feed_url = s.feed_url AND a.entry_id = s.entry_id)"
+        ).fetchone()[0])
 
 
 def get_saved_counts_by_folder(folder_feed_urls_by_id: dict[int, set[str]]) -> dict[int, int]:
@@ -19247,6 +19291,7 @@ def home(
     subscribe: str | None = None,
     subscribe_to: str | None = None,
     full: int | None = None,
+    kept: str | None = None,
 ):
     # E-ink auto-detect: a Supernote tablet's browser gets the light, paginated
     # Feeds Read Mode instead of the heavy three-pane app. `?full=1` (the Read
@@ -19297,6 +19342,7 @@ def home(
             chunk=chunk,
             chunk_delta=chunk_delta,
             subscribe=subscribe or subscribe_to,
+            kept=kept,
         )
         if full:
             # Remember the full-app opt-out on this device (Supernote) so later
@@ -19330,6 +19376,7 @@ def _home_inner(
     chunk: int | None = None,
     chunk_delta: str | None = None,
     subscribe: str | None = None,
+    kept: str | None = None,
 ):
     # Allow client to suggest a preferred read_filter via header for SPA/AJAX calls.
     # Use it only when no explicit `read_filter` was supplied in the URL/form.
@@ -19370,19 +19417,57 @@ def _home_inner(
         _tick("connect")
         # Per-scope: Feeds and Saved keep their own remembered order.
         _sort_by_key, _sort_dir_key = sort_setting_keys(normalize_star_only(star_only))
-        preferred_sort_by = normalize_sort_by(get_setting(conn, _sort_by_key))
+        # "starred" (order by saved_entries.saved_at) means something only in the
+        # Saved scope — in Feeds most entries were never starred, so the order
+        # would be arbitrary. Gating it on the scope rather than blessing it
+        # globally is what keeps it out of the Feeds view, where it once leaked
+        # in and left the toolbar reading "Published newest" over a star-ordered
+        # list. It has to be allowed on the READ back too, or a remembered
+        # "starred" would be silently rewritten to the default on every load —
+        # the preference quietly destroying itself.
+        _allow_starred_sort = normalize_star_only(star_only)
+        preferred_sort_by = normalize_sort_by(
+            get_setting(conn, _sort_by_key), allow_starred=_allow_starred_sort)
         preferred_sort_dir = normalize_sort_dir(get_setting(conn, _sort_dir_key))
         problematic_feeds_last_viewed_at = parse_epoch_setting(get_setting(conn, PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY))
-        selected_sort_by = normalize_sort_by(sort_by or preferred_sort_by)
-        selected_sort_dir = normalize_sort_dir(sort_dir or preferred_sort_dir)
+        # The Saved Inbox is the whole star pile — every star, however it was
+        # made (by hand, by a save_article rule, by the browser extension) —
+        # and a to-do pile's natural order is when you added to it. It opens
+        # most-recently-starred, which is a NODE DEFAULT, not a URL param: the
+        # index persists any explicit sort_by it is handed, and a default that
+        # persisted would overwrite the order you chose for the rest of Saved.
+        inbox_view = _allow_starred_sort and kept == "starred"
+        _node_default_sort_by = "starred" if inbox_view else preferred_sort_by
+        _node_default_sort_dir = "desc" if inbox_view else preferred_sort_dir
+        # The star order belongs to the Inbox node, and only to it. Two guards,
+        # because the templates hand `sort_by` around in ~14 places (post links,
+        # search, action forms) and one of them forgetting `kept=starred` must
+        # not be able to turn the whole Saved scope star-ordered:
+        #   * honored only ON the Inbox — a stray ?sort_by=starred elsewhere
+        #     falls back to that scope's own remembered order;
+        #   * never PERSISTED — it is a node default, and persisting it would
+        #     overwrite the order chosen for the rest of Saved. This is the
+        #     exact shape of the bug that once left the toolbar reading
+        #     "Published newest" over a star-ordered list.
+        selected_sort_by = normalize_sort_by(
+            sort_by or _node_default_sort_by, allow_starred=_allow_starred_sort)
+        if selected_sort_by == "starred" and not inbox_view:
+            selected_sort_by = normalize_sort_by(preferred_sort_by)
+        selected_sort_dir = normalize_sort_dir(sort_dir or _node_default_sort_dir)
         # Persist only an EXPLICIT choice from the sort menu. Re-saving on every
         # plain load meant any stored value normalize_sort_by did not recognize
         # was silently replaced by the default — the remembered preference
         # quietly destroying itself, with no way to tell it had happened.
-        if sort_by:
-            set_setting(conn, _sort_by_key, selected_sort_by)
-        if sort_dir:
-            set_setting(conn, _sort_dir_key, selected_sort_dir)
+        # Neither half of the Inbox's order is persistable. Blocking only the
+        # KEY let its direction through: visiting the Inbox (desc) flipped the
+        # remembered Saved direction, so leaving it turned "All" from
+        # oldest-first to newest-first. A sort is a pair, and a node default has
+        # to be inert as a pair.
+        if selected_sort_by != "starred":
+            if sort_by:
+                set_setting(conn, _sort_by_key, selected_sort_by)
+            if sort_dir:
+                set_setting(conn, _sort_dir_key, selected_sort_dir)
         _tick("settings")
 
         snapshot = get_meta_structure_snapshot(conn)
@@ -19546,10 +19631,12 @@ def _home_inner(
     try:
         saved_unread_count = get_saved_unread_count()
         saved_counts_by_folder = get_saved_counts_by_folder(folder_feed_urls_by_id)
+        inbox_total = get_starred_inbox_total()
     except Exception as exc:  # noqa: BLE001 — badges only; never block the render
         LOGGER.warning("saved counts failed: %s", exc)
         saved_unread_count = 0
         saved_counts_by_folder = {}
+        inbox_total = 0
 
     feed_title_map = get_feed_title_map()
     inactive_feeds = [
@@ -19649,6 +19736,10 @@ def _home_inner(
         star_only=selected_star_only,
         selected_tag=selected_tag,
         search_query=selected_query,
+        # The Inbox is the to-do pile: stars only. Every other Saved node still
+        # spans the whole kept set (starred OR tagged), because a tag is filing
+        # and filing something is not a to-do.
+        kept_scope=("starred" if inbox_view else "kept"),
     )
 
     # Surface orphan archive entries (saved articles whose feed has been
@@ -19811,6 +19902,8 @@ def _home_inner(
         "selected_resume_read_filter": selected_resume_read_filter,
         "saved_unread_count": saved_unread_count,
         "saved_counts_by_folder": saved_counts_by_folder,
+        "inbox_view": inbox_view,
+        "inbox_total": inbox_total,
         "global_note": global_note,
         "email_configured": is_email_configured(),
         "yt_oauth_connected": youtube_oauth_connected(),

@@ -2972,6 +2972,10 @@ const CAPTURE_MODE_FULL = 'full';
       const scopeFolderId = nextUrl.searchParams.get('folder_id');
       const scopeFeedUrl = nextUrl.searchParams.get('list_feed_url');
       const nextStarOnly = nextUrl.searchParams.get('star_only') === '1';
+      // The Saved Inbox is a distinct node that shares the root folder id with
+      // "All" — `kept=starred` is the only thing telling them apart. Without it
+      // here, both rows key off the same id and "All" wins.
+      const nextInbox = nextStarOnly && nextUrl.searchParams.get('kept') === 'starred';
       const nextHome = nextUrl.searchParams.get('home') === '1'
         || (nextStarOnly && nextUrl.searchParams.get('saved_home') === '1');
       const nextSavedHome = nextStarOnly && nextHome;
@@ -3040,9 +3044,19 @@ const CAPTURE_MODE_FULL = 'full';
         }
         let isMatch = false;
         if (!nextFeedUrl && folderLink.getAttribute('data-folder-id') === nextFolderId) {
+          // Saved Inbox row: root folder + star mode + kept=starred. Checked
+          // before "All", which shares its folder id and would otherwise claim
+          // every root-level Saved URL.
+          if (folderLink.classList.contains('saved-inbox-item')) {
+            isMatch = nextInbox;
+          }
           // Saved "All" row: the whole-backlog view (root + star, not landing).
-          if (folderLink.classList.contains('saved-all-item')) {
-            isMatch = nextStarOnly && !nextHomeEffective;
+          // Explicitly NOT the Inbox and NOT a tag view — both are their own
+          // nodes at the same folder id, and the server's own condition for this
+          // row already excludes them. The client has to agree or it overrides
+          // a correctly-rendered page a second after it loads.
+          else if (folderLink.classList.contains('saved-all-item')) {
+            isMatch = nextStarOnly && !nextHomeEffective && !nextInbox && !nextTag;
           }
           // Feeds "All" row: every feed (root, feeds mode, not landing).
           else if (folderLink.classList.contains('feeds-all-item')) {

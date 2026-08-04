@@ -108,7 +108,7 @@ end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, 
 excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 `py/full-ssrf` was.
 
-### 0b. Saved Inbox = every star, newest-star-first — PARKED on `saved-inbox-wip`
+### 0b. Saved Inbox = every star, newest-star-first — UNBLOCKED on `saved-inbox-wip`
 
 **What it does.** Saved → Inbox was a pinned link to the `inbox` **tag**, which
 only the save_article automation ever writes — it showed 3 items against 9,577
@@ -119,8 +119,9 @@ the `starred` sort already existed for Read Mode. Decided 2026-08-03: the
 `inbox` tag keeps being written and stays in the Tags list, it just no longer
 defines the node.
 
-**Verified working** on a seeded instance (publish order deliberately reversed
-against star order so the two can never be confused): all 30 stars listed,
+**Verified working** on a seeded instance (both the published and the received
+order deliberately reversed against star order, so no fallback column can pass
+by coincidence): all 30 stars listed,
 tagged-but-unstarred excluded, newest-star-first, "All" untouched at 35 kept
 with its own remembered order, the order never persisted as the remembered Saved
 sort, article links keeping the node, "Longest starred" reversing it.
@@ -135,17 +136,47 @@ sort, article links keeping the node, "Longest starred" reversing it.
   (the key was guarded, the dir was not), so visiting the Inbox flipped Saved
   from oldest-first to newest-first and it stayed that way.
 
-**⚠ Unresolved, do not ship without settling it.** Under the star sort, chunk 1
-returns the *oldest* stars and chunk 2 returns page 1; chunk 3 is correct.
-Ordinary sorts chunk perfectly and the feeds scope is fine, so it is specific to
-the star order. Logging confirms the window is called with exactly the right
-arguments (`sort_by='starred' dir='desc' kept_scope='starred' n=30 limit=10`),
-and calling `_sorted_star_key_window`, `list_entries_for_feeds` and
-`merge_orphan_saved_entries` in-process with those same arguments all return the
-correct order — unreconciled. **Next step: log the window's RETURN VALUE
-in-request**, which should settle it in one run. Note this is not merely a
-scrolling bug: with 9,577 stars the unchunked view also exceeds the 250 limit,
-so the same window governs the *first* page.
+**The chunking blocker is SETTLED 2026-08-04 — it was the first of those two
+bugs, observed against a build that predated its fix.** That is exactly why it
+read as unreconcilable: the in-process calls ran the fixed
+`_sorted_star_key_window` while the request path was still running the old one,
+so both observations were true and about different code.
+
+Reproduced deterministically in `tests/integration/test_saved_inbox_chunking.py`
+by reverting just the `starred` branch of the window — it fails chunk 1 and
+chunk 2 and passes chunk 3, the reported triad exactly:
+
+- **chunk 1 → the oldest stars.** The window clips to `limit`, so with the star
+  branch missing it clipped by `e.first_updated` — the ten *longest*-starred,
+  correctly ordered among themselves, which is why it looked like an ordering
+  bug rather than a selection one.
+- **chunk 3 correct.** `len(star_keys) > fetch_limit` is False once the limit
+  reaches the star count (30 keys, limit 30), so chunk 3 skipped the window
+  entirely. The "correct" page was the one that never took the broken path.
+
+**Worth keeping from this:** the first version of that test's seed passed
+against the broken code, because it only reversed *published* against star order
+while leaving *received* order coincident with it — and `e.first_updated` is
+received. A seed for an ordering bug has to disagree with every fallback the
+code can reach, not just the obvious one.
+
+**A second, unrelated bug surfaced from Josh clicking it 2026-08-04: the Inbox
+row lost its highlight to "All" about a second after the click.** Client-side,
+and it predates this branch — the old `tag=inbox` Inbox had it too.
+`updateScopeActiveState` matches sidebar rows on `data-folder-id`, the Inbox
+anchor had none, and `saved-all-item` matched on star mode alone — so the
+server rendered Inbox active and the SPA's active-state pass then moved the
+highlight to All. Fixed by giving the anchor a `data-folder-id` and teaching the
+matcher about `kept=starred`; the All row now also yields to tag views, which
+the server's own condition for that row already did. Reproduced and confirmed in
+Chromium both ways (without the fix: "All"; with it: "Inbox", still correct
+after 3s).
+
+Nothing else was found. The branch is ready to ship; it now carries 13
+regression tests covering the unchunked list, each chunk, the chunks tiling
+without gaps or repeats, both directions, and the sequences (landing then
+chunking, and the Inbox not overwriting the remembered Saved order), plus 5
+structural guards on the active-state fix (there is no JS test harness here).
 
 ### Offline actions — SHIPPED 2026-08-01, CONFIRMED ON THE DEVICE 2026-08-02
 
