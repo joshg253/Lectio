@@ -188,7 +188,13 @@
         {% if root_folder_row %}
         {% set tree_read_filter = selected_resume_read_filter if selected_read_filter == 'history' else selected_read_filter %}
         {# Compact query fragments for tree/folder/feed links — omit default values #}
-        {% set _tree_sq = (('&sort_by=' ~ selected_sort_by) if selected_sort_by != 'post' else '') ~ (('&sort_dir=' ~ selected_sort_dir) if selected_sort_dir != 'asc' else '') %}
+        {# 'starred' is the Inbox's node default, not a choice to carry around:
+           propagating it would hand every other Saved node an order most of its
+           rows cannot support, and the index persists what it is handed. Tree
+           links fall back to the scope's own remembered sort instead. #}
+        {% set _tree_sort_by = 'post' if selected_sort_by == 'starred' else selected_sort_by %}
+        {% set _tree_sort_dir = 'asc' if selected_sort_by == 'starred' else selected_sort_dir %}
+        {% set _tree_sq = (('&sort_by=' ~ _tree_sort_by) if _tree_sort_by != 'post' else '') ~ (('&sort_dir=' ~ _tree_sort_dir) if _tree_sort_dir != 'asc' else '') %}
         {# Feeds-tree links never carry star mode: Saved Articles and All Feeds
            are the mode switches, and each block is only visible in its own mode. #}
         {% set _tree_rfq = (('&read_filter=' ~ tree_read_filter) if tree_read_filter != 'all' else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != tree_read_filter else '') %}
@@ -244,18 +250,24 @@
             </button>
           </div>
           <div class="tree-children saved-tree-children"{% if not selected_star_only %} hidden{% endif %}>
-            {# Inbox: auto-saved articles (Save/Star automation) awaiting review —
-               a pinned tag bucket; file items out by removing the 'inbox' tag. #}
-            {% set _inbox_tag_row = (tag_rows | selectattr('name', 'equalto', 'inbox') | list | first) if tag_rows else none %}
+            {# Inbox: everything starred, newest star first — however the star
+               was made (by hand, by a save_article rule, by the extension). It
+               was the 'inbox' TAG bucket, which only the automation ever wrote,
+               so it showed 3 of 9,577 stars and disagreed with Read Mode's
+               Inbox for the same word. `kept=starred` is what narrows it to the
+               star axis and gives it its most-recently-starred default order;
+               no other Saved link carries it, so leaving the Inbox restores the
+               order you had. The 'inbox' tag is still written and still listed
+               under Tags — it just no longer defines this node. #}
             <div class="tree-folder-group">
               <div class="tree-folder-row">
                 <span class="tree-toggle-spacer"></span>
                 <a
-                  href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _saved_rfq }}&tag=inbox"
-                  class="tree-item child-item saved-folder-item saved-inbox-item {% if selected_star_only and selected_tag == 'inbox' %}active{% endif %}"
+                  href="/?folder_id={{ root_folder_row.id }}{{ _saved_rfq }}&kept=starred"
+                  class="tree-item child-item saved-folder-item saved-inbox-item {% if inbox_view %}active{% endif %}"
                 >
                   <span class="name">Inbox</span>
-                  {% if _inbox_tag_row %}<span class="count">{{ _inbox_tag_row.count }}</span>{% endif %}
+                  {% if inbox_total %}<span class="count">{{ inbox_total }}</span>{% endif %}
                 </a>
               </div>
             </div>
@@ -452,6 +464,10 @@
         {% set tb_base = '/?folder_id=' ~ selected_folder_id %}
         {% if selected_feed_url %}{% set tb_base = tb_base ~ '&list_feed_url=' ~ (selected_feed_url | urlencode) %}{% endif %}
         {% if selected_tag %}{% set tb_base = tb_base ~ '&tag=' ~ (selected_tag | urlencode) %}{% endif %}
+        {# Sticky for toolbar links only. Changing the sort or the filter must
+           stay in the Inbox; the TREE links deliberately omit it, so clicking
+           any other Saved node leaves. #}
+        {% if inbox_view %}{% set tb_base = tb_base ~ '&kept=starred' %}{% endif %}
         {% set tb_sort = (('&sort_by=' ~ selected_sort_by) if selected_sort_by != 'post' else '') ~ (('&sort_dir=' ~ selected_sort_dir) if selected_sort_dir != 'asc' else '') %}
         {% set tb_rf = (('&read_filter=' ~ selected_read_filter) if selected_read_filter != 'all' else '') ~ ('&star_only=1' if selected_star_only else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != selected_read_filter else '') %}
         {% set resume_filter = selected_resume_read_filter if selected_read_filter == 'history' else selected_read_filter %}
@@ -459,7 +475,10 @@
         {% set filter_icon = 'star' if selected_star_only else ('mark_email_unread' if selected_read_filter == 'unread' else ('history' if selected_read_filter == 'history' else 'format_list_bulleted')) %}
         {% set filter_is_active = selected_read_filter == 'unread' or selected_star_only %}
         {% set sort_is_active = selected_sort_by != 'post' or selected_sort_dir != 'desc' %}
-        {% set sort_by_label = 'Pub' if selected_sort_by == 'post' else 'Rec' %}
+        {# 'Star' is why this exists: order-by-star-date reaching the toolbar as
+           an unlabelled case is the bug that made it read "Published newest"
+           over a differently-ordered list. #}
+        {% set sort_by_label = 'Pub' if selected_sort_by == 'post' else ('Star' if selected_sort_by == 'starred' else 'Rec') %}
         {% set sort_dir_label = 'new' if selected_sort_dir == 'desc' else 'old' %}
         <div class="toolbar-row-main">
           {# Phone only: open the folder drawer over the list. CSS hides it at
@@ -493,13 +512,18 @@
                    filter) by a tag. Base keeps everything except the tag. #}
                 {% set tag_filter_base = '/?folder_id=' ~ selected_folder_id %}
                 {% if selected_feed_url %}{% set tag_filter_base = tag_filter_base ~ '&list_feed_url=' ~ (selected_feed_url | urlencode) %}{% endif %}
+                {# Picking a tag LEAVES the Inbox — a tag is filing, the Inbox is
+                   the to-do pile — so it must not drag the star order with it.
+                   (The server ignores a starred sort off-node anyway; this keeps
+                   the URL honest rather than relying on that.) #}
+                {% set tag_filter_sort = '' if selected_sort_by == 'starred' else tb_sort %}
                 <hr class="menu-divider" />
                 <details class="filter-tags-submenu">
                   <summary class="menu-item filter-tags-summary {% if selected_tag %}active{% endif %}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">sell</span> Tags <span class="filter-tags-caret material-symbols-rounded" aria-hidden="true">expand_more</span></summary>
                   <div class="filter-tags-list">
-                    {% if selected_tag %}<a class="menu-item" href="{{ tag_filter_base ~ tb_rf ~ tb_sort }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">close</span> Clear tag</a>{% endif %}
+                    {% if selected_tag %}<a class="menu-item" href="{{ tag_filter_base ~ tb_rf ~ tag_filter_sort }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">close</span> Clear tag</a>{% endif %}
                     {% for tag_row in tag_rows %}
-                    <a class="menu-item {% if selected_tag == tag_row.name %}active{% endif %}" href="{{ tag_filter_base ~ '&tag=' ~ (tag_row.name | urlencode) ~ tb_rf ~ tb_sort }}"><span class="tag-label">#{{ tag_row.name }}</span> <span class="count">{{ tag_row.count }}</span></a>
+                    <a class="menu-item {% if selected_tag == tag_row.name %}active{% endif %}" href="{{ tag_filter_base ~ '&tag=' ~ (tag_row.name | urlencode) ~ tb_rf ~ tag_filter_sort }}"><span class="tag-label">#{{ tag_row.name }}</span> <span class="count">{{ tag_row.count }}</span></a>
                     {% endfor %}
                   </div>
                 </details>
@@ -516,6 +540,12 @@
                 <a class="menu-item {% if selected_sort_by == 'post' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=post&sort_dir=asc' ~ tb_rf }}">Published oldest</a>
                 <a class="menu-item {% if selected_sort_by == 'received' and selected_sort_dir == 'desc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=received&sort_dir=desc' ~ tb_rf }}">Received newest</a>
                 <a class="menu-item {% if selected_sort_by == 'received' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=received&sort_dir=asc' ~ tb_rf }}">Received oldest</a>
+                {# Saved only: in Feeds most entries were never starred, so this
+                   order would be arbitrary. #}
+                {% if selected_star_only %}
+                <a class="menu-item {% if selected_sort_by == 'starred' and selected_sort_dir == 'desc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=starred&sort_dir=desc' ~ tb_rf }}">Recently starred</a>
+                <a class="menu-item {% if selected_sort_by == 'starred' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=starred&sort_dir=asc' ~ tb_rf }}">Longest starred</a>
+                {% endif %}
               </div>
             </details>
           </div>
@@ -621,6 +651,8 @@
         </div>
         <div id="toolbar-search-row" class="toolbar-search-row{% if not selected_query %} toolbar-search-hidden{% endif %}">
           <form method="get" action="/" class="posts-search-form" role="search" aria-label="Search posts">
+            {# Searching from the Inbox must search the Inbox. #}
+            {% if inbox_view %}<input type="hidden" name="kept" value="starred" />{% endif %}
             <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
             {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
             {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
@@ -655,7 +687,11 @@
         {% set list_feed_query = '&list_feed_url=' ~ (selected_feed_url | urlencode) if selected_feed_url else '' %}
         {% set tag_query = '&tag=' ~ (selected_tag | urlencode) if selected_tag else '' %}
         {# Only include sort/filter params when non-default to keep URLs clean #}
-        {% set sort_query = (('&sort_by=' ~ selected_sort_by) if selected_sort_by != 'post' else '') ~ (('&sort_dir=' ~ selected_sort_dir) if selected_sort_dir != 'asc' else '') %}
+        {# Post links stay on the node they were clicked from, so in the Inbox
+           they must carry `kept=starred` too — the star order is only honored
+           there, and without it opening an article would silently re-sort the
+           list behind it. #}
+        {% set sort_query = ('&kept=starred' if inbox_view else '') ~ (('&sort_by=' ~ selected_sort_by) if selected_sort_by != 'post' else '') ~ (('&sort_dir=' ~ selected_sort_dir) if selected_sort_dir != 'asc' else '') %}
         {% set read_filter_query = (('&read_filter=' ~ selected_read_filter) if selected_read_filter != 'all' else '') ~ ('&star_only=1' if selected_star_only else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != selected_read_filter else '') %}
         <div
           class="post-item {% if selected_entry and selected_entry.feed_url == post.feed_url and selected_entry.id == post.id %}active{% endif %}{% if post.read %} is-read{% endif %}"
