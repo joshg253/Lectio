@@ -198,3 +198,85 @@ def test_mined_dates_are_range_checked():
     assert main.mine_publish_date("<p>nothing here</p>") is None
     assert main.mine_publish_date(
         '<time datetime="2020-03-04T05:06:07Z">x</time>').year == 2020
+
+
+# --- orphan saves: the feed is gone, the entry lives only in the archive -----
+
+
+ORPHAN_FEED = "https://feeds.feedburner.com/Gone"
+ORPHAN_ID = "http://feedproxy.google.com/~r/Gone/~3/abc123/"
+
+
+@pytest.fixture
+def orphan(configured):
+    """A saved entry whose feed was unsubscribed: present in the archive, absent
+    from reader. Saved still lists it, so its date must still be editable."""
+    main.ensure_starred_archive_schema()
+    with main.get_starred_archive_connection() as arch:
+        arch.execute(
+            "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at, title, link)"
+            " VALUES (?, ?, 'complete', 0, ?, ?)",
+            (ORPHAN_FEED, ORPHAN_ID, "orphaned save", "https://gone.test/post"),
+        )
+    yield
+
+
+def test_orphan_save_can_be_dated(orphan):
+    """Reported as "Entry not found." — the route gated on reader, and an orphan
+    is by definition not in reader."""
+    resp = _client().post("/entries/set-date", data={
+        "feed_url": ORPHAN_FEED, "entry_id": ORPHAN_ID, "published": "2019-03-14",
+    })
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ok"] is True
+
+    with main.get_starred_archive_connection() as arch:
+        stored = arch.execute(
+            "SELECT published_at FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+            (ORPHAN_FEED, ORPHAN_ID),
+        ).fetchone()[0]
+    assert stored is not None
+    from datetime import datetime, timezone
+    assert datetime.fromtimestamp(stored, tz=timezone.utc).date().isoformat() == "2019-03-14"
+
+
+def test_orphan_date_is_also_recorded_as_an_override(orphan):
+    """So the two agree if the feed is ever re-subscribed and the entry returns
+    to reader."""
+    _client().post("/entries/set-date", data={
+        "feed_url": ORPHAN_FEED, "entry_id": ORPHAN_ID, "published": "2019-03-14",
+    })
+
+    with main.get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT published FROM entry_date_overrides WHERE feed_url = ? AND entry_id = ?",
+            (ORPHAN_FEED, ORPHAN_ID),
+        ).fetchone()
+    assert row is not None and row[0].startswith("2019-03-14")
+
+
+def test_orphan_date_can_be_cleared(orphan):
+    client = _client()
+    client.post("/entries/set-date", data={
+        "feed_url": ORPHAN_FEED, "entry_id": ORPHAN_ID, "published": "2019-03-14",
+    })
+
+    resp = client.post("/entries/set-date", data={
+        "feed_url": ORPHAN_FEED, "entry_id": ORPHAN_ID, "published": "",
+    })
+
+    assert resp.status_code == 200
+    with main.get_starred_archive_connection() as arch:
+        assert arch.execute(
+            "SELECT published_at FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+            (ORPHAN_FEED, ORPHAN_ID),
+        ).fetchone()[0] is None
+
+
+def test_entry_in_neither_store_still_404s(orphan):
+    """The orphan fallback must not turn a genuine miss into a success."""
+    resp = _client().post("/entries/set-date", data={
+        "feed_url": ORPHAN_FEED, "entry_id": "no-such-entry", "published": "2019-03-14",
+    })
+    assert resp.status_code == 404

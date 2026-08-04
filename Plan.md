@@ -2786,15 +2786,26 @@ Other:
   `RedirectResponse(url=_safe_next(...))` may re-flag; dismiss with the same
   rationale.
 
-- **Pre-existing date-less entries sort by received time, not true age** — new
-  imports backfill a real `published` (Inoreader crawl-time fallback), and the
-  Pub-Old/Pub-New window now falls back to `first_updated` so old posts surface
-  correctly. But the handful of already-imported entries with a NULL `published`
-  (~343 in the live DB) still lack a true publication date; rather than overwrite
-  reader's `published` column with import time (worse than the runtime
-  URL/title-inferred fallback), they sort by when the reader first saw them. A
-  one-time backfill that persists the inferred effective date could be added later
-  if the ordering of those specific entries ever matters.
+- **Entries nothing can date sort by received time** — an entry with a NULL
+  `published`, no dated permalink and no date in its title has no publication
+  date to find, so it sorts by when the reader first saw it. That is now the
+  *only* remaining case: the two bugs that used to dominate this bucket were
+  fixed 2026-08-04 (see below). A one-time backfill persisting the inferred date
+  could still be added if the ordering of those specific entries ever matters.
+
+  **Fixed 2026-08-04 — sentinel dates, and unreachable inference.** Two defects
+  that hid each other. (1) A missing date stored as a *sentinel* — the Unix epoch
+  from an importer, or year 0001 from a parser — is **truthy**, and every date
+  fallback here is an `or` chain, so it beat every fallback instead of falling
+  through like the NULL it stood for. 312 entries across 31 feeds. (2) The
+  URL/title inference was **dead code**: it sat behind `entry_effective_date`,
+  which already fell back to the received date and so was never falsy, meaning
+  `url_inferred_pubdate` had never once run. The visible symptom was an entry
+  with `2025-11-22` in its own URL showing no usable date at all. Split into
+  `entry_publication_date` (may return None — what lets the UI say "no date"
+  honestly) and `entry_effective_date` (always returns something, for the sort
+  and the bulk age actions), with `real_published_date` normalizing sentinels to
+  None. `_URL_PUBDATE_RE` also gained the `/YYYY-MM-DD/` permalink shape.
 
 - **Reddit OAuth app registration blocked (access request DENIED 2026-07-19)** —
   Reddit killed free OAuth2 app registration as part of the 2023 API crackdown. The

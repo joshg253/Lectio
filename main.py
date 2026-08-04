@@ -5287,16 +5287,70 @@ def get_unread_counts_by_feed() -> dict[str, int]:
         return counts.copy()
 
 
+# A stored date at or before this is a MISSING date that arrived as a sentinel,
+# not a publication date. Two clusters exist in a real library — the Unix epoch
+# (an importer's "0") and year 0001 (a parser's zero-value) — 312 entries across
+# 31 feeds when measured 2026-08-04, with nothing at all between year 1 and 1995.
+# The cutoff matches the `_MIN_YEAR = 1990` convention the recovery scripts in
+# scripts/ already use.
+#
+# This matters far more than it looks: every date fallback in this file is an
+# `or` chain, and a sentinel is *truthy*. A NULL falls through to the next
+# source; epoch-0 stops the chain dead and wins. That is why an entry whose URL
+# carries its own date still displayed nothing.
+_SENTINEL_DATE_BEFORE = datetime(1990, 1, 1, tzinfo=timezone.utc)
+
+
+def real_published_date(value: datetime | None) -> datetime | None:
+    """*value* if it is a plausible publication date, else None.
+
+    Normalizes the missing-date sentinels to the None they should have been, so
+    callers can keep writing plain `or` chains.
+    """
+    if value is None:
+        return None
+    try:
+        # reader stores naive UTC; an aware value may arrive from an override.
+        ref = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        return None if ref < _SENTINEL_DATE_BEFORE else value
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def entry_publication_date(entry) -> datetime | None:
+    """When the entry was actually published, or None when nothing says.
+
+    Ordered by how much the source can be trusted: the feed's own dates first,
+    then a date the permalink states outright, then a month-precision permalink,
+    then one parsed out of the title. Deliberately does NOT fall back to the
+    received date — "when Lectio first saw it" is not a publication date, and a
+    caller that wants that fallback should say so via `entry_effective_date`.
+    Keeping them apart is what lets the UI show "no date" honestly.
+
+    `entry.link` and `entry.id` can differ and the date may live in either.
+    """
+    return (
+        real_published_date(getattr(entry, "published", None))
+        or real_published_date(getattr(entry, "updated", None))
+        or url_inferred_pubdate(getattr(entry, "link", None))
+        or url_inferred_pubdate(getattr(entry, "id", None))
+        or url_inferred_pubmonth(getattr(entry, "link", None))
+        or url_inferred_pubmonth(getattr(entry, "id", None))
+        or title_inferred_pubdate(getattr(entry, "title", None))
+    )
+
+
 def entry_effective_date(entry) -> datetime | None:
-    """The date the UI treats as an entry's timestamp: publish date, falling
-    back to update then received (`added`) date for feeds that omit dates.
+    """The date the UI treats as an entry's timestamp: publication date (see
+    `entry_publication_date`), falling back to the received (`added`) date for
+    entries nothing can date.
 
     Single source of truth so the list render, unread counts, and the bulk
     age actions (mark-older/newer-than) all agree — a mismatch here made
     mark-older skip entries the UI had optimistically marked, so they flashed
     read then reverted.
     """
-    return entry.published or entry.updated or entry.added
+    return entry_publication_date(entry) or getattr(entry, "added", None)
 
 
 _DEDUPE_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
@@ -9306,7 +9360,11 @@ def datetime_sort_value(dt: datetime | None) -> float:
 # to -inf and clusters at one end. This regex catches the common /YYYY/MM/DD/
 # pattern; we use it only as a sort fallback so display still shows what the
 # feed actually said (or '—').
-_URL_PUBDATE_RE = re.compile(r"/(\d{4})/(\d{1,2})/(\d{1,2})(?:/|$|\?)")
+# Both common dated-permalink shapes: /2019/07/06/slug (WordPress) and
+# /2025-11-22/slug (Jekyll/Hugo and hand-rolled blogs — brendangregg.com uses
+# it). Only the first separator has to be a slash; the rest may be either, so
+# one pattern covers both without a second regex to keep in sync.
+_URL_PUBDATE_RE = re.compile(r"/(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:/|$|\?|\.)")
 
 # WordPress's other common permalink shape: /YYYY/MM/slug, no day. blog.guitar-pro.com
 # uses it for all 67 of its undated entries. Month precision beats no date at all —
@@ -12285,19 +12343,12 @@ def list_entries_for_feeds(
             elif sort_key == "history_sort_value":
                 sort_value = datetime_sort_value(read_dt)
             elif sort_key == "post_sort_value":
-                # Fall back to URL-inferred (link or id) → title-inferred →
-                # received-time, so entries from feeds that don't supply
-                # <pubDate> still sort in a sensible order instead of all
-                # clustering at -inf. entry.link and entry.id can differ;
-                # the date may live in either.
-                effective_pub_dt = (
-                    published_dt
-                    or url_inferred_pubdate(entry.link)
-                    or url_inferred_pubdate(entry.id)
-                    or title_inferred_pubdate(entry.title)
-                    or entry.added
-                )
-                sort_value = datetime_sort_value(effective_pub_dt)
+                # published_dt is already entry_effective_date, which now runs
+                # the whole inference chain and only then falls back to received
+                # time. The chain used to be repeated here instead — and was
+                # unreachable, because entry_effective_date returned `added` and
+                # every `or` below it was dead. See entry_publication_date.
+                sort_value = datetime_sort_value(published_dt)
             else:
                 sort_value = datetime_sort_value(entry.added)
 
@@ -24726,6 +24777,75 @@ def delete_entry_route(feed_url: str = Form(...), entry_id: str = Form(...)):
     return JSONResponse({"ok": True})
 
 
+def _parse_local_date_to_utc(published: str) -> datetime | None:
+    """A date from the picker, read as LOCAL time, returned as UTC.
+
+    Naive input means midnight *where the user is*; treating it as UTC rendered
+    it back through astimezone() as the previous day. See the note in
+    set_entry_date_route, which this was factored out of.
+    """
+    try:
+        dt = datetime.fromisoformat(published)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.astimezone()
+    return dt.astimezone(timezone.utc)
+
+
+def _set_orphan_entry_date(feed_url: str, entry_id: str, published: str) -> JSONResponse:
+    """Set (or clear) the date of a saved entry whose feed is gone.
+
+    There is no reader row to update, so the date is written where the orphan
+    actually reads it from: ``archived_entry.published_at``, a float epoch. The
+    override row is kept in step so the two agree if the feed is ever
+    re-subscribed and the entry comes back to reader.
+    """
+    try:
+        arch_ctx = get_starred_archive_connection()
+    except Exception:  # noqa: BLE001 — no archive means no orphan can exist
+        return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+    with arch_ctx as arch:
+        try:
+            row = arch.execute(
+                "SELECT 1 FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # Archive not provisioned yet (fresh install): the entry is in
+            # neither store, which is the same answer as not finding it.
+            row = None
+        if row is None:
+            return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+        if not published:
+            arch.execute(
+                "UPDATE archived_entry SET published_at = NULL WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            )
+        else:
+            dt = _parse_local_date_to_utc(published)
+            if dt is None:
+                return JSONResponse({"ok": False, "error": "Invalid date."}, status_code=400)
+            arch.execute(
+                "UPDATE archived_entry SET published_at = ? WHERE feed_url = ? AND entry_id = ?",
+                (dt.timestamp(), feed_url, entry_id),
+            )
+    with get_meta_connection() as conn:
+        if not published:
+            conn.execute(
+                "DELETE FROM entry_date_overrides WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            )
+        else:
+            dt = _parse_local_date_to_utc(published)
+            conn.execute(
+                "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published) VALUES (?, ?, ?)",
+                (feed_url, entry_id, dt.strftime("%Y-%m-%d %H:%M:%S")),  # ty: ignore[possibly-unbound-attribute]
+            )
+    invalidate_unread_counts_cache()
+    return JSONResponse({"ok": True, "orphan": True, "cleared": not published})
+
+
 @app.post("/entries/set-date")
 def set_entry_date_route(feed_url: str = Form(...), entry_id: str = Form(...), published: str = Form("")):
     """Override a post's published date (fixes garbage dates — epoch-0 entries
@@ -24740,8 +24860,15 @@ def set_entry_date_route(feed_url: str = Form(...), entry_id: str = Form(...), p
     """
     published = published.strip()
     with get_reader() as reader:
-        if reader.get_entry((feed_url, entry_id), None) is None:
-            return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+        entry_missing = reader.get_entry((feed_url, entry_id), None) is None
+    if entry_missing:
+        # An ORPHAN save: its feed was unsubscribed, so the entry exists only in
+        # the archive. Saved still lists it (merge_orphan_saved_entries) and its
+        # date comes from archived_entry.published_at — so refusing here was a
+        # dead end with no other way to correct the date. Reported on a
+        # feedburner save whose feed is long gone.
+        return _set_orphan_entry_date(feed_url, entry_id, published)
+    with get_reader() as reader:
         if not published:
             with get_meta_connection() as conn:
                 conn.execute(

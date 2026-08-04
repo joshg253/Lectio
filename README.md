@@ -330,6 +330,15 @@ The short version:
 | `lectio_meta.sqlite3` | App state: prefs, automation rules, lead images, read history, failure tracking |
 | `lectio_meta.sqlite` | Starred/saved entry archive |
 
+Dates are worked out rather than trusted blindly. A publisher that ships no
+date — or ships a placeholder like the Unix epoch, which importers and parsers
+both like to write — no longer strands a post at "1970": Lectio falls back to the
+date in the permalink (`/2019/07/06/` or `/2025-11-22/`), then a month-precision
+permalink, then a date in the title, and only then to when it first saw the post.
+Posts nothing can date say so instead of quietly showing their arrival time as a
+publication date. You can also correct any post's date by hand, including saved
+posts whose feed you've since unsubscribed from.
+
 Scheduled refresh is watchdogged. Feeds are fetched sequentially, so one host
 that accepts a connection and then goes silent can stall every feed behind it —
 invisibly, since the app keeps serving. Every fetch carries a read deadline, the
