@@ -107,10 +107,23 @@ while leaving *received* order coincident with it — and `e.first_updated` is
 received. A seed for an ordering bug has to disagree with every fallback the
 code can reach, not just the obvious one.
 
+**A second, unrelated bug surfaced from Josh clicking it 2026-08-04: the Inbox
+row lost its highlight to "All" about a second after the click.** Client-side,
+and it predates this branch — the old `tag=inbox` Inbox had it too.
+`updateScopeActiveState` matches sidebar rows on `data-folder-id`, the Inbox
+anchor had none, and `saved-all-item` matched on star mode alone — so the
+server rendered Inbox active and the SPA's active-state pass then moved the
+highlight to All. Fixed by giving the anchor a `data-folder-id` and teaching the
+matcher about `kept=starred`; the All row now also yields to tag views, which
+the server's own condition for that row already did. Reproduced and confirmed in
+Chromium both ways (without the fix: "All"; with it: "Inbox", still correct
+after 3s).
+
 Nothing else was found. The branch is ready to ship; it now carries 13
 regression tests covering the unchunked list, each chunk, the chunks tiling
 without gaps or repeats, both directions, and the sequences (landing then
-chunking, and the Inbox not overwriting the remembered Saved order).
+chunking, and the Inbox not overwriting the remembered Saved order), plus 5
+structural guards on the active-state fix (there is no JS test harness here).
 
 ### Offline actions — SHIPPED 2026-08-01, CONFIRMED ON THE DEVICE 2026-08-02
 

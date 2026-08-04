@@ -265,6 +265,12 @@
                 <a
                   href="/?folder_id={{ root_folder_row.id }}{{ _saved_rfq }}&kept=starred"
                   class="tree-item child-item saved-folder-item saved-inbox-item {% if inbox_view %}active{% endif %}"
+                  {# Without this the SPA's active-state pass cannot match this row
+                     at all (it keys off data-folder-id), so a second after the
+                     click it moved the highlight to "All" — which matches on
+                     star mode alone. The server had it right; the client
+                     overrode it. #}
+                  data-folder-id="{{ root_folder_row.id }}"
                 >
                   <span class="name">Inbox</span>
                   {% if inbox_total %}<span class="count">{{ inbox_total }}</span>{% endif %}
