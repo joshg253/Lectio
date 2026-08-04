@@ -368,3 +368,84 @@ def test_other_feeds_are_not_merged_into(env):
         ).fetchone()[0]
 
     assert n == 2
+
+
+# ── Why a spec matched nothing (the dry run's rescue diagnostic) ───────────
+
+
+def test_dry_run_reports_what_a_good_tag_rescued(env):
+    """'-deals, +linux' cuts nothing here because the only Deals post that is
+    also Linux is rescued — and the one that isn't is 'e-deal'. Reported so an
+    empty result stops looking identical to a rule that is working."""
+    with main.get_meta_connection() as conn:
+        result = main._run_tag_filter(conn, "feed", FEED, "-deals, +linux", apply=False)
+    assert result["total_matches"] == 1          # e-deal, untouched by +linux
+    assert result["rescued"] == 1                # e-mixed
+    assert result["rescued_by"] == ["linux"]
+
+
+def test_a_universal_good_tag_cancels_the_whole_rule_and_says_so(env):
+    """The live case: on a feed tagging platform availability, every dropped
+    post also carries the rescuing tag, so the spec is self-cancelling."""
+    main.feed_tag_service.record_entry_tags(FEED, [
+        ("e-deal", ["Deals", "Linux"]),
+        ("e-mixed", ["Linux", "Deals"]),
+    ])
+    with main.get_meta_connection() as conn:
+        result = main._run_tag_filter(conn, "feed", FEED, "-deals, +linux", apply=False)
+    assert result["total_matches"] == 0
+    assert result["rescued"] == 2
+    assert result["rescued_by"] == ["linux"]
+
+
+def test_nothing_is_reported_rescued_when_no_drop_tag_was_hit(env):
+    with main.get_meta_connection() as conn:
+        result = main._run_tag_filter(conn, "feed", FEED, "-nosuchtag, +linux", apply=False)
+    assert result["rescued"] == 0
+    assert result["rescued_by"] == []
+
+
+def test_dry_run_flags_a_good_only_spec_as_a_no_op(env):
+    """'+linux' reads as "keep Linux posts" but cuts nothing by design — good
+    tags rescue from drops and whitelist nothing. Flagged so the preview can
+    say what to write instead of reporting a bare zero."""
+    with main.get_meta_connection() as conn:
+        result = main._run_tag_filter(conn, "feed", FEED, "+linux", apply=False)
+    assert result["total_matches"] == 0
+    assert result["good_only"] is True
+
+
+def test_a_spec_with_teeth_is_not_flagged_good_only(env):
+    with main.get_meta_connection() as conn:
+        drop = main._run_tag_filter(conn, "feed", FEED, "+linux, -deals", apply=False)
+        require = main._run_tag_filter(conn, "feed", FEED, "++linux", apply=False)
+    assert drop["good_only"] is False
+    assert require["good_only"] is False
+
+
+# ── Chip row: every tag reaches the page, only the first few are on screen ──
+
+
+def test_more_than_eight_feed_tags_survive_to_the_page(env):
+    """The cap used to be 8, which silently truncated Rock Paper Shotgun's 28
+    tags per post — and the tag worth keeping ("PC") sits tenth, so the row
+    offered every platform to drop and no way to say which to keep."""
+    tags = [f"tag{i}" for i in range(28)]
+    main.feed_tag_service.record_entry_tags(FEED, [("e-linux", tags)])
+    got = main.get_feed_tag_suggestions(FEED, "e-linux")
+    assert len(got) == 28
+    assert "tag9" in got
+
+
+def test_the_hard_cap_still_bounds_a_pathological_feed(env):
+    main.feed_tag_service.record_entry_tags(
+        FEED, [("e-linux", [f"tag{i}" for i in range(120)])]
+    )
+    assert len(main.get_feed_tag_suggestions(FEED, "e-linux")) == main.MAX_FEED_TAG_SUGGESTIONS
+
+
+def test_dismissed_tags_are_still_removed_before_the_cap(env):
+    """Order matters: capping first would let dismissed chips eat the budget."""
+    main.feed_tag_service.record_entry_tags(FEED, [("e-linux", ["Keep Me", "Drop Me"])])
+    main.feed_tag_service.set_tag_suppressed(FEED, "Drop Me", True)
+    assert main.get_feed_tag_suggestions(FEED, "e-linux") == ["Keep Me"]

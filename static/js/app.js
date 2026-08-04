@@ -4215,6 +4215,23 @@ const CAPTURE_MODE_FULL = 'full';
       }
     });
 
+    /* Reveal the feed tags past the collapse point.
+     *
+     * A publisher's tag order is its own, and the useful one is often late:
+     * Rock Paper Shotgun ships 28 tags per post with "PC" tenth, so a row
+     * truncated to eight offered every platform to drop and no way to say which
+     * to keep. All of them are rendered, most of them hidden; this uncovers the
+     * rest. One-way — there is no reason to fold them back mid-triage. */
+    document.addEventListener('click', (event) => {
+      const btn = event.target instanceof Element
+        ? event.target.closest('[data-feed-tag-more]') : null;
+      if (!btn) return;
+      event.preventDefault();
+      const wrap = btn.closest('.entry-tag-suggestions');
+      if (wrap) wrap.querySelectorAll('.is-extra-feed-tag').forEach((c) => { c.hidden = false; });
+      btn.remove();
+    });
+
     // Dismiss a suggestion chip from the entry pane.
     document.addEventListener('click', async (event) => {
       const btn = event.target instanceof Element
@@ -9165,6 +9182,7 @@ const CAPTURE_MODE_FULL = 'full';
           empty.textContent = 'No automation rules yet. Click "+ Add Rule" to create one.';
           listEl.appendChild(empty);
           restoreScroll();
+          hlRevealDraftIfPending();
           return;
         }
         const TYPE_ORDER = HL_TYPE_ORDER;
@@ -9625,6 +9643,7 @@ const CAPTURE_MODE_FULL = 'full';
           } // end sectionRules loop
         } // end TYPE_ORDER loop
         restoreScroll();
+        hlRevealDraftIfPending();
       }
 
       function hlRenderDedupGroups(panel, groups, maxShown) {
@@ -9795,6 +9814,33 @@ const CAPTURE_MODE_FULL = 'full';
             summary.textContent = data.total_matches + ' match' + (data.total_matches === 1 ? '' : 'es') + (data.truncated ? ' (showing first 20)' : '') + ' in last ' + (data.total_scanned || 0) + ' entries (read + unread)';
           }
           panel.appendChild(summary);
+          /* Why a tag filter found nothing. '-mac, +pc' reads as "drop Apple,
+           * keep PC", but on a feed that tags platform availability every Mac
+           * post is a PC post too, so the + cancels the whole rule — and zero
+           * matches looks exactly like a rule that is working. Say so. */
+          if (data.rescued) {
+            const note = document.createElement('div');
+            note.className = 'hl-rule-dryrun-note';
+            const by = (data.rescued_by || []).map(t => '+' + t).join(', ');
+            note.textContent = data.rescued + ' entr' + (data.rescued === 1 ? 'y' : 'ies') +
+              ' hit a drop tag but ' + (data.rescued === 1 ? 'was' : 'were') + ' rescued' +
+              (by ? ' by ' + by : '') +
+              (matches.length === 0
+                ? ' — that is why nothing matched. Drop the rescuing tag from the spec to cut them.'
+                : '.');
+            panel.appendChild(note);
+          }
+          /* '+tag' alone can never cut anything: a good tag rescues from drops
+           * and whitelists nothing, so with no drops there is nothing for it to
+           * do. It still reads as "keep these", so say what to write instead. */
+          if (data.good_only) {
+            const note = document.createElement('div');
+            note.className = 'hl-rule-dryrun-note';
+            note.textContent = '“+tag” only rescues entries from a “-tag” drop — on its own it ' +
+              'never marks anything read. To keep ONLY these, require them with “++tag”; ' +
+              'to drop something, name it with “-tag”.';
+            panel.appendChild(note);
+          }
           for (const m of matches) {
             const item = document.createElement('div');
             item.className = 'hl-rule-dryrun-item' + (m.read ? ' hl-rule-dryrun-item--read' : '');
@@ -9835,6 +9881,32 @@ const CAPTURE_MODE_FULL = 'full';
         addRuleBtn?.removeAttribute('hidden');
       }
 
+      /* Bring the open draft on screen, once.
+       *
+       * A draft appended by hlInsertDraft is often overtaken by hlRenderRules,
+       * which strips every rule row and re-appends them *after* whatever else
+       * is in the list — so a draft opened from a feed's right-click → Automation
+       * ends up at the TOP of a list the modal may have opened scrolled to the
+       * bottom, out of sight, with no sign the form is even open. Scrolling
+       * inside hlInsertDraft alone loses that race.
+       *
+       * So the reveal is re-asserted at the end of hlRenderRules as well — but
+       * only inside a short window after the draft was opened, never as a
+       * standing rule. hlRenderRules also runs on every rule toggle, where
+       * preserving the reader's scroll position was itself a fix; a flag left
+       * standing would undo it. A window expires on its own, which a boolean
+       * cleared by whichever path happens to run first does not. */
+      const HL_DRAFT_REVEAL_MS = 1500;
+      let hlDraftOpenedAt = 0;
+      function hlRevealDraftIfPending() {
+        if (!hlActiveDraft || !hlActiveDraft.isConnected) return;
+        if (Date.now() - hlDraftOpenedAt > HL_DRAFT_REVEAL_MS) return;
+        // 'start', not 'nearest': the draft is taller than a rule row, and
+        // 'nearest' happily leaves its lower half — the tag field and Save —
+        // below the fold.
+        hlActiveDraft.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+
       function hlInsertDraft(draftEl, afterEl) {
         hlHideDraft();
         hlActiveDraft = draftEl;
@@ -9843,7 +9915,8 @@ const CAPTURE_MODE_FULL = 'full';
         if (afterEl) afterEl.insertAdjacentElement('afterend', draftEl);
         else listEl?.appendChild(draftEl);
         draftEl.querySelector('.hl-draft-pattern')?.focus();
-        window.setTimeout(() => draftEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 80);
+        hlDraftOpenedAt = Date.now();
+        window.setTimeout(hlRevealDraftIfPending, 80);
       }
 
       function hlBuildDraft(prefill, saveLabel, onSave) {
@@ -10582,6 +10655,53 @@ const CAPTURE_MODE_FULL = 'full';
         matchMethodSel.addEventListener('change', syncTypeControls);
         folderSel.addEventListener('change', syncTypeControls);
 
+        /* The scope this draft would save to. Explicit feed picks always win —
+         * the picker can select feeds without a folder, and silently discarding
+         * them made the rule global. */
+        function draftScope() {
+          const feeds = getSelectedFeeds();
+          if (feeds.length === 1) return { scope: 'feed', scope_id: feeds[0] };
+          if (feeds.length >= 2)  return { scope: 'feeds', scope_id: feeds.join('\n') };
+          if (folderSel.value)    return { scope: 'folder', scope_id: folderSel.value };
+          return { scope: 'global', scope_id: '' };
+        }
+
+        /* ── Feed-tag autocomplete, for tag_filter rules ────────────────────
+         *
+         * A tag_filter spec can only match tags ingest actually captured, and
+         * they are stored hyphenated and lowercased — so typing one blind is
+         * guesswork against a vocabulary the user has never seen. The list is
+         * scope-specific for the same reason the rule is: HackerNoon's 140-tag
+         * long tail is irrelevant when the rule is pointed at Steam.
+         *
+         * Loaded on focus rather than on open: most rules are not tag_filter,
+         * and a global-scope vocabulary is the whole table. Keyed by scope, so
+         * changing the folder or feed picks refetches and nothing else does. */
+        const tagVocab = { key: null, tags: [] };
+        let tagVocabInFlight = null;
+        function loadTagVocab() {
+          if (typeSel.value !== 'tag_filter') return;
+          const s = draftScope();
+          const key = s.scope + ' ' + s.scope_id;
+          if (tagVocab.key === key || tagVocabInFlight === key) return;
+          tagVocabInFlight = key;
+          const qs = new URLSearchParams({ scope: s.scope, scope_id: s.scope_id });
+          fetch('/rules/tag-vocabulary?' + qs.toString(), { credentials: 'same-origin' })
+            .then(r => r.ok ? r.json() : { tags: [] })
+            .then(d => { tagVocab.key = key; tagVocab.tags = d.tags || []; })
+            // Autocomplete is a convenience: a failed load leaves the field a
+            // plain text box, which is exactly what it was before.
+            .catch(() => {})
+            .finally(() => { tagVocabInFlight = null; });
+        }
+        // Attached BEFORE the Enter-to-save handler below: picking a suggestion
+        // with Enter must not also submit the rule, and the list can only stop
+        // a handler that was registered after it.
+        window.attachTagAutocomplete?.(patInput, () => tagVocab.tags, { separator: ',' });
+        patInput.addEventListener('focus', loadTagVocab);
+        typeSel.addEventListener('change', loadTagVocab);
+        folderSel.addEventListener('change', loadTagVocab);
+
         cancelBtn.addEventListener('click', hlHideDraft);
         patInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveBtn.click(); } });
 
@@ -10616,7 +10736,6 @@ const CAPTURE_MODE_FULL = 'full';
           if (ruleType === 'webhook' && !webhookUrl) { webhookUrlInput.focus(); return; }
           if (ruleType === 'youtube_playlist' && !ytPlSel.value) { ytPlSel.focus(); return; }
           const isRegex = regexBtn.getAttribute('aria-pressed') === 'true' ? 1 : 0;
-          const selectedFeeds = getSelectedFeeds();
           const color    = colorSel.value || 'yellow';
           const searchIn = searchInSel.value || 'title';
           const delivery = deliverySel.value || 'immediately';
@@ -10626,14 +10745,7 @@ const CAPTURE_MODE_FULL = 'full';
           const ccMe = ccMeCheck.checked ? 1 : 0;
           const webhookFormat = webhookFormatSel.value || 'generic';
           const webhookBatch = (webhookFormat !== 'ifttt' && webhookBatchCheck.checked) ? 1 : 0;
-          let scope, scopeId;
-          // Explicit feed picks always win — the picker can now select feeds
-          // without a folder (server-backed search), and silently discarding
-          // them made the rule global.
-          if (selectedFeeds.length === 1)      { scope = 'feed';   scopeId = selectedFeeds[0]; }
-          else if (selectedFeeds.length >= 2)  { scope = 'feeds';  scopeId = selectedFeeds.join('\n'); }
-          else if (folderId)                   { scope = 'folder'; scopeId = folderId; }
-          else                                 { scope = 'global'; scopeId = ''; }
+          const { scope, scope_id: scopeId } = draftScope();
           const ytPlOpt = ytPlSel.options[ytPlSel.selectedIndex];
           await onSave({ scope, scope_id: scopeId, keyword: pattern, color, is_regex: isRegex,
                          type: ruleType, search_in: searchIn, delivery,
@@ -13674,14 +13786,45 @@ const CAPTURE_MODE_FULL = 'full';
     } catch (_) { lectioTagNames = []; }
 
     // Shared, token-aware tag autocomplete: suggests from getTags() as you type
-    // the current whitespace-separated token, keyboard-navigable. Reusable — the
-    // per-entry tag input uses it; the automation rule form can pass its own
-    // (feed-tag) source. Idempotent per input (data-tag-ac guard).
-    function attachTagAutocomplete(input, getTags) {
-      if (!(input instanceof HTMLInputElement) || input.dataset.tagAc) return;
+    // the current token, keyboard-navigable. Idempotent per input (data-tag-ac).
+    //
+    // Two callers, two token grammars, ONE control — the second caller is why
+    // the separator and the sign prefix are options rather than literals:
+    //
+    //   per-entry tagging  space-separated, an optional '#', tags from the
+    //                      user's own library;
+    //   rule form          comma-separated (so multi-word tags can be typed
+    //                      as-is), each token optionally signed -/+/++, tags
+    //                      from what ingest actually captured for the scope.
+    //
+    // getTags() may return plain strings or {tag, count} objects; counts are
+    // shown when present, because in the rule form the count is the decision.
+    function attachTagAutocomplete(input, getTags, opts) {
+      const editable = input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement;
+      if (!editable || input.dataset.tagAc) return;
       input.dataset.tagAc = '1';
       input.setAttribute('autocomplete', 'off');
+      const o = opts || {};
+      const SEP = o.separator || ' ';
+      const COMMA = SEP === ',';
+      // A rule spec's -/+/++ is part of the SPEC, not of the tag: it must
+      // survive completion untouched, so it is sliced off before matching and
+      // left in place when the tag is written back. The per-entry '#' is the
+      // opposite — decoration on the tag itself, overwritten by the completion
+      // as it always was — so it is stripped by norm() and not treated here.
+      //
+      // null rather than an empty-matching /^/: that regex made stripSign a
+      // literal no-op (CodeQL "replacement of a substring with itself"). Space
+      // mode has no sign grammar at all, and saying so outright beats a pattern
+      // that quietly matches nothing.
+      const SIGN_RE = COMMA ? /^(?:\+\+|[+-])?/ : null;
+      const signOf = (t) => (SIGN_RE ? t.match(SIGN_RE)[0] : '');
+      const stripSign = (t) => (SIGN_RE ? t.replace(SIGN_RE, '') : t);
       const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      // Multi-word tags are STORED hyphenated but typed naturally, so the typed
+      // token has to be hyphenated before it can prefix-match a suggestion.
+      const norm = (s) => COMMA ? s.trim().toLowerCase().replace(/\s+/g, '-')
+                                : s.replace(/^#*/, '').toLowerCase();
       const box = document.createElement('div');
       box.className = 'tag-autocomplete';
       box.hidden = true;
@@ -13692,20 +13835,30 @@ const CAPTURE_MODE_FULL = 'full';
       const token = () => {
         const v = input.value;
         const caret = input.selectionStart ?? v.length;
-        const start = v.lastIndexOf(' ', caret - 1) + 1;
-        return { start, end: caret, text: v.slice(start, caret).replace(/^#+/, '').toLowerCase() };
+        let start = v.lastIndexOf(SEP, caret - 1) + 1;
+        // Whitespace after the separator belongs to the layout, not the token.
+        start += v.slice(start, caret).match(/^\s*/)[0].length;
+        const sign = signOf(v.slice(start, caret));
+        return { start: start + sign.length, end: caret, text: norm(v.slice(start + sign.length, caret)) };
       };
       const close = () => { box.hidden = true; matches = []; active = -1; };
       const paint = () => {
-        box.innerHTML = matches.map((t, i) =>
-          `<div class="tag-autocomplete-item${i === active ? ' is-active' : ''}" data-i="${i}">#${esc(t)}</div>`
+        box.innerHTML = matches.map((m, i) =>
+          `<div class="tag-autocomplete-item${i === active ? ' is-active' : ''}" data-i="${i}">` +
+          `#${esc(m.tag)}` +
+          (m.count ? `<span class="tag-autocomplete-count">${m.count}</span>` : '') +
+          '</div>'
         ).join('');
       };
       const update = () => {
         const tk = token();
         if (!tk.text) return close();
-        const have = new Set(input.value.toLowerCase().split(/\s+/).map((t) => t.replace(/^#+/, '')));
-        matches = (getTags() || []).filter((t) => t.startsWith(tk.text) && t !== tk.text && !have.has(t)).slice(0, 8);
+        const have = new Set(input.value.split(COMMA ? ',' : /\s+/)
+          .map((t) => norm(stripSign(t))));
+        matches = (getTags() || [])
+          .map((t) => (typeof t === 'string' ? { tag: t, count: 0 } : t))
+          .filter((m) => m.tag.startsWith(tk.text) && m.tag !== tk.text && !have.has(m.tag))
+          .slice(0, 8);
         if (!matches.length) return close();
         box.style.top = (input.offsetTop + input.offsetHeight) + 'px';
         box.style.left = input.offsetLeft + 'px';
@@ -13716,21 +13869,26 @@ const CAPTURE_MODE_FULL = 'full';
       const choose = (i) => {
         if (i < 0 || i >= matches.length) return;
         const tk = token();
+        const tag = matches[i].tag;
         const before = input.value.slice(0, tk.start);
         const after = input.value.slice(tk.end);
-        const sep = after.length && !after.startsWith(' ') ? ' ' : '';
-        input.value = before + matches[i] + sep + after;
-        const caret = (before + matches[i]).length + (sep ? 1 : 0);
+        const sep = after.length && !after.startsWith(SEP) ? SEP : '';
+        input.value = before + tag + sep + after;
+        const caret = (before + tag).length + sep.length;
         input.setSelectionRange(caret, caret);
         close();
       };
       input.addEventListener('input', () => { active = -1; update(); });
+      // stopImmediatePropagation, not just preventDefault: the rule form binds
+      // its own Enter-to-save on this same element, and picking a suggestion
+      // must not also submit the rule.
+      const consume = (e) => { e.preventDefault(); e.stopImmediatePropagation(); };
       input.addEventListener('keydown', (e) => {
         if (box.hidden || !matches.length) return;
-        if (e.key === 'ArrowDown') { active = Math.min(active + 1, matches.length - 1); paint(); e.preventDefault(); }
-        else if (e.key === 'ArrowUp') { active = Math.max(active - 1, 0); paint(); e.preventDefault(); }
-        else if (e.key === 'Enter' && active >= 0) { choose(active); e.preventDefault(); }
-        else if (e.key === 'Tab') { choose(active >= 0 ? active : 0); e.preventDefault(); }
+        if (e.key === 'ArrowDown') { active = Math.min(active + 1, matches.length - 1); paint(); consume(e); }
+        else if (e.key === 'ArrowUp') { active = Math.max(active - 1, 0); paint(); consume(e); }
+        else if (e.key === 'Enter' && active >= 0) { choose(active); consume(e); }
+        else if (e.key === 'Tab') { choose(active >= 0 ? active : 0); consume(e); }
         else if (e.key === 'Escape') { close(); }
       });
       box.addEventListener('mousedown', (e) => {
@@ -14014,9 +14172,13 @@ const CAPTURE_MODE_FULL = 'full';
         const wrap = document.createElement('span');
         wrap.className = 'entry-tag-suggestions';
         wrap.setAttribute('aria-label', 'Feed tags — filter this feed');
-        for (const tag of data.tags) {
+        // Same collapse as the server-rendered row, and for the same reason —
+        // every tag is present, only the first few are on screen.
+        const COLLAPSE_AFTER = 8;
+        data.tags.forEach((tag, i) => {
           const chip = document.createElement('span');
           chip.className = 'entry-tag-chip suggestion feed-tag-filter-chip';
+          if (i >= COLLAPSE_AFTER) { chip.classList.add('is-extra-feed-tag'); chip.hidden = true; }
           if (!manual.has(tag)) {
             const add = document.createElement('button');
             add.type = 'button';
@@ -14045,6 +14207,14 @@ const CAPTURE_MODE_FULL = 'full';
             chip.appendChild(btn);
           }
           wrap.appendChild(chip);
+        });
+        if (data.tags.length > COLLAPSE_AFTER) {
+          const more = document.createElement('button');
+          more.type = 'button';
+          more.className = 'feed-tag-more';
+          more.setAttribute('data-feed-tag-more', '1');
+          more.textContent = '+' + (data.tags.length - COLLAPSE_AFTER) + ' more';
+          wrap.appendChild(more);
         }
         nowForm.insertAdjacentElement('beforebegin', wrap);
         bindEntryTagInteractions();  // boundClick markers keep this idempotent

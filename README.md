@@ -74,6 +74,23 @@ The short version:
   list grows past a screenful, a **type filter** above it narrows to one kind of
   rule — chips for the types you actually use, each with its count — and the list
   keeps its scroll position when you toggle a rule rather than jumping to the top.
+  A **tag-filter** rule's tag list autocompletes from the tags the feeds in that
+  rule's scope have actually published, **with the number of posts carrying
+  each** — so you can see that a tag is on 9 of 10 posts before you filter on it,
+  instead of guessing at a vocabulary you've never seen. Type multi-word tags
+  naturally (`+Steam Deck`); the suggestion fills in the stored form. If a
+  tag-filter test finds **nothing**, it now says why when the cause is a
+  rescuing tag — `-mac, +pc` cuts nothing on a feed that tags every PC game's
+  Mac release, and silently matching zero is otherwise indistinguishable from
+  working. The same goes for a `+tag`-only filter, which rescues from drops but
+  never cuts on its own: the test says so and points at `++tag` (keep only
+  these) and `-tag` (drop these). A post's feed-tag chips show the first eight
+  with a **+N more** to reveal the rest — some publishers ship 28 tags a post and
+  bury the useful one, and a tag with no chip can't be filtered on at all.
+  Clicking a tag in the Saved sidebar stays in Saved, rather than throwing you
+  into the Feeds view with an empty list.
+  Opening the rule form from a feed's right-click menu scrolls the
+  form into view rather than leaving it off-screen at the top of a long list.
 - **Keep vs. to-do** — **tagging a post keeps it forever**: it triggers a full
   offline capture (page + images) so tagged posts survive a dead feed, while
   **starring** is the lightweight "needs dealing with" marker. A post is kept

@@ -15,7 +15,7 @@ import html as html_module
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 LOGGER = logging.getLogger(__name__)
@@ -291,6 +291,47 @@ class FeedTagService:
                 (feed_url, entry_id),
             ).fetchall()
         return [row[0] for row in rows]
+
+    def tag_vocabulary(
+        self, feed_urls: Iterable[str] | None, *, limit: int = 400
+    ) -> list[tuple[str, int]]:
+        """The tags actually present in a scope, most-used first.
+
+        Feeds the rule form's autocomplete: a tag_filter rule can only match
+        what ingest captured, so suggesting from this table is suggesting from
+        the only vocabulary that can ever hit. Counts come along because they
+        are the whole decision — a tag on 9 of 10 entries is a filter worth
+        writing, one on a single entry is noise.
+
+        ``feed_urls=None`` means every feed (a global-scope rule). Raw stored
+        casing is returned; the caller normalizes, because normalization is
+        what collapses "Steam Deck" and "steam deck" into one suggestion and
+        that merge has to also merge their counts.
+        """
+        urls = None if feed_urls is None else [u for u in feed_urls if u]
+        if urls is not None and not urls:
+            return []
+        sql = (
+            "SELECT tag, COUNT(*) AS n FROM entry_feed_tags"
+            "{where} GROUP BY LOWER(tag) ORDER BY n DESC, LOWER(tag) LIMIT ?"
+        )
+        params: list = []
+        where = ""
+        if urls is not None:
+            # One bound parameter per feed. SQLite allows 32k of them since
+            # 3.32, so a folder would need thousands of feeds to reach the
+            # limit; global scope (the only unbounded case) passes None and
+            # takes the unfiltered branch instead.
+            where = " WHERE feed_url IN (%s)" % ",".join("?" * len(urls))
+            params.extend(urls)
+        params.append(max(1, limit))
+        try:
+            with self._get_meta_connection() as conn:
+                rows = conn.execute(sql.format(where=where), params).fetchall()
+        except Exception:
+            LOGGER.warning("tag vocabulary lookup failed", exc_info=True)
+            return []
+        return [(str(r[0]), int(r[1])) for r in rows]
 
     def suppressed_tags(self, feed_url: str) -> set[str]:
         """Tags the user has dismissed for this feed. Compared case-insensitively,

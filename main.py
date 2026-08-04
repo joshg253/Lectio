@@ -522,7 +522,14 @@ def _is_hotlink_img_host(netloc: str) -> bool:
     return any(host == h or host.endswith("." + h) for h in _HOTLINK_IMG_HOSTS)
 MANUAL_TAG_KEY_PREFIX = "lectio.manual_tag."
 MAX_MANUAL_TAGS = 12
-MAX_FEED_TAG_SUGGESTIONS = 8
+# Hard cap on how many of an entry's feed tags are carried to the page. RPS
+# ships 28 on a single post, so this is generous on purpose — the cost of one
+# extra chip is that it is ignored, and the cost of a missing one is that the
+# tag cannot be filtered on at all.
+MAX_FEED_TAG_SUGGESTIONS = 40
+# How many chips the row shows before the "+N more" expander. Eight fits the
+# header without wrapping; the rest are one click away rather than absent.
+FEED_TAG_CHIPS_COLLAPSED = 8
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$")
 def _static_asset_version() -> str:
     """Cache-buster for every ?v=-versioned static asset.
@@ -6233,6 +6240,10 @@ def _run_tag_filter(
     to_mark: list[tuple[str, str]] = []
     matched_entries: list[dict] = []
     _ENTRY_DETAIL_CAP = 50
+    # Entries a drop tag caught but a good/required tag let through, and which
+    # tags did the rescuing — the dry run's explanation for an empty result.
+    rescued = 0
+    rescued_by: collections.Counter[str] = collections.Counter()
 
     with get_reader() as reader:
         feed_title_cache: dict[str, str] = {}
@@ -6294,7 +6305,15 @@ def _run_tag_filter(
             elif (tags & exclude) and not (tags & saving):
                 pass  # blocked and nothing rescues it
             else:
-                continue  # kept
+                # Kept — but record WHY when a drop tag was overruled. A spec
+                # like '-mac, +pc' reads as "drop Apple, keep PC" and on a feed
+                # that tags platform availability every Mac post is also a PC
+                # post, so the rescue silently cancels the whole rule. Zero
+                # matches then looks identical to a rule that is working.
+                if (tags & exclude) and (tags & saving):
+                    rescued += 1
+                    rescued_by.update(tags & saving)
+                continue
             to_mark.append((fu, eid))
             if apply and len(matched_entries) < _ENTRY_DETAIL_CAP:
                 matched_entries.append({
@@ -6336,6 +6355,15 @@ def _run_tag_filter(
             "total_matches": len(to_mark),
             "truncated": len(to_mark) > _DRY_RESULT_LIMIT,
             "count": len(to_mark),
+            "rescued": rescued,
+            "rescued_by": [t for t, _n in rescued_by.most_common(4)],
+            # A spec of nothing but good tags cuts nothing, ever, by design:
+            # good tags rescue from drops and whitelist nothing, so with no
+            # drops to rescue from there is nothing for them to do. It is a
+            # reasonable thing to write ("+wallpapers" reads as "keep these"),
+            # and its result is indistinguishable from a rule that is working,
+            # so the preview names it rather than reporting a bare zero.
+            "good_only": bool(good and not exclude and not require),
         }
     return {"count": len(to_mark), "entries": matched_entries}
 
@@ -12805,6 +12833,7 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "manual_tags": [],
         "manual_tags_text": "",
         "feed_tag_suggestions": [],
+        "feed_tag_chips_collapsed": FEED_TAG_CHIPS_COLLAPSED,
         "feed_tag_filter_signs": {},
         "author_filter_token": None,
         "feed_icon_url": None,
@@ -14798,6 +14827,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "kept": bool(is_saved or manual_tags),
             "manual_tags_text": " ".join(manual_tags),
             "feed_tag_suggestions": feed_tag_suggestions,
+            "feed_tag_chips_collapsed": FEED_TAG_CHIPS_COLLAPSED,
             "feed_tag_filter_signs": feed_tag_filter_signs,
             "author_filter_token": _author_token,
             "feed_icon_url": get_favicon_url(entry.feed_url, getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None),
@@ -21380,6 +21410,36 @@ def webhook_test_route(
     if ok:
         return JSONResponse({"ok": True})
     return JSONResponse({"ok": False, "error": err or "send failed"}, status_code=400)
+
+
+@app.get("/rules/tag-vocabulary")
+def rules_tag_vocabulary_route(
+    scope: str = Query("global"),
+    scope_id: str = Query(""),
+    limit: int = Query(400),
+):
+    """The feed-provided tags available to a tag_filter rule in this scope.
+
+    Feeds the rule form's autocomplete. A tag_filter spec can only ever match
+    what ingest captured into ``entry_feed_tags``, so typing blind against a
+    140-tag long tail (HackerNoon) or a hyphenated stored form (`windows-11`)
+    is guesswork; this turns it into a list.
+
+    Tags come back **normalized**, the same transform ``parse_tag_filter_spec``
+    applies to what the user types — so completing a suggestion produces a
+    token that matches by construction. Counts are entry counts, merged across
+    casing variants, and are the reason to pick one tag over another.
+    """
+    with get_meta_connection() as conn:
+        feed_urls = resolve_rule_feed_urls(conn, scope, scope_id)
+    raw = feed_tag_service.tag_vocabulary(feed_urls, limit=max(1, min(limit, 2000)))
+    merged: dict[str, int] = {}
+    for tag, count in raw:
+        normalized = normalize_tag_value(tag)
+        if normalized:
+            merged[normalized] = merged.get(normalized, 0) + count
+    tags = sorted(merged.items(), key=lambda kv: (-kv[1], kv[0]))
+    return JSONResponse({"tags": [{"tag": t, "count": n} for t, n in tags]})
 
 
 @app.get("/rules/dry-run")

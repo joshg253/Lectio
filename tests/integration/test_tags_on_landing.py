@@ -68,3 +68,26 @@ def test_scope_view_still_shows_tags(configured):
     body = _client().get("/?folder_id=1").text
     assert 'class="tag-link' in body
     assert "#reads" in body
+
+
+def test_a_sidebar_tag_link_stays_in_the_saved_scope(configured):
+    """The Tags block only renders in Saved — the template hides it on
+    `not selected_star_only` and the JS toggles it on the same flag — yet every
+    link in it hardcoded `star_only=0`. Clicking a tag therefore threw you into
+    the Feeds scope on "All", and then listed nothing, because Feeds drops
+    disabled and kept-but-unsubscribed feeds, which is exactly where saved-only
+    tagged entries live."""
+    import re
+
+    body = _client().get("/?folder_id=1&star_only=1").text
+    hrefs = re.findall(r'<a[^>]*class="tag-link[^"]*"[^>]*href="([^"]+)"', body)
+    assert hrefs, "no sidebar tag links rendered"
+    for href in hrefs:
+        assert "star_only=1" in href, href
+        assert "star_only=0" not in href, href
+
+
+def test_following_that_link_lists_the_tagged_entry(configured):
+    """The bug's second half: the wrong scope also emptied the list."""
+    body = _client().get("/?folder_id=1&tag=reads&star_only=1&read_filter=all").text
+    assert "Tagged post" in body
