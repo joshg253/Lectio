@@ -10,22 +10,20 @@ this file only tracks what's still open.
 The order is deliberate and is **not** the order they were found in. Reasoning
 in one line each; detail in the sections below.
 
-1. **Refresh scheduler: timeout + watchdog (§0a).** Do this first. It is not a
-   missing feature, it is the reader silently not working — it already cost 34
-   hours of missed feeds across the whole library while `/healthz` stayed green,
-   and nothing in the design stops it recurring tonight. Small, self-contained,
-   protects everything else.
+1. ~~**Refresh scheduler: timeout + watchdog (§0a).**~~ **DONE** — branch
+   `scheduler-stall-watchdog`. It was not a missing feature, it was the reader
+   silently not working: 34 hours of missed feeds while `/healthz` stayed green.
 2. **Saved Inbox = the whole star pile (§0b).** Branch `saved-inbox-wip`.
    Feature work, and the least urgent: the Inbox works today, it is just showing
    the wrong set. Blocked on an unexplained chunking bug — read §0b before
    resuming, and do not ship it without settling that.
 3. **Everything else in this file**, unchanged.
 
-Shipped on the way to this list and now on `rule-tag-autocomplete` (PR open):
-rule-form tag autocomplete, the two dry-run diagnostics, the feed-tag chip
-expander, the context-menu stacking fix, and the sidebar tag-link scope fix.
+Shipped on the way to this list, now merged as PR #176: rule-form tag
+autocomplete, the two dry-run diagnostics, the feed-tag chip expander, the
+context-menu stacking fix, and the sidebar tag-link scope fix.
 
-### 0a. Refresh scheduler stalls silently — NOT FIXED
+### 0a. Refresh scheduler stalls silently — FIXED 2026-08-04
 
 **Diagnosed 2026-08-04 on the live instance.** Nothing had refreshed for ~34
 hours: library-wide ingest over 30 hours was **6 entries, zero YouTube, zero
@@ -40,20 +38,75 @@ so one outbound call with no read deadline stalls every feed behind it. Restored
 by restarting the container; refresh resumed immediately (53 entries in the
 first 10 minutes).
 
-Three things to build:
+**Built on `scheduler-stall-watchdog`** (rationale in ARCHITECTURE.md, "Refresh
+scheduler: why it has a watchdog"):
 
-- **A hard read timeout on every outbound call on the scheduler path.** This is
-  the actual bug. A feed host that accepts a connection and then says nothing
-  must cost one timeout, not the whole cycle.
-- **`try`/`except` around `websub_service.renew_expiring_subscriptions()`**
-  ([main.py:16111](main.py#L16111)). It sits *after* the per-user loop, which is
-  guarded, and is itself unguarded — so an exception there escapes into
-  `scheduled_refresh_loop`, which has no handler either, and **kills the thread
-  permanently**. Same symptom as the hang, different cause, one `try` away.
-- **A watchdog.** `app.state.last_scheduled_refresh_started_at` already exists;
-  compare it against the cadence and log loudly (or restart the thread) when it
-  falls behind. The failure mode that matters here is not that it broke, it is
-  that it broke *invisibly* for 34 hours.
+- **Read deadline stated explicitly.** `ReaderApi` takes `session_timeout` and
+  main passes `LECTIO_FEED_CONNECT_TIMEOUT` / `LECTIO_FEED_READ_TIMEOUT`
+  (10s/30s) rather than inheriting reader's `(3.05, 60)`. Audited the rest of
+  the scheduler path while here: **every other outbound call already had a
+  timeout** (scraper 20s, devto, deviantart, websub 8–10s, readability 12s,
+  thumbs, lead images 15s), so this was the only unbounded one.
+- **Nothing escapes the loop.** The WebSub renewal is guarded, and
+  `scheduled_refresh_loop` now catches everything — an uncaught exception there
+  did not crash the app, it silently ended the only thread that refreshes feeds.
+- **A watchdog on progress, not elapsed time.** This is the part worth
+  remembering: the original note proposed comparing
+  `last_scheduled_refresh_started_at` against the cadence, but that field is only
+  written when folders are actually due, and more importantly *elapsed time
+  cannot distinguish slow from stuck* — a full-library pass legitimately runs for
+  an hour. `FeedRefreshService` now reports a stage on each advance, and the
+  watchdog trips only on a pass that is in flight and has not moved.
+
+**Deliberately not done: killing the thread.** Python cannot interrupt a thread
+blocked in a socket read, so past `LECTIO_SCHEDULER_STALL_RESTART_SECONDS`
+(default 1800) the watchdog calls `os._exit(1)` and lets
+`restart: unless-stopped` do what the manual recovery did. `0` disables it.
+
+**Deliberately not done: failing `/healthz` on a stall.** It reports the stall in
+the body and still returns 200 — that endpoint is both the Docker HEALTHCHECK and
+Traefik's, and a reader whose refresh is stuck is still perfectly readable.
+Failing it would withdraw the backend and turn a background failure into an
+outage.
+
+**Still worth watching:** the trickle case is bounded by the watchdog, not
+prevented — a host feeding one byte per 29s keeps a pass "advancing" per-read but
+not per-feed. If that ever shows up, the fix is a per-feed wall-clock budget in
+`update_feeds`, not a shorter read deadline.
+
+### 0c. CodeQL board triage
+
+**Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a
+false positive.** Same class and same rationale as the `build_reader_page`
+dismissal on PR #144: everything the route embeds is allowlist-sanitized —
+`article_html` on every branch of `resolve_reader_article_html` (archive at
+capture, live via `sanitize_readability_html`, stored via `reader_sanitize` at
+ingest), `<title>` via `html.escape`, `<h1>` via `sanitize_inline_title`
+(escape-then-restore, so no attribute or unknown tag survives a round trip), and
+dateline/source/lead-image URLs via `html.escape`. CodeQL flags it because our
+BeautifulSoup sanitizer is not a recognized sanitizer, and the taint source is
+the `feed_url`/`entry_id` query params that select the row.
+
+**Still open on the board (5), not yet triaged:**
+
+- `py/polynomial-redos` ×4 — [main.py:13882](main.py#L13882),
+  [13888](main.py#L13888) (`_LEAD_IMG_OPENER_RE` against stored content),
+  [17153](main.py#L17153) (`<[^>]+>` tag-strip in the visible-text measure),
+  [17244](main.py#L17244) (the `srcset` strip in `proxy_reader_images`). All four
+  run over **feed-supplied HTML**, which is attacker-influenced in the way that
+  matters for a ReDoS, so these are worth actually fixing rather than dismissing.
+- `py/stack-trace-exposure` — [main.py:21412](main.py#L21412), the webhook test
+  route returning `err` to the caller. Admin-only, but the fix (log the detail,
+  return a generic message) is smaller than the argument for keeping it.
+
+**If the reflective-XSS class keeps recurring**, the repo already has the pattern
+for it: `.github/codeql/queries/` holds guard-aware copies of the SSRF and
+path-injection queries that model our audited guards as sanitizer barriers, with
+the stock versions excluded in `codeql-config.yml`. A `LectioReflectiveXss.ql`
+modeling `html_sanitize.sanitize_html` / `sanitize_inline_title` as barriers would
+end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, and
+excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
+`py/full-ssrf` was.
 
 ### 0b. Saved Inbox = every star, newest-star-first — PARKED on `saved-inbox-wip`
 

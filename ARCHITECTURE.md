@@ -280,6 +280,42 @@ hardening of `/api/img` and `/thumb` has landed — see "Security posture". The
 WebSub discover-on-subscribe spawned when a feed is added now re-binds the
 requesting user via `_run_in_user_context`.)
 
+### Refresh scheduler: why it has a watchdog
+
+The scheduler is one thread running one pass at a time, and every feed in a pass
+is fetched sequentially. That is a deliberate simplicity trade (it keeps Lectio a
+polite client and makes backoff reasoning local), but it has one consequence
+worth stating plainly: **any single outbound call that never returns stops every
+feed behind it.** That is not hypothetical — it happened, and nothing refreshed
+for 34 hours while `/healthz` answered 200 the whole time.
+
+Three layers, each covering what the one above it cannot:
+
+1. **A read deadline on every feed fetch.** `ReaderApi` states `session_timeout`
+   explicitly (`LECTIO_FEED_CONNECT_TIMEOUT` / `LECTIO_FEED_READ_TIMEOUT`) rather
+   than inheriting reader's default. A host that accepts a connection and then
+   says nothing costs one timeout, not the whole cycle.
+2. **Nothing may escape the loop.** `scheduled_refresh_loop` catches everything,
+   and the WebSub renewal — which sits *after* the guarded per-user loop — has its
+   own guard. An uncaught exception there does not crash the app; it silently ends
+   the only thread that refreshes feeds, which looks exactly like a hang.
+3. **A watchdog on progress, not elapsed time.** A read deadline is per-socket-
+   read, so a host trickling one byte at a time never trips it. `FeedRefreshService`
+   reports a stage each time it advances; `scheduler_watchdog_loop` trips only when
+   a pass is in flight and has not advanced for `LECTIO_SCHEDULER_STALL_SECONDS`.
+   Elapsed time alone is useless here — a full-library pass legitimately runs for
+   an hour, so "slow" and "stuck" are only distinguishable by whether it moves.
+
+A wedged pass cannot be cancelled: Python cannot interrupt a thread blocked in a
+socket read. So the escalation past `LECTIO_SCHEDULER_STALL_RESTART_SECONDS` is
+`os._exit(1)`, letting the container's `restart: unless-stopped` policy do what
+the manual recovery did. Set it to `0` to log only.
+
+A stall is reported in the `/healthz` body but **never fails the probe**. That
+endpoint is both the Docker HEALTHCHECK and Traefik's: a reader whose background
+refresh is stuck is still entirely usable for reading, and failing the probe would
+withdraw the backend, converting a background-work failure into an outage.
+
 ### Per-user in-memory caches
 
 The module-level caches that hold per-user data (folder/feed structure, unread

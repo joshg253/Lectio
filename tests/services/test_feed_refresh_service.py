@@ -79,11 +79,12 @@ def _make_conn(db_path: Path):
 
 
 def _build_service(db_path: Path, reader, yt_calls: list[str], lead_calls: list[str],
-                   on_fetch_refused=None):
+                   on_fetch_refused=None, progress_hook=None):
     def get_meta_connection():
         return _make_conn(db_path)
 
     return FeedRefreshService(
+        progress_hook=progress_hook,
         get_meta_connection=get_meta_connection,
         get_reader=lambda: _ReaderCtx(reader),
         fetch_and_store_youtube_durations=lambda feed_url: yt_calls.append(feed_url),
@@ -479,3 +480,61 @@ def test_low_fanout_requests_are_not_paced(tmp_path: Path, monkeypatch):
 
     service.update_feeds(feeds)
     assert not [s for s in sleeps if s > 0]
+
+
+def test_progress_hook_fires_per_feed_before_the_fetch(tmp_path):
+    """The scheduler watchdog trips on lack of progress, so every feed must tick
+    it — and BEFORE the fetch, so a hung feed is the one the log names."""
+    reader = _FakeReader()
+    stages: list[str] = []
+    svc = _build_service(tmp_path / "m.sqlite", reader, [], [],
+                         progress_hook=stages.append)
+
+    svc.update_feeds(["https://a.test/feed", "https://b.test/feed"], enhance=False)
+
+    assert any("https://a.test/feed" in s for s in stages)
+    assert any("https://b.test/feed" in s for s in stages)
+    # The a-feed's stage is recorded before the b-feed's, so a hang on a leaves
+    # "a" as the reported stage rather than "b".
+    a_at = next(i for i, s in enumerate(stages) if "a.test" in s)
+    b_at = next(i for i, s in enumerate(stages) if "b.test" in s)
+    assert a_at < b_at
+
+
+def test_progress_hook_fires_for_a_failing_feed_too(tmp_path):
+    """A batch of dead feeds still counts as progress — it is moving, just failing."""
+    reader = _FakeReader(fail_urls={"https://dead.test/feed"})
+    stages: list[str] = []
+    svc = _build_service(tmp_path / "m.sqlite", reader, [], [],
+                         progress_hook=stages.append)
+
+    svc.update_feeds(["https://dead.test/feed"], enhance=False)
+
+    assert any("https://dead.test/feed" in s for s in stages)
+
+
+def test_progress_hook_fires_during_the_enhancement_pass(tmp_path):
+    """Enhancement is the network-heavy half and runs in the scheduler thread, so
+    a stall there must be visible too."""
+    reader = _FakeReader()
+    stages: list[str] = []
+    svc = _build_service(tmp_path / "m.sqlite", reader, [], [],
+                         progress_hook=stages.append)
+
+    svc.update_feeds(["https://a.test/feed"], enhance=True)
+
+    assert any(s.startswith("enhance ") for s in stages)
+
+
+def test_a_raising_progress_hook_never_breaks_a_refresh(tmp_path):
+    """It is telemetry. It must not be able to stop feeds updating."""
+    reader = _FakeReader()
+
+    def _boom(_stage):
+        raise RuntimeError("telemetry exploded")
+
+    svc = _build_service(tmp_path / "m.sqlite", reader, [], [], progress_hook=_boom)
+
+    svc.update_feeds(["https://a.test/feed"], enhance=False)
+
+    assert reader.updated == ["https://a.test/feed"]

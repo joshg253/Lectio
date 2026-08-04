@@ -55,6 +55,7 @@ class FeedRefreshService:
         failed_feed_backoff_base_seconds: int,
         failed_feed_backoff_max_seconds: int,
         on_fetch_refused: Callable[[str], bool] | None = None,
+        progress_hook: Callable[[str], None] | None = None,
     ) -> None:
         self._get_meta_connection = get_meta_connection
         self._get_reader = get_reader
@@ -70,6 +71,18 @@ class FeedRefreshService:
         # return True if it was newly flagged (so this cycle can retry it). Keeps
         # the good-citizen escalation policy out of the service layer.
         self._on_fetch_refused = on_fetch_refused
+        # Called with a short stage label each time the refresh advances. The
+        # scheduler watchdog uses it to tell "slow but moving" (a full-library
+        # pass legitimately runs for an hour) from "stuck on one socket read".
+        self._progress_hook = progress_hook
+
+    def _note_progress(self, stage: str) -> None:
+        if self._progress_hook is None:
+            return
+        try:
+            self._progress_hook(stage)
+        except Exception:  # noqa: BLE001 — telemetry must never break a refresh
+            pass
 
     @staticmethod
     def _is_fetch_refusal(exc: Exception) -> bool:
@@ -305,6 +318,9 @@ class FeedRefreshService:
 
         with self._get_reader() as reader:
             for idx, feed_url in enumerate(feed_url_list, start=1):
+                    # Before the fetch, so a feed that hangs is the one named in
+                    # the watchdog's log rather than its predecessor.
+                    self._note_progress(f"feed {idx}/{len(feed_url_list)} {feed_url}")
                     feed_started_at = time.perf_counter()
                     feed_state = feed_state_map.get(feed_url) or {}
                     domain = _feed_domain(feed_url)
@@ -617,6 +633,7 @@ class FeedRefreshService:
         # Re-delete tombstoned entries the refresh may have resurrected (the
         # publisher's feed still carries them), before enhancement wastes work
         # on entries that are about to disappear.
+        self._note_progress("post-fetch fixups")
         self.purge_tombstoned_entries(feed_url_list)
         # Re-pin user-corrected published dates / titles a refresh may have
         # reverted to the feed's original (garbage) value.
@@ -827,5 +844,6 @@ class FeedRefreshService:
         Callers that must return promptly (manual refresh request handlers) should
         run this off the request path; ``update_feeds(enhance=False)`` skips it."""
         for feed_url in feed_urls:
+            self._note_progress(f"enhance {feed_url}")
             self._fetch_and_store_youtube_durations(feed_url)
             self._fetch_and_store_lead_images(feed_url)

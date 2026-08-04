@@ -113,12 +113,16 @@ class ReaderApi:
         self,
         db_path: Path | str,
         browser_ua_provider: Callable[[], set[str]] | None = None,
+        session_timeout: tuple[float, float] | None = None,
     ) -> None:
         self._db_path = str(db_path)
         # Returns the set of feed URLs that should fetch with a browser identity.
         # Called live on each request (the set changes as feeds get flagged), so
         # it must be cheap; main caches it per-user.
         self._browser_ua_provider = browser_ua_provider
+        # (connect, read) seconds for every feed fetch. Passed through to reader's
+        # requests session. None keeps reader's own default.
+        self._session_timeout = session_timeout
 
     def client(self):
         # Give reader's SQLite connections a 30-second busy-wait timeout so
@@ -131,11 +135,20 @@ class ReaderApi:
         # browser-UA escalation (full header set, not just UA) is a strict superset.
         # .entry_dedupe merges user state when feed entry IDs change (slug rewrites,
         # CMS migrations). .enclosure_dedupe drops duplicate enclosure URLs per entry.
+        #
+        # session_timeout is stated explicitly rather than left to reader's default
+        # (3.05, 60): the scheduler refreshes feeds strictly sequentially, so every
+        # second a single unresponsive host holds is a second every feed behind it
+        # waits. It is a per-socket-read deadline, not a total one — a host that
+        # trickles bytes can still outlast it, which is what the scheduler watchdog
+        # in main.py is for.
+        extra = {} if self._session_timeout is None else {"session_timeout": self._session_timeout}
         r = make_reader(
             self._db_path,
             feed_root='',
             _storage=storage,
             plugins=['.entry_dedupe', '.enclosure_dedupe'],
+            **extra,
         )
 
         # lazy_init callbacks are popped from the END of the list (LIFO order).
