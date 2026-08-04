@@ -13812,7 +13812,14 @@ const CAPTURE_MODE_FULL = 'full';
       // left in place when the tag is written back. The per-entry '#' is the
       // opposite — decoration on the tag itself, overwritten by the completion
       // as it always was — so it is stripped by norm() and not treated here.
-      const SIGN_RE = COMMA ? /^(?:\+\+|[+-])?/ : /^/;
+      //
+      // null rather than an empty-matching /^/: that regex made stripSign a
+      // literal no-op (CodeQL "replacement of a substring with itself"). Space
+      // mode has no sign grammar at all, and saying so outright beats a pattern
+      // that quietly matches nothing.
+      const SIGN_RE = COMMA ? /^(?:\+\+|[+-])?/ : null;
+      const signOf = (t) => (SIGN_RE ? t.match(SIGN_RE)[0] : '');
+      const stripSign = (t) => (SIGN_RE ? t.replace(SIGN_RE, '') : t);
       const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
       // Multi-word tags are STORED hyphenated but typed naturally, so the typed
       // token has to be hyphenated before it can prefix-match a suggestion.
@@ -13831,7 +13838,7 @@ const CAPTURE_MODE_FULL = 'full';
         let start = v.lastIndexOf(SEP, caret - 1) + 1;
         // Whitespace after the separator belongs to the layout, not the token.
         start += v.slice(start, caret).match(/^\s*/)[0].length;
-        const sign = v.slice(start, caret).match(SIGN_RE)[0];
+        const sign = signOf(v.slice(start, caret));
         return { start: start + sign.length, end: caret, text: norm(v.slice(start + sign.length, caret)) };
       };
       const close = () => { box.hidden = true; matches = []; active = -1; };
@@ -13847,7 +13854,7 @@ const CAPTURE_MODE_FULL = 'full';
         const tk = token();
         if (!tk.text) return close();
         const have = new Set(input.value.split(COMMA ? ',' : /\s+/)
-          .map((t) => norm(t.replace(SIGN_RE, ''))));
+          .map((t) => norm(stripSign(t))));
         matches = (getTags() || [])
           .map((t) => (typeof t === 'string' ? { tag: t, count: 0 } : t))
           .filter((m) => m.tag.startsWith(tk.text) && m.tag !== tk.text && !have.has(m.tag))
