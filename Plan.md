@@ -74,6 +74,29 @@ prevented — a host feeding one byte per 29s keeps a pass "advancing" per-read 
 not per-feed. If that ever shows up, the fix is a per-feed wall-clock budget in
 `update_feeds`, not a shorter read deadline.
 
+### Moving a feed to a new URL — FIXED 2026-08-04
+
+Changing a feed's URL left three loose ends, all reported from live use:
+
+- **The site identity stayed behind.** A feed that moves host moved its site
+  too, but the alias rule that expresses that had to be added by hand
+  afterwards. Everything downstream reads `feed_url_rewrites` — the entry-link
+  rebase, the dupe scan, the favicon, re-fetch, **and the Website shown in Feed
+  Properties** (`_rewrite_url_host`) — so one rule fixes all of them, and its
+  absence showed up as a Website still naming a dead domain, which does not look
+  like something the URL change caused. Now seeded automatically on a host
+  change, reusing exactly what Edit Website does. Skipped when the host is
+  unchanged, and never clobbers a rule the user already declared.
+- **The feed vanished from the tree.** The client redirected by copying the
+  current query string and swapping `list_feed_url` — but Properties can be
+  opened from a page with no `folder_id` at all (Settings → Feeds, or an
+  already-feed-scoped URL), and without one the sidebar has nothing to select.
+  The feed was open in the list and invisible in the tree, with no route back to
+  its context menu. `/feeds/change-url` now returns the feed's `folder_id`.
+- **The old host is offered for the alias field** when the server declined to
+  seed it itself (rule already present, or a same-host move), carried across the
+  navigation in `sessionStorage` and read exactly once.
+
 ### 0c. CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a

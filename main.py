@@ -24489,8 +24489,39 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
         # It was disabled while dead; the working replacement should fetch again.
         enable_feed(new_url)
 
+    # A feed that moved to a new HOST moved the site with it. Seed the same
+    # alias rule Edit Website seeds, so the old domain keeps resolving: the
+    # entry-link rebase, the dupe scan, the favicon, re-fetch AND the Website
+    # shown in Feed Properties all read through feed_url_rewrites, so one rule
+    # fixes all of them. Doing it by hand afterwards is easy to forget, and the
+    # symptom (Website still naming a dead domain) does not look like something
+    # the URL change caused.
+    alias: dict | None = None
+    _old_host = _normalize_alias_host(urlparse(old_url).netloc)
+    _new_host = _normalize_alias_host(urlparse(new_url).netloc)
+    if _old_host and _new_host and _old_host != _new_host:
+        try:
+            with get_meta_connection() as conn:
+                already = conn.execute(
+                    "SELECT 1 FROM feed_url_rewrites WHERE feed_url = ? AND from_host = ?",
+                    (new_url, _old_host),
+                ).fetchone()
+                if already is None:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO feed_url_rewrites (feed_url, from_host, to_host)"
+                        " VALUES (?, ?, ?)",
+                        (new_url, _old_host, _new_host),
+                    )
+            if already is None:
+                stats = migrate_feed_host_rewrite(new_url, {_old_host: _new_host})
+                alias = {"from_host": _old_host, "to_host": _new_host,
+                         "migrated": int(stats.get("migrated", 0) or 0)}
+        except Exception:  # noqa: BLE001 — the URL change itself already succeeded
+            LOGGER.warning("[change-url] alias seeding failed for %s", new_url, exc_info=True)
+
     invalidate_meta_structure_cache()
     invalidate_problematic_feeds_cache()
+    invalidate_unread_counts_cache()
     global _unread_counts_generation
     _unread_counts_generation += 1
 
@@ -24501,7 +24532,25 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
         name="refresh-after-url-change",
     ).start()
 
-    return JSONResponse({"ok": True, "new_url": new_url})
+    # The folder the feed sits in, so the client can navigate back to it WITH
+    # its scope. Without this the redirect carried only list_feed_url, and a
+    # feed URL with no folder_id leaves the sidebar with nothing to select —
+    # the feed is open in the list but invisible in the tree, so there is no
+    # way back to its context menu.
+    folder_id = None
+    try:
+        with get_meta_connection() as conn:
+            row = conn.execute(
+                "SELECT folder_id FROM folder_feeds WHERE feed_url = ? LIMIT 1", (new_url,)
+            ).fetchone()
+            folder_id = int(row["folder_id"]) if row else None
+    except Exception:  # noqa: BLE001 — navigation nicety, never fail the change
+        LOGGER.warning("[change-url] folder lookup failed for %s", new_url, exc_info=True)
+
+    return JSONResponse({
+        "ok": True, "new_url": new_url, "folder_id": folder_id,
+        "old_host": _old_host, "alias": alias,
+    })
 
 
 @app.post("/feeds/unsubscribe")

@@ -4277,6 +4277,31 @@ const CAPTURE_MODE_FULL = 'full';
     // ingest, and feed the global dedupe alias map. Until this list existed the
     // only way to add one was Edit Website, which can only declare a host it
     // can already see in the feed — so an older dead domain had no way in.
+    // A URL change navigates (full page load), so the host the feed moved away
+    // from cannot be held in a variable. sessionStorage carries it across that
+    // one navigation and is read exactly once — a stale suggestion offered days
+    // later would be worse than none.
+    const _PENDING_ALIAS_KEY = 'lectio.pendingAliasHost';
+
+    function setPendingAliasHost(feedUrl, host) {
+      try {
+        if (!feedUrl || !host) return;
+        window.sessionStorage.setItem(_PENDING_ALIAS_KEY, JSON.stringify({ feedUrl, host }));
+      } catch (e) { /* private mode / quota — the prefill is optional */ }
+    }
+
+    function takePendingAliasHost(feedUrl) {
+      try {
+        const raw = window.sessionStorage.getItem(_PENDING_ALIAS_KEY);
+        if (!raw) return '';
+        window.sessionStorage.removeItem(_PENDING_ALIAS_KEY);
+        const saved = JSON.parse(raw);
+        return saved && saved.feedUrl === feedUrl ? (saved.host || '') : '';
+      } catch (e) {
+        return '';
+      }
+    }
+
     function renderFeedPropAliases(feedUrl, rewrites) {
       const list = document.getElementById('feed-prop-alias-list');
       const empty = document.getElementById('feed-prop-alias-empty');
@@ -4285,7 +4310,12 @@ const CAPTURE_MODE_FULL = 'full';
       const status = document.getElementById('feed-prop-alias-status');
       if (!list) return;
       if (addBtn) addBtn.dataset.feedUrl = feedUrl || '';
-      if (input) input.value = '';
+      // Prefill the host this feed just moved away from, so declaring it is one
+      // click rather than something to remember and retype. The server seeds
+      // that alias itself on a host change, so this only has anything to offer
+      // when it declined to — the rule already existed, or the move was
+      // same-host — and it clears itself once used.
+      if (input) input.value = takePendingAliasHost(feedUrl) || '';
       if (status) status.textContent = '';
       list.textContent = '';
       const rows = Array.isArray(rewrites) ? rewrites : [];
@@ -5861,7 +5891,18 @@ const CAPTURE_MODE_FULL = 'full';
         // Navigate to the RESOLVED url (probe may have followed a redirect or
         // discovered the feed on a pasted page URL).
         const finalUrl = json.new_url || newUrl;
-        window.location.assign(`/?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(window.location.search)), list_feed_url: finalUrl })}`);
+        // Carry the feed's folder so the sidebar can still select it. Copying
+        // the current query string is not enough: Properties can be opened from
+        // a page that has no folder_id at all (Settings → Feeds, or an
+        // already-feed-scoped URL), and then the feed lands open in the list but
+        // invisible in the tree, with no way back to its context menu. The
+        // server looks the folder up, so this works wherever we were.
+        const params = { ...Object.fromEntries(new URLSearchParams(window.location.search)), list_feed_url: finalUrl };
+        if (json.folder_id != null) params.folder_id = String(json.folder_id);
+        // Only worth offering when the server did NOT already seed the alias
+        // itself; otherwise the rule exists and there is nothing to declare.
+        if (json.old_host && !json.alias) setPendingAliasHost(finalUrl, json.old_host);
+        window.location.assign(`/?${new URLSearchParams(params)}`);
       } catch (err) {
         feedPropChangeUrlStatus.textContent = `Error: ${err.message}`;
       } finally {
