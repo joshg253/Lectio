@@ -263,6 +263,15 @@ and `rewrite_html_assets` now rewires `<a href>` as well as `<img src>` so the
 in-body download link points at the local copy too — a saved post whose "get the
 tab" link still points at a dead publisher has kept the wrong half.
 
+**Existing saves need `scripts/backfill_attachments.py`** — capture runs inside
+`_archive_entry`, and `enqueue_archive` keeps an existing row at
+`status='complete'` while the worker only takes `pending`, so re-starring an old
+post does not re-capture it. The backfill re-fetches **no pages**: the archive
+already stores each post's HTML, so links are found offline and only the files
+themselves are requested. It calls the same `_archive_asset` the live path does,
+so storage, dedupe and the size cap cannot drift. Dry run 2026-08-05 on
+blog.guitar-pro.com: **211 attachments across 119 saved posts**.
+
 **Enclosures are captured unconditionally on star/tag**, without the per-feed
 extension list: an `<enclosure>` is the publisher *declaring* that a file
 belongs to the post (Standard Ebooks attaches the epub), which is a stronger
