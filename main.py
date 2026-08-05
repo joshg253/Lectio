@@ -8679,10 +8679,34 @@ _NEVER_ATTACHMENT_EXTS = frozenset({
     "htm", "html", "xhtml", "shtml", "php", "php3", "php4", "php5", "phtml",
     "asp", "aspx", "jsp", "jspx", "cgi", "pl", "cfm", "do", "action",
 })
-# Deliberately no "*": the extension list is the whole safeguard. `*` on an
-# ordinary post also matches every link to a homepage, a category page or a
-# social profile, which is a crawl rather than a capture.
+# An exact extension ("gp5"), or a PREFIX pattern ("gp*" -> gp, gp3, gp4, gp5,
+# gpx). Guitar Pro alone ships five, so listing them by hand is tedious and
+# guaranteed to miss the next one.
+#
+# A bare "*" is still refused, and the prefix must be at least two characters:
+# the point of the list is that it names a FAMILY of file types, and a one-letter
+# prefix ("p*" -> pdf, png, ppt, psd…) is a wildcard wearing a hat. Page types
+# are refused separately and at match time too, so even a broad prefix can never
+# reach an .html.
 _ATTACHMENT_EXT_RE = re.compile(r"^[a-z0-9]{1,8}$")
+_ATTACHMENT_PREFIX_RE = re.compile(r"^([a-z0-9]{2,8})\*$")
+
+
+def _attachment_ext_matches(ext: str, patterns: list[str]) -> bool:
+    """Whether a file's extension is one this feed keeps.
+
+    Page types are re-checked HERE and not only on save: a stored value must
+    never be able to smuggle one through, whatever wrote it.
+    """
+    if not ext or ext in _NEVER_ATTACHMENT_EXTS:
+        return False
+    for pattern in patterns:
+        if pattern.endswith("*"):
+            if ext.startswith(pattern[:-1]):
+                return True
+        elif ext == pattern:
+            return True
+    return False
 # Per-file ceiling. A tab or a lyric sheet is kilobytes; anything past this is
 # not what this feature is for, and the archive is a SQLite blob store.
 ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
@@ -8696,12 +8720,18 @@ def normalize_attachment_exts(raw_value: str) -> list[str]:
     """
     out: list[str] = []
     for token in (raw_value or "").replace(",", " ").split():
-        ext = token.strip().lower().lstrip("*").lstrip(".")
-        if not ext or not _ATTACHMENT_EXT_RE.match(ext):
+        raw = token.strip().lower().lstrip(".")
+        prefix_match = _ATTACHMENT_PREFIX_RE.match(raw)
+        if prefix_match:
+            # Kept as written ("gp*"). Page types are refused at MATCH time, so
+            # a broad prefix still cannot reach an .html or a .php.
+            value = prefix_match.group(1) + "*"
+        elif _ATTACHMENT_EXT_RE.match(raw) and raw not in _NEVER_ATTACHMENT_EXTS:
+            value = raw
+        else:
             continue
-        if ext in _NEVER_ATTACHMENT_EXTS or ext in out:
-            continue
-        out.append(ext)
+        if value not in out:
+            out.append(value)
     return out
 
 
@@ -8746,7 +8776,7 @@ def attachment_links_in_html(content_html: str, base_url: str, exts: list[str]) 
         return []
     from bs4 import BeautifulSoup
 
-    wanted = {e.lower() for e in exts}
+    wanted = [e.lower() for e in exts]
     found: list[str] = []
     soup = BeautifulSoup(content_html, "html.parser")
     for a in soup.find_all("a"):
@@ -8759,7 +8789,7 @@ def attachment_links_in_html(content_html: str, base_url: str, exts: list[str]) 
         if _dot < 0:
             continue
         ext = path[_dot + 1:]
-        if ext in wanted and ext not in _NEVER_ATTACHMENT_EXTS and absolute not in found:
+        if _attachment_ext_matches(ext, wanted) and absolute not in found:
             found.append(absolute)
     return found
 

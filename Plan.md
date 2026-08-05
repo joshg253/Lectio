@@ -231,10 +231,11 @@ free, and differ from images only in how they are FOUND.
 
 Three decisions worth keeping:
 
-- **No wildcard, at all.** `*` on an ordinary post also matches every link to a
-  homepage, a category or a social profile. The extension list is the whole
-  safeguard that keeps this a capture rather than a crawl, so there is nothing
-  to opt into.
+- **No bare wildcard** — `*` on an ordinary post also matches every link to a
+  homepage, a category or a social profile. But a **prefix pattern** is allowed
+  (`gp*` → gp/gp3/gp4/gp5/gpx), because it still names a family of file types
+  and cannot reach a page. The prefix must be at least two characters: `p*`
+  (pdf, png, ppt, psd…) is a wildcard wearing a hat.
 - **Page extensions are refused everywhere** (`html`, `php`, `aspx`, `jsp`, …) —
   dropped on save *and* re-checked in the finder, so a stored value could never
   smuggle one through. Dropped rather than rejected: typing "pdf html" means the

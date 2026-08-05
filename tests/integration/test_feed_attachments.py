@@ -137,3 +137,47 @@ def test_relative_links_resolve_against_the_post():
 def test_root_relative_links_resolve_against_the_host():
     assert main.attachment_links_in_html('<a href="/files/song.gp">x</a>', POST, ["gp"]) == [
         "https://blog.guitar-pro.com/files/song.gp"]
+
+
+# --- prefix patterns ---------------------------------------------------------
+
+
+def test_a_prefix_pattern_is_kept_as_written():
+    """Guitar Pro alone ships .gp/.gp3/.gp4/.gp5/.gpx — listing them by hand is
+    tedious and misses the next one."""
+    assert main.normalize_attachment_exts("gp*") == ["gp*"]
+
+
+@pytest.mark.parametrize("ext,expected", [
+    ("gp", True), ("gp3", True), ("gp5", True), ("gpx", True),
+    ("gtp", False), ("png", False), ("pdf", False),
+])
+def test_prefix_matching(ext, expected):
+    assert main._attachment_ext_matches(ext, ["gp*"]) is expected
+
+
+def test_a_bare_wildcard_is_still_refused():
+    assert main.normalize_attachment_exts("*") == []
+
+
+def test_a_one_letter_prefix_is_refused():
+    """"p*" would take pdf, png, ppt, psd… — a wildcard wearing a hat. The list
+    is meant to name a FAMILY of file types."""
+    assert main.normalize_attachment_exts("p*") == []
+    assert main.normalize_attachment_exts("h*") == []
+
+
+def test_a_prefix_can_never_reach_a_page_type():
+    """Page types are refused at MATCH time as well as on save, so even a broad
+    prefix cannot pull in an .html or a .php."""
+    assert main._attachment_ext_matches("php", ["ph*"]) is False
+    assert main._attachment_ext_matches("html", ["ht*"]) is False
+
+
+def test_prefix_and_exact_patterns_mix():
+    exts = main.normalize_attachment_exts("gp* gtp pdf")
+    html = ('<a href="/a.gp5">1</a><a href="/b.gtp">2</a>'
+            '<a href="/c.pdf">3</a><a href="/d.zip">4</a><a href="/e.php">5</a>')
+    got = main.attachment_links_in_html(html, POST, exts)
+
+    assert [u.split("/")[-1] for u in got] == ["a.gp5", "b.gtp", "c.pdf"]

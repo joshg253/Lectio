@@ -2739,11 +2739,11 @@
           <dt>Keep linked files</dt>
           <dd id="feed-prop-attachments-row">
             <input type="text" id="feed-prop-attachments-input" class="feed-prop-url-input"
-                   placeholder="e.g. gp gp5 gpx pdf" autocomplete="off"
+                   placeholder="e.g. gp* gtp pdf" autocomplete="off"
                    aria-describedby="feed-prop-attachments-hint" />
             <button type="button" id="feed-prop-attachments-save" class="feed-prop-inline-btn feed-prop-inline-btn--primary">Save</button>
             <span id="feed-prop-attachments-status" class="feed-prop-inline-status"></span>
-            <div id="feed-prop-attachments-hint" class="feed-prop-hint">Saved with the post when you star or tag it. Page types (html, php…) are always ignored.</div>
+            <div id="feed-prop-attachments-hint" class="feed-prop-hint">Saved with the post when you star or tag it. <code>gp*</code> covers gp/gp3/gp5/gpx. Page types (html, php…) are always ignored, and there is no bare <code>*</code>.</div>
           </dd>
           {# Declared domain migrations. Without this the rules act invisibly —
              they rewrite at ingest and feed the global dedupe alias map, but
