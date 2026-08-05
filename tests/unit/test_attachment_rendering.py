@@ -102,3 +102,52 @@ def test_both_in_one_document():
     )
     assert 'href="/starred-asset/H1"' in out
     assert 'src="/starred-asset/H2"' in out
+
+
+# --- which enclosures are captured -------------------------------------------
+#
+# Enclosures are kept WITHOUT the per-feed extension list, because an
+# <enclosure> is the publisher declaring the file belongs to the post. These pin
+# the selection rule the capture path applies.
+
+
+def _capturable(enclosures) -> list[str]:
+    """Mirrors the enclosure filter in StarredArchiveService._archive_entry."""
+    out = []
+    for enc in enclosures:
+        url = (enc.href or "").strip()
+        if not url:
+            continue
+        if (enc.type or "").lower().startswith(("audio/", "image/")):
+            continue
+        out.append(url)
+    return out
+
+
+def test_an_epub_enclosure_is_captured():
+    """Standard Ebooks attaches the book itself — needing per-feed setup for
+    that would be asking the user to state the obvious."""
+    epub = "https://standardebooks.org/ebooks/x/downloads/book.epub?source=feed"
+    assert _capturable([_Enc(epub, "application/epub+zip", 554861)]) == [epub]
+
+
+def test_a_query_string_does_not_stop_an_enclosure_being_captured():
+    """Standard Ebooks appends ?source=feed to every enclosure URL."""
+    assert _capturable([_Enc("https://x.test/b.epub?source=feed", "application/epub+zip")])
+
+
+def test_audio_enclosures_are_skipped():
+    """Podcast enclosures are large and stream fine, and they already have a
+    player."""
+    assert _capturable([_Enc("https://x.test/ep.mp3", "audio/mpeg")]) == []
+
+
+def test_image_enclosures_are_skipped():
+    """Already captured as images; listing them again poisons the lead-image
+    dedup."""
+    assert _capturable([_Enc("https://x.test/cover.jpg", "image/jpeg")]) == []
+
+
+def test_a_pdf_enclosure_is_captured():
+    """Magazine feeds attach the issue."""
+    assert _capturable([_Enc("https://x.test/issue.pdf", "application/pdf")])
