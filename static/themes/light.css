@@ -1,4 +1,14 @@
 :root {
+  /* What goes BEHIND a transparent image in article bodies. Images are stored
+     with their transparency intact — nothing is flattened at capture — so this
+     is purely a presentation choice and changing it re-themes every transparent
+     image instantly, with no re-fetch.
+
+     White in BOTH themes on purpose: transparent article images are
+     overwhelmingly black line art (xkcd/what-if illustrations, diagrams, logos)
+     drawn for a light page, so a dark backdrop renders them black-on-black. Set
+     this to `transparent` to get the untouched look back. */
+  --img-backdrop: #ffffff;
   --bg: #f2efe7;
   --surface: #fcfbf7;
   --ink: #22201a;

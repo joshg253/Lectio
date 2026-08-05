@@ -173,6 +173,11 @@ body {
   height: auto;
   margin: 0.9em auto;      /* spacing above/below + centred */
   break-inside: avoid;
+  /* No image backdrop here on purpose, unlike the app's .entry-content img.
+     This page is pure black-on-white by design, so transparent line art already
+     lands on white — and the `#reader-columns *` rule above forces
+     `background: transparent !important` for e-ink contrast, which any backdrop
+     set here would have to fight for no gain. */
 }
 /* The prepended lead/hero image. */
 #reader-columns .reader-lead { margin: 0 0 1em; }

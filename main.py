@@ -4123,6 +4123,14 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_paywalled INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+        # Tags this feed's posts usually want, pinned to the front of the
+        # suggestion chips. A feed with a stable subject (a guitar blog: #guitar,
+        # #bass) publishes no tags saying so, leaving the same words to be typed
+        # on every post. Stored space-separated, normalized on write.
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN suggested_tags TEXT")
+        except Exception:
+            pass
         try:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN inject_source_images INTEGER NOT NULL DEFAULT 0")
         except Exception:
@@ -8607,6 +8615,50 @@ def _manually_tagged_entry_keys() -> set[tuple[str, str]]:
         conn.close()
 
 
+def get_feed_pinned_tags(feed_url: str) -> list[str]:
+    """Tags the user pinned to this feed, to be offered on every one of its posts.
+
+    Feed-provided tags only exist when the publisher ships them. A feed with a
+    stable subject usually ships nothing — a guitar blog does not tag posts
+    "guitar" because the whole site is about guitars — so filing them meant
+    typing the same word every time. These are the answer to that, and they are
+    a *suggestion*, never applied automatically: the point is one click, not an
+    automatic tag (a rule already does that if you want it).
+    """
+    try:
+        with get_meta_connection() as conn:
+            row = conn.execute(
+                "SELECT suggested_tags FROM feed_display_prefs WHERE feed_url = ?",
+                (feed_url,),
+            ).fetchone()
+    except Exception:  # noqa: BLE001 — suggestions are never worth failing a render
+        return []
+    if not row or not row["suggested_tags"]:
+        return []
+    out: list[str] = []
+    for raw in str(row["suggested_tags"]).replace(",", " ").split():
+        normalized = normalize_tag_value(raw)
+        if normalized and normalized not in out:
+            out.append(normalized)
+    return out
+
+
+def set_feed_pinned_tags(feed_url: str, raw_value: str) -> list[str]:
+    """Store the pinned tags for *feed_url*, normalized. Returns what was kept."""
+    tags: list[str] = []
+    for raw in (raw_value or "").replace(",", " ").split():
+        normalized = normalize_tag_value(raw)
+        if normalized and normalized not in tags:
+            tags.append(normalized)
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO feed_display_prefs (feed_url, suggested_tags) VALUES (?, ?)"
+            " ON CONFLICT(feed_url) DO UPDATE SET suggested_tags = excluded.suggested_tags",
+            (feed_url, " ".join(tags)),
+        )
+    return tags
+
+
 def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     """Feed-provided tags captured at ingest (entry_feed_tags meta table).
 
@@ -9134,6 +9186,7 @@ def get_feed_properties(feed_url: str) -> dict:
             ],
             # Dismissed suggestion chips, so a mis-clicked × has a way back.
             "suppressed_tags": feed_tag_service.suppressed_tag_list(feed_url),
+            "suggested_tags": get_feed_pinned_tags(feed_url),
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
             "fetch_history": get_feed_fetch_history(_pc, feed_url),
@@ -21840,8 +21893,14 @@ def entry_feed_tags_route(
                     feed_tag_service.record_entry_tags(feed_url, [(entry_id, page_tags)])
                     raw_tags = page_tags[:MAX_FEED_TAG_SUGGESTIONS]
 
+    # The user's pinned tags go FIRST — they are the ones being reached for, and
+    # a feed that ships 28 tags a post would otherwise bury them past the
+    # collapse. Prepending rather than a separate list means the existing
+    # dedupe below is also what guarantees "never show a chip twice": a pinned
+    # tag the publisher happens to ship too appears once, in the pinned position.
+    pinned = get_feed_pinned_tags(feed_url)
     tags: list[str] = []
-    for raw_tag in raw_tags:
+    for raw_tag in [*pinned, *raw_tags]:
         normalized = normalize_tag_value(raw_tag)
         if normalized and normalized not in tags:
             tags.append(normalized)
@@ -21858,6 +21917,10 @@ def entry_feed_tags_route(
         "ok": True,
         "tags": tags,
         "signs": signs,
+        # Which of them are the user's own pinned tags, so the client can mark
+        # them: they are a different KIND of suggestion (a standing decision
+        # about the feed, not something the publisher said about this post).
+        "pinned": pinned,
         "manual_tags": [normalize_tag_value(t) for t in manual_tags],
     })
 
@@ -25308,6 +25371,23 @@ def migrate_feed_host_rewrite(feed_url: str, host_map: dict[str, str]) -> dict:
                     stats["locked"] += 1
                     break
     return dict(stats)
+
+
+@app.post("/feeds/suggested-tags")
+def set_feed_suggested_tags_route(feed_url: str = Form(...), tags: str = Form("")):
+    """Pin tags to a feed so every one of its posts offers them as chips.
+
+    For a feed with a stable subject that ships no tags of its own — a guitar
+    blog does not tag posts "guitar" — where filing otherwise meant typing the
+    same word every time. A suggestion, never an automatic tag: a tag rule
+    already exists for people who want it applied without looking.
+    """
+    with get_reader() as reader:
+        if reader.get_feed(feed_url, None) is None:
+            return JSONResponse({"ok": False, "error": "Feed not found."}, status_code=404)
+    kept = set_feed_pinned_tags(feed_url, tags)
+    invalidate_meta_structure_cache()
+    return JSONResponse({"ok": True, "tags": kept})
 
 
 @app.post("/feeds/set-website")

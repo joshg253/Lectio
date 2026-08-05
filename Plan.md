@@ -186,6 +186,39 @@ into byte-identical output and reported a fix that never happened.
 re-renders the first time it is viewed — no mass delete of the 59k-row, 431 MB
 cache and no refetch storm.
 
+### Suggested tags per feed — SHIPPED 2026-08-05
+
+A feed with a stable subject publishes no tags saying so (guitar-pro's feed never
+tags a post "guitar"), so filing meant retyping the same word on every post.
+`feed_display_prefs.suggested_tags` holds a normalized, space-separated list per
+feed, edited in Feed Properties.
+
+They are **prepended to the chip list** rather than kept as a separate list —
+which is what makes the existing dedupe loop also the guarantee that a tag the
+publisher happens to ship appears exactly once, in the pinned position. They are
+also exempt from the 8-chip collapse: pinned precisely so they are always
+reachable, and a feed shipping 28 tags would otherwise bury them behind
+"+N more". A *suggestion*, never auto-applied — a tag rule already does that.
+
+Also: **picking a tag from the autocomplete now applies it.** The widget is
+shared with the rule form, where the tag is one field of a spec, so this is
+opt-in via `applyOnChoose` rather than default behaviour.
+
+### Transparent images on the dark theme — SHIPPED 2026-08-05
+
+Images keep their transparency (nothing is flattened at capture); the theme
+paints behind them via `--img-backdrop`. White in *both* themes: transparent
+article images are overwhelmingly black line art drawn for a light page, and an
+image that changed appearance when you toggled the theme would be worse than one
+that never does. Setting the variable to `transparent` restores the untouched
+look, with no re-fetch — which is the point of doing it in CSS rather than in the
+stored bytes.
+
+Deliberately NOT applied in Read Mode: that page is pure black-on-white by
+design, so transparent art already lands on white, and `#reader-columns *` forces
+`background: transparent !important` for e-ink contrast — a backdrop there would
+have to fight it for no gain.
+
 ### 0c. CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a

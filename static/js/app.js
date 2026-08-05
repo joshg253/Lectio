@@ -4306,6 +4306,51 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       }
     }
 
+    // Tags pinned to a feed, offered as chips on every one of its posts. Kept
+    // beside the alias editor because it is the same shape of control: a small
+    // free-text field on the feed, saved on its own.
+    function renderFeedPropSuggestedTags(feedUrl, tags) {
+      const input = document.getElementById('feed-prop-suggested-tags-input');
+      const save = document.getElementById('feed-prop-suggested-tags-save');
+      const status = document.getElementById('feed-prop-suggested-tags-status');
+      if (!input || !save) return;
+      input.value = (tags || []).join(' ');
+      save.dataset.feedUrl = feedUrl || '';
+      if (status) status.textContent = '';
+      if (typeof window.attachTagAutocomplete === 'function') {
+        window.attachTagAutocomplete(input, () => window.lectioTagNames || []);
+      }
+    }
+
+    async function submitFeedPropSuggestedTags() {
+      const input = document.getElementById('feed-prop-suggested-tags-input');
+      const save = document.getElementById('feed-prop-suggested-tags-save');
+      const status = document.getElementById('feed-prop-suggested-tags-status');
+      const feedUrl = save?.dataset.feedUrl || '';
+      if (!feedUrl || !input) return;
+      if (status) status.textContent = 'Saving…';
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, tags: input.value });
+        const resp = await fetch('/feeds/suggested-tags', { method: 'POST', body });
+        const json = await resp.json();
+        if (!json.ok) {
+          if (status) status.textContent = json.error || 'Could not save.';
+          return;
+        }
+        // Echo back what was KEPT — tags are normalized on write, so the field
+        // should show what will actually be offered rather than what was typed.
+        input.value = (json.tags || []).join(' ');
+        if (status) status.textContent = json.tags.length ? 'Saved.' : 'Cleared.';
+        // The open entry's chips were built from the old set.
+        const form = document.getElementById('entry-tags-form');
+        if (form) delete form.dataset.feedTagsRequested;
+        document.querySelector('.entry-tag-suggestions')?.remove();
+        if (typeof maybeInjectFeedTagChips === 'function') maybeInjectFeedTagChips();
+      } catch (err) {
+        if (status) status.textContent = `Error: ${err.message}`;
+      }
+    }
+
     function renderFeedPropAliases(feedUrl, rewrites) {
       const list = document.getElementById('feed-prop-alias-list');
       const empty = document.getElementById('feed-prop-alias-empty');
@@ -4404,6 +4449,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     document.getElementById('feed-prop-alias-add')?.addEventListener('click', (event) => {
       event.preventDefault();
       submitFeedPropAlias();
+    });
+    document.getElementById('feed-prop-suggested-tags-save')?.addEventListener('click', submitFeedPropSuggestedTags);
+    document.getElementById('feed-prop-suggested-tags-input')?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); submitFeedPropSuggestedTags(); }
     });
     document.getElementById('feed-prop-alias-input')?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
@@ -4533,6 +4582,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         }
         renderFeedPropAliases(feedUrl, data.url_rewrites || []);
         renderFeedPropHiddenTags(feedUrl, data.suppressed_tags || []);
+        renderFeedPropSuggestedTags(feedUrl, data.suggested_tags || []);
         setFeedPropText(feedPropXml, data.feed_url || feedUrl);
         if (feedPropXmlOpen) {
           const xu = (data.feed_url || feedUrl || '').trim();
@@ -13943,6 +13993,16 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         const caret = (before + tag).length + sep.length;
         input.setSelectionRange(caret, caret);
         close();
+        // Picking a suggestion IS the decision — on the per-entry tag field
+        // there is nothing left to confirm, so making the user then find and
+        // click Apply is pure ceremony. Opt-in via `opts.applyOnChoose`,
+        // because the same widget serves the rule form, where the tag is one
+        // field of a spec and applying would submit a half-built rule.
+        if (typeof o.applyOnChoose === 'function') {
+          try {
+            o.applyOnChoose(tag);
+          } catch (e) { /* never let this swallow the completion itself */ }
+        }
       };
       input.addEventListener('input', () => { active = -1; update(); });
       // stopImmediatePropagation, not just preventDefault: the rule form binds
@@ -13975,7 +14035,17 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       entryTagsForm = document.querySelector('.entry-tags-form');
       entryTagsInput = document.getElementById('entry-tags-input');
       entryTagsMergedInput = document.getElementById('entry-tags-input-merged');
-      if (entryTagsInput) attachTagAutocomplete(entryTagsInput, () => lectioTagNames);
+      if (entryTagsInput) {
+        attachTagAutocomplete(entryTagsInput, () => lectioTagNames, {
+          // Submit through the form's own handler so the optimistic chip
+          // update, the kept-state sync and the error path all stay in one
+          // place rather than being duplicated here.
+          applyOnChoose: () => {
+            const form = entryTagsInput.closest('form') || entryTagsForm;
+            if (form) form.requestSubmit();
+          },
+        });
+      }
     }
 
     function normalizeTagToken(token) {
@@ -14235,6 +14305,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         if ((nowForm.querySelector('input[name="entry_id"]')?.value || '') !== entryId) return;
         const manual = new Set(data.manual_tags || []);
         const signs = data.signs || {};
+        // The user's own pinned tags. Marked because they are a different KIND
+        // of suggestion — a standing decision about the feed, not something the
+        // publisher said about this post. The server already put them first and
+        // deduped them against the feed's own tags.
+        const pinned = new Set(data.pinned || []);
         const wrap = document.createElement('span');
         wrap.className = 'entry-tag-suggestions';
         wrap.setAttribute('aria-label', 'Feed tags — filter this feed');
@@ -14244,7 +14319,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         data.tags.forEach((tag, i) => {
           const chip = document.createElement('span');
           chip.className = 'entry-tag-chip suggestion feed-tag-filter-chip';
-          if (i >= COLLAPSE_AFTER) { chip.classList.add('is-extra-feed-tag'); chip.hidden = true; }
+          if (pinned.has(tag)) chip.classList.add('is-pinned-tag');
+          // A pinned tag is never collapsed: it is pinned precisely so it is
+          // always reachable, and a feed shipping 28 tags would otherwise hide
+          // the ones you chose behind "+N more".
+          if (i >= COLLAPSE_AFTER && !pinned.has(tag)) { chip.classList.add('is-extra-feed-tag'); chip.hidden = true; }
           if (!manual.has(tag)) {
             const add = document.createElement('button');
             add.type = 'button';
