@@ -8690,6 +8690,7 @@ _NEVER_ATTACHMENT_EXTS = frozenset({
 # reach an .html.
 _ATTACHMENT_EXT_RE = re.compile(r"^[a-z0-9]{1,8}$")
 _ATTACHMENT_PREFIX_RE = re.compile(r"^([a-z0-9]{2,8})\*$")
+_HREF_ATTR_RE = re.compile(r'href=[\'"]([^\'"]+)[\'"]', re.I)
 
 
 def _attachment_ext_matches(ext: str, patterns: list[str]) -> bool:
@@ -8733,6 +8734,70 @@ def normalize_attachment_exts(raw_value: str) -> list[str]:
         if value not in out:
             out.append(value)
     return out
+
+
+# Already captured as images by the archive, so offering them as "attachments"
+# would be redundant noise in the suggestion list.
+# NB: bare extensions, and deliberately NOT named _IMAGE_EXTS — that name is
+# already taken further down by a tuple of DOTTED suffixes for a different
+# check, and being defined later it would win at import time.
+_ARCHIVED_IMAGE_EXTS = frozenset({
+    "jpg", "jpeg", "png", "gif", "webp", "avif", "svg", "bmp", "ico",
+})
+# A link to a bare domain ("https://example.com") leaves the TLD looking like a
+# file extension. Nothing else distinguishes it from a real one.
+_TLD_LOOKALIKES = frozenset({
+    "com", "org", "net", "io", "co", "us", "uk", "eu", "de", "fr", "jp", "ru",
+    "tv", "me", "info", "biz", "app", "dev", "xyz",
+})
+
+
+def scan_feed_attachment_extensions(feed_url: str, limit: int = 10) -> list[dict]:
+    """File extensions this feed's posts actually link to, most common first.
+
+    The point is that the field stops guessing: a generic placeholder suggested
+    Guitar Pro formats to every feed in the library. Counted from the entries
+    already stored, so it costs no requests.
+
+    Images are excluded (the archive captures those anyway), as are page types
+    and the TLD lookalikes a bare-domain link leaves behind.
+    """
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    try:
+        with get_reader() as reader:
+            for entry in reader.get_entries(feed=feed_url):
+                content = entry.get_content(prefer_summary=False)
+                html_text = (content.value if content and content.value else "") or ""
+                if not html_text:
+                    html_text = str(getattr(entry, "summary", "") or "")
+                if not html_text:
+                    continue
+                for href in _HREF_ATTR_RE.findall(html_text):
+                    path = urlparse(href).path.lower()
+                    dot = path.rfind(".")
+                    if dot < 0:
+                        continue
+                    ext = path[dot + 1:]
+                    if not _ATTACHMENT_EXT_RE.match(ext):
+                        continue
+                    if (ext in _NEVER_ATTACHMENT_EXTS or ext in _ARCHIVED_IMAGE_EXTS
+                            or ext in _TLD_LOOKALIKES):
+                        continue
+                    counts[ext] += 1
+    except Exception:  # noqa: BLE001 — a suggestion is never worth an error
+        LOGGER.debug("attachment extension scan failed for %s", feed_url, exc_info=True)
+        return []
+    # Drop one-offs: a path fragment that merely looks like an extension
+    # ("…/music", "…/bulakhov") always appears once, while anything the feed
+    # genuinely publishes recurs. This is a suggestion list, so a rare real type
+    # costs nothing — it can still be typed.
+    return [
+        {"ext": ext, "count": n}
+        for ext, n in counts.most_common(limit * 2)
+        if n >= 2
+    ][:limit]
 
 
 def get_feed_attachment_exts(feed_url: str) -> list[str]:
@@ -25584,6 +25649,17 @@ def set_feed_suggested_tags_route(feed_url: str = Form(...), tags: str = Form(""
     kept = set_feed_pinned_tags(feed_url, tags)
     invalidate_meta_structure_cache()
     return JSONResponse({"ok": True, "tags": kept})
+
+
+@app.get("/feeds/attachment-candidates")
+def feed_attachment_candidates_route(feed_url: str = Query(...)):
+    """File types THIS feed actually links to, for the Keep-linked-files field.
+
+    The field used to carry a fixed example, which meant every feed in the
+    library was advised to keep Guitar Pro tabs. Counted from stored entries, so
+    it costs no requests.
+    """
+    return JSONResponse({"ok": True, "candidates": scan_feed_attachment_extensions(feed_url)})
 
 
 @app.post("/feeds/attachment-exts")

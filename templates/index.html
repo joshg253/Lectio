@@ -2739,10 +2739,14 @@
           <dt>Keep linked files</dt>
           <dd id="feed-prop-attachments-row">
             <input type="text" id="feed-prop-attachments-input" class="feed-prop-url-input"
-                   placeholder="e.g. gp* gtp pdf" autocomplete="off"
+                   placeholder="none — nothing kept" autocomplete="off"
                    aria-describedby="feed-prop-attachments-hint" />
             <button type="button" id="feed-prop-attachments-save" class="feed-prop-inline-btn feed-prop-inline-btn--primary">Save</button>
             <span id="feed-prop-attachments-status" class="feed-prop-inline-status"></span>
+            {# What THIS feed actually links to, counted from its stored posts —
+               the field used to carry a fixed example, which advised every feed
+               in the library to keep Guitar Pro tabs. #}
+            <div id="feed-prop-attachments-candidates" class="feed-prop-ext-candidates" hidden></div>
             <div id="feed-prop-attachments-hint" class="feed-prop-hint">Saved with the post when you star or tag it. <code>gp*</code> covers gp/gp3/gp5/gpx. Page types (html, php…) are always ignored, and there is no bare <code>*</code>.</div>
           </dd>
           {# Declared domain migrations. Without this the rules act invisibly —

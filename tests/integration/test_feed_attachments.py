@@ -181,3 +181,72 @@ def test_prefix_and_exact_patterns_mix():
     got = main.attachment_links_in_html(html, POST, exts)
 
     assert [u.split("/")[-1] for u in got] == ["a.gp5", "b.gtp", "c.pdf"]
+
+
+# --- suggesting what the feed actually links to ------------------------------
+
+
+def _seed_entry(entry_id: str, html: str) -> None:
+    with main.get_reader() as reader:
+        reader.add_entry({
+            "feed_url": FEED, "id": entry_id, "title": entry_id,
+            "link": POST, "content": [{"value": html, "type": "text/html"}],
+        })
+
+
+def test_scan_reports_what_the_feed_links(configured):
+    _seed_entry("a", '<a href="/x/song.gp">t</a><a href="/x/sheet.pdf">p</a>')
+    _seed_entry("b", '<a href="/y/other.gp">t</a>')
+    _seed_entry("c", '<a href="/z/third.gp">t</a><a href="/z/b.pdf">p</a>')
+
+    got = {r["ext"]: r["count"] for r in main.scan_feed_attachment_extensions(FEED)}
+
+    assert got == {"gp": 3, "pdf": 2}
+
+
+def test_images_are_not_suggested(configured):
+    """The archive captures those anyway — offering them is noise."""
+    for i in range(3):
+        _seed_entry(f"i{i}", '<a href="/a.png">x</a><a href="/b.jpg">y</a>')
+
+    assert main.scan_feed_attachment_extensions(FEED) == []
+
+
+def test_page_types_are_not_suggested(configured):
+    for i in range(3):
+        _seed_entry(f"p{i}", '<a href="/a.html">x</a><a href="/b.php">y</a>')
+
+    assert main.scan_feed_attachment_extensions(FEED) == []
+
+
+def test_bare_domain_links_do_not_look_like_extensions(configured):
+    """"https://example.com" leaves "com" looking like a file extension."""
+    for i in range(3):
+        _seed_entry(f"d{i}", '<a href="https://example.com">x</a>')
+
+    assert main.scan_feed_attachment_extensions(FEED) == []
+
+
+def test_one_off_path_fragments_are_dropped(configured):
+    """A path that merely looks like an extension ("…/bulakhov") appears once;
+    anything the feed genuinely publishes recurs."""
+    _seed_entry("one", '<a href="/artists/bulakhov">x</a><a href="/a.gp">t</a>')
+    _seed_entry("two", '<a href="/b.gp">t</a>')
+
+    got = [r["ext"] for r in main.scan_feed_attachment_extensions(FEED)]
+
+    assert got == ["gp"]
+
+
+def test_most_common_first(configured):
+    _seed_entry("m1", '<a href="/a.pdf">1</a>')
+    _seed_entry("m2", '<a href="/b.pdf">2</a>')
+    for i in range(4):
+        _seed_entry(f"g{i}", '<a href="/c.gp">t</a>')
+
+    assert [r["ext"] for r in main.scan_feed_attachment_extensions(FEED)] == ["gp", "pdf"]
+
+
+def test_a_feed_with_no_file_links_suggests_nothing(configured):
+    _seed_entry("plain", "<p>just words</p>")
+    assert main.scan_feed_attachment_extensions(FEED) == []

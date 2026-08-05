@@ -7891,3 +7891,31 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
 .entry-tag-chip.suggestion.is-pinned-tag .feed-tag-filter-name {
   font-weight: 600;
 }
+
+/* Extensions a feed actually links to, offered under the Keep-linked-files
+   field. A suggestion built from the feed's own posts, so the field stops
+   advising every feed in the library to keep Guitar Pro tabs. */
+.feed-prop-ext-candidates {
+  margin-top: 0.3rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: center;
+}
+.feed-prop-ext-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.feed-prop-ext-chip {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: inherit;
+  cursor: pointer;
+}
+.feed-prop-ext-chip:hover {
+  border-color: var(--accent);
+}

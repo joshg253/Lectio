@@ -247,6 +247,14 @@ Three decisions worth keeping:
 
 25 MB per file (`ATTACHMENT_MAX_BYTES`); the archive is a SQLite blob store.
 
+**The field suggests what the feed actually links**, counted from its stored
+entries (`scan_feed_attachment_extensions`) and rendered as clickable chips —
+guitar-pro's feed offers `gp (293) gpx (32) zip (28) pdf (10) mp3 (3)`. It
+replaced a fixed placeholder, which advised every feed in the library to keep
+Guitar Pro tabs. Images are excluded (the archive captures those anyway), as are
+page types, TLD lookalikes from bare-domain links, and one-off path fragments
+that merely look like extensions.
+
 **Not done: surfacing them in the entry pane.** They are captured and served
 from `/starred-asset/<hash>`, but nothing lists them yet — that is the next
 piece.

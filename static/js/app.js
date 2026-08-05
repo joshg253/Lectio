@@ -4316,6 +4316,52 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       input.value = (exts || []).join(' ');
       save.dataset.feedUrl = feedUrl || '';
       if (status) status.textContent = '';
+      loadFeedPropAttachmentCandidates(feedUrl);
+    }
+
+    // What this feed actually links to. Clicking a chip appends it, so the
+    // common case is picking from what is really there rather than guessing at
+    // extensions and hoping.
+    async function loadFeedPropAttachmentCandidates(feedUrl) {
+      const box = document.getElementById('feed-prop-attachments-candidates');
+      const input = document.getElementById('feed-prop-attachments-input');
+      if (!box || !input || !feedUrl) return;
+      box.hidden = true;
+      box.textContent = '';
+      let data;
+      try {
+        const qs = new URLSearchParams({ feed_url: feedUrl });
+        data = await (await fetch('/feeds/attachment-candidates?' + qs)).json();
+      } catch (e) {
+        return;   // a suggestion is never worth an error
+      }
+      const rows = (data && data.candidates) || [];
+      if (!rows.length) return;
+      const label = document.createElement('span');
+      label.className = 'feed-prop-ext-label';
+      label.textContent = 'This feed links: ';
+      box.appendChild(label);
+      for (const row of rows) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'feed-prop-ext-chip';
+        chip.textContent = `${row.ext} (${row.count})`;
+        chip.title = `Keep .${row.ext} files from this feed`;
+        chip.addEventListener('click', () => {
+          const have = input.value.split(/\s+/).filter(Boolean);
+          // Already covered by an exact entry or a prefix pattern? Then adding
+          // it again would just be a duplicate.
+          const covered = have.some((p) => p === row.ext
+            || (p.endsWith('*') && row.ext.startsWith(p.slice(0, -1))));
+          if (!covered) {
+            have.push(row.ext);
+            input.value = have.join(' ');
+          }
+          input.focus();
+        });
+        box.appendChild(chip);
+      }
+      box.hidden = false;
     }
 
     async function submitFeedPropAttachments() {
