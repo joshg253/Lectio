@@ -1142,6 +1142,19 @@ class StarredArchiveService:
         if is_animated:
             return raw_bytes, source_content_type or "image/gif", img.width, img.height
 
+        # Normalize BEFORE resizing: LANCZOS on a palette image resamples palette
+        # indices rather than colours. WebP carries alpha, so transparency is
+        # kept rather than flattened.
+        #
+        # `"A" in img.mode` misses the common case — a palette PNG's mode is
+        # plain "P" and its transparency lives in img.info, so line art and
+        # logos saved that way converted to RGB and kept whatever sat under the
+        # alpha, which is usually black. That is the same defect the /thumb path
+        # had, where it turned xkcd/what-if illustrations into black rectangles.
+        if img.mode not in ("RGB", "RGBA"):
+            _has_alpha = "A" in img.mode or "transparency" in img.info
+            img = img.convert("RGBA" if _has_alpha else "RGB")
+
         width, height = img.width, img.height
         longest = max(width, height)
         if longest > ARCHIVE_IMAGE_MAX_DIM:
@@ -1153,8 +1166,6 @@ class StarredArchiveService:
         # WebP supports both alpha and non-alpha; consistent format simplifies
         # serving later. Quality 80 is visibly close to source for most photos
         # while compressing far better than JPEG 85.
-        if img.mode not in ("RGB", "RGBA"):
-            img = img.convert("RGBA" if "A" in img.mode else "RGB")
         buf = io.BytesIO()
         save_kwargs: dict[str, Any] = {"format": "WEBP", "quality": ARCHIVE_IMAGE_WEBP_QUALITY, "method": 4}
         try:

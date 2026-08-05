@@ -143,6 +143,33 @@ first-capture date needs the CDX API sorted ascending; probed 2026-08-04 and it
 worked (what-if/105 → 2014-07-19) but timed out on 2 of 3 tries. Worth revisiting
 only if a cluster shows up that has no other date source.
 
+### Transparent images rendered as black boxes — FIXED 2026-08-04
+
+Reported on what-if.xkcd posts. `Image.convert("RGB")` keeps whatever RGB sits
+*under* the alpha, and for line art that is black — so a transparent PNG became a
+solid black rectangle. Measured on `what-if.xkcd.com/imgs/a/138`: mean luminance
+**33** the naive way against **235** composited onto white.
+
+Two paths had it, in two disguises:
+
+- **`/thumb`** called `.convert("RGB")` outright. Now composites onto white
+  first. White rather than a theme colour because the output is a JPEG cached
+  and shared across users and themes, so a background has to be chosen once —
+  and this kind of image (diagrams, logos, line art) is drawn for a light page.
+  The zoom<1 letterbox canvas follows the same logic: white when the source had
+  alpha, black (unchanged) for photos.
+- **The starred archive** tested `"A" in img.mode`, which is False for a
+  *palette* PNG — mode `"P"`, transparency in `img.info` — so precisely the
+  images this breaks were the ones it flattened. WebP carries alpha, so it now
+  keeps it. Normalization also moved ahead of the resize, since LANCZOS on a
+  palette image resamples palette indices rather than colours.
+
+**Cached thumbnails were already black**, so the fix needed a cache bust.
+`_THUMB_RENDER_VERSION` joins the cache key (the same idiom as the existing
+`_p2` suffix), so old entries are never looked up again and each thumbnail
+re-renders the first time it is viewed — no mass delete of the 59k-row, 431 MB
+cache and no refetch storm.
+
 ### 0c. CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a

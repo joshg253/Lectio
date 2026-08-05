@@ -20246,6 +20246,14 @@ def debug_toggle_feed_bypass(request: Request, feed_url: str = Form(...)):
 # Thumbnail dimensions: 2× the CSS slot (4.5rem ≈ 72px, tile height ≈ 84px) for retina.
 _THUMB_W = 144
 _THUMB_H = 168
+# Bump when the RENDERING changes in a way that makes already-cached thumbnails
+# wrong. It is part of the cache key, so old entries are simply never looked up
+# again and each thumbnail re-renders the first time it is actually viewed —
+# no mass delete, and no refetch storm across a 59k-row cache.
+#   a1 — flatten transparency onto white instead of `.convert("RGB")`, which
+#        kept the RGB under the alpha and turned transparent line art (xkcd /
+#        what-if illustrations, logos, diagrams) into black rectangles.
+_THUMB_RENDER_VERSION = "a1"
 
 # Cover-mode crop: map crop value → (horizontal fraction, vertical fraction), 0=start 1=end.
 _THUMB_COVER_POS: dict[str, tuple[float, float]] = {
@@ -20344,7 +20352,9 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
         _crop_cache_key = f"{crop}_z{_fill_zoom:.2f}" + ("_p2" if _fill_zoom < 1.0 else "")
     else:
         _crop_cache_key = crop
-    cache_key = hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}|{_crop_cache_key}".encode()).hexdigest()
+    cache_key = hashlib.sha256(
+        f"{url}|{_THUMB_W}|{_THUMB_H}|{_crop_cache_key}|{_THUMB_RENDER_VERSION}".encode()
+    ).hexdigest()
     cached_headers = {"Cache-Control": "public, max-age=604800, immutable"}
 
     try:
@@ -20427,7 +20437,23 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
             return Response(status_code=502)
 
     try:
-        img = _PILImage.open(io.BytesIO(raw)).convert("RGB")
+        img = _PILImage.open(io.BytesIO(raw))
+        # Flatten transparency onto WHITE before anything else. `.convert("RGB")`
+        # alone keeps whatever RGB sits *under* the alpha, which is usually
+        # black — so a transparent line-art PNG (xkcd/what-if illustrations,
+        # logos, diagrams) became a black rectangle. Measured on
+        # what-if.xkcd.com/imgs/a/138: mean luminance 33 the naive way against
+        # 235 composited. The output is JPEG and shared across users and themes,
+        # so a background has to be picked once; white is what this kind of
+        # image is drawn for.
+        _had_alpha = img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info
+        if _had_alpha:
+            _rgba = img.convert("RGBA")
+            _flat = _PILImage.new("RGB", _rgba.size, (255, 255, 255))
+            _flat.paste(_rgba, mask=_rgba.split()[3])
+            img = _flat
+        else:
+            img = img.convert("RGB")
         iw, ih = img.size
         if crop == "smart":
             # Content-aware crop: use SmartCrop to find the most interesting
@@ -20502,8 +20528,15 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
                 top = round(ey * v_frac)
                 img = img.crop((left, top, left + _THUMB_W, top + _THUMB_H))
             else:
-                # Zoom < 1.0: image smaller than frame — paste on black canvas at anchor position.
-                canvas = _PILImage.new("RGB", (_THUMB_W, _THUMB_H), (0, 0, 0))
+                # Zoom < 1.0: image smaller than frame — paste on a canvas at the
+                # anchor position. Black letterboxes a photo; an image that came
+                # with transparency was drawn to sit on a light page, and framing
+                # it in black reintroduces exactly the black-box look the flatten
+                # above just fixed.
+                canvas = _PILImage.new(
+                    "RGB", (_THUMB_W, _THUMB_H),
+                    (255, 255, 255) if _had_alpha else (0, 0, 0),
+                )
                 h_frac, v_frac = _THUMB_COVER_POS.get(crop, (0.5, 0.5))
                 paste_left = round((_THUMB_W - new_w) * h_frac)
                 paste_top = round((_THUMB_H - new_h) * v_frac)
