@@ -13604,6 +13604,32 @@ def _norm_media_link(url: str | None) -> str:
 _HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 
 
+def _strip_play_button_glyphs(content_html: str) -> str:
+    """Remove a facade's standalone play-button glyph.
+
+    A "video facade" is a thumbnail plus a play triangle the publisher positions
+    ON TOP of it with CSS (guitarworld ships
+    ``<svg class="play-button" width="234.67">`` next to the thumbnail). The
+    sanitizer drops that positioning, so the glyph stops being an overlay and
+    becomes a block element in the flow — rendering as a huge logo above the
+    video. Overlaid or not, it is decoration: the recovered embed has a real
+    play button of its own.
+    """
+    if "play-button" not in (content_html or ""):
+        return content_html
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(content_html, "html.parser")
+    removed = False
+    for svg in soup.find_all("svg"):
+        classes = svg.get("class") or []
+        if isinstance(classes, str):
+            classes = classes.split()
+        if any("play-button" in str(c) for c in classes):
+            svg.decompose()
+            removed = True
+    return str(soup) if removed else content_html
+
+
 def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str]] | list[tuple[str, str]]) -> str:
     """Insert recovered embeds where they belong, not just at the bottom.
 
@@ -13743,7 +13769,7 @@ def _inject_recovered_source_embeds(content_html, entry):
     items = _extract_source_embed_iframes(raw_html, body)
     if not items:
         return content_html
-    return _place_recovered_embeds(body, items)
+    return _place_recovered_embeds(_strip_play_button_glyphs(body), items)
 
 
 def _inject_source_gallery(content_html, entry, lead_image_url):
@@ -14660,8 +14686,14 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # chips are feed-filter controls ([- tag +] toggling the feed's
         # tag_filter rule), so all of the entry's feed tags show — including
         # ones already applied as manual tags.
+        # The user's pinned tags first, exactly as /entries/feed-tags does it.
+        # Both paths must agree: this one renders with the page, the other
+        # injects after a tag is applied and the pane re-renders — and when only
+        # one of them knew about pinned tags, applying one suggestion made the
+        # rest disappear.
+        entry_pinned_tags = get_feed_pinned_tags(str(entry.feed_url))
         feed_tag_suggestions = []
-        for raw_tag in raw_feed_tags:
+        for raw_tag in [*entry_pinned_tags, *raw_feed_tags]:
             normalized = normalize_tag_value(raw_tag)
             if normalized and normalized not in feed_tag_suggestions:
                 feed_tag_suggestions.append(normalized)
@@ -15044,6 +15076,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "kept": bool(is_saved or manual_tags),
             "manual_tags_text": " ".join(manual_tags),
             "feed_tag_suggestions": feed_tag_suggestions,
+            "pinned_feed_tags": entry_pinned_tags,
             "feed_tag_chips_collapsed": FEED_TAG_CHIPS_COLLAPSED,
             "feed_tag_filter_signs": feed_tag_filter_signs,
             "author_filter_token": _author_token,
