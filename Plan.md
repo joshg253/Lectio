@@ -164,7 +164,23 @@ Two paths had it, in two disguises:
   keeps it. Normalization also moved ahead of the resize, since LANCZOS on a
   palette image resamples palette indices rather than colours.
 
-**Cached thumbnails were already black**, so the fix needed a cache bust.
+**Already-archived assets were already black, and the code fix cannot reach
+them** — the alpha is gone from the stored bytes, so only a re-fetch restores it.
+This is what the entry body actually serves: a saved entry's images are rewritten
+to `/starred-asset/<hash>` at render time, so the body shows the stored copy, not
+the live image. `scripts/repair_flattened_archive_images.py` re-fetches and
+re-encodes. **Applied 2026-08-04: 143 what-if assets restored.**
+
+Candidates are found from the **WebP header**, not by decoding — an asset that
+declares no alpha whose source URL is a format that *can* carry it is a suspect,
+which is a 32-byte read per asset instead of decoding 25k images (a decode scan
+did not finish in ten minutes). A candidate is only rewritten if the re-fetched
+source actually has a *meaningful* alpha channel: xkcd's book covers have an
+alpha channel that is entirely opaque and artwork that is simply dark (mean
+luminance 38 on white, from the publisher), and an earlier pass "repaired" those
+into byte-identical output and reported a fix that never happened.
+
+**Cached thumbnails were also already black**, so the fix needed a cache bust.
 `_THUMB_RENDER_VERSION` joins the cache key (the same idiom as the existing
 `_p2` suffix), so old entries are never looked up again and each thumbnail
 re-renders the first time it is viewed — no mass delete of the 59k-row, 431 MB
