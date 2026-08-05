@@ -10183,14 +10183,53 @@ def _enclosure_label(enc_url: str, enc_type: str) -> str:
     return enc_type or "attachment"
 
 
-def _render_entry_attachments(entry, audio_url: str | None) -> str:
+def _attachment_list_item(source_url: str, label: str, meta: str,
+                          asset_map: dict[str, str]) -> str:
+    """One <li>, pointing at the local copy when there is one.
+
+    A saved post whose files still 404 at the publisher has kept the wrong half,
+    so the archived copy wins whenever it exists; the badge says which you are
+    getting, because "saved" is the reason the link still works.
+    """
+    asset_hash = asset_map.get(source_url)
+    if asset_hash:
+        href = html.escape(f"{STARRED_ASSET_URL_PREFIX}{asset_hash}", quote=True)
+        badge = (' <span class="entry-attachment-saved" '
+                 'style="color:var(--muted,#888);font-size:0.85em;">saved</span>')
+    else:
+        href = html.escape(source_url, quote=True)
+        badge = ""
+    return (f'<li><a href="{href}" target="_blank" rel="noopener noreferrer" download>'
+            f'{label}</a>{meta}{badge}</li>')
+
+
+def _render_entry_attachments(entry, audio_url: str | None,
+                              asset_map: dict[str, str] | None = None) -> str:
     """Render a footer "Attachments" section for non-audio enclosures.
 
     Magazine/document feeds (e.g. Full Circle) attach the issue PDF/EPUB as
     ``<enclosure>`` elements that never appear in the article body. The audio
     enclosure (if any) is already surfaced as a player, so it's skipped here to
     avoid a duplicate link.
+
+    *asset_map* (source_url -> hash) is the entry's archived assets. Anything in
+    it is served from the local copy instead of the publisher's URL, so a saved
+    post's files still open after the site goes down — the whole point of
+    keeping them. Files captured from BODY LINKS (the per-feed extension list)
+    are appended to the same list rather than getting a section of their own:
+    from the reader's side they are the same thing, "files that came with this
+    post", and the difference is only in how Lectio found them.
     """
+    if asset_map is None:
+        # Fetched here rather than threaded through: this renderer is called
+        # from a path that has no map in hand, and the lookup is one indexed
+        # query on the entry's own key.
+        try:
+            asset_map = starred_archive_service.get_entry_asset_map(
+                str(entry.feed_url), str(entry.id))
+        except Exception:  # noqa: BLE001 — falls back to publisher URLs
+            asset_map = {}
+    asset_map = asset_map or {}
     seen: set[str] = set()
     items: list[str] = []
     for enc in (getattr(entry, "enclosures", None) or []):
@@ -10212,11 +10251,18 @@ def _render_entry_attachments(entry, audio_url: str | None) -> str:
         label = html.escape(_enclosure_label(enc_url, enc_type))
         size = _format_enclosure_size(getattr(enc, "length", None))
         meta = f" <span style=\"color:var(--muted,#888);\">({size})</span>" if size else ""
-        safe_url = html.escape(enc_url, quote=True)
-        items.append(
-            f'<li><a href="{safe_url}" target="_blank" rel="noopener noreferrer" download>'
-            f'{label}</a>{meta}</li>'
-        )
+        items.append(_attachment_list_item(enc_url, label, meta, asset_map))
+
+    # Files captured from body links, appended to the same list.
+    for source_url in asset_map:
+        if source_url in seen or not source_url:
+            continue
+        if _url_has_image_ext(source_url) or _url_has_audio_ext(source_url):
+            continue        # images render inline; audio has its own player
+        seen.add(source_url)
+        items.append(_attachment_list_item(
+            source_url, html.escape(_enclosure_label(source_url, "")), "", asset_map))
+
     if not items:
         return ""
     return (

@@ -50,6 +50,8 @@ ARCHIVE_WORKER_QUIET_INTERVAL_S = 30.0  # back off when nothing pending
 
 _IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
 _SRC_ATTR_RE = re.compile(r'\bsrc\s*=\s*(?:"([^"]+)"|\'([^\']+)\')', re.IGNORECASE)
+_A_TAG_RE = re.compile(r"<a\b[^>]*>", re.IGNORECASE)
+_HREF_ATTR_ANY_RE = re.compile(r'\bhref\s*=\s*(?:"([^"]*)"|\'([^\']*)\')', re.IGNORECASE)
 _HREF_IMG_RE = re.compile(
     r'<a\b[^>]*\bhref\s*=\s*(?:"([^"]+\.(?:jpe?g|png|webp|gif|avif))"|\'([^\']+\.(?:jpe?g|png|webp|gif|avif))\')',
     re.IGNORECASE,
@@ -971,6 +973,23 @@ class StarredArchiveService:
         for url in image_urls:
             self._archive_asset(feed_url, entry_id, url)
 
+        # 4a. Enclosures — the publisher DECLARING that a file belongs to this
+        #     post (Standard Ebooks attaches the epub, magazine feeds the issue
+        #     PDF). That is a stronger claim than a link in the body, so these
+        #     are kept unconditionally rather than behind the per-feed extension
+        #     list. Audio is skipped: podcast enclosures are large and stream
+        #     fine, and images are already collected above.
+        for enc in (getattr(entry, "enclosures", None) or []):
+            enc_url = str(getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
+            if not enc_url:
+                continue
+            enc_type = str(getattr(enc, "type", None) or "").lower()
+            if enc_type.startswith(("audio/", "image/")):
+                continue
+            if enc_url in image_urls:
+                continue
+            self._archive_asset(feed_url, entry_id, enc_url, max_bytes=ATTACHMENT_MAX_BYTES)
+
         # 4b. Linked FILES this feed keeps — guitar-pro's posts link .gp tabs
         #     and .pdf lyric sheets that disappear along with the post. Reuses
         #     _archive_asset, which already stores non-image bytes untouched and
@@ -1210,10 +1229,15 @@ class StarredArchiveService:
     # ------------------------------------------------------------------
 
     def rewrite_html_assets(self, html_text: str, asset_map: dict[str, str], asset_url_prefix: str) -> str:
-        """Replace `<img src=...>` URLs with archive-served URLs when captured.
+        """Point `<img src>` and `<a href>` at the archived copy when there is one.
 
         `asset_url_prefix` is e.g. "/starred-asset/"; we append the asset hash.
         Unknown URLs are left untouched (still serve from origin while live).
+
+        Links matter as much as images now that files are captured: a saved post
+        whose "download the tab" link still points at a dead publisher has kept
+        the wrong half. Only URLs actually in the map are touched, so this can
+        only ever redirect a link to a file we hold.
         """
         if not html_text or not asset_map:
             return html_text
@@ -1230,4 +1254,16 @@ class StarredArchiveService:
             replacement = f'src="{asset_url_prefix}{asset_hash}"'
             return _SRC_ATTR_RE.sub(replacement, tag, count=1)
 
-        return _IMG_TAG_RE.sub(_rewrite_img, html_text)
+        def _rewrite_anchor(m: re.Match) -> str:
+            tag = m.group(0)
+            href_match = _HREF_ATTR_ANY_RE.search(tag)
+            if not href_match:
+                return tag
+            href = (href_match.group(1) or href_match.group(2) or "").strip()
+            asset_hash = asset_map.get(href)
+            if not asset_hash:
+                return tag
+            return _HREF_ATTR_ANY_RE.sub(f'href="{asset_url_prefix}{asset_hash}"', tag, count=1)
+
+        html_text = _IMG_TAG_RE.sub(_rewrite_img, html_text)
+        return _A_TAG_RE.sub(_rewrite_anchor, html_text)

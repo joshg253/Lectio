@@ -255,9 +255,19 @@ Guitar Pro tabs. Images are excluded (the archive captures those anyway), as are
 page types, TLD lookalikes from bare-domain links, and one-off path fragments
 that merely look like extensions.
 
-**Not done: surfacing them in the entry pane.** They are captured and served
-from `/starred-asset/<hash>`, but nothing lists them yet — that is the next
-piece.
+**Surfaced in the existing Attachments footer**, not a section of their own:
+from the reader's side an enclosure and a captured body link are the same thing
+("files that came with this post") and differ only in how Lectio found them.
+Anything archived is served from `/starred-asset/<hash>` with a "saved" badge,
+and `rewrite_html_assets` now rewires `<a href>` as well as `<img src>` so the
+in-body download link points at the local copy too — a saved post whose "get the
+tab" link still points at a dead publisher has kept the wrong half.
+
+**Enclosures are captured unconditionally on star/tag**, without the per-feed
+extension list: an `<enclosure>` is the publisher *declaring* that a file
+belongs to the post (Standard Ebooks attaches the epub), which is a stronger
+claim than a link in the body. Audio is skipped — podcast enclosures are large
+and stream fine — and images are already captured as images.
 
 ### 0c. CodeQL board triage
 
