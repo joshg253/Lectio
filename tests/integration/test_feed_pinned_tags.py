@@ -109,3 +109,49 @@ def test_pinned_tags_come_first_and_only_once(configured, monkeypatch):
     assert tags[:2] == ["guitar", "bass"], "pinned tags not offered first"
     assert tags.count("guitar") == 1, "a tag the publisher also ships was shown twice"
     assert tags == ["guitar", "bass", "lessons", "review"]
+
+
+# --- how pinned tags differ from the publisher's own -------------------------
+
+
+def _suggestions(publisher: list[str], pinned: str, manual: list[str]):
+    """Mirrors the shared build in both chip paths."""
+    main.set_feed_pinned_tags(FEED, pinned)
+    pinned_list = main.get_feed_pinned_tags(FEED)
+    publisher_norm = {main.normalize_tag_value(t) for t in publisher}
+    pinned_only = [t for t in pinned_list if t not in publisher_norm]
+    manual_norm = {main.normalize_tag_value(t) for t in manual}
+    out: list[str] = []
+    for raw in [*pinned_list, *publisher]:
+        n = main.normalize_tag_value(raw)
+        if not n or n in out:
+            continue
+        if n in pinned_only and n in manual_norm:
+            continue
+        out.append(n)
+    return out, pinned_only
+
+
+def test_applied_pinned_tag_stops_being_suggested(configured):
+    """Once it is on the post it is shown as a real tag chip — suggesting it
+    again is noise."""
+    tags, _ = _suggestions(publisher=["lessons"], pinned="guitar bass", manual=["guitar"])
+    assert "guitar" not in tags
+    assert tags == ["bass", "lessons"]
+
+
+def test_an_applied_publisher_tag_still_shows(configured):
+    """Its chip is a FILTER control, not just a suggestion, so it stays."""
+    tags, _ = _suggestions(publisher=["lessons"], pinned="guitar", manual=["lessons"])
+    assert "lessons" in tags
+
+
+def test_pinned_only_tags_are_identified(configured):
+    """These are the ones that get no filter arrows."""
+    _, pinned_only = _suggestions(publisher=["lessons", "guitar"], pinned="guitar bass", manual=[])
+    assert pinned_only == ["bass"], "a tag the publisher also ships is not pinned-only"
+
+
+def test_a_pinned_tag_the_publisher_also_ships_keeps_its_arrows(configured):
+    _, pinned_only = _suggestions(publisher=["guitar"], pinned="guitar", manual=[])
+    assert "guitar" not in pinned_only

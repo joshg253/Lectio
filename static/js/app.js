@@ -4331,8 +4331,21 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       if (status) status.textContent = 'Saving…';
       try {
         const body = new URLSearchParams({ feed_url: feedUrl, tags: input.value });
-        const resp = await fetch('/feeds/suggested-tags', { method: 'POST', body });
-        const json = await resp.json();
+        const resp = await fetch('/feeds/suggested-tags', {
+          method: 'POST', body, credentials: 'same-origin',
+        });
+        // Read as text and parse ourselves: a bare resp.json() failure reports
+        // only "unexpected character at position N", which says nothing about
+        // WHAT came back. Showing the start of the body turns an opaque parse
+        // error into something diagnosable.
+        const raw = await resp.text();
+        let json;
+        try {
+          json = JSON.parse(raw);
+        } catch (e) {
+          if (status) status.textContent = `Server sent ${resp.status}: ${raw.slice(0, 80)}`;
+          return;
+        }
         if (!json.ok) {
           if (status) status.textContent = json.error || 'Could not save.';
           return;
@@ -14310,6 +14323,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         // publisher said about this post. The server already put them first and
         // deduped them against the feed's own tags.
         const pinned = new Set(data.pinned || []);
+        // Pinned tags the publisher does NOT also ship: no filter arrows, since
+        // those toggle a rule keyed on the publisher's own tags and could never
+        // match. The server already dropped the ones already applied.
+        const pinnedOnly = new Set(data.pinned_only || []);
         const wrap = document.createElement('span');
         wrap.className = 'entry-tag-suggestions';
         wrap.setAttribute('aria-label', 'Feed tags — filter this feed');
@@ -14339,7 +14356,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           name.className = 'feed-tag-filter-name';
           name.textContent = tag;
           chip.appendChild(name);
-          for (const [sign, cls, glyph, verb] of [['+', 'include', '▲', 'good tag — rescues'], ['-', 'exclude', '▼', 'drops']]) {
+          for (const [sign, cls, glyph, verb] of (pinnedOnly.has(tag) ? [] : [['+', 'include', '▲', 'good tag — rescues'], ['-', 'exclude', '▼', 'drops']])) {
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.className = `feed-tag-filter-sign ${cls}` + (signs[tag] === sign ? ' active' : '');

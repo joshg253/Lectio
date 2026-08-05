@@ -14692,11 +14692,27 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # one of them knew about pinned tags, applying one suggestion made the
         # rest disappear.
         entry_pinned_tags = get_feed_pinned_tags(str(entry.feed_url))
+        _publisher_tags = {
+            n for n in (normalize_tag_value(t) for t in raw_feed_tags) if n
+        }
+        # A pinned tag the publisher does NOT also ship gets no filter arrows:
+        # they toggle a feed tag_filter rule keyed on the publisher's tags, and
+        # filtering on a word this feed never publishes does nothing. One the
+        # publisher does ship is an ordinary feed tag that happens to be pinned,
+        # so it keeps them.
+        pinned_only_tags = [t for t in entry_pinned_tags if t not in _publisher_tags]
+        _manual_now = {normalize_tag_value(t) for t in (manual_tags or [])}
         feed_tag_suggestions = []
         for raw_tag in [*entry_pinned_tags, *raw_feed_tags]:
             normalized = normalize_tag_value(raw_tag)
-            if normalized and normalized not in feed_tag_suggestions:
-                feed_tag_suggestions.append(normalized)
+            if not normalized or normalized in feed_tag_suggestions:
+                continue
+            # Once a pinned-only tag is applied there is nothing left to suggest
+            # — the tag is already on the post and shown as a real tag chip. A
+            # publisher tag still shows, because its chip is a filter control.
+            if normalized in pinned_only_tags and normalized in _manual_now:
+                continue
+            feed_tag_suggestions.append(normalized)
         # Current +/- state of the feed's tag_filter rule, so active signs render lit.
         feed_tag_filter_signs: dict[str, str] = {}
         _author_token = author_filter_token(getattr(entry, "authors_str", None))
@@ -15077,6 +15093,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "manual_tags_text": " ".join(manual_tags),
             "feed_tag_suggestions": feed_tag_suggestions,
             "pinned_feed_tags": entry_pinned_tags,
+            "pinned_only_feed_tags": pinned_only_tags,
             "feed_tag_chips_collapsed": FEED_TAG_CHIPS_COLLAPSED,
             "feed_tag_filter_signs": feed_tag_filter_signs,
             "author_filter_token": _author_token,
@@ -21932,11 +21949,20 @@ def entry_feed_tags_route(
     # dedupe below is also what guarantees "never show a chip twice": a pinned
     # tag the publisher happens to ship too appears once, in the pinned position.
     pinned = get_feed_pinned_tags(feed_url)
+    _publisher = {n for n in (normalize_tag_value(t) for t in raw_tags) if n}
+    # See the entry-pane build for why these two lists exist: a pinned tag the
+    # publisher never ships gets no filter arrows, and disappears from the
+    # suggestions once it has actually been applied.
+    pinned_only = [t for t in pinned if t not in _publisher]
+    _manual_now = {normalize_tag_value(t) for t in manual_tags}
     tags: list[str] = []
     for raw_tag in [*pinned, *raw_tags]:
         normalized = normalize_tag_value(raw_tag)
-        if normalized and normalized not in tags:
-            tags.append(normalized)
+        if not normalized or normalized in tags:
+            continue
+        if normalized in pinned_only and normalized in _manual_now:
+            continue
+        tags.append(normalized)
 
     signs: dict[str, str] = {}
     if tags:
@@ -21954,6 +21980,7 @@ def entry_feed_tags_route(
         # them: they are a different KIND of suggestion (a standing decision
         # about the feed, not something the publisher said about this post).
         "pinned": pinned,
+        "pinned_only": pinned_only,
         "manual_tags": [normalize_tag_value(t) for t in manual_tags],
     })
 
