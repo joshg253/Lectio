@@ -1,0 +1,139 @@
+"""Keeping the files a post links to — guitar-pro's .gp tabs and .pdf sheets.
+
+Two rules shape the whole feature: page extensions are never attachments, and
+there is no wildcard. The extension list IS the safeguard that keeps this a
+capture of named file types rather than a crawl of every link on the page.
+"""
+from __future__ import annotations
+
+import pytest
+
+import main
+from services import tenancy
+
+FEED = "https://blog.guitar-pro.com/feed/"
+POST = "https://blog.guitar-pro.com/2018/10/free-tablatures/"
+
+
+@pytest.fixture
+def configured(tmp_path):
+    saved = tenancy._layout
+    main.close_thread_db_pools()
+    tenancy.configure(
+        data_dir=tmp_path,
+        legacy_reader=tmp_path / "reader.sqlite",
+        legacy_meta=tmp_path / "meta.sqlite3",
+        legacy_starred=tmp_path / "starred.sqlite",
+    )
+    main.ensure_meta_schema()
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, exist_ok=True)
+    try:
+        yield
+    finally:
+        main.close_thread_db_pools()
+        tenancy._layout = saved
+
+
+# --- the extension list ------------------------------------------------------
+
+
+def test_extensions_are_normalized():
+    assert main.normalize_attachment_exts(".GP, gp5  pdf") == ["gp", "gp5", "pdf"]
+
+
+@pytest.mark.parametrize("raw", ["html", "htm", "php", "aspx", "jsp", "cgi", "xhtml"])
+def test_page_types_are_never_attachments(raw):
+    """Following these would make it a crawler, not a capture."""
+    assert main.normalize_attachment_exts(raw) == []
+
+
+def test_page_types_are_dropped_not_fatal():
+    """Typing "pdf html" means the pdf; failing the save over the html helps
+    nobody."""
+    assert main.normalize_attachment_exts("pdf html gp") == ["pdf", "gp"]
+
+
+@pytest.mark.parametrize("raw", ["*", "*.*", ".*", "**"])
+def test_there_is_no_wildcard(raw):
+    assert main.normalize_attachment_exts(raw) == []
+
+
+def test_junk_is_ignored():
+    assert main.normalize_attachment_exts("!! .. -- 'x'") == []
+
+
+def test_round_trip(configured):
+    assert main.set_feed_attachment_exts(FEED, "gp gp5 pdf") == ["gp", "gp5", "pdf"]
+    assert main.get_feed_attachment_exts(FEED) == ["gp", "gp5", "pdf"]
+
+
+def test_off_by_default(configured):
+    assert main.get_feed_attachment_exts(FEED) == []
+
+
+def test_clearing(configured):
+    main.set_feed_attachment_exts(FEED, "gp")
+    assert main.set_feed_attachment_exts(FEED, "") == []
+    assert main.get_feed_attachment_exts(FEED) == []
+
+
+# --- finding the links -------------------------------------------------------
+
+
+HTML = """
+<a href="/wp-content/uploads/My_Life.gp">tab</a>
+<a href="https://assets-wp.guitar-pro.eu/uploads/Lyrics.pdf">sheet</a>
+<a href="https://blog.guitar-pro.com/category/lessons/">more lessons</a>
+<a href="/index.php">home</a>
+<a href="/post.php?download=song.gp">looks like a file</a>
+<a href="mailto:hi@example.test">mail</a>
+"""
+
+
+def test_only_the_wanted_extensions_are_found():
+    got = main.attachment_links_in_html(HTML, POST, ["gp", "pdf"])
+    assert got == [
+        "https://blog.guitar-pro.com/wp-content/uploads/My_Life.gp",
+        "https://assets-wp.guitar-pro.eu/uploads/Lyrics.pdf",
+    ]
+
+
+def test_a_different_host_is_allowed():
+    """The whole reason a same-host rule was rejected: guitar-pro serves tabs
+    from assets-wp.guitar-pro.eu while the post lives on blog.guitar-pro.com."""
+    got = main.attachment_links_in_html(HTML, POST, ["pdf"])
+    assert got == ["https://assets-wp.guitar-pro.eu/uploads/Lyrics.pdf"]
+
+
+def test_a_query_string_does_not_make_a_page_a_file():
+    """/post.php?download=song.gp is a page. Matching on the PATH is what keeps
+    this honest."""
+    assert "post.php" not in " ".join(main.attachment_links_in_html(HTML, POST, ["gp"]))
+
+
+def test_nothing_is_found_when_the_feature_is_off():
+    assert main.attachment_links_in_html(HTML, POST, []) == []
+
+
+def test_page_extensions_cannot_be_forced_through_the_finder():
+    """Even if a stored value somehow contained one, the finder refuses it."""
+    assert main.attachment_links_in_html(HTML, POST, ["php"]) == []
+
+
+def test_duplicate_links_are_returned_once():
+    html = '<a href="/a.pdf">1</a><a href="/a.pdf">2</a>'
+    assert main.attachment_links_in_html(html, POST, ["pdf"]) == [
+        "https://blog.guitar-pro.com/a.pdf"]
+
+
+def test_relative_links_resolve_against_the_post():
+    """POST ends in a slash, so it is a directory and a bare filename resolves
+    inside it."""
+    assert main.attachment_links_in_html('<a href="song.gp">x</a>', POST, ["gp"]) == [
+        "https://blog.guitar-pro.com/2018/10/free-tablatures/song.gp"]
+
+
+def test_root_relative_links_resolve_against_the_host():
+    assert main.attachment_links_in_html('<a href="/files/song.gp">x</a>', POST, ["gp"]) == [
+        "https://blog.guitar-pro.com/files/song.gp"]

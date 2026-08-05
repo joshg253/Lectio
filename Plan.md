@@ -219,6 +219,37 @@ design, so transparent art already lands on white, and `#reader-columns *` force
 `background: transparent !important` for e-ink contrast — a backdrop there would
 have to fight it for no gain.
 
+### Keep linked files with a saved post — SHIPPED 2026-08-05
+
+Some posts are a wrapper around a download: guitar-pro's tab posts link `.gp`
+files and PDF lyric sheets that disappear with the article. Per-feed extension
+list in `feed_display_prefs.attachment_exts`; on star/tag the archive worker
+scans the captured HTML and stores matches through the existing
+`_archive_asset`, which already stores non-image bytes untouched and dedupes per
+(entry, source_url) — so attachments inherit retention and the orphan sweep for
+free, and differ from images only in how they are FOUND.
+
+Three decisions worth keeping:
+
+- **No wildcard, at all.** `*` on an ordinary post also matches every link to a
+  homepage, a category or a social profile. The extension list is the whole
+  safeguard that keeps this a capture rather than a crawl, so there is nothing
+  to opt into.
+- **Page extensions are refused everywhere** (`html`, `php`, `aspx`, `jsp`, …) —
+  dropped on save *and* re-checked in the finder, so a stored value could never
+  smuggle one through. Dropped rather than rejected: typing "pdf html" means the
+  pdf, and the UI says which were ignored.
+- **Any host, matched on the URL path.** A same-host rule was considered and
+  rejected: guitar-pro serves tabs from `assets-wp.guitar-pro.eu` while the post
+  is on `blog.guitar-pro.com`, so it would miss exactly the case this exists
+  for. Path-only matching means `/post.php?download=song.gp` stays a page.
+
+25 MB per file (`ATTACHMENT_MAX_BYTES`); the archive is a SQLite blob store.
+
+**Not done: surfacing them in the entry pane.** They are captured and served
+from `/starred-asset/<hash>`, but nothing lists them yet — that is the next
+piece.
+
 ### 0c. CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a

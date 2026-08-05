@@ -42,6 +42,8 @@ LOGGER = logging.getLogger(__name__)
 
 ARCHIVE_IMAGE_MAX_DIM = 3840  # 4K longest side
 ARCHIVE_IMAGE_WEBP_QUALITY = 80
+# Per-attachment ceiling; see main.ATTACHMENT_MAX_BYTES.
+ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
 ARCHIVE_FETCH_TIMEOUT_S = 15.0
 ARCHIVE_WORKER_POLL_INTERVAL_S = 5.0
 ARCHIVE_WORKER_QUIET_INTERVAL_S = 30.0  # back off when nothing pending
@@ -65,6 +67,7 @@ class StarredArchiveService:
         sanitize_readability_html: Callable[[str], str],
         background_user_ids: Callable[[], list[str]] | None = None,
         on_canonical_link: Callable[[str, str, str, str], bool] | None = None,
+        find_attachments=None,
         manually_tagged_keys: Callable[[], set[tuple[str, str]]] | None = None,
     ) -> None:
         self._get_archive_connection = get_archive_connection
@@ -81,6 +84,11 @@ class StarredArchiveService:
         # "has a complete archive" no longer implies "was starred" — see
         # backfill_saved_entries_from_archive.
         self._manually_tagged_keys = manually_tagged_keys
+        # Given (feed_url, html, base_url), returns absolute URLs of linked
+        # FILES this feed is configured to keep (tabs, PDFs). Injected rather
+        # than implemented here: which extensions a feed keeps is a per-feed
+        # setting in the meta DB, and that policy belongs with the rest of it.
+        self._find_attachments = find_attachments
         # Which users the worker should scan each cycle. The archive DB is
         # resolved per-user through the context-bound get_archive_connection,
         # so the worker must bind each user in turn — a single global thread
@@ -963,6 +971,22 @@ class StarredArchiveService:
         for url in image_urls:
             self._archive_asset(feed_url, entry_id, url)
 
+        # 4b. Linked FILES this feed keeps — guitar-pro's posts link .gp tabs
+        #     and .pdf lyric sheets that disappear along with the post. Reuses
+        #     _archive_asset, which already stores non-image bytes untouched and
+        #     dedupes per (entry, source_url); attachments differ only in how
+        #     they are FOUND, so they are stored in the same place and inherit
+        #     the same retention and orphan sweep.
+        if self._find_attachments is not None:
+            for html_text, base_url in base_urls:
+                if not html_text:
+                    continue
+                try:
+                    for url in self._find_attachments(feed_url, html_text, base_url):
+                        self._archive_asset(feed_url, entry_id, url, max_bytes=ATTACHMENT_MAX_BYTES)
+                except Exception as exc:  # noqa: BLE001 — never fail a capture over an extra
+                    LOGGER.debug("attachment scan failed for %s: %s", entry_id, exc)
+
         # 5. Persist HTML blobs + metadata + mark complete.
         source_blob = zlib.compress(source_html.encode("utf-8")) if source_html else None
         readability_blob = zlib.compress(readability_html.encode("utf-8")) if readability_html else None
@@ -1072,7 +1096,8 @@ class StarredArchiveService:
             LOGGER.debug("starred archive: byte fetch failed for %s: %s", url, exc)
             return None
 
-    def _archive_asset(self, feed_url: str, entry_id: str, source_url: str) -> None:
+    def _archive_asset(self, feed_url: str, entry_id: str, source_url: str,
+                       max_bytes: int | None = None) -> None:
         # Skip if this entry already has a link for this URL.
         try:
             with self._get_archive_connection() as conn:
@@ -1089,6 +1114,11 @@ class StarredArchiveService:
         if not fetched:
             return
         raw_bytes, content_type = fetched
+        if max_bytes is not None and len(raw_bytes) > max_bytes:
+            # A tab or a lyric sheet is kilobytes. Past the cap this is not what
+            # the feature is for, and the archive is a SQLite blob store.
+            LOGGER.info("starred archive: skipping %s (%d bytes over cap)", source_url, len(raw_bytes))
+            return
 
         processed = self._process_image(raw_bytes, content_type)
         if processed is None:
