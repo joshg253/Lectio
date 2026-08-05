@@ -147,13 +147,15 @@ def backfill_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
         try:
             # The same call the live capture makes, so the storage, dedupe and
             # size cap cannot drift from it.
-            starred_archive_service._archive_asset(
+            # main.starred_archive_service is the configured INSTANCE; the
+            # module import above only carries the constants.
+            main.starred_archive_service._archive_asset(
                 feed_url, entry_id, url,
                 max_bytes=starred_archive_service.ATTACHMENT_MAX_BYTES,
             )
         except Exception as exc:  # noqa: BLE001
             host_fail[netloc] += 1
-            print(f"    skip {url[:70]}: {type(exc).__name__}", flush=True)
+            print(f"    skip {url[:70]}: {type(exc).__name__}: {exc}", flush=True)
             continue
         with main.get_starred_archive_connection() as conn:
             ok = conn.execute(
