@@ -509,9 +509,13 @@
           class="entry-source-button"
           data-feed-url="{{ selected_entry.feed_url }}"
           data-entry-id="{{ selected_entry.id }}"
-          title="Revert cleanup — restore the article as the feed served it"
-          aria-label="Revert cleanup"
-        ><span class="material-symbols-rounded" aria-hidden="true">restore_page</span></button>
+          {# The row is written by BOTH the pane cleanup and any re-fetch, so the
+             label has to cover both — "Revert cleanup" meant nothing to someone
+             whose article had been replaced by a bad re-fetch, which is the
+             case people actually need this for. #}
+          title="Restore the original article — undoes a re-fetch or a cleanup"
+          aria-label="Restore the original article"
+        ><span class="material-symbols-rounded" aria-hidden="true">restore_page</span><span class="entry-restore-label">Restore</span></button>
         {% endif %}
         {% endif %}
       </div>

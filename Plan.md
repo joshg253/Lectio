@@ -321,6 +321,37 @@ header-hostile characters replaced):
   as" and a pasted URL are named too. Skipped for images/audio/video, which
   render inline and would only be made un-viewable by an attachment disposition.
 
+### Re-fetch replacing an article with a feed's boilerplate — GUARDED 2026-08-06
+
+Readability can lock onto a site's standing furniture instead of the post:
+commandlinefu.com's "is the place to record those command-line gems…" replaced
+the actual command. The existing mismatch guard cannot see this — the page IS
+the right article, the title stays correct, and the boilerplate is *longer* than
+what it replaced, so neither title nor length separates them.
+
+What does: site chrome extracts **identically for every post on a feed**. A new
+extraction byte-identical to one already stored against a DIFFERENT entry of the
+same feed is refused and the stored copy kept (`extraction_matches_sibling`).
+Short extractions are exempt — a two-line stub can legitimately coincide.
+
+**Damage already done: 592 entries across 39 feeds** (premierguitar 347,
+guitarworld 118, heyscriptingguy 105). `scripts/revert_boilerplate_refetches.py`
+restores from `entry_content_edits.original_content`, needing no network — but
+**only 27 had a snapshot**; the other 565 were overwritten before that table
+existed and their feed-served body is gone. The archive is no help: its
+`content_html_zlib` is copied from the reader entry, which was already clobbered.
+
+**Not covered by this guard:** a re-fetch that grabs a *different unique*
+article. Entry 26031 came back as a piece about sandbox-game rendering — unique
+text, so the sibling test cannot see it. The slug/title mismatch guard is what
+should catch that shape, and it did not; worth investigating if it recurs.
+
+The pane's Restore control was also relabelled. It is written by both the
+cleanup and any re-fetch, but read "Revert cleanup", which meant nothing to
+someone whose article had been replaced by a bad re-fetch — the case people
+actually need it for. It now carries a visible word rather than being one
+unlabelled icon among several.
+
 ### 0c. CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a

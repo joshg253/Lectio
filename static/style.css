@@ -7934,3 +7934,15 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
 .feed-prop-ext-chip:hover {
   border-color: var(--accent);
 }
+
+/* The restore control carries a word as well as its icon. It is the recovery
+   path for a re-fetch that replaced an article with the wrong content, and an
+   unlabelled icon among a row of unlabelled icons is not findable when you need
+   it — which is exactly when you are already annoyed. */
+#entry-cleanup-revert-button {
+  gap: 0.25rem;
+}
+.entry-restore-label {
+  font-size: 0.78rem;
+  line-height: 1;
+}
