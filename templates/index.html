@@ -2716,6 +2716,21 @@
               <span id="feed-prop-change-website-status" class="feed-prop-inline-status"></span>
             </span>
           </dd>
+          {# Tags this feed's posts usually want. Feed-provided chips only exist
+             when the publisher ships them, and a feed with a stable subject
+             ships none — a guitar blog doesn't tag posts "guitar" — so filing
+             meant typing the same word every time. These are offered as chips
+             on every post in the feed, pinned to the front. A suggestion, never
+             applied automatically: a tag rule already does that. #}
+          <dt>Suggested tags</dt>
+          <dd id="feed-prop-suggested-tags-row">
+            <input type="text" id="feed-prop-suggested-tags-input" class="feed-prop-url-input"
+                   placeholder="e.g. guitar bass" autocomplete="off"
+                   aria-describedby="feed-prop-suggested-tags-hint" />
+            <button type="button" id="feed-prop-suggested-tags-save" class="feed-prop-inline-btn feed-prop-inline-btn--primary">Save</button>
+            <span id="feed-prop-suggested-tags-status" class="feed-prop-inline-status"></span>
+            <div id="feed-prop-suggested-tags-hint" class="feed-prop-hint">Offered as chips on every post in this feed, before the feed's own tags.</div>
+          </dd>
           {# Declared domain migrations. Without this the rules act invisibly —
              they rewrite at ingest and feed the global dedupe alias map, but
              nothing rendered them and only an inferrable host could be added. #}

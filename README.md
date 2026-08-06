@@ -343,6 +343,18 @@ When a saved article's page rots, **Re-fetch from Internet Archive** pulls the
 snapshot instead — and because archived copies usually still carry the byline the
 publisher has since dropped, that often recovers the date as well as the text.
 
+**Suggested tags per feed.** A feed with a stable subject rarely tags its own
+posts — a guitar blog doesn't tag anything "guitar" — so filing meant typing the
+same word every time. Pin tags to a feed in Feed Properties and they're offered
+as chips on every post in it, ahead of the feed's own tags and never shown twice
+if the publisher happens to ship the same one. They're a suggestion, not an
+automatic tag; a tag rule already covers that. Picking a tag from the
+autocomplete applies it straight away rather than making you confirm.
+
+Transparent images keep their transparency and the theme paints behind them
+(`--img-backdrop`, white in both themes) — black line art on a dark page was
+otherwise invisible.
+
 Scheduled refresh is watchdogged. Feeds are fetched sequentially, so one host
 that accepts a connection and then goes silent can stall every feed behind it —
 invisibly, since the app keeps serving. Every fetch carries a read deadline, the

@@ -3265,10 +3265,13 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
 
 /* Suggestion chips sit inline in the tags row, next to the manual chips. */
 .entry-tag-suggestions {
-  display: inline-flex;
-  gap: 0.3rem;
-  flex-wrap: wrap;
-  align-items: center;
+  /* `display: contents`, not inline-flex. An inline-flex box wraps INTERNALLY
+     but is placed in the parent as one atomic inline box, so the whole group
+     jumped to the next line the moment it no longer fitted — instead of the
+     last chip or two breaking like every other chip on the row.
+     .entry-tags-row is already a wrapping flex container, so dissolving this
+     box lets each chip wrap on its own. Its gap governs from here. */
+  display: contents;
 }
 
 .tag-autocomplete {
@@ -3566,6 +3569,12 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   background-color: transparent !important;
   color: inherit !important;
 }
+/* ...except images, which need the opposite: a white backing so transparent
+   line art stays legible on the dark theme. This has to carry !important to
+   beat the blanket rule immediately above, which exists for text containers. */
+.entry-readability-content img {
+  background-color: var(--img-backdrop, #fff) !important;
+}
 
 .entry-source-frame {
   display: none;
@@ -3788,6 +3797,17 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   display: block;
   max-width: 100%;
   height: auto;
+  /* Back every article image with white. Only transparent ones are affected —
+     an opaque photo covers it completely — and those are overwhelmingly black
+     line art (xkcd/what-if illustrations, diagrams, logos) drawn for a light
+     page. On the dark theme they were rendering black-on-black.
+
+     Unconditional rather than dark-only on purpose: the light theme's page is
+     already white, so this is invisible there, and an image that changed
+     appearance when you toggled the theme would be worse than one that never
+     does. The colour is a theme variable so it is one line to change or to set
+     back to `transparent`. */
+  background-color: var(--img-backdrop, #fff);
 }
 
 /* Several <img> sharing one container are a row in the source — images are
@@ -7860,3 +7880,14 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
 .archive-old-table { border-collapse: collapse; margin: .25rem 0 .5rem; }
 .archive-old-table td { padding: .15rem .75rem .15rem 0; }
 .archive-old-table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* A tag pinned to the feed in Feed Properties, as opposed to one the publisher
+   shipped. Marked because the two are different kinds of claim — one is your
+   standing decision about the feed, the other is what this post says about
+   itself — and because these are the ones being reached for. */
+.entry-tag-chip.suggestion.is-pinned-tag {
+  border-color: var(--accent);
+}
+.entry-tag-chip.suggestion.is-pinned-tag .feed-tag-filter-name {
+  font-weight: 600;
+}

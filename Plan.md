@@ -143,6 +143,82 @@ first-capture date needs the CDX API sorted ascending; probed 2026-08-04 and it
 worked (what-if/105 → 2014-07-19) but timed out on 2 of 3 tries. Worth revisiting
 only if a cluster shows up that has no other date source.
 
+### Transparent images rendered as black boxes — FIXED 2026-08-04
+
+Reported on what-if.xkcd posts. `Image.convert("RGB")` keeps whatever RGB sits
+*under* the alpha, and for line art that is black — so a transparent PNG became a
+solid black rectangle. Measured on `what-if.xkcd.com/imgs/a/138`: mean luminance
+**33** the naive way against **235** composited onto white.
+
+Two paths had it, in two disguises:
+
+- **`/thumb`** called `.convert("RGB")` outright. Now composites onto white
+  first. White rather than a theme colour because the output is a JPEG cached
+  and shared across users and themes, so a background has to be chosen once —
+  and this kind of image (diagrams, logos, line art) is drawn for a light page.
+  The zoom<1 letterbox canvas follows the same logic: white when the source had
+  alpha, black (unchanged) for photos.
+- **The starred archive** tested `"A" in img.mode`, which is False for a
+  *palette* PNG — mode `"P"`, transparency in `img.info` — so precisely the
+  images this breaks were the ones it flattened. WebP carries alpha, so it now
+  keeps it. Normalization also moved ahead of the resize, since LANCZOS on a
+  palette image resamples palette indices rather than colours.
+
+**Already-archived assets were already black, and the code fix cannot reach
+them** — the alpha is gone from the stored bytes, so only a re-fetch restores it.
+This is what the entry body actually serves: a saved entry's images are rewritten
+to `/starred-asset/<hash>` at render time, so the body shows the stored copy, not
+the live image. `scripts/repair_flattened_archive_images.py` re-fetches and
+re-encodes. **Applied 2026-08-04: 143 what-if assets restored.**
+
+Candidates are found from the **WebP header**, not by decoding — an asset that
+declares no alpha whose source URL is a format that *can* carry it is a suspect,
+which is a 32-byte read per asset instead of decoding 25k images (a decode scan
+did not finish in ten minutes). A candidate is only rewritten if the re-fetched
+source actually has a *meaningful* alpha channel: xkcd's book covers have an
+alpha channel that is entirely opaque and artwork that is simply dark (mean
+luminance 38 on white, from the publisher), and an earlier pass "repaired" those
+into byte-identical output and reported a fix that never happened.
+
+**Cached thumbnails were also already black**, so the fix needed a cache bust.
+`_THUMB_RENDER_VERSION` joins the cache key (the same idiom as the existing
+`_p2` suffix), so old entries are never looked up again and each thumbnail
+re-renders the first time it is viewed — no mass delete of the 59k-row, 431 MB
+cache and no refetch storm.
+
+### Suggested tags per feed — SHIPPED 2026-08-05
+
+A feed with a stable subject publishes no tags saying so (guitar-pro's feed never
+tags a post "guitar"), so filing meant retyping the same word on every post.
+`feed_display_prefs.suggested_tags` holds a normalized, space-separated list per
+feed, edited in Feed Properties.
+
+They are **prepended to the chip list** rather than kept as a separate list —
+which is what makes the existing dedupe loop also the guarantee that a tag the
+publisher happens to ship appears exactly once, in the pinned position. They are
+also exempt from the 8-chip collapse: pinned precisely so they are always
+reachable, and a feed shipping 28 tags would otherwise bury them behind
+"+N more". A *suggestion*, never auto-applied — a tag rule already does that.
+
+Also: **picking a tag from the autocomplete now applies it.** The widget is
+shared with the rule form, where the tag is one field of a spec, so this is
+opt-in via `applyOnChoose` rather than default behaviour.
+
+### Transparent images on the dark theme — SHIPPED 2026-08-05
+
+Images keep their transparency (nothing is flattened at capture); the theme
+paints behind them via `--img-backdrop`. White in *both* themes: transparent
+article images are overwhelmingly black line art drawn for a light page, and an
+image that changed appearance when you toggled the theme would be worse than one
+that never does. Setting the variable to `transparent` restores the untouched
+look, with no re-fetch — which is the point of doing it in CSS rather than in the
+stored bytes.
+
+Deliberately NOT applied in Read Mode: that page is pure black-on-white by
+design, so transparent art already lands on white, and `#reader-columns *` forces
+`background: transparent !important` for e-ink contrast — a backdrop there would
+have to fight it for no gain.
+
 ### 0c. CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a

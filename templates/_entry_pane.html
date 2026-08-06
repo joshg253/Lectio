@@ -263,7 +263,12 @@
         {# Past the collapse point the chip is present but hidden, not omitted:
            a publisher's platform tags sort late (RPS puts "PC" 10th of 28), and
            an absent chip cannot be filtered on at all. #}
-        <span class="entry-tag-chip suggestion feed-tag-filter-chip{% if loop.index0 >= collapse_after %} is-extra-feed-tag{% endif %}"{% if loop.index0 >= collapse_after %} hidden{% endif %}>
+        {# A pinned tag is never collapsed: it is pinned precisely so it stays
+           reachable, and a feed shipping 28 tags would bury it behind "+N more". #}
+        {% set is_pinned = tag in (selected_entry.pinned_feed_tags or []) %}
+        {% set is_pinned_only = tag in (selected_entry.pinned_only_feed_tags or []) %}
+        {% set is_extra = loop.index0 >= collapse_after and not is_pinned %}
+        <span class="entry-tag-chip suggestion feed-tag-filter-chip{% if is_pinned %} is-pinned-tag{% endif %}{% if is_extra %} is-extra-feed-tag{% endif %}"{% if is_extra %} hidden{% endif %}>
           {% if tag not in selected_entry.manual_tags %}
           <button
             type="button"
@@ -275,6 +280,13 @@
           >+</button>
           {% endif %}
           <span class="feed-tag-filter-name">{{ tag }}</span>
+          {# The arrows toggle the feed's tag_filter rule, which keys off tags
+             the PUBLISHER ships. For a tag pinned by hand that this feed never
+             publishes, filtering on it can never match anything — so the
+             controls are omitted rather than offered and inert. A pinned tag
+             the publisher does also ship keeps them: it is an ordinary feed tag
+             that happens to be pinned. #}
+          {% if not is_pinned_only %}
           <button
             type="button"
             class="feed-tag-filter-sign include{% if active_sign == '+' %} active{% endif %}"
@@ -293,6 +305,7 @@
             aria-label="Feed filter: drop #{{ tag }} posts (unless a good tag rescues them)"
             aria-pressed="{{ 'true' if active_sign == '-' else 'false' }}"
           >▼</button>
+          {% endif %}
           {# Dismiss this suggestion for this feed. Manual because no automatic
              rule can tell a useless tag ("VinylDeals" — the subreddit) from a
              wanted one ("Lessons" — what the post IS); both look like boilerplate
@@ -306,12 +319,13 @@
           >×</button>
         </span>
         {% endfor %}
-        {% if selected_entry.feed_tag_suggestions|length > collapse_after %}
+        {% set hidden_count = (selected_entry.feed_tag_suggestions|length) - collapse_after %}
+        {% if hidden_count > 0 %}
         <button
           type="button"
           class="feed-tag-more"
           data-feed-tag-more="1"
-        >+{{ selected_entry.feed_tag_suggestions|length - collapse_after }} more</button>
+        >+{{ hidden_count }} more</button>
         {% endif %}
       </span>
       {% endif %}

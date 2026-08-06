@@ -4123,6 +4123,14 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_paywalled INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+        # Tags this feed's posts usually want, pinned to the front of the
+        # suggestion chips. A feed with a stable subject (a guitar blog: #guitar,
+        # #bass) publishes no tags saying so, leaving the same words to be typed
+        # on every post. Stored space-separated, normalized on write.
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN suggested_tags TEXT")
+        except Exception:
+            pass
         try:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN inject_source_images INTEGER NOT NULL DEFAULT 0")
         except Exception:
@@ -8607,6 +8615,50 @@ def _manually_tagged_entry_keys() -> set[tuple[str, str]]:
         conn.close()
 
 
+def get_feed_pinned_tags(feed_url: str) -> list[str]:
+    """Tags the user pinned to this feed, to be offered on every one of its posts.
+
+    Feed-provided tags only exist when the publisher ships them. A feed with a
+    stable subject usually ships nothing — a guitar blog does not tag posts
+    "guitar" because the whole site is about guitars — so filing them meant
+    typing the same word every time. These are the answer to that, and they are
+    a *suggestion*, never applied automatically: the point is one click, not an
+    automatic tag (a rule already does that if you want it).
+    """
+    try:
+        with get_meta_connection() as conn:
+            row = conn.execute(
+                "SELECT suggested_tags FROM feed_display_prefs WHERE feed_url = ?",
+                (feed_url,),
+            ).fetchone()
+    except Exception:  # noqa: BLE001 — suggestions are never worth failing a render
+        return []
+    if not row or not row["suggested_tags"]:
+        return []
+    out: list[str] = []
+    for raw in str(row["suggested_tags"]).replace(",", " ").split():
+        normalized = normalize_tag_value(raw)
+        if normalized and normalized not in out:
+            out.append(normalized)
+    return out
+
+
+def set_feed_pinned_tags(feed_url: str, raw_value: str) -> list[str]:
+    """Store the pinned tags for *feed_url*, normalized. Returns what was kept."""
+    tags: list[str] = []
+    for raw in (raw_value or "").replace(",", " ").split():
+        normalized = normalize_tag_value(raw)
+        if normalized and normalized not in tags:
+            tags.append(normalized)
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO feed_display_prefs (feed_url, suggested_tags) VALUES (?, ?)"
+            " ON CONFLICT(feed_url) DO UPDATE SET suggested_tags = excluded.suggested_tags",
+            (feed_url, " ".join(tags)),
+        )
+    return tags
+
+
 def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     """Feed-provided tags captured at ingest (entry_feed_tags meta table).
 
@@ -9134,6 +9186,7 @@ def get_feed_properties(feed_url: str) -> dict:
             ],
             # Dismissed suggestion chips, so a mis-clicked × has a way back.
             "suppressed_tags": feed_tag_service.suppressed_tag_list(feed_url),
+            "suggested_tags": get_feed_pinned_tags(feed_url),
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
             "fetch_history": get_feed_fetch_history(_pc, feed_url),
@@ -13551,6 +13604,32 @@ def _norm_media_link(url: str | None) -> str:
 _HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 
 
+def _strip_play_button_glyphs(content_html: str) -> str:
+    """Remove a facade's standalone play-button glyph.
+
+    A "video facade" is a thumbnail plus a play triangle the publisher positions
+    ON TOP of it with CSS (guitarworld ships
+    ``<svg class="play-button" width="234.67">`` next to the thumbnail). The
+    sanitizer drops that positioning, so the glyph stops being an overlay and
+    becomes a block element in the flow — rendering as a huge logo above the
+    video. Overlaid or not, it is decoration: the recovered embed has a real
+    play button of its own.
+    """
+    if "play-button" not in (content_html or ""):
+        return content_html
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(content_html, "html.parser")
+    removed = False
+    for svg in soup.find_all("svg"):
+        classes = svg.get("class") or []
+        if isinstance(classes, str):
+            classes = classes.split()
+        if any("play-button" in str(c) for c in classes):
+            svg.decompose()
+            removed = True
+    return str(soup) if removed else content_html
+
+
 def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str]] | list[tuple[str, str]]) -> str:
     """Insert recovered embeds where they belong, not just at the bottom.
 
@@ -13690,7 +13769,7 @@ def _inject_recovered_source_embeds(content_html, entry):
     items = _extract_source_embed_iframes(raw_html, body)
     if not items:
         return content_html
-    return _place_recovered_embeds(body, items)
+    return _place_recovered_embeds(_strip_play_button_glyphs(body), items)
 
 
 def _inject_source_gallery(content_html, entry, lead_image_url):
@@ -14607,11 +14686,33 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # chips are feed-filter controls ([- tag +] toggling the feed's
         # tag_filter rule), so all of the entry's feed tags show — including
         # ones already applied as manual tags.
+        # The user's pinned tags first, exactly as /entries/feed-tags does it.
+        # Both paths must agree: this one renders with the page, the other
+        # injects after a tag is applied and the pane re-renders — and when only
+        # one of them knew about pinned tags, applying one suggestion made the
+        # rest disappear.
+        entry_pinned_tags = get_feed_pinned_tags(str(entry.feed_url))
+        _publisher_tags = {
+            n for n in (normalize_tag_value(t) for t in raw_feed_tags) if n
+        }
+        # A pinned tag the publisher does NOT also ship gets no filter arrows:
+        # they toggle a feed tag_filter rule keyed on the publisher's tags, and
+        # filtering on a word this feed never publishes does nothing. One the
+        # publisher does ship is an ordinary feed tag that happens to be pinned,
+        # so it keeps them.
+        pinned_only_tags = [t for t in entry_pinned_tags if t not in _publisher_tags]
+        _manual_now = {normalize_tag_value(t) for t in (manual_tags or [])}
         feed_tag_suggestions = []
-        for raw_tag in raw_feed_tags:
+        for raw_tag in [*entry_pinned_tags, *raw_feed_tags]:
             normalized = normalize_tag_value(raw_tag)
-            if normalized and normalized not in feed_tag_suggestions:
-                feed_tag_suggestions.append(normalized)
+            if not normalized or normalized in feed_tag_suggestions:
+                continue
+            # Once a pinned-only tag is applied there is nothing left to suggest
+            # — the tag is already on the post and shown as a real tag chip. A
+            # publisher tag still shows, because its chip is a filter control.
+            if normalized in pinned_only_tags and normalized in _manual_now:
+                continue
+            feed_tag_suggestions.append(normalized)
         # Current +/- state of the feed's tag_filter rule, so active signs render lit.
         feed_tag_filter_signs: dict[str, str] = {}
         _author_token = author_filter_token(getattr(entry, "authors_str", None))
@@ -14991,6 +15092,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "kept": bool(is_saved or manual_tags),
             "manual_tags_text": " ".join(manual_tags),
             "feed_tag_suggestions": feed_tag_suggestions,
+            "pinned_feed_tags": entry_pinned_tags,
+            "pinned_only_feed_tags": pinned_only_tags,
             "feed_tag_chips_collapsed": FEED_TAG_CHIPS_COLLAPSED,
             "feed_tag_filter_signs": feed_tag_filter_signs,
             "author_filter_token": _author_token,
@@ -20246,6 +20349,14 @@ def debug_toggle_feed_bypass(request: Request, feed_url: str = Form(...)):
 # Thumbnail dimensions: 2× the CSS slot (4.5rem ≈ 72px, tile height ≈ 84px) for retina.
 _THUMB_W = 144
 _THUMB_H = 168
+# Bump when the RENDERING changes in a way that makes already-cached thumbnails
+# wrong. It is part of the cache key, so old entries are simply never looked up
+# again and each thumbnail re-renders the first time it is actually viewed —
+# no mass delete, and no refetch storm across a 59k-row cache.
+#   a1 — flatten transparency onto white instead of `.convert("RGB")`, which
+#        kept the RGB under the alpha and turned transparent line art (xkcd /
+#        what-if illustrations, logos, diagrams) into black rectangles.
+_THUMB_RENDER_VERSION = "a1"
 
 # Cover-mode crop: map crop value → (horizontal fraction, vertical fraction), 0=start 1=end.
 _THUMB_COVER_POS: dict[str, tuple[float, float]] = {
@@ -20344,7 +20455,9 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
         _crop_cache_key = f"{crop}_z{_fill_zoom:.2f}" + ("_p2" if _fill_zoom < 1.0 else "")
     else:
         _crop_cache_key = crop
-    cache_key = hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}|{_crop_cache_key}".encode()).hexdigest()
+    cache_key = hashlib.sha256(
+        f"{url}|{_THUMB_W}|{_THUMB_H}|{_crop_cache_key}|{_THUMB_RENDER_VERSION}".encode()
+    ).hexdigest()
     cached_headers = {"Cache-Control": "public, max-age=604800, immutable"}
 
     try:
@@ -20427,7 +20540,23 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
             return Response(status_code=502)
 
     try:
-        img = _PILImage.open(io.BytesIO(raw)).convert("RGB")
+        img = _PILImage.open(io.BytesIO(raw))
+        # Flatten transparency onto WHITE before anything else. `.convert("RGB")`
+        # alone keeps whatever RGB sits *under* the alpha, which is usually
+        # black — so a transparent line-art PNG (xkcd/what-if illustrations,
+        # logos, diagrams) became a black rectangle. Measured on
+        # what-if.xkcd.com/imgs/a/138: mean luminance 33 the naive way against
+        # 235 composited. The output is JPEG and shared across users and themes,
+        # so a background has to be picked once; white is what this kind of
+        # image is drawn for.
+        _had_alpha = img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info
+        if _had_alpha:
+            _rgba = img.convert("RGBA")
+            _flat = _PILImage.new("RGB", _rgba.size, (255, 255, 255))
+            _flat.paste(_rgba, mask=_rgba.split()[3])
+            img = _flat
+        else:
+            img = img.convert("RGB")
         iw, ih = img.size
         if crop == "smart":
             # Content-aware crop: use SmartCrop to find the most interesting
@@ -20502,8 +20631,15 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
                 top = round(ey * v_frac)
                 img = img.crop((left, top, left + _THUMB_W, top + _THUMB_H))
             else:
-                # Zoom < 1.0: image smaller than frame — paste on black canvas at anchor position.
-                canvas = _PILImage.new("RGB", (_THUMB_W, _THUMB_H), (0, 0, 0))
+                # Zoom < 1.0: image smaller than frame — paste on a canvas at the
+                # anchor position. Black letterboxes a photo; an image that came
+                # with transparency was drawn to sit on a light page, and framing
+                # it in black reintroduces exactly the black-box look the flatten
+                # above just fixed.
+                canvas = _PILImage.new(
+                    "RGB", (_THUMB_W, _THUMB_H),
+                    (255, 255, 255) if _had_alpha else (0, 0, 0),
+                )
                 h_frac, v_frac = _THUMB_COVER_POS.get(crop, (0.5, 0.5))
                 paste_left = round((_THUMB_W - new_w) * h_frac)
                 paste_top = round((_THUMB_H - new_h) * v_frac)
@@ -21807,11 +21943,26 @@ def entry_feed_tags_route(
                     feed_tag_service.record_entry_tags(feed_url, [(entry_id, page_tags)])
                     raw_tags = page_tags[:MAX_FEED_TAG_SUGGESTIONS]
 
+    # The user's pinned tags go FIRST — they are the ones being reached for, and
+    # a feed that ships 28 tags a post would otherwise bury them past the
+    # collapse. Prepending rather than a separate list means the existing
+    # dedupe below is also what guarantees "never show a chip twice": a pinned
+    # tag the publisher happens to ship too appears once, in the pinned position.
+    pinned = get_feed_pinned_tags(feed_url)
+    _publisher = {n for n in (normalize_tag_value(t) for t in raw_tags) if n}
+    # See the entry-pane build for why these two lists exist: a pinned tag the
+    # publisher never ships gets no filter arrows, and disappears from the
+    # suggestions once it has actually been applied.
+    pinned_only = [t for t in pinned if t not in _publisher]
+    _manual_now = {normalize_tag_value(t) for t in manual_tags}
     tags: list[str] = []
-    for raw_tag in raw_tags:
+    for raw_tag in [*pinned, *raw_tags]:
         normalized = normalize_tag_value(raw_tag)
-        if normalized and normalized not in tags:
-            tags.append(normalized)
+        if not normalized or normalized in tags:
+            continue
+        if normalized in pinned_only and normalized in _manual_now:
+            continue
+        tags.append(normalized)
 
     signs: dict[str, str] = {}
     if tags:
@@ -21825,6 +21976,11 @@ def entry_feed_tags_route(
         "ok": True,
         "tags": tags,
         "signs": signs,
+        # Which of them are the user's own pinned tags, so the client can mark
+        # them: they are a different KIND of suggestion (a standing decision
+        # about the feed, not something the publisher said about this post).
+        "pinned": pinned,
+        "pinned_only": pinned_only,
         "manual_tags": [normalize_tag_value(t) for t in manual_tags],
     })
 
@@ -25275,6 +25431,23 @@ def migrate_feed_host_rewrite(feed_url: str, host_map: dict[str, str]) -> dict:
                     stats["locked"] += 1
                     break
     return dict(stats)
+
+
+@app.post("/feeds/suggested-tags")
+def set_feed_suggested_tags_route(feed_url: str = Form(...), tags: str = Form("")):
+    """Pin tags to a feed so every one of its posts offers them as chips.
+
+    For a feed with a stable subject that ships no tags of its own — a guitar
+    blog does not tag posts "guitar" — where filing otherwise meant typing the
+    same word every time. A suggestion, never an automatic tag: a tag rule
+    already exists for people who want it applied without looking.
+    """
+    with get_reader() as reader:
+        if reader.get_feed(feed_url, None) is None:
+            return JSONResponse({"ok": False, "error": "Feed not found."}, status_code=404)
+    kept = set_feed_pinned_tags(feed_url, tags)
+    invalidate_meta_structure_cache()
+    return JSONResponse({"ok": True, "tags": kept})
 
 
 @app.post("/feeds/set-website")
