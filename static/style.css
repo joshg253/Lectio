@@ -7935,14 +7935,52 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
   border-color: var(--accent);
 }
 
-/* The restore control carries a word as well as its icon. It is the recovery
-   path for a re-fetch that replaced an article with the wrong content, and an
-   unlabelled icon among a row of unlabelled icons is not findable when you need
-   it — which is exactly when you are already annoyed. */
+/* The restore control is the recovery path for a re-fetch that replaced an
+   article with the wrong content, and it was one unlabelled icon among several
+   — unfindable exactly when you need it. A text label was tried first and the
+   row has no width for it (it clipped mid-word), so it is tinted instead: the
+   only coloured control in the row, and only present when there IS something to
+   restore. */
 #entry-cleanup-revert-button {
-  gap: 0.25rem;
+  color: var(--accent);
 }
-.entry-restore-label {
-  font-size: 0.78rem;
-  line-height: 1;
+#entry-cleanup-revert-button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
+
+/* Context-menu flyouts. Edit and Re-fetch are four items each that only matter
+   once you have decided to change a post; inline they pushed the everyday
+   actions down a menu nobody wants to read.
+
+   The list is absolutely positioned rather than expanded in place so the parent
+   menu keeps its size — a menu that grows under the cursor moves the item you
+   were aiming at. JS adds .ctx-submenu--left when opening right would run off
+   the viewport. */
+.ctx-submenu { position: relative; }
+.ctx-submenu-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  list-style: none;
+  cursor: pointer;
+}
+.ctx-submenu-summary::-webkit-details-marker { display: none; }
+.ctx-submenu-caret { font-size: 1rem; opacity: 0.7; }
+.ctx-submenu-list {
+  position: absolute;
+  top: 0;
+  left: 100%;
+  min-width: 11rem;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+  background: var(--elevated-bg, var(--surface));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: var(--shadow, 0 8px 20px rgba(0, 0, 0, 0.35));
+}
+.ctx-submenu--left > .ctx-submenu-list { left: auto; right: 100%; }
+.ctx-submenu[open] > .ctx-submenu-summary { background: var(--hover-bg); }

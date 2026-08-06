@@ -2674,6 +2674,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     const postRefetchButton = document.getElementById('ctx-post-refetch');
     const postRefetchFullButton = document.getElementById('ctx-post-refetch-full');
     const postRefetchArchiveButton = document.getElementById('ctx-post-refetch-archive');
+    const postRestoreOriginalButton = document.getElementById('ctx-post-restore-original');
+    const postRefetchGroup = document.getElementById('ctx-post-refetch-group');
     // Both re-fetch items appear on ANY post with a link. Read at call time, so
     // it picks up whichever post the menu was opened on.
     //
@@ -7038,6 +7040,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           setMenuItemVisible(postRefetchButton, postCanRefetch());
           setMenuItemVisible(postRefetchFullButton, postCanRefetch());
           setMenuItemVisible(postRefetchArchiveButton, postCanRefetch());
+          updateRefetchGroupVisibility();
           setMenuItemVisible(postMoveVisibleButton, false);
           setMenuItemVisible(postRemoveTagShownButton, false);
           setMenuItemVisible(postMarkAboveReadButton, false);
@@ -7399,6 +7402,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             setMenuItemVisible(postRefetchButton, postCanRefetch());
             setMenuItemVisible(postRefetchFullButton, postCanRefetch());
             setMenuItemVisible(postRefetchArchiveButton, postCanRefetch());
+            updateRefetchGroupVisibility();
             setMenuItemVisible(postMoveVisibleButton, true);
             // "Remove this tag from all shown": only in the Saved view filtered
             // by a tag. Scoped server-side to the folder+tag, so it clears the
@@ -8515,6 +8519,73 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     // A boolean rather than a mode string: only the request body needs the wire
     // value, and the file-scope CAPTURE_MODE_FULL keeps that spelling in one
     // place — a typo there falls back to readability silently.
+    // The Re-fetch group shows when any of its items does. "Restore original"
+    // is asked for per post: it only exists once a re-fetch (or a cleanup) has
+    // stored the body as the feed served it, and offering a dead Restore is
+    // worse than not offering one.
+    async function updateRefetchGroupVisibility() {
+      const canRefetch = postCanRefetch();
+      setMenuItemVisible(postRestoreOriginalButton, false);
+      if (postRefetchGroup) postRefetchGroup.hidden = !canRefetch;
+      const feedUrl = contextPostFeedUrl;
+      const entryId = contextPostEntryId;
+      if (!feedUrl || !entryId) return;
+      try {
+        const qs = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId });
+        const data = await (await fetch('/entries/content/has-original?' + qs)).json();
+        // The menu may have moved on to another post while we waited.
+        if (contextPostFeedUrl !== feedUrl || contextPostEntryId !== entryId) return;
+        if (data && data.has_original) {
+          setMenuItemVisible(postRestoreOriginalButton, true);
+          if (postRefetchGroup) postRefetchGroup.hidden = false;
+        }
+      } catch (e) { /* a missing Restore is not worth an error */ }
+    }
+
+    // Flip a flyout to the left when opening right would run off screen.
+    for (const submenu of document.querySelectorAll('.ctx-submenu')) {
+      submenu.addEventListener('toggle', () => {
+        if (!submenu.open) { submenu.classList.remove('ctx-submenu--left'); return; }
+        const list = submenu.querySelector('.ctx-submenu-list');
+        if (!list) return;
+        submenu.classList.remove('ctx-submenu--left');
+        if (list.getBoundingClientRect().right > window.innerWidth - 8) {
+          submenu.classList.add('ctx-submenu--left');
+        }
+      });
+      // One flyout at a time, and never leave one open for the next post.
+      submenu.addEventListener('toggle', () => {
+        if (!submenu.open) return;
+        for (const other of document.querySelectorAll('.ctx-submenu[open]')) {
+          if (other !== submenu) other.open = false;
+        }
+      });
+    }
+
+    postRestoreOriginalButton?.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const feedUrl = contextPostFeedUrl;
+      const entryId = contextPostEntryId;
+      hideAllContextMenus();
+      if (!feedUrl || !entryId) return;
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId });
+        const resp = await fetch('/entries/content/revert', {
+          method: 'POST', body, credentials: 'same-origin',
+        });
+        const json = await resp.json();
+        if (!json.ok) {
+          showToastMessage(json.error || 'Could not restore the original.');
+          return;
+        }
+        showToastMessage('Original restored.');
+        loadEntryPaneWithoutFullRefresh(window.location.href, false);
+      } catch (err) {
+        showToastMessage('Could not restore the original.');
+      }
+    });
+
     const runPostRefetch = async (event, fullPage, modeOverride) => {
       event.preventDefault();
       event.stopPropagation();

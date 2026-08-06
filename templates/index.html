@@ -1613,18 +1613,36 @@
     <button type="button" id="ctx-post-move-visible" class="context-menu-item">Move visible to feed…</button>
     <button type="button" id="ctx-post-remove-tag-shown" class="context-menu-item danger" hidden>Remove this tag from all shown</button>
     <button type="button" id="ctx-post-automation" class="context-menu-item">Automation…</button>
-    <button type="button" id="ctx-post-edit-date" class="context-menu-item">Edit date…</button>
-    <button type="button" id="ctx-post-edit-title" class="context-menu-item">Edit title…</button>
-    <button type="button" id="ctx-post-edit-link" class="context-menu-item">Edit URL…</button>
-    <button type="button" id="ctx-post-refetch" class="context-menu-item" hidden>Re-fetch content</button>
-    {# Same re-fetch, whole-page capture instead of readability extraction —
-       for a post whose normal re-fetch keeps coming back wrong. #}
-    <button type="button" id="ctx-post-refetch-full" class="context-menu-item" hidden>Re-fetch full page</button>
-    {# The archive by explicit request. The automatic fallback only fires when the
-       live fetch is REFUSED; a publisher serving a page that passes every guard
-       but is no longer the article (rewritten, truncated, paywalled) is the case
-       that otherwise sends you to archive.org by hand. #}
-    <button type="button" id="ctx-post-refetch-archive" class="context-menu-item" hidden>Re-fetch from Internet Archive</button>
+    {# Edit and Re-fetch each collapse into a flyout: they are four and four
+       items that only matter once you have decided to change this post, and
+       inline they pushed the everyday actions (mark read, copy URL) down a menu
+       nobody wants to read. #}
+    <details class="ctx-submenu" id="ctx-post-edit-group">
+      <summary class="context-menu-item ctx-submenu-summary">Edit<span class="ctx-submenu-caret material-symbols-rounded" aria-hidden="true">chevron_right</span></summary>
+      <div class="ctx-submenu-list">
+        <button type="button" id="ctx-post-edit-date" class="context-menu-item">Date…</button>
+        <button type="button" id="ctx-post-edit-title" class="context-menu-item">Title…</button>
+        <button type="button" id="ctx-post-edit-link" class="context-menu-item">URL…</button>
+      </div>
+    </details>
+    <details class="ctx-submenu" id="ctx-post-refetch-group" hidden>
+      <summary class="context-menu-item ctx-submenu-summary">Re-fetch<span class="ctx-submenu-caret material-symbols-rounded" aria-hidden="true">chevron_right</span></summary>
+      <div class="ctx-submenu-list">
+        <button type="button" id="ctx-post-refetch" class="context-menu-item" hidden>Content</button>
+        {# Whole-page capture instead of readability extraction — for a post
+           whose normal re-fetch keeps coming back wrong. #}
+        <button type="button" id="ctx-post-refetch-full" class="context-menu-item" hidden>Full page</button>
+        {# The archive by explicit request. The automatic fallback only fires when
+           the live fetch is REFUSED; a publisher serving a page that passes every
+           guard but is no longer the article is the case that otherwise sends you
+           to archive.org by hand. #}
+        <button type="button" id="ctx-post-refetch-archive" class="context-menu-item" hidden>From Internet Archive</button>
+        {# Undo. Lives here because a bad re-fetch is what you are undoing, and
+           the header icon it replaces was unfindable exactly when needed. Shown
+           only when there IS a stored original. #}
+        <button type="button" id="ctx-post-restore-original" class="context-menu-item" hidden>Restore original</button>
+      </div>
+    </details>
     <button type="button" id="ctx-post-delete" class="context-menu-item danger">Delete post…</button>
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
   </div>

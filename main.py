@@ -25642,6 +25642,26 @@ def clean_entry_content_route(
     return JSONResponse({"ok": True, "applied": applied, "unmatched": unmatched})
 
 
+@app.get("/entries/content/has-original")
+def entry_has_original_content_route(feed_url: str = Query(...), entry_id: str = Query(...)):
+    """Whether this post has a stored original to restore.
+
+    Asked per post so the menu can offer Restore only when it would do
+    something — a dead control is worse than an absent one, and this is the
+    recovery path for a re-fetch that replaced an article, so it has to be
+    trustworthy when it does appear.
+    """
+    try:
+        with get_meta_connection() as conn:
+            found = conn.execute(
+                "SELECT 1 FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchone()
+    except sqlite3.OperationalError:
+        found = None      # tenant DB predates the table
+    return JSONResponse({"ok": True, "has_original": bool(found)})
+
+
 @app.post("/entries/content/revert")
 def revert_entry_content_route(feed_url: str = Form(...), entry_id: str = Form(...)):
     """Undo every cleanup on a post, restoring the body as the feed served it."""
