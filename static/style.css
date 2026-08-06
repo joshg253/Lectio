@@ -6538,6 +6538,21 @@ mark.highlight-mark {
 .feed-prop-alias-del:hover { border-color: var(--danger, #c0392b); color: var(--danger, #c0392b); }
 .feed-prop-alias-empty { font-size: 0.8rem; color: var(--muted, #888); margin-right: 0.4rem; }
 .feed-prop-alias-empty[hidden] { display: none; }
+/* Explanatory line under a Feed Properties field. Same treatment as
+   .feed-prop-alias-empty above — these are asides, not labels, and at body size
+   they competed with the control they were explaining. */
+.feed-prop-hint {
+  font-size: 0.8rem;
+  color: var(--muted, #888);
+  margin-top: 0.25rem;
+  line-height: 1.4;
+}
+.feed-prop-hint code {
+  font-size: 0.95em;
+  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
+  padding: 0 0.2em;
+  border-radius: 3px;
+}
 #feed-prop-alias-add-wrap { display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
 #feed-prop-alias-status { color: var(--muted, #888); }
 .unsub-migrate-select-all-row { font-size: 0.85rem; margin: 0.35rem 0 0; }
