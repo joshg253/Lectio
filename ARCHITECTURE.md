@@ -280,6 +280,77 @@ hardening of `/api/img` and `/thumb` has landed — see "Security posture". The
 WebSub discover-on-subscribe spawned when a feed is added now re-binds the
 requesting user via `_run_in_user_context`.)
 
+### Dating an entry
+
+Two functions, deliberately not one:
+
+- **`entry_publication_date`** — when the entry was actually published, or
+  `None` when nothing says. Ordered by trust: the feed's own `published`, then
+  `updated`, then a date the permalink states outright (`/2019/07/06/` or
+  `/2025-11-22/`), then a month-precision permalink (`/2021/04/` → the 1st),
+  then a date parsed out of the title.
+- **`entry_effective_date`** — the same, falling back to the received date so it
+  *always* returns something. The list sort, the unread counts and the bulk age
+  actions all key off this one; they disagreed once, and mark-older skipped
+  entries the UI had already greyed.
+
+Being able to return `None` is the point of the split: it is what lets the UI
+show "no date" honestly instead of quietly presenting "when Lectio first saw it"
+as a publication date.
+
+**Missing dates do not always arrive as NULL.** Importers and parsers write
+sentinels — the Unix epoch, or year 0001 — and a sentinel is *truthy*. Since
+every step above is an `or` chain, a sentinel beat every fallback below it, and
+an entry carrying its own date in its URL still displayed nothing.
+`real_published_date` normalizes anything before 1990 back to the `None` it
+stood for. Any new date source added here must go through it; a raw
+`entry.published or …` reintroduces the bug silently.
+
+### Learning a date on re-fetch
+
+Re-fetch is a free chance to learn a date for an entry that has none, and it
+consults three sources, worst last (`services/publish_date`):
+
+1. **the page's own metadata** — `article:published_time`, JSON-LD
+   `datePublished`, `<time datetime=…>`;
+2. **a date the page prints but never marks up** — hanselman.com ships
+   `<span class="blogMetaDate">February 03, 2026</span>` and nothing
+   machine-readable, so mining metadata correctly found nothing on a page
+   visibly showing its date. Only elements the publisher *labelled*
+   (class/id naming date/publish/posted/byline) count, and the first match
+   wins: a page is full of date-shaped text — comment timestamps, related-post
+   rails, a copyright footer — and matching any of it would reliably pick the
+   wrong one;
+3. **the site's own index**, for sites that publish dates nowhere near the
+   article. what-if.xkcd.com carries no date in any form on an article, while
+   its archive index lists all 162 with theirs. This is a *site adapter*, not a
+   branch in the caller: adding a site means registering a resolver, and the
+   caller keeps asking one question.
+
+Two guards make this safe to run automatically. It **never overwrites a date the
+entry already has** — re-fetch once moved `published` and destroyed 105 real
+dates — and it never touches an entry whose date the user pinned by hand. "Has a
+date" means `real_published_date` says so, which is what stops a sentinel from
+counting as one.
+
+### The Internet Archive as a re-fetch source
+
+`wayback_snapshot_url` asks archive.org's availability API — one small JSON call,
+no crawling of a site that already refused us. Re-fetch reaches for it two ways:
+
+- **Automatically**, when the live fetch is *refused*: a parked page, a section
+  index, a 404. The guard is right to refuse those, but on its own it leaves the
+  user with nothing.
+- **On request** (`mode=archive`, "Re-fetch from Internet Archive"), which exists
+  for the case the automatic path cannot see — a publisher serving a page that
+  passes every guard while no longer being the article: rewritten, truncated, or
+  paywalled. That page is indistinguishable from a good one to a guard, so only
+  the reader can say it is wrong.
+
+An archived page is also usually a *better* date source than the live one, since
+the archived copy still carries the byline the publisher has since dropped —
+which is why the date mining runs over whatever the re-fetch actually fetched.
+
 ### Refresh scheduler: why it has a watchdog
 
 The scheduler is one thread running one pass at a time, and every feed in a pass

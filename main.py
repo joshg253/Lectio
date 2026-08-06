@@ -51,6 +51,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from services import bluesky
+from services import publish_date as publish_date_service
 from services import deviantart as deviantart_service
 from services import devto as devto_service
 from services import youtube_oauth as youtube_oauth_service
@@ -5287,16 +5288,70 @@ def get_unread_counts_by_feed() -> dict[str, int]:
         return counts.copy()
 
 
+# A stored date at or before this is a MISSING date that arrived as a sentinel,
+# not a publication date. Two clusters exist in a real library — the Unix epoch
+# (an importer's "0") and year 0001 (a parser's zero-value) — 312 entries across
+# 31 feeds when measured 2026-08-04, with nothing at all between year 1 and 1995.
+# The cutoff matches the `_MIN_YEAR = 1990` convention the recovery scripts in
+# scripts/ already use.
+#
+# This matters far more than it looks: every date fallback in this file is an
+# `or` chain, and a sentinel is *truthy*. A NULL falls through to the next
+# source; epoch-0 stops the chain dead and wins. That is why an entry whose URL
+# carries its own date still displayed nothing.
+_SENTINEL_DATE_BEFORE = datetime(1990, 1, 1, tzinfo=timezone.utc)
+
+
+def real_published_date(value: datetime | None) -> datetime | None:
+    """*value* if it is a plausible publication date, else None.
+
+    Normalizes the missing-date sentinels to the None they should have been, so
+    callers can keep writing plain `or` chains.
+    """
+    if value is None:
+        return None
+    try:
+        # reader stores naive UTC; an aware value may arrive from an override.
+        ref = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        return None if ref < _SENTINEL_DATE_BEFORE else value
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def entry_publication_date(entry) -> datetime | None:
+    """When the entry was actually published, or None when nothing says.
+
+    Ordered by how much the source can be trusted: the feed's own dates first,
+    then a date the permalink states outright, then a month-precision permalink,
+    then one parsed out of the title. Deliberately does NOT fall back to the
+    received date — "when Lectio first saw it" is not a publication date, and a
+    caller that wants that fallback should say so via `entry_effective_date`.
+    Keeping them apart is what lets the UI show "no date" honestly.
+
+    `entry.link` and `entry.id` can differ and the date may live in either.
+    """
+    return (
+        real_published_date(getattr(entry, "published", None))
+        or real_published_date(getattr(entry, "updated", None))
+        or url_inferred_pubdate(getattr(entry, "link", None))
+        or url_inferred_pubdate(getattr(entry, "id", None))
+        or url_inferred_pubmonth(getattr(entry, "link", None))
+        or url_inferred_pubmonth(getattr(entry, "id", None))
+        or title_inferred_pubdate(getattr(entry, "title", None))
+    )
+
+
 def entry_effective_date(entry) -> datetime | None:
-    """The date the UI treats as an entry's timestamp: publish date, falling
-    back to update then received (`added`) date for feeds that omit dates.
+    """The date the UI treats as an entry's timestamp: publication date (see
+    `entry_publication_date`), falling back to the received (`added`) date for
+    entries nothing can date.
 
     Single source of truth so the list render, unread counts, and the bulk
     age actions (mark-older/newer-than) all agree — a mismatch here made
     mark-older skip entries the UI had optimistically marked, so they flashed
     read then reverted.
     """
-    return entry.published or entry.updated or entry.added
+    return entry_publication_date(entry) or getattr(entry, "added", None)
 
 
 _DEDUPE_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
@@ -9306,7 +9361,11 @@ def datetime_sort_value(dt: datetime | None) -> float:
 # to -inf and clusters at one end. This regex catches the common /YYYY/MM/DD/
 # pattern; we use it only as a sort fallback so display still shows what the
 # feed actually said (or '—').
-_URL_PUBDATE_RE = re.compile(r"/(\d{4})/(\d{1,2})/(\d{1,2})(?:/|$|\?)")
+# Both common dated-permalink shapes: /2019/07/06/slug (WordPress) and
+# /2025-11-22/slug (Jekyll/Hugo and hand-rolled blogs — brendangregg.com uses
+# it). Only the first separator has to be a slash; the rest may be either, so
+# one pattern covers both without a second regex to keep in sync.
+_URL_PUBDATE_RE = re.compile(r"/(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:/|$|\?|\.)")
 
 # WordPress's other common permalink shape: /YYYY/MM/slug, no day. blog.guitar-pro.com
 # uses it for all 67 of its undated entries. Month precision beats no date at all —
@@ -12285,19 +12344,12 @@ def list_entries_for_feeds(
             elif sort_key == "history_sort_value":
                 sort_value = datetime_sort_value(read_dt)
             elif sort_key == "post_sort_value":
-                # Fall back to URL-inferred (link or id) → title-inferred →
-                # received-time, so entries from feeds that don't supply
-                # <pubDate> still sort in a sensible order instead of all
-                # clustering at -inf. entry.link and entry.id can differ;
-                # the date may live in either.
-                effective_pub_dt = (
-                    published_dt
-                    or url_inferred_pubdate(entry.link)
-                    or url_inferred_pubdate(entry.id)
-                    or title_inferred_pubdate(entry.title)
-                    or entry.added
-                )
-                sort_value = datetime_sort_value(effective_pub_dt)
+                # published_dt is already entry_effective_date, which now runs
+                # the whole inference chain and only then falls back to received
+                # time. The chain used to be repeated here instead — and was
+                # unreachable, because entry_effective_date returned `added` and
+                # every `or` below it was dead. See entry_publication_date.
+                sort_value = datetime_sort_value(published_dt)
             else:
                 sort_value = datetime_sort_value(entry.added)
 
@@ -24438,8 +24490,39 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
         # It was disabled while dead; the working replacement should fetch again.
         enable_feed(new_url)
 
+    # A feed that moved to a new HOST moved the site with it. Seed the same
+    # alias rule Edit Website seeds, so the old domain keeps resolving: the
+    # entry-link rebase, the dupe scan, the favicon, re-fetch AND the Website
+    # shown in Feed Properties all read through feed_url_rewrites, so one rule
+    # fixes all of them. Doing it by hand afterwards is easy to forget, and the
+    # symptom (Website still naming a dead domain) does not look like something
+    # the URL change caused.
+    alias: dict | None = None
+    _old_host = _normalize_alias_host(urlparse(old_url).netloc)
+    _new_host = _normalize_alias_host(urlparse(new_url).netloc)
+    if _old_host and _new_host and _old_host != _new_host:
+        try:
+            with get_meta_connection() as conn:
+                already = conn.execute(
+                    "SELECT 1 FROM feed_url_rewrites WHERE feed_url = ? AND from_host = ?",
+                    (new_url, _old_host),
+                ).fetchone()
+                if already is None:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO feed_url_rewrites (feed_url, from_host, to_host)"
+                        " VALUES (?, ?, ?)",
+                        (new_url, _old_host, _new_host),
+                    )
+            if already is None:
+                stats = migrate_feed_host_rewrite(new_url, {_old_host: _new_host})
+                alias = {"from_host": _old_host, "to_host": _new_host,
+                         "migrated": int(stats.get("migrated", 0) or 0)}
+        except Exception:  # noqa: BLE001 — the URL change itself already succeeded
+            LOGGER.warning("[change-url] alias seeding failed for %s", new_url, exc_info=True)
+
     invalidate_meta_structure_cache()
     invalidate_problematic_feeds_cache()
+    invalidate_unread_counts_cache()
     global _unread_counts_generation
     _unread_counts_generation += 1
 
@@ -24450,7 +24533,25 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
         name="refresh-after-url-change",
     ).start()
 
-    return JSONResponse({"ok": True, "new_url": new_url})
+    # The folder the feed sits in, so the client can navigate back to it WITH
+    # its scope. Without this the redirect carried only list_feed_url, and a
+    # feed URL with no folder_id leaves the sidebar with nothing to select —
+    # the feed is open in the list but invisible in the tree, so there is no
+    # way back to its context menu.
+    folder_id = None
+    try:
+        with get_meta_connection() as conn:
+            row = conn.execute(
+                "SELECT folder_id FROM folder_feeds WHERE feed_url = ? LIMIT 1", (new_url,)
+            ).fetchone()
+            folder_id = int(row["folder_id"]) if row else None
+    except Exception:  # noqa: BLE001 — navigation nicety, never fail the change
+        LOGGER.warning("[change-url] folder lookup failed for %s", new_url, exc_info=True)
+
+    return JSONResponse({
+        "ok": True, "new_url": new_url, "folder_id": folder_id,
+        "old_host": _old_host, "alias": alias,
+    })
 
 
 @app.post("/feeds/unsubscribe")
@@ -24726,6 +24827,75 @@ def delete_entry_route(feed_url: str = Form(...), entry_id: str = Form(...)):
     return JSONResponse({"ok": True})
 
 
+def _parse_local_date_to_utc(published: str) -> datetime | None:
+    """A date from the picker, read as LOCAL time, returned as UTC.
+
+    Naive input means midnight *where the user is*; treating it as UTC rendered
+    it back through astimezone() as the previous day. See the note in
+    set_entry_date_route, which this was factored out of.
+    """
+    try:
+        dt = datetime.fromisoformat(published)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.astimezone()
+    return dt.astimezone(timezone.utc)
+
+
+def _set_orphan_entry_date(feed_url: str, entry_id: str, published: str) -> JSONResponse:
+    """Set (or clear) the date of a saved entry whose feed is gone.
+
+    There is no reader row to update, so the date is written where the orphan
+    actually reads it from: ``archived_entry.published_at``, a float epoch. The
+    override row is kept in step so the two agree if the feed is ever
+    re-subscribed and the entry comes back to reader.
+    """
+    try:
+        arch_ctx = get_starred_archive_connection()
+    except Exception:  # noqa: BLE001 — no archive means no orphan can exist
+        return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+    with arch_ctx as arch:
+        try:
+            row = arch.execute(
+                "SELECT 1 FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # Archive not provisioned yet (fresh install): the entry is in
+            # neither store, which is the same answer as not finding it.
+            row = None
+        if row is None:
+            return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+        if not published:
+            arch.execute(
+                "UPDATE archived_entry SET published_at = NULL WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            )
+        else:
+            dt = _parse_local_date_to_utc(published)
+            if dt is None:
+                return JSONResponse({"ok": False, "error": "Invalid date."}, status_code=400)
+            arch.execute(
+                "UPDATE archived_entry SET published_at = ? WHERE feed_url = ? AND entry_id = ?",
+                (dt.timestamp(), feed_url, entry_id),
+            )
+    with get_meta_connection() as conn:
+        if not published:
+            conn.execute(
+                "DELETE FROM entry_date_overrides WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            )
+        else:
+            dt = _parse_local_date_to_utc(published)
+            conn.execute(
+                "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published) VALUES (?, ?, ?)",
+                (feed_url, entry_id, dt.strftime("%Y-%m-%d %H:%M:%S")),  # ty: ignore[possibly-unbound-attribute]
+            )
+    invalidate_unread_counts_cache()
+    return JSONResponse({"ok": True, "orphan": True, "cleared": not published})
+
+
 @app.post("/entries/set-date")
 def set_entry_date_route(feed_url: str = Form(...), entry_id: str = Form(...), published: str = Form("")):
     """Override a post's published date (fixes garbage dates — epoch-0 entries
@@ -24740,8 +24910,15 @@ def set_entry_date_route(feed_url: str = Form(...), entry_id: str = Form(...), p
     """
     published = published.strip()
     with get_reader() as reader:
-        if reader.get_entry((feed_url, entry_id), None) is None:
-            return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+        entry_missing = reader.get_entry((feed_url, entry_id), None) is None
+    if entry_missing:
+        # An ORPHAN save: its feed was unsubscribed, so the entry exists only in
+        # the archive. Saved still lists it (merge_orphan_saved_entries) and its
+        # date comes from archived_entry.published_at — so refusing here was a
+        # dead end with no other way to correct the date. Reported on a
+        # feedburner save whose feed is long gone.
+        return _set_orphan_entry_date(feed_url, entry_id, published)
+    with get_reader() as reader:
         if not published:
             with get_meta_connection() as conn:
                 conn.execute(
@@ -27349,6 +27526,25 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
 # compared in two places here and sent from two more in static/js/app.js — a
 # typo on any of them silently falls back to readability rather than erroring.
 CAPTURE_MODE_FULL = "full"
+# Re-fetch the Internet Archive's snapshot instead of the live page. Same
+# reasoning about the spelling being shared with the client.
+CAPTURE_MODE_ARCHIVE = "archive"
+
+
+def _entry_source_url(feed_url: str, entry_id: str) -> str | None:
+    """The address a capture is re-fetched FROM: its current link, falling back
+    to its id (a capture's id is the address it was first saved from)."""
+    try:
+        with get_reader() as reader:
+            entry = reader.get_entry((feed_url, entry_id), None)
+    except Exception:  # noqa: BLE001
+        return None
+    if entry is None:
+        return None
+    link = str(getattr(entry, "link", "") or "")
+    if link.startswith(("http://", "https://")):
+        return link
+    return entry_id if entry_id.startswith(("http://", "https://")) else None
 
 
 # Hosts whose last automatic re-fetch failed, and when. Auto-refetch is a
@@ -27459,17 +27655,31 @@ def _refresh_captured_article_for_current_user(
 
     *mode* ``"full"`` captures the whole page body instead of readability-
     extracting it — the escape hatch for pages readability mangles. See
-    extract_full_page_article."""
+    extract_full_page_article.
+
+    *mode* ``"archive"`` goes straight to the Wayback snapshot instead of the
+    live page. The automatic archive fallback below only triggers when the live
+    fetch is *refused* (parked page, 404), which leaves out the case that sent
+    users to archive.org by hand: a publisher serving a page that passes every
+    guard but is no longer the article — rewritten, truncated, or paywalled."""
+    from_archive: str | None = None
+    if mode == CAPTURE_MODE_ARCHIVE:
+        from_archive = wayback_snapshot_url(_entry_source_url(feed_url, entry_id) or entry_id)
+        if not from_archive:
+            return {"ok": False, "error": "The Internet Archive has no snapshot of this page."}
     _base = fetch_full_page_article if mode == CAPTURE_MODE_FULL else fetch_readability_article
     # Keep the page we already fetched, so a date can be mined from it without a
     # second request. readability strips head metadata, which is where the date is.
     _capture: dict = {}
 
     def extract(url: str):
+        # An explicit archive re-fetch ignores the URL the caller would have
+        # used: the snapshot IS the target.
+        target = from_archive or url
         try:
-            return _base(url, capture=_capture)
+            return _base(target, capture=_capture)
         except TypeError:
-            return _base(url)          # a caller-supplied extractor without the kwarg
+            return _base(target)       # a caller-supplied extractor without the kwarg
 
     reader = get_reader()
     with get_meta_connection() as conn:
@@ -27481,6 +27691,8 @@ def _refresh_captured_article_for_current_user(
             extract=extract,
             enqueue_archive=starred_archive_service.enqueue_archive,
         )
+    if from_archive and result.get("ok"):
+        result["from_archive"] = from_archive
     # The live page was refused as a different article (parked page, section
     # index). Ask the archive for the real one before giving up — the guard
     # protects the stored copy, but on its own it leaves the user stuck.
@@ -27518,11 +27730,20 @@ def _apply_mined_publish_date(feed_url: str, entry_id: str, raw_html: str | None
     Deliberately narrow. Re-fetch used to move `published` and destroyed 105 real
     dates before that was caught, so this never overwrites a date the entry
     already has, and never touches an entry whose date the user pinned by hand.
-    It exists for the ~1,278 entries still sitting at the Unix epoch because their
-    importer had no date to give — a re-fetch is a free chance to learn one.
+    It exists for the entries still sitting on a missing-date sentinel because
+    their importer had no date to give — a re-fetch is a free chance to learn one.
+
+    Three sources, worst last (see services/publish_date):
+      1. the page's own metadata,
+      2. a date the page prints for humans but never marks up — hanselman.com
+         ships `<span class="blogMetaDate">` and nothing machine-readable,
+      3. the site's own index, for sites that publish dates nowhere near the
+         article — what-if.xkcd.com articles carry no date at all.
     """
     if not raw_html:
-        return None
+        # Sources 2 and 3 still need trying: a site index does not need the page,
+        # and this is reached when a fetch produced no HTML to mine.
+        raw_html = None
     with get_meta_connection() as conn:
         if conn.execute(
             "SELECT 1 FROM entry_date_overrides WHERE feed_url = ? AND entry_id = ?",
@@ -27534,11 +27755,24 @@ def _apply_mined_publish_date(feed_url: str, entry_id: str, raw_html: str | None
         row = db.execute(
             "SELECT published FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id)
         ).fetchone()
-        current = str(row[0] or "") if row else ""
-        # Only an absent or epoch date qualifies as "we don't know".
-        if current and not current.startswith("1970-01-01"):
-            return None
+        current_raw = row[0] if row else None
+        # "We don't know" means absent OR a sentinel. This used to test only for
+        # the 1970 prefix, which silently excluded the 129 entries whose importer
+        # wrote year 0001 instead — the same class of value, a different spelling.
+        # real_published_date is the single place that judgement lives.
+        if current_raw is not None:
+            parsed = current_raw
+            if isinstance(parsed, str):
+                try:
+                    parsed = datetime.fromisoformat(parsed)
+                except ValueError:
+                    parsed = None
+            if parsed is not None and real_published_date(parsed) is not None:
+                return None       # a real date already; never overwrite it
+        source = "metadata"
         mined = mine_publish_date(raw_html)
+        if mined is None:
+            mined, source = publish_date_service.resolve(raw_html, entry_id)
         if mined is None:
             return None
         stored = mined.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -27546,7 +27780,7 @@ def _apply_mined_publish_date(feed_url: str, entry_id: str, raw_html: str | None
                    (stored, feed_url, entry_id))
         db.commit()
     invalidate_unread_counts_cache()
-    LOGGER.info("[re-fetch] learned publish date %s for %s", stored, entry_id)
+    LOGGER.info("[re-fetch] learned publish date %s (%s) for %s", stored, source, entry_id)
     return stored
 
 

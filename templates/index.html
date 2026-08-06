@@ -1620,6 +1620,11 @@
     {# Same re-fetch, whole-page capture instead of readability extraction —
        for a post whose normal re-fetch keeps coming back wrong. #}
     <button type="button" id="ctx-post-refetch-full" class="context-menu-item" hidden>Re-fetch full page</button>
+    {# The archive by explicit request. The automatic fallback only fires when the
+       live fetch is REFUSED; a publisher serving a page that passes every guard
+       but is no longer the article (rewritten, truncated, paywalled) is the case
+       that otherwise sends you to archive.org by hand. #}
+    <button type="button" id="ctx-post-refetch-archive" class="context-menu-item" hidden>Re-fetch from Internet Archive</button>
     <button type="button" id="ctx-post-delete" class="context-menu-item danger">Delete post…</button>
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
   </div>

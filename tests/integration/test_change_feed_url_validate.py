@@ -91,3 +91,102 @@ def test_schemeless_input_gets_https(configured, monkeypatch):
         r = c.post("/feeds/change-url", data={"old_url": FEED, "new_url": "example.test/other.xml"})
     assert r.status_code == 200
     assert captured["url"] == "https://example.test/other.xml"
+
+
+# --- moving a feed to a new host takes the site identity with it ------------
+
+
+def _add_to_folder(feed_url: str) -> int:
+    with main.get_meta_connection() as conn:
+        folder_id = main.get_root_folder_id(conn)
+        conn.execute(
+            "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+            (folder_id, feed_url),
+        )
+    return folder_id
+
+
+def test_host_change_seeds_the_alias_rule(configured, monkeypatch):
+    """A feed that moved host moved its site too. Everything downstream — the
+    entry-link rebase, the dupe scan, the favicon, re-fetch, and the Website
+    shown in Properties — reads feed_url_rewrites, so one rule fixes them all.
+    Leaving it to be added by hand meant the Website kept naming a dead domain,
+    which does not look like something the URL change caused."""
+    new_url = "https://www.newhost.test/feed"
+    _patch_probe(monkeypatch, {"status": "feed", "feeds": [{"url": new_url}]})
+
+    with _client() as c:
+        r = c.post("/feeds/change-url", data={"old_url": FEED, "new_url": new_url})
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # `www.` is folded by _normalize_alias_host — the alias map is host-identity,
+    # and www/non-www is the same site.
+    assert body["alias"]["from_host"] == "example.test"
+    assert body["alias"]["to_host"] == "newhost.test"
+    with main.get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT from_host, to_host FROM feed_url_rewrites WHERE feed_url = ?", (new_url,)
+        ).fetchone()
+    assert (row["from_host"], row["to_host"]) == ("example.test", "newhost.test")
+
+
+def test_same_host_change_seeds_nothing(configured, monkeypatch):
+    """Only a HOST move implies the site moved; a path change on the same host
+    must not declare the host an alias of itself."""
+    new_url = "https://example.test/other-feed.xml"
+    _patch_probe(monkeypatch, {"status": "feed", "feeds": [{"url": new_url}]})
+
+    with _client() as c:
+        r = c.post("/feeds/change-url", data={"old_url": FEED, "new_url": new_url})
+
+    assert r.json()["alias"] is None
+    with main.get_meta_connection() as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM feed_url_rewrites WHERE feed_url = ?", (new_url,)
+        ).fetchone()[0] == 0
+
+
+def test_existing_alias_is_not_clobbered(configured, monkeypatch):
+    """A rule the user already declared outranks the one we would seed."""
+    new_url = "https://www.newhost.test/feed"
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO feed_url_rewrites (feed_url, from_host, to_host) VALUES (?, ?, ?)",
+            (new_url, "example.test", "hand.declared.test"),
+        )
+    _patch_probe(monkeypatch, {"status": "feed", "feeds": [{"url": new_url}]})
+
+    with _client() as c:
+        r = c.post("/feeds/change-url", data={"old_url": FEED, "new_url": new_url})
+
+    assert r.json()["alias"] is None, "seeded over a rule the user already had"
+    with main.get_meta_connection() as conn:
+        assert conn.execute(
+            "SELECT to_host FROM feed_url_rewrites WHERE feed_url = ? AND from_host = ?",
+            (new_url, "example.test"),
+        ).fetchone()[0] == "hand.declared.test"
+
+
+def test_response_carries_the_folder_so_the_tree_can_select_it(configured, monkeypatch):
+    """Without this the client redirected to ?list_feed_url=… alone, and a feed
+    URL with no folder_id leaves the sidebar nothing to select — the feed opens
+    in the list but is invisible in the tree, with no way back to its menu."""
+    new_url = "https://www.newhost.test/feed"
+    folder_id = _add_to_folder(FEED)
+    _patch_probe(monkeypatch, {"status": "feed", "feeds": [{"url": new_url}]})
+
+    with _client() as c:
+        r = c.post("/feeds/change-url", data={"old_url": FEED, "new_url": new_url})
+
+    assert r.json()["folder_id"] == folder_id
+
+
+def test_old_host_is_reported_for_the_alias_prefill(configured, monkeypatch):
+    new_url = "https://www.newhost.test/feed"
+    _patch_probe(monkeypatch, {"status": "feed", "feeds": [{"url": new_url}]})
+
+    with _client() as c:
+        r = c.post("/feeds/change-url", data={"old_url": FEED, "new_url": new_url})
+
+    assert r.json()["old_host"] == "example.test"

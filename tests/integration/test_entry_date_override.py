@@ -198,3 +198,154 @@ def test_mined_dates_are_range_checked():
     assert main.mine_publish_date("<p>nothing here</p>") is None
     assert main.mine_publish_date(
         '<time datetime="2020-03-04T05:06:07Z">x</time>').year == 2020
+
+
+# --- orphan saves: the feed is gone, the entry lives only in the archive -----
+
+
+ORPHAN_FEED = "https://feeds.feedburner.com/Gone"
+ORPHAN_ID = "http://feedproxy.google.com/~r/Gone/~3/abc123/"
+
+
+@pytest.fixture
+def orphan(configured):
+    """A saved entry whose feed was unsubscribed: present in the archive, absent
+    from reader. Saved still lists it, so its date must still be editable."""
+    main.ensure_starred_archive_schema()
+    with main.get_starred_archive_connection() as arch:
+        arch.execute(
+            "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at, title, link)"
+            " VALUES (?, ?, 'complete', 0, ?, ?)",
+            (ORPHAN_FEED, ORPHAN_ID, "orphaned save", "https://gone.test/post"),
+        )
+    yield
+
+
+def test_orphan_save_can_be_dated(orphan):
+    """Reported as "Entry not found." — the route gated on reader, and an orphan
+    is by definition not in reader."""
+    resp = _client().post("/entries/set-date", data={
+        "feed_url": ORPHAN_FEED, "entry_id": ORPHAN_ID, "published": "2019-03-14",
+    })
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ok"] is True
+
+    with main.get_starred_archive_connection() as arch:
+        stored = arch.execute(
+            "SELECT published_at FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+            (ORPHAN_FEED, ORPHAN_ID),
+        ).fetchone()[0]
+    assert stored is not None
+    from datetime import datetime, timezone
+    assert datetime.fromtimestamp(stored, tz=timezone.utc).date().isoformat() == "2019-03-14"
+
+
+def test_orphan_date_is_also_recorded_as_an_override(orphan):
+    """So the two agree if the feed is ever re-subscribed and the entry returns
+    to reader."""
+    _client().post("/entries/set-date", data={
+        "feed_url": ORPHAN_FEED, "entry_id": ORPHAN_ID, "published": "2019-03-14",
+    })
+
+    with main.get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT published FROM entry_date_overrides WHERE feed_url = ? AND entry_id = ?",
+            (ORPHAN_FEED, ORPHAN_ID),
+        ).fetchone()
+    assert row is not None and row[0].startswith("2019-03-14")
+
+
+def test_orphan_date_can_be_cleared(orphan):
+    client = _client()
+    client.post("/entries/set-date", data={
+        "feed_url": ORPHAN_FEED, "entry_id": ORPHAN_ID, "published": "2019-03-14",
+    })
+
+    resp = client.post("/entries/set-date", data={
+        "feed_url": ORPHAN_FEED, "entry_id": ORPHAN_ID, "published": "",
+    })
+
+    assert resp.status_code == 200
+    with main.get_starred_archive_connection() as arch:
+        assert arch.execute(
+            "SELECT published_at FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+            (ORPHAN_FEED, ORPHAN_ID),
+        ).fetchone()[0] is None
+
+
+def test_entry_in_neither_store_still_404s(orphan):
+    """The orphan fallback must not turn a genuine miss into a success."""
+    resp = _client().post("/entries/set-date", data={
+        "feed_url": ORPHAN_FEED, "entry_id": "no-such-entry", "published": "2019-03-14",
+    })
+    assert resp.status_code == 404
+
+
+# --- the sentinel gate, and the non-metadata sources ------------------------
+
+
+def _set_stored_published(value: str) -> None:
+    with main.get_reader() as reader:
+        db = reader._storage.get_db()
+        db.execute("UPDATE entries SET published = ? WHERE feed = ? AND id = 'e1'", (value, FEED))
+        db.commit()
+
+
+def test_year_0001_counts_as_no_date(configured):
+    """The gate used to test only for the "1970-01-01" prefix, which silently
+    excluded the 129 entries whose importer wrote year 0001 instead — the same
+    class of value in a different spelling."""
+    _set_stored_published("0001-01-01 00:00:00")
+    page = '<meta property="article:published_time" content="2019-01-22T10:00:00+00:00"/>'
+
+    assert main._apply_mined_publish_date(FEED, "e1", page) == "2019-01-22 10:00:00"
+
+
+def test_a_real_date_is_still_never_overwritten(configured):
+    """The guard that matters: re-fetch once MOVED published and destroyed 105
+    real dates."""
+    _set_stored_published("2015-06-07 00:00:00")
+    page = '<meta property="article:published_time" content="2019-01-22T10:00:00+00:00"/>'
+
+    assert main._apply_mined_publish_date(FEED, "e1", page) is None
+    assert _reader_published() == "2015-06-07 00:00:00"
+
+
+def test_a_date_only_printed_for_humans_is_used(configured):
+    """hanselman.com ships this and nothing machine-readable, so mining metadata
+    correctly found nothing — on a page visibly showing its date."""
+    _set_stored_published("1970-01-01 00:00:00")
+    page = '<section><span class="blogMetaDate">February 03, 2026</span></section>'
+
+    assert main._apply_mined_publish_date(FEED, "e1", page) == "2026-02-03 00:00:00"
+
+
+def test_the_site_index_dates_an_article_with_no_date_on_it(configured, monkeypatch):
+    """what-if articles carry no date in any form; the site's archive index has
+    every one. Note the page HTML here is empty — that is the case."""
+    from datetime import datetime, timezone
+
+    from services import publish_date as pd
+    monkeypatch.setattr(pd, "_whatif_index", {"157": datetime(2018, 5, 21, tzinfo=timezone.utc)})
+
+    with main.get_reader() as reader:
+        reader.add_entry({
+            "feed_url": FEED, "id": "https://what-if.xkcd.com/157/",
+            "title": "Earth-Moon Fire Pole", "link": "https://what-if.xkcd.com/157/",
+        })
+        db = reader._storage.get_db()
+        db.execute("UPDATE entries SET published = '1970-01-01 00:00:00' WHERE feed = ? AND id = ?",
+                   (FEED, "https://what-if.xkcd.com/157/"))
+        db.commit()
+
+    got = main._apply_mined_publish_date(FEED, "https://what-if.xkcd.com/157/", "<html></html>")
+    assert got == "2018-05-21 00:00:00"
+
+
+def test_metadata_still_wins_over_the_weaker_sources(configured):
+    _set_stored_published("1970-01-01 00:00:00")
+    page = ('<meta property="article:published_time" content="2019-01-22T10:00:00+00:00"/>'
+            '<span class="blogMetaDate">February 03, 2026</span>')
+
+    assert main._apply_mined_publish_date(FEED, "e1", page) == "2019-01-22 10:00:00"

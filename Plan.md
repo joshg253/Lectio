@@ -74,6 +74,75 @@ prevented — a host feeding one byte per 29s keeps a pass "advancing" per-read 
 not per-feed. If that ever shows up, the fix is a per-feed wall-clock budget in
 `update_feeds`, not a shorter read deadline.
 
+### Moving a feed to a new URL — FIXED 2026-08-04
+
+Changing a feed's URL left three loose ends, all reported from live use:
+
+- **The site identity stayed behind.** A feed that moves host moved its site
+  too, but the alias rule that expresses that had to be added by hand
+  afterwards. Everything downstream reads `feed_url_rewrites` — the entry-link
+  rebase, the dupe scan, the favicon, re-fetch, **and the Website shown in Feed
+  Properties** (`_rewrite_url_host`) — so one rule fixes all of them, and its
+  absence showed up as a Website still naming a dead domain, which does not look
+  like something the URL change caused. Now seeded automatically on a host
+  change, reusing exactly what Edit Website does. Skipped when the host is
+  unchanged, and never clobbers a rule the user already declared.
+- **The feed vanished from the tree.** The client redirected by copying the
+  current query string and swapping `list_feed_url` — but Properties can be
+  opened from a page with no `folder_id` at all (Settings → Feeds, or an
+  already-feed-scoped URL), and without one the sidebar has nothing to select.
+  The feed was open in the list and invisible in the tree, with no route back to
+  its context menu. `/feeds/change-url` now returns the feed's `folder_id`.
+- **The old host is offered for the alias field** when the server declined to
+  seed it itself (rule already present, or a same-host move), carried across the
+  navigation in `sessionStorage` and read exactly once.
+
+### what-if.xkcd dates — APPLIED 2026-08-04 (45 entries)
+
+`scripts/recover_whatif_dates.py` — **applied 2026-08-04, 45 of 45**, real
+publisher dates (Earth-Moon Fire Pole → 2018-05-21). Library-wide sentinel count
+went 313 → 267. Log:
+`data/users/<uid>/recovered_whatif_dates_20260804-154117.json`.
+
+The index fetch now lives in `services/publish_date` and the script delegates to
+it, so re-fetching a single what-if post and running the backfill over the whole
+backlog cannot disagree about a date.
+
+`fetch_missing_publish_dates.py` had recorded what-if as hopeless — 45 entries,
+fetching the article pages returned **zero** dates. That was correct and it was
+about the wrong page: a what-if *article* carries no date metadata at all
+(re-verified against all 50 stored captures — no `article:published_time`, no
+JSON-LD, not even a `<time>`). The *archive index* carries every one of them in
+an `<h3 class="archive-date">`, so the whole back catalogue is **one polite GET**
+keyed by the article URL already stored as the entry id.
+
+**The lesson, which is the reusable part:** check whether a date is published
+somewhere else on the site — an index, an archive, a sitemap — before concluding
+it must be fetched per-article or does not exist. The same note already exists
+for blog.guitar-pro.com, where the per-article fetch would have written a date
+wrong by three and a half years.
+
+### Internet Archive re-fetch — the manual trigger, added 2026-08-04
+
+`wayback_snapshot_url` already existed and re-fetch already used it — but only on
+a *refused* live fetch (parked page, 404). The case that sent Josh to
+archive.org by hand is the one that passes every guard: a publisher serving a
+page that is no longer the article — rewritten, truncated, paywalled. That page
+is indistinguishable from a good one to a guard, so only the reader can call it
+wrong, and nothing let them ask. Added `mode=archive` and a **Re-fetch from
+Internet Archive** post-menu item.
+
+The date half of that manual workflow needed nothing extra: mining already runs
+over whatever the re-fetch fetched, and an archived copy usually still carries
+the byline the publisher dropped — which the new visible-text tier now reads.
+
+**Not done: the Wayback timestamp as a date source.** The availability API
+returns the *closest* snapshot, not the first, so its timestamp is whatever crawl
+happened to be nearest — recent, and nothing to do with publication. A real
+first-capture date needs the CDX API sorted ascending; probed 2026-08-04 and it
+worked (what-if/105 → 2014-07-19) but timed out on 2 of 3 tries. Worth revisiting
+only if a cluster shows up that has no other date source.
+
 ### 0c. CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a
@@ -2786,15 +2855,26 @@ Other:
   `RedirectResponse(url=_safe_next(...))` may re-flag; dismiss with the same
   rationale.
 
-- **Pre-existing date-less entries sort by received time, not true age** — new
-  imports backfill a real `published` (Inoreader crawl-time fallback), and the
-  Pub-Old/Pub-New window now falls back to `first_updated` so old posts surface
-  correctly. But the handful of already-imported entries with a NULL `published`
-  (~343 in the live DB) still lack a true publication date; rather than overwrite
-  reader's `published` column with import time (worse than the runtime
-  URL/title-inferred fallback), they sort by when the reader first saw them. A
-  one-time backfill that persists the inferred effective date could be added later
-  if the ordering of those specific entries ever matters.
+- **Entries nothing can date sort by received time** — an entry with a NULL
+  `published`, no dated permalink and no date in its title has no publication
+  date to find, so it sorts by when the reader first saw it. That is now the
+  *only* remaining case: the two bugs that used to dominate this bucket were
+  fixed 2026-08-04 (see below). A one-time backfill persisting the inferred date
+  could still be added if the ordering of those specific entries ever matters.
+
+  **Fixed 2026-08-04 — sentinel dates, and unreachable inference.** Two defects
+  that hid each other. (1) A missing date stored as a *sentinel* — the Unix epoch
+  from an importer, or year 0001 from a parser — is **truthy**, and every date
+  fallback here is an `or` chain, so it beat every fallback instead of falling
+  through like the NULL it stood for. 312 entries across 31 feeds. (2) The
+  URL/title inference was **dead code**: it sat behind `entry_effective_date`,
+  which already fell back to the received date and so was never falsy, meaning
+  `url_inferred_pubdate` had never once run. The visible symptom was an entry
+  with `2025-11-22` in its own URL showing no usable date at all. Split into
+  `entry_publication_date` (may return None — what lets the UI say "no date"
+  honestly) and `entry_effective_date` (always returns something, for the sort
+  and the bulk age actions), with `real_published_date` normalizing sentinels to
+  None. `_URL_PUBDATE_RE` also gained the `/YYYY-MM-DD/` permalink shape.
 
 - **Reddit OAuth app registration blocked (access request DENIED 2026-07-19)** —
   Reddit killed free OAuth2 app registration as part of the 2023 API crackdown. The
