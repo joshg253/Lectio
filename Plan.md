@@ -306,6 +306,21 @@ a candidate URL. The decoded URL still has to satisfy the feed's extension list 
 this widens where links are FOUND, not what counts as a file. Referenced
 attachments on blog.guitar-pro.com went 211 → 461.
 
+### Attachments download with their real filename — FIXED 2026-08-05
+
+An archived asset is addressed by **content hash**, so a bare `download`
+attribute made the browser save `cfc24ad676575660aa54d641afe8b2c8…` with no
+extension — unopenable and unidentifiable. Three places now carry the name,
+derived from the source URL's basename (URL-decoded, query dropped,
+header-hostile characters replaced):
+
+- the Attachments list (`download="Melody-Danny_Boy.gp"`);
+- in-body links rewritten to the archive, unless the publisher already set a
+  `download` name of their own;
+- the `/starred-asset/` route itself, via `Content-Disposition`, so "Save link
+  as" and a pasted URL are named too. Skipped for images/audio/video, which
+  render inline and would only be made un-viewable by an attachment disposition.
+
 ### 0c. CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a

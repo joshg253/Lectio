@@ -5,6 +5,8 @@ kept the wrong half, so anything archived is served from the local copy.
 """
 from __future__ import annotations
 
+import pytest
+
 import main
 from services.starred_archive import StarredArchiveService
 
@@ -187,3 +189,42 @@ def test_an_image_link_with_a_query_still_counts():
     svc = StarredArchiveService.__new__(StarredArchiveService)
     got = svc._extract_image_urls('<a href="https://x.test/a.png?v=2">i</a>', "https://x.test/")
     assert got == {"https://x.test/a.png?v=2"}
+
+
+# --- downloads must arrive with a usable name --------------------------------
+#
+# An archived asset is addressed by CONTENT HASH, so without a filename the
+# browser saves "cfc24ad676575660aa54d641afe8b2c86e8fa02bc…" with no extension —
+# unopenable and unidentifiable.
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://assets-wp.guitar-pro.eu/uploads/2024/12/Melody-Danny_Boy.gp",
+     "Melody-Danny_Boy.gp"),
+    ("https://x.test/a%20b/My%20Tab.gp5?v=2", "My Tab.gp5"),   # decoded, query dropped
+    ('https://x.test/na:me*.pdf', "na_me_.pdf"),               # sanitized
+    ("https://x.test/no-basename/", "attachment"),             # nothing to use
+])
+def test_download_filename_is_derived_from_the_source_url(url, expected):
+    assert main.attachment_filename_for_url(url) == expected
+
+
+def test_the_attachment_link_carries_the_filename():
+    html = main._render_entry_attachments(
+        _Entry([_Enc(EPUB, "application/epub+zip")]), None, {EPUB: "HASH1"})
+    assert 'download="book.epub"' in html
+
+
+def test_a_rewritten_body_link_carries_the_filename():
+    tab = "https://x.test/uploads/Melody-Danny_Boy.gp"
+    out = _rewrite(f'<a href="{tab}">tab</a>', {tab: "H"})
+    assert 'download="Melody-Danny_Boy.gp"' in out
+    assert 'href="/starred-asset/H"' in out
+
+
+def test_an_existing_download_attribute_is_left_alone():
+    """The publisher's own chosen name wins over ours."""
+    tab = "https://x.test/a.gp"
+    out = _rewrite(f'<a href="{tab}" download="Their Name.gp">t</a>', {tab: "H"})
+    assert out.count("download=") == 1
+    assert "Their Name.gp" in out

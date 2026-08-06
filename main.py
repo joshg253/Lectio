@@ -10219,6 +10219,21 @@ def _enclosure_label(enc_url: str, enc_type: str) -> str:
     return enc_type or "attachment"
 
 
+def attachment_filename_for_url(source_url: str) -> str:
+    """The filename a saved asset should download as.
+
+    An archived asset is addressed by content hash, so without this the browser
+    names the download after the URL's last segment — a 64-character hash with
+    no extension, which is unopenable and unidentifiable. Taken from the source
+    URL's own basename, minus any query.
+    """
+    name = urlparse(source_url or "").path.rsplit("/", 1)[-1]
+    name = unquote(name).strip()
+    # Header- and filesystem-hostile characters out; keep it recognisable.
+    name = re.sub(r'[\\/:*?"<>|\r\n]+', "_", name).strip(". ")
+    return name[:120] or "attachment"
+
+
 def _attachment_list_item(source_url: str, label: str, meta: str,
                           asset_map: dict[str, str]) -> str:
     """One <li>, pointing at the local copy when there is one.
@@ -10235,8 +10250,11 @@ def _attachment_list_item(source_url: str, label: str, meta: str,
     else:
         href = html.escape(source_url, quote=True)
         badge = ""
-    return (f'<li><a href="{href}" target="_blank" rel="noopener noreferrer" download>'
-            f'{label}</a>{meta}{badge}</li>')
+    # `download` must carry the NAME: the archived URL ends in a content hash,
+    # and a bare `download` makes the browser save that hash with no extension.
+    dl = html.escape(attachment_filename_for_url(source_url), quote=True)
+    return (f'<li><a href="{href}" target="_blank" rel="noopener noreferrer" '
+            f'download="{dl}">{label}</a>{meta}{badge}</li>')
 
 
 def _render_entry_attachments(entry, audio_url: str | None,
@@ -20973,10 +20991,20 @@ def starred_asset(asset_hash: str) -> Response:
     if found is None:
         return Response(status_code=404)
     data, content_type = found
+    headers = {"Cache-Control": "public, max-age=31536000, immutable"}
+    # Name the file. The URL is a content hash, so without this a "Save link as"
+    # — or any download the `download` attribute does not cover — writes a
+    # 64-character hash with no extension. Images are left unnamed: they render
+    # inline and a Content-Disposition would not help them.
+    if not (content_type or "").lower().startswith(("image/", "audio/", "video/")):
+        source_url = starred_archive_service.source_url_for_asset(asset_hash)
+        if source_url:
+            filename = attachment_filename_for_url(source_url)
+            headers["Content-Disposition"] = f'attachment; filename="{filename}"'
     return Response(
         content=data,
         media_type=content_type,
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        headers=headers,
     )
 
 

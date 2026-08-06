@@ -62,6 +62,15 @@ _HREF_ANCHOR_RE = re.compile(
     re.IGNORECASE,
 )
 _IMAGE_PATH_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")
+_UNSAFE_NAME_RE = re.compile(r'[\\/:*?"<>|\r\n]+')
+
+
+def _download_name_for(source_url: str) -> str:
+    """Filename for a link rewritten to a content-addressed archive URL."""
+    from urllib.parse import unquote
+
+    name = unquote(urlparse(source_url or "").path.rsplit("/", 1)[-1]).strip()
+    return _UNSAFE_NAME_RE.sub("_", name).strip(". ")[:120]
 
 
 class StarredArchiveService:
@@ -262,6 +271,23 @@ class StarredArchiveService:
                 continue
             out[str(row["source_url"])] = str(row["asset_hash"])
         return out
+
+    def source_url_for_asset(self, asset_hash: str) -> str | None:
+        """Any source URL this asset was stored from, for naming a download.
+
+        Assets are content-addressed and shared, so several posts can reference
+        the same bytes; any of the URLs gives the same filename, which is all
+        this is for.
+        """
+        try:
+            with self._get_archive_connection() as conn:
+                row = conn.execute(
+                    "SELECT source_url FROM archived_asset_link WHERE asset_hash = ? LIMIT 1",
+                    (asset_hash,),
+                ).fetchone()
+        except sqlite3.Error:
+            return None
+        return str(row["source_url"]) if row else None
 
     def has_complete_archive(self, feed_url: str, entry_id: str) -> bool:
         """True if a `complete` archive row exists for this key."""
@@ -1308,7 +1334,15 @@ class StarredArchiveService:
             asset_hash = asset_map.get(href)
             if not asset_hash:
                 return tag
-            return _HREF_ATTR_ANY_RE.sub(f'href="{asset_url_prefix}{asset_hash}"', tag, count=1)
+            tag = _HREF_ATTR_ANY_RE.sub(f'href="{asset_url_prefix}{asset_hash}"', tag, count=1)
+            # Carry the original filename. The archived URL ends in a content
+            # hash, so a download from this link would otherwise be saved as a
+            # 64-character hash with no extension.
+            if "download=" not in tag.lower():
+                name = _download_name_for(href)
+                if name:
+                    tag = tag[:-1].rstrip() + f' download="{name}">'
+            return tag
 
         html_text = _IMG_TAG_RE.sub(_rewrite_img, html_text)
         return _A_TAG_RE.sub(_rewrite_anchor, html_text)
