@@ -375,6 +375,7 @@ def refresh_captured_article(
     *,
     extract: Callable[[str], tuple[str, str]],
     enqueue_archive: Callable[[str, str], None] | None = None,
+    is_boilerplate_extraction: Callable[[str, str, str], bool] | None = None,
 ) -> dict:
     """Re-fetch and re-extract a Lectio capture in place, wherever it lives.
 
@@ -498,6 +499,31 @@ def refresh_captured_article(
         )
         result["mismatch"] = True
         return result
+
+    # ⚠ A page can be the RIGHT article and still extract to the wrong thing.
+    # commandlinefu.com's pages made readability lock onto the site's standing
+    # blurb ("is the place to record those command-line gems…"), which replaced
+    # the actual command. The guard above cannot see it: the title stayed
+    # correct, and the boilerplate is LONGER than the command it replaced, so
+    # neither title nor length separates them.
+    #
+    # What does separate them: site chrome extracts IDENTICALLY for every post
+    # on that feed. If this exact text is already stored against a DIFFERENT
+    # entry of the same feed, it is not this article's content. Measured on the
+    # live archive before this existed: 1,109 entries across 58 feeds had been
+    # overwritten with a sibling's extraction.
+    if is_boilerplate_extraction is not None:
+        try:
+            if is_boilerplate_extraction(feed_url, entry_id, article_html):
+                result["error"] = (
+                    "That page extracted to the same text as other posts in this "
+                    "feed — the site's boilerplate, not the article. The stored "
+                    "copy was left alone. Try Re-fetch full page."
+                )
+                result["boilerplate"] = True
+                return result
+        except Exception:  # noqa: BLE001 — a guard must never break the feature
+            LOGGER.debug("boilerplate check failed for %s", entry_id, exc_info=True)
 
     # Snapshot the body BEFORE replacing it, so a bad re-fetch is one click to
     # undo. Two entries were destroyed this way before this existed — a parked

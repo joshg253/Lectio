@@ -10719,7 +10719,15 @@ def _absolutize_article_urls(article_html: str, base_url: str) -> str:
 
 
 def _set_or_replace_tag_attr(tag_html: str, attr_name: str, value: str) -> str:
-    attr_re = re.compile(rf'\b{re.escape(attr_name)}\s*=\s*["\'][^"\']*["\']', re.IGNORECASE)
+    r"""Set *attr_name* on a tag, replacing it only if it is genuinely present.
+
+    The boundary is ``(?<![-\w])``, not ``\b``: a hyphen is a non-word character,
+    so ``\bsrc=`` matches inside ``data-lazy-src=``. Promoting a lazy image
+    therefore "found" an existing src, rewrote the lazy attribute with its own
+    value, and added no real src at all — the image had nothing to load and
+    rendered as an empty box.
+    """
+    attr_re = re.compile(rf'(?<![-\w]){re.escape(attr_name)}\s*=\s*["\'][^"\']*["\']', re.IGNORECASE)
     attr_literal = f'{attr_name}="{html.escape(value, quote=True)}"'
     if attr_re.search(tag_html):
         return attr_re.sub(attr_literal, tag_html, count=1)
@@ -11744,6 +11752,13 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     title = doc.short_title() or source_url
     summary = doc.summary(html_partial=True)
     summary = _reinject_readability_embeds(summary, raw_html)
+    # Promote lazy-loading attributes BEFORE sanitizing. A page that ships
+    # `<img data-lazy-src=…>` with no `src` (Wayback snapshots of WordPress
+    # sites do exactly this) otherwise stores an image element with nothing to
+    # load, which renders as an empty box. The helper already existed for the
+    # web-view proxy; capture needs it more, because what it stores is what the
+    # offline copy will forever contain.
+    summary = normalize_proxy_lazy_media(summary)
     article_html = sanitize_readability_html(summary).strip()
     _bs4_fallback_used = False
     if len(article_html) < 300:
@@ -28212,6 +28227,7 @@ def _refresh_captured_article_for_current_user(
             entry_id,
             extract=extract,
             enqueue_archive=starred_archive_service.enqueue_archive,
+            is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
         )
     if from_archive and result.get("ok"):
         result["from_archive"] = from_archive
@@ -28232,6 +28248,7 @@ def _refresh_captured_article_for_current_user(
                     reader, conn, feed_url, entry_id,
                     extract=_from_archive,
                     enqueue_archive=starred_archive_service.enqueue_archive,
+                    is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
                 )
             if archived_result.get("ok"):
                 archived_result["from_archive"] = snapshot
