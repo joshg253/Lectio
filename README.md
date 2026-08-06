@@ -343,6 +343,16 @@ When a saved article's page rots, **Re-fetch from Internet Archive** pulls the
 snapshot instead — and because archived copies usually still carry the byline the
 publisher has since dropped, that often recovers the date as well as the text.
 
+**Keep the files a post links to.** Some posts are really a wrapper around a
+download — guitar-pro's tab posts link `.gp` files and PDF lyric sheets that
+vanish with the article, so keeping the text without them keeps the wrong half.
+Name the extensions in Feed Properties and they're captured alongside the post
+when you star or tag it, served from the same offline archive. Extensions only:
+there's deliberately no wildcard, and page types (`html`, `php`, …) are always
+ignored — that list is what keeps this a capture of named file types rather than
+a crawl of every link on the page. Files on a separate asset domain are fine,
+which is the normal case.
+
 **Suggested tags per feed.** A feed with a stable subject rarely tags its own
 posts — a guitar blog doesn't tag anything "guitar" — so filing meant typing the
 same word every time. Pin tags to a feed in Feed Properties and they're offered

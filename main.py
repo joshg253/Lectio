@@ -4131,6 +4131,14 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN suggested_tags TEXT")
         except Exception:
             pass
+        # File extensions to keep alongside a post when it is saved — guitar-pro
+        # links .gp tabs and .pdf lyric sheets that vanish with the post. Stored
+        # space-separated and normalized; empty/absent means the feature is off
+        # for this feed.
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN attachment_exts TEXT")
+        except Exception:
+            pass
         try:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN inject_source_images INTEGER NOT NULL DEFAULT 0")
         except Exception:
@@ -8202,6 +8210,10 @@ starred_archive_service = StarredArchiveService(
     # tag-created archive from a star-created one — since tag-as-keep, an
     # archive row alone no longer means the entry was starred.
     manually_tagged_keys=lambda: _manually_tagged_entry_keys(),
+    # Lazy for the same reason. Per-feed policy (which extensions this feed
+    # keeps) plus the link scan, so the service only has to ask one question.
+    find_attachments=lambda feed_url, html, base: attachment_links_in_html(
+        html, base, get_feed_attachment_exts(feed_url)),
 )
 
 
@@ -8657,6 +8669,194 @@ def set_feed_pinned_tags(feed_url: str, raw_value: str) -> list[str]:
             (feed_url, " ".join(tags)),
         )
     return tags
+
+
+# Page extensions are never attachments, whatever the user types. A capture that
+# followed .html/.php would stop being "keep the files this post links to" and
+# become a crawler — and the one thing that reliably distinguishes a file from a
+# page here IS the extension, so this list is what keeps the feature honest.
+_NEVER_ATTACHMENT_EXTS = frozenset({
+    "htm", "html", "xhtml", "shtml", "php", "php3", "php4", "php5", "phtml",
+    "asp", "aspx", "jsp", "jspx", "cgi", "pl", "cfm", "do", "action",
+})
+# An exact extension ("gp5"), or a PREFIX pattern ("gp*" -> gp, gp3, gp4, gp5,
+# gpx). Guitar Pro alone ships five, so listing them by hand is tedious and
+# guaranteed to miss the next one.
+#
+# A bare "*" is still refused, and the prefix must be at least two characters:
+# the point of the list is that it names a FAMILY of file types, and a one-letter
+# prefix ("p*" -> pdf, png, ppt, psd…) is a wildcard wearing a hat. Page types
+# are refused separately and at match time too, so even a broad prefix can never
+# reach an .html.
+_ATTACHMENT_EXT_RE = re.compile(r"^[a-z0-9]{1,8}$")
+_ATTACHMENT_PREFIX_RE = re.compile(r"^([a-z0-9]{2,8})\*$")
+_HREF_ATTR_RE = re.compile(r'href=[\'"]([^\'"]+)[\'"]', re.I)
+
+
+def _attachment_ext_matches(ext: str, patterns: list[str]) -> bool:
+    """Whether a file's extension is one this feed keeps.
+
+    Page types are re-checked HERE and not only on save: a stored value must
+    never be able to smuggle one through, whatever wrote it.
+    """
+    if not ext or ext in _NEVER_ATTACHMENT_EXTS:
+        return False
+    for pattern in patterns:
+        if pattern.endswith("*"):
+            if ext.startswith(pattern[:-1]):
+                return True
+        elif ext == pattern:
+            return True
+    return False
+# Per-file ceiling. A tab or a lyric sheet is kilobytes; anything past this is
+# not what this feature is for, and the archive is a SQLite blob store.
+ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
+
+
+def normalize_attachment_exts(raw_value: str) -> list[str]:
+    """Parse a user's extension list: lower-cased, dot-stripped, deduped.
+
+    Page types are dropped rather than rejected — the user typing "pdf html"
+    means the pdf, and failing the whole save over the html would be unhelpful.
+    """
+    out: list[str] = []
+    for token in (raw_value or "").replace(",", " ").split():
+        raw = token.strip().lower().lstrip(".")
+        prefix_match = _ATTACHMENT_PREFIX_RE.match(raw)
+        if prefix_match:
+            # Kept as written ("gp*"). Page types are refused at MATCH time, so
+            # a broad prefix still cannot reach an .html or a .php.
+            value = prefix_match.group(1) + "*"
+        elif _ATTACHMENT_EXT_RE.match(raw) and raw not in _NEVER_ATTACHMENT_EXTS:
+            value = raw
+        else:
+            continue
+        if value not in out:
+            out.append(value)
+    return out
+
+
+# Already captured as images by the archive, so offering them as "attachments"
+# would be redundant noise in the suggestion list.
+# NB: bare extensions, and deliberately NOT named _IMAGE_EXTS — that name is
+# already taken further down by a tuple of DOTTED suffixes for a different
+# check, and being defined later it would win at import time.
+_ARCHIVED_IMAGE_EXTS = frozenset({
+    "jpg", "jpeg", "png", "gif", "webp", "avif", "svg", "bmp", "ico",
+})
+# A link to a bare domain ("https://example.com") leaves the TLD looking like a
+# file extension. Nothing else distinguishes it from a real one.
+_TLD_LOOKALIKES = frozenset({
+    "com", "org", "net", "io", "co", "us", "uk", "eu", "de", "fr", "jp", "ru",
+    "tv", "me", "info", "biz", "app", "dev", "xyz",
+})
+
+
+def scan_feed_attachment_extensions(feed_url: str, limit: int = 10) -> list[dict]:
+    """File extensions this feed's posts actually link to, most common first.
+
+    The point is that the field stops guessing: a generic placeholder suggested
+    Guitar Pro formats to every feed in the library. Counted from the entries
+    already stored, so it costs no requests.
+
+    Images are excluded (the archive captures those anyway), as are page types
+    and the TLD lookalikes a bare-domain link leaves behind.
+    """
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    try:
+        with get_reader() as reader:
+            for entry in reader.get_entries(feed=feed_url):
+                content = entry.get_content(prefer_summary=False)
+                html_text = (content.value if content and content.value else "") or ""
+                if not html_text:
+                    html_text = str(getattr(entry, "summary", "") or "")
+                if not html_text:
+                    continue
+                for href in _HREF_ATTR_RE.findall(html_text):
+                    path = urlparse(href).path.lower()
+                    dot = path.rfind(".")
+                    if dot < 0:
+                        continue
+                    ext = path[dot + 1:]
+                    if not _ATTACHMENT_EXT_RE.match(ext):
+                        continue
+                    if (ext in _NEVER_ATTACHMENT_EXTS or ext in _ARCHIVED_IMAGE_EXTS
+                            or ext in _TLD_LOOKALIKES):
+                        continue
+                    counts[ext] += 1
+    except Exception:  # noqa: BLE001 — a suggestion is never worth an error
+        LOGGER.debug("attachment extension scan failed for %s", feed_url, exc_info=True)
+        return []
+    # Drop one-offs: a path fragment that merely looks like an extension
+    # ("…/music", "…/bulakhov") always appears once, while anything the feed
+    # genuinely publishes recurs. This is a suggestion list, so a rare real type
+    # costs nothing — it can still be typed.
+    return [
+        {"ext": ext, "count": n}
+        for ext, n in counts.most_common(limit * 2)
+        if n >= 2
+    ][:limit]
+
+
+def get_feed_attachment_exts(feed_url: str) -> list[str]:
+    """Extensions this feed keeps as attachments, or [] when the feature is off."""
+    try:
+        with get_meta_connection() as conn:
+            row = conn.execute(
+                "SELECT attachment_exts FROM feed_display_prefs WHERE feed_url = ?",
+                (feed_url,),
+            ).fetchone()
+    except Exception:  # noqa: BLE001
+        return []
+    if not row or not row["attachment_exts"]:
+        return []
+    return normalize_attachment_exts(str(row["attachment_exts"]))
+
+
+def set_feed_attachment_exts(feed_url: str, raw_value: str) -> list[str]:
+    """Store the attachment extensions for *feed_url*. Returns what was kept."""
+    exts = normalize_attachment_exts(raw_value)
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO feed_display_prefs (feed_url, attachment_exts) VALUES (?, ?)"
+            " ON CONFLICT(feed_url) DO UPDATE SET attachment_exts = excluded.attachment_exts",
+            (feed_url, " ".join(exts)),
+        )
+    return exts
+
+
+def attachment_links_in_html(content_html: str, base_url: str, exts: list[str]) -> list[str]:
+    """Absolute URLs of linked files matching *exts*, in document order.
+
+    Matches on the URL PATH only, so a query string never turns a page into an
+    attachment (``/post.php?file=x.pdf`` is a page). Any host is allowed: the
+    files a post links to routinely live on a separate asset domain — guitar-pro
+    serves .gp tabs from assets-wp.guitar-pro.eu while the post is on
+    blog.guitar-pro.com — so a same-host rule would miss exactly the case this
+    exists for.
+    """
+    if not content_html or not exts:
+        return []
+    from bs4 import BeautifulSoup
+
+    wanted = [e.lower() for e in exts]
+    found: list[str] = []
+    soup = BeautifulSoup(content_html, "html.parser")
+    for a in soup.find_all("a"):
+        href = str(a.get("href") or "").strip()
+        if not href or href.startswith(("data:", "mailto:", "javascript:")):
+            continue
+        absolute = urljoin(base_url or "", href)
+        path = urlparse(absolute).path.lower()
+        _dot = path.rfind(".")
+        if _dot < 0:
+            continue
+        ext = path[_dot + 1:]
+        if _attachment_ext_matches(ext, wanted) and absolute not in found:
+            found.append(absolute)
+    return found
 
 
 def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
@@ -9187,6 +9387,7 @@ def get_feed_properties(feed_url: str) -> dict:
             # Dismissed suggestion chips, so a mis-clicked × has a way back.
             "suppressed_tags": feed_tag_service.suppressed_tag_list(feed_url),
             "suggested_tags": get_feed_pinned_tags(feed_url),
+            "attachment_exts": get_feed_attachment_exts(feed_url),
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
             "fetch_history": get_feed_fetch_history(_pc, feed_url),
@@ -9982,14 +10183,53 @@ def _enclosure_label(enc_url: str, enc_type: str) -> str:
     return enc_type or "attachment"
 
 
-def _render_entry_attachments(entry, audio_url: str | None) -> str:
+def _attachment_list_item(source_url: str, label: str, meta: str,
+                          asset_map: dict[str, str]) -> str:
+    """One <li>, pointing at the local copy when there is one.
+
+    A saved post whose files still 404 at the publisher has kept the wrong half,
+    so the archived copy wins whenever it exists; the badge says which you are
+    getting, because "saved" is the reason the link still works.
+    """
+    asset_hash = asset_map.get(source_url)
+    if asset_hash:
+        href = html.escape(f"{STARRED_ASSET_URL_PREFIX}{asset_hash}", quote=True)
+        badge = (' <span class="entry-attachment-saved" '
+                 'style="color:var(--muted,#888);font-size:0.85em;">saved</span>')
+    else:
+        href = html.escape(source_url, quote=True)
+        badge = ""
+    return (f'<li><a href="{href}" target="_blank" rel="noopener noreferrer" download>'
+            f'{label}</a>{meta}{badge}</li>')
+
+
+def _render_entry_attachments(entry, audio_url: str | None,
+                              asset_map: dict[str, str] | None = None) -> str:
     """Render a footer "Attachments" section for non-audio enclosures.
 
     Magazine/document feeds (e.g. Full Circle) attach the issue PDF/EPUB as
     ``<enclosure>`` elements that never appear in the article body. The audio
     enclosure (if any) is already surfaced as a player, so it's skipped here to
     avoid a duplicate link.
+
+    *asset_map* (source_url -> hash) is the entry's archived assets. Anything in
+    it is served from the local copy instead of the publisher's URL, so a saved
+    post's files still open after the site goes down — the whole point of
+    keeping them. Files captured from BODY LINKS (the per-feed extension list)
+    are appended to the same list rather than getting a section of their own:
+    from the reader's side they are the same thing, "files that came with this
+    post", and the difference is only in how Lectio found them.
     """
+    if asset_map is None:
+        # Fetched here rather than threaded through: this renderer is called
+        # from a path that has no map in hand, and the lookup is one indexed
+        # query on the entry's own key.
+        try:
+            asset_map = starred_archive_service.get_entry_asset_map(
+                str(entry.feed_url), str(entry.id))
+        except Exception:  # noqa: BLE001 — falls back to publisher URLs
+            asset_map = {}
+    asset_map = asset_map or {}
     seen: set[str] = set()
     items: list[str] = []
     for enc in (getattr(entry, "enclosures", None) or []):
@@ -10011,11 +10251,18 @@ def _render_entry_attachments(entry, audio_url: str | None) -> str:
         label = html.escape(_enclosure_label(enc_url, enc_type))
         size = _format_enclosure_size(getattr(enc, "length", None))
         meta = f" <span style=\"color:var(--muted,#888);\">({size})</span>" if size else ""
-        safe_url = html.escape(enc_url, quote=True)
-        items.append(
-            f'<li><a href="{safe_url}" target="_blank" rel="noopener noreferrer" download>'
-            f'{label}</a>{meta}</li>'
-        )
+        items.append(_attachment_list_item(enc_url, label, meta, asset_map))
+
+    # Files captured from body links, appended to the same list.
+    for source_url in asset_map:
+        if source_url in seen or not source_url:
+            continue
+        if _url_has_image_ext(source_url) or _url_has_audio_ext(source_url):
+            continue        # images render inline; audio has its own player
+        seen.add(source_url)
+        items.append(_attachment_list_item(
+            source_url, html.escape(_enclosure_label(source_url, "")), "", asset_map))
+
     if not items:
         return ""
     return (
@@ -25448,6 +25695,38 @@ def set_feed_suggested_tags_route(feed_url: str = Form(...), tags: str = Form(""
     kept = set_feed_pinned_tags(feed_url, tags)
     invalidate_meta_structure_cache()
     return JSONResponse({"ok": True, "tags": kept})
+
+
+@app.get("/feeds/attachment-candidates")
+def feed_attachment_candidates_route(feed_url: str = Query(...)):
+    """File types THIS feed actually links to, for the Keep-linked-files field.
+
+    The field used to carry a fixed example, which meant every feed in the
+    library was advised to keep Guitar Pro tabs. Counted from stored entries, so
+    it costs no requests.
+    """
+    return JSONResponse({"ok": True, "candidates": scan_feed_attachment_extensions(feed_url)})
+
+
+@app.post("/feeds/attachment-exts")
+def set_feed_attachment_exts_route(feed_url: str = Form(...), exts: str = Form("")):
+    """Which linked file types this feed keeps alongside a saved post.
+
+    guitar-pro's posts link .gp tabs and .pdf lyric sheets that disappear with
+    the post; keeping the article without them keeps the wrong half. Page
+    extensions are dropped rather than rejected, and there is no wildcard — the
+    extension list IS the safeguard that keeps this a capture and not a crawl.
+    """
+    with get_reader() as reader:
+        if reader.get_feed(feed_url, None) is None:
+            return JSONResponse({"ok": False, "error": "Feed not found."}, status_code=404)
+    kept = set_feed_attachment_exts(feed_url, exts)
+    dropped = [
+        t.strip().lower().lstrip("*").lstrip(".")
+        for t in (exts or "").replace(",", " ").split()
+        if t.strip().lower().lstrip("*").lstrip(".") in _NEVER_ATTACHMENT_EXTS
+    ]
+    return JSONResponse({"ok": True, "exts": kept, "dropped": sorted(set(dropped))})
 
 
 @app.post("/feeds/set-website")

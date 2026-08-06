@@ -121,7 +121,11 @@ def _candidates(conn, host: str | None) -> list[tuple[str, str]]:
          GROUP BY a.asset_hash
     """
     out: list[tuple[str, str]] = []
+    seen = 0
     for asset_hash, src, head in conn.execute(sql):
+        seen += 1
+        if seen % 2000 == 0:
+            print(f"    scanned {seen:,} asset(s), {len(out):,} candidate(s) so far", flush=True)
         src = str(src or "")
         path = urlparse(src).path.lower()
         if not path.endswith(_ALPHA_CAPABLE_EXT):
@@ -135,10 +139,12 @@ def _candidates(conn, host: str | None) -> list[tuple[str, str]]:
 
 
 def repair_for_user(user_id: str, apply: bool, host: str | None, limit: int) -> int:
+    print(f"[{user_id}] scanning the archive for flattened images…", flush=True)
     with main.get_starred_archive_connection() as conn:
         cands = _candidates(conn, host)
     print(f"[{user_id}] {len(cands):,} candidate asset(s)"
-          + (f" on {host}" if host else "") + " — re-fetching to check for alpha")
+          + (f" on {host}" if host else "") + " — re-fetching to check for alpha",
+          flush=True)
     if not cands:
         return 0
 
@@ -169,7 +175,7 @@ def repair_for_user(user_id: str, apply: bool, host: str | None, limit: int) -> 
             fresh = _reencode_with_alpha(resp.content)
         except Exception as exc:  # noqa: BLE001
             host_fail[netloc] += 1
-            print(f"    skip {src[:70]}: {type(exc).__name__}")
+            print(f"    skip {src[:70]}: {type(exc).__name__}", flush=True)
             continue
         if fresh is None:
             continue          # source has no transparency; stored copy was fine
@@ -177,7 +183,7 @@ def repair_for_user(user_id: str, apply: bool, host: str | None, limit: int) -> 
         new_hash = hashlib.sha256(fresh).hexdigest()
         repaired.append({"old_hash": asset_hash, "new_hash": new_hash,
                          "source_url": src, "bytes": len(fresh)})
-        print(f"    fixed {src.split('/')[-1][:44]}  {len(fresh):,}B")
+        print(f"    fixed {src.split('/')[-1][:44]}  {len(fresh):,}B", flush=True)
 
         if not apply:
             continue

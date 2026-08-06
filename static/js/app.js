@@ -4306,6 +4306,102 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       }
     }
 
+    // Linked file types this feed keeps with a saved post. Same shape of
+    // control as the suggested-tags field beside it.
+    function renderFeedPropAttachments(feedUrl, exts) {
+      const input = document.getElementById('feed-prop-attachments-input');
+      const save = document.getElementById('feed-prop-attachments-save');
+      const status = document.getElementById('feed-prop-attachments-status');
+      if (!input || !save) return;
+      input.value = (exts || []).join(' ');
+      save.dataset.feedUrl = feedUrl || '';
+      if (status) status.textContent = '';
+      loadFeedPropAttachmentCandidates(feedUrl);
+    }
+
+    // What this feed actually links to. Clicking a chip appends it, so the
+    // common case is picking from what is really there rather than guessing at
+    // extensions and hoping.
+    async function loadFeedPropAttachmentCandidates(feedUrl) {
+      const box = document.getElementById('feed-prop-attachments-candidates');
+      const input = document.getElementById('feed-prop-attachments-input');
+      if (!box || !input || !feedUrl) return;
+      box.hidden = true;
+      box.textContent = '';
+      let data;
+      try {
+        const qs = new URLSearchParams({ feed_url: feedUrl });
+        data = await (await fetch('/feeds/attachment-candidates?' + qs)).json();
+      } catch (e) {
+        return;   // a suggestion is never worth an error
+      }
+      const rows = (data && data.candidates) || [];
+      if (!rows.length) return;
+      const label = document.createElement('span');
+      label.className = 'feed-prop-ext-label';
+      label.textContent = 'This feed links: ';
+      box.appendChild(label);
+      for (const row of rows) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'feed-prop-ext-chip';
+        chip.textContent = `${row.ext} (${row.count})`;
+        chip.title = `Keep .${row.ext} files from this feed`;
+        chip.addEventListener('click', () => {
+          const have = input.value.split(/\s+/).filter(Boolean);
+          // Already covered by an exact entry or a prefix pattern? Then adding
+          // it again would just be a duplicate.
+          const covered = have.some((p) => p === row.ext
+            || (p.endsWith('*') && row.ext.startsWith(p.slice(0, -1))));
+          if (!covered) {
+            have.push(row.ext);
+            input.value = have.join(' ');
+          }
+          input.focus();
+        });
+        box.appendChild(chip);
+      }
+      box.hidden = false;
+    }
+
+    async function submitFeedPropAttachments() {
+      const input = document.getElementById('feed-prop-attachments-input');
+      const save = document.getElementById('feed-prop-attachments-save');
+      const status = document.getElementById('feed-prop-attachments-status');
+      const feedUrl = save?.dataset.feedUrl || '';
+      if (!feedUrl || !input) return;
+      if (status) status.textContent = 'Saving…';
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, exts: input.value });
+        const resp = await fetch('/feeds/attachment-exts', {
+          method: 'POST', body, credentials: 'same-origin',
+        });
+        const raw = await resp.text();
+        let json;
+        try {
+          json = JSON.parse(raw);
+        } catch (e) {
+          if (status) status.textContent = `Server sent ${resp.status}: ${raw.slice(0, 80)}`;
+          return;
+        }
+        if (!json.ok) {
+          if (status) status.textContent = json.error || 'Could not save.';
+          return;
+        }
+        input.value = (json.exts || []).join(' ');
+        // Say so rather than silently discarding them — a user who typed
+        // "pdf html" should learn why only the pdf stuck.
+        const dropped = json.dropped || [];
+        if (dropped.length) {
+          status.textContent = `Saved. Ignored page types: ${dropped.join(', ')}.`;
+        } else {
+          status.textContent = json.exts.length ? 'Saved.' : 'Cleared — no files kept.';
+        }
+      } catch (err) {
+        if (status) status.textContent = `Error: ${err.message}`;
+      }
+    }
+
     // Tags pinned to a feed, offered as chips on every one of its posts. Kept
     // beside the alias editor because it is the same shape of control: a small
     // free-text field on the feed, saved on its own.
@@ -4463,6 +4559,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       event.preventDefault();
       submitFeedPropAlias();
     });
+    document.getElementById('feed-prop-attachments-save')?.addEventListener('click', submitFeedPropAttachments);
+    document.getElementById('feed-prop-attachments-input')?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); submitFeedPropAttachments(); }
+    });
     document.getElementById('feed-prop-suggested-tags-save')?.addEventListener('click', submitFeedPropSuggestedTags);
     document.getElementById('feed-prop-suggested-tags-input')?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') { event.preventDefault(); submitFeedPropSuggestedTags(); }
@@ -4596,6 +4696,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         renderFeedPropAliases(feedUrl, data.url_rewrites || []);
         renderFeedPropHiddenTags(feedUrl, data.suppressed_tags || []);
         renderFeedPropSuggestedTags(feedUrl, data.suggested_tags || []);
+        renderFeedPropAttachments(feedUrl, data.attachment_exts || []);
         setFeedPropText(feedPropXml, data.feed_url || feedUrl);
         if (feedPropXmlOpen) {
           const xu = (data.feed_url || feedUrl || '').trim();

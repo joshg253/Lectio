@@ -219,6 +219,65 @@ design, so transparent art already lands on white, and `#reader-columns *` force
 `background: transparent !important` for e-ink contrast — a backdrop there would
 have to fight it for no gain.
 
+### Keep linked files with a saved post — SHIPPED 2026-08-05
+
+Some posts are a wrapper around a download: guitar-pro's tab posts link `.gp`
+files and PDF lyric sheets that disappear with the article. Per-feed extension
+list in `feed_display_prefs.attachment_exts`; on star/tag the archive worker
+scans the captured HTML and stores matches through the existing
+`_archive_asset`, which already stores non-image bytes untouched and dedupes per
+(entry, source_url) — so attachments inherit retention and the orphan sweep for
+free, and differ from images only in how they are FOUND.
+
+Three decisions worth keeping:
+
+- **No bare wildcard** — `*` on an ordinary post also matches every link to a
+  homepage, a category or a social profile. But a **prefix pattern** is allowed
+  (`gp*` → gp/gp3/gp4/gp5/gpx), because it still names a family of file types
+  and cannot reach a page. The prefix must be at least two characters: `p*`
+  (pdf, png, ppt, psd…) is a wildcard wearing a hat.
+- **Page extensions are refused everywhere** (`html`, `php`, `aspx`, `jsp`, …) —
+  dropped on save *and* re-checked in the finder, so a stored value could never
+  smuggle one through. Dropped rather than rejected: typing "pdf html" means the
+  pdf, and the UI says which were ignored.
+- **Any host, matched on the URL path.** A same-host rule was considered and
+  rejected: guitar-pro serves tabs from `assets-wp.guitar-pro.eu` while the post
+  is on `blog.guitar-pro.com`, so it would miss exactly the case this exists
+  for. Path-only matching means `/post.php?download=song.gp` stays a page.
+
+25 MB per file (`ATTACHMENT_MAX_BYTES`); the archive is a SQLite blob store.
+
+**The field suggests what the feed actually links**, counted from its stored
+entries (`scan_feed_attachment_extensions`) and rendered as clickable chips —
+guitar-pro's feed offers `gp (293) gpx (32) zip (28) pdf (10) mp3 (3)`. It
+replaced a fixed placeholder, which advised every feed in the library to keep
+Guitar Pro tabs. Images are excluded (the archive captures those anyway), as are
+page types, TLD lookalikes from bare-domain links, and one-off path fragments
+that merely look like extensions.
+
+**Surfaced in the existing Attachments footer**, not a section of their own:
+from the reader's side an enclosure and a captured body link are the same thing
+("files that came with this post") and differ only in how Lectio found them.
+Anything archived is served from `/starred-asset/<hash>` with a "saved" badge,
+and `rewrite_html_assets` now rewires `<a href>` as well as `<img src>` so the
+in-body download link points at the local copy too — a saved post whose "get the
+tab" link still points at a dead publisher has kept the wrong half.
+
+**Existing saves need `scripts/backfill_attachments.py`** — capture runs inside
+`_archive_entry`, and `enqueue_archive` keeps an existing row at
+`status='complete'` while the worker only takes `pending`, so re-starring an old
+post does not re-capture it. The backfill re-fetches **no pages**: the archive
+already stores each post's HTML, so links are found offline and only the files
+themselves are requested. It calls the same `_archive_asset` the live path does,
+so storage, dedupe and the size cap cannot drift. Dry run 2026-08-05 on
+blog.guitar-pro.com: **211 attachments across 119 saved posts**.
+
+**Enclosures are captured unconditionally on star/tag**, without the per-feed
+extension list: an `<enclosure>` is the publisher *declaring* that a file
+belongs to the post (Standard Ebooks attaches the epub), which is a stronger
+claim than a link in the body. Audio is skipped — podcast enclosures are large
+and stream fine — and images are already captured as images.
+
 ### 0c. CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a
