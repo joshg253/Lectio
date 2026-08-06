@@ -43,20 +43,32 @@ def test_an_unarchived_enclosure_still_links_to_the_publisher():
     assert "/starred-asset/" not in html
 
 
-def test_captured_body_files_join_the_same_list():
+def test_captured_body_files_join_the_same_list(monkeypatch):
     """From the reader's side these are the same thing — "files that came with
     this post" — and the difference is only how Lectio found them."""
+    monkeypatch.setattr(main.starred_archive_service, "get_entry_file_assets",
+                        lambda f, e: {TAB: "HASH2"})
+
     html = main._render_entry_attachments(_Entry([]), None, {TAB: "HASH2"})
+
     assert "/starred-asset/HASH2" in html
     assert "Attachments" in html
 
 
-def test_images_and_audio_are_not_listed_as_attachments():
-    """Images render inline and audio has its own player."""
+def test_images_and_audio_are_not_listed_as_attachments(monkeypatch):
+    """Decided by STORED content type, not by the URL: a Gravatar
+    ("/avatar/<hash>?s=48") is an image with nothing in its URL to say so, and
+    two of them surfaced as "webp attachments"."""
+    # get_entry_file_assets is what applies the content-type filter, so an
+    # image never reaches the renderer at all.
+    monkeypatch.setattr(main.starred_archive_service, "get_entry_file_assets",
+                        lambda f, e: {})
+
     html = main._render_entry_attachments(_Entry([]), None, {
         "https://x.test/photo.jpg": "H1",
         "https://x.test/show.mp3": "H2",
     })
+
     assert html == ""
 
 
@@ -151,3 +163,27 @@ def test_image_enclosures_are_skipped():
 def test_a_pdf_enclosure_is_captured():
     """Magazine feeds attach the issue."""
     assert _capturable([_Enc("https://x.test/issue.pdf", "application/pdf")])
+
+
+# --- what is NOT an attachment ----------------------------------------------
+
+
+def test_a_share_button_is_not_an_image_link():
+    """A Pinterest "/pin/create/button/?…&media=….jpg" link ENDS in .jpg, so a
+    pattern anchored on the whole href matched it — and 1.1MB of HTML was
+    fetched and stored as an asset. The URL PATH is what decides."""
+    svc = StarredArchiveService.__new__(StarredArchiveService)
+    html = ('<a href="https://pinterest.com/pin/create/button/'
+            '?url=https%3A%2F%2Fx.test%2Fp&media=https%3A%2F%2Fx.test%2Fa.jpg">pin</a>'
+            '<a href="https://x.test/real.jpg">photo</a>')
+
+    got = svc._extract_image_urls(html, "https://x.test/")
+
+    assert got == {"https://x.test/real.jpg"}
+
+
+def test_an_image_link_with_a_query_still_counts():
+    """Only the path decides — a cache-buster must not disqualify a real image."""
+    svc = StarredArchiveService.__new__(StarredArchiveService)
+    got = svc._extract_image_urls('<a href="https://x.test/a.png?v=2">i</a>', "https://x.test/")
+    assert got == {"https://x.test/a.png?v=2"}

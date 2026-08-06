@@ -10254,11 +10254,17 @@ def _render_entry_attachments(entry, audio_url: str | None,
         items.append(_attachment_list_item(enc_url, label, meta, asset_map))
 
     # Files captured from body links, appended to the same list.
-    for source_url in asset_map:
+    # Judged by STORED content type, not by guessing from the URL: a Gravatar
+    # ("/avatar/<hash>?s=48") and a CDN path with no extension are both images
+    # with nothing in the URL to say so, and they surfaced as "attachments".
+    try:
+        file_assets = starred_archive_service.get_entry_file_assets(
+            str(entry.feed_url), str(entry.id))
+    except Exception:  # noqa: BLE001
+        file_assets = {}
+    for source_url in file_assets:
         if source_url in seen or not source_url:
             continue
-        if _url_has_image_ext(source_url) or _url_has_audio_ext(source_url):
-            continue        # images render inline; audio has its own player
         seen.add(source_url)
         items.append(_attachment_list_item(
             source_url, html.escape(_enclosure_label(source_url, "")), "", asset_map))

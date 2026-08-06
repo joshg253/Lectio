@@ -250,3 +250,36 @@ def test_most_common_first(configured):
 def test_a_feed_with_no_file_links_suggests_nothing(configured):
     _seed_entry("plain", "<p>just words</p>")
     assert main.scan_feed_attachment_extensions(FEED) == []
+
+
+# --- the content-type filter -------------------------------------------------
+
+
+def test_only_real_files_are_returned_as_attachments(configured):
+    """Decided by STORED content type. A Gravatar and a CDN path with no
+    extension are both images with nothing in the URL to say so, and they
+    surfaced as "webp attachments"; a share button was stored as 1.1MB of HTML
+    and surfaced as an "attachment" that downloaded a .htm."""
+    main.ensure_starred_archive_schema()
+    rows = [
+        ("https://x.test/song.gp", "H1", "application/octet-stream"),
+        ("https://x.test/sheet.pdf", "H2", "application/pdf"),
+        ("https://gravatar.com/avatar/abc?s=48", "H3", "image/webp"),
+        ("https://cdn.test/flexiimages/xyz", "H4", "image/svg+xml"),
+        ("https://pinterest.com/pin/create/button/?media=x.jpg", "H5", "text/html"),
+        ("https://x.test/ep", "H6", "audio/mpeg"),
+    ]
+    with main.get_starred_archive_connection() as conn:
+        for url, h, ctype in rows:
+            conn.execute(
+                "INSERT OR REPLACE INTO archived_asset"
+                " (asset_hash, data, content_type, byte_size, created_at)"
+                " VALUES (?, ?, ?, 1, 0)", (h, b"x", ctype))
+            conn.execute(
+                "INSERT OR REPLACE INTO archived_asset_link"
+                " (feed_url, entry_id, source_url, asset_hash) VALUES (?, ?, ?, ?)",
+                (FEED, "e1", url, h))
+
+    got = main.starred_archive_service.get_entry_file_assets(FEED, "e1")
+
+    assert set(got) == {"https://x.test/song.gp", "https://x.test/sheet.pdf"}
