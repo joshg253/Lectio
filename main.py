@@ -8827,6 +8827,39 @@ def set_feed_attachment_exts(feed_url: str, raw_value: str) -> list[str]:
     return exts
 
 
+# Attributes that carry a base64-encoded URL instead of an href. guitar-pro
+# ships <span class="obflink" data-o="<base64>"> for its tab downloads, so the
+# file the page offers every visitor is reachable by the browser but invisible
+# to an href scan. Named attributes only — never a blind base64 sweep of the
+# document, which would turn any long token into a candidate URL.
+_OBFUSCATED_URL_ATTRS = ("data-o", "data-url", "data-href", "data-link", "data-file")
+_B64ISH_RE = re.compile(r"^[A-Za-z0-9+/=_-]{16,}$")
+
+
+def _decode_obfuscated_urls(soup) -> list[str]:
+    """http(s) URLs hidden in base64 attributes, in document order.
+
+    Only values that decode cleanly to an absolute http(s) URL are returned;
+    anything else is ignored rather than guessed at. The result still has to
+    satisfy the caller's extension list, so this widens where links are FOUND
+    without widening what counts as a file.
+    """
+    out: list[str] = []
+    for attr in _OBFUSCATED_URL_ATTRS:
+        for el in soup.find_all(attrs={attr: True}):
+            raw = str(el.get(attr) or "").strip()
+            if not raw or not _B64ISH_RE.match(raw):
+                continue
+            try:
+                decoded = base64.b64decode(raw + "=" * (-len(raw) % 4)).decode("utf-8")
+            except Exception:  # noqa: BLE001 — not base64, or not text
+                continue
+            decoded = decoded.strip()
+            if decoded.startswith(("http://", "https://")) and decoded not in out:
+                out.append(decoded)
+    return out
+
+
 def attachment_links_in_html(content_html: str, base_url: str, exts: list[str]) -> list[str]:
     """Absolute URLs of linked files matching *exts*, in document order.
 
@@ -8844,8 +8877,11 @@ def attachment_links_in_html(content_html: str, base_url: str, exts: list[str]) 
     wanted = [e.lower() for e in exts]
     found: list[str] = []
     soup = BeautifulSoup(content_html, "html.parser")
-    for a in soup.find_all("a"):
-        href = str(a.get("href") or "").strip()
+    hrefs = [str(a.get("href") or "").strip() for a in soup.find_all("a")]
+    # Links the page hides in a base64 attribute count too — see
+    # _decode_obfuscated_urls.
+    hrefs.extend(_decode_obfuscated_urls(soup))
+    for href in hrefs:
         if not href or href.startswith(("data:", "mailto:", "javascript:")):
             continue
         absolute = urljoin(base_url or "", href)

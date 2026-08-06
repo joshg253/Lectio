@@ -278,6 +278,34 @@ belongs to the post (Standard Ebooks attaches the epub), which is a stronger
 claim than a link in the body. Audio is skipped — podcast enclosures are large
 and stream fine — and images are already captured as images.
 
+### Attachment capture: what is NOT a file — FIXED 2026-08-05
+
+Three bugs, one of which the Attachments list only made *visible*.
+
+- **A share button stored as an asset.** The image-link pattern required an
+  href to *end* in an image extension, which a Pinterest
+  `/pin/create/button/?url=…&media=….jpg` link satisfies. Anchors are now judged
+  on the URL **path**, so a query string cannot disguise a page as an image
+  while a real image with a cache-buster still counts. Capture also refuses HTML
+  outright now, whatever led it there.
+- **Images listed as attachments.** A Gravatar (`/avatar/<hash>?s=48`) and a CDN
+  path with no extension are both images with nothing in the URL to say so. The
+  list is decided by **stored content type** instead of guessed from the URL, so
+  assets stored before the capture fix stop being offered without a re-capture.
+- **1,816 HTML assets, 1.63 GB** had accumulated. Purged with
+  `scripts/purge_html_assets.py` (deletes on stored `content_type` only — never
+  by sniffing bytes, so a legitimately saved .html attachment cannot be eaten).
+  Archive 5.9 GB → 4.4 GB after VACUUM.
+
+**Obfuscated download links are decoded.** guitar-pro ships
+`<span class="obflink" data-o="<base64>">` for its tab downloads, so the file the
+page offers every visitor is reachable by the browser but invisible to an href
+scan. Named attributes only (`data-o`, `data-url`, `data-href`, `data-link`,
+`data-file`) and never a blind base64 sweep, which would turn any long token into
+a candidate URL. The decoded URL still has to satisfy the feed's extension list —
+this widens where links are FOUND, not what counts as a file. Referenced
+attachments on blog.guitar-pro.com went 211 → 461.
+
 ### 0c. CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a

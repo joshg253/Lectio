@@ -283,3 +283,50 @@ def test_only_real_files_are_returned_as_attachments(configured):
     got = main.starred_archive_service.get_entry_file_assets(FEED, "e1")
 
     assert set(got) == {"https://x.test/song.gp", "https://x.test/sheet.pdf"}
+
+
+# --- links the page hides in a base64 attribute ------------------------------
+
+
+OBF = ("<span class='obflink' data-o='aHR0cHM6Ly9hc3NldHMtd3AuZ3VpdGFyLXByby5ldS93cC1jb250"
+       "ZW50L3VwbG9hZHMvMjAyNi8wNi9Ccnlhbl9BZGFtcy1TdW1tZXJfb2ZfNjkuZ3A='>"
+       "bryan_adams-summer_of_69.gp</span>")
+
+
+def test_a_base64_hidden_link_is_found():
+    """guitar-pro ships <span class="obflink" data-o="<base64>"> for its tab
+    downloads, so the file the page offers every visitor is reachable by the
+    browser but invisible to an href scan."""
+    got = main.attachment_links_in_html(OBF, POST, ["gp*"])
+    assert got == ["https://assets-wp.guitar-pro.eu/wp-content/uploads/2026/06/"
+                   "Bryan_Adams-Summer_of_69.gp"]
+
+
+def test_a_hidden_link_still_has_to_match_the_extension_list():
+    """Widens where links are FOUND, not what counts as a file."""
+    assert main.attachment_links_in_html(OBF, POST, ["pdf"]) == []
+
+
+def test_a_hidden_page_link_is_still_refused():
+    # base64 of "https://x.test/page.html"
+    html = "<span data-o='aHR0cHM6Ly94LnRlc3QvcGFnZS5odG1s'>x</span>"
+    assert main.attachment_links_in_html(html, POST, ["html", "gp"]) == []
+
+
+def test_non_base64_attributes_are_ignored():
+    html = "<span data-o='not-base64-at-all!!'>x</span>"
+    assert main.attachment_links_in_html(html, POST, ["gp"]) == []
+
+
+def test_base64_that_is_not_a_url_is_ignored():
+    # base64 of "just some text"
+    html = "<span data-o='anVzdCBzb21lIHRleHQ='>x</span>"
+    assert main.attachment_links_in_html(html, POST, ["gp"]) == []
+
+
+def test_plain_links_and_hidden_links_both_appear():
+    html = OBF + '<a href="/plain.pdf">p</a>'
+    got = main.attachment_links_in_html(html, POST, ["gp*", "pdf"])
+    assert len(got) == 2
+    assert any(u.endswith(".pdf") for u in got)
+    assert any(u.endswith(".gp") for u in got)
