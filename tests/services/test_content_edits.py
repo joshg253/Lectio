@@ -159,3 +159,62 @@ def test_too_many_ops_is_mapped_too():
         content_edits.parse_ops([{"op": "remove", "path": [0], "fp": {}}] * (content_edits.MAX_OPS + 1))
     except content_edits.ContentEditError as exc:
         assert exc.code in main._CLEANUP_ERROR_MESSAGES
+
+# --- text as the last resort -------------------------------------------------
+#
+# The browser fingerprints the RENDERED body — sanitized (attributes and classes
+# stripped), lead image hoisted out (so sibling indices shift), per-feed cleanups
+# applied — while ops replay against the STORED body. Structure therefore
+# disagrees for nodes that are plainly the same paragraph, which is how
+# "remove this boilerplate" reported that nothing could be matched.
+
+_BOILER = ("I am the author. I write essays about technology and philosophy, "
+           "and here are a few things I have built.")
+
+
+def test_a_node_is_found_by_text_when_structure_disagrees():
+    stored = f'<p class="stored-only">{_BOILER}</p><p>The actual article.</p>'
+    ops = [{"op": "remove", "path": [99],
+            "fp": {"tag": "p", "id": "", "cls": ["rendered-only"],
+                   "text": _BOILER, "kids": 0, "src": ""}}]
+
+    html, applied, unmatched = content_edits.apply_ops(stored, ops)
+
+    assert (applied, unmatched) == (1, [])
+    assert _BOILER not in html
+    assert "The actual article." in html
+
+
+def test_ambiguous_text_is_refused():
+    """Deleting the wrong paragraph is worse than declining to delete one."""
+    stored = f"<p>{_BOILER}</p><p>{_BOILER}</p>"
+    ops = [{"op": "remove", "path": [99],
+            "fp": {"tag": "p", "id": "", "cls": ["x"], "text": _BOILER,
+                   "kids": 0, "src": ""}}]
+
+    _html, applied, unmatched = content_edits.apply_ops(stored, ops)
+
+    assert applied == 0
+    assert len(unmatched) == 1
+
+
+def test_short_text_is_not_enough_for_the_TEXT_fallback():
+    """A word is not a passage. Tested against the fallback directly: the
+    structural scorer can still match a short node on its own evidence (exact
+    text plus child count), and that behaviour is deliberately unchanged."""
+    root = BeautifulSoup('<div><p class="a">Read more</p></div>', "html.parser").div
+    target = {"tag": "p", "id": "", "cls": ["b"], "text": "Read more",
+              "kids": 0, "src": ""}
+
+    assert content_edits._resolve_by_text(root, target) is None
+
+
+def test_a_different_tag_is_never_matched_by_text():
+    stored = f"<div>{_BOILER}</div>"
+    ops = [{"op": "remove", "path": [99],
+            "fp": {"tag": "p", "id": "", "cls": [], "text": _BOILER,
+                   "kids": 0, "src": ""}}]
+
+    _html, applied, _unmatched = content_edits.apply_ops(stored, ops)
+
+    assert applied == 0

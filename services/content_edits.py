@@ -214,6 +214,36 @@ def _resolve_by_search(root, target: dict):
     return None
 
 
+# A node's TEXT survives what its structure does not. The browser fingerprints
+# the RENDERED body, which by then has been sanitized (attributes and classes
+# stripped), had its lead image hoisted out (so sibling indices shift) and had
+# per-feed cleanups applied — while the ops are replayed against the STORED
+# body. Structure therefore disagrees for nodes that are plainly the same
+# paragraph, which is how "remove this boilerplate" reported that none of the
+# elements could be matched.
+#
+# Long enough to be distinctive, and required to be UNIQUE in the document:
+# deleting the wrong paragraph is worse than declining to delete one.
+_TEXT_FALLBACK_MIN_CHARS = 40
+
+
+def _resolve_by_text(root, target: dict):
+    """A node whose visible text is exactly the target's, when nothing else fits.
+
+    Tag must still agree, the text must be long enough to identify a passage
+    rather than a word, and exactly one node may carry it.
+    """
+    text = (target.get("text") or "").strip()
+    tag = target.get("tag") or ""
+    if not text or not tag or len(text) < _TEXT_FALLBACK_MIN_CHARS:
+        return None
+    matches = [
+        node for node in root.find_all(tag)
+        if _normalize_text(node.get_text(" ", strip=True)) == text
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def apply_ops(content_html: str, ops: list[dict]) -> tuple[str, int, list[dict]]:
     """Replay *ops* against *content_html*.
 
@@ -235,6 +265,8 @@ def apply_ops(content_html: str, ops: list[dict]) -> tuple[str, int, list[dict]]
         node = _resolve_by_path(root, op["path"])
         if node is None or _score(fingerprint(node), target) < _PATH_ACCEPT_SCORE:
             node = _resolve_by_search(root, target)
+        if node is None:
+            node = _resolve_by_text(root, target)
         if node is None:
             unmatched.append({
                 "index": index,
