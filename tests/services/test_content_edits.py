@@ -218,3 +218,46 @@ def test_a_different_tag_is_never_matched_by_text():
     _html, applied, _unmatched = content_edits.apply_ops(stored, ops)
 
     assert applied == 0
+
+
+def test_a_fingerprint_truncated_by_utf16_units_still_matches():
+    """The browser sliced by UTF-16 code units and Python by code points, so a
+    single astral character (an emoji) shifted the cut by one and the two never
+    compared equal — a post whose first paragraph began with an emoji could not
+    be cleaned up at all. cleanup.js slices by code point now; this covers ops
+    recorded before that, and any future divergence of the same shape."""
+    body = ("\U0001F355 I am the author. I write essays about technology and "
+            "philosophy, and here are a few things I have built for you to read.")
+    stored = f"<p>{body}</p><p>The actual article.</p>"
+    # Exactly what the old client sent: truncation counted in UTF-16 units.
+    js_text = body.encode("utf-16-le")[: content_edits._TEXT_PREFIX_LEN * 2].decode(
+        "utf-16-le", errors="ignore")
+    ops = [{"op": "remove", "path": [99],
+            "fp": {"tag": "p", "id": "", "cls": [], "text": js_text, "kids": 0, "src": ""}}]
+
+    html, applied, unmatched = content_edits.apply_ops(stored, ops)
+
+    assert (applied, unmatched) == (1, [])
+    assert "I am the author" not in html
+    assert "The actual article." in html
+
+
+def test_the_text_fallback_needs_a_long_enough_passage():
+    """Tested against the fallback directly: the structural scorer can still
+    match a short node on its own evidence (exact text, unique in the document),
+    and that behaviour is deliberately unchanged."""
+    root = BeautifulSoup("<div><p>Short lead in.</p></div>", "html.parser").div
+    target = {"tag": "p", "id": "", "cls": [], "text": "Short lead in.",
+              "kids": 0, "src": ""}
+
+    assert content_edits._resolve_by_text(root, target) is None
+
+
+def test_the_text_fallback_refuses_two_candidates_sharing_a_prefix():
+    """A prefix long enough to pass the floor still must not be ambiguous."""
+    lead = "I am the author and I write essays about technology and philosophy"
+    root = BeautifulSoup(
+        f"<div><p>{lead} one.</p><p>{lead} two.</p></div>", "html.parser").div
+    target = {"tag": "p", "id": "", "cls": [], "text": lead, "kids": 0, "src": ""}
+
+    assert content_edits._resolve_by_text(root, target) is None

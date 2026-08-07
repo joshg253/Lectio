@@ -237,9 +237,23 @@ def _resolve_by_text(root, target: dict):
     tag = target.get("tag") or ""
     if not text or not tag or len(text) < _TEXT_FALLBACK_MIN_CHARS:
         return None
+
+    # Compared as a common prefix rather than for equality. Both sides truncate
+    # to the same LIMIT but not necessarily the same STRING: the browser sliced
+    # by UTF-16 code units and Python by code points, so a single emoji shifted
+    # the cut by one character. That is fixed in cleanup.js, but ops recorded
+    # before the fix — and any future divergence of the same shape — still have
+    # to resolve. The prefix is long enough that two different paragraphs
+    # sharing it is not a realistic collision.
+    def _same_passage(candidate: str) -> bool:
+        shortest = min(len(candidate), len(text))
+        if shortest < _TEXT_FALLBACK_MIN_CHARS:
+            return False
+        return candidate[:shortest] == text[:shortest]
+
     matches = [
         node for node in root.find_all(tag)
-        if _normalize_text(node.get_text(" ", strip=True)) == text
+        if _same_passage(_normalize_text(node.get_text(" ", strip=True)))
     ]
     return matches[0] if len(matches) == 1 else None
 
