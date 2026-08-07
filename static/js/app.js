@@ -14744,7 +14744,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const feedForm      = document.getElementById('afd-feed-form');
       const pfForm        = document.getElementById('afd-pf-form');
 
-      let checkTimer = null, selectedFeedUrl = null, isPageFeedMode = false, isChecking = false, isDevToMode = false;
+      let checkTimer = null, selectedFeedUrl = null, isPageFeedMode = false, isChecking = false, isDevToMode = false, isForceMode = false;
       const devtoSection = document.getElementById('afd-devto');
 
       // Mirror of the server's parse_devto_url: front-page/tag/feed URLs only
@@ -14784,7 +14784,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         document.getElementById('afd-devto-exclude').value = '';
         document.getElementById('afd-devto-english').checked = true;
         submitBtn.disabled = true; submitBtn.textContent = 'Add Feed';
-        selectedFeedUrl = null; isPageFeedMode = false; isDevToMode = false;
+        selectedFeedUrl = null; isPageFeedMode = false; isDevToMode = false; isForceMode = false;
         spinner.hidden = true; isChecking = false;
         newFolderRow.hidden = true; newFolderName.value = '';
       }
@@ -14823,7 +14823,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         const devto = devtoParse(url);
         if (devto) {
           setMsg('dev.to detected — this will create a filtered feed via the dev.to API.', 'ok');
-          pickEl.hidden = true; pfSection.hidden = true; isPageFeedMode = false;
+          pickEl.hidden = true; pfSection.hidden = true; isPageFeedMode = false; isForceMode = false;
           devtoSection.hidden = false; isDevToMode = true; selectedFeedUrl = url;
           if (devto.tag) document.getElementById('afd-devto-tag').value = devto.tag;
           submitBtn.textContent = 'Add dev.to Feed'; submitBtn.disabled = false;
@@ -14832,7 +14832,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         devtoSection.hidden = true; isDevToMode = false;
         isChecking = true; spinner.hidden = false; submitBtn.disabled = true;
         setMsg(''); pickEl.hidden = true; pickEl.innerHTML = ''; pfSection.hidden = true;
-        selectedFeedUrl = null; isPageFeedMode = false;
+        selectedFeedUrl = null; isPageFeedMode = false; isForceMode = false;
         try {
           const r = await fetch('/feeds/discover?url=' + encodeURIComponent(url));
           apply(url, await r.json());
@@ -14855,11 +14855,24 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             renderPicker(d.feeds);
             submitBtn.textContent = 'Add Feed';
           }
-        } else if (d.status === 'none' || d.status === 'blocked') {
+        } else if (d.status === 'none') {
+          // Fetched fine, simply has no feed: an article or a plain page.
+          // Page Feed is the honest offer; subscribing to it directly is what
+          // produced 29 husk feeds, so no force option here.
           setMsg(d.message, 'warn');
           pfSection.hidden = false; isPageFeedMode = true; selectedFeedUrl = rawUrl;
           pfSyncPickBtn();
           submitBtn.textContent = 'Create Page Feed'; submitBtn.disabled = false;
+        } else if (d.reason !== 'unsafe' && (d.status === 'blocked' || d.status === 'error')) {
+          // REFUSED — 403, timeout, anti-bot challenge. We never saw the
+          // content, so this may be a real feed behind a wall that lets up
+          // later. Let the user subscribe anyway. (`reason: 'unsafe'` is our
+          // OWN SSRF refusal and is deliberately excluded.)
+          setMsg(d.message || 'The site refused us.', 'warn');
+          isForceMode = true; selectedFeedUrl = rawUrl;
+          submitBtn.textContent = 'Subscribe Anyway'; submitBtn.disabled = false;
+          // No Page Feed offer here: a site that refused the probe refuses the
+          // page-feed fetcher the same way, so it would only fail later.
         } else {
           setMsg(d.message || 'Could not check URL.', 'error');
         }
@@ -14946,6 +14959,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           document.getElementById('afd-ff-devto-english').value  = isDevToMode ? (document.getElementById('afd-devto-english').checked ? '1' : '0') : '';
           document.getElementById('afd-ff-devto-minreact').value = isDevToMode ? document.getElementById('afd-devto-minreact').value.trim() : '';
           document.getElementById('afd-ff-devto-exclude').value  = isDevToMode ? document.getElementById('afd-devto-exclude').value.trim() : '';
+          document.getElementById('afd-ff-force').value = isForceMode ? '1' : '';
           feedForm.submit();
         }
       });

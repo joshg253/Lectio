@@ -391,7 +391,12 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
     try:
         resp, _escalated = _get_with_escalation(url, timeout=timeout)
     except url_guard.UnsafeURLError:
-        return {"status": "blocked", "feeds": [], "message": "That address is not allowed (private/loopback target)."}
+        # "unsafe" marks the one refusal the user may NOT override. Both
+        # refusal shapes report status "blocked" (see the bot-protection branch
+        # below), so anything offering a force-subscribe must tell them apart —
+        # use refusal_is_forceable() rather than reading status directly.
+        return {"status": "blocked", "reason": "unsafe", "feeds": [],
+                "message": "That address is not allowed (private/loopback target)."}
     except httpx.TimeoutException:
         return {"status": "error", "feeds": [], "message": "Connection timed out."}
     except Exception as exc:
@@ -538,6 +543,27 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
 def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
     """Return RSS/Atom feed URLs reachable from url. See discover_feed_urls_ex."""
     return discover_feed_urls_ex(url, timeout=timeout)[0]
+
+
+def refusal_is_forceable(probe: dict) -> bool:
+    """May the user subscribe to this URL anyway, despite the failed probe?
+
+    Yes for a REFUSAL — a 403, a timeout, an anti-bot challenge page. We never
+    saw the content, so the address may well be a real feed behind a wall that
+    starts working later.
+
+    No for two cases that look similar and are not:
+      - the SSRF guard's refusal (``reason == "unsafe"``). Overriding it would
+        let a private/loopback address be subscribed, and the force path skips
+        discovery, so this probe is the only thing standing there.
+      - a page we fetched FINE that simply has no feed (``status == "none"``).
+        Subscribing to that produces a husk: a permanently failing "feed"
+        holding whatever gets captured onto it. 29 of those accumulated before
+        the distinction existed (scripts/rehome_article_feeds.py).
+    """
+    if probe.get("reason") == "unsafe":
+        return False
+    return str(probe.get("status") or "") in ("error", "blocked")
 
 
 def discover_feed_urls_ex(url: str, *, timeout: float = 10.0) -> tuple[list[str], bool]:

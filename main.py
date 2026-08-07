@@ -21381,6 +21381,18 @@ def create_feed(
     # For non-YouTube URLs, probe whether the URL is a feed and run
     # auto-discovery if it looks like a webpage instead.
     discovery_escalated = False
+    if force and not _is_youtube_url(url):
+        # Force skips discovery, and discovery is where the SSRF guard runs.
+        # Nothing else on this path checks, so assert it directly: a forced
+        # subscribe is an override of a SITE's refusal, never of ours.
+        try:
+            url_guard.ensure_safe_outbound_url(url)
+        except Exception:  # noqa: BLE001 — guard refusal, not a transport error
+            return RedirectResponse(
+                url=(f"/?folder_id={folder_id}&message="
+                     + quote_plus("That address is not allowed (private/loopback target).")),
+                status_code=303,
+            )
     if not _is_youtube_url(url) and not force:
         candidates, discovery_escalated = discover_feed_urls_ex(url)
         if not candidates:
@@ -21399,7 +21411,8 @@ def create_feed(
                 probe = _probe_url(url)
             except Exception:  # noqa: BLE001 — classification only
                 probe = {}
-            refused = str(probe.get("status") or "") in ("error", "blocked")
+            from services.feed_discovery import refusal_is_forceable
+            refused = refusal_is_forceable(probe)
             note = (
                 "That address could not be read (the site refused us)."
                 if refused else "No RSS/Atom feed found at that URL."
