@@ -20209,9 +20209,14 @@ def _home_inner(
     # merge — which carries the ARCHIVED title and no thumbnail, so an edited
     # title showed correctly in the article header (read from reader) and stale in
     # the list, and the thumbnail appeared on open and vanished on return.
+    #
+    # ONLY at the root, and only when no feed is selected: belonging to no folder
+    # means it belongs to the whole-library view, not to every folder. Adding it
+    # unconditionally put saved articles in every folder's list.
     if selected_star_only:
-        entry_feed_urls = (entry_feed_urls | get_kept_feed_urls()
-                           | {saved_articles_service.SAVED_FEED_URL})
+        entry_feed_urls = entry_feed_urls | get_kept_feed_urls()
+        if selected_folder_id == root_id and not selected_feed_url:
+            entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
     posts = list_entries_for_feeds(
         entry_feed_urls,
         limit=limit,
