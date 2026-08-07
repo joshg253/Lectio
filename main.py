@@ -21389,8 +21389,14 @@ def create_feed(
         try:
             url_guard.ensure_safe_outbound_url(url)
         except Exception:  # noqa: BLE001 — guard refusal, not a transport error
+            # int() is a no-op at runtime (FastAPI has already coerced the form
+            # field and rejected anything non-numeric with a 422), but it makes
+            # the barrier explicit: the redirect target is a fixed path, and the
+            # only interpolated value is provably a number, so nothing here can
+            # carry a scheme or host. CodeQL does not model the coercion and
+            # reads the raw parameter as remote input (py/url-redirection).
             return RedirectResponse(
-                url=(f"/?folder_id={folder_id}&message="
+                url=("/?folder_id=" + str(int(folder_id)) + "&message="
                      + quote_plus("That address is not allowed (private/loopback target).")),
                 status_code=303,
             )
