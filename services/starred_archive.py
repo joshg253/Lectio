@@ -52,10 +52,25 @@ _IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
 _SRC_ATTR_RE = re.compile(r'\bsrc\s*=\s*(?:"([^"]+)"|\'([^\']+)\')', re.IGNORECASE)
 _A_TAG_RE = re.compile(r"<a\b[^>]*>", re.IGNORECASE)
 _HREF_ATTR_ANY_RE = re.compile(r'\bhref\s*=\s*(?:"([^"]*)"|\'([^\']*)\')', re.IGNORECASE)
-_HREF_IMG_RE = re.compile(
-    r'<a\b[^>]*\bhref\s*=\s*(?:"([^"]+\.(?:jpe?g|png|webp|gif|avif))"|\'([^\']+\.(?:jpe?g|png|webp|gif|avif))\')',
+# Anchors are matched generically and judged on the URL PATH in code. The old
+# pattern required the href to *end* in an image extension, which a share button
+# satisfies by carrying one in its query: a Pinterest
+# "/pin/create/button/?url=…&media=….jpg" link read as an image, and 1.1MB of
+# HTML was fetched and stored as an asset.
+_HREF_ANCHOR_RE = re.compile(
+    r'<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|\'([^\']*)\')',
     re.IGNORECASE,
 )
+_IMAGE_PATH_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")
+_UNSAFE_NAME_RE = re.compile(r'[\\/:*?"<>|\r\n]+')
+
+
+def _download_name_for(source_url: str) -> str:
+    """Filename for a link rewritten to a content-addressed archive URL."""
+    from urllib.parse import unquote
+
+    name = unquote(urlparse(source_url or "").path.rsplit("/", 1)[-1]).strip()
+    return _UNSAFE_NAME_RE.sub("_", name).strip(". ")[:120]
 
 
 class StarredArchiveService:
@@ -226,6 +241,108 @@ class StarredArchiveService:
         except sqlite3.Error:
             return {}
         return {str(row["source_url"]): str(row["asset_hash"]) for row in rows}
+
+    def get_entry_file_assets(self, feed_url: str, entry_id: str) -> dict[str, str]:
+        """{source_url -> asset_hash} for assets that are actually FILES.
+
+        Images and audio are excluded by their STORED content type rather than
+        by guessing from the URL: a Gravatar ("/avatar/<hash>?s=48") and a CDN
+        path with no extension are both images with nothing in the URL to say
+        so, and they surfaced as nonsense "attachments". HTML is excluded too —
+        a page is never an attachment, and some were stored before capture
+        started refusing them.
+        """
+        try:
+            with self._get_archive_connection() as conn:
+                rows = conn.execute(
+                    "SELECT l.source_url, l.asset_hash, a.content_type"
+                    "  FROM archived_asset_link l"
+                    "  JOIN archived_asset a ON a.asset_hash = l.asset_hash"
+                    " WHERE l.feed_url = ? AND l.entry_id = ?",
+                    (feed_url, entry_id),
+                ).fetchall()
+        except sqlite3.Error:
+            return {}
+        out: dict[str, str] = {}
+        for row in rows:
+            source_url = str(row["source_url"])
+            ctype = str(row["content_type"] or "").lower()
+            if ctype.startswith(("image/", "audio/", "video/", "text/html",
+                                 "application/xhtml")):
+                continue
+            # An attachment must also LOOK like a file. A tracking pixel
+            # ("facebook.com/tr?id=…&ev=PageView") has no extension in its path
+            # and is not served as an image type either, so it slipped past the
+            # content-type filter and was offered as an attachment named "tr".
+            name = urlparse(source_url).path.rsplit("/", 1)[-1]
+            if "." not in name.strip("."):
+                continue
+            out[source_url] = str(row["asset_hash"])
+        return out
+
+    @staticmethod
+    def extraction_fingerprint(html_text: str) -> str:
+        """A stable hash of an extraction's visible TEXT.
+
+        Markup varies between runs (attribute order, whitespace) while the words
+        do not, so the text is what identifies "the same extraction".
+        """
+        text = re.sub(r"<[^>]+>", " ", html_text or "")
+        text = re.sub(r"\s+", " ", text).strip()
+        return hashlib.sha256(text.encode("utf-8")).hexdigest() if text else ""
+
+    def extraction_matches_sibling(self, feed_url: str, entry_id: str,
+                                   html_text: str, *, min_chars: int = 120) -> bool:
+        """True when this extraction is byte-identical to another entry's.
+
+        Site chrome extracts the same for every post on a feed, so a match
+        against a DIFFERENT entry means readability grabbed the furniture rather
+        than the article. Short extractions are exempt: a two-line stub can
+        legitimately coincide, and refusing those would block real re-fetches.
+        """
+        text_len = len(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html_text or "")).strip())
+        if text_len < min_chars:
+            return False
+        fingerprint = self.extraction_fingerprint(html_text)
+        if not fingerprint:
+            return False
+        try:
+            with self._get_archive_connection() as conn:
+                rows = conn.execute(
+                    "SELECT entry_id, readability_html_zlib FROM archived_entry"
+                    " WHERE feed_url = ? AND entry_id != ?"
+                    "   AND readability_html_zlib IS NOT NULL",
+                    (feed_url, entry_id),
+                ).fetchall()
+        except sqlite3.Error:
+            return False
+        for row in rows:
+            try:
+                other = zlib.decompress(row["readability_html_zlib"]).decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001
+                continue
+            if self.extraction_fingerprint(other) == fingerprint:
+                LOGGER.info("re-fetch: extraction matches sibling %s on %s",
+                            row["entry_id"], feed_url)
+                return True
+        return False
+
+    def source_url_for_asset(self, asset_hash: str) -> str | None:
+        """Any source URL this asset was stored from, for naming a download.
+
+        Assets are content-addressed and shared, so several posts can reference
+        the same bytes; any of the URLs gives the same filename, which is all
+        this is for.
+        """
+        try:
+            with self._get_archive_connection() as conn:
+                row = conn.execute(
+                    "SELECT source_url FROM archived_asset_link WHERE asset_hash = ? LIMIT 1",
+                    (asset_hash,),
+                ).fetchone()
+        except sqlite3.Error:
+            return None
+        return str(row["source_url"]) if row else None
 
     def has_complete_archive(self, feed_url: str, entry_id: str) -> bool:
         """True if a `complete` archive row exists for this key."""
@@ -1073,10 +1190,13 @@ class StarredArchiveService:
             if not src or src.startswith("data:"):
                 continue
             urls.add(urljoin(base_url, src))
-        for href_match in _HREF_IMG_RE.finditer(html_text):
+        for href_match in _HREF_ANCHOR_RE.finditer(html_text):
             href = (href_match.group(1) or href_match.group(2) or "").strip()
-            if href and not href.startswith("data:"):
-                urls.add(urljoin(base_url, href))
+            if not href or href.startswith("data:"):
+                continue
+            absolute = urljoin(base_url, href)
+            if urlparse(absolute).path.lower().endswith(_IMAGE_PATH_EXTS):
+                urls.add(absolute)
         return urls
 
     def _fetch_guarded(self, url: str) -> httpx.Response:
@@ -1133,6 +1253,12 @@ class StarredArchiveService:
         if not fetched:
             return
         raw_bytes, content_type = fetched
+        # A page is never an asset. Whatever pointed here — a mis-detected image
+        # link, a redirect to a login wall — storing HTML wastes space and then
+        # surfaces as a nonsense "attachment" the user is invited to download.
+        if (content_type or "").lower().startswith(("text/html", "application/xhtml")):
+            LOGGER.info("starred archive: refusing HTML as an asset: %s", source_url)
+            return
         if max_bytes is not None and len(raw_bytes) > max_bytes:
             # A tab or a lyric sheet is kilobytes. Past the cap this is not what
             # the feature is for, and the archive is a SQLite blob store.
@@ -1263,7 +1389,15 @@ class StarredArchiveService:
             asset_hash = asset_map.get(href)
             if not asset_hash:
                 return tag
-            return _HREF_ATTR_ANY_RE.sub(f'href="{asset_url_prefix}{asset_hash}"', tag, count=1)
+            tag = _HREF_ATTR_ANY_RE.sub(f'href="{asset_url_prefix}{asset_hash}"', tag, count=1)
+            # Carry the original filename. The archived URL ends in a content
+            # hash, so a download from this link would otherwise be saved as a
+            # 64-character hash with no extension.
+            if "download=" not in tag.lower():
+                name = _download_name_for(href)
+                if name:
+                    tag = tag[:-1].rstrip() + f' download="{name}">'
+            return tag
 
         html_text = _IMG_TAG_RE.sub(_rewrite_img, html_text)
         return _A_TAG_RE.sub(_rewrite_anchor, html_text)

@@ -22,7 +22,13 @@
   var state = null;
 
   function normalizeText(value) {
-    return (value || '').replace(/\s+/g, ' ').trim().slice(0, TEXT_PREFIX_LEN);
+    var text = (value || '').replace(/\s+/g, ' ').trim();
+    // Slice by CODE POINTS, not UTF-16 code units. String.slice counts units,
+    // so one astral character (an emoji) makes this truncate a character
+    // earlier than the server's Python `[:160]` — and the fingerprints then
+    // never compare equal. A post whose first paragraph began with 🍕 could not
+    // be cleaned up at all: "None of those elements could be matched."
+    return Array.from(text).slice(0, TEXT_PREFIX_LEN).join('');
   }
 
   // Mirrors _normalize_src in services/content_edits.py: unwrap the /api/img

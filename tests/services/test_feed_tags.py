@@ -589,3 +589,71 @@ def test_an_empty_feed_list_is_not_global(service):
 def test_vocabulary_honors_the_limit(service):
     service.record_entry_tags(FEED, [("e1", [f"t{i}" for i in range(20)])])
     assert len(service.tag_vocabulary([FEED], limit=5)) == 5
+
+
+def test_page_tags_prefer_link_text_over_prose_title():
+    """A publisher links the same taxonomy twice — once as the tag, once as a
+    navigation aside — and only the first is a tag. fossforce carries
+    title="View all posts in AI" on the tag itself and a sibling reading
+    "More posts in AI »", so a post tagged AI and Developer harvested four
+    "tags" and not one of them was a tag."""
+    html = (
+        '<a href="https://x.test/category/ai/" title="View all posts in AI">AI</a>'
+        '<a href="https://x.test/category/developer/" title="View all posts in Developer">Developer</a>'
+        '<a href="https://x.test/category/ai/">More posts in AI &raquo;</a>'
+        '<a href="https://x.test/category/developer/">More posts in Developer &raquo;</a>'
+    )
+    assert extract_page_tags(html) == ["AI", "Developer"]
+
+
+def test_prose_anchor_text_falls_back_to_the_slug():
+    """When the only link to a taxonomy is the prose one, its slug is the tag."""
+    html = '<a href="https://x.test/category/ai/">More posts in AI &raquo;</a>'
+    assert extract_page_tags(html) == ["ai"]
+
+
+def test_a_long_link_text_is_not_a_tag():
+    html = ('<a href="https://x.test/tag/linux/">'
+            'Read our complete guide to everything Linux on the desktop</a>')
+    assert extract_page_tags(html) == ["linux"]
+
+
+# --- Taxonomy carried in the query string, not the path -----------------
+
+def test_query_string_taxonomy_is_read_as_a_tag():
+    """Google Developers Blog's "posted in:" block. The path says /search/,
+    so only the parameter name identifies these as taxonomy links."""
+    html = """
+      <div class="posted-in-section__tags"><ul>
+        <li><a href="/search/?technology_categories=AI" class="glue-caption">AI</a></li>
+        <li><a href="/search/?content_type_categories=How-To+Guides" class="glue-caption">How-To Guides</a></li>
+      </ul></div>
+    """
+    assert extract_page_tags(html) == ["AI", "How-To Guides"]
+
+
+def test_query_taxonomy_falls_back_to_the_param_value():
+    """No link text to read (the anchor wraps an icon), so the term itself is
+    the tag — and '+' is a space, not a literal plus."""
+    html = '<a href="/search/?content_type_categories=How-To+Guides"><img src="i.png"></a>'
+    assert extract_page_tags(html) == ["How-To Guides"]
+
+
+def test_search_and_paging_params_are_not_taxonomy():
+    """The parameter name must END in a taxonomy word. A free-text search box
+    and a paginator sit on the same pages and are not tags."""
+    html = (
+        '<a href="/search/?q=machine+learning">Search</a>'
+        '<a href="/search/?s=tags">Find</a>'
+        '<a href="/blog/?page=2">Next</a>'
+        '<a href="/blog/?category_count=12">Counts</a>'
+    )
+    assert extract_page_tags(html) == []
+
+
+def test_path_taxonomy_still_wins_its_hyphen_expansion():
+    """A PATH slug is a slugification, so hyphens become spaces; a QUERY value
+    is the publisher's own display term, so its hyphens are kept (the
+    'How-To Guides' case above)."""
+    html = '<a href="/tags/pet-supplies/"><img src="i.png"></a>'
+    assert extract_page_tags(html) == ["pet supplies"]

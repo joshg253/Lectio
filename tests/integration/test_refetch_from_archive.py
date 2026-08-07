@@ -51,7 +51,7 @@ def test_archive_mode_fetches_the_snapshot_not_the_live_page(configured, monkeyp
     monkeypatch.setattr(main, "fetch_readability_article", _fake_extract)
     monkeypatch.setattr(
         main.saved_articles_service, "refresh_captured_article",
-        lambda reader, conn, f, e, extract, enqueue_archive: (
+        lambda reader, conn, f, e, extract, enqueue_archive, **kw: (
             extract(ENTRY), {"ok": True, "source_url": ENTRY})[1],
     )
 
@@ -87,7 +87,7 @@ def test_normal_mode_still_fetches_the_live_page(configured, monkeypatch):
     monkeypatch.setattr(main, "fetch_readability_article", _fake_extract)
     monkeypatch.setattr(
         main.saved_articles_service, "refresh_captured_article",
-        lambda reader, conn, f, e, extract, enqueue_archive: (
+        lambda reader, conn, f, e, extract, enqueue_archive, **kw: (
             extract(ENTRY), {"ok": True, "source_url": ENTRY})[1],
     )
 

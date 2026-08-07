@@ -250,3 +250,83 @@ def test_most_common_first(configured):
 def test_a_feed_with_no_file_links_suggests_nothing(configured):
     _seed_entry("plain", "<p>just words</p>")
     assert main.scan_feed_attachment_extensions(FEED) == []
+
+
+# --- the content-type filter -------------------------------------------------
+
+
+def test_only_real_files_are_returned_as_attachments(configured):
+    """Decided by STORED content type. A Gravatar and a CDN path with no
+    extension are both images with nothing in the URL to say so, and they
+    surfaced as "webp attachments"; a share button was stored as 1.1MB of HTML
+    and surfaced as an "attachment" that downloaded a .htm."""
+    main.ensure_starred_archive_schema()
+    rows = [
+        ("https://x.test/song.gp", "H1", "application/octet-stream"),
+        ("https://x.test/sheet.pdf", "H2", "application/pdf"),
+        ("https://gravatar.com/avatar/abc?s=48", "H3", "image/webp"),
+        ("https://cdn.test/flexiimages/xyz", "H4", "image/svg+xml"),
+        ("https://pinterest.com/pin/create/button/?media=x.jpg", "H5", "text/html"),
+        ("https://x.test/ep", "H6", "audio/mpeg"),
+    ]
+    with main.get_starred_archive_connection() as conn:
+        for url, h, ctype in rows:
+            conn.execute(
+                "INSERT OR REPLACE INTO archived_asset"
+                " (asset_hash, data, content_type, byte_size, created_at)"
+                " VALUES (?, ?, ?, 1, 0)", (h, b"x", ctype))
+            conn.execute(
+                "INSERT OR REPLACE INTO archived_asset_link"
+                " (feed_url, entry_id, source_url, asset_hash) VALUES (?, ?, ?, ?)",
+                (FEED, "e1", url, h))
+
+    got = main.starred_archive_service.get_entry_file_assets(FEED, "e1")
+
+    assert set(got) == {"https://x.test/song.gp", "https://x.test/sheet.pdf"}
+
+
+# --- links the page hides in a base64 attribute ------------------------------
+
+
+OBF = ("<span class='obflink' data-o='aHR0cHM6Ly9hc3NldHMtd3AuZ3VpdGFyLXByby5ldS93cC1jb250"
+       "ZW50L3VwbG9hZHMvMjAyNi8wNi9Ccnlhbl9BZGFtcy1TdW1tZXJfb2ZfNjkuZ3A='>"
+       "bryan_adams-summer_of_69.gp</span>")
+
+
+def test_a_base64_hidden_link_is_found():
+    """guitar-pro ships <span class="obflink" data-o="<base64>"> for its tab
+    downloads, so the file the page offers every visitor is reachable by the
+    browser but invisible to an href scan."""
+    got = main.attachment_links_in_html(OBF, POST, ["gp*"])
+    assert got == ["https://assets-wp.guitar-pro.eu/wp-content/uploads/2026/06/"
+                   "Bryan_Adams-Summer_of_69.gp"]
+
+
+def test_a_hidden_link_still_has_to_match_the_extension_list():
+    """Widens where links are FOUND, not what counts as a file."""
+    assert main.attachment_links_in_html(OBF, POST, ["pdf"]) == []
+
+
+def test_a_hidden_page_link_is_still_refused():
+    # base64 of "https://x.test/page.html"
+    html = "<span data-o='aHR0cHM6Ly94LnRlc3QvcGFnZS5odG1s'>x</span>"
+    assert main.attachment_links_in_html(html, POST, ["html", "gp"]) == []
+
+
+def test_non_base64_attributes_are_ignored():
+    html = "<span data-o='not-base64-at-all!!'>x</span>"
+    assert main.attachment_links_in_html(html, POST, ["gp"]) == []
+
+
+def test_base64_that_is_not_a_url_is_ignored():
+    # base64 of "just some text"
+    html = "<span data-o='anVzdCBzb21lIHRleHQ='>x</span>"
+    assert main.attachment_links_in_html(html, POST, ["gp"]) == []
+
+
+def test_plain_links_and_hidden_links_both_appear():
+    html = OBF + '<a href="/plain.pdf">p</a>'
+    got = main.attachment_links_in_html(html, POST, ["gp*", "pdf"])
+    assert len(got) == 2
+    assert any(u.endswith(".pdf") for u in got)
+    assert any(u.endswith(".gp") for u in got)

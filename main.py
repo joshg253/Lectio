@@ -7530,7 +7530,11 @@ def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
 
 _SAVE_ARTICLE_AUTO_PER_RUN_CAP = 50  # archive worker fan-out bound
-_SAVE_ARTICLE_INBOX_TAG = "inbox"
+# NB: saving no longer writes an "inbox" tag. The Saved Inbox is defined by the
+# STAR (kept=starred) since 2026-08-03, so the tag stopped carrying meaning and
+# only fought the user: untagging a post put it back on the next save, because
+# a re-save counts as new or "resurfaced". Existing `inbox` tags are left alone
+# — they are the user's data, and the Tags list still lists them.
 
 
 def _run_save_article_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
@@ -7588,16 +7592,8 @@ def _run_save_article_rules_after_refresh(refreshed_feed_urls: set[str]) -> None
                             eid = str(entry.id)
                             result = _star_entry_for_current_user(fu, eid)
                             if not result.get("ok") or result.get("duplicate"):
-                                continue  # missing, or already in Saved — don't re-tag
+                                continue  # missing, or already in Saved
                             saved += 1
-                            try:
-                                existing = get_manual_tags_for_entry(fu, eid)
-                                if _SAVE_ARTICLE_INBOX_TAG not in existing:
-                                    set_manual_tags_for_entry(
-                                        fu, eid, " ".join(existing + [_SAVE_ARTICLE_INBOX_TAG])
-                                    )
-                            except Exception:  # noqa: BLE001 — star landed; tag is best-effort
-                                LOGGER.warning("[save-article-auto] inbox tag failed for %s", eid)
                             if fu not in feed_title_cache:
                                 try:
                                     feed_title_cache[fu] = str(getattr(reader.get_feed(fu), "title", None) or fu)
@@ -8827,6 +8823,39 @@ def set_feed_attachment_exts(feed_url: str, raw_value: str) -> list[str]:
     return exts
 
 
+# Attributes that carry a base64-encoded URL instead of an href. guitar-pro
+# ships <span class="obflink" data-o="<base64>"> for its tab downloads, so the
+# file the page offers every visitor is reachable by the browser but invisible
+# to an href scan. Named attributes only — never a blind base64 sweep of the
+# document, which would turn any long token into a candidate URL.
+_OBFUSCATED_URL_ATTRS = ("data-o", "data-url", "data-href", "data-link", "data-file")
+_B64ISH_RE = re.compile(r"^[A-Za-z0-9+/=_-]{16,}$")
+
+
+def _decode_obfuscated_urls(soup) -> list[str]:
+    """http(s) URLs hidden in base64 attributes, in document order.
+
+    Only values that decode cleanly to an absolute http(s) URL are returned;
+    anything else is ignored rather than guessed at. The result still has to
+    satisfy the caller's extension list, so this widens where links are FOUND
+    without widening what counts as a file.
+    """
+    out: list[str] = []
+    for attr in _OBFUSCATED_URL_ATTRS:
+        for el in soup.find_all(attrs={attr: True}):
+            raw = str(el.get(attr) or "").strip()
+            if not raw or not _B64ISH_RE.match(raw):
+                continue
+            try:
+                decoded = base64.b64decode(raw + "=" * (-len(raw) % 4)).decode("utf-8")
+            except Exception:  # noqa: BLE001 — not base64, or not text
+                continue
+            decoded = decoded.strip()
+            if decoded.startswith(("http://", "https://")) and decoded not in out:
+                out.append(decoded)
+    return out
+
+
 def attachment_links_in_html(content_html: str, base_url: str, exts: list[str]) -> list[str]:
     """Absolute URLs of linked files matching *exts*, in document order.
 
@@ -8844,8 +8873,11 @@ def attachment_links_in_html(content_html: str, base_url: str, exts: list[str]) 
     wanted = [e.lower() for e in exts]
     found: list[str] = []
     soup = BeautifulSoup(content_html, "html.parser")
-    for a in soup.find_all("a"):
-        href = str(a.get("href") or "").strip()
+    hrefs = [str(a.get("href") or "").strip() for a in soup.find_all("a")]
+    # Links the page hides in a base64 attribute count too — see
+    # _decode_obfuscated_urls.
+    hrefs.extend(_decode_obfuscated_urls(soup))
+    for href in hrefs:
         if not href or href.startswith(("data:", "mailto:", "javascript:")):
             continue
         absolute = urljoin(base_url or "", href)
@@ -10183,6 +10215,21 @@ def _enclosure_label(enc_url: str, enc_type: str) -> str:
     return enc_type or "attachment"
 
 
+def attachment_filename_for_url(source_url: str) -> str:
+    """The filename a saved asset should download as.
+
+    An archived asset is addressed by content hash, so without this the browser
+    names the download after the URL's last segment — a 64-character hash with
+    no extension, which is unopenable and unidentifiable. Taken from the source
+    URL's own basename, minus any query.
+    """
+    name = urlparse(source_url or "").path.rsplit("/", 1)[-1]
+    name = unquote(name).strip()
+    # Header- and filesystem-hostile characters out; keep it recognisable.
+    name = re.sub(r'[\\/:*?"<>|\r\n]+', "_", name).strip(". ")
+    return name[:120] or "attachment"
+
+
 def _attachment_list_item(source_url: str, label: str, meta: str,
                           asset_map: dict[str, str]) -> str:
     """One <li>, pointing at the local copy when there is one.
@@ -10199,8 +10246,11 @@ def _attachment_list_item(source_url: str, label: str, meta: str,
     else:
         href = html.escape(source_url, quote=True)
         badge = ""
-    return (f'<li><a href="{href}" target="_blank" rel="noopener noreferrer" download>'
-            f'{label}</a>{meta}{badge}</li>')
+    # `download` must carry the NAME: the archived URL ends in a content hash,
+    # and a bare `download` makes the browser save that hash with no extension.
+    dl = html.escape(attachment_filename_for_url(source_url), quote=True)
+    return (f'<li><a href="{href}" target="_blank" rel="noopener noreferrer" '
+            f'download="{dl}">{label}</a>{meta}{badge}</li>')
 
 
 def _render_entry_attachments(entry, audio_url: str | None,
@@ -10254,11 +10304,17 @@ def _render_entry_attachments(entry, audio_url: str | None,
         items.append(_attachment_list_item(enc_url, label, meta, asset_map))
 
     # Files captured from body links, appended to the same list.
-    for source_url in asset_map:
+    # Judged by STORED content type, not by guessing from the URL: a Gravatar
+    # ("/avatar/<hash>?s=48") and a CDN path with no extension are both images
+    # with nothing in the URL to say so, and they surfaced as "attachments".
+    try:
+        file_assets = starred_archive_service.get_entry_file_assets(
+            str(entry.feed_url), str(entry.id))
+    except Exception:  # noqa: BLE001
+        file_assets = {}
+    for source_url in file_assets:
         if source_url in seen or not source_url:
             continue
-        if _url_has_image_ext(source_url) or _url_has_audio_ext(source_url):
-            continue        # images render inline; audio has its own player
         seen.add(source_url)
         items.append(_attachment_list_item(
             source_url, html.escape(_enclosure_label(source_url, "")), "", asset_map))
@@ -10659,7 +10715,15 @@ def _absolutize_article_urls(article_html: str, base_url: str) -> str:
 
 
 def _set_or_replace_tag_attr(tag_html: str, attr_name: str, value: str) -> str:
-    attr_re = re.compile(rf'\b{re.escape(attr_name)}\s*=\s*["\'][^"\']*["\']', re.IGNORECASE)
+    r"""Set *attr_name* on a tag, replacing it only if it is genuinely present.
+
+    The boundary is ``(?<![-\w])``, not ``\b``: a hyphen is a non-word character,
+    so ``\bsrc=`` matches inside ``data-lazy-src=``. Promoting a lazy image
+    therefore "found" an existing src, rewrote the lazy attribute with its own
+    value, and added no real src at all — the image had nothing to load and
+    rendered as an empty box.
+    """
+    attr_re = re.compile(rf'(?<![-\w]){re.escape(attr_name)}\s*=\s*["\'][^"\']*["\']', re.IGNORECASE)
     attr_literal = f'{attr_name}="{html.escape(value, quote=True)}"'
     if attr_re.search(tag_html):
         return attr_re.sub(attr_literal, tag_html, count=1)
@@ -11684,6 +11748,13 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     title = doc.short_title() or source_url
     summary = doc.summary(html_partial=True)
     summary = _reinject_readability_embeds(summary, raw_html)
+    # Promote lazy-loading attributes BEFORE sanitizing. A page that ships
+    # `<img data-lazy-src=…>` with no `src` (Wayback snapshots of WordPress
+    # sites do exactly this) otherwise stores an image element with nothing to
+    # load, which renders as an empty box. The helper already existed for the
+    # web-view proxy; capture needs it more, because what it stores is what the
+    # offline copy will forever contain.
+    summary = normalize_proxy_lazy_media(summary)
     article_html = sanitize_readability_html(summary).strip()
     _bs4_fallback_used = False
     if len(article_html) < 300:
@@ -16492,6 +16563,7 @@ def _start_background_update(feed_url: str) -> None:
     with get_meta_connection() as conn:
         if feed_url in get_disabled_feed_urls(conn):
             return
+    _uid = tenancy.current_user_id()  # captured here; the thread cannot see it
 
     def _run() -> None:
         with updating_feeds_lock:
@@ -16505,7 +16577,7 @@ def _start_background_update(feed_url: str) -> None:
             with updating_feeds_lock:
                 updating_feeds.discard(feed_url)
 
-    thread = threading.Thread(target=_run, daemon=True)
+    thread = threading.Thread(target=_run_in_user_context, args=(_uid, _run), daemon=True)
     thread.start()
 
 
@@ -19688,6 +19760,7 @@ def home(
     q: str | None = None,
     message: str | None = None,
     no_rss_url: str | None = None,
+    force_url: str | None = None,
     chunk: int | None = None,
     chunk_delta: str | None = None,
     subscribe: str | None = None,
@@ -19741,6 +19814,7 @@ def home(
             q=q,
             message=message,
             no_rss_url=no_rss_url,
+            force_url=force_url,
             chunk=chunk,
             chunk_delta=chunk_delta,
             subscribe=subscribe or subscribe_to,
@@ -19775,6 +19849,7 @@ def _home_inner(
     q: str | None = None,
     message: str | None = None,
     no_rss_url: str | None = None,
+    force_url: str | None = None,
     chunk: int | None = None,
     chunk_delta: str | None = None,
     subscribe: str | None = None,
@@ -20127,8 +20202,21 @@ def _home_inner(
     # The Kept view browses kept-but-unsubscribed feeds too: they're hidden from
     # the tree/All Feeds but their starred/tagged entries (with real tags) still
     # live in reader, so add them to the scan scope when in the saved/kept view.
+    #
+    # The Saved Articles feed belongs here for a different reason: it is a live
+    # reader feed that sits in NO folder, so the folder-derived set above misses
+    # it entirely. Its posts then reached the list only through the orphan-archive
+    # merge — which carries the ARCHIVED title and no thumbnail, so an edited
+    # title showed correctly in the article header (read from reader) and stale in
+    # the list, and the thumbnail appeared on open and vanished on return.
+    #
+    # ONLY at the root, and only when no feed is selected: belonging to no folder
+    # means it belongs to the whole-library view, not to every folder. Adding it
+    # unconditionally put saved articles in every folder's list.
     if selected_star_only:
         entry_feed_urls = entry_feed_urls | get_kept_feed_urls()
+        if selected_folder_id == root_id and not selected_feed_url:
+            entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
     posts = list_entries_for_feeds(
         entry_feed_urls,
         limit=limit,
@@ -20181,7 +20269,14 @@ def _home_inner(
         try:
             posts = merge_orphan_saved_entries(
                 posts,
-                live_feed_urls=all_feed_urls,
+                # The Saved Articles feed is LIVE in reader but sits in no
+                # folder, so a folder-derived set makes every one of its posts
+                # look orphaned. They then render from the archive: the archived
+                # title (so an edited title showed stale in the list and correct
+                # in the header) and no thumbnail (so it appeared on open and
+                # vanished on return). An entry whose feed is live is not an
+                # orphan, whatever the folder tree says.
+                live_feed_urls=all_feed_urls | {saved_articles_service.SAVED_FEED_URL},
                 sort_by=selected_sort_by,
                 sort_dir=selected_sort_dir,
                 limit=limit,
@@ -20327,6 +20422,7 @@ def _home_inner(
         "selected_entry": selected_entry,
         "message": message,
         "no_rss_url": no_rss_url,
+        "force_url": force_url,
         # Quick-subscription deep link (e.g. RSSHub-Radar pointed at Lectio via
         # the Feedbin/Nextcloud News override). Only pass through http(s) URLs so
         # the auto-opened Add Feed dialog can't be primed with a junk scheme.
@@ -20931,10 +21027,20 @@ def starred_asset(asset_hash: str) -> Response:
     if found is None:
         return Response(status_code=404)
     data, content_type = found
+    headers = {"Cache-Control": "public, max-age=31536000, immutable"}
+    # Name the file. The URL is a content hash, so without this a "Save link as"
+    # — or any download the `download` attribute does not cover — writes a
+    # 64-character hash with no extension. Images are left unnamed: they render
+    # inline and a Content-Disposition would not help them.
+    if not (content_type or "").lower().startswith(("image/", "audio/", "video/")):
+        source_url = starred_archive_service.source_url_for_asset(asset_hash)
+        if source_url:
+            filename = attachment_filename_for_url(source_url)
+            headers["Content-Disposition"] = f'attachment; filename="{filename}"'
     return Response(
         content=data,
         media_type=content_type,
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        headers=headers,
     )
 
 
@@ -21201,6 +21307,7 @@ def create_feed(
     devto_english_only: str = Form(""),
     devto_min_reactions: str = Form(""),
     devto_tags_exclude: str = Form(""),
+    force: int = Form(0),
 ):
     url = feed_url.strip()
     target_url = url
@@ -21275,14 +21382,54 @@ def create_feed(
     # For non-YouTube URLs, probe whether the URL is a feed and run
     # auto-discovery if it looks like a webpage instead.
     discovery_escalated = False
-    if not _is_youtube_url(url):
+    if force and not _is_youtube_url(url):
+        # Force skips discovery, and discovery is where the SSRF guard runs.
+        # Nothing else on this path checks, so assert it directly: a forced
+        # subscribe is an override of a SITE's refusal, never of ours.
+        try:
+            url_guard.ensure_safe_outbound_url(url)
+        except Exception:  # noqa: BLE001 — guard refusal, not a transport error
+            # int() is a no-op at runtime (FastAPI has already coerced the form
+            # field and rejected anything non-numeric with a 422), but it makes
+            # the barrier explicit: the redirect target is a fixed path, and the
+            # only interpolated value is provably a number, so nothing here can
+            # carry a scheme or host. CodeQL does not model the coercion and
+            # reads the raw parameter as remote input (py/url-redirection).
+            return RedirectResponse(
+                url=("/?folder_id=" + str(int(folder_id)) + "&message="
+                     + quote_plus("That address is not allowed (private/loopback target).")),
+                status_code=303,
+            )
+    if not _is_youtube_url(url) and not force:
         candidates, discovery_escalated = discover_feed_urls_ex(url)
         if not candidates:
+            # Why discovery failed decides what we offer. A REFUSAL (403, a
+            # timeout, an empty anti-bot response) means we never saw the
+            # content, so the URL may well be a feed behind a wall and
+            # subscribing anyway is reasonable — it may start working later.
+            # A page we fetched FINE that simply has no feed is an article, and
+            # subscribing to it produces a husk: a permanently failing "feed"
+            # holding whatever gets captured onto it, invisible unless you go
+            # looking. 29 of those had accumulated before this distinction
+            # existed (see scripts/rehome_article_feeds.py).
+            probe = {}
+            try:
+                from services.feed_discovery import probe_url as _probe_url
+                probe = _probe_url(url)
+            except Exception:  # noqa: BLE001 — classification only
+                probe = {}
+            from services.feed_discovery import refusal_is_forceable
+            refused = refusal_is_forceable(probe)
+            note = (
+                "That address could not be read (the site refused us)."
+                if refused else "No RSS/Atom feed found at that URL."
+            )
             return RedirectResponse(
                 url=(
                     f"/?folder_id={folder_id}"
-                    f"&message={quote_plus('No RSS/Atom feed found at that URL.')}"
+                    f"&message={quote_plus(note)}"
                     f"&no_rss_url={quote_plus(url)}"
+                    + (f"&force_url={quote_plus(url)}" if refused else "")
                 ),
                 status_code=303,
             )
@@ -21502,8 +21649,8 @@ def fix_url_titles():
         ]
     if stale_urls:
         threading.Thread(
-            target=feed_refresh_service.update_feeds,
-            args=(stale_urls,),
+            target=_run_in_user_context,
+            args=(tenancy.current_user_id(), feed_refresh_service.update_feeds, stale_urls),
             daemon=True,
             name="fix-url-titles",
         ).start()
@@ -24929,9 +25076,15 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
     global _unread_counts_generation
     _unread_counts_generation += 1
 
+    # Bound to the requesting tenant: a bare Thread does not inherit
+    # contextvars, so this refresh ran as the DEFAULT user and fetched into the
+    # wrong (or no) database. The URL change itself succeeded, so the symptom
+    # was a feed that had plainly moved yet still showed the OLD site's title
+    # and link until some later scheduled cycle happened to pick it up —
+    # looking for all the world like the change hadn't taken.
     threading.Thread(
-        target=feed_refresh_service.update_feeds,
-        args=([new_url],),
+        target=_run_in_user_context,
+        args=(tenancy.current_user_id(), feed_refresh_service.update_feeds, [new_url]),
         daemon=True,
         name="refresh-after-url-change",
     ).start()
@@ -25555,6 +25708,26 @@ def clean_entry_content_route(
                 bump_received=False, pin_content=True,
             )
     return JSONResponse({"ok": True, "applied": applied, "unmatched": unmatched})
+
+
+@app.get("/entries/content/has-original")
+def entry_has_original_content_route(feed_url: str = Query(...), entry_id: str = Query(...)):
+    """Whether this post has a stored original to restore.
+
+    Asked per post so the menu can offer Restore only when it would do
+    something — a dead control is worse than an absent one, and this is the
+    recovery path for a re-fetch that replaced an article, so it has to be
+    trustworthy when it does appear.
+    """
+    try:
+        with get_meta_connection() as conn:
+            found = conn.execute(
+                "SELECT 1 FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchone()
+    except sqlite3.OperationalError:
+        found = None      # tenant DB predates the table
+    return JSONResponse({"ok": True, "has_original": bool(found)})
 
 
 @app.post("/entries/content/revert")
@@ -27952,24 +28125,6 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
     # article never appeared in the Inbox until the cache expired.
     if result.get("ok") and (not result.get("duplicate") or result.get("resurfaced")):
         invalidate_unread_counts_cache()
-        # Land the save in the Saved Inbox: tag it 'inbox', the same bucket the
-        # auto-save rule uses. A manual save (extension/bookmarklet/modal) never
-        # got this, so saves were starred but invisible in the Inbox tag view.
-        # Only on a new save or a resurface — never re-tag a duplicate the user
-        # has deliberately filed out of the Inbox.
-        eid = result.get("entry_id")
-        if eid:
-            try:
-                existing = get_manual_tags_for_entry(saved_articles_service.SAVED_FEED_URL, eid)
-                if _SAVE_ARTICLE_INBOX_TAG not in existing:
-                    set_manual_tags_for_entry(
-                        saved_articles_service.SAVED_FEED_URL, eid,
-                        " ".join(existing + [_SAVE_ARTICLE_INBOX_TAG]),
-                    )
-                    invalidate_tag_counts_cache()
-                    invalidate_has_manual_tags_cache()
-            except Exception:  # noqa: BLE001 — the save landed; the tag is a nicety
-                LOGGER.warning("[save-article] inbox tag failed for %s", eid)
     return result
 
 
@@ -28142,6 +28297,7 @@ def _refresh_captured_article_for_current_user(
             entry_id,
             extract=extract,
             enqueue_archive=starred_archive_service.enqueue_archive,
+            is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
         )
     if from_archive and result.get("ok"):
         result["from_archive"] = from_archive
@@ -28162,12 +28318,25 @@ def _refresh_captured_article_for_current_user(
                     reader, conn, feed_url, entry_id,
                     extract=_from_archive,
                     enqueue_archive=starred_archive_service.enqueue_archive,
+                    is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
                 )
             if archived_result.get("ok"):
                 archived_result["from_archive"] = snapshot
                 result = archived_result
 
     if result.get("ok"):
+        # The body just changed, so a lead image derived from the OLD body is
+        # stale — and a stale one is worse than none, because the first body
+        # image is HOISTED OUT of the article to become the hero. A treblezine
+        # post re-fetched from the archive ended up with a dead 403 hero (the
+        # publisher's original URL, cached earlier) while the working archived
+        # image was removed from the body as "already the lead". The image
+        # simply vanished. Clearing it here makes the next render derive one
+        # from what the article now actually contains.
+        try:
+            lead_image_service.clear_entry_lead_image_cache(feed_url, entry_id)
+        except Exception:  # noqa: BLE001 — never fail a good re-fetch over this
+            LOGGER.debug("lead-image invalidation failed for %s", entry_id, exc_info=True)
         try:
             result["dated"] = _apply_mined_publish_date(
                 feed_url, entry_id, _capture.get("raw_html"))

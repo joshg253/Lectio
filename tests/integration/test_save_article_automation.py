@@ -1,5 +1,5 @@
 """Save/Star automation rule: stars matching fresh entries into the Saved
-backlog and tags them 'inbox'; plus the safe-dedup GUID signal that lets
+backlog; plus the safe-dedup GUID signal that lets
 identical-GUID cross-feed copies (slickdeals search feeds) dedupe without a
 body match."""
 from __future__ import annotations
@@ -57,7 +57,7 @@ def _is_starred(entry_id: str) -> bool:
             (FEED, entry_id)).fetchone() is not None
 
 
-def test_rule_stars_and_inbox_tags_matching_entries(configured):
+def test_rule_stars_matching_entries(configured):
     _add_rule("switch")
     with main.get_reader() as reader:
         _seed(reader)
@@ -65,16 +65,27 @@ def test_rule_stars_and_inbox_tags_matching_entries(configured):
 
     assert _is_starred("e-match")
     assert not _is_starred("e-other")
-    assert "inbox" in main.get_manual_tags_for_entry(FEED, "e-match")
-    assert main.get_manual_tags_for_entry(FEED, "e-other") == []
 
 
-def test_rerun_does_not_retag_filed_entries(configured):
+def test_rule_writes_no_tags_at_all(configured):
+    """The star IS the save. Saving used to also write an 'inbox' tag, from
+    when the Inbox was a tag view; it is defined by the star now, so writing
+    the tag only fought the user — removing it by hand put it back on the
+    next save. Nothing may write tags on the user's behalf here."""
     _add_rule("switch")
     with main.get_reader() as reader:
         _seed(reader)
     main._run_save_article_rules_after_refresh({FEED})
-    # User files the item out of the Inbox (removes the tag, keeps the star).
+
+    assert main.get_manual_tags_for_entry(FEED, "e-match") == []
+    assert main.get_manual_tags_for_entry(FEED, "e-other") == []
+
+
+def test_rerun_leaves_the_users_own_tags_alone(configured):
+    _add_rule("switch")
+    with main.get_reader() as reader:
+        _seed(reader)
+    main._run_save_article_rules_after_refresh({FEED})
     main.set_manual_tags_for_entry(FEED, "e-match", "toread")
     main._run_save_article_rules_after_refresh({FEED})
     assert main.get_manual_tags_for_entry(FEED, "e-match") == ["toread"]

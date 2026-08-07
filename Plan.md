@@ -5,6 +5,23 @@ this file only tracks what's still open.
 
 ## Now
 
+### ⏰ Check on or after 2026-08-13: did the husk feeds come back?
+
+29 article URLs had been subscribed as feeds and were rehomed 2026-08-06. The
+Add-Feed door they *could* have come through is now shut (a page that reads fine
+but has no feed can no longer be force-subscribed), **but that was never proven
+to be the door they used** — `create_feed` already refused that shape, so they
+arrived by some other route: an older version, an OPML import, or the extension.
+
+One command settles it:
+
+    uv run python scripts/rehome_article_feeds.py     # dry run, writes nothing
+
+**Zero** means the door is shut and this reminder can be deleted. **Anything
+above zero means there is a second door**, and the URLs it reports are the
+evidence for finding it — check what they have in common (host, import batch,
+whether they carry captures from the extension).
+
 ### 0. Next three, in this order (agreed 2026-08-04)
 
 The order is deliberate and is **not** the order they were found in. Reasoning
@@ -277,6 +294,123 @@ extension list: an `<enclosure>` is the publisher *declaring* that a file
 belongs to the post (Standard Ebooks attaches the epub), which is a stronger
 claim than a link in the body. Audio is skipped — podcast enclosures are large
 and stream fine — and images are already captured as images.
+
+### Attachment capture: what is NOT a file — FIXED 2026-08-05
+
+Three bugs, one of which the Attachments list only made *visible*.
+
+- **A share button stored as an asset.** The image-link pattern required an
+  href to *end* in an image extension, which a Pinterest
+  `/pin/create/button/?url=…&media=….jpg` link satisfies. Anchors are now judged
+  on the URL **path**, so a query string cannot disguise a page as an image
+  while a real image with a cache-buster still counts. Capture also refuses HTML
+  outright now, whatever led it there.
+- **Images listed as attachments.** A Gravatar (`/avatar/<hash>?s=48`) and a CDN
+  path with no extension are both images with nothing in the URL to say so. The
+  list is decided by **stored content type** instead of guessed from the URL, so
+  assets stored before the capture fix stop being offered without a re-capture.
+- **1,816 HTML assets, 1.63 GB** had accumulated. Purged with
+  `scripts/purge_html_assets.py` (deletes on stored `content_type` only — never
+  by sniffing bytes, so a legitimately saved .html attachment cannot be eaten).
+  Archive 5.9 GB → 4.4 GB after VACUUM.
+
+**Obfuscated download links are decoded.** guitar-pro ships
+`<span class="obflink" data-o="<base64>">` for its tab downloads, so the file the
+page offers every visitor is reachable by the browser but invisible to an href
+scan. Named attributes only (`data-o`, `data-url`, `data-href`, `data-link`,
+`data-file`) and never a blind base64 sweep, which would turn any long token into
+a candidate URL. The decoded URL still has to satisfy the feed's extension list —
+this widens where links are FOUND, not what counts as a file. Referenced
+attachments on blog.guitar-pro.com went 211 → 461.
+
+### Attachments download with their real filename — FIXED 2026-08-05
+
+An archived asset is addressed by **content hash**, so a bare `download`
+attribute made the browser save `cfc24ad676575660aa54d641afe8b2c8…` with no
+extension — unopenable and unidentifiable. Three places now carry the name,
+derived from the source URL's basename (URL-decoded, query dropped,
+header-hostile characters replaced):
+
+- the Attachments list (`download="Melody-Danny_Boy.gp"`);
+- in-body links rewritten to the archive, unless the publisher already set a
+  `download` name of their own;
+- the `/starred-asset/` route itself, via `Content-Disposition`, so "Save link
+  as" and a pasted URL are named too. Skipped for images/audio/video, which
+  render inline and would only be made un-viewable by an attachment disposition.
+
+### Re-fetch replacing an article with a feed's boilerplate — GUARDED 2026-08-06
+
+Readability can lock onto a site's standing furniture instead of the post:
+commandlinefu.com's "is the place to record those command-line gems…" replaced
+the actual command. The existing mismatch guard cannot see this — the page IS
+the right article, the title stays correct, and the boilerplate is *longer* than
+what it replaced, so neither title nor length separates them.
+
+What does: site chrome extracts **identically for every post on a feed**. A new
+extraction byte-identical to one already stored against a DIFFERENT entry of the
+same feed is refused and the stored copy kept (`extraction_matches_sibling`).
+Short extractions are exempt — a two-line stub can legitimately coincide.
+
+**Damage already done: 592 entries across 39 feeds** (premierguitar 347,
+guitarworld 118, heyscriptingguy 105). `scripts/revert_boilerplate_refetches.py`
+restores from `entry_content_edits.original_content`, needing no network — but
+**only 27 had a snapshot**; the other 565 were overwritten before that table
+existed and their feed-served body is gone. The archive is no help: its
+`content_html_zlib` is copied from the reader entry, which was already clobbered.
+
+**Not covered by this guard:** a re-fetch that grabs a *different unique*
+article. Entry 26031 came back as a piece about sandbox-game rendering — unique
+text, so the sibling test cannot see it. The slug/title mismatch guard is what
+should catch that shape, and it did not; worth investigating if it recurs.
+
+The pane's Restore control was also relabelled. It is written by both the
+cleanup and any re-fetch, but read "Revert cleanup", which meant nothing to
+someone whose article had been replaced by a bad re-fetch — the case people
+actually need it for. It now carries a visible word rather than being one
+unlabelled icon among several.
+
+### Article URLs registered as feeds — REHOMED 2026-08-06 (31 captures)
+
+29 "feeds" in the live library were article pages, added by hand while searching
+for a real feed. Each held one or two user captures and failed on every refresh
+cycle, since Lectio re-parsed an article page as RSS forever.
+
+`scripts/rehome_article_feeds.py` moves the captures to Saved Articles and
+deletes the husk. Detection needs all three of: a recorded parse failure, a URL
+with **no feed marker**, and every entry being a user capture — a dead *real*
+feed carrying saved captures matches the last two, which is why the URL shape is
+load-bearing rather than cosmetic.
+
+**The archive is why this is a script and not 29 clicks.**
+`_move_entry_to_feed` carries the star, tags, read state and body, but does
+**not** touch the starred archive — so a plain move orphans the offline copy and
+every captured image under a feed key that is about to be deleted.
+`rekey_archive` repoints it, and the meta tables keyed on (feed_url, entry_id)
+follow. Order matters: move, re-key, then delete the husk.
+
+Applied after a full backup (7 DBs, 5.5GB). One feed first as a trial, verified,
+then the rest: **31 of 31 present on Saved Articles afterwards, 0 missing, 0
+article-URL feeds left**. The trial also showed why merging beats synthesizing —
+the canonical copy already on Saved Articles had a 72KB body against the husk's
+299 bytes.
+
+### Force-subscribe, split by WHY discovery failed — 2026-08-06
+
+Adding a feed refused an address that discovery could not resolve, and offered
+only "Create page feed". That left no way to subscribe to a real feed behind a
+bot wall (a 403 today may answer tomorrow), while nothing stopped an article URL
+becoming a permanently failing husk by other routes.
+
+Both are the same decision, split by the probe's own verdict:
+
+- **`error` / `blocked`** — a refusal, a timeout, an empty anti-bot body. We
+  never saw the content, so the address may well be a feed. Offer **Subscribe
+  anyway**, which skips discovery entirely (there is nothing to validate).
+- **`none`** — fetched fine, no feed anywhere in it. That is an article, and
+  subscribing produces a husk. Only the page-feed offer stands.
+
+The page-feed offer is unchanged in both cases; it scrapes a readable page,
+which is a different thing from subscribing to an address.
 
 ### 0c. CodeQL board triage
 
