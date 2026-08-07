@@ -589,3 +589,30 @@ def test_an_empty_feed_list_is_not_global(service):
 def test_vocabulary_honors_the_limit(service):
     service.record_entry_tags(FEED, [("e1", [f"t{i}" for i in range(20)])])
     assert len(service.tag_vocabulary([FEED], limit=5)) == 5
+
+
+def test_page_tags_prefer_link_text_over_prose_title():
+    """A publisher links the same taxonomy twice — once as the tag, once as a
+    navigation aside — and only the first is a tag. fossforce carries
+    title="View all posts in AI" on the tag itself and a sibling reading
+    "More posts in AI »", so a post tagged AI and Developer harvested four
+    "tags" and not one of them was a tag."""
+    html = (
+        '<a href="https://x.test/category/ai/" title="View all posts in AI">AI</a>'
+        '<a href="https://x.test/category/developer/" title="View all posts in Developer">Developer</a>'
+        '<a href="https://x.test/category/ai/">More posts in AI &raquo;</a>'
+        '<a href="https://x.test/category/developer/">More posts in Developer &raquo;</a>'
+    )
+    assert extract_page_tags(html) == ["AI", "Developer"]
+
+
+def test_prose_anchor_text_falls_back_to_the_slug():
+    """When the only link to a taxonomy is the prose one, its slug is the tag."""
+    html = '<a href="https://x.test/category/ai/">More posts in AI &raquo;</a>'
+    assert extract_page_tags(html) == ["ai"]
+
+
+def test_a_long_link_text_is_not_a_tag():
+    html = ('<a href="https://x.test/tag/linux/">'
+            'Read our complete guide to everything Linux on the desktop</a>')
+    assert extract_page_tags(html) == ["linux"]

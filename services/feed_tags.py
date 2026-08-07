@@ -136,6 +136,27 @@ _ANCHOR_ATTR_RE = re.compile(
 _INNER_TAG_RE = re.compile(r"<[^>]+>")
 
 
+# A tag is a label, not a sentence. Publishers link the same taxonomy twice —
+# once as the tag itself ("AI") and once as a navigation aside ("More posts in
+# AI »", title="View all posts in AI") — and only the first is a tag.
+_TAG_PROSE_MARKERS = ("»", "«", "…", "→")
+_TAG_TEXT_MAX_CHARS = 30
+
+
+def _looks_like_a_tag(text: str) -> bool:
+    """Whether an anchor's text reads as a tag rather than a phrase."""
+    text = (text or "").strip()
+    if len(text) < 2 or len(text) > _TAG_TEXT_MAX_CHARS:
+        return False
+    if any(marker in text for marker in _TAG_PROSE_MARKERS):
+        return False
+    lowered = text.lower()
+    return not any(
+        lowered.startswith(prefix)
+        for prefix in ("more posts", "view all", "all posts", "see all", "browse ")
+    )
+
+
 def extract_page_tags(html: str | None) -> list[str]:
     """Harvest article tags from a source page — the fallback for entries
     whose feed never delivered <category> data (aged out of the feed window,
@@ -220,16 +241,27 @@ def extract_page_tags(html: str | None) -> list[str]:
         href = attrs.get("href") or ""
         if not _TAXONOMY_HREF_RE.search(href):
             continue
-        # title, then the anchor's own text, then the slug. The text carries the
-        # publisher's casing and punctuation ("Pet Supplies", "Woot!") where a slug
-        # gives "pet-supplies" — but only when there IS text: Valnet wraps its tag
-        # anchors around an image or a one-character span, and a slug beats "x".
-        text = (attrs.get("title") or "").strip()
-        if len(text) < 2:
-            text = " ".join(_INNER_TAG_RE.sub(" ", m.group(2)).split())
-        if len(text) < 2:
+        # The anchor's own TEXT first, then the slug, then the title.
+        #
+        # Title was first and it is prose on every WordPress site: fossforce's
+        # category links carry title="View all posts in AI" beside a sibling
+        # reading "More posts in AI »", so a post tagged AI and Developer
+        # harvested four "tags" and not one of them was a tag. The link text is
+        # what the publisher shows a reader ("AI"), and it keeps the casing and
+        # punctuation a slug loses ("Pet Supplies", "Woot!").
+        #
+        # Slug before title for the rest: Valnet wraps its tag anchors around an
+        # image or a one-character span, so there is no text to read, and
+        # "pet-supplies" still beats a sentence.
+        text = " ".join(_INNER_TAG_RE.sub(" ", m.group(2)).split())
+        if not _looks_like_a_tag(text):
+            # Prose, not a tag: the same category is often linked twice, once as
+            # the tag and once as "More posts in AI »". Its slug is the tag.
             slug_m = _TAXONOMY_HREF_RE.search(href)
-            text = (slug_m.group(1) if slug_m else "").replace("-", " ")
+            slug = (slug_m.group(1) if slug_m else "").replace("-", " ")
+            text = slug or text
+        if len(text) < 2:
+            text = (attrs.get("title") or "").strip()
         if len(text) >= 2:
             values.append(text)
 
