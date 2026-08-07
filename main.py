@@ -16563,6 +16563,7 @@ def _start_background_update(feed_url: str) -> None:
     with get_meta_connection() as conn:
         if feed_url in get_disabled_feed_urls(conn):
             return
+    _uid = tenancy.current_user_id()  # captured here; the thread cannot see it
 
     def _run() -> None:
         with updating_feeds_lock:
@@ -16576,7 +16577,7 @@ def _start_background_update(feed_url: str) -> None:
             with updating_feeds_lock:
                 updating_feeds.discard(feed_url)
 
-    thread = threading.Thread(target=_run, daemon=True)
+    thread = threading.Thread(target=_run_in_user_context, args=(_uid, _run), daemon=True)
     thread.start()
 
 
@@ -21642,8 +21643,8 @@ def fix_url_titles():
         ]
     if stale_urls:
         threading.Thread(
-            target=feed_refresh_service.update_feeds,
-            args=(stale_urls,),
+            target=_run_in_user_context,
+            args=(tenancy.current_user_id(), feed_refresh_service.update_feeds, stale_urls),
             daemon=True,
             name="fix-url-titles",
         ).start()
@@ -25069,9 +25070,15 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
     global _unread_counts_generation
     _unread_counts_generation += 1
 
+    # Bound to the requesting tenant: a bare Thread does not inherit
+    # contextvars, so this refresh ran as the DEFAULT user and fetched into the
+    # wrong (or no) database. The URL change itself succeeded, so the symptom
+    # was a feed that had plainly moved yet still showed the OLD site's title
+    # and link until some later scheduled cycle happened to pick it up —
+    # looking for all the world like the change hadn't taken.
     threading.Thread(
-        target=feed_refresh_service.update_feeds,
-        args=([new_url],),
+        target=_run_in_user_context,
+        args=(tenancy.current_user_id(), feed_refresh_service.update_feeds, [new_url]),
         daemon=True,
         name="refresh-after-url-change",
     ).start()
