@@ -42,21 +42,61 @@ Parked, deliberately:
   hunting it cold — Josh will flag it if it recurs.
 - **The husk-feed re-check**, dated above. Not before 2026-08-13.
 
-### 0c. Dependency / stack update — DUE, not started
+### 0c. Dependency / stack update — feedparser DONE 2026-08-06, batch pending
+
+**feedparser 6.0.12 → 6.0.14 is in.** The code change it needed was not the one
+predicted below, and the real finding is bigger than the bump:
+
+- Nothing in Lectio imports `sgmllib`. feedparser 6.0.13 replaced its own
+  `import sgmllib` with a self-contained `feedparser.sgml` and dropped the
+  `sgmllib3k` dependency — an internal change, no caller work.
+- **`reader` was never using the feedparser we bump.** It ships
+  `reader._vendor.feedparser` (6.0.11) and prefers it unless
+  `READER_NO_VENDORED_FEEDPARSER` is set. That vendored copy does a bare
+  `import sgmllib`, satisfied only transitively by feedparser 6.0.12's
+  `sgmllib3k` dep — so the moment `uv` pruned `sgmllib3k`, every `reader` import
+  died with `ModuleNotFoundError`. That is what the bump actually broke, and it
+  broke loudly (all 2551 tests errored at collection), not quietly.
+- The quiet part is what it exposed: for as long as the vendored copy was in
+  use, **the whole §0c premise was false** — bumping feedparser never touched
+  the code that parses the library. And `main.py`'s `_parse_month_first_pubdate`
+  handler, registered on the installed feedparser specifically so ingest would
+  understand `"May 11, 2026 19:15:50 +0000"`, was registered on a module ingest
+  never called. It only ever applied to Lectio's own direct `feedparser.parse`
+  calls.
+
+Resolved by pointing `reader` at the installed feedparser
+(`services/__init__.py` sets `READER_NO_VENDORED_FEEDPARSER=1`; `main.py` and
+`tests/conftest.py` establish it before their `reader` imports). Ingest now
+parses with 6.0.14 and the date handler reaches it.
+`tests/services/test_feedparser_wiring.py` pins all three facts.
+
+Verified beyond the suite, as this section demanded: 10 real feeds / 194 entries
+fetched once and parsed by **both** 6.0.11-vendored and 6.0.14-installed —
+titles, `published` strings, parsed date tuples, links, content lengths, tag and
+enclosure counts **identical, zero differences**. Then a live ingest through
+Lectio's own `SanitizingFeedparserParser` into a scratch DB: Atom (xkcd,
+what-if), RSS (Ars Technica), a YouTube channel feed and a DeviantArt `file://`
+feed all landed fully dated, titled and bodied; the bot-walled feed failed
+cleanly with its 403 as before. One YouTube URL 403'd on `reader`'s fetcher
+during that run while the same URL had returned 200 to a direct request a minute
+earlier — fetch-layer, unrelated to parsing, and not investigated.
+
+**Still to do — the routine batch** (certifi, fastapi, uvicorn, httpx2 together).
 
 Versions as installed 2026-08-06, checked against PyPI the same day. Only
-feedparser needs code written; the rest are version bumps that want a test run
+feedparser needed code written; the rest are version bumps that want a test run
 and a look at the app.
 
 | Package | Installed | Latest | Note |
 |---|---|---|---|
-| feedparser | 6.0.12 | **6.0.14** | **The only one with a code change behind it.** 6.0.13 dropped the vendored `sgmllib`, so the import has to be swapped. Do it alone and first — it parses every feed in the library, and a silent regression here surfaces days later as "some feeds stopped updating", not as a failed upgrade. |
+| feedparser | ~~6.0.12~~ | **6.0.14 — DONE** | See above. The code change was real but not the predicted one: `reader`'s vendored copy had to be switched off, not an import swapped. |
 | certifi | 2026.6.17 | **2026.7.22** | It is a CA bundle; newer is the whole point. |
 | fastapi | 0.138.0 | **0.141.1** | Routine. |
 | uvicorn | 0.49.0 | **0.52.1** | Routine. |
 | httpx2 | 2.4.0 | **2.9.1** | **Test-only.** It is in the `dev` extra because starlette's TestClient prefers it; no runtime code imports it. A bump here can only break the suite, never the app. |
 | httpx | 0.28.1 | 0.28.1 | **Already current — do not "upgrade" it to 2.x.** `httpx2` is a *separate package*, not httpx's next major. Every runtime caller (`main.py`, `services/url_guard.py`, and eight other services) imports `httpx`, and swapping them is a migration, not a version bump. Not in scope here. |
-| reader | 3.26 | 3.26 | Already current. Read the changelog before any future bump — it owns the entry store, and Lectio reaches into `reader._storage.get_db()` in several places. |
+| reader | 3.26 | 3.26 | Already current. Read the changelog before any future bump — it owns the entry store, and Lectio reaches into `reader._storage.get_db()` in several places. Its vendored feedparser is now switched off, so a `reader` bump no longer silently changes which parser ingest uses — but check that `READER_NO_VENDORED_FEEDPARSER` is still the opt-out. |
 
 **Order:** feedparser alone, verify a real refresh cycle, commit. Then the
 routine three (certifi, fastapi, uvicorn) together, plus httpx2. Keeping

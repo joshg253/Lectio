@@ -542,6 +542,25 @@ feeds must be excluded from the global caches.
   standing between feed HTML and a `| safe` render — it drops scriptable tags,
   all `on*` handlers, `style`, `javascript:`/`vbscript:`/`data:` URLs (incl.
   control-char-obfuscated), and `object`/`embed`/`form`.
+- **One feedparser per process, and it is the installed one** — `reader` ships a
+  vendored feedparser (`reader._vendor.feedparser`) and uses it by default, so
+  for a long time Lectio ran two copies at different versions: the vendored one
+  parsed every feed at ingest, while the `import feedparser` in `main.py` only
+  served Lectio's own direct `feedparser.parse` calls (feed comparison, podcast
+  enclosure sniffing, YouTube embed recovery). Two consequences, both silent:
+  the date handler `main.py` registers for day-of-week-less RFC 2822 dates
+  (`_parse_month_first_pubdate`) never reached ingest, and dependency bumps to
+  feedparser never touched the code that parses the library. `services/__init__.py`
+  now sets `READER_NO_VENDORED_FEEDPARSER=1` so `reader` uses the installed
+  feedparser. It is a `setdefault`, so an operator can still force the vendored
+  copy — but the vendored copy in `reader` 3.26 is 6.0.11, whose `sgml.py` does a
+  bare `import sgmllib`; that module came in transitively from feedparser's
+  `sgmllib3k` dependency, which feedparser 6.0.13 dropped in favor of a
+  self-contained `feedparser.sgml`. So on feedparser ≥ 6.0.13 the vendored copy
+  does not import at all. The variable must be set before anything imports
+  `reader`, which is why `main.py` and `tests/conftest.py` — both of which reach
+  `reader` ahead of the services package — establish it themselves.
+  `tests/services/test_feedparser_wiring.py` pins the invariant.
 - **Link fields are feed input too** — that allowlist only covers URLs *inside*
   content HTML. An entry's own `link` is equally attacker-controlled, and Jinja
   escaping protects the attribute *context*, not the scheme: `href="{{ link }}"`

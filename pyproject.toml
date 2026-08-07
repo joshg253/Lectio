@@ -7,7 +7,7 @@ requires-python = ">=3.14"
 dependencies = [
     "aiosqlite",
     "fastapi",
-    "feedparser",
+    "feedparser>=6.0.14",
     "httpx",
     "pillow>=12.3.0",
     "smartcrop>=0.5",
