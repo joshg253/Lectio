@@ -20202,8 +20202,16 @@ def _home_inner(
     # The Kept view browses kept-but-unsubscribed feeds too: they're hidden from
     # the tree/All Feeds but their starred/tagged entries (with real tags) still
     # live in reader, so add them to the scan scope when in the saved/kept view.
+    #
+    # The Saved Articles feed belongs here for a different reason: it is a live
+    # reader feed that sits in NO folder, so the folder-derived set above misses
+    # it entirely. Its posts then reached the list only through the orphan-archive
+    # merge — which carries the ARCHIVED title and no thumbnail, so an edited
+    # title showed correctly in the article header (read from reader) and stale in
+    # the list, and the thumbnail appeared on open and vanished on return.
     if selected_star_only:
-        entry_feed_urls = entry_feed_urls | get_kept_feed_urls()
+        entry_feed_urls = (entry_feed_urls | get_kept_feed_urls()
+                           | {saved_articles_service.SAVED_FEED_URL})
     posts = list_entries_for_feeds(
         entry_feed_urls,
         limit=limit,
@@ -20256,7 +20264,14 @@ def _home_inner(
         try:
             posts = merge_orphan_saved_entries(
                 posts,
-                live_feed_urls=all_feed_urls,
+                # The Saved Articles feed is LIVE in reader but sits in no
+                # folder, so a folder-derived set makes every one of its posts
+                # look orphaned. They then render from the archive: the archived
+                # title (so an edited title showed stale in the list and correct
+                # in the header) and no thumbnail (so it appeared on open and
+                # vanished on return). An entry whose feed is live is not an
+                # orphan, whatever the folder tree says.
+                live_feed_urls=all_feed_urls | {saved_articles_service.SAVED_FEED_URL},
                 sort_by=selected_sort_by,
                 sort_dir=selected_sort_dir,
                 limit=limit,
