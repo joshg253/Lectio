@@ -5,6 +5,23 @@ this file only tracks what's still open.
 
 ## Now
 
+### ⏰ Check on or after 2026-08-13: did the husk feeds come back?
+
+29 article URLs had been subscribed as feeds and were rehomed 2026-08-06. The
+Add-Feed door they *could* have come through is now shut (a page that reads fine
+but has no feed can no longer be force-subscribed), **but that was never proven
+to be the door they used** — `create_feed` already refused that shape, so they
+arrived by some other route: an older version, an OPML import, or the extension.
+
+One command settles it:
+
+    uv run python scripts/rehome_article_feeds.py     # dry run, writes nothing
+
+**Zero** means the door is shut and this reminder can be deleted. **Anything
+above zero means there is a second door**, and the URLs it reports are the
+evidence for finding it — check what they have in common (host, import batch,
+whether they carry captures from the extension).
+
 ### 0. Next three, in this order (agreed 2026-08-04)
 
 The order is deliberate and is **not** the order they were found in. Reasoning
