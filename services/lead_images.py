@@ -235,6 +235,8 @@ class LeadImageService:
     # about Bluesky may well carry "bluesky-screenshot-2026.png", and a substring
     # rule would reject it. Bare names, and the icon-/social- decorations sites
     # put around them, are what identify chrome.
+    _BLOGGER_PROXY_RE = re.compile(r"googleusercontent\.com/blogger_img_proxy/", re.I)
+
     _SOCIAL_ICON_NAMES = (
         "bsky", "bluesky", "twitter", "tweet", "facebook", "fb", "instagram",
         "mastodon", "linkedin", "youtube", "reddit", "tumblr", "pinterest",
@@ -2676,6 +2678,13 @@ class LeadImageService:
         if self._EMOJI_URL_PATTERNS.search(parsed.netloc + parsed.path):
             return False
         if self.is_social_icon_url(image_url) or self.is_ad_url(image_url):
+            return False
+        # Blogger re-serves an external image through lh3.googleusercontent.com/
+        # blogger_img_proxy/…, and that proxy answers 429 with an HTML body when
+        # hotlinked — so it is useless as a thumbnail source. The image it proxies
+        # is in the post anyway (darryl-cunningham's comic panels sit on Flickr
+        # and load fine), so skipping the wrapper picks the real one.
+        if self._BLOGGER_PROXY_RE.search(parsed.netloc + parsed.path):
             return False
         if self._AVATAR_HINT_PATTERNS.search(parsed.path):
             return False
