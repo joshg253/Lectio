@@ -137,8 +137,14 @@ _TAXONOMY_HREF_RE = re.compile(r"/(?:tags?|categor(?:y|ies))/([^/?#]+)", re.IGNO
 # ``technology_categories`` matches while a free-text search (``?q=``, ``?s=``)
 # and a paginator (``?page=``) cannot. Anchored on both sides for that reason:
 # a substring test would take ``?category_count=12``.
+#
+# The name prefix is length-bounded rather than a bare ``*?``: a lazy star in
+# front of an alternation backtracks quadratically on a long run of word
+# characters that never completes the match, and hrefs are attacker-supplied
+# page content (a data: URI is arbitrarily long). 40 is far past any real
+# parameter name.
 _TAXONOMY_QUERY_RE = re.compile(
-    r"[?&]([A-Za-z0-9_-]*?(?:tags?|categor(?:y|ies)|topics?))=([^&#]+)", re.IGNORECASE
+    r"[?&]([A-Za-z0-9_-]{0,40}?(?:tags?|categor(?:y|ies)|topics?))=([^&#]+)", re.IGNORECASE
 )
 
 
