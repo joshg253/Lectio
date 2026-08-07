@@ -7530,7 +7530,11 @@ def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
 
 _SAVE_ARTICLE_AUTO_PER_RUN_CAP = 50  # archive worker fan-out bound
-_SAVE_ARTICLE_INBOX_TAG = "inbox"
+# NB: saving no longer writes an "inbox" tag. The Saved Inbox is defined by the
+# STAR (kept=starred) since 2026-08-03, so the tag stopped carrying meaning and
+# only fought the user: untagging a post put it back on the next save, because
+# a re-save counts as new or "resurfaced". Existing `inbox` tags are left alone
+# — they are the user's data, and the Tags list still lists them.
 
 
 def _run_save_article_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
@@ -7588,16 +7592,8 @@ def _run_save_article_rules_after_refresh(refreshed_feed_urls: set[str]) -> None
                             eid = str(entry.id)
                             result = _star_entry_for_current_user(fu, eid)
                             if not result.get("ok") or result.get("duplicate"):
-                                continue  # missing, or already in Saved — don't re-tag
+                                continue  # missing, or already in Saved
                             saved += 1
-                            try:
-                                existing = get_manual_tags_for_entry(fu, eid)
-                                if _SAVE_ARTICLE_INBOX_TAG not in existing:
-                                    set_manual_tags_for_entry(
-                                        fu, eid, " ".join(existing + [_SAVE_ARTICLE_INBOX_TAG])
-                                    )
-                            except Exception:  # noqa: BLE001 — star landed; tag is best-effort
-                                LOGGER.warning("[save-article-auto] inbox tag failed for %s", eid)
                             if fu not in feed_title_cache:
                                 try:
                                     feed_title_cache[fu] = str(getattr(reader.get_feed(fu), "title", None) or fu)
@@ -28103,24 +28099,6 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
     # article never appeared in the Inbox until the cache expired.
     if result.get("ok") and (not result.get("duplicate") or result.get("resurfaced")):
         invalidate_unread_counts_cache()
-        # Land the save in the Saved Inbox: tag it 'inbox', the same bucket the
-        # auto-save rule uses. A manual save (extension/bookmarklet/modal) never
-        # got this, so saves were starred but invisible in the Inbox tag view.
-        # Only on a new save or a resurface — never re-tag a duplicate the user
-        # has deliberately filed out of the Inbox.
-        eid = result.get("entry_id")
-        if eid:
-            try:
-                existing = get_manual_tags_for_entry(saved_articles_service.SAVED_FEED_URL, eid)
-                if _SAVE_ARTICLE_INBOX_TAG not in existing:
-                    set_manual_tags_for_entry(
-                        saved_articles_service.SAVED_FEED_URL, eid,
-                        " ".join(existing + [_SAVE_ARTICLE_INBOX_TAG]),
-                    )
-                    invalidate_tag_counts_cache()
-                    invalidate_has_manual_tags_cache()
-            except Exception:  # noqa: BLE001 — the save landed; the tag is a nicety
-                LOGGER.warning("[save-article] inbox tag failed for %s", eid)
     return result
 
 
