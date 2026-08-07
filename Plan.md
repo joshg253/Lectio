@@ -42,7 +42,7 @@ Parked, deliberately:
   hunting it cold — Josh will flag it if it recurs.
 - **The husk-feed re-check**, dated above. Not before 2026-08-13.
 
-### 0c. Dependency / stack update — feedparser DONE 2026-08-06, batch pending
+### 0c. Dependency / stack update — DONE 2026-08-06
 
 **feedparser 6.0.12 → 6.0.14 is in.** The code change it needed was not the one
 predicted below, and the real finding is bigger than the bump:
@@ -82,7 +82,16 @@ cleanly with its 403 as before. One YouTube URL 403'd on `reader`'s fetcher
 during that run while the same URL had returned 200 to a direct request a minute
 earlier — fetch-layer, unrelated to parsing, and not investigated.
 
-**Still to do — the routine batch** (certifi, fastapi, uvicorn, httpx2 together).
+**The routine batch is in too** (2026-08-06): certifi 2026.6.17 → 2026.7.22,
+fastapi 0.138.0 → 0.141.1, uvicorn 0.49.0 → 0.52.1, httpx2 (+ httpcore2)
+2.4.0 → 2.9.1. Lockfile only — `uv lock --upgrade-package`, not `uv add`, since
+this project pins floors in `pyproject.toml` only where a floor means something
+and lets the lock choose versions. Nothing else moved: `starlette` stayed at
+1.3.1, `httpx` at 0.28.1. 2554 tests pass and the app boots on the new
+fastapi/uvicorn with `/`, `/entries`, `/settings` and `/saved` all serving and a
+warning-free startup log.
+
+**§0c is now complete.**
 
 Versions as installed 2026-08-06, checked against PyPI the same day. Only
 feedparser needed code written; the rest are version bumps that want a test run
