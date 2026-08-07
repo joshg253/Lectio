@@ -22,23 +22,52 @@ above zero means there is a second door**, and the URLs it reports are the
 evidence for finding it — check what they have in common (host, import batch,
 whether they carry captures from the extension).
 
-### 0. Next three, in this order (agreed 2026-08-04)
+### 0. Next up, in this order (agreed 2026-08-06)
 
-The order is deliberate and is **not** the order they were found in. Reasoning
-in one line each; detail in the sections below.
+1. **Dependency / stack update (§0c).** Nothing is broken; this is the routine
+   sweep that belongs on a credit-reset day, and feedparser's is the one with a
+   real code change behind it.
+2. **The 565 boilerplate-damaged entries.** Documented under "Re-fetch replacing
+   an article with a feed's boilerplate" below. The guard is in and the 27
+   restorable ones are restored; what is left needs the body re-acquired from
+   the network, which is a different job from the revert script.
+3. **Saved Inbox = the whole star pile (§0b).** Unblocked (the chunking bug was
+   a stale build, not a bug) and still open. Feature work: the Inbox works
+   today, it is just showing the wrong set.
 
-1. ~~**Refresh scheduler: timeout + watchdog (§0a).**~~ **DONE** — branch
-   `scheduler-stall-watchdog`. It was not a missing feature, it was the reader
-   silently not working: 34 hours of missed feeds while `/healthz` stayed green.
-2. **Saved Inbox = the whole star pile (§0b).** Branch `saved-inbox-wip`.
-   Feature work, and the least urgent: the Inbox works today, it is just showing
-   the wrong set. Blocked on an unexplained chunking bug — read §0b before
-   resuming, and do not ship it without settling that.
-3. **Everything else in this file**, unchanged.
+Parked, deliberately:
 
-Shipped on the way to this list, now merged as PR #176: rule-form tag
-autocomplete, the two dry-run diagnostics, the feed-tag chip expander, the
-context-menu stacking fix, and the sidebar tag-link scope fix.
+- **makeuseof re-fetch returns white images.** Seen once during testing
+  2026-08-06 and never investigated. Waiting on a second sighting rather than
+  hunting it cold — Josh will flag it if it recurs.
+- **The husk-feed re-check**, dated above. Not before 2026-08-13.
+
+### 0c. Dependency / stack update — DUE, not started
+
+Versions as installed 2026-08-06, checked against PyPI the same day. Only
+feedparser needs code written; the rest are version bumps that want a test run
+and a look at the app.
+
+| Package | Installed | Latest | Note |
+|---|---|---|---|
+| feedparser | 6.0.12 | **6.0.14** | **The only one with a code change behind it.** 6.0.13 dropped the vendored `sgmllib`, so the import has to be swapped. Do it alone and first — it parses every feed in the library, and a silent regression here surfaces days later as "some feeds stopped updating", not as a failed upgrade. |
+| certifi | 2026.6.17 | **2026.7.22** | It is a CA bundle; newer is the whole point. |
+| fastapi | 0.138.0 | **0.141.1** | Routine. |
+| uvicorn | 0.49.0 | **0.52.1** | Routine. |
+| httpx2 | 2.4.0 | **2.9.1** | **Test-only.** It is in the `dev` extra because starlette's TestClient prefers it; no runtime code imports it. A bump here can only break the suite, never the app. |
+| httpx | 0.28.1 | 0.28.1 | **Already current — do not "upgrade" it to 2.x.** `httpx2` is a *separate package*, not httpx's next major. Every runtime caller (`main.py`, `services/url_guard.py`, and eight other services) imports `httpx`, and swapping them is a migration, not a version bump. Not in scope here. |
+| reader | 3.26 | 3.26 | Already current. Read the changelog before any future bump — it owns the entry store, and Lectio reaches into `reader._storage.get_db()` in several places. |
+
+**Order:** feedparser alone, verify a real refresh cycle, commit. Then the
+routine three (certifi, fastapi, uvicorn) together, plus httpx2. Keeping
+feedparser out of the batch is the point — it is the only one that can fail
+quietly, and a batch makes it un-bisectable.
+
+**Verification that matters more than the test suite:** the suite mocks most
+network work, so it will pass even if feed parsing has regressed. After
+feedparser, refresh a handful of real feeds of different shapes (an Atom feed, a
+YouTube feed, a DeviantArt file feed, one of the bot-walled ones) and confirm
+entries land with correct dates and titles.
 
 ### 0a. Refresh scheduler stalls silently — FIXED 2026-08-04
 
