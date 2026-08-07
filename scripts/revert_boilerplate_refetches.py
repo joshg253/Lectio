@@ -4,11 +4,16 @@ Readability can lock onto a site's standing furniture instead of the post —
 commandlinefu.com's "is the place to record those command-line gems…" replaced
 the actual command. The re-fetch guard refuses this now
 (`extraction_matches_sibling`), but entries overwritten before it existed keep
-the wrong body. Measured on the live archive: **1,109 entries across 58 feeds**.
+the wrong body. Measured on the live archive 2026-08-06: **592 entries across 39
+feeds**, of which **27** are restorable here — see
+`scripts/refetch_boilerplate_damage.py` for the other 565, which have no
+snapshot and can only come back off the network.
 
 **Detection is the same test the guard uses**: an entry whose stored extraction
 is byte-identical to a *different* entry's on the same feed is site chrome, not
-an article. Nothing is judged by length or by guessing at wording.
+an article. Nothing is judged by length or by guessing at wording. It is
+literally the same code — `sibling_extraction_entries`, the bulk form of the
+guard, living next to it in `services/starred_archive.py`.
 
 **Restoration needs no network.** `entry_content_edits.original_content` holds
 the body as the feed served it, snapshotted before the re-fetch replaced it —
@@ -23,14 +28,10 @@ guessed at.
 from __future__ import annotations
 
 import argparse
-import collections
-import hashlib
 import json
 import os
-import re
 import sqlite3
 import sys
-import zlib
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,43 +39,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import main  # noqa: E402
 from services import tenancy  # noqa: E402
 
-_MIN_CHARS = 120
-
-
-def _fingerprint(html_text: str) -> tuple[str, int]:
-    text = re.sub(r"<[^>]+>", " ", html_text or "")
-    text = re.sub(r"\s+", " ", text).strip()
-    return (hashlib.sha256(text.encode("utf-8")).hexdigest(), len(text))
-
 
 def find_boilerplate_entries(only_feed: str | None) -> list[tuple[str, str]]:
-    """(feed_url, entry_id) whose extraction is shared with a sibling."""
-    by_feed: dict[str, dict[str, list[str]]] = collections.defaultdict(
-        lambda: collections.defaultdict(list))
-    with main.get_starred_archive_connection() as conn:
-        rows = conn.execute(
-            "SELECT feed_url, entry_id, readability_html_zlib FROM archived_entry"
-            " WHERE readability_html_zlib IS NOT NULL"
-        ).fetchall()
-    for row in rows:
-        feed_url = str(row["feed_url"])
-        if only_feed and feed_url != only_feed:
-            continue
-        try:
-            html_text = zlib.decompress(row["readability_html_zlib"]).decode("utf-8", "replace")
-        except Exception:  # noqa: BLE001
-            continue
-        fingerprint, length = _fingerprint(html_text)
-        if length < _MIN_CHARS:
-            continue
-        by_feed[feed_url][fingerprint].append(str(row["entry_id"]))
+    """(feed_url, entry_id) whose extraction is shared with a sibling.
 
-    out: list[tuple[str, str]] = []
-    for feed_url, groups in by_feed.items():
-        for entry_ids in groups.values():
-            if len(entry_ids) > 1:
-                out.extend((feed_url, e) for e in entry_ids)
-    return out
+    Thin wrapper: the test itself lives beside the live re-fetch guard it is the
+    bulk form of, so a sweep and the guard cannot disagree about what counts as
+    boilerplate.
+    """
+    return main.starred_archive_service.sibling_extraction_entries(only_feed)
 
 
 def revert_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:

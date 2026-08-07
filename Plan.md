@@ -24,13 +24,12 @@ whether they carry captures from the extension).
 
 ### 0. Next up, in this order (agreed 2026-08-06)
 
-1. **Dependency / stack update (§0c).** Nothing is broken; this is the routine
-   sweep that belongs on a credit-reset day, and feedparser's is the one with a
-   real code change behind it.
+1. ~~**Dependency / stack update (§0c).**~~ **DONE 2026-08-06.** feedparser did
+   have a code change behind it, though not the predicted one — see §0c.
 2. **The 565 boilerplate-damaged entries.** Documented under "Re-fetch replacing
-   an article with a feed's boilerplate" below. The guard is in and the 27
-   restorable ones are restored; what is left needs the body re-acquired from
-   the network, which is a different job from the revert script.
+   an article with a feed's boilerplate" below. **The script is written and
+   tested (2026-08-06); what remains is running it with `--apply`**, which is
+   368 live network re-fetches and wants a go-ahead.
 3. **Saved Inbox = the whole star pile (§0b).** Unblocked (the chunking bug was
    a stale build, not a bug) and still open. Feature work: the Inbox works
    today, it is just showing the wrong set.
@@ -435,6 +434,43 @@ restores from `entry_content_edits.original_content`, needing no network — but
 **only 27 had a snapshot**; the other 565 were overwritten before that table
 existed and their feed-served body is gone. The archive is no help: its
 `content_html_zlib` is copied from the reader entry, which was already clobbered.
+
+**The 565: `scripts/refetch_boilerplate_damage.py`, written 2026-08-06, not yet
+run for real.** With no stored original the only surviving copy of each article
+is on the internet, so this is a re-fetch run rather than a restore. It shares
+everything with `refetch_scope.py` except scope — same pacing, slug guard,
+snapshot-before-write, Wayback fallback and date mining, now all through
+`services.refetch_batch.run_paced` so the two cannot drift. Scope differs in one
+way that matters: `refetch_scope` takes *kept* articles, this takes the damaged
+entries kept or not, because an unkept entry's body is damaged just the same and
+no future feed refresh repairs it.
+
+The shipped guard now works in the repair's favour: a page that still extracts
+to the same boilerplate is **refused**, so an unrecoverable entry keeps what it
+has instead of being re-damaged.
+
+What the dry run says about the real 565 (2026-08-06):
+
+| | |
+|---|---|
+| have a snapshot | 27 — the revert script's job, already done |
+| **no longer exist in the reader** | **197** — the archive row outlived the entry; nothing to write back to |
+| no http(s) link | 0 |
+| **actually re-fetchable** | **368**, across 35 hosts, ~22 min at the pacing |
+
+So "565 need the network" and "368 can be attempted" are different numbers, and
+the script prints both rather than quietly narrowing one into the other.
+
+Temper expectations on the 368: the biggest cohort is `blogs.technet.com` (132)
+and `channel9.msdn.com`, hosts Microsoft retired outright, plus 26
+`www.inoreader.com` proxy URLs. For those the Wayback fallback is the only route
+and will often come up empty — expect a large `refused`/`dead` column. That is
+the guard doing its job, not a failure.
+
+**Left to do:** run it with `--apply`. It is 368 outbound requests and a bulk
+write to the live library, so it wants a go-ahead rather than being folded into
+a build. Suggested shape: `--limit 20 --apply` first, read the log, then the
+rest.
 
 **Not covered by this guard:** a re-fetch that grabs a *different unique*
 article. Entry 26031 came back as a piece about sandbox-game rendering — unique
