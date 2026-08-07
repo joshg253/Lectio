@@ -14,6 +14,7 @@ from __future__ import annotations
 import html as html_module
 import logging
 import re
+from urllib.parse import unquote_plus
 import time
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -127,6 +128,37 @@ _ANCHOR_RE = re.compile(r"<a\b([^>]*)>(.{0,120}?)</a>", re.IGNORECASE | re.DOTAL
 # /tag/x, /tags/x, /category/x, /categories/x — trailing slash optional. The
 # capture is the slug, used when the anchor has no text of its own.
 _TAXONOMY_HREF_RE = re.compile(r"/(?:tags?|categor(?:y|ies))/([^/?#]+)", re.IGNORECASE)
+# Taxonomy carried in the QUERY STRING instead of the path. The Google
+# Developers Blog links its "posted in:" block as
+# /search/?technology_categories=AI and ?content_type_categories=How-To+Guides,
+# so the path says "search" and only the parameter NAME identifies a taxonomy.
+#
+# The name must END in a taxonomy word so a compound like
+# ``technology_categories`` matches while a free-text search (``?q=``, ``?s=``)
+# and a paginator (``?page=``) cannot. Anchored on both sides for that reason:
+# a substring test would take ``?category_count=12``.
+_TAXONOMY_QUERY_RE = re.compile(
+    r"[?&]([A-Za-z0-9_-]*?(?:tags?|categor(?:y|ies)|topics?))=([^&#]+)", re.IGNORECASE
+)
+
+
+def _taxonomy_slug_from_href(href: str) -> str | None:
+    """The taxonomy term an href encodes, or None if it encodes none.
+
+    Returns the raw slug/term for use when the anchor has no readable text of
+    its own; the caller still prefers the link text (see the tier below).
+    """
+    if not href:
+        return None
+    if path_m := _TAXONOMY_HREF_RE.search(href):
+        return path_m.group(1).replace("-", " ")
+    if query_m := _TAXONOMY_QUERY_RE.search(href):
+        # "How-To+Guides" -> "How-To Guides". Hyphens are NOT expanded here the
+        # way a path slug's are: a query value is the publisher's display term
+        # already, so "How-To Guides" is the name they use, not a slugification
+        # of "How To Guides".
+        return unquote_plus(query_m.group(2)).strip() or None
+    return None
 # The unquoted alternative is not optional politeness: minified Hugo output emits
 # `href=https://host/tags/x/` with no quotes at all, so a quotes-only pattern
 # matched nothing on those pages and every anchor tier below silently found zero.
@@ -239,7 +271,8 @@ def extract_page_tags(html: str | None) -> list[str]:
                 (g for g in (am.group(3), am.group(4), am.group(5)) if g is not None), ""
             )
         href = attrs.get("href") or ""
-        if not _TAXONOMY_HREF_RE.search(href):
+        slug = _taxonomy_slug_from_href(href)
+        if slug is None:
             continue
         # The anchor's own TEXT first, then the slug, then the title.
         #
@@ -257,8 +290,6 @@ def extract_page_tags(html: str | None) -> list[str]:
         if not _looks_like_a_tag(text):
             # Prose, not a tag: the same category is often linked twice, once as
             # the tag and once as "More posts in AI »". Its slug is the tag.
-            slug_m = _TAXONOMY_HREF_RE.search(href)
-            slug = (slug_m.group(1) if slug_m else "").replace("-", " ")
             text = slug or text
         if len(text) < 2:
             text = (attrs.get("title") or "").strip()
