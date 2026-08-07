@@ -15177,6 +15177,35 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       });
     }
 
+    // Subscribe to an address we were REFUSED — a feed behind a bot wall may
+    // start answering later. Only offered for a refusal, never for a page we
+    // read fine that simply is not a feed; the folder comes from the view the
+    // add was attempted from.
+    const toastForceSubscribeBtn = document.getElementById('toast-force-subscribe-btn');
+    if (toastForceSubscribeBtn) {
+      toastForceSubscribeBtn.addEventListener('click', async () => {
+        const url = window.FORCE_URL;
+        if (!url) return;
+        const folderId = new URLSearchParams(window.location.search).get('folder_id') || '1';
+        toastForceSubscribeBtn.disabled = true;
+        try {
+          const body = new URLSearchParams({ feed_url: url, folder_id: folderId, force: '1' });
+          const resp = await fetch('/feeds', {
+            method: 'POST', body, credentials: 'same-origin', redirect: 'follow',
+          });
+          if (resp.ok) {
+            window.location.assign(`/?folder_id=${encodeURIComponent(folderId)}`);
+            return;
+          }
+          showToastMessage('Could not subscribe to that address.');
+        } catch (err) {
+          showToastMessage('Could not subscribe to that address.');
+        } finally {
+          toastForceSubscribeBtn.disabled = false;
+        }
+      });
+    }
+
     async function submitRefreshFormAsync(form) {
       const response = await fetch(form.action, {
         method: 'POST',

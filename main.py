@@ -19763,6 +19763,7 @@ def home(
     q: str | None = None,
     message: str | None = None,
     no_rss_url: str | None = None,
+    force_url: str | None = None,
     chunk: int | None = None,
     chunk_delta: str | None = None,
     subscribe: str | None = None,
@@ -19816,6 +19817,7 @@ def home(
             q=q,
             message=message,
             no_rss_url=no_rss_url,
+            force_url=force_url,
             chunk=chunk,
             chunk_delta=chunk_delta,
             subscribe=subscribe or subscribe_to,
@@ -19850,6 +19852,7 @@ def _home_inner(
     q: str | None = None,
     message: str | None = None,
     no_rss_url: str | None = None,
+    force_url: str | None = None,
     chunk: int | None = None,
     chunk_delta: str | None = None,
     subscribe: str | None = None,
@@ -20422,6 +20425,7 @@ def _home_inner(
         "selected_entry": selected_entry,
         "message": message,
         "no_rss_url": no_rss_url,
+        "force_url": force_url,
         # Quick-subscription deep link (e.g. RSSHub-Radar pointed at Lectio via
         # the Feedbin/Nextcloud News override). Only pass through http(s) URLs so
         # the auto-opened Add Feed dialog can't be primed with a junk scheme.
@@ -21306,6 +21310,7 @@ def create_feed(
     devto_english_only: str = Form(""),
     devto_min_reactions: str = Form(""),
     devto_tags_exclude: str = Form(""),
+    force: int = Form(0),
 ):
     url = feed_url.strip()
     target_url = url
@@ -21380,14 +21385,35 @@ def create_feed(
     # For non-YouTube URLs, probe whether the URL is a feed and run
     # auto-discovery if it looks like a webpage instead.
     discovery_escalated = False
-    if not _is_youtube_url(url):
+    if not _is_youtube_url(url) and not force:
         candidates, discovery_escalated = discover_feed_urls_ex(url)
         if not candidates:
+            # Why discovery failed decides what we offer. A REFUSAL (403, a
+            # timeout, an empty anti-bot response) means we never saw the
+            # content, so the URL may well be a feed behind a wall and
+            # subscribing anyway is reasonable — it may start working later.
+            # A page we fetched FINE that simply has no feed is an article, and
+            # subscribing to it produces a husk: a permanently failing "feed"
+            # holding whatever gets captured onto it, invisible unless you go
+            # looking. 29 of those had accumulated before this distinction
+            # existed (see scripts/rehome_article_feeds.py).
+            probe = {}
+            try:
+                from services.feed_discovery import probe_url as _probe_url
+                probe = _probe_url(url)
+            except Exception:  # noqa: BLE001 — classification only
+                probe = {}
+            refused = str(probe.get("status") or "") in ("error", "blocked")
+            note = (
+                "That address could not be read (the site refused us)."
+                if refused else "No RSS/Atom feed found at that URL."
+            )
             return RedirectResponse(
                 url=(
                     f"/?folder_id={folder_id}"
-                    f"&message={quote_plus('No RSS/Atom feed found at that URL.')}"
+                    f"&message={quote_plus(note)}"
                     f"&no_rss_url={quote_plus(url)}"
+                    + (f"&force_url={quote_plus(url)}" if refused else "")
                 ),
                 status_code=303,
             )

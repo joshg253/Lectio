@@ -377,6 +377,24 @@ article-URL feeds left**. The trial also showed why merging beats synthesizing �
 the canonical copy already on Saved Articles had a 72KB body against the husk's
 299 bytes.
 
+### Force-subscribe, split by WHY discovery failed — 2026-08-06
+
+Adding a feed refused an address that discovery could not resolve, and offered
+only "Create page feed". That left no way to subscribe to a real feed behind a
+bot wall (a 403 today may answer tomorrow), while nothing stopped an article URL
+becoming a permanently failing husk by other routes.
+
+Both are the same decision, split by the probe's own verdict:
+
+- **`error` / `blocked`** — a refusal, a timeout, an empty anti-bot body. We
+  never saw the content, so the address may well be a feed. Offer **Subscribe
+  anyway**, which skips discovery entirely (there is nothing to validate).
+- **`none`** — fetched fine, no feed anywhere in it. That is an article, and
+  subscribing produces a husk. Only the page-feed offer stands.
+
+The page-feed offer is unchanged in both cases; it scrapes a readable page,
+which is a different thing from subscribing to an address.
+
 ### 0c. CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a

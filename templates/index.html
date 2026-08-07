@@ -24,6 +24,7 @@
     window.YT_SYNC_LAST_RESULT = {{ youtube_sync_last_result | tojson }};
     window.SUBSCRIBE_URL = {{ subscribe_url | tojson }};
     window.NO_RSS_URL = {{ no_rss_url | tojson }};
+    window.FORCE_URL = {{ force_url | tojson }};
     window.PORTRAIT_IMG_MAX_WIDTH = {{ portrait_img_max_width | tojson }};
   </script>
   <script>
@@ -1384,7 +1385,12 @@
   </script>
 
   {% if message %}
-  <div id="toast-message" class="toast-message">{{ message }}{% if no_rss_url %} <button type="button" class="toast-action-btn" id="toast-page-feed-btn">Create page feed</button>{% endif %}</div>
+  {# Two different offers, because the reasons differ. A page-feed scrapes a
+   readable page; "Subscribe anyway" is for an address we were REFUSED, which
+   may be a real feed behind a bot wall that lets up later. It is deliberately
+   absent when the page was fetched fine and simply is not a feed — that is how
+   article URLs became permanently failing husk feeds. #}
+<div id="toast-message" class="toast-message">{{ message }}{% if no_rss_url %} <button type="button" class="toast-action-btn" id="toast-page-feed-btn">Create page feed</button>{% endif %}{% if force_url %} <button type="button" class="toast-action-btn" id="toast-force-subscribe-btn">Subscribe anyway</button>{% endif %}</div>
   {% endif %}
 
   <form id="context-add-feed-form" method="post" action="/feeds" hidden>
