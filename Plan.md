@@ -352,6 +352,31 @@ someone whose article had been replaced by a bad re-fetch — the case people
 actually need it for. It now carries a visible word rather than being one
 unlabelled icon among several.
 
+### Article URLs registered as feeds — REHOMED 2026-08-06 (31 captures)
+
+29 "feeds" in the live library were article pages, added by hand while searching
+for a real feed. Each held one or two user captures and failed on every refresh
+cycle, since Lectio re-parsed an article page as RSS forever.
+
+`scripts/rehome_article_feeds.py` moves the captures to Saved Articles and
+deletes the husk. Detection needs all three of: a recorded parse failure, a URL
+with **no feed marker**, and every entry being a user capture — a dead *real*
+feed carrying saved captures matches the last two, which is why the URL shape is
+load-bearing rather than cosmetic.
+
+**The archive is why this is a script and not 29 clicks.**
+`_move_entry_to_feed` carries the star, tags, read state and body, but does
+**not** touch the starred archive — so a plain move orphans the offline copy and
+every captured image under a feed key that is about to be deleted.
+`rekey_archive` repoints it, and the meta tables keyed on (feed_url, entry_id)
+follow. Order matters: move, re-key, then delete the husk.
+
+Applied after a full backup (7 DBs, 5.5GB). One feed first as a trial, verified,
+then the rest: **31 of 31 present on Saved Articles afterwards, 0 missing, 0
+article-URL feeds left**. The trial also showed why merging beats synthesizing —
+the canonical copy already on Saved Articles had a 72KB body against the husk's
+299 bytes.
+
 ### 0c. CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a
