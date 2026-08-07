@@ -164,6 +164,38 @@ feedparser, refresh a handful of real feeds of different shapes (an Atom feed, a
 YouTube feed, a DeviantArt file feed, one of the bot-walled ones) and confirm
 entries land with correct dates and titles.
 
+### Re-importing your own OPML export duplicated 440 feeds — FIXED 2026-08-07
+
+Found while building a test file for the OPML upload route, not by looking for
+it. A round-trip of the live library's own export — export, then import the file
+back — subscribed **440 of 2,909 foldered feeds a second time**.
+
+`import_opml` canonicalizes each incoming `xmlUrl` (so `old.reddit`, `?alt=rss`
+and trailing-slash variants attach to an existing subscription) but compared the
+result against the **raw** stored URLs. A stored URL that was not already
+canonical never matched, so the feed looked new and was subscribed again under
+the canonical spelling. **A trailing slash was enough.** Fixed by canonicalizing
+the comparison set too.
+
+Two things made this hide well:
+
+- The duplicates are invisible to a `GROUP BY feed_url` check, because the two
+  rows hold different strings (`…/feed/` and `…/feed`). An early measurement
+  using exactly that check said "0 duplicates" and was wrong.
+- It only fires on **restore-from-backup**, which nobody does until they need
+  to — and then it is the worst possible moment to discover it.
+
+Verified against a snapshot of the live meta DB: re-importing the real export
+went from `imported=440` to `imported=0`, with `folder_feeds` unchanged at
+2,909. Tests assert on subscription counts rather than URL uniqueness, for the
+reason above, and were confirmed to fail against the old code.
+
+**Not investigated:** why 440 stored URLs are non-canonical in the first place.
+The import path canonicalizes, so these predate it or arrive by another route
+(OPML import before the canonicalization existed, discovery, the extension). A
+one-off normalization pass over `folder_feeds` would make the two spellings
+converge, but nothing is broken by leaving them.
+
 ### Refreshing a feed rewrote the remembered sort — FIXED 2026-08-07
 
 Reported: "my sort keeps reverting back to Pub new (I'm generally always using

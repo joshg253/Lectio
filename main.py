@@ -17476,8 +17476,18 @@ def import_opml(conn: sqlite3.Connection, opml_data: bytes) -> int:
             raise RuntimeError("Could not determine id for inserted folder.")
         return int(cursor.lastrowid)
 
-    # Track feeds already assigned to a folder (including existing subscriptions)
-    feeds_with_folder = set(row["feed_url"] for row in conn.execute("SELECT feed_url FROM folder_feeds"))
+    # Track feeds already assigned to a folder (including existing subscriptions).
+    #
+    # CANONICALIZED, because the incoming URL is canonicalized before it is looked
+    # up here and comparing a canonical URL against raw stored ones finds nothing.
+    # Any subscription whose stored URL is not already canonical — a trailing
+    # slash is enough — then looked "new" and was subscribed a second time under
+    # the canonical spelling. Re-importing Lectio's OWN export duplicated 440 of
+    # 2,909 foldered feeds that way, which is precisely the restore-from-backup
+    # path a user is most likely to take.
+    feeds_with_folder = set(
+        canonical_feed_url(str(row["feed_url"])) for row in conn.execute("SELECT feed_url FROM folder_feeds")
+    )
 
     with get_reader() as reader:
 
