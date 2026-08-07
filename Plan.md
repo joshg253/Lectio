@@ -122,6 +122,42 @@ feedparser, refresh a handful of real feeds of different shapes (an Atom feed, a
 YouTube feed, a DeviantArt file feed, one of the bot-walled ones) and confirm
 entries land with correct dates and titles.
 
+### Refreshing a feed rewrote the remembered sort — FIXED 2026-08-07
+
+Reported: "my sort keeps reverting back to Pub new (I'm generally always using
+Pub Old for Feeds)." A closed loop, and one that could **only** bite someone
+whose preference was oldest-first:
+
+1. The preference is `asc`, so the templates omit `sort_dir` from links — they
+   emit it only when it differs from `DEFAULT_SORT_DIR` ("asc").
+2. `refreshCurrentFeedOrFolder` (app.js) read the now-absent param and
+   substituted `'desc'`. That JS default had simply never agreed with the
+   server's.
+3. `build_sort_query` put `&sort_dir=desc` in the redirect, because desc is not
+   the default.
+4. The index persists an **explicit** sort — so every folder or feed refresh
+   rewrote the preference to newest-first. Set it back, refresh, lose it again.
+
+Fixed by passing the parameter through rather than inventing one: absent means
+"not in the URL", the redirect carries nothing, and the index falls back to the
+remembered preference. `sort_by` got the same treatment — its `|| 'post'`
+happens to match `DEFAULT_SORT_BY` today, so it was harmless, which is precisely
+why it would have survived review and broken the day either default moved.
+
+**This is the second bug of exactly this shape** (see the Inbox notes below: the
+Inbox's sort *direction* persisted as the remembered Saved order because the key
+was guarded and the dir was not — same symptom, oldest-first silently becoming
+newest-first and staying that way). The common thread is that a sort is a
+**pair**, and any code path that can put half of one into a URL can rewrite a
+preference. Worth suspecting first the next time an order "won't stick".
+
+Tests: source assertions on app.js (no JS harness in this repo — same approach
+as `test_tag_link_scope_staleness`) plus the server half in
+`test_refresh_routes.py`. Verified the direction test fails against the old code
+and passes against the new.
+
+The live preference had already been corrupted to `desc` and was reset by hand.
+
 ### 0a. Refresh scheduler stalls silently — FIXED 2026-08-04
 
 **Diagnosed 2026-08-04 on the live instance.** Nothing had refreshed for ~34
