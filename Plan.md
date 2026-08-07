@@ -22,6 +22,48 @@ above zero means there is a second door**, and the URLs it reports are the
 evidence for finding it — check what they have in common (host, import batch,
 whether they carry captures from the extension).
 
+### Three webcomics showing the wrong image — FIXED 2026-08-07
+
+Reported as "a couple webcomics not behaving even after setting as Webcomic".
+All three had one root cause: `_extract_webcomic_panel_image` only ever inspected
+an `<img>`'s **own** id/class, so it could not see a container like
+`<div id="comic">` — and it settled for whatever chrome happened to carry a
+comic-ish class. What was stored before the fix:
+
+| feed | stored image | what it actually was |
+|---|---|---|
+| pbfcomics.com | `nav_home_white.png` | the **79×30 "Home" nav button**, on every entry, captioned "Home" |
+| mahonoir.com | `csss.jpg` | a **1200×630 OG social card** |
+| claycomix.com | a `pf-summary-widget` thumbnail | **another post's** comic |
+
+The shared culprit is `wp-post-image`. It is WordPress's featured-image class,
+added to the img-level pattern *for claycomix* — and it also marks PBF's nav
+items and claycomix's own sidebar widget. The class alone is not evidence; where
+it sits is.
+
+Three changes, all scoped to the webcomic path so nothing else can regress:
+
+- **Container recognition.** A `<div id="comic">` / `#unspliced-comic` wrapper
+  now selects the panel, and inside such a container the first acceptable image
+  wins with no id/class test on the img at all — most CMSes wrap the panel and
+  leave the `<img>` bare. Tokens come from an explicit list, so `comic-nav` and
+  PBF's `comic_categories-comic` post class do not match.
+- **Chrome stripping** (nav/menu/widget/sidebar/gallery), applied to both the
+  panel scan and the alt-text scan — the caption must come from wherever the
+  panel came from, or you get a strip captioned "Home".
+- **`og:description` equal to `og:site_name` is not a caption.** PBF ships
+  `og:description="The Perry Bible Fellowship"` on every strip; using it would
+  caption the entire feed with the site name.
+
+mahonoir needed one extra call: it ships the page twice inside one outer
+`<div id="comic">` — `#spliced-comic` cut into phone panels (first in the
+document) and `#unspliced-comic` whole. Excluding the spliced container from the
+match list is not enough, because the *outer* container matches and its first
+image is the spliced one; it is removed from the HTML instead.
+
+claycomix correctly resolves to **no panel** now, so the caller falls back to
+`og:image` — the post's own curated image — instead of a sibling's thumbnail.
+
 ### 0. Next up, in this order (agreed 2026-08-06)
 
 1. ~~**Dependency / stack update (§0c).**~~ **DONE 2026-08-06.** feedparser did
