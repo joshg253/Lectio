@@ -28290,6 +28290,18 @@ def _refresh_captured_article_for_current_user(
                 result = archived_result
 
     if result.get("ok"):
+        # The body just changed, so a lead image derived from the OLD body is
+        # stale — and a stale one is worse than none, because the first body
+        # image is HOISTED OUT of the article to become the hero. A treblezine
+        # post re-fetched from the archive ended up with a dead 403 hero (the
+        # publisher's original URL, cached earlier) while the working archived
+        # image was removed from the body as "already the lead". The image
+        # simply vanished. Clearing it here makes the next render derive one
+        # from what the article now actually contains.
+        try:
+            lead_image_service.clear_entry_lead_image_cache(feed_url, entry_id)
+        except Exception:  # noqa: BLE001 — never fail a good re-fetch over this
+            LOGGER.debug("lead-image invalidation failed for %s", entry_id, exc_info=True)
         try:
             result["dated"] = _apply_mined_publish_date(
                 feed_url, entry_id, _capture.get("raw_html"))
