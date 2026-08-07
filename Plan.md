@@ -81,6 +81,11 @@ cleanly with its 403 as before. One YouTube URL 403'd on `reader`'s fetcher
 during that run while the same URL had returned 200 to a direct request a minute
 earlier — fetch-layer, unrelated to parsing, and not investigated.
 
+Then confirmed at library scale on the deployed build: a scheduler pass
+retrieved **294 feeds** (rss20 170, atom10 123, rss10 1) with **3 exceptions —
+all Reddit HTTP 429**, i.e. rate limiting, not parsing. 16 new entries ingested,
+all 16 with both a date and a title.
+
 **The routine batch is in too** (2026-08-06): certifi 2026.6.17 → 2026.7.22,
 fastapi 0.138.0 → 0.141.1, uvicorn 0.49.0 → 0.52.1, httpx2 (+ httpcore2)
 2.4.0 → 2.9.1. Lockfile only — `uv lock --upgrade-package`, not `uv add`, since
