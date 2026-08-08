@@ -281,6 +281,27 @@ A methodological note worth keeping: I reported "all 131 are new damage" from an
 archive-based measurement, then had to correct it to 41 once the reader was
 checked. **The archive is not evidence of current state.** Ask the reader.
 
+### A guard refusal was counted as a host failure — FIXED 2026-08-07
+
+Third defect in the same repair, found by running it. `run_paced` classified an
+outcome as a refusal on `result["mismatch"]`, but the boilerplate guard sets a
+*different* key, `result["boilerplate"]`. So every guard refusal was counted as
+a **failure** — and failures count against the host, four in a row dropping it
+for the rest of the run.
+
+Two consequences, the second much worse than the first:
+
+- Reporting lied. The 24-entry run showed "failed 21" when all 21 were the guard
+  correctly refusing to overwrite good data with boilerplate again.
+- **It silently cut the big run short.** The first 368-entry pass attempted only
+  223 and reported 145 "host dropped" — hosts eliminated not by broken sites but
+  by their pages honestly extracting to boilerplate. The sites answered fine
+  every time.
+
+`run_paced`'s docstring already said `mismatch` "covers a refusal — the page was
+a different article, **or the extraction was the feed's boilerplate again**", so
+the intent was documented and the implementation simply missed the second key.
+
 ### Refreshing a feed rewrote the remembered sort — FIXED 2026-08-07
 
 Reported: "my sort keeps reverting back to Pub new (I'm generally always using
