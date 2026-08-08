@@ -410,20 +410,23 @@ class StarredArchiveService:
         """
         feeds = {f for f, _e in keys}
         by_feed: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
-        reader = self._get_reader()
-        for feed_url in feeds:
-            try:
-                entries = reader.get_entries(feed=feed_url)
-            except Exception:  # noqa: BLE001 — a vanished feed is not an error here
-                continue
-            for entry in entries:
-                body = " ".join(c.value or "" for c in (getattr(entry, "content", None) or []))
-                text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip()
-                if len(text) < min_chars:
+        # `with`, like every other _get_reader() call in this module: the reader
+        # owns DB connections, and this runs once per repair or revert pass, so
+        # a bare call leaks one every time.
+        with self._get_reader() as reader:
+            for feed_url in feeds:
+                try:
+                    entries = reader.get_entries(feed=feed_url)
+                except Exception:  # noqa: BLE001 — a vanished feed is not an error here
                     continue
-                fingerprint = self.extraction_fingerprint(body)
-                if fingerprint:
-                    by_feed[feed_url][fingerprint].append(entry.id)
+                for entry in entries:
+                    body = " ".join(c.value or "" for c in (getattr(entry, "content", None) or []))
+                    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip()
+                    if len(text) < min_chars:
+                        continue
+                    fingerprint = self.extraction_fingerprint(body)
+                    if fingerprint:
+                        by_feed[feed_url][fingerprint].append(entry.id)
 
         sharing: set[tuple[str, str]] = set()
         bodied: set[tuple[str, str]] = set()
