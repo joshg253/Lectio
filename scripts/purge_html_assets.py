@@ -32,7 +32,7 @@ _HTML_TYPES = ("text/html%", "application/xhtml%")
 
 
 def purge_for_user(user_id: str, apply: bool) -> int:
-    with main.get_starred_archive_connection() as conn:
+    with main.archive_conn() as conn:
         rows = conn.execute(
             "SELECT a.asset_hash, a.byte_size, MIN(l.source_url) AS src"
             "  FROM archived_asset a"
@@ -56,7 +56,7 @@ def purge_for_user(user_id: str, apply: bool) -> int:
     log = [{"asset_hash": str(r["asset_hash"]), "byte_size": int(r["byte_size"] or 0),
             "source_url": str(r["src"] or "")} for r in rows]
     hashes = [str(r["asset_hash"]) for r in rows]
-    with main.get_starred_archive_connection() as conn:
+    with main.archive_conn() as conn:
         for start in range(0, len(hashes), 500):
             chunk = hashes[start:start + 500]
             marks = ",".join("?" * len(chunk))

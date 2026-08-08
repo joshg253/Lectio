@@ -17,11 +17,11 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 import zipfile
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Annotated, Callable, Iterable, Sequence, cast
+from typing import Annotated, Callable, Iterable, Iterator, Sequence, cast
 from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlencode, urljoin, urlparse, urlsplit, urlunparse, urlunsplit
 
 import feedparser
@@ -3071,8 +3071,24 @@ def get_starred_archive_connection() -> sqlite3.Connection:
     return conn
 
 
+@contextmanager
+def archive_conn() -> Iterator[sqlite3.Connection]:
+    """An archive connection that commits (or rolls back) *and* closes.
+
+    ``with sqlite3_connection:`` only wraps a transaction — it leaves the
+    handle open, and this factory returns a fresh one per call. Use this
+    wherever the archive DB is touched.
+    """
+    conn = get_starred_archive_connection()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
 def ensure_starred_archive_schema() -> None:
-    with get_starred_archive_connection() as conn:
+    with archive_conn() as conn:
         # Archive content is irreplaceable if the source goes down — leave
         # synchronous at the default FULL for durability. WAL still helps with
         # concurrent reads from the render path.
@@ -16009,7 +16025,7 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
     # below would otherwise open an archive connection per entry just to
     # discover that most have nothing to move.
     try:
-        with get_starred_archive_connection() as _ac:
+        with archive_conn() as _ac:
             src_archived_ids = {
                 str(r[0]) for r in _ac.execute(
                     "SELECT entry_id FROM archived_entry WHERE feed_url = ?", (remove_url,)
@@ -25160,7 +25176,7 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
 
     # Migrate starred archive DB tables.
     try:
-        with get_starred_archive_connection() as arch_conn:
+        with archive_conn() as arch_conn:
             for table in ("archived_entry", "archived_asset_link"):
                 try:
                     arch_conn.execute(f"UPDATE {table} SET feed_url = ? WHERE feed_url = ?", (new_url, old_url))
@@ -25551,10 +25567,12 @@ def _set_orphan_entry_date(feed_url: str, entry_id: str, published: str) -> JSON
     re-subscribed and the entry comes back to reader.
     """
     try:
-        arch_ctx = get_starred_archive_connection()
+        _arch = get_starred_archive_connection()
     except Exception:  # noqa: BLE001 — no archive means no orphan can exist
         return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
-    with arch_ctx as arch:
+    # Not archive_conn(): the guard above has to see a connect failure before
+    # the body runs. closing() then commits-and-closes the same way it does.
+    with closing(_arch), _arch as arch:
         try:
             row = arch.execute(
                 "SELECT 1 FROM archived_entry WHERE feed_url = ? AND entry_id = ?",

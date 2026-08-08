@@ -182,6 +182,15 @@ The resolver and per-user connection pools live in `services/tenancy.py`;
 `main.py` resolve through it. The current user is a `contextvars.ContextVar` that
 defaults to `DEFAULT_USER_ID`.
 
+**The archive connection is the odd one out: it is not pooled.**
+`get_starred_archive_connection()` returns a *fresh* connection per call, so
+the caller owns closing it. `with conn:` does not — that is sqlite3's
+*transaction* manager, which commits or rolls back and leaves the handle open,
+so the plain form leaked a connection per call site. Go through
+`main.archive_conn()` (or `StarredArchiveService._archive_conn()`) instead:
+same transaction semantics, plus the close. Reach for the raw factory only
+where a connect failure has to be caught before the body runs.
+
 Accounts live in a global users table (`lectio_auth.sqlite`, `services/users.py`,
 NOT routed through tenancy). Each account has a stable, immutable **`user_id`**
 (an opaque slug generated at creation) and a mutable **`username`**. The

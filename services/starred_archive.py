@@ -28,7 +28,8 @@ import threading
 import time
 import zlib
 from collections import OrderedDict, defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -36,8 +37,7 @@ import httpx
 from PIL import Image as _PILImage
 from readability import Document
 
-from services import tenancy
-from services import url_guard
+from services import tenancy, url_guard
 
 LOGGER = logging.getLogger(__name__)
 
@@ -127,12 +127,34 @@ class StarredArchiveService:
         self._wake_event = threading.Event()
 
     # ------------------------------------------------------------------
+    # Connection handling
+    # ------------------------------------------------------------------
+
+    @contextmanager
+    def _archive_conn(self) -> Iterator[sqlite3.Connection]:
+        """An archive connection that commits (or rolls back) *and* closes.
+
+        ``with sqlite3_connection:`` is a transaction context manager, not a
+        closing one — it commits on a clean exit and rolls back on an
+        exception, but leaves the handle open. The factory hands out a fresh
+        connection per call, so using it bare leaked one per call site and
+        left them to the garbage collector. Every call site goes through here
+        instead; the transaction semantics are unchanged.
+        """
+        conn = self._get_archive_connection()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------
     # Enqueue / dequeue API
     # ------------------------------------------------------------------
 
     def enqueue_archive(self, feed_url: str, entry_id: str) -> None:
         now = time.time()
-        with self._get_archive_connection() as conn:
+        with self._archive_conn() as conn:
             conn.execute(
                 """
                 INSERT INTO archived_entry (feed_url, entry_id, status, starred_at)
@@ -150,7 +172,7 @@ class StarredArchiveService:
         self._wake_event.set()
 
     def enqueue_removal(self, feed_url: str, entry_id: str) -> None:
-        with self._get_archive_connection() as conn:
+        with self._archive_conn() as conn:
             conn.execute(
                 "UPDATE archived_entry SET status = 'pending_removal' WHERE feed_url = ? AND entry_id = ?",
                 (feed_url, entry_id),
@@ -177,7 +199,7 @@ class StarredArchiveService:
 
         enqueued = 0
         now = time.time()
-        with self._get_archive_connection() as conn:
+        with self._archive_conn() as conn:
             for row in saved_rows:
                 cur = conn.execute(
                     """
@@ -208,7 +230,7 @@ class StarredArchiveService:
 
         out: set[str] = set()
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 for row in conn.execute("SELECT asset_hash, width, height FROM archived_asset"):
                     if LeadImageService.is_ad_dimension(row["width"], row["height"]):
                         out.add(str(row["asset_hash"]))
@@ -224,7 +246,7 @@ class StarredArchiveService:
 
     def get_asset(self, asset_hash: str) -> tuple[bytes, str] | None:
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 row = conn.execute(
                     "SELECT data, content_type FROM archived_asset WHERE asset_hash = ?",
                     (asset_hash,),
@@ -238,7 +260,7 @@ class StarredArchiveService:
     def get_entry_asset_map(self, feed_url: str, entry_id: str) -> dict[str, str]:
         """Return {source_url -> asset_hash} for a starred entry."""
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 rows = conn.execute(
                     "SELECT source_url, asset_hash FROM archived_asset_link WHERE feed_url = ? AND entry_id = ?",
                     (feed_url, entry_id),
@@ -258,7 +280,7 @@ class StarredArchiveService:
         started refusing them.
         """
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 rows = conn.execute(
                     "SELECT l.source_url, l.asset_hash, a.content_type"
                     "  FROM archived_asset_link l"
@@ -323,7 +345,7 @@ class StarredArchiveService:
         _BY_FEED = ("SELECT feed_url, entry_id, readability_html_zlib FROM archived_entry"
                     " WHERE readability_html_zlib IS NOT NULL AND feed_url = ?")
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 if only_feed:
                     rows = conn.execute(_BY_FEED, (only_feed,)).fetchall()
                 else:
@@ -460,7 +482,7 @@ class StarredArchiveService:
                         _recent, feed_url)
             return True
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 rows = conn.execute(
                     "SELECT entry_id, readability_html_zlib FROM archived_entry"
                     " WHERE feed_url = ? AND entry_id != ?"
@@ -491,7 +513,7 @@ class StarredArchiveService:
         this is for.
         """
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 row = conn.execute(
                     "SELECT source_url FROM archived_asset_link WHERE asset_hash = ? LIMIT 1",
                     (asset_hash,),
@@ -503,7 +525,7 @@ class StarredArchiveService:
     def has_complete_archive(self, feed_url: str, entry_id: str) -> bool:
         """True if a `complete` archive row exists for this key."""
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 return conn.execute(
                     "SELECT 1 FROM archived_entry "
                     "WHERE feed_url = ? AND entry_id = ? AND status = 'complete' LIMIT 1",
@@ -519,7 +541,7 @@ class StarredArchiveService:
         move makes a capture redundant (the target already has one) or when
         sweeping orphaned rows. Assets shared with another entry are kept."""
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 hashes = [
                     str(r["asset_hash"]) for r in conn.execute(
                         "SELECT DISTINCT asset_hash FROM archived_asset_link "
@@ -558,7 +580,7 @@ class StarredArchiveService:
         transient capture failure can still be retried); the rest are deleted.
         Returns the number removed. Used by the nightly maintenance."""
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 failed = conn.execute(
                     "SELECT feed_url, entry_id FROM archived_entry WHERE status = 'failed'"
                 ).fetchall()
@@ -591,7 +613,7 @@ class StarredArchiveService:
         if (src_feed, src_id) == (dst_feed, dst_id):
             return True
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 exists = conn.execute(
                     "SELECT 1 FROM archived_entry WHERE feed_url = ? AND entry_id = ? LIMIT 1",
                     (dst_feed, dst_id),
@@ -633,7 +655,7 @@ class StarredArchiveService:
         is missing or not yet `complete`.
         """
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 row = conn.execute(
                     """
                     SELECT title, link, feed_title, author, published_at, received_at,
@@ -680,7 +702,7 @@ class StarredArchiveService:
         render with empty content; the unsubscribe guard prevents this anyway).
         """
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 rows = conn.execute(
                     """
                     SELECT feed_url, entry_id, title, link, feed_title, author,
@@ -746,7 +768,7 @@ class StarredArchiveService:
         received_at = _to_epoch(getattr(entry, "added", None))
 
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 cur = conn.execute(
                     """
                     UPDATE archived_entry
@@ -793,7 +815,7 @@ class StarredArchiveService:
         cheaper than inventing thousands.
         """
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 rows = conn.execute(
                     "SELECT feed_url, entry_id FROM archived_entry WHERE status = 'complete'"
                 ).fetchall()
@@ -863,7 +885,7 @@ class StarredArchiveService:
         reader; no HTTP). Returns the number of rows updated.
         """
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 rows = conn.execute(
                     "SELECT feed_url, entry_id FROM archived_entry "
                     "WHERE status = 'complete' AND (title IS NULL OR title = '')"
@@ -887,7 +909,7 @@ class StarredArchiveService:
         completed = 0
         while time.time() < deadline:
             try:
-                with self._get_archive_connection() as conn:
+                with self._archive_conn() as conn:
                     row = conn.execute(
                         "SELECT entry_id FROM archived_entry "
                         "WHERE feed_url = ? AND status IN ('pending', 'in_progress') "
@@ -910,7 +932,7 @@ class StarredArchiveService:
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning("force-archive failed for %s/%s: %s", feed_url, entry_id, exc)
                 try:
-                    with self._get_archive_connection() as conn:
+                    with self._archive_conn() as conn:
                         conn.execute(
                             "UPDATE archived_entry SET status = 'failed', error = ? "
                             "WHERE feed_url = ? AND entry_id = ?",
@@ -922,7 +944,7 @@ class StarredArchiveService:
 
     def get_archived_readability_html(self, feed_url: str, entry_id: str) -> str | None:
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 row = conn.execute(
                     "SELECT readability_html_zlib FROM archived_entry "
                     "WHERE feed_url = ? AND entry_id = ? AND status = 'complete'",
@@ -943,7 +965,7 @@ class StarredArchiveService:
 
     def get_stats(self) -> dict[str, int]:
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 by_status = {
                     str(row["status"]): int(row["c"])
                     for row in conn.execute(
@@ -971,7 +993,7 @@ class StarredArchiveService:
     def largest_archived_entries(self, limit: int = 50) -> list[dict[str, Any]]:
         """Return entries ranked by total archived bytes (assets + HTML)."""
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 rows = conn.execute(
                     """
                     SELECT
@@ -1048,7 +1070,7 @@ class StarredArchiveService:
         for uid in self._background_user_ids():
             try:
                 with tenancy.user_context(uid):
-                    with self._get_archive_connection() as conn:
+                    with self._archive_conn() as conn:
                         reclaimed = conn.execute(
                             "UPDATE archived_entry SET status = 'pending' "
                             "WHERE status = 'in_progress'"
@@ -1080,7 +1102,7 @@ class StarredArchiveService:
 
     def _process_one_pending(self) -> bool:
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 row = conn.execute(
                     "SELECT feed_url, entry_id FROM archived_entry "
                     "WHERE status = 'pending' ORDER BY starred_at ASC LIMIT 1"
@@ -1105,7 +1127,7 @@ class StarredArchiveService:
         except Exception as exc:  # noqa: BLE001 — worker must never die
             LOGGER.exception("starred archive: capture failed for %s / %s: %s", feed_url, entry_id, exc)
             try:
-                with self._get_archive_connection() as conn:
+                with self._archive_conn() as conn:
                     conn.execute(
                         "UPDATE archived_entry SET status = 'failed', error = ? "
                         "WHERE feed_url = ? AND entry_id = ?",
@@ -1117,7 +1139,7 @@ class StarredArchiveService:
 
     def _process_one_pending_removal(self) -> bool:
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 row = conn.execute(
                     "SELECT feed_url, entry_id FROM archived_entry "
                     "WHERE status = 'pending_removal' LIMIT 1"
@@ -1283,7 +1305,7 @@ class StarredArchiveService:
         source_blob = zlib.compress(source_html.encode("utf-8")) if source_html else None
         readability_blob = zlib.compress(readability_html.encode("utf-8")) if readability_html else None
         content_blob = zlib.compress(content_html.encode("utf-8")) if content_html else None
-        with self._get_archive_connection() as conn:
+        with self._archive_conn() as conn:
             conn.execute(
                 """
                 UPDATE archived_entry
@@ -1395,7 +1417,7 @@ class StarredArchiveService:
                        max_bytes: int | None = None) -> None:
         # Skip if this entry already has a link for this URL.
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 exists = conn.execute(
                     "SELECT 1 FROM archived_asset_link WHERE feed_url = ? AND entry_id = ? AND source_url = ?",
                     (feed_url, entry_id, source_url),
@@ -1433,7 +1455,7 @@ class StarredArchiveService:
 
         asset_hash = hashlib.sha256(stored_bytes).hexdigest()
         try:
-            with self._get_archive_connection() as conn:
+            with self._archive_conn() as conn:
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO archived_asset

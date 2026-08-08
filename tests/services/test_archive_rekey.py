@@ -41,9 +41,23 @@ def archive(tmp_path):
     conn.close()
 
 
+def _connect_to(conn):
+    """A factory handing out a fresh connection to the same file, as the app's
+    does. The service closes what it opens, so injecting the fixture's own
+    handle would close it out from under the test's assertions."""
+    path = conn.execute("PRAGMA database_list").fetchone()[2]
+
+    def connect():
+        fresh = sqlite3.connect(path)
+        fresh.row_factory = sqlite3.Row
+        return fresh
+
+    return connect
+
+
 def _svc(archive):
     return StarredArchiveService(
-        get_archive_connection=lambda: archive,
+        get_archive_connection=_connect_to(archive),
         get_meta_connection=lambda: None,  # type: ignore[arg-type]
         get_reader=lambda: None,  # type: ignore[arg-type]
         user_agent="test",

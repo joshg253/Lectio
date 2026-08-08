@@ -29,8 +29,127 @@ os.environ.setdefault("LECTIO_DISABLE_STARTUP_BACKFILL", "1")
 os.environ.setdefault("READER_NO_VENDORED_FEEDPARSER", "1")
 
 import socket  # noqa: E402
+import sqlite3  # noqa: E402
+import sys as _sys  # noqa: E402
+import threading  # noqa: E402
+import traceback  # noqa: E402
 
 import pytest  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# "database is locked" diagnostics
+# ---------------------------------------------------------------------------
+# One source of this flake was found and fixed (a per-request daemon writing
+# the meta DB, now behind LECTIO_DISABLE_STARTUP_BACKFILL above). A second is
+# unexplained: it has only ever fired in CI, never reproduces locally, and the
+# leaked-handle theory was measured and refuted (5 SQLite fds open at the end
+# of a 2,629-test run). So the evidence has to be collected in the run that
+# fails, not chased afterwards.
+#
+# On a failure whose traceback says "database is locked", dump the two things
+# that could explain it: every live thread's stack (a stray background daemon
+# mid-write is the leading suspect) and the state of each SQLite file the
+# process has open, including whether the lock is *still* held a moment later.
+# Costs nothing unless such a failure happens.
+
+_LOCK_DUMP_BUDGET = 3  # a cascade of failures shouldn't bury the first dump
+
+
+def _open_sqlite_paths() -> list[str]:
+    """Every SQLite file this process has open, via /proc (Linux/CI only)."""
+    fd_dir = Path("/proc/self/fd")
+    if not fd_dir.is_dir():
+        return []
+    paths = set()
+    for fd in fd_dir.iterdir():
+        try:
+            target = os.readlink(fd)
+        except OSError:
+            continue
+        if ".sqlite" in target or target.endswith((".db", ".db-wal", ".db-shm")):
+            paths.add(target)
+    return sorted(paths)
+
+
+def _probe_lock(path: str) -> str:
+    """Is `path` still write-locked? BEGIN IMMEDIATE with no retry says so."""
+    try:
+        conn = sqlite3.connect(path, timeout=0)
+    except Exception as exc:  # noqa: BLE001
+        return f"could not open: {exc}"
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("ROLLBACK")
+        return "writable now (lock already released)"
+    except sqlite3.OperationalError as exc:
+        return f"STILL LOCKED: {exc}"
+    except Exception as exc:  # noqa: BLE001
+        return f"probe failed: {exc}"
+    finally:
+        conn.close()
+
+
+def _lock_diagnostics_text() -> str:
+    lines: list[str] = []
+    frames = _sys._current_frames()
+
+    main_thread = threading.main_thread()
+    lines.append(f"-- threads ({threading.active_count()} alive) --")
+    for thread in threading.enumerate():
+        lines.append(f"  {thread.name} daemon={thread.daemon} alive={thread.is_alive()}")
+        # Only background threads get a stack: the main thread's is the
+        # diagnostics code itself, forty frames of pytest internals deep.
+        frame = None if thread is main_thread else frames.get(thread.ident or -1)
+        if frame is not None:
+            for entry in traceback.format_stack(frame):
+                lines.extend("    " + ln for ln in entry.rstrip().splitlines())
+
+    paths = _open_sqlite_paths()
+    lines.append(f"-- open SQLite files ({len(paths)}) --")
+    for path in paths:
+        wal = Path(path + "-wal")
+        wal_note = f", wal={wal.stat().st_size}B" if wal.exists() else ""
+        # Probing the -wal/-shm sidecars themselves would be meaningless.
+        sidecar = path.endswith(("-wal", "-shm", "-journal"))
+        verdict = "" if sidecar else f" -> {_probe_lock(path)}"
+        lines.append(f"  {path}{wal_note}{verdict}")
+    return "\n".join(lines)
+
+
+def _exception_chain_text(excinfo) -> str:
+    """Every message in the cause/context chain — reader wraps the sqlite3
+    error, so the phrase can sit several links down."""
+    if excinfo is None:
+        return ""
+    messages, exc, seen = [], excinfo.value, 0
+    while exc is not None and seen < 10:
+        messages.append(str(exc))
+        exc = exc.__cause__ or exc.__context__
+        seen += 1
+    return " | ".join(messages)
+
+
+def pytest_exception_interact(node, call, report):
+    global _LOCK_DUMP_BUDGET
+    if _LOCK_DUMP_BUDGET <= 0:
+        return
+    if "database is locked" not in _exception_chain_text(call.excinfo):
+        return
+    _LOCK_DUMP_BUDGET -= 1
+    try:
+        text = _lock_diagnostics_text()
+    except Exception as exc:  # noqa: BLE001 — diagnostics must never fail a run
+        text = f"lock diagnostics failed: {exc}"
+    # As a report section so it lands in the FAILURES block, and on the real
+    # stderr so it is visible even if the run dies before the summary.
+    report.sections.append(("database-is-locked diagnostics", text))
+    capman = node.config.pluginmanager.getplugin("capturemanager")
+    banner = f"\n===== database-is-locked diagnostics: {node.nodeid} ({report.when}) =====\n"
+    if capman is not None:
+        with capman.global_and_fixture_disabled():
+            print(banner + text, file=_sys.stderr)
+    else:
+        print(banner + text, file=_sys.stderr)
 
 _real_connect = socket.socket.connect
 _real_create_connection = socket.create_connection

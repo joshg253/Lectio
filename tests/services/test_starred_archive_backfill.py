@@ -69,13 +69,23 @@ def dbs(tmp_path):
 
 
 def _service(archive, meta, reader, tagged=None, tagged_raises=False):
+    # A fresh connection per call, as the app's factory does: the service
+    # closes what it opens, so handing it the fixture's own handle would close
+    # it out from under the test's assertions.
+    archive_path = archive.execute("PRAGMA database_list").fetchone()[2]
+
+    def get_archive_connection():
+        conn = sqlite3.connect(archive_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
     def manually_tagged_keys():
         if tagged_raises:
             raise RuntimeError("reader db unavailable")
         return set(tagged or ())
 
     return StarredArchiveService(
-        get_archive_connection=lambda: archive,
+        get_archive_connection=get_archive_connection,
         get_meta_connection=lambda: meta,
         get_reader=lambda: reader,
         user_agent="test",
