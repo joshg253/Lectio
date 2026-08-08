@@ -103,10 +103,96 @@ when the page was already pulled this session.
 claycomix correctly resolves to **no panel** now, so the caller falls back to
 `og:image` — the post's own curated image — instead of a sibling's thumbnail.
 
+### Archive connections are never closed — OPEN, wants its own PR
+
+Found 2026-08-08 while chasing the CI flake, and **not fixed** — it is
+pre-existing, broad, and had nothing to do with the PR in hand.
+
+`get_starred_archive_connection()` returns a **fresh** `sqlite3.Connection` per
+call (no pool, unlike the reader and meta handles). Every call site then does:
+
+```python
+with self._get_archive_connection() as conn:
+    ...
+```
+
+`with` on a sqlite3 connection is a **transaction** context manager. It commits
+or rolls back on exit and **does not close the connection** — verified:
+
+```python
+with sqlite3.connect(p) as c:
+    c.execute("create table t(x)")
+c.execute("select 1")      # still open
+```
+
+So every one of these leaks a connection, left to the garbage collector.
+**31 call sites in `services/starred_archive.py`**, all of them `with`-wrapped,
+plus 13 more uses of the factory elsewhere.
+
+**What it is not.** This is not the cause of the "database is locked" flake
+below — measured across a full 2,629-test run, only 5 SQLite descriptors remain
+open at session end against an fd limit of ~10⁹. The leak is real but small in
+practice, because CPython refcounting collects most of them promptly. It is
+worth fixing on its own merits, not as a flake fix.
+
+**The fix is not a blind find-and-replace.** Swapping to
+`with closing(conn) as c:` closes but drops the commit that the current form
+provides, which the writing call sites depend on. The correct shape is
+`with closing(self._get_archive_connection()) as conn, conn:` — close *and*
+commit — applied per call site with an eye to which ones actually write. Worth
+a pass over the read-only ones first, where plain `closing` is enough.
+
+### The "database is locked" CI flake — HALF FIXED, half unexplained
+
+Two CI failures on 2026-08-08, both `database is locked`, both in tests that had
+nothing to do with the branch they failed on.
+
+**Source one — found and fixed.** `_queue_media_audio_scan` spawns a daemon that
+writes the per-user meta DB. `tests/conftest.py` already sets
+`LECTIO_DISABLE_STARTUP_BACKFILL` for exactly this failure mode and says so, but
+that switch only covered daemons started at STARTUP; this one is spawned per
+request and slipped through. Now gated. Proof it was real: the suite had been
+ending `2629 passed, 1 warning` for as long as anyone had looked, the warning
+being `no such table: feed_media_scan` from that thread. It now ends
+`2629 passed` with none.
+
+**Source two — not explained, and deliberately not papered over.**
+`test_saved_inbox_chunking` failed at fixture setup with no thread exception
+anywhere in the log. It does not reproduce locally: that file passes on repeat,
+and the full suite passes every run. The obvious theory was leaked handles
+accumulating — `close_thread_db_pools`'s own docstring blames exactly that — so
+an autouse teardown was written and then **measured**, and the theory did not
+survive:
+
+| | leaked SQLite fds |
+|---|---|
+| subset, with the teardown | 18 |
+| subset, without it | 18 |
+| full suite (2,629 tests) | 5 |
+
+No difference, and nowhere near any limit. The teardown was reverted rather than
+shipped: a no-op carrying an authoritative comment about a cause that had just
+been refuted is worse than nothing, because the next person to hit this would
+believe it.
+
+Also worth recording: the same tree later passed. The red and green runs on
+PR #185 differed only in a commit *message*. That is confirmation it is a flake,
+not evidence of a fix.
+
+**It will recur on an unrelated PR.** Catching it needs diagnostics inside the
+CI run — which connection holds the lock at failure time — because it does not
+reproduce on this machine. A `-p no:randomly` run, or dumping
+`PRAGMA lock_status` / open connections on failure, is the next step. Guessing
+one red build at a time is not.
+
 ### 0. Next up, in this order (agreed 2026-08-06)
 
-**All three are done as of 2026-08-07. This list is finished; delete it once
-something replaces it.**
+**All three are done as of 2026-08-07.** Two items opened on 2026-08-08 and
+documented above replace them:
+
+1. **Archive connections are never closed** — 31 call sites, wants its own PR.
+2. **The "database is locked" CI flake** — half fixed; the second source needs
+   diagnostics inside a CI run, since it does not reproduce locally.
 
 1. ~~**Dependency / stack update (§0c).**~~ **DONE 2026-08-06.** feedparser did
    have a code change behind it, though not the predicted one — see §0c.
