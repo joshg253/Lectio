@@ -159,3 +159,75 @@ def test_an_unclosed_container_does_not_swallow_the_document(svc):
     # rest of the page.
     html = '<div class="widget"><article><img src="/uploads/strip.png" /></article>'
     assert svc._balanced_container_end(html, 0, "div") == 0
+
+
+# ---------------------------------------------------------------------------
+# A webcomic feed's own <enclosure> is usually not the comic.
+#
+# mahonoir.com ships a per-entry social card (0312csss.jpg, 1200x630) beside a
+# page whose panel is 1080x1620. extract_entry_thumbnail_url took the enclosure
+# before ever consulting the source page, so the card was returned and then
+# cached as the lead image — the container fix alone could not surface, because
+# the panel extractor was never called. fetch_and_store_lead_images_for_feed has
+# always skipped the feed-XML thumbnail for webcomics; this path had not.
+# ---------------------------------------------------------------------------
+
+class FakeEnclosure:
+    def __init__(self, href, type_):
+        self.href = href
+        self.type = type_
+
+
+class FakeEntry:
+    def __init__(self, feed_url, entry_id, link, enclosures=()):
+        self.feed_url = feed_url
+        self.id = entry_id
+        self.link = link
+        self.enclosures = list(enclosures)
+
+
+def _webcomic_svc(monkeypatch, webcomic: bool):
+    svc = LeadImageService(
+        get_meta_connection=lambda: sqlite3.connect(":memory:"),
+        get_reader=lambda: None,
+        user_agent="test",
+        extract_video_id=lambda _u: None,
+        cache={},
+        fetched_at_cache={},
+    )
+    monkeypatch.setattr(svc, "_is_feed_webcomic", lambda _f: webcomic)
+    monkeypatch.setattr(svc, "_is_feed_none_strategy", lambda _f: False)
+    return svc
+
+
+CARD = "https://mahonoir.com/wp-content/uploads/2026/05/0312csss.jpg"
+
+
+def _entry():
+    return FakeEntry(
+        "https://mahonoir.com/comic/feed",
+        "https://mahonoir.com/?post_type=comic&p=1317",
+        "https://mahonoir.com/comic/dead-shall-rise-chapter-3-page-12/",
+        [FakeEnclosure(CARD, "image/jpeg")],
+    )
+
+
+def test_a_webcomic_enclosure_does_not_pre_empt_the_source_page(monkeypatch):
+    svc = _webcomic_svc(monkeypatch, webcomic=True)
+    monkeypatch.setattr(svc, "_fetch_source_lead_image", lambda *a, **k: "https://mahonoir.com/panel.jpg")
+    got = svc.extract_entry_thumbnail_url(_entry(), include_source_lookup=True)
+    assert got != CARD, "the social card won again"
+
+
+def test_a_normal_feeds_enclosure_is_still_used(monkeypatch):
+    """The skip must be scoped to webcomic feeds — enclosures are right elsewhere."""
+    svc = _webcomic_svc(monkeypatch, webcomic=False)
+    got = svc.extract_entry_thumbnail_url(_entry(), include_source_lookup=True)
+    assert got == CARD
+
+
+def test_fast_mode_still_uses_the_enclosure(monkeypatch):
+    """In list rendering there is nothing better to offer, so a card beats a blank."""
+    svc = _webcomic_svc(monkeypatch, webcomic=True)
+    got = svc.extract_entry_thumbnail_url(_entry(), include_source_lookup=False, fast_only=True)
+    assert got == CARD

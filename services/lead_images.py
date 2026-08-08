@@ -1306,12 +1306,28 @@ class LeadImageService:
                 else:
                     return cached
 
+        # On a webcomic feed the publisher's own enclosure is usually NOT the
+        # comic. mahonoir.com ships a per-entry social card
+        # (`<enclosure url=".../0312csss.jpg">`, 1200x630) beside a page whose
+        # actual panel is 1080x1620, and taking the enclosure here meant the
+        # source page was never consulted — the card was returned, then cached as
+        # the lead image. `fetch_and_store_lead_images_for_feed` has always
+        # skipped the feed-XML thumbnail lookup for exactly this reason; this
+        # path simply never got the same rule.
+        #
+        # Only when a source lookup can actually replace it: in fast/list mode
+        # there is nothing better to offer, and a social card beats a blank.
+        _skip_feed_thumbnail = (
+            include_source_lookup and not fast_only
+            and bool(feed_url) and self._is_feed_webcomic(feed_url)
+        )
+
         # Some feeds (for example NYTimes) expose media thumbnail fields or
         # image enclosures on the entry object. Check common locations before
         # parsing HTML so we can surface thumbnails reliably in the posts list.
         try:
             # media_thumbnail may be a list of dicts or a single dict
-            media_thumb = getattr(entry, "media_thumbnail", None)
+            media_thumb = None if _skip_feed_thumbnail else getattr(entry, "media_thumbnail", None)
             if media_thumb:
                 # normalize list/dict
                 candidates = media_thumb if isinstance(media_thumb, (list, tuple)) else [media_thumb]
@@ -1329,7 +1345,7 @@ class LeadImageService:
                             return resolved
 
             # media_content is often a list of dicts with 'url' and 'type'
-            media_content = getattr(entry, "media_content", None)
+            media_content = None if _skip_feed_thumbnail else getattr(entry, "media_content", None)
             if media_content:
                 candidates = media_content if isinstance(media_content, (list, tuple)) else [media_content]
                 for item in candidates:
@@ -1341,7 +1357,7 @@ class LeadImageService:
                                 return url
 
             # reader stores enclosures on entry.enclosures (tuple of Enclosure objects).
-            enclosures = getattr(entry, "enclosures", None)
+            enclosures = None if _skip_feed_thumbnail else getattr(entry, "enclosures", None)
             if enclosures and isinstance(enclosures, (list, tuple)):
                 for enc in enclosures:
                     try:
@@ -1361,7 +1377,7 @@ class LeadImageService:
                             return url
 
             # Some parsers expose enclosure/link entries on `links`.
-            links = getattr(entry, "links", None)
+            links = None if _skip_feed_thumbnail else getattr(entry, "links", None)
             if links and isinstance(links, (list, tuple)):
                 for link_obj in links:
                     try:

@@ -61,6 +61,10 @@ document) and `#unspliced-comic` whole. Excluding the spliced container from the
 match list is not enough, because the *outer* container matches and its first
 image is the spliced one; it is removed from the HTML instead.
 
+**Second cause, found only after deploying (2026-08-07).** pbf came good; mahonoir did not. Its feed ships a per-entry social card as an `<enclosure>` (`0312csss.jpg`, 1200×630), and `extract_entry_thumbnail_url` took that immediately after the cache check — before any source-page lookup — so the panel extractor was never reached and the card was cached as the lead image. Webcomic feeds now skip the feed-XML thumbnail there too (the backfill path always did), except in fast/list mode where there is nothing better to show.
+
+**Still open: claycomix.** It resolves to `564-1.jpg`, the post's own `og:image` (1996×1349) — reported as "no change", which is literally true since that is what was stored before. The in-content strip is `depcom564.800.jpg` (800×2455). Both are the comic in different layouts, so which one is *wanted* is a judgement call, not a bug diagnosis — awaiting a decision rather than guessing.
+
 claycomix correctly resolves to **no panel** now, so the caller falls back to
 `og:image` — the post's own curated image — instead of a sibling's thumbnail.
 
