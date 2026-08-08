@@ -38,13 +38,22 @@ def _refresh_block() -> str:
 
 
 def test_the_refresh_helper_does_not_invent_a_sort_direction():
+    """Pin the fallback to empty, not merely 'not desc'.
+
+    Forbidding the one value that caused the bug would let the next hardcoded
+    default through — `|| 'asc'` reads as harmless today and breaks the moment
+    DEFAULT_SORT_DIR moves. Empty means "not in the URL", which is the only
+    answer that defers to the remembered preference.
+    """
     block = _refresh_block()
     match = re.search(r"const sortDir = searchParams\.get\('sort_dir'\)([^;]*);", block)
     assert match, "refreshCurrentFeedOrFolder no longer reads sort_dir the expected way"
-    fallback = match.group(1)
-    assert "'desc'" not in fallback and '"desc"' not in fallback, (
-        "a hardcoded 'desc' fallback here rewrites an oldest-first preference on "
-        "every refresh — pass the parameter through instead"
+    fallback = match.group(1).strip()
+    assert re.fullmatch(r"\|\|\s*(?:''|\"\")", fallback), (
+        f"sort_dir fallback is {fallback!r}; it must be `|| ''`. Any hardcoded "
+        "value here is a default invented in JS, and the index PERSISTS an "
+        "explicit sort — which is how a refresh silently rewrote the user's "
+        "remembered order."
     )
 
 
@@ -55,8 +64,11 @@ def test_the_refresh_helper_does_not_invent_a_sort_key():
     block = _refresh_block()
     match = re.search(r"const sortBy = searchParams\.get\('sort_by'\)([^;]*);", block)
     assert match, "refreshCurrentFeedOrFolder no longer reads sort_by the expected way"
-    assert "'post'" not in match.group(1), (
-        "pass sort_by through rather than re-deriving the server's default in JS"
+    fallback = match.group(1).strip()
+    assert re.fullmatch(r"\|\|\s*(?:''|\"\")", fallback), (
+        f"sort_by fallback is {fallback!r}; it must be `|| ''` for the same reason "
+        "as sort_dir. 'post' happens to match DEFAULT_SORT_BY today, which is "
+        "exactly why a wrong value here would survive review."
     )
 
 
