@@ -1001,6 +1001,10 @@ because the same text under two feeds is a syndicated post rather than
 furniture; and extractions under 120 characters are exempt, because a two-line
 stub can legitimately coincide and refusing those would block real re-fetches.
 
+**The guard remembers what it has allowed this run, because the archive cannot.** `enqueue_archive` is asynchronous, so during a bulk repair `extraction_matches_sibling` could not see the batch's own writes: entry 1 is allowed, entry 2 gets the same wrong text seconds later and is allowed too because entry 1's extraction has not been archived yet. A 368-entry run on 2026-08-07 wrote identical comment-section text to five supernote entries exactly this way. The service now keeps a bounded per-feed map of fingerprints it has allowed (300 per feed, 6h TTL, cleared by `forget_recent_extractions`) and refuses a match against that as well as against the archive. An archive-sourced refusal is deliberately *not* recorded — a maybe should not become a fact.
+
+**Corollary, and the more expensive half: the archive is not evidence of current state.** Anything measuring damage from `archived_entry.readability_html_zlib` reads a store that lags every repair. After that run, 129 of its 131 rewritten entries still had their pre-run extraction stored and still looked damaged; worse, the same lag had inflated the original damage count from the start — of 594 flagged, 327 held perfectly good bodies. `scripts/refetch_boilerplate_damage.py` therefore filters its scope, and verifies its own output, against the READER, which is what a person actually reads. Use the archive to find candidates; use the reader to decide.
+
 `sibling_extraction_entries` is the same test in bulk — "which stored
 extractions already are boilerplate?" rather than "would writing this one be?" —
 and lives next to the guard rather than in the repair scripts, because two

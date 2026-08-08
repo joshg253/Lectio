@@ -22,14 +22,49 @@ class FakeEntry:
         self.link = link
 
 
-class FakeReader:
-    """Only what the script asks of a reader: does this entry exist, and its link."""
+class FakeContent:
+    def __init__(self, value):
+        self.value = value
 
-    def __init__(self, entries):
+
+class FakeBodyEntry:
+    """An entry as the reader returns it from get_entries: id + content."""
+
+    def __init__(self, entry_id, body=""):
+        self.id = entry_id
+        self.content = [FakeContent(body)] if body else []
+
+
+class FakeReader:
+    """Only what the script asks of a reader: entry lookup, link, and bodies.
+
+    `bodies` maps feed_url -> {entry_id: body html}; it drives _still_sharing_text,
+    which decides whether an entry is already repaired. Default: every entry has a
+    unique body, so nothing is filtered as already-repaired unless a test says so.
+    """
+
+    def __init__(self, entries, bodies=None):
         self._entries = entries
+        self._bodies = bodies if bodies is not None else {}
 
     def get_entry(self, key, default=None):
         return self._entries.get(key, default)
+
+    def get_entries(self, feed=None):
+        explicit = self._bodies.get(feed)
+        if explicit is not None:
+            return [FakeBodyEntry(e, b) for e, b in explicit.items()]
+        # No bodies configured: give every entry on the feed the SAME text, so
+        # they all read as still damaged and the partition logic under test is
+        # what decides their fate. Unique bodies would make them all look
+        # already-repaired and filter the whole scope away.
+        shared = "<p>" + ("the site boilerplate every post shares " * 8) + "</p>"
+        rows = [FakeBodyEntry(e, shared) for (f, e) in self._entries if f == feed]
+        # Plus one more entry holding the same text. Sharing needs two, and a
+        # test with a single victim would otherwise read as already-repaired —
+        # true, but not what these tests are about.
+        rows.append(FakeBodyEntry("sibling-holding-the-same-boilerplate", shared))
+        return rows
 
     def __enter__(self):
         return self
@@ -144,7 +179,8 @@ def test_every_victim_is_accounted_for(monkeypatch, meta_db):
     rows, skipped = script.targets(None)
 
     assert len(rows) + sum(skipped.values()) == len(victims)
-    assert skipped == {"has_snapshot": 1, "entry_gone": 1, "no_http_link": 1}
+    assert skipped == {"has_snapshot": 1, "entry_gone": 1, "no_http_link": 1,
+                       "already_repaired": 0}
 
 
 def test_the_feed_filter_is_passed_through(monkeypatch, meta_db):
@@ -156,3 +192,61 @@ def test_the_feed_filter_is_passed_through(monkeypatch, meta_db):
     script.targets(FEED)
 
     assert seen == [FEED]
+
+
+# ---------------------------------------------------------------------------
+# Detection reads the ARCHIVE, which lags a repair badly — after the first apply
+# run, 129 of 131 rewritten entries still had their pre-run extraction stored,
+# so they all still looked damaged. Without this filter the next run would spend
+# ~90 network re-fetches re-repairing entries that are already fine.
+# ---------------------------------------------------------------------------
+
+UNIQUE = "<p>" + ("a body only this entry has " * 12) + "</p>"
+SHARED = "<p>" + ("the site boilerplate every post shares " * 8) + "</p>"
+
+
+def _wire_bodies(monkeypatch, victims, entries, bodies):
+    monkeypatch.setattr(script.main.starred_archive_service, "sibling_extraction_entries",
+                        lambda only_feed=None: list(victims))
+    monkeypatch.setattr(script.main, "get_reader", lambda: FakeReader(entries, bodies))
+
+
+def test_an_entry_whose_body_is_now_unique_is_not_re_fetched(monkeypatch, meta_db):
+    _wire_bodies(monkeypatch, [(FEED, "fixed"), (FEED, "a"), (FEED, "b")],
+                 {(FEED, "fixed"): FakeEntry("https://example.com/fixed"),
+                  (FEED, "a"): FakeEntry("https://example.com/a"),
+                  (FEED, "b"): FakeEntry("https://example.com/b")},
+                 {FEED: {"fixed": UNIQUE, "a": SHARED, "b": SHARED}})
+
+    rows, skipped = script.targets(None)
+
+    assert sorted(r[1] for r in rows) == ["a", "b"]
+    assert skipped["already_repaired"] == 1
+
+
+def test_an_entry_with_no_reader_row_is_gone_not_repaired(monkeypatch, meta_db):
+    """It has no body, which is not the same as having a unique one."""
+    _wire_bodies(monkeypatch, [(FEED, "gone"), (FEED, "a"), (FEED, "b")],
+                 {(FEED, "a"): FakeEntry("https://example.com/a"),
+                  (FEED, "b"): FakeEntry("https://example.com/b")},
+                 {FEED: {"a": SHARED, "b": SHARED}})
+
+    rows, skipped = script.targets(None)
+
+    assert skipped["entry_gone"] == 1
+    assert skipped["already_repaired"] == 0
+    assert sorted(r[1] for r in rows) == ["a", "b"]
+
+
+def test_a_short_body_is_not_treated_as_repaired(monkeypatch, meta_db):
+    """Below the min-chars floor there is nothing to judge, so do not exclude it."""
+    _wire_bodies(monkeypatch, [(FEED, "stub"), (FEED, "a"), (FEED, "b")],
+                 {(FEED, "stub"): FakeEntry("https://example.com/stub"),
+                  (FEED, "a"): FakeEntry("https://example.com/a"),
+                  (FEED, "b"): FakeEntry("https://example.com/b")},
+                 {FEED: {"stub": "<p>tiny</p>", "a": SHARED, "b": SHARED}})
+
+    rows, skipped = script.targets(None)
+
+    assert skipped["already_repaired"] == 0
+    assert "stub" in [r[1] for r in rows]

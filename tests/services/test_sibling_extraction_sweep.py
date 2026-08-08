@@ -152,3 +152,71 @@ def test_a_missing_table_returns_nothing_rather_than_raising(tmp_path):
         sanitize_readability_html=lambda html: html,
     )
     assert svc.sibling_extraction_entries() == []
+
+
+# ---------------------------------------------------------------------------
+# The guard must remember its OWN run's writes.
+#
+# Archiving is asynchronous (enqueue_archive), so during a bulk repair the guard
+# could not see what the same run had just written: entry 1 gets comment-section
+# text and is allowed because the archive still holds the old boilerplate; entry
+# 2 gets the SAME text seconds later and is allowed too. A 368-entry run on
+# 2026-08-07 wrote identical text to five supernote entries this way, and every
+# one of its 131 "successes" ended up sharing text with a sibling.
+# ---------------------------------------------------------------------------
+
+def test_the_same_extraction_twice_in_one_run_is_refused(service, archive):
+    """The exact race. Nothing is in the archive; both writes are in-run."""
+    assert service.extraction_matches_sibling(FEED, "e1", BOILERPLATE) is False
+    assert service.extraction_matches_sibling(FEED, "e2", BOILERPLATE) is True
+
+
+def test_a_third_entry_is_still_refused(service, archive):
+    service.extraction_matches_sibling(FEED, "e1", BOILERPLATE)
+    assert service.extraction_matches_sibling(FEED, "e2", BOILERPLATE) is True
+    assert service.extraction_matches_sibling(FEED, "e3", BOILERPLATE) is True
+
+
+def test_re_checking_the_same_entry_is_not_a_self_collision(service, archive):
+    """An entry must not be refused because IT was the one that recorded the text."""
+    assert service.extraction_matches_sibling(FEED, "e1", ARTICLE_A) is False
+    assert service.extraction_matches_sibling(FEED, "e1", ARTICLE_A) is False
+
+
+def test_distinct_articles_in_one_run_are_all_allowed(service, archive):
+    assert service.extraction_matches_sibling(FEED, "e1", ARTICLE_A) is False
+    assert service.extraction_matches_sibling(FEED, "e2", ARTICLE_B) is False
+
+
+def test_the_memory_is_per_feed(service, archive):
+    """Two feeds legitimately syndicating the same post must not block each other."""
+    assert service.extraction_matches_sibling(FEED, "e1", BOILERPLATE) is False
+    assert service.extraction_matches_sibling(OTHER_FEED, "e1", BOILERPLATE) is False
+
+
+def test_short_extractions_are_still_exempt_in_run(service, archive):
+    assert service.extraction_matches_sibling(FEED, "e1", STUB) is False
+    assert service.extraction_matches_sibling(FEED, "e2", STUB) is False
+
+
+def test_an_archive_match_still_wins_and_is_not_recorded(service, archive):
+    """A refusal from the archive must not poison the memory with that text."""
+    _store(archive, [(FEED, "old1", BOILERPLATE), (FEED, "old2", BOILERPLATE)])
+    assert service.extraction_matches_sibling(FEED, "new", BOILERPLATE) is True
+    service.forget_recent_extractions()
+    # With the archive rows still present it refuses again — from the archive,
+    # not from a stale in-run record.
+    assert service.extraction_matches_sibling(FEED, "new", BOILERPLATE) is True
+
+
+def test_forgetting_clears_the_in_run_memory(service, archive):
+    assert service.extraction_matches_sibling(FEED, "e1", BOILERPLATE) is False
+    service.forget_recent_extractions()
+    assert service.extraction_matches_sibling(FEED, "e2", BOILERPLATE) is False
+
+
+def test_the_memory_is_bounded_per_feed(service, archive):
+    """A long run must not grow this without limit."""
+    for i in range(service._RECENT_PER_FEED + 50):
+        service.extraction_matches_sibling(FEED, f"e{i}", f"<p>{'unique text ' * 20}{i}</p>")
+    assert len(service._recent_extractions[FEED]) <= service._RECENT_PER_FEED

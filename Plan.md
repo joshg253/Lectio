@@ -235,6 +235,52 @@ The import path canonicalizes, so these predate it or arrive by another route
 one-off normalization pass over `folder_feeds` would make the two spellings
 converge, but nothing is broken by leaving them.
 
+### Boilerplate repair: the guard had no memory of its own run — FIXED 2026-08-07
+
+The first `--apply` run (368 targets, 223 attempted before host-dropping) reported
+**131 recovered**. Two things were wrong with that number, and both are now fixed.
+
+**1. The guard could not see its own batch.** `extraction_matches_sibling`
+compares against extractions in the ARCHIVE, and archiving is asynchronous. So
+entry 1 gets comment-section text and is allowed (the archive still holds the old
+boilerplate, which differs); entry 2 gets the *same* text seconds later and is
+allowed too, because entry 1's new extraction has not landed. Five supernote
+entries ended up sharing *"Received my open box Nomad in near new condition…"* —
+a reader comment — written by the run itself. The guard was correct for the
+one-at-a-time interactive case it was built for and simply had no memory of a
+batch. It now keeps a bounded, per-feed record of what it has allowed this run
+and refuses a match against that as well as against the archive.
+
+Real blast radius: **41 of 131**, not all of them. My first measurement said all
+131 and was wrong — see below.
+
+**2. Detection over-reports, badly, because the archive lags.** Measuring damage
+from `archived_entry.readability_html_zlib` flags an entry whose archive row is
+stale even when its actual body is fine. After the run, **129 of the 131**
+rewritten entries still had their pre-run extraction stored. And the same lag had
+been inflating the figure from the very beginning: of the 594 flagged, **327 hold
+perfectly good unique bodies**. Scope is now filtered by what the READER holds.
+
+The corrected picture, and it is a much smaller job than "565":
+
+| | |
+|---|---|
+| flagged by the archive | 594 |
+| **already fine** (stale archive row only) | **327** |
+| restorable from a local snapshot, no network | 46 |
+| no longer exist in the reader | 197 |
+| **actually need re-fetching** | **24** |
+
+**Runs now verify themselves.** "The write was allowed" is not "the article came
+back", and the difference was found by hand, afterwards, only because the numbers
+looked odd. Each run re-checks what it wrote — against the reader, not the
+archive, since the archive cannot yet know — and reports how many still share
+text with a sibling.
+
+A methodological note worth keeping: I reported "all 131 are new damage" from an
+archive-based measurement, then had to correct it to 41 once the reader was
+checked. **The archive is not evidence of current state.** Ask the reader.
+
 ### Refreshing a feed rewrote the remembered sort — FIXED 2026-08-07
 
 Reported: "my sort keeps reverting back to Pub new (I'm generally always using

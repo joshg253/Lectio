@@ -29,10 +29,23 @@ body is damaged just the same and no future feed refresh will repair it.
 **The guard now works in this script's favour.** A page that still extracts to
 the same boilerplate is refused rather than written, so an entry that cannot be
 recovered keeps what it has instead of being re-damaged. Those are reported as
-`refused` — not failures, and not fixed either. Expect a lot of them from the
-feeds that were damaged most: `blogs.technet.com` and `channel9.msdn.com` no
-longer exist, so the archive fallback is the only route and often there is no
-snapshot to find.
+`refused` — not failures, and not fixed either.
+
+**Two lessons from the first apply run (2026-08-07), both now built in:**
+
+- *The guard had no memory of its own batch.* Archiving is asynchronous, so
+  entry 2 could be written the same wrong text as entry 1 seconds earlier and
+  still pass, because entry 1's extraction had not been archived yet. It wrote
+  identical comment-section text to five supernote entries this way. The guard
+  now remembers what it has allowed this run.
+- *Detection over-reports, because the archive lags.* 129 of the 131 entries the
+  run rewrote still had their pre-run extraction stored, so they still looked
+  damaged. Worse, the same lag had been inflating the count from the start: of
+  594 flagged, 327 had perfectly good bodies. Scope is now filtered by what the
+  READER holds, which is what a person actually reads.
+
+A run therefore also **verifies itself** at the end, re-checking what it wrote,
+because "the write was allowed" is not the same as "the article came back".
 
 Entries whose reader row is gone are skipped: the archive still lists them, but
 there is nothing left to write a body back to.
@@ -45,8 +58,10 @@ there is nothing left to write a body back to.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import os
+import re
 import sqlite3
 import sys
 from collections import Counter
@@ -56,6 +71,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import main  # noqa: E402
 from services import refetch_batch, tenancy  # noqa: E402
+
+# Same floor the guard uses: a short body can legitimately coincide.
+_MIN_EXTRACTION_CHARS = 120
 
 
 def _has_snapshot(keys: list[tuple[str, str]]) -> set[tuple[str, str]]:
@@ -86,8 +104,20 @@ def targets(only_feed: str | None) -> tuple[list[tuple[str, str, str]], dict[str
     that quietly narrowed the first into the second would be lying about scope.
     """
     victims = main.starred_archive_service.sibling_extraction_entries(only_feed)
+
+    # Detection reads the ARCHIVE, which is written asynchronously and lags a
+    # repair badly: after the first apply run, 129 of 131 rewritten entries still
+    # had their pre-run extraction stored, so they all still looked damaged. Left
+    # alone, the next run would spend ~90 network re-fetches re-repairing entries
+    # that are already fine. An entry whose CURRENT body is unique on its feed is
+    # not damaged, whatever the archive still says.
+    _sharing, _bodied = _text_sharing_state(list(victims))
+    already_fixed = _bodied - _sharing
+    victims = [k for k in victims if k not in already_fixed]
+
     restorable = _has_snapshot(victims)
-    skipped = {"has_snapshot": 0, "entry_gone": 0, "no_http_link": 0}
+    skipped = {"has_snapshot": 0, "entry_gone": 0, "no_http_link": 0,
+               "already_repaired": len(already_fixed)}
 
     rows: list[tuple[str, str, str]] = []
     with main.get_reader() as reader:
@@ -107,6 +137,52 @@ def targets(only_feed: str | None) -> tuple[list[tuple[str, str, str]], dict[str
     return rows, skipped
 
 
+def _text_sharing_state(
+    keys: list[tuple[str, str]],
+) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+    """``(sharing, bodied)`` for *keys*, read from the reader.
+
+    ``bodied`` is those with a body long enough to judge at all; ``sharing`` is
+    the subset whose text another entry on the same feed also holds. The two are
+    returned separately because "unique text" and "no text to look at" must not
+    be conflated — an entry with no reader row would otherwise be reported as
+    repaired when it is simply gone.
+
+    Reads the READER, not the archive. The archive is written asynchronously, so
+    straight after a run it does not yet contain what the run produced — using it
+    here would report a clean bill of health for exactly the failure this checks
+    for. The reader is also what the user actually reads.
+
+    Compares each rewritten entry against every entry on its feed, not just the
+    other rewritten ones: replacing one boilerplate with a *different* entry's
+    existing body is the same defect.
+    """
+    feeds = {f for f, _e in keys}
+    by_feed: dict[str, dict[str, list[str]]] = collections.defaultdict(
+        lambda: collections.defaultdict(list))
+    fingerprint = main.starred_archive_service.extraction_fingerprint
+    with main.get_reader() as reader:
+        for feed_url in feeds:
+            for entry in reader.get_entries(feed=feed_url):
+                body = " ".join(c.value or "" for c in (entry.content or []))
+                text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip()
+                if len(text) < _MIN_EXTRACTION_CHARS:
+                    continue
+                fp = fingerprint(body)
+                if fp:
+                    by_feed[feed_url][fp].append(entry.id)
+
+    shared: set[tuple[str, str]] = set()
+    bodied: set[tuple[str, str]] = set()
+    for feed_url, groups in by_feed.items():
+        for ids in groups.values():
+            bodied.update((feed_url, e) for e in ids)
+            if len(ids) > 1:
+                shared.update((feed_url, e) for e in ids)
+    wanted = set(keys)
+    return shared & wanted, bodied & wanted
+
+
 def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None:
     rows, skipped = targets(only_feed)
     total_skipped = sum(skipped.values())
@@ -115,6 +191,8 @@ def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None
           f"extraction in {scope}")
     print(f"      {skipped['has_snapshot']:,} have a snapshot — run "
           "scripts/revert_boilerplate_refetches.py for those, it needs no network")
+    print(f"      {skipped['already_repaired']:,} already hold unique text — repaired by an "
+          "earlier run; the archive just has not caught up")
     print(f"      {skipped['entry_gone']:,} no longer exist in the reader; "
           f"{skipped['no_http_link']:,} have no http(s) link")
     print(f"      {len(rows):,} can be re-fetched")
@@ -145,6 +223,10 @@ def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None
               f"refused={stats['mismatch']} dead={stats['dead']} failed={stats['failed']}",
               flush=True)
 
+    # Start with no in-run memory, so a previous run's allowances cannot refuse
+    # a legitimate write here.
+    main.starred_archive_service.forget_recent_extractions()
+
     stats, log = refetch_batch.run_paced(
         ordered,
         lambda f, e: main._refresh_captured_article_for_current_user(f, e, "readability"),
@@ -158,6 +240,26 @@ def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None
           f"page gone {stats['dead']:,} | failed {stats['failed']:,} | "
           f"host dropped {stats['skipped_host']:,}")
     print(f"      log: {out}")
+
+    # Verify the run's own output. "recovered" only means a write was allowed at
+    # the time; it does not mean the article came back. The first apply run
+    # reported 131 recovered and every one of them turned out to share text with
+    # a sibling — new boilerplate in place of old — and that was found by hand,
+    # afterwards. A repair that cannot audit itself is not finished.
+    written = [(r["feed_url"], r["entry_id"]) for r in log if r.get("ok")]
+    if written:
+        bad = sorted(_text_sharing_state(written)[0])
+        print(f"\n      verification: of {len(written):,} rewritten, "
+              f"{len(written) - len(bad):,} hold text unique on their feed, "
+              f"{len(bad):,} still share text with a sibling.")
+        if bad:
+            print("      Those are NOT repaired — the page gave boilerplate again.")
+            for _feed_url, entry_id in bad[:5]:
+                print(f"        {entry_id[:84]}")
+            if len(bad) > 5:
+                print(f"        … and {len(bad) - 5:,} more")
+            print("      Re-running will not help them; they need a different source.")
+
     print("      Every write snapshotted what it replaced, so any one is revertible —")
     print("      though what it replaced was the boilerplate, not the lost original.")
     print("      Restart the app so nothing serves a cached render.")
