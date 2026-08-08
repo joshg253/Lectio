@@ -22,6 +22,87 @@ above zero means there is a second door**, and the URLs it reports are the
 evidence for finding it — check what they have in common (host, import batch,
 whether they carry captures from the extension).
 
+### Three webcomics showing the wrong image — FIXED 2026-08-07
+
+Reported as "a couple webcomics not behaving even after setting as Webcomic".
+All three had one root cause: `_extract_webcomic_panel_image` only ever inspected
+an `<img>`'s **own** id/class, so it could not see a container like
+`<div id="comic">` — and it settled for whatever chrome happened to carry a
+comic-ish class. What was stored before the fix:
+
+| feed | stored image | what it actually was |
+|---|---|---|
+| pbfcomics.com | `nav_home_white.png` | the **79×30 "Home" nav button**, on every entry, captioned "Home" |
+| mahonoir.com | `csss.jpg` | a **1200×630 OG social card** |
+| claycomix.com | a `pf-summary-widget` thumbnail | **another post's** comic |
+
+The shared culprit is `wp-post-image`. It is WordPress's featured-image class,
+added to the img-level pattern *for claycomix* — and it also marks PBF's nav
+items and claycomix's own sidebar widget. The class alone is not evidence; where
+it sits is.
+
+Three changes, all scoped to the webcomic path so nothing else can regress:
+
+- **Container recognition.** A `<div id="comic">` / `#unspliced-comic` wrapper
+  now selects the panel, and inside such a container the first acceptable image
+  wins with no id/class test on the img at all — most CMSes wrap the panel and
+  leave the `<img>` bare. Tokens come from an explicit list, so `comic-nav` and
+  PBF's `comic_categories-comic` post class do not match.
+- **Chrome stripping** (nav/menu/widget/sidebar/gallery), applied to both the
+  panel scan and the alt-text scan — the caption must come from wherever the
+  panel came from, or you get a strip captioned "Home".
+- **`og:description` equal to `og:site_name` is not a caption.** PBF ships
+  `og:description="The Perry Bible Fellowship"` on every strip; using it would
+  caption the entire feed with the site name.
+
+mahonoir needed one extra call: it ships the page twice inside one outer
+`<div id="comic">` — `#spliced-comic` cut into phone panels (first in the
+document) and `#unspliced-comic` whole. Excluding the spliced container from the
+match list is not enough, because the *outer* container matches and its first
+image is the spliced one; it is removed from the HTML instead.
+
+**claycomix was never a lead-image problem at all (clarified 2026-08-07).** The
+thumbnail (`564-1.jpg`, the og:image preview) is *correct*; what was missing was
+the full strip from the **article body** — and the body already contained it.
+`_strip_lead_image_opener` deleted it. That branch fires when the body's opening
+image is not the lead image, and its comment assumed one situation: the opener is
+a small placeholder (ComicControl's `/comicsthumbs/foo.jpg` beside the full
+`/comics/foo.jpg`) and the lead is the upgrade. claycomix is the exact inverse —
+the opener is the full 800x2455 strip and the lead is a 1996x1349 preview — so
+the comic was stripped out and the preview shown in its place. It appeared
+nowhere.
+
+Deleting content now needs positive evidence: the opener is kept (and the
+separate hero dropped, the same call the floated-image branch already makes) only
+when it is BOTH a different picture from the lead (basename, ignoring `-WxH`
+resize suffixes) AND declares full-size dimensions. An opener that declares
+nothing stays strippable, which preserves the thumbnail-wrapper behaviour that
+`test_thumbnail_wrapper_imgs_stripped` pins — that test caught a first attempt
+that used basename alone. The list thumbnail resolves independently, so it is
+untouched.
+
+**mahonoir needed the opposite treatment, and the enclosure fix was backed out
+(2026-08-07).** Its feed body carries no image at all — one "The post … appeared
+first on …" paragraph — while advertising a per-entry social card as its
+`<enclosure>`. An earlier fix made webcomic feeds ignore that enclosure so the
+panel became the lead; that was wrong once the card was confirmed to be the
+*wanted* list thumbnail, and it is reverted. Nothing can be recovered from the
+body the way claycomix's could, because the body never had it, so the panel is
+fetched from the source page and placed into the article, and the separate hero
+is dropped in the same move (otherwise the card and the comic both render). The
+list thumbnail is untouched: the resolved lead is captured in
+`_resolved_lead_for_cache` before this runs, and that is what reaches
+`entry_lead_images`.
+
+Injection happens **after** `_strip_lead_image_opener`, not before: injecting
+first would hand the new `<img>` to it as the body's opener and it would be
+removed again. Cost is a source-page fetch on the render path, limited to
+webcomic feeds whose body has no image, and served from `_source_html_cache`
+when the page was already pulled this session.
+
+claycomix correctly resolves to **no panel** now, so the caller falls back to
+`og:image` — the post's own curated image — instead of a sibling's thumbnail.
+
 ### 0. Next up, in this order (agreed 2026-08-06)
 
 1. ~~**Dependency / stack update (§0c).**~~ **DONE 2026-08-06.** feedparser did
@@ -121,6 +202,74 @@ network work, so it will pass even if feed parsing has regressed. After
 feedparser, refresh a handful of real feeds of different shapes (an Atom feed, a
 YouTube feed, a DeviantArt file feed, one of the bot-walled ones) and confirm
 entries land with correct dates and titles.
+
+### Re-importing your own OPML export duplicated 440 feeds — FIXED 2026-08-07
+
+Found while building a test file for the OPML upload route, not by looking for
+it. A round-trip of the live library's own export — export, then import the file
+back — subscribed **440 of 2,909 foldered feeds a second time**.
+
+`import_opml` canonicalizes each incoming `xmlUrl` (so `old.reddit`, `?alt=rss`
+and trailing-slash variants attach to an existing subscription) but compared the
+result against the **raw** stored URLs. A stored URL that was not already
+canonical never matched, so the feed looked new and was subscribed again under
+the canonical spelling. **A trailing slash was enough.** Fixed by canonicalizing
+the comparison set too.
+
+Two things made this hide well:
+
+- The duplicates are invisible to a `GROUP BY feed_url` check, because the two
+  rows hold different strings (`…/feed/` and `…/feed`). An early measurement
+  using exactly that check said "0 duplicates" and was wrong.
+- It only fires on **restore-from-backup**, which nobody does until they need
+  to — and then it is the worst possible moment to discover it.
+
+Verified against a snapshot of the live meta DB: re-importing the real export
+went from `imported=440` to `imported=0`, with `folder_feeds` unchanged at
+2,909. Tests assert on subscription counts rather than URL uniqueness, for the
+reason above, and were confirmed to fail against the old code.
+
+**Not investigated:** why 440 stored URLs are non-canonical in the first place.
+The import path canonicalizes, so these predate it or arrive by another route
+(OPML import before the canonicalization existed, discovery, the extension). A
+one-off normalization pass over `folder_feeds` would make the two spellings
+converge, but nothing is broken by leaving them.
+
+### Refreshing a feed rewrote the remembered sort — FIXED 2026-08-07
+
+Reported: "my sort keeps reverting back to Pub new (I'm generally always using
+Pub Old for Feeds)." A closed loop, and one that could **only** bite someone
+whose preference was oldest-first:
+
+1. The preference is `asc`, so the templates omit `sort_dir` from links — they
+   emit it only when it differs from `DEFAULT_SORT_DIR` ("asc").
+2. `refreshCurrentFeedOrFolder` (app.js) read the now-absent param and
+   substituted `'desc'`. That JS default had simply never agreed with the
+   server's.
+3. `build_sort_query` put `&sort_dir=desc` in the redirect, because desc is not
+   the default.
+4. The index persists an **explicit** sort — so every folder or feed refresh
+   rewrote the preference to newest-first. Set it back, refresh, lose it again.
+
+Fixed by passing the parameter through rather than inventing one: absent means
+"not in the URL", the redirect carries nothing, and the index falls back to the
+remembered preference. `sort_by` got the same treatment — its `|| 'post'`
+happens to match `DEFAULT_SORT_BY` today, so it was harmless, which is precisely
+why it would have survived review and broken the day either default moved.
+
+**This is the second bug of exactly this shape** (see the Inbox notes below: the
+Inbox's sort *direction* persisted as the remembered Saved order because the key
+was guarded and the dir was not — same symptom, oldest-first silently becoming
+newest-first and staying that way). The common thread is that a sort is a
+**pair**, and any code path that can put half of one into a URL can rewrite a
+preference. Worth suspecting first the next time an order "won't stick".
+
+Tests: source assertions on app.js (no JS harness in this repo — same approach
+as `test_tag_link_scope_staleness`) plus the server half in
+`test_refresh_routes.py`. Verified the direction test fails against the old code
+and passes against the new.
+
+The live preference had already been corrupted to `desc` and was reset by hand.
 
 ### 0a. Refresh scheduler stalls silently — FIXED 2026-08-04
 

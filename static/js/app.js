@@ -15259,8 +15259,18 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const isEntryScope = searchParams.has('entry_id');
       let feedUrl = scopeListFeedUrl || (isEntryScope ? entryFeedUrl : null);
       const entryId = searchParams.get('entry_id') || '';
-      const sortBy = searchParams.get('sort_by') || 'post';
-      const sortDir = searchParams.get('sort_dir') || 'desc';
+      // Sort is PASSED THROUGH, never defaulted. A link omits sort_by/sort_dir
+      // precisely when they equal the server's defaults (post/asc), so inventing
+      // a value here does not reproduce the current view — it asserts one. The
+      // old `|| 'desc'` disagreed with DEFAULT_SORT_DIR ("asc"), which made
+      // every folder/feed refresh post an explicit sort_dir=desc, and the index
+      // persists an explicit sort. A user reading oldest-first had that
+      // preference silently rewritten to newest-first by their own refresh, over
+      // and over. Empty means "not in the URL": it is dropped from the redirect
+      // and the index falls back to the remembered preference, which is the
+      // whole point.
+      const sortBy = searchParams.get('sort_by') || '';
+      const sortDir = searchParams.get('sort_dir') || '';
       const readFilter = searchParams.get('read_filter') || 'unread';
       const starOnly = searchParams.get('star_only') || '0';
       const resumeReadFilter = searchParams.get('resume_read_filter') || readFilter;

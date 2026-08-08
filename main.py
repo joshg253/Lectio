@@ -10550,7 +10550,17 @@ def _is_feed_subscribed(conn: sqlite3.Connection, feed_url: str) -> bool:
 
 
 def _queue_media_audio_scan(feed_url: str) -> None:
-    """Background-scan a feed for media:content audio (deduped, tenancy-bound)."""
+    """Background-scan a feed for media:content audio (deduped, tenancy-bound).
+
+    Honours LECTIO_DISABLE_STARTUP_BACKFILL for the reason conftest sets it: a
+    daemon writing the per-user meta DB races the test's own ops on the same
+    temp DB and surfaces as an intermittent "database is locked". That switch
+    already covered the *startup* daemons; this one is spawned per request, so
+    it slipped through and kept failing CI from a test that never touches it
+    (test_feed_link_xss, which only renders a post list).
+    """
+    if os.getenv("LECTIO_DISABLE_STARTUP_BACKFILL", "0") == "1":
+        return
     uid = tenancy.current_user_id()
     key = (uid, feed_url)
     with _media_scan_lock:
@@ -14271,6 +14281,58 @@ _FLOAT_STYLE_RE = re.compile(r"float:\s*(?:left|right)", re.IGNORECASE)
 _CLOSE_A_RE = re.compile(r"</a\s*>", re.IGNORECASE)
 _TUMBLR_MEDIA_PREFIX_RE = re.compile(r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/", re.IGNORECASE)
 
+_OPENER_SRC_RE = re.compile(r"<img\b[^>]*?\bsrc=[\"']([^\"']+)[\"']", re.IGNORECASE | re.DOTALL)
+# WordPress and most CDNs spell a resize as a -WxH suffix on the basename.
+_IMG_SIZE_SUFFIX_RE = re.compile(r"-\d{2,5}x\d{2,5}(?=\.[A-Za-z0-9]+$)")
+
+
+_OPENER_DIM_RE = re.compile(r"\b(width|height)=[\"']?(\d{2,5})", re.IGNORECASE)
+_SRCSET_WIDTH_RE = re.compile(r"\s(\d{2,5})w(?:,|\s|$)")
+# Below this, an opener is a thumbnail standing in for something better.
+_FULL_SIZE_IMAGE_MIN_PX = 400
+
+
+def _opener_is_own_full_image(opener_html: str, lead_image_url: str | None) -> bool:
+    """True when the opener <img> is a full-size picture of its own, not a stand-in.
+
+    Decides whether hoisting the lead may DELETE the opener from the body. Two
+    situations reach here looking alike:
+
+      * the opener is a PLACEHOLDER for the lead — ComicControl's
+        ``/comicsthumbs/foo.jpg`` beside the full ``/comics/foo.jpg``, or a bare
+        thumbnail in a body that is otherwise a line of text. Stripping is an
+        upgrade.
+      * the opener IS the article — claycomix ships the full 800x2455 strip in
+        the body while og:image is a 1996x1349 preview. Stripping deleted the
+        comic and showed the preview in its place, so the strip appeared nowhere.
+
+    Deleting content needs positive evidence, but the placeholder case has to
+    keep working, so both tests must pass: a different picture from the lead
+    (basename, ignoring ``-WxH`` resize suffixes), AND declared dimensions that
+    say full-size. An opener that declares nothing stays strippable, which is
+    the long-standing behaviour for thumbnail-wrapper bodies.
+    """
+    if not lead_image_url:
+        return False
+    m = _OPENER_SRC_RE.search(opener_html or "")
+    if not m:
+        return False
+
+    def _key(url: str) -> str:
+        name = urlparse(html.unescape(url)).path.rsplit("/", 1)[-1]
+        return _IMG_SIZE_SUFFIX_RE.sub("", name).lower()
+
+    src_key = _key(m.group(1))
+    if not src_key or src_key == _key(lead_image_url):
+        return False        # same picture, resized or relocated — a placeholder
+
+    biggest = max(
+        [int(v) for _a, v in _OPENER_DIM_RE.findall(opener_html)]
+        + [int(w) for w in _SRCSET_WIDTH_RE.findall(opener_html)]
+        + [0]
+    )
+    return biggest >= _FULL_SIZE_IMAGE_MIN_PX
+
 
 _ad_asset_hashes_cache = _PerUserDict()
 _ad_asset_hashes_lock = threading.Lock()
@@ -14416,6 +14478,47 @@ def _collapse_block_spacers(content_html):
     return out or None
 
 
+_HAS_IMG_RE = re.compile(r"<img\b", re.IGNORECASE)
+
+
+def _inject_webcomic_panel_into_bodyless_entry(content_html, entry, feed_url: str, lead_image_url):
+    """Put the comic in the article when a webcomic feed ships a body without one.
+
+    mahonoir.com's feed carries no image at all — only a "The post … appeared
+    first on …" paragraph — while advertising a per-entry social card as its
+    `<enclosure>`. That card is a good LIST THUMBNAIL and a poor article: reading
+    the entry showed a share graphic and no comic. Unlike claycomix, nothing can
+    be recovered from the body, because the body never had it.
+
+    So the panel is fetched from the source page and placed in the article. The
+    separate hero is dropped in the same move, or the card and the comic both
+    render. The list thumbnail is unaffected: the caller captured the resolved
+    lead in `_resolved_lead_for_cache` before this ran, and that is what reaches
+    `entry_lead_images`.
+
+    Narrow on purpose — webcomic feeds only, and only when the body has no image
+    of its own — because it costs a source-page fetch on the render path. The
+    fetch is served from `_source_html_cache` when the same page was already
+    pulled this session.
+    """
+    if not feed_url or not lead_image_service._is_feed_webcomic(feed_url):
+        return content_html, lead_image_url
+    if content_html and _HAS_IMG_RE.search(content_html):
+        return content_html, lead_image_url
+    link = str(getattr(entry, "link", "") or "")
+    if not link.startswith(("http://", "https://")):
+        return content_html, lead_image_url
+    try:
+        panel = lead_image_service._fetch_source_lead_image(link, is_webcomic=True)
+    except Exception:  # noqa: BLE001 — an article without its comic beats a 500
+        LOGGER.warning("[webcomic] panel injection failed for %s", link, exc_info=True)
+        return content_html, lead_image_url
+    if not panel:
+        return content_html, lead_image_url
+    figure = f'<p><img src="{html.escape(panel, quote=True)}" alt="" /></p>'
+    return figure + (content_html or ""), None
+
+
 def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_lead_in_article: bool):
     """Dedup the lead image against the article body. Returns (content_html, lead_image_url).
 
@@ -14485,10 +14588,26 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
                     "", content_html, flags=re.IGNORECASE,
                 ).strip() or None
         else:
-            # lead_image_url isn't in the opener's <img> src — the opener is a
-            # different image (e.g. a comicsthumbs placeholder) while lead_image_url
-            # is the full-size source image. Raw-strip the opener; restore any
-            # anchored "New comic!" link text.
+            # lead_image_url isn't in the opener's <img> src. Two very different
+            # situations look identical here, and stripping is only right for one:
+            #
+            #   * the opener is a small PLACEHOLDER for the lead (ComicControl's
+            #     /comicsthumbs/foo.jpg beside the full /comics/foo.jpg). Strip
+            #     it — the hero shows the better copy of the same picture.
+            #   * the opener is a DIFFERENT, often better picture than the lead.
+            #     claycomix puts the full 800x2455 strip in the body while
+            #     og:image is a 1996x1349 preview; stripping deleted the comic
+            #     from the article and showed the preview in its place, so the
+            #     actual strip appeared nowhere at all.
+            #
+            # A placeholder shares its basename with the lead; a different
+            # picture does not. When they differ, keep the author's image where
+            # they put it and drop the separate hero — the same call the floated
+            # -image branch above makes. The list thumbnail is resolved
+            # independently (get_cached_entry_thumbnail), so it is unaffected.
+            if _opener_is_own_full_image(_m.group(0), lead_image_url):
+                return content_html, None
+            # Raw-strip the opener; restore any anchored "New comic!" link text.
             _matched_opener = _m.group(0)
             content_html = content_html[_m.end():].lstrip() or None
             _a_opener_m = re.search(r"<a\b[^>]*>", _matched_opener, re.IGNORECASE)
@@ -15191,6 +15310,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         _resolved_lead_for_cache = lead_image_url
         content_html, lead_image_url = _strip_lead_image_opener(
             content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article
+        )
+        # AFTER the strip, deliberately: injecting first would hand the new <img>
+        # to _strip_lead_image_opener as the body's opener and it would be
+        # removed again.
+        content_html, lead_image_url = _inject_webcomic_panel_into_bodyless_entry(
+            content_html, entry, str(entry.feed_url), lead_image_url
         )
         content_html = _collapse_block_spacers(_strip_ad_images(content_html))
 
@@ -17476,8 +17601,18 @@ def import_opml(conn: sqlite3.Connection, opml_data: bytes) -> int:
             raise RuntimeError("Could not determine id for inserted folder.")
         return int(cursor.lastrowid)
 
-    # Track feeds already assigned to a folder (including existing subscriptions)
-    feeds_with_folder = set(row["feed_url"] for row in conn.execute("SELECT feed_url FROM folder_feeds"))
+    # Track feeds already assigned to a folder (including existing subscriptions).
+    #
+    # CANONICALIZED, because the incoming URL is canonicalized before it is looked
+    # up here and comparing a canonical URL against raw stored ones finds nothing.
+    # Any subscription whose stored URL is not already canonical — a trailing
+    # slash is enough — then looked "new" and was subscribed a second time under
+    # the canonical spelling. Re-importing Lectio's OWN export duplicated 440 of
+    # 2,909 foldered feeds that way, which is precisely the restore-from-backup
+    # path a user is most likely to take.
+    feeds_with_folder = set(
+        canonical_feed_url(str(row["feed_url"])) for row in conn.execute("SELECT feed_url FROM folder_feeds")
+    )
 
     with get_reader() as reader:
 

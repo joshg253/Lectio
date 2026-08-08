@@ -24,6 +24,14 @@ from services.url_guard import is_safe_outbound_url
 
 LOGGER = logging.getLogger(__name__)
 
+_TAG_NAME_RE = re.compile(r"<\s*([A-Za-z][\w-]*)")
+
+
+def _tag_name_of(open_tag: str) -> str:
+    """The element name from a matched opening tag, lowercased ('' if unparsable)."""
+    m = _TAG_NAME_RE.match(open_tag)
+    return m.group(1).lower() if m else ""
+
 # Last-resort browser UA for source-page fetches that an honest UA gets WAF-refused
 # (HTTP 403/503, e.g. Cloudflare-gated paizo.com). Escalated only after the honest
 # request is actually refused — never preemptively.
@@ -467,6 +475,55 @@ class LeadImageService:
         re.IGNORECASE | re.VERBOSE,
     )
 
+    # The panel is very often marked on its CONTAINER rather than on the <img>.
+    # pbfcomics.com wraps it in <div id="comic"> and gives the image itself only
+    # class="lazyload"; mahonoir.com uses <div id="unspliced-comic">. Matching
+    # only the img's own id/class means neither site's panel can ever be found,
+    # and the scan settles for whatever chrome happens to carry a comic-ish
+    # class instead — on PBF, the 79x30 "Home" nav button, because the theme
+    # marks nav items with WordPress's wp-post-image featured-image class.
+    #
+    # Whole tokens from an explicit list, not a fuzzy `comic` substring: this
+    # must not match `comic-nav` (the previous/next buttons), PBF's
+    # `comic_categories-comic` post class, or `pbf-thumbnail-gallery`.
+    #
+    # mahonoir ships the same page twice inside one outer `<div id="comic">` —
+    # `#spliced-comic` cut into single panels for phones, `#unspliced-comic`
+    # whole — and the spliced copy comes FIRST. Excluding it from this list is
+    # not enough, because the OUTER container matches and its first image is the
+    # spliced one; the spliced container is dropped in _WEBCOMIC_CHROME_OPEN_RE
+    # instead, so what remains inside `#comic` is the whole page.
+    _WEBCOMIC_CONTAINER_OPEN_RE = re.compile(
+        r'<(div|section|article|figure)\b[^>]*\b(?:id|class)=["\'][^"\']*'
+        r'(?<![-\w])(?:'
+        r'comic|comic[-_]area|comic[-_]body|comic[-_]wrap(?:per)?|'
+        r'comic[-_]page|comic[-_]panel|comicpane|unspliced[-_]comic'
+        r')(?![-\w])'
+        r'[^"\']*["\'][^>]*>',
+        re.IGNORECASE,
+    )
+    # Chrome containers that must never supply a webcomic panel. Applied only on
+    # the webcomic path, so the blast radius is feeds already marked webcomic.
+    # `wp-post-image` is WordPress's featured-image class and was added to the
+    # img-level pattern for claycomix — but claycomix also renders a
+    # `pf-summary-widget` sidebar holding ANOTHER post's featured image, and
+    # PBF's nav items carry it too. The class alone is not evidence; where it
+    # sits is.
+    _WEBCOMIC_CHROME_OPEN_RE = re.compile(
+        r'<(nav|header|footer|aside|ul|div|li)\b[^>]*\b(?:id|class)=["\'][^"\']*'
+        r'(?:menu[-_]item|top[-_]menu|site[-_]header|site[-_]footer|'
+        r'widget|sidebar|thumbnail[-_]gallery|pf[-_]summary)'
+        r'[^"\']*["\'][^>]*>'
+        # …plus the phone-only duplicate rendering of a page that is also
+        # published whole (mahonoir's `#spliced-comic` beside `#unspliced-comic`).
+        # The lookbehind is what keeps `unspliced-comic` out of this: there,
+        # `spliced` is preceded by a word character and so does not match.
+        r'|<(div|section)\b[^>]*\b(?:id|class)=["\'][^"\']*'
+        r'(?<![-\w])spliced[-_]comic(?![-\w])'
+        r'[^"\']*["\'][^>]*>',
+        re.IGNORECASE,
+    )
+
     # ComicControl CMS (atomic-robo.com, everblue-comic.com, many others) ships a
     # small /comicsthumbs/<file> image in its RSS enclosure while the full-resolution
     # panel lives at /comics/<same-file> on the page (id="cc-comic"). The thumb and
@@ -721,6 +778,54 @@ class LeadImageService:
         b = cls._service_key(link_url)
         return bool(a) and a == b
 
+    @staticmethod
+    def _balanced_container_end(html: str, start: int, tag_name: str) -> int:
+        # tag_name comes from _tag_name_of(match) rather than a capture group:
+        # these patterns are alternations, so which group holds the tag depends
+        # on which branch fired, and a wrong group index fails silently by
+        # stripping nothing.
+        """Index just past the closing tag of the element opening at *start*.
+
+        Returns *start* when the element never closes, so callers can tell the
+        walk failed rather than silently swallowing the rest of the document.
+        """
+        tag_re = re.compile(r'<(/?)' + tag_name + r'\b[^>]*>', re.IGNORECASE)
+        depth = 0
+        for dm in tag_re.finditer(html, start):
+            if dm.group(1):
+                depth -= 1
+                if depth == 0:
+                    return dm.end()
+            else:
+                depth += 1
+        return start
+
+    def _strip_balanced_containers(self, html: str, open_re: re.Pattern) -> str:
+        """Remove every balanced element whose opening tag matches *open_re*."""
+        result: list[str] = []
+        pos = 0
+        for match in open_re.finditer(html):
+            start = match.start()
+            if start < pos:
+                continue
+            result.append(html[pos:start])
+            end = self._balanced_container_end(html, start, _tag_name_of(match.group(0)))
+            pos = end if end > start else match.end()
+        result.append(html[pos:])
+        return "".join(result)
+
+    def _iter_balanced_containers(self, html: str, open_re: re.Pattern):
+        """Yield the inner HTML of each balanced element matching *open_re*."""
+        pos = 0
+        for match in open_re.finditer(html):
+            start = match.start()
+            if start < pos:
+                continue
+            end = self._balanced_container_end(html, start, _tag_name_of(match.group(0)))
+            if end > start:
+                yield html[match.end():end]
+                pos = end
+
     def _strip_related_post_blocks(self, html: str) -> str:
         """Remove related/recent/more-posts containers from source-page HTML.
 
@@ -729,28 +834,7 @@ class LeadImageService:
         would otherwise pick one of those, showing a different post's image. We
         drop the whole balanced container so only the article's own images score.
         """
-        result: list[str] = []
-        pos = 0
-        for match in self._RELATED_BLOCK_OPEN_RE.finditer(html):
-            start = match.start()
-            if start < pos:
-                continue
-            tag_name = match.group(1).lower()
-            result.append(html[pos:start])
-            tag_re = re.compile(r'<(/?)' + tag_name + r'\b[^>]*>', re.IGNORECASE)
-            depth = 0
-            end = start
-            for dm in tag_re.finditer(html, start):
-                if dm.group(1):
-                    depth -= 1
-                    if depth == 0:
-                        end = dm.end()
-                        break
-                else:
-                    depth += 1
-            pos = end if end > start else match.end()
-        result.append(html[pos:])
-        return "".join(result)
+        return self._strip_balanced_containers(html, self._RELATED_BLOCK_OPEN_RE)
 
     def _is_feed_none_strategy(self, feed_url: str) -> bool:
         """Return True if this feed is manually locked to strategy='none' (no lead images)."""
@@ -2310,6 +2394,21 @@ class LeadImageService:
         # comic/featured classes, and the greedy first-match below would otherwise
         # return a sibling post's image (e.g. karlkerschl.com's featured-posts row).
         html_text = self._strip_social_link_images(self._strip_related_post_blocks(html_text))
+        # Then site chrome. A comic-ish class on an <img> is not evidence when the
+        # img sits in a nav menu or a sidebar widget — see _WEBCOMIC_CHROME_OPEN_RE.
+        html_text = self._strip_balanced_containers(html_text, self._WEBCOMIC_CHROME_OPEN_RE)
+
+        # A container marked as the comic outranks anything the img's own
+        # attributes say: most CMSes wrap the panel and leave the <img> bare.
+        # Inside such a container the first acceptable image IS the panel, so no
+        # id/class test is applied to the img at all.
+        for inner in self._iter_balanced_containers(html_text, self._WEBCOMIC_CONTAINER_OPEN_RE):
+            for tag_match in self._IMG_TAG_RE.finditer(inner):
+                attrs = self._parse_img_attrs(tag_match.group(0))
+                resolved = self._first_acceptable_img_url(attrs, base_url, source_url)
+                if resolved:
+                    return resolved
+
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             tag = tag_match.group(0)
             attrs = self._parse_img_attrs(tag)
@@ -2317,14 +2416,21 @@ class LeadImageService:
             img_class = (attrs.get("class") or "").strip()
             if not (self._WEBCOMIC_IMG_ID_RE.fullmatch(img_id) or self._WEBCOMIC_IMG_CLASS_RE.search(img_class)):
                 continue
-            for image_url in self._collect_img_candidate_urls(attrs, source_url=source_url):
-                if not image_url or image_url.startswith("data:"):
-                    continue
-                resolved = urljoin(base_url, image_url)
-                if urlparse(resolved).path.lower().endswith(".svg"):
-                    continue
-                if self._is_image_url_acceptable(resolved, None, None, allow_extensionless=True, source_url=source_url):
-                    return resolved
+            resolved = self._first_acceptable_img_url(attrs, base_url, source_url)
+            if resolved:
+                return resolved
+        return None
+
+    def _first_acceptable_img_url(self, attrs: dict, base_url: str, source_url: str) -> str | None:
+        """First candidate URL on this <img> that survives the acceptability rules."""
+        for image_url in self._collect_img_candidate_urls(attrs, source_url=source_url):
+            if not image_url or image_url.startswith("data:"):
+                continue
+            resolved = urljoin(base_url, image_url)
+            if urlparse(resolved).path.lower().endswith(".svg"):
+                continue
+            if self._is_image_url_acceptable(resolved, None, None, allow_extensionless=True, source_url=source_url):
+                return resolved
         return None
 
     def _extract_preferred_source_image_url(self, html_text: str, base_url: str, source_url: str, is_webcomic: bool = False) -> str | None:
@@ -3087,6 +3193,10 @@ class LeadImageService:
         r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']*)["\']',
         re.IGNORECASE,
     )
+    _OG_SITE_NAME_RE = re.compile(
+        r'<meta[^>]+property=["\']og:site_name["\'][^>]+content=["\']([^"\']*)["\']',
+        re.IGNORECASE,
+    )
 
     def _extract_webcomic_alt_text(self, html_text: str) -> str | None:
         """Return the webcomic hover/secret text from a source page, or None.
@@ -3101,6 +3211,12 @@ class LeadImageService:
         # below would otherwise return a sibling post's featured-image alt text (e.g.
         # karlkerschl.com's pinned "How I Built My Own Patreon Alternative").
         html_text = self._strip_related_post_blocks(html_text)
+        # And site chrome, for the same reason one step further: PBF marks its nav
+        # items with wp-post-image, so the <img> scan below captioned every strip
+        # "Home" — the alt text of the navigation button. Whatever supplies the
+        # panel must also supply its caption, so this mirrors the strip applied in
+        # _extract_webcomic_panel_image.
+        html_text = self._strip_balanced_containers(html_text, self._WEBCOMIC_CHROME_OPEN_RE)
         m = self._WEBCOMIC_ALT_TEXT_RE.search(html_text)
         if m:
             text = re.sub(r"<[^>]+>", " ", m.group(1))
@@ -3122,7 +3238,13 @@ class LeadImageService:
         m = self._OG_DESCRIPTION_RE.search(html_text)
         if m:
             text = html.unescape(m.group(1)).strip()
-            if text:
+            # A description equal to the site's own name is boilerplate, not a
+            # punchline — pbfcomics.com ships og:description="The Perry Bible
+            # Fellowship" on every strip. Returning it would caption the whole
+            # feed with the site name, which is worse than no caption at all.
+            site = self._OG_SITE_NAME_RE.search(html_text)
+            site_name = html.unescape(site.group(1)).strip() if site else ""
+            if text and text.casefold() != site_name.casefold():
                 return text
         return None
 
