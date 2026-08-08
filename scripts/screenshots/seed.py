@@ -65,6 +65,9 @@ def main() -> int:
         3: "to-read", 9: "to-read", 6: "reference",
     }
     saved_positions = {2, 5}
+    # Stars, separately from saved_entries: the Saved Inbox and Read Mode's Inbox
+    # are both "starred minus archived", so without these they shoot empty.
+    starred_positions = {0, 2, 5, 7, 10, 13}
     read_history_rows: list[tuple] = []
     with app.get_reader() as reader:
         feed_titles = {f.url: (f.title or "") for f in reader.get_feeds()}
@@ -87,6 +90,9 @@ def main() -> int:
                 tag = tags_by_position.get(pos)
                 if tag:
                     reader.set_tag(rid, f"{app.MANUAL_TAG_KEY_PREFIX}{tag}")
+                if pos in starred_positions:
+                    reader.set_entry_read(rid, False)
+                    reader.mark_entry_as_important(rid)
                 if pos in saved_positions:
                     conn.execute(
                         "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",

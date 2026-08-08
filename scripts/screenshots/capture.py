@@ -169,9 +169,16 @@ def capture(base_url: str, out_dir: Path) -> None:
         # 9: Tag filtering — click a sidebar tag, then open the first tagged post.
         ctx, page = new_page("dark")
         page.goto(base_url, wait_until="networkidle")
-        page.locator(".tag-link").first.click()
-        page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(300)
+        # Navigate by href rather than clicking: the Tags list lives in the
+        # Saved half of the sidebar and is not visible while in Feeds mode.
+        tag_href = page.evaluate(
+            "(() => { const el = document.querySelector('.tag-link[href]');"
+            " return el ? el.getAttribute('href') : null; })()"
+        )
+        if not tag_href:
+            raise SystemExit("no tag link in the seeded sidebar")
+        page.goto(base_url.rstrip("/") + tag_href, wait_until="networkidle")
+        page.wait_for_timeout(400)
         page.locator(".post-main-link").first.click()
         page.wait_for_timeout(700)
         _shoot(page, out_dir, "9tags.png")
@@ -188,6 +195,73 @@ def capture(base_url: str, out_dir: Path) -> None:
             page.goto(base_url.rstrip("/") + href, wait_until="networkidle")
             page.wait_for_timeout(500)
             _shoot(page, out_dir, "10history.png")
+        ctx.close()
+
+        # 12: the Saved view — the read-later pile (kept = starred or tagged).
+        ctx, page = new_page("dark")
+        page.goto(base_url + "/?star_only=1", wait_until="networkidle")
+        page.wait_for_timeout(600)
+        _shoot(page, out_dir, "12saved.png")
+        ctx.close()
+
+        # 13 + 14: Read Mode, the e-ink reading app — list, then an article.
+        # Deliberately shot light: the surface is designed for e-ink.
+        ctx, page = new_page("light")
+        page.goto(base_url + "/read?scope=feeds", wait_until="networkidle")
+        # The landing state is "pick a folder, tag, or Archive" with no list, so
+        # drill into a folder first or both shots come back empty.
+        folder = page.evaluate(
+            "(() => { const el = document.querySelector('.rm-folder-link[href]');"
+            " return el ? el.getAttribute('href') : null; })()"
+        )
+        if not folder:
+            raise SystemExit("no Read Mode folder link in the seeded tree")
+        page.goto(base_url.rstrip("/") + folder, wait_until="networkidle")
+        page.wait_for_timeout(600)
+        _shoot(page, out_dir, "13readmode.png")
+        article = page.evaluate(
+            "(() => { const el = document.querySelector('a.rm-item-link[href]');"
+            " return el ? el.getAttribute('href') : null; })()"
+        )
+        if not article:
+            raise SystemExit("Read Mode folder listed no articles")
+        page.goto(base_url.rstrip("/") + article, wait_until="networkidle")
+        page.wait_for_timeout(600)
+        _shoot(page, out_dir, "14readmode_article.png")
+        ctx.close()
+
+        # 15: the phone layout — one pane at a time below 720px.
+        ctx = browser.new_context(viewport={"width": 390, "height": 844},
+                                  device_scale_factor=3, is_mobile=True,
+                                  has_touch=True)  # ty: ignore[invalid-argument-type]
+        page = ctx.new_page()
+        _set_theme(page, "dark")
+        page.goto(base_url + "/?read_filter=all", wait_until="networkidle")
+        page.wait_for_timeout(600)
+        # A phone opens on the folder drawer (level 0); level 1 is the post list.
+        page.evaluate("window.setSinglePaneLevel && window.setSinglePaneLevel(1)")
+        try:
+            page.wait_for_selector(".post-item", timeout=8000)
+        except Exception:  # noqa: BLE001 — better no shot than a blank one
+            print("  SKIP 15phone.png — post list did not render")
+            ctx.close()
+        else:
+            page.wait_for_timeout(500)
+            _shoot(page, out_dir, "15phone.png")
+            ctx.close()
+
+        # 16: Save Article — the read-later capture modal, no feed required.
+        # read_filter=all so the list behind the modal isn't an empty pane.
+        ctx, page = new_page("dark")
+        page.goto(base_url + "/?read_filter=all", wait_until="networkidle")
+        # Reached from the hamburger menu (a <details>), the way a user does.
+        page.evaluate("document.querySelector('.hamburger-menu')?.setAttribute('open','')")
+        page.wait_for_timeout(200)
+        page.locator("#menu-save-article-btn").click()
+        page.wait_for_timeout(600)
+        page.fill("#sva-url", "https://example.com/an-article-worth-keeping")
+        page.wait_for_timeout(200)
+        _shoot(page, out_dir, "16savearticle.png", clip_selector="#save-article-modal")
         ctx.close()
 
         browser.close()

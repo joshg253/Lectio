@@ -1,10 +1,9 @@
 # Lectio Plan
 
-Backlog and staging area for future work. Completed work lives in git history —
-this file only tracks what's still open.
+Open work only. Anything shipped lives in git history and, where it still
+explains why the code looks the way it does, in ARCHITECTURE.md.
 
 ## Now
-
 ### ⏰ Check on or after 2026-08-13: did the husk feeds come back?
 
 29 article URLs had been subscribed as feeds and were rehomed 2026-08-06. The
@@ -22,913 +21,65 @@ above zero means there is a second door**, and the URLs it reports are the
 evidence for finding it — check what they have in common (host, import batch,
 whether they carry captures from the extension).
 
-### Three webcomics showing the wrong image — FIXED 2026-08-07
+### The "database is locked" CI flake — source two still unexplained
 
-Reported as "a couple webcomics not behaving even after setting as Webcomic".
-All three had one root cause: `_extract_webcomic_panel_image` only ever inspected
-an `<img>`'s **own** id/class, so it could not see a container like
-`<div id="comic">` — and it settled for whatever chrome happened to carry a
-comic-ish class. What was stored before the fix:
+Source one was found and fixed on 2026-08-08: `_queue_media_audio_scan` spawned a
+daemon writing the per-user meta DB, and `LECTIO_DISABLE_STARTUP_BACKFILL` only
+covered daemons started at *startup*. Now gated — the suite ends `2629 passed`
+with no `no such table: feed_media_scan` warning.
 
-| feed | stored image | what it actually was |
-|---|---|---|
-| pbfcomics.com | `nav_home_white.png` | the **79×30 "Home" nav button**, on every entry, captioned "Home" |
-| mahonoir.com | `csss.jpg` | a **1200×630 OG social card** |
-| claycomix.com | a `pf-summary-widget` thumbnail | **another post's** comic |
-
-The shared culprit is `wp-post-image`. It is WordPress's featured-image class,
-added to the img-level pattern *for claycomix* — and it also marks PBF's nav
-items and claycomix's own sidebar widget. The class alone is not evidence; where
-it sits is.
-
-Three changes, all scoped to the webcomic path so nothing else can regress:
-
-- **Container recognition.** A `<div id="comic">` / `#unspliced-comic` wrapper
-  now selects the panel, and inside such a container the first acceptable image
-  wins with no id/class test on the img at all — most CMSes wrap the panel and
-  leave the `<img>` bare. Tokens come from an explicit list, so `comic-nav` and
-  PBF's `comic_categories-comic` post class do not match.
-- **Chrome stripping** (nav/menu/widget/sidebar/gallery), applied to both the
-  panel scan and the alt-text scan — the caption must come from wherever the
-  panel came from, or you get a strip captioned "Home".
-- **`og:description` equal to `og:site_name` is not a caption.** PBF ships
-  `og:description="The Perry Bible Fellowship"` on every strip; using it would
-  caption the entire feed with the site name.
-
-mahonoir needed one extra call: it ships the page twice inside one outer
-`<div id="comic">` — `#spliced-comic` cut into phone panels (first in the
-document) and `#unspliced-comic` whole. Excluding the spliced container from the
-match list is not enough, because the *outer* container matches and its first
-image is the spliced one; it is removed from the HTML instead.
-
-**claycomix was never a lead-image problem at all (clarified 2026-08-07).** The
-thumbnail (`564-1.jpg`, the og:image preview) is *correct*; what was missing was
-the full strip from the **article body** — and the body already contained it.
-`_strip_lead_image_opener` deleted it. That branch fires when the body's opening
-image is not the lead image, and its comment assumed one situation: the opener is
-a small placeholder (ComicControl's `/comicsthumbs/foo.jpg` beside the full
-`/comics/foo.jpg`) and the lead is the upgrade. claycomix is the exact inverse —
-the opener is the full 800x2455 strip and the lead is a 1996x1349 preview — so
-the comic was stripped out and the preview shown in its place. It appeared
-nowhere.
-
-Deleting content now needs positive evidence: the opener is kept (and the
-separate hero dropped, the same call the floated-image branch already makes) only
-when it is BOTH a different picture from the lead (basename, ignoring `-WxH`
-resize suffixes) AND declares full-size dimensions. An opener that declares
-nothing stays strippable, which preserves the thumbnail-wrapper behaviour that
-`test_thumbnail_wrapper_imgs_stripped` pins — that test caught a first attempt
-that used basename alone. The list thumbnail resolves independently, so it is
-untouched.
-
-**mahonoir needed the opposite treatment, and the enclosure fix was backed out
-(2026-08-07).** Its feed body carries no image at all — one "The post … appeared
-first on …" paragraph — while advertising a per-entry social card as its
-`<enclosure>`. An earlier fix made webcomic feeds ignore that enclosure so the
-panel became the lead; that was wrong once the card was confirmed to be the
-*wanted* list thumbnail, and it is reverted. Nothing can be recovered from the
-body the way claycomix's could, because the body never had it, so the panel is
-fetched from the source page and placed into the article, and the separate hero
-is dropped in the same move (otherwise the card and the comic both render). The
-list thumbnail is untouched: the resolved lead is captured in
-`_resolved_lead_for_cache` before this runs, and that is what reaches
-`entry_lead_images`.
-
-Injection happens **after** `_strip_lead_image_opener`, not before: injecting
-first would hand the new `<img>` to it as the body's opener and it would be
-removed again. Cost is a source-page fetch on the render path, limited to
-webcomic feeds whose body has no image, and served from `_source_html_cache`
-when the page was already pulled this session.
-
-claycomix correctly resolves to **no panel** now, so the caller falls back to
-`og:image` — the post's own curated image — instead of a sibling's thumbnail.
-
-### Archive connections are never closed — FIXED 2026-08-08
-
-Found while chasing the CI flake below; fixed in its own change once the flake
-work was separated from it.
-
-`get_starred_archive_connection()` returns a **fresh** `sqlite3.Connection` per
-call (no pool, unlike the reader and meta handles). Every call site then does:
-
-```python
-with self._get_archive_connection() as conn:
-    ...
-```
-
-`with` on a sqlite3 connection is a **transaction** context manager. It commits
-or rolls back on exit and **does not close the connection** — verified:
-
-```python
-with sqlite3.connect(p) as c:
-    c.execute("create table t(x)")
-c.execute("select 1")      # still open
-```
-
-So every one of these leaks a connection, left to the garbage collector.
-**31 call sites in `services/starred_archive.py`**, all of them `with`-wrapped,
-plus 13 more uses of the factory elsewhere.
-
-**What it is not.** This is not the cause of the "database is locked" flake
-below — measured across a full 2,629-test run, only 5 SQLite descriptors remain
-open at session end against an fd limit of ~10⁹. The leak is real but small in
-practice, because CPython refcounting collects most of them promptly. It is
-worth fixing on its own merits, not as a flake fix.
-
-**The fix was not a blind find-and-replace.** Swapping to
-`with closing(conn) as c:` closes but drops the commit that the old form
-provided, which the writing call sites depend on.
-
-**What shipped.** One context manager per layer that does both —
-`StarredArchiveService._archive_conn()` and `main.archive_conn()`:
-
-```python
-conn = get_starred_archive_connection()
-try:
-    with conn:          # unchanged transaction semantics: commit, or roll back
-        yield conn
-finally:
-    conn.close()        # the part that was missing
-```
-
-All 31 service call sites, 3 in `main.py`, and 7 across `scripts/` now go
-through it. One site keeps the raw factory on purpose: `_set_orphan_entry_date`
-guards `connect()` itself in a `try` and must see that failure *before* the
-body runs, which a context manager defers to `__enter__` — it uses
-`with closing(_arch), _arch as arch:` and says why in a comment.
-
-Two test files were injecting a single shared connection as the "factory", so
-the service closed the handle their own assertions then used. They now hand out
-a fresh connection per call, matching the real factory's contract.
-`tests/services/test_archive_connection_lifecycle.py` pins all three halves:
-reads and writes close, the write is still committed, and a failing call site
-rolls back *and* closes.
-
-Not a flake fix, and it did not turn out to be one: the suite still passes and
-the second lock source below is still unexplained.
-
-### The "database is locked" CI flake — HALF FIXED, half unexplained
-
-Two CI failures on 2026-08-08, both `database is locked`, both in tests that had
-nothing to do with the branch they failed on.
-
-**Source one — found and fixed.** `_queue_media_audio_scan` spawns a daemon that
-writes the per-user meta DB. `tests/conftest.py` already sets
-`LECTIO_DISABLE_STARTUP_BACKFILL` for exactly this failure mode and says so, but
-that switch only covered daemons started at STARTUP; this one is spawned per
-request and slipped through. Now gated. Proof it was real: the suite had been
-ending `2629 passed, 1 warning` for as long as anyone had looked, the warning
-being `no such table: feed_media_scan` from that thread. It now ends
-`2629 passed` with none.
-
-**Source two — not explained, and deliberately not papered over.**
-`test_saved_inbox_chunking` failed at fixture setup with no thread exception
-anywhere in the log. It does not reproduce locally: that file passes on repeat,
-and the full suite passes every run. The obvious theory was leaked handles
-accumulating — `close_thread_db_pools`'s own docstring blames exactly that — so
-an autouse teardown was written and then **measured**, and the theory did not
-survive:
-
-| | leaked SQLite fds |
-|---|---|
-| subset, with the teardown | 18 |
-| subset, without it | 18 |
-| full suite (2,629 tests) | 5 |
-
-No difference, and nowhere near any limit. The teardown was reverted rather than
-shipped: a no-op carrying an authoritative comment about a cause that had just
-been refuted is worse than nothing, because the next person to hit this would
-believe it.
-
-Also worth recording: the same tree later passed. The red and green runs on
-PR #185 differed only in a commit *message*. That is confirmation it is a flake,
+**Source two has no explanation.** `test_saved_inbox_chunking` failed at fixture
+setup with no thread exception in the log, and it does not reproduce here: that
+file passes on repeat and the full suite passes every run. The leaked-handle
+theory was measured and **refuted** — 18 leaked SQLite fds with an autouse
+teardown, 18 without it, 5 across a full 2,629-test run, nowhere near any limit.
+The teardown was reverted rather than shipped, because a no-op carrying an
+authoritative comment about a refuted cause is worse than nothing. The same tree
+later passed with only a commit *message* changed, which confirms a flake and is
 not evidence of a fix.
 
-**It will recur on an unrelated PR** — so the next red build now collects its
-own evidence. `pytest_exception_interact` in `tests/conftest.py` fires on any
-failure whose *exception chain* says "database is locked" (reader wraps the
-sqlite3 error, so the phrase sits a link or two down) and dumps:
+**Nothing more to do until it fires again**, and when it does it now collects its
+own evidence: `pytest_exception_interact` in `tests/conftest.py` dumps live
+thread stacks, every open SQLite file, and a `BEGIN IMMEDIATE` probe per DB
+saying whether the lock is still held. Costs nothing on a green run.
 
-- every live thread with a stack — a stray background daemon mid-write is the
-  leading suspect, and it is the one thing a post-hoc log cannot show;
-- every SQLite file the process has open, from `/proc/self/fd`, with `-wal`
-  size;
-- a `BEGIN IMMEDIATE` probe at `timeout=0` per DB, which says whether the lock
-  is **still held** a moment later or had already been released.
-
-It writes both a report section (so it lands in the FAILURES block) and real
-stderr with capture disabled (so it survives a run that dies before the
-summary), and is capped at 3 dumps so a cascade can't bury the first. Costs
-nothing on a green run. Verified against a deliberately locked DB, and
-`tests/test_lock_diagnostics.py` pins the pieces so they can't quietly start
-returning nothing.
-
-One correction to the earlier note: a `-p no:randomly` run is moot —
-**pytest-randomly is not installed** and there is no pytest config, so
-collection order is already deterministic. Whatever this is, it is timing, not
-ordering.
-
-### 0. Next up, in this order (agreed 2026-08-06)
-
-**All three are done as of 2026-08-07.** Two items opened on 2026-08-08 and
-documented above replaced them, and both are now done too:
-
-1. ~~**Archive connections are never closed**~~ — **DONE 2026-08-08.** All 41
-   call sites go through a commit-and-close context manager.
-2. **The "database is locked" CI flake** — source one fixed; source two still
-   unexplained, but the next occurrence now dumps thread stacks and per-DB lock
-   state from inside the CI run. Nothing more to do until it fires again.
-
-1. ~~**Dependency / stack update (§0c).**~~ **DONE 2026-08-06.** feedparser did
-   have a code change behind it, though not the predicted one — see §0c.
-2. ~~**The 565 boilerplate-damaged entries.**~~ **DONE 2026-08-07.** Ran to
-   completion; everything recoverable was recovered. See the closing table under
-   "Re-fetch replacing an article with a feed's boilerplate".
-3. ~~**Saved Inbox = the whole star pile (§0b).**~~ **SHIPPED — merged as PR
-   #178** (`saved-inbox`), on main and live. §0b's own heading still says
-   "UNBLOCKED on `saved-inbox-wip`", which is what made it read as open long
-   after it had landed; that branch no longer exists locally or on the remote
-   because it was merged. Checked 2026-08-07 against the reflog and the deployed
-   code — `kept=starred` is wired at templates/index.html:267.
-
-Parked, deliberately:
+Ruled out, so don't retry it: `-p no:randomly` is moot — **pytest-randomly is not
+installed** and there is no pytest config, so collection order is already
+deterministic. Whatever this is, it is timing, not ordering.
+### Parked, deliberately
 
 - **makeuseof re-fetch returns white images.** Seen once during testing
   2026-08-06 and never investigated. Waiting on a second sighting rather than
   hunting it cold — Josh will flag it if it recurs.
-- **The husk-feed re-check**, dated above. Not before 2026-08-13.
-
-### 0c. Dependency / stack update — DONE 2026-08-06
-
-**feedparser 6.0.12 → 6.0.14 is in.** The code change it needed was not the one
-predicted below, and the real finding is bigger than the bump:
-
-- Nothing in Lectio imports `sgmllib`. feedparser 6.0.13 replaced its own
-  `import sgmllib` with a self-contained `feedparser.sgml` and dropped the
-  `sgmllib3k` dependency — an internal change, no caller work.
-- **`reader` was never using the feedparser we bump.** It ships
-  `reader._vendor.feedparser` (6.0.11) and prefers it unless
-  `READER_NO_VENDORED_FEEDPARSER` is set. That vendored copy does a bare
-  `import sgmllib`, satisfied only transitively by feedparser 6.0.12's
-  `sgmllib3k` dep — so the moment `uv` pruned `sgmllib3k`, every `reader` import
-  died with `ModuleNotFoundError`. That is what the bump actually broke, and it
-  broke loudly (all 2551 tests errored at collection), not quietly.
-- The quiet part is what it exposed: for as long as the vendored copy was in
-  use, **the whole §0c premise was false** — bumping feedparser never touched
-  the code that parses the library. And `main.py`'s `_parse_month_first_pubdate`
-  handler, registered on the installed feedparser specifically so ingest would
-  understand `"May 11, 2026 19:15:50 +0000"`, was registered on a module ingest
-  never called. It only ever applied to Lectio's own direct `feedparser.parse`
-  calls.
-
-Resolved by pointing `reader` at the installed feedparser
-(`services/__init__.py` sets `READER_NO_VENDORED_FEEDPARSER=1`; `main.py` and
-`tests/conftest.py` establish it before their `reader` imports). Ingest now
-parses with 6.0.14 and the date handler reaches it.
-`tests/services/test_feedparser_wiring.py` pins all three facts.
-
-Verified beyond the suite, as this section demanded: 10 real feeds / 194 entries
-fetched once and parsed by **both** 6.0.11-vendored and 6.0.14-installed —
-titles, `published` strings, parsed date tuples, links, content lengths, tag and
-enclosure counts **identical, zero differences**. Then a live ingest through
-Lectio's own `SanitizingFeedparserParser` into a scratch DB: Atom (xkcd,
-what-if), RSS (Ars Technica), a YouTube channel feed and a DeviantArt `file://`
-feed all landed fully dated, titled and bodied; the bot-walled feed failed
-cleanly with its 403 as before. One YouTube URL 403'd on `reader`'s fetcher
-during that run while the same URL had returned 200 to a direct request a minute
-earlier — fetch-layer, unrelated to parsing, and not investigated.
-
-Then confirmed at library scale on the deployed build: a scheduler pass
-retrieved **294 feeds** (rss20 170, atom10 123, rss10 1) with **3 exceptions —
-all Reddit HTTP 429**, i.e. rate limiting, not parsing. 16 new entries ingested,
-all 16 with both a date and a title.
-
-**The routine batch is in too** (2026-08-06): certifi 2026.6.17 → 2026.7.22,
-fastapi 0.138.0 → 0.141.1, uvicorn 0.49.0 → 0.52.1, httpx2 (+ httpcore2)
-2.4.0 → 2.9.1. Lockfile only — `uv lock --upgrade-package`, not `uv add`, since
-this project pins floors in `pyproject.toml` only where a floor means something
-and lets the lock choose versions. Nothing else moved: `starlette` stayed at
-1.3.1, `httpx` at 0.28.1. 2554 tests pass and the app boots on the new
-fastapi/uvicorn with `/`, `/entries`, `/settings` and `/saved` all serving and a
-warning-free startup log.
-
-**§0c is now complete.**
-
-Versions as installed 2026-08-06, checked against PyPI the same day. Only
-feedparser needed code written; the rest are version bumps that want a test run
-and a look at the app.
-
-| Package | Installed | Latest | Note |
-|---|---|---|---|
-| feedparser | ~~6.0.12~~ | **6.0.14 — DONE** | See above. The code change was real but not the predicted one: `reader`'s vendored copy had to be switched off, not an import swapped. |
-| certifi | 2026.6.17 | **2026.7.22** | It is a CA bundle; newer is the whole point. |
-| fastapi | 0.138.0 | **0.141.1** | Routine. |
-| uvicorn | 0.49.0 | **0.52.1** | Routine. |
-| httpx2 | 2.4.0 | **2.9.1** | **Test-only.** It is in the `dev` extra because starlette's TestClient prefers it; no runtime code imports it. A bump here can only break the suite, never the app. |
-| httpx | 0.28.1 | 0.28.1 | **Already current — do not "upgrade" it to 2.x.** `httpx2` is a *separate package*, not httpx's next major. Every runtime caller (`main.py`, `services/url_guard.py`, and eight other services) imports `httpx`, and swapping them is a migration, not a version bump. Not in scope here. |
-| reader | 3.26 | 3.26 | Already current. Read the changelog before any future bump — it owns the entry store, and Lectio reaches into `reader._storage.get_db()` in several places. Its vendored feedparser is now switched off, so a `reader` bump no longer silently changes which parser ingest uses — but check that `READER_NO_VENDORED_FEEDPARSER` is still the opt-out. |
-
-**Order:** feedparser alone, verify a real refresh cycle, commit. Then the
-routine three (certifi, fastapi, uvicorn) together, plus httpx2. Keeping
-feedparser out of the batch is the point — it is the only one that can fail
-quietly, and a batch makes it un-bisectable.
-
-**Verification that matters more than the test suite:** the suite mocks most
-network work, so it will pass even if feed parsing has regressed. After
-feedparser, refresh a handful of real feeds of different shapes (an Atom feed, a
-YouTube feed, a DeviantArt file feed, one of the bot-walled ones) and confirm
-entries land with correct dates and titles.
-
-### Re-importing your own OPML export duplicated 440 feeds — FIXED 2026-08-07
-
-Found while building a test file for the OPML upload route, not by looking for
-it. A round-trip of the live library's own export — export, then import the file
-back — subscribed **440 of 2,909 foldered feeds a second time**.
-
-`import_opml` canonicalizes each incoming `xmlUrl` (so `old.reddit`, `?alt=rss`
-and trailing-slash variants attach to an existing subscription) but compared the
-result against the **raw** stored URLs. A stored URL that was not already
-canonical never matched, so the feed looked new and was subscribed again under
-the canonical spelling. **A trailing slash was enough.** Fixed by canonicalizing
-the comparison set too.
-
-Two things made this hide well:
-
-- The duplicates are invisible to a `GROUP BY feed_url` check, because the two
-  rows hold different strings (`…/feed/` and `…/feed`). An early measurement
-  using exactly that check said "0 duplicates" and was wrong.
-- It only fires on **restore-from-backup**, which nobody does until they need
-  to — and then it is the worst possible moment to discover it.
-
-Verified against a snapshot of the live meta DB: re-importing the real export
-went from `imported=440` to `imported=0`, with `folder_feeds` unchanged at
-2,909. Tests assert on subscription counts rather than URL uniqueness, for the
-reason above, and were confirmed to fail against the old code.
-
-**Not investigated:** why 440 stored URLs are non-canonical in the first place.
-The import path canonicalizes, so these predate it or arrive by another route
-(OPML import before the canonicalization existed, discovery, the extension). A
-one-off normalization pass over `folder_feeds` would make the two spellings
-converge, but nothing is broken by leaving them.
-
-### Boilerplate repair: the guard had no memory of its own run — FIXED 2026-08-07
-
-The first `--apply` run (368 targets, 223 attempted before host-dropping) reported
-**131 recovered**. Two things were wrong with that number, and both are now fixed.
-
-**1. The guard could not see its own batch.** `extraction_matches_sibling`
-compares against extractions in the ARCHIVE, and archiving is asynchronous. So
-entry 1 gets comment-section text and is allowed (the archive still holds the old
-boilerplate, which differs); entry 2 gets the *same* text seconds later and is
-allowed too, because entry 1's new extraction has not landed. Five supernote
-entries ended up sharing *"Received my open box Nomad in near new condition…"* —
-a reader comment — written by the run itself. The guard was correct for the
-one-at-a-time interactive case it was built for and simply had no memory of a
-batch. It now keeps a bounded, per-feed record of what it has allowed this run
-and refuses a match against that as well as against the archive.
-
-Real blast radius: **41 of 131**, not all of them. My first measurement said all
-131 and was wrong — see below.
-
-**2. Detection over-reports, badly, because the archive lags.** Measuring damage
-from `archived_entry.readability_html_zlib` flags an entry whose archive row is
-stale even when its actual body is fine. After the run, **129 of the 131**
-rewritten entries still had their pre-run extraction stored. And the same lag had
-been inflating the figure from the very beginning: of the 594 flagged, **327 hold
-perfectly good unique bodies**. Scope is now filtered by what the READER holds.
-
-The corrected picture, and it is a much smaller job than "565":
-
-| | |
-|---|---|
-| flagged by the archive | 594 |
-| **already fine** (stale archive row only) | **327** |
-| restorable from a local snapshot, no network | 46 |
-| no longer exist in the reader | 197 |
-| **actually need re-fetching** | **24** |
-
-**Runs now verify themselves.** "The write was allowed" is not "the article came
-back", and the difference was found by hand, afterwards, only because the numbers
-looked odd. Each run re-checks what it wrote — against the reader, not the
-archive, since the archive cannot yet know — and reports how many still share
-text with a sibling.
-
-A methodological note worth keeping: I reported "all 131 are new damage" from an
-archive-based measurement, then had to correct it to 41 once the reader was
-checked. **The archive is not evidence of current state.** Ask the reader.
-
-### A guard refusal was counted as a host failure — FIXED 2026-08-07
-
-Third defect in the same repair, found by running it. `run_paced` classified an
-outcome as a refusal on `result["mismatch"]`, but the boilerplate guard sets a
-*different* key, `result["boilerplate"]`. So every guard refusal was counted as
-a **failure** — and failures count against the host, four in a row dropping it
-for the rest of the run.
-
-Two consequences, the second much worse than the first:
-
-- Reporting lied. The 24-entry run showed "failed 21" when all 21 were the guard
-  correctly refusing to overwrite good data with boilerplate again.
-- **It silently cut the big run short.** The first 368-entry pass attempted only
-  223 and reported 145 "host dropped" — hosts eliminated not by broken sites but
-  by their pages honestly extracting to boilerplate. The sites answered fine
-  every time.
-
-`run_paced`'s docstring already said `mismatch` "covers a refusal — the page was
-a different article, **or the extraction was the feed's boilerplate again**", so
-the intent was documented and the implementation simply missed the second key.
-
-### The revert script would have undone the repair — FIXED 2026-08-07
-
-Caught before it ran. `revert_boilerplate_refetches.py` restores from a snapshot
-for everything the ARCHIVE flags, and the archive lags every repair — so after
-the repair ran it offered to restore **158** entries when only 42 were still
-damaged. The other ~116 had just been fixed, and restoring them would have put
-the boilerplate straight back.
-
-Both scripts now share one reader-based judgement,
-`StarredArchiveService.body_text_sharing_state`, so they cannot disagree about
-which entries are damaged *now*. The revert script skips anything already
-holding unique text and says so.
-
-It also no longer claims a snapshot is worth restoring when the snapshot is
-itself boilerplate: every re-fetch snapshots what it replaced, so a repair run
-fills that table with the very thing it was removing. `_useful_snapshots` applies
-the same uniqueness test to the stored original.
-
-**The boilerplate epic is CLOSED, 2026-08-07.** The revert restored 46 entries
-and the numbers close:
-
-| | |
-|---|---|
-| hold unique text — fine | **368** |
-| no longer exist in the reader | 197 |
-| unrecoverable — page and Wayback both give boilerplate | 27 |
-
-368 + 197 + 27 = 592. Nothing recoverable is left. The 27 are the floor: a run
-attempts them, the guard refuses every one, no hosts are dropped and nothing is
-written — the repair finished, not a failure. Re-running any of this is a no-op.
-
-Known cosmetic inconsistency, left alone deliberately: the repair script counts
-snapshots *worth* restoring (`_useful_snapshots`) while the revert script
-restores every snapshot it finds, so they reported 42 and 46. Restoring a
-snapshot that is itself boilerplate is harmless — it replaces boilerplate with
-boilerplate — and with nothing left to restore there is no target for the fix.
-
-**What this exercise actually cost, worth remembering.** Five defects, every one
-found by RUNNING the thing rather than reading it: the guard had no memory of
-its own batch; detection trusted a store that lags; refusals were counted as
-host failures and silently cut a run by 145 attempts; the revert script would
-have undone the repair; and a patch of mine left a duplicate function shadowing
-the real one. The self-verification step now built into a run exists because
-none of these announced themselves.
-
-### Refreshing a feed rewrote the remembered sort — FIXED 2026-08-07
-
-Reported: "my sort keeps reverting back to Pub new (I'm generally always using
-Pub Old for Feeds)." A closed loop, and one that could **only** bite someone
-whose preference was oldest-first:
-
-1. The preference is `asc`, so the templates omit `sort_dir` from links — they
-   emit it only when it differs from `DEFAULT_SORT_DIR` ("asc").
-2. `refreshCurrentFeedOrFolder` (app.js) read the now-absent param and
-   substituted `'desc'`. That JS default had simply never agreed with the
-   server's.
-3. `build_sort_query` put `&sort_dir=desc` in the redirect, because desc is not
-   the default.
-4. The index persists an **explicit** sort — so every folder or feed refresh
-   rewrote the preference to newest-first. Set it back, refresh, lose it again.
-
-Fixed by passing the parameter through rather than inventing one: absent means
-"not in the URL", the redirect carries nothing, and the index falls back to the
-remembered preference. `sort_by` got the same treatment — its `|| 'post'`
-happens to match `DEFAULT_SORT_BY` today, so it was harmless, which is precisely
-why it would have survived review and broken the day either default moved.
-
-**This is the second bug of exactly this shape** (see the Inbox notes below: the
-Inbox's sort *direction* persisted as the remembered Saved order because the key
-was guarded and the dir was not — same symptom, oldest-first silently becoming
-newest-first and staying that way). The common thread is that a sort is a
-**pair**, and any code path that can put half of one into a URL can rewrite a
-preference. Worth suspecting first the next time an order "won't stick".
-
-Tests: source assertions on app.js (no JS harness in this repo — same approach
-as `test_tag_link_scope_staleness`) plus the server half in
-`test_refresh_routes.py`. Verified the direction test fails against the old code
-and passes against the new.
-
-The live preference had already been corrupted to `desc` and was reset by hand.
-
-### 0a. Refresh scheduler stalls silently — FIXED 2026-08-04
-
-**Diagnosed 2026-08-04 on the live instance.** Nothing had refreshed for ~34
-hours: library-wide ingest over 30 hours was **6 entries, zero YouTube, zero
-deals**. Per-folder cadence timestamps were frozen at 2026-08-03 06:09 UTC
-against a 30-minute cadence, and feed-update calls fell from 2,531 in one hour
-to 1–4/hour (those few being manual opens, not sweeps).
-
-**Cause: the scheduler thread was alive but hung on a socket read** —
-`tid=46 state=(sched) comm=Thread-1 (sched...) wchan=wait_woken`, with three
-established HTTPS connections. `scheduled_refresh_loop` is strictly sequential,
-so one outbound call with no read deadline stalls every feed behind it. Restored
-by restarting the container; refresh resumed immediately (53 entries in the
-first 10 minutes).
-
-**Built on `scheduler-stall-watchdog`** (rationale in ARCHITECTURE.md, "Refresh
-scheduler: why it has a watchdog"):
-
-- **Read deadline stated explicitly.** `ReaderApi` takes `session_timeout` and
-  main passes `LECTIO_FEED_CONNECT_TIMEOUT` / `LECTIO_FEED_READ_TIMEOUT`
-  (10s/30s) rather than inheriting reader's `(3.05, 60)`. Audited the rest of
-  the scheduler path while here: **every other outbound call already had a
-  timeout** (scraper 20s, devto, deviantart, websub 8–10s, readability 12s,
-  thumbs, lead images 15s), so this was the only unbounded one.
-- **Nothing escapes the loop.** The WebSub renewal is guarded, and
-  `scheduled_refresh_loop` now catches everything — an uncaught exception there
-  did not crash the app, it silently ended the only thread that refreshes feeds.
-- **A watchdog on progress, not elapsed time.** This is the part worth
-  remembering: the original note proposed comparing
-  `last_scheduled_refresh_started_at` against the cadence, but that field is only
-  written when folders are actually due, and more importantly *elapsed time
-  cannot distinguish slow from stuck* — a full-library pass legitimately runs for
-  an hour. `FeedRefreshService` now reports a stage on each advance, and the
-  watchdog trips only on a pass that is in flight and has not moved.
-
-**Deliberately not done: killing the thread.** Python cannot interrupt a thread
-blocked in a socket read, so past `LECTIO_SCHEDULER_STALL_RESTART_SECONDS`
-(default 1800) the watchdog calls `os._exit(1)` and lets
-`restart: unless-stopped` do what the manual recovery did. `0` disables it.
-
-**Deliberately not done: failing `/healthz` on a stall.** It reports the stall in
-the body and still returns 200 — that endpoint is both the Docker HEALTHCHECK and
-Traefik's, and a reader whose refresh is stuck is still perfectly readable.
-Failing it would withdraw the backend and turn a background failure into an
-outage.
-
-**Still worth watching:** the trickle case is bounded by the watchdog, not
-prevented — a host feeding one byte per 29s keeps a pass "advancing" per-read but
-not per-feed. If that ever shows up, the fix is a per-feed wall-clock budget in
-`update_feeds`, not a shorter read deadline.
-
-### Moving a feed to a new URL — FIXED 2026-08-04
-
-Changing a feed's URL left three loose ends, all reported from live use:
-
-- **The site identity stayed behind.** A feed that moves host moved its site
-  too, but the alias rule that expresses that had to be added by hand
-  afterwards. Everything downstream reads `feed_url_rewrites` — the entry-link
-  rebase, the dupe scan, the favicon, re-fetch, **and the Website shown in Feed
-  Properties** (`_rewrite_url_host`) — so one rule fixes all of them, and its
-  absence showed up as a Website still naming a dead domain, which does not look
-  like something the URL change caused. Now seeded automatically on a host
-  change, reusing exactly what Edit Website does. Skipped when the host is
-  unchanged, and never clobbers a rule the user already declared.
-- **The feed vanished from the tree.** The client redirected by copying the
-  current query string and swapping `list_feed_url` — but Properties can be
-  opened from a page with no `folder_id` at all (Settings → Feeds, or an
-  already-feed-scoped URL), and without one the sidebar has nothing to select.
-  The feed was open in the list and invisible in the tree, with no route back to
-  its context menu. `/feeds/change-url` now returns the feed's `folder_id`.
-- **The old host is offered for the alias field** when the server declined to
-  seed it itself (rule already present, or a same-host move), carried across the
-  navigation in `sessionStorage` and read exactly once.
-
-### what-if.xkcd dates — APPLIED 2026-08-04 (45 entries)
-
-`scripts/recover_whatif_dates.py` — **applied 2026-08-04, 45 of 45**, real
-publisher dates (Earth-Moon Fire Pole → 2018-05-21). Library-wide sentinel count
-went 313 → 267. Log:
-`data/users/<uid>/recovered_whatif_dates_20260804-154117.json`.
-
-The index fetch now lives in `services/publish_date` and the script delegates to
-it, so re-fetching a single what-if post and running the backfill over the whole
-backlog cannot disagree about a date.
-
-`fetch_missing_publish_dates.py` had recorded what-if as hopeless — 45 entries,
-fetching the article pages returned **zero** dates. That was correct and it was
-about the wrong page: a what-if *article* carries no date metadata at all
-(re-verified against all 50 stored captures — no `article:published_time`, no
-JSON-LD, not even a `<time>`). The *archive index* carries every one of them in
-an `<h3 class="archive-date">`, so the whole back catalogue is **one polite GET**
-keyed by the article URL already stored as the entry id.
-
-**The lesson, which is the reusable part:** check whether a date is published
-somewhere else on the site — an index, an archive, a sitemap — before concluding
-it must be fetched per-article or does not exist. The same note already exists
-for blog.guitar-pro.com, where the per-article fetch would have written a date
-wrong by three and a half years.
-
-### Internet Archive re-fetch — the manual trigger, added 2026-08-04
-
-`wayback_snapshot_url` already existed and re-fetch already used it — but only on
-a *refused* live fetch (parked page, 404). The case that sent Josh to
-archive.org by hand is the one that passes every guard: a publisher serving a
-page that is no longer the article — rewritten, truncated, paywalled. That page
-is indistinguishable from a good one to a guard, so only the reader can call it
-wrong, and nothing let them ask. Added `mode=archive` and a **Re-fetch from
-Internet Archive** post-menu item.
-
-The date half of that manual workflow needed nothing extra: mining already runs
-over whatever the re-fetch fetched, and an archived copy usually still carries
-the byline the publisher dropped — which the new visible-text tier now reads.
-
-**Not done: the Wayback timestamp as a date source.** The availability API
-returns the *closest* snapshot, not the first, so its timestamp is whatever crawl
-happened to be nearest — recent, and nothing to do with publication. A real
-first-capture date needs the CDX API sorted ascending; probed 2026-08-04 and it
-worked (what-if/105 → 2014-07-19) but timed out on 2 of 3 tries. Worth revisiting
-only if a cluster shows up that has no other date source.
-
-### Transparent images rendered as black boxes — FIXED 2026-08-04
-
-Reported on what-if.xkcd posts. `Image.convert("RGB")` keeps whatever RGB sits
-*under* the alpha, and for line art that is black — so a transparent PNG became a
-solid black rectangle. Measured on `what-if.xkcd.com/imgs/a/138`: mean luminance
-**33** the naive way against **235** composited onto white.
-
-Two paths had it, in two disguises:
-
-- **`/thumb`** called `.convert("RGB")` outright. Now composites onto white
-  first. White rather than a theme colour because the output is a JPEG cached
-  and shared across users and themes, so a background has to be chosen once —
-  and this kind of image (diagrams, logos, line art) is drawn for a light page.
-  The zoom<1 letterbox canvas follows the same logic: white when the source had
-  alpha, black (unchanged) for photos.
-- **The starred archive** tested `"A" in img.mode`, which is False for a
-  *palette* PNG — mode `"P"`, transparency in `img.info` — so precisely the
-  images this breaks were the ones it flattened. WebP carries alpha, so it now
-  keeps it. Normalization also moved ahead of the resize, since LANCZOS on a
-  palette image resamples palette indices rather than colours.
-
-**Already-archived assets were already black, and the code fix cannot reach
-them** — the alpha is gone from the stored bytes, so only a re-fetch restores it.
-This is what the entry body actually serves: a saved entry's images are rewritten
-to `/starred-asset/<hash>` at render time, so the body shows the stored copy, not
-the live image. `scripts/repair_flattened_archive_images.py` re-fetches and
-re-encodes. **Applied 2026-08-04: 143 what-if assets restored.**
-
-Candidates are found from the **WebP header**, not by decoding — an asset that
-declares no alpha whose source URL is a format that *can* carry it is a suspect,
-which is a 32-byte read per asset instead of decoding 25k images (a decode scan
-did not finish in ten minutes). A candidate is only rewritten if the re-fetched
-source actually has a *meaningful* alpha channel: xkcd's book covers have an
-alpha channel that is entirely opaque and artwork that is simply dark (mean
-luminance 38 on white, from the publisher), and an earlier pass "repaired" those
-into byte-identical output and reported a fix that never happened.
-
-**Cached thumbnails were also already black**, so the fix needed a cache bust.
-`_THUMB_RENDER_VERSION` joins the cache key (the same idiom as the existing
-`_p2` suffix), so old entries are never looked up again and each thumbnail
-re-renders the first time it is viewed — no mass delete of the 59k-row, 431 MB
-cache and no refetch storm.
-
-### Suggested tags per feed — SHIPPED 2026-08-05
-
-A feed with a stable subject publishes no tags saying so (guitar-pro's feed never
-tags a post "guitar"), so filing meant retyping the same word on every post.
-`feed_display_prefs.suggested_tags` holds a normalized, space-separated list per
-feed, edited in Feed Properties.
-
-They are **prepended to the chip list** rather than kept as a separate list —
-which is what makes the existing dedupe loop also the guarantee that a tag the
-publisher happens to ship appears exactly once, in the pinned position. They are
-also exempt from the 8-chip collapse: pinned precisely so they are always
-reachable, and a feed shipping 28 tags would otherwise bury them behind
-"+N more". A *suggestion*, never auto-applied — a tag rule already does that.
-
-Also: **picking a tag from the autocomplete now applies it.** The widget is
-shared with the rule form, where the tag is one field of a spec, so this is
-opt-in via `applyOnChoose` rather than default behaviour.
-
-### Transparent images on the dark theme — SHIPPED 2026-08-05
-
-Images keep their transparency (nothing is flattened at capture); the theme
-paints behind them via `--img-backdrop`. White in *both* themes: transparent
-article images are overwhelmingly black line art drawn for a light page, and an
-image that changed appearance when you toggled the theme would be worse than one
-that never does. Setting the variable to `transparent` restores the untouched
-look, with no re-fetch — which is the point of doing it in CSS rather than in the
-stored bytes.
-
-Deliberately NOT applied in Read Mode: that page is pure black-on-white by
-design, so transparent art already lands on white, and `#reader-columns *` forces
-`background: transparent !important` for e-ink contrast — a backdrop there would
-have to fight it for no gain.
-
-### Keep linked files with a saved post — SHIPPED 2026-08-05
-
-Some posts are a wrapper around a download: guitar-pro's tab posts link `.gp`
-files and PDF lyric sheets that disappear with the article. Per-feed extension
-list in `feed_display_prefs.attachment_exts`; on star/tag the archive worker
-scans the captured HTML and stores matches through the existing
-`_archive_asset`, which already stores non-image bytes untouched and dedupes per
-(entry, source_url) — so attachments inherit retention and the orphan sweep for
-free, and differ from images only in how they are FOUND.
-
-Three decisions worth keeping:
-
-- **No bare wildcard** — `*` on an ordinary post also matches every link to a
-  homepage, a category or a social profile. But a **prefix pattern** is allowed
-  (`gp*` → gp/gp3/gp4/gp5/gpx), because it still names a family of file types
-  and cannot reach a page. The prefix must be at least two characters: `p*`
-  (pdf, png, ppt, psd…) is a wildcard wearing a hat.
-- **Page extensions are refused everywhere** (`html`, `php`, `aspx`, `jsp`, …) —
-  dropped on save *and* re-checked in the finder, so a stored value could never
-  smuggle one through. Dropped rather than rejected: typing "pdf html" means the
-  pdf, and the UI says which were ignored.
-- **Any host, matched on the URL path.** A same-host rule was considered and
-  rejected: guitar-pro serves tabs from `assets-wp.guitar-pro.eu` while the post
-  is on `blog.guitar-pro.com`, so it would miss exactly the case this exists
-  for. Path-only matching means `/post.php?download=song.gp` stays a page.
-
-25 MB per file (`ATTACHMENT_MAX_BYTES`); the archive is a SQLite blob store.
-
-**The field suggests what the feed actually links**, counted from its stored
-entries (`scan_feed_attachment_extensions`) and rendered as clickable chips —
-guitar-pro's feed offers `gp (293) gpx (32) zip (28) pdf (10) mp3 (3)`. It
-replaced a fixed placeholder, which advised every feed in the library to keep
-Guitar Pro tabs. Images are excluded (the archive captures those anyway), as are
-page types, TLD lookalikes from bare-domain links, and one-off path fragments
-that merely look like extensions.
-
-**Surfaced in the existing Attachments footer**, not a section of their own:
-from the reader's side an enclosure and a captured body link are the same thing
-("files that came with this post") and differ only in how Lectio found them.
-Anything archived is served from `/starred-asset/<hash>` with a "saved" badge,
-and `rewrite_html_assets` now rewires `<a href>` as well as `<img src>` so the
-in-body download link points at the local copy too — a saved post whose "get the
-tab" link still points at a dead publisher has kept the wrong half.
-
-**Existing saves need `scripts/backfill_attachments.py`** — capture runs inside
-`_archive_entry`, and `enqueue_archive` keeps an existing row at
-`status='complete'` while the worker only takes `pending`, so re-starring an old
-post does not re-capture it. The backfill re-fetches **no pages**: the archive
-already stores each post's HTML, so links are found offline and only the files
-themselves are requested. It calls the same `_archive_asset` the live path does,
-so storage, dedupe and the size cap cannot drift. Dry run 2026-08-05 on
-blog.guitar-pro.com: **211 attachments across 119 saved posts**.
-
-**Enclosures are captured unconditionally on star/tag**, without the per-feed
-extension list: an `<enclosure>` is the publisher *declaring* that a file
-belongs to the post (Standard Ebooks attaches the epub), which is a stronger
-claim than a link in the body. Audio is skipped — podcast enclosures are large
-and stream fine — and images are already captured as images.
-
-### Attachment capture: what is NOT a file — FIXED 2026-08-05
-
-Three bugs, one of which the Attachments list only made *visible*.
-
-- **A share button stored as an asset.** The image-link pattern required an
-  href to *end* in an image extension, which a Pinterest
-  `/pin/create/button/?url=…&media=….jpg` link satisfies. Anchors are now judged
-  on the URL **path**, so a query string cannot disguise a page as an image
-  while a real image with a cache-buster still counts. Capture also refuses HTML
-  outright now, whatever led it there.
-- **Images listed as attachments.** A Gravatar (`/avatar/<hash>?s=48`) and a CDN
-  path with no extension are both images with nothing in the URL to say so. The
-  list is decided by **stored content type** instead of guessed from the URL, so
-  assets stored before the capture fix stop being offered without a re-capture.
-- **1,816 HTML assets, 1.63 GB** had accumulated. Purged with
-  `scripts/purge_html_assets.py` (deletes on stored `content_type` only — never
-  by sniffing bytes, so a legitimately saved .html attachment cannot be eaten).
-  Archive 5.9 GB → 4.4 GB after VACUUM.
-
-**Obfuscated download links are decoded.** guitar-pro ships
-`<span class="obflink" data-o="<base64>">` for its tab downloads, so the file the
-page offers every visitor is reachable by the browser but invisible to an href
-scan. Named attributes only (`data-o`, `data-url`, `data-href`, `data-link`,
-`data-file`) and never a blind base64 sweep, which would turn any long token into
-a candidate URL. The decoded URL still has to satisfy the feed's extension list —
-this widens where links are FOUND, not what counts as a file. Referenced
-attachments on blog.guitar-pro.com went 211 → 461.
-
-### Attachments download with their real filename — FIXED 2026-08-05
-
-An archived asset is addressed by **content hash**, so a bare `download`
-attribute made the browser save `cfc24ad676575660aa54d641afe8b2c8…` with no
-extension — unopenable and unidentifiable. Three places now carry the name,
-derived from the source URL's basename (URL-decoded, query dropped,
-header-hostile characters replaced):
-
-- the Attachments list (`download="Melody-Danny_Boy.gp"`);
-- in-body links rewritten to the archive, unless the publisher already set a
-  `download` name of their own;
-- the `/starred-asset/` route itself, via `Content-Disposition`, so "Save link
-  as" and a pasted URL are named too. Skipped for images/audio/video, which
-  render inline and would only be made un-viewable by an attachment disposition.
-
-### Re-fetch replacing an article with a feed's boilerplate — GUARDED 2026-08-06
-
-Readability can lock onto a site's standing furniture instead of the post:
-commandlinefu.com's "is the place to record those command-line gems…" replaced
-the actual command. The existing mismatch guard cannot see this — the page IS
-the right article, the title stays correct, and the boilerplate is *longer* than
-what it replaced, so neither title nor length separates them.
-
-What does: site chrome extracts **identically for every post on a feed**. A new
-extraction byte-identical to one already stored against a DIFFERENT entry of the
-same feed is refused and the stored copy kept (`extraction_matches_sibling`).
-Short extractions are exempt — a two-line stub can legitimately coincide.
-
-**Damage already done: 592 entries across 39 feeds** (premierguitar 347,
-guitarworld 118, heyscriptingguy 105). `scripts/revert_boilerplate_refetches.py`
-restores from `entry_content_edits.original_content`, needing no network — but
-**only 27 had a snapshot**; the other 565 were overwritten before that table
-existed and their feed-served body is gone. The archive is no help: its
-`content_html_zlib` is copied from the reader entry, which was already clobbered.
-
-**The 565: `scripts/refetch_boilerplate_damage.py`, written 2026-08-06, not yet
-run for real.** With no stored original the only surviving copy of each article
-is on the internet, so this is a re-fetch run rather than a restore. It shares
-everything with `refetch_scope.py` except scope — same pacing, slug guard,
-snapshot-before-write, Wayback fallback and date mining, now all through
-`services.refetch_batch.run_paced` so the two cannot drift. Scope differs in one
-way that matters: `refetch_scope` takes *kept* articles, this takes the damaged
-entries kept or not, because an unkept entry's body is damaged just the same and
-no future feed refresh repairs it.
-
-The shipped guard now works in the repair's favour: a page that still extracts
-to the same boilerplate is **refused**, so an unrecoverable entry keeps what it
-has instead of being re-damaged.
-
-What the dry run says about the real 565 (2026-08-06):
-
-| | |
-|---|---|
-| have a snapshot | 27 — the revert script's job, already done |
-| **no longer exist in the reader** | **197** — the archive row outlived the entry; nothing to write back to |
-| no http(s) link | 0 |
-| **actually re-fetchable** | **368**, across 35 hosts, ~22 min at the pacing |
-
-So "565 need the network" and "368 can be attempted" are different numbers, and
-the script prints both rather than quietly narrowing one into the other.
-
-Temper expectations on the 368: the biggest cohort is `blogs.technet.com` (132)
-and `channel9.msdn.com`, hosts Microsoft retired outright, plus 26
-`www.inoreader.com` proxy URLs. For those the Wayback fallback is the only route
-and will often come up empty — expect a large `refused`/`dead` column. That is
-the guard doing its job, not a failure.
-
-**Left to do:** run it with `--apply`. It is 368 outbound requests and a bulk
-write to the live library, so it wants a go-ahead rather than being folded into
-a build. Suggested shape: `--limit 20 --apply` first, read the log, then the
-rest.
-
-**Not covered by this guard:** a re-fetch that grabs a *different unique*
-article. Entry 26031 came back as a piece about sandbox-game rendering — unique
-text, so the sibling test cannot see it. The slug/title mismatch guard is what
-should catch that shape, and it did not; worth investigating if it recurs.
-
-The pane's Restore control was also relabelled. It is written by both the
-cleanup and any re-fetch, but read "Revert cleanup", which meant nothing to
-someone whose article had been replaced by a bad re-fetch — the case people
-actually need it for. It now carries a visible word rather than being one
-unlabelled icon among several.
-
-### Article URLs registered as feeds — REHOMED 2026-08-06 (31 captures)
-
-29 "feeds" in the live library were article pages, added by hand while searching
-for a real feed. Each held one or two user captures and failed on every refresh
-cycle, since Lectio re-parsed an article page as RSS forever.
-
-`scripts/rehome_article_feeds.py` moves the captures to Saved Articles and
-deletes the husk. Detection needs all three of: a recorded parse failure, a URL
-with **no feed marker**, and every entry being a user capture — a dead *real*
-feed carrying saved captures matches the last two, which is why the URL shape is
-load-bearing rather than cosmetic.
-
-**The archive is why this is a script and not 29 clicks.**
-`_move_entry_to_feed` carries the star, tags, read state and body, but does
-**not** touch the starred archive — so a plain move orphans the offline copy and
-every captured image under a feed key that is about to be deleted.
-`rekey_archive` repoints it, and the meta tables keyed on (feed_url, entry_id)
-follow. Order matters: move, re-key, then delete the husk.
-
-Applied after a full backup (7 DBs, 5.5GB). One feed first as a trial, verified,
-then the rest: **31 of 31 present on Saved Articles afterwards, 0 missing, 0
-article-URL feeds left**. The trial also showed why merging beats synthesizing —
-the canonical copy already on Saved Articles had a 72KB body against the husk's
-299 bytes.
-
-### Force-subscribe, split by WHY discovery failed — 2026-08-06
-
-Adding a feed refused an address that discovery could not resolve, and offered
-only "Create page feed". That left no way to subscribe to a real feed behind a
-bot wall (a 403 today may answer tomorrow), while nothing stopped an article URL
-becoming a permanently failing husk by other routes.
-
-Both are the same decision, split by the probe's own verdict:
-
-- **`error` / `blocked`** — a refusal, a timeout, an empty anti-bot body. We
-  never saw the content, so the address may well be a feed. Offer **Subscribe
-  anyway**, which skips discovery entirely (there is nothing to validate).
-- **`none`** — fetched fine, no feed anywhere in it. That is an article, and
-  subscribing produces a husk. Only the page-feed offer stands.
-
-The page-feed offer is unchanged in both cases; it scrapes a readable page,
-which is a different thing from subscribing to an address.
-
-### 0c. CodeQL board triage
+- **440 stored feed URLs are non-canonical.** Surfaced by the OPML round-trip
+  duplication fix (which canonicalizes both sides of the comparison now, so
+  re-importing your own export is a no-op). Why they are non-canonical was never
+  chased: they predate the canonicalization or arrive by another route. A
+  one-off normalization pass over `folder_feeds` would converge the spellings,
+  but nothing is broken by leaving them.
+- **A re-fetch that returns a *different unique* article.** The sibling-text
+  guard cannot see this shape — entry 26031 came back as a piece about
+  sandbox-game rendering, unique text and all. The slug/title mismatch guard is
+  what should have caught it and did not. Worth investigating if it recurs.
+- **The scheduler's trickle case.** The stall watchdog bounds it but does not
+  prevent it: a host feeding one byte per 29s keeps a pass "advancing" per-read
+  but not per-feed. If that shows up, the fix is a per-feed wall-clock budget in
+  `update_feeds`, not a shorter read deadline.
+- **The Wayback timestamp as a date source.** The availability API returns the
+  *closest* snapshot, so its timestamp is whatever crawl happened to be nearest.
+  A real first-capture date needs the CDX API sorted ascending; probed
+  2026-08-04, it worked (what-if/105 → 2014-07-19) but timed out on 2 of 3 tries.
+  Worth revisiting only if a cluster shows up with no other date source.
+- **Inline SVG in feed content is mangled at ingest.** feedparser parses an
+  HTML-escaped `<description>` as HTML, where a trailing slash is meaningless, so
+  `<rect/><circle/><path/>` becomes `<rect><circle><path>` — every shape nested
+  inside the rect, which cannot contain them. The browser paints the rect and
+  drops the rest, so **any feed shipping inline SVG art renders as a flat colour
+  block**. Lectio's own sanitizers are innocent; the damage is done before either
+  sees it. A real fix means re-parsing SVG subtrees as XML at ingest. The
+  screenshot tooling emits explicit end tags to dodge it, which is a workaround
+  for the demo, not a fix.
+### CodeQL board triage
 
 **Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a
 false positive.** Same class and same rationale as the `build_reader_page`
@@ -962,567 +113,43 @@ end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, 
 excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 `py/full-ssrf` was.
 
-### 0b. Saved Inbox = every star, newest-star-first — SHIPPED (PR #178, on main)
+### Offline actions — two pieces left
 
-**What it does.** Saved → Inbox was a pinned link to the `inbox` **tag**, which
-only the save_article automation ever writes — it showed 3 items against 9,577
-stars and disagreed with Read Mode's Inbox for the same word. The branch makes
-it the whole star pile (starred minus archived), most-recently-starred first,
-however the star was made. `kept=starred` is the node marker; `kept_scope` and
-the `starred` sort already existed for Read Mode. Decided 2026-08-03: the
-`inbox` tag keeps being written and stays in the Tags list, it just no longer
-defines the node.
+Shipped 2026-08-01 and confirmed on the Supernote 2026-08-02; design rationale is
+in ARCHITECTURE.md ("Offline reading and offline acting"). What was left undone:
 
-**Verified working** on a seeded instance (both the published and the received
-order deliberately reversed against star order, so no fallback column can pass
-by coincidence): all 30 stars listed,
-tagged-but-unstarred excluded, newest-star-first, "All" untouched at 35 kept
-with its own remembered order, the order never persisted as the remembered Saved
-sort, article links keeping the node, "Longest starred" reversing it.
+- **The stale-action guard.** The conflict rule as shipped is plain
+  last-writer-wins: a queued action replays over whatever the server now holds.
+  "If the server state already moved, accept the server's version" needs a
+  per-entry modification time the schema does not carry (`archived_entries` has
+  `archived_at`, `saved_entries` has `saved_at`, tags and read state have
+  nothing), so it is a schema question, not a client tweak. Low urgency — the
+  only conflicting writer is Josh on another device, within minutes. Worth doing
+  only if a surprising revert is actually observed.
+- **An offline star/unstar.** Scoped in but not built: the reader has no star
+  control, only Archive (which unstars) and Delete. Adding one is a UI question
+  first, and Read Mode deliberately has few controls.
 
-**Two real bugs found and fixed on the branch:**
+Deliberately *not* built: a `synced_actions` idempotency table. The four routes
+the outbox drives are already idempotent set-state operations, so replaying one
+is a no-op; an action-id table would cost a meta-DB schema change plus the
+startup per-user migration for no behavioral change.
+### Saved dedup workflow — repeat-session polish
 
-- `_sorted_star_key_window` had no `starred` branch at all — it fell through to
-  `e.first_updated`. That window runs whenever the star set exceeds the fetch
-  limit, which on a real backlog is *always*, so the Inbox would have picked its
-  visible page by received date.
-- The Inbox's sort **direction** was persisting as the remembered Saved order
-  (the key was guarded, the dir was not), so visiting the Inbox flipped Saved
-  from oldest-first to newest-first and it stayed that way.
+The correctness and safety work is done (2026-07-21) and **the scan currently
+returns nothing: 0 confirmed, 0 possible.** What is left is cosmetic except for
+one item:
 
-**The chunking blocker is SETTLED 2026-08-04 — it was the first of those two
-bugs, observed against a build that predated its fix.** That is exactly why it
-read as unreconcilable: the in-process calls ran the fixed
-`_sorted_star_key_window` while the request path was still running the old one,
-so both observations were true and about different code.
-
-Reproduced deterministically in `tests/integration/test_saved_inbox_chunking.py`
-by reverting just the `starred` branch of the window — it fails chunk 1 and
-chunk 2 and passes chunk 3, the reported triad exactly:
-
-- **chunk 1 → the oldest stars.** The window clips to `limit`, so with the star
-  branch missing it clipped by `e.first_updated` — the ten *longest*-starred,
-  correctly ordered among themselves, which is why it looked like an ordering
-  bug rather than a selection one.
-- **chunk 3 correct.** `len(star_keys) > fetch_limit` is False once the limit
-  reaches the star count (30 keys, limit 30), so chunk 3 skipped the window
-  entirely. The "correct" page was the one that never took the broken path.
-
-**Worth keeping from this:** the first version of that test's seed passed
-against the broken code, because it only reversed *published* against star order
-while leaving *received* order coincident with it — and `e.first_updated` is
-received. A seed for an ordering bug has to disagree with every fallback the
-code can reach, not just the obvious one.
-
-**A second, unrelated bug surfaced from Josh clicking it 2026-08-04: the Inbox
-row lost its highlight to "All" about a second after the click.** Client-side,
-and it predates this branch — the old `tag=inbox` Inbox had it too.
-`updateScopeActiveState` matches sidebar rows on `data-folder-id`, the Inbox
-anchor had none, and `saved-all-item` matched on star mode alone — so the
-server rendered Inbox active and the SPA's active-state pass then moved the
-highlight to All. Fixed by giving the anchor a `data-folder-id` and teaching the
-matcher about `kept=starred`; the All row now also yields to tag views, which
-the server's own condition for that row already did. Reproduced and confirmed in
-Chromium both ways (without the fix: "All"; with it: "Inbox", still correct
-after 3s).
-
-Nothing else was found. The branch is ready to ship; it now carries 13
-regression tests covering the unchunked list, each chunk, the chunks tiling
-without gaps or repeats, both directions, and the sequences (landing then
-chunking, and the Inbox not overwriting the remembered Saved order), plus 5
-structural guards on the active-state fix (there is no JS test harness here).
-
-### Offline actions — SHIPPED 2026-08-01, CONFIRMED ON THE DEVICE 2026-08-02
-
-Built and verified in Chromium (queue an Archive with the network off, confirm it
-persists across a reload, reconnect, watch it drain), then **confirmed on the
-Supernote itself — "works as expected"**. That was the test that counted: Chrome
-96 in an Android WebView is where storage persistence and service-worker lifetime
-are the host app's call rather than the web platform's, so nothing about the
-Chromium run guaranteed it. Design rationale is in ARCHITECTURE.md ("Offline
-reading and offline acting"); what follows is only what was left undone.
-
-**Deliberately not built: the `synced_actions` idempotency table.** The four
-routes the outbox drives are already idempotent set-state operations
-(`archived=0/1`, discard, the full tag set with `append_mode=0`, `read=1`), so
-replaying one is a no-op. An action-id table would have cost a meta-DB schema
-change plus the startup per-user migration for no change in behavior.
-
-**Still open — the stale-action guard.** The conflict rule as shipped is plain
-last-writer-wins: a queued action replays over whatever the server now holds. The
-plan's point 4 also wanted "if the server state already moved, accept the server's
-version" — archived from the desktop, then the device reconnects and re-archives.
-That needs a per-entry modification time the schema does not carry
-(`archived_entries` has `archived_at`, `saved_entries` has `saved_at`, tags and
-read state have nothing), so it is a real schema question, not a client tweak.
-Low urgency: the only conflicting writer is Josh on another device, within a
-window of minutes. Worth doing only if a surprising revert is actually observed.
-
-**Also still open: an offline star/unstar.** Scoped in but not built — the reader
-has no star control, only Archive (which unstars) and Delete. Adding one is a UI
-question first, and Read Mode deliberately has few controls.
-
-### Phone layout revived (2026-07-31)
-
-Single-pane mode is back as a third mode in the main app's layout shell (≤720px).
-Deliberately *not* revived alongside it: swipe gestures and pull-to-refresh, which
-`9dab5a8` removed as part of the same commit but are a separate decision from "can I
-read on my phone". Their `bindSwipeGestures` / `bindSinglePanePullToRefresh` call
-sites remain as no-ops, so either can come back on its own.
-
-Verified with Playwright at 390x844 (levels step 0→1→2, back controls, 44px touch
-targets), and **confirmed on Josh's actual phone 2026-08-02** — "still awesome".
-Nothing outstanding here.
-
-**Rule-management UI shipped 2026-07-25** — Feed Properties → **Other domains**
-lists a feed's declared domain aliases with add/remove (`POST
-/feeds/url-rewrites`, `…/delete`). Closes the deferral below: Edit Website can
-only seed a rule for a host it can *infer*, so an author's older dead domain
-(Tushar's `tusharsadhwani.dev` / `tushar.bio`, neither with a surviving entry)
-had no way into `feed_url_rewrites`, no way to be seen, and no way to be removed
-short of SQL.
-
-**Shipped 2026-07-23 (engines done, rule-management UI deferred to a browser
-session):**
-- **"Fix URLs" per-feed host rewrite** — for an author who moved domains without
-  updating their feed's `<guid>`/`<link>` (e.g. `tush.ar/rss.xml` still emits
-  `tushar.lol`/`sadh.life`). A `feed_url_rewrites` rule rewrites the host at
-  ingest (raw feedparser result, before reader derives ids), so entries arrive
-  with the current-domain id/link — which is what the post title-links carry, and
-  the *only* way to fix them durably (the link alone can be overridden; the id is
-  the PK and the feed re-serves the old guid every refresh).
-  `scripts/apply_feed_url_rewrites.py` migrated the 31 existing tush.ar entries
-  (→18 after same-slug cross-domain merges; 1 star + 15 tags preserved), and a
-  live refresh confirmed the old ids don't come back.
-  **UI shipped 2026-07-24:** Feed Properties → **Edit** next to Website. Editing
-  the site domain seeds the `feed_url_rewrites` rule (old channel-link host → new
-  Website host) and migrates the existing posts inline via
-  `migrate_feed_host_rewrite` — the same per-entry logic the batch script now
-  imports from `main` (`migrate_entry_to_new_host`). Also fixed the reverse bug
-  it exposed: the list/pane rebase (`_rebase_proxy_entry_link`) folds the channel
-  link through declared migrations first, so a feed whose channel `<link>` still
-  names the dead host can't rewrite correct entry links back onto it, and the
-  Website/favicon read the migrated host too.
-- **Re-save resurfaces from Archive** — an explicit save of an already-archived+
-  read article (e.g. one a 2019 Instapaper import archived) now un-archives it and
-  marks it unread, so it lands in the Saved Inbox instead of silently staying in
-  Archive. Was the reactormag "Black Cat" report.
-
-**Current focus: Saved Articles — finish the read-later app, then get the backlog
-under control.** Items **#1–#7** are that epic, in dependency order: fix what's
-broken (#1–#2), organize the pile (#3–#6), finish the Instapaper-clone surface
-(#7). **#8** is the daily-polish bucket to slot in whenever. **#9** is a single
-command with a decay clock — run it any time, it doesn't queue behind anything.
-**#10–#12** are unrelated and genuinely deferrable.
-
-**Overnight session 2026-07-22 — what changed:**
-- **#9 pass 1 ran** (`--only archive --apply`): **3,581 archives enqueued**, the
-  worker is draining them. Pass 2 (Wayback) still deferred.
-- **The orphaned star rows are solved** — `backfill_saved_entries_from_archive`
-  was re-creating them at every startup, which is why the bug looked
-  irreproducible. Fixed and tested; **the sweep still needs a go-ahead**, and
-  the orphaned *archive* rows need a re-key-or-delete decision. See #4.
-- **⚠ A second bug in the same function was silently starring tagged entries**,
-  and pass 1 was feeding it — left alone it would have manufactured ~3,581
-  redundant stars, re-creating #5's entire backlog. Caught mid-run at 166 and
-  fixed. See #4 for the mechanism; **#5's count is now a moving target
-  (1,603 → 1,769), so re-measure right before acting on it.**
-- **#5 and #6 re-measured.** #5 is unchanged in size (1,603) and safer than
-  before (only 29 rows carry `archived_at`). **#6 collapsed from ~490 groups to
-  65** — #4 did what it was predicted to do, and #6 may no longer be worth
-  building.
-- **#3 is blocked on a decision**: its core premise (client holds the whole
-  list) turned out to be false — the server sends 250 and pages after that.
-
-**Shipped 2026-07-21: #1, #1c and #4.** The duplicate workflow is safe and the
-scan returns nothing; Saved search went ~19s → ~1.2s and now matches article
-text; auto-filing took `lectio:saved` from **4,334 to 424**. **#5 and #6 are
-therefore unblocked** — and every number they were scoped against is now stale,
-because #4 rearranged exactly the sets they operate on. **Re-measure first.**
-Still open in the epic: **#2**, **#3**, **#5**, **#6**, **#7**, plus #1b's "not
-duplicates" persistence (demoted — see #1).
-
-**The cleanup order inside #3–#6 matters** and isn't arbitrary: auto-file (#4)
-merges curation between duplicate copies, which changes which entries carry stars
-and tags — so unstarring (#5) and dupe-scanning (#6) must come after it or they
-operate on a set that shifts underneath them. Re-measure between steps.
-
-**Inoreader renews $69.99 on 2027-03-16** — confirmed 2026-07-21, ~8 months of
-runway at ~$5.83/month, so the Ino chain (#10) is **scheduled work, not urgent**:
-start ~Dec 2026, leaving ~3 months to validate before renewal. The motivation is
-consolidation and ownership, not cost.
-
-**⚠ Measured 2026-07-21 BEFORE the filing run — every row below is superseded.**
-Kept because it is the reasoning that shaped the epic, not because it is current.
-#4 has since taken `lectio:saved` from 4,334 to **424**, so the #5 and #6 rows in
-particular describe a set that no longer exists. Re-measure before acting on them.
-(The starred total also moved 11,050 → 13,895, but ~3,600 of that is the orphaned
-star rows logged under #4 — not real saves.)
-
-| finding | number | item |
-|---|---|---|
-| saved articles with no feed, but a host matching one you subscribe to | **3,974 of 4,334 (91.7%)** | #4 — done |
-| starred items that also carry a tag (star now redundant) | **1,643 (14.9% of starred)** | #5 — restale |
-| duplicate groups the *current* scan can see (`lectio:saved` only) | **5** | #6 — now 0 |
-| duplicate groups actually in the Saved **view** (all starred items) | **~490, ~520 extra copies** | #6 — restale |
-
-That last gap is the headline: **the dupe scan structurally cannot see the dominant
-duplicate class.** It scans `feed = 'lectio:saved'` only, but the Saved view shows
-all 11,050 starred items — and 447 of the ~490 duplicate groups are *cross-feed*
-(the same article both URL-saved **and** starred in its real feed). See #6.
-
-Taken together the epic should take the Saved view from 11,050 items to something
-far smaller and actually organized: ~3,974 filed onto real feeds, ~1,643 unstarred
-as already-tagged, ~520 duplicate copies collapsed (with heavy overlap between
-those sets — re-measure rather than adding them up).
-
-### 1. Saved dedup workflow — correctness, safety, then UX (one project)
-
-Treat the whole dupe cluster as **one piece of work**, not six tickets. It's a
-single workflow you're actively using, the pieces reinforce each other, and
-shipping them separately means re-opening the same code five times. Full per-item
-detail under "Saved / Tags / dupe-scan friction" in Later.
-
-**1a — correctness + safety. DONE 2026-07-21.** Both halves shipped together; the
-scope changed on contact with the data, so the corrections are recorded here.
-
-- **Scheme/`www` folding — done in the dedupe key only.**
-  `normalize_entry_link_for_dedupe` ([main.py:4920](main.py#L4920)) now folds the
-  scheme and a leading `www.` (host lowercased, paths left case-sensitive), which
-  reaches all four consumers at once: the Saved scan's confirmed tier, the
-  render-time list collapse, the cross-feed cleanup pass, and the curation
-  migration on feed removal.
-  - **`normalize_article_url` was deliberately left alone.** The Plan called for
-    fixing both layers, but that one is the stored entry id *and* link. Rewriting
-    it would touch up to 780 `http://` saved entries, some on genuinely http-only
-    hosts, to fix a class with **zero live instances** — see below. The stored URL
-    stays as saved; only the comparison key folds.
-  - **The one-off merge was dropped: there was nothing to merge.** Measured
-    2026-07-21 — **zero** http/https or www twins remain *inside* `lectio:saved`
-    (Josh had already cleared them by hand). "New pairs accrue daily" was a
-    code-derived prediction, not visible in the data. Across the whole starred
-    set the fold gains only 8 groups / 10 copies out of 448.
-  - **The real payoff is the tier, not the count.** The confirmed tier's other
-    key, the URL slug, is discarded when generic (`/index.html`, blocklisted, or
-    hyphen-free and short — [main.py:4996](main.py#L4996)). So twins split by that
-    rule: 5 were rescued into *confirmed* by their slug, 4 had no usable slug and
-    fell to *possible*, where nothing is preselected and each needs a hand
-    judgment. That is the bug Josh hit ("I removed a bunch of http/https dupes,
-    but they appear under the maybe dupes"). Folding gives every twin a
-    confirmed-tier key. It also merges the 5 http `romhacking.net` rows into the
-    existing 239-copy homepage-link false positive — no worse, same known footgun.
-  - Side effect worth knowing: the keep-order's "prefer https" tiebreak now
-    actually engages, since twins finally group.
-- **The confirmed tier no longer pre-arms deletion.** Nothing renders checked in
-  either tier. `savedDedupGroupHtml`'s flag is now `showKeeper` — it only labels
-  the copy the keep-order would keep. Selection is armed solely by probe evidence:
-  `_sdApplySelection` (replacing `_sdFlipKeeper`) checks a copy only when its URL
-  came back 404/410. Alive, bot-walled, timed-out, and unchecked copies stay
-  unselected, so an inconclusive probe can never queue a delete. Two groups
-  deliberately select nothing: one where *every* copy is dead (link rot, not
-  duplication), and the sole copy still holding stored content. The possible tier
-  never auto-arms at all.
-  - **Correction to the original note:** the "Check All" button beside it is
-    *"Check all URLs"* — it runs the throttled liveness probe, not a select-all.
-    The danger was only the pre-checked boxes, and those are gone.
-
-**1a-bis — the slug tier was host-blind. DONE 2026-07-21.** Found immediately
-after the above shipped: Josh re-ran the scan and *every* group was a
-false positive. Both confirmed groups were cross-site slug collisions —
-`pinch-harmonics` on guitarworld.com vs guitarmasterclass.net,
-`acoustic-guitar-strumming-patterns` on guitarworld.com vs guitarchalk.com.
-`_safe_dedup_entry_slug` returns the last path segment with no host, and
-`/saved/duplicates` is the **only** consumer where a bare slug match confirms a
-duplicate on its own (the multi-signal dedup always requires title/body
-corroboration — a lone `slug` is not in `_SAFE_DEDUP_COMBOS`). So two
-publishers writing about one topic became a confirmed duplicate, pre-armed for
-deletion until the safety fix landed hours earlier. Fixed with
-`_saved_dup_host_slug`, which scopes the key to the folded host; the shared
-helper is untouched. **Confirmed groups went 2 → 0 on live data.**
-
-**Inline title editing in the dupe dialog — DONE 2026-07-21.** Josh: some saved
-titles no longer match what the post says. Each row gets a ✎ that swaps the
-title for an input (Enter saves, Esc cancels, blur saves) and POSTs to the
-existing `/entries/set-title`, so the correction is pinned as an override that a
-later refresh can't clobber. The row is a `<label>`, so the handler
-preventDefaults to keep the edit from toggling that copy's checkbox.
-
-Covered by `tests/unit/test_entry_dedupe_key.py` (22 cases) and verified in a
-browser against a seeded instance: no checkbox pre-checked, "keep" on row 0
-only, title edit persists and leaves the selection alone.
-
-**The Saved dupe scan is now clean: 0 confirmed, 0 possible** (verified against
-live data 2026-07-21, after Josh used the new inline title editing).
-
-Worth recording *why*, because it changes the priority of "Not duplicates": the
-three residual possible-tier groups matched on **title only** — they were
-different posts whose saved titles had drifted into collision. Correcting the
-titles removed the only signal binding them, so the groups stopped existing
-rather than being suppressed. Inline title editing turned out to be a partial
-substitute for "not duplicates", not just a convenience.
-
-**Partial**, though — it only dissolves *title*-matched groups. A group flagged
-`same content` (body-prefix match) won't respond to a title edit. So **"Not
-duplicates" persistence in #1b is demoted from blocking to worth-having**: build
-it when a body-matched false positive actually shows up, not before.
-
-Also of note: the corrections are durable. `entry_title_overrides` re-pins the
-title if a refresh re-ingests the entry, and `_replace_entry_content` checks
-`title_pinned`, so a later **Re-fetch content** won't undo them.
-
-**1b — make repeat sessions bearable.** Only one item here isn't cosmetic:
-
-- **"Not duplicates"** — persistent per-pair suppression so a rejected group stops
-  reappearing on every scan. Needs new storage (a meta-DB table, so it also needs
-  the startup per-user migration or existing tenants 500). **Demoted 2026-07-21:**
-  the scan now returns nothing at all, and inline title editing dissolves
-  title-matched false positives outright. Build this when a *body*-matched false
-  positive shows up — that's the case a title edit can't fix.
+- **"Not duplicates"** — persistent per-pair suppression so a rejected group
+  stops reappearing. Needs a new meta-DB table, so it also needs the startup
+  per-user migration or existing tenants 500. **Demoted:** inline title editing
+  dissolves *title*-matched false positives outright (correcting the title
+  removes the only signal binding the group), so build this when a **body**-
+  matched false positive actually shows up — that is the case a title edit
+  cannot fix.
 - **Red 404 status**, **collapsible Confirmed/Possible sections**, **resizable
-  dialog** — cheap, all in the same dialog, do them in one pass while you're there.
-
-**1c — Saved search. DONE 2026-07-21.** The button was never the problem, and
-neither was Read Mode: **the search took ~19 seconds**, which is
-indistinguishable from doing nothing. Reproduced end-to-end against a copy of
-the live library (133,765 entries, FTS index rebuilt so the numbers are honest).
-
-Root cause: the kept branch in `list_entries_for_feeds` runs *ahead* of the
-generic `elif search_terms` fast path, so the Saved view was the one place a
-search took no fast path at all — it hydrated all ~11k kept keys via
-`reader.get_entry` and filtered in Python. `_filter_star_keys_by_search` now
-narrows the keys in SQL first (same technique as `_sorted_star_key_window`) and
-only the survivors are hydrated.
-
-| query | before | after |
-|---|---|---|
-| Saved, no query | 1.09s | 1.05s |
-| Saved `q=python` | 18.94s | 1.51s |
-| Saved `q=coffee` | 18.25s (28 posts) | 1.52s (**406 posts**) |
-
-**A dead end worth not repeating: do not route this through reader's FTS index.**
-`search_entries` builds a highlighted snippet per result — ~7.8ms/row, 76s for
-one common term — so the FTS version measured *worse* (97s) than the scan it
-replaced. That same cost is why a **Feeds-view** search still took ~10s.
-**DONE 2026-07-22** — the Feeds view now uses the same SQL narrowing
-(`_search_entry_keys_in_sql`), measured on the live library (134k entries,
-2,888 feeds):
-
-| query | before | after |
-|---|---|---|
-| `python` | 21.0s | **1.45s** |
-| `guitar` | 9.3s | **1.26s** |
-| `coffee` | 4.6s | **1.35s** |
-
-Snippet-building was ~95% of it (19.7s of `python`'s 21.0s); hydration was never
-the problem. Both search surfaces now share a predicate, so a Feeds search
-reaches article text like Saved does (`coffee` 833 → 1,237 hits) and inherits
-the same raw-HTML caveat. `_search_entries_fts` and `_fts_query` were deleted.
-
-**FTS index retired — DONE 2026-07-22.** Nothing read it, and maintaining it
-cost 1.3ms per new entry on every refresh plus **564MB** on disk (against a
-743MB reader DB). No longer built, enabled or updated; the startup index-build
-thread is gone too, so a fresh install stops spending its first minutes walking
-every entry. `scripts/drop_search_index.py` reclaims the space.
-
-Worth remembering, because it is a trap: **`disable_search()` does not reclaim
-anything.** The DROPs go to the WAL and SQLite never shrinks a file on its own,
-so the first run *grew* usage to 564MB index + 567MB WAL before the script
-learned to checkpoint and VACUUM (index → 4KB). Any future "drop a big derived
-table" work needs the same follow-through.
-
-The `coffee` jump (28 → 406 posts) is the second half: Saved search previously
-matched only metadata, never the article text, so a phrase from inside a saved
-article returned nothing after a 19s wait. The SQL haystack now includes the
-stored content (~60ms extra). Content is matched as raw HTML, so a markup-ish
-term ("span", "http") matches nearly everything — stripping tags needs a
-plain-text column maintained at ingest, deferred until a real search is hurt.
-
-Covered by `tests/integration/test_star_key_search_filter.py` (10 cases:
-field coverage, body matching, AND-ing, LIKE-wildcard escaping, >999-variable
-chunking, and the fall-back-to-Python path).
-
-**1c-bis — the actual reason Search "did nothing". DONE 2026-07-21.** The perf
-fix above was real but wasn't what Josh was hitting: the log showed his page
-served in 852ms and **not one request carrying `q=`, ever**. Reproduced in a
-browser:
-
-**In-page navigation replaces the toolbar DOM node, killing every listener bound
-to it.** `loadScopePanesWithoutFullRefresh` — the sidebar, folder, scope and
-search-form path — swaps the toolbar, and `#toolbar-search-btn`'s click handler
-was attached to the old node at init. So after the *first* in-page nav, clicking
-Search did literally nothing: no row, no request, no console error. A direct URL
-load worked fine, which is why it never showed up in testing.
-
-Fixed by delegating from `document` instead: the search button, the new clear
-button, the input listener, and the form's `submit` handler (which had the same
-flaw — Enter would silently degrade to a full page reload once the form node was
-replaced). **Anything wired to this toolbar must be delegated**; binding to
-`#toolbar-*` nodes at init is a live trap for the next feature added here.
-
-Shipped alongside, since the surface was already open:
-- **A real submit button** on both the toolbar search and Read Mode's form.
-  Neither had one — Enter was the only trigger and nothing said so. Read Mode's
-  matters most: it's the e-ink/stylus surface, where there may be no comfortable
-  Enter key at all.
-- **A clear (✕) control** on both, appearing once there's a query.
-- **Read Mode search no longer drops the selected node** (the Plan's long-standing
-  note): the form posted only `scope`, so searching from a folder, feed, tag, or
-  Archive silently widened to everything. `_read_mode_search_fields` now carries
-  the node as hidden inputs, and `_read_clear_search_href` returns you to that
-  same node minus the query.
-
-Verified in a browser end to end: search and clear both work *after* an in-page
-nav, Enter still routes in-page rather than reloading, and a search started
-inside Archive stays in Archive.
-
-### 2. Saved capture quality — DONE 2026-07-28
-
-`extract_full_page_article` / `fetch_full_page_article` capture the whole page
-body instead of readability-extracting it: same sanitizer and post-processing
-tail (factored into `_finalize_article_html`), but the body-selection step keeps
-everything rather than scoring it.
-
-**UI shipped 2026-07-28**, both halves, verified in a browser:
-
-- **Re-fetch full page** in the post context menu — same handler as *Re-fetch
-  content*, with `mode` selecting the extractor, so the dead-source recovery
-  (offer to delete a 404) can't drift between the two.
-- **Capture the whole page** checkbox on the Save Article modal
-  (`POST /articles/save` gained `mode`). Having it at *save* time is the point:
-  the re-fetch form only helps once an entry exists, so a page shape known to
-  extract badly had to be captured wrong first.
-
-**Off by default, and matched exactly against `"full"`** so a stray value can't
-silently widen a capture — on a blog-shaped page full capture keeps the nav and
-sidebar chrome readability strips. The checkbox also resets on every modal open:
-it describes one page's shape, not a standing preference.
-
-Verified on the two shapes below plus the live Blood Meridian article: full
-capture keeps the cover image and pull-quote readability drops (4 imgs / 7,238
-chars vs 2 / 5,774). Subsumes the lead-image-drop finding — that third failure
-mode is now fixable, not just diagnosed.
-
-The tradeoff is deliberate: on a blog-shaped page this keeps nav/sidebar chrome
-readability would strip, so it is the escape hatch for document-shaped pages,
-not the default. Only script/style/nav/header/footer are removed as never-content.
-
-**Image-drop also fixed at the extraction level (2026-07-23).** guitarplayer
-lessons store ~54 tab figures in bare divs no content selector matches;
-readability kept ~1, so a normal refetch lost the figures that *are* the lesson.
-`extract_readability_article` now falls back to the whole body as a last resort
-when it *and* the selector fallback both keep ≤1 image on a >10-image page — so a
-normal refetch recovers them, not only `mode=full`. Gated hard so a reasonable
-extraction is never widened into dragging in chrome. 51 captured guitarplayer
-lessons batch-refetched with `mode=full` (images 41 → 1,118, ~22 each); the 50
-feed-provided GP entries are correctly untouched (the feed owns their content).
-
-The original analysis follows.
-
-
-
-**Every save path funnels through readability, so there is currently no way to get
-a fuller copy of a page it handles badly.** Verified 2026-07-21 against Josh's
-example, `https://schacon.github.io/git/everyday.html`:
-
-| | chars |
-|---|---|
-| page body text | 11,658 |
-| readability extracted | **786** (~6.7%) |
-
-It doesn't just under-extract — it picks the *wrong node*, returning a single
-`<pre>` shell-session block instead of the prose. The page is a DocBook-style
-export: 84 `<p>` scattered across 68 `<div>`, no `<article>`/`<section>`, and 13
-`<pre>`. Readability scores containers by paragraph density, so one big `<pre>`
-wins while the actual prose stays split across sibling divs that each score low.
-
-**⚠ CORRECTED 2026-07-22 — "deterministic re-run" is only half true, and the
-half that's false was hiding a working fix.** Two distinct failure modes were
-filed here as one:
-
-- **Deterministic** (the schacon example below): a static document that scores
-  the same way every time. Re-fetch genuinely can't help. The analysis below
-  stands for this case.
-- **Transient** — a JS-heavy page where extraction depends on what the fetch
-  returned that day. **Re-fetch is exactly the right escape hatch here**, and it
-  was being wrongly dismissed.
-
-Demonstrated on Josh's report of a Dropbox blog post stored as 638KB / 522
-images whose only text was bylines — readability had taken the *article-listing
-grid* off a 2.6MB, 1,620-image AEM page. Re-running the identical extractor on
-the live URL returned the correct article (11,591 chars, 5,006 chars of text).
-Better evidence still: the same URL was captured twice into two different feeds,
-and **one copy was already correct** — same code, same page, different outcome.
-
-Scope check across all 273 large user-saved captures: only 3 are
-image-dominated, and 2 of those are legitimately so ("All 182 screensavers on
-your Amazon Fire TV", "50 Time-Saving and Free Photoshop Actions"). So this is a
-rare failure, not a systemic one — which argues for keeping #2 as a manual
-escape hatch rather than a pipeline change.
-
-**Shipped alongside: Re-fetch works on filed articles.** It was gated on feed
-identity in both the route and the UI, so auto-filing (#4) silently stripped the
-hatch from every one of the ~3,900 articles it moved — the surface most likely
-to need it. Now gated on the entry being a Lectio capture, with in-place update
-via `refresh_filed_article`. See ARCHITECTURE "Saved articles".
-
-**A third failure mode, found 2026-07-22: readability silently drops the lead
-image.** Distinct from both above — extraction succeeds, the prose is fine, but
-the article loses its opening art.
-
-Reproduced across three sibling posts on one site (Blood Meridian pt.1/2/3 on
-mattiaspettersson.com). All three wrap the cover identically:
-`<div class="separator"><a style="float:left"><img></a></div>` as the first
-child of `.entry-content`. Readability's *conditional cleaning* drops child divs
-that are text-free and link-heavy — the cover is 100% link, 0% text — but the
-thresholds scale with the page's overall text volume, so:
-
-| | extracted chars | lead image |
-|---|---|---|
-| pt-1 | 6,948 | **dropped** |
-| pt-2 | 4,155 | kept |
-| pt-3 | 8,870 | kept |
-
-Same code, same site, same markup, different side of the line. pt-1 also lost
-the styled pull-quote that followed the cover, so the loss isn't only images.
-
-**Two things this rules out, so don't re-test them:**
-- **Not the save method.** Josh's read was that the Readit extension captured
-  the image and the server-side save didn't. Running the *server-side* extractor
-  over all three URLs reproduces the split exactly, so the extension has no
-  advantage here and re-saving pt-1 by any route produces the same result.
-- **Not recoverable from metadata.** The page has no `og:image` and no
-  `twitter:image`, so the lead-image service has nothing to fall back on — the
-  image exists only inside the content readability just stripped.
-
-**Options, undecided:** (a) accept it; (b) a *lead-image rescue* — after
-extraction, if the raw page's first in-content image is absent from the result,
-prepend it. Fixes the class, but changes the pipeline for every save and needs
-care not to start dragging in logos and header art; (c) fold it into the
-raw/full-page save mode below, which sidesteps extraction entirely. **(c) is
-the natural home** — it's the same "readability made a bad call, let me keep
-the whole thing" need, and designing (b) separately risks two half-solutions.
-
-Why none of the existing escape hatches help *for the deterministic case* — all
-three call the same `extract_readability_article`, so they are deterministic
-re-runs of the same failure:
-
-- **Re-fetch content** (`/articles/refresh-content`, [main.py:22731](main.py#L22731))
-  → re-fetch + re-extract, same pipeline.
-- **Extension / captured-DOM save** — `_extract_from_capture`
-  ([main.py:23022](main.py#L23022)) runs readability *on the captured DOM*. It
-  helps for JS-rendered or paywalled pages, but for a static document the
-  captured DOM ≈ the fetched HTML, so the result is identical.
-- **Delete and re-save** — saved entries are keyed by normalized URL, so a re-save
-  refreshes the same entry with the same extraction.
-
-So this is a genuine gap, not user error: **add a "save full page (don't extract)"
-option** that sanitizes the whole `<body>` via the existing
-`html_sanitize.sanitize_html` instead of readability-extracting. Wants to be
-reachable both at save time and as a per-entry "re-save without extraction" so
-already-bad captures can be fixed in place. Related to #10 (same pipeline, opposite
-direction: that one *adds* extraction to feeds with no body).
-
-### 2a. Backups: retention is count-based and size-blind
+  dialog** — cheap, all in the same dialog, do them in one pass.
+### Backups: retention is count-based and size-blind
 
 `scripts/backup_databases.py --keep 5` means five generations of an **8.4GB**
 starred archive — ~40GB on a 72GB disk. Two safety backups taken during the
@@ -1536,39 +163,7 @@ that drops to 2 once a source is over a GB. Also worth noting the archive grew
 7.2 → 7.9GB overnight capturing 3,581 retro-archive pages, so the number this
 is sized against keeps moving.
 
-### 2b. Dead feed-redirector links — investigated 2026-07-22, automation exhausted
-
-Not a new item; recording the measurement so nobody re-investigates. Every
-automatic recovery path fails on the live library:
-
-| starred redirector links | 37 |
-|---|---|
-| recoverable from captured archive HTML | **0** — no archive rows for these |
-| recoverable by live redirect resolution | **0** — feedproxy.google.com 404s, no redirect chain |
-| recoverable from Archive.org | **0** — no snapshots of the redirector URLs |
-| have an article slug in the path (reconstructable in principle) | 15 |
-| opaque id only (`~3/vGL5XCHkyww/`) | 22 |
-| whose feed knows the publisher host | 30 |
-| **still hold their content** (article readable in Lectio) | **36 of 37** |
-
-`scripts/backfill_canonical_links.py` was built for this and returns
-`0/37 recoverable`. Hosts: 35 feedproxy.google.com, 1 danielmiessler, 1 betanews.
-
-**A host+slug reconstruction tier was considered and rejected**: it would cover
-~13 entries, needs a per-entry verification fetch, and guesses the publisher
-host from the feed's site link or the `/~r/<token>/` path. Poor value for 13
-links on mostly dead 2013-era blogs.
-
-**Resolved instead by Edit URL** (`POST /entries/set-link`) — the user finds the
-new location by hand and pins it, then Re-fetch pulls the body from there. That
-covers the 22 opaque ones no heuristic could ever reach, and generalizes past
-redirectors to any moved or reorganized site. See ARCHITECTURE "Canonical entry
-links".
-
-Note the loss here is only the *link*: 36 of 37 still have their stored content,
-so the articles read fine in Lectio today.
-
-### 3. "Filter this view" — ⚠ BLOCKED on a decision (see finding 3 below)
+### "Filter this view" — ⚠ BLOCKED on a decision (see finding 3 below)
 
 **Do not start this as written.** The premise that the client holds the whole
 list is false as of 2026-07-22; pick between options (a)/(b)/(c) in finding 3
@@ -1672,458 +267,25 @@ that's what #4 automates; use this for the tail and for spot work.
 (The dead `server_posts_total` / `server_posts_sent` plumbing noticed while checking
 this is filed with the other dead-code items under "Code health" in Later.)
 
-### 4. Auto-file Uncategorized saved items into their real feeds — BUILT 2026-07-21
+### Auto-file saved articles — the tail
 
-**Shipped:** `services/saved_autofile.py` + `GET /saved/autofile/preview` +
-`POST /saved/autofile`, driven from Settings → Feeds → Utilities → **File saved
-articles** (the two duplicate scanners moved to their own **Dupes** tab). Nothing moves without per-host approval. Re-measured on live data at
-build time (the Plan's original numbers predate a lot of manual filing):
+Built and run 2026-07-21: `lectio:saved` went **4,334 → 424**, and the four big
+no-feed hosts are gone from the list. Rationale is in ARCHITECTURE.md ("Saved
+articles"). What remains:
 
-| | |
-|---|---|
-| live unfiled saved articles | 4,261 across 176 hosts |
-| **confident match, pre-checked** | **2,880 across 87 hosts** |
-| weak match (low support) — shown, unchecked | 465 |
-| ambiguous (2+ candidate feeds) | 181 |
-| no subscribed feed for the host | 735 |
-
-**Match on the article host, not the feed-URL host** — a feed often lives on a
-different host than the articles it publishes (`rss.beehiiv.com` serving
-`joanwestenberg.com`), so the signal is which subscribed feed already carries
-entries linking to that host.
-
-**"Exactly one candidate" is not the same as "confident", and the difference was
-load-bearing.** `guitarworld.com`'s target is backed by 77 of the feed's own
-entries; `guitarplayer.com`'s only candidate was a scraped single-article URL
-with **one** supporting entry — auto-filing 303 articles into it would have been
-wrong. Hence `MIN_SUPPORT`. Josh independently confirmed the guitarplayer case
-is messy ("gp got sucked into guitarworld at some point").
-
-**Also fixed here: `_move_entry_to_feed` left a husk behind.** It marked the
-source read and stripped star/tags but never removed it, on the reasoning that
-reader can't delete feed-provided entries — which isn't true for `lectio:saved`,
-whose entries are `added_by='user'`. So filing never shrank the backlog (Josh
-moved a batch and `lectio:saved` stayed at exactly 4,334) and every later dupe
-scan re-read husks. The saved source is now hard-deleted via the shared
-`_hard_delete_entry`. Verified on a copy of live data: filing 11 articles took
-`lectio:saved` 4,334 → 4,323 and moved 11 stars onto the target feed.
-
-**Refinements from Josh working the list:**
-- **Newly added feeds weren't being suggested — three separate causes.** Josh
-  added feeds for the four biggest no-feed hosts and saw no change. Entry-link
-  evidence alone can't see them: `guitarchalk.com/blog/feed` and
-  `quickreads.net/feed.xml` had **0 entries** (never fetched, so no evidence can
-  exist), and the guitarmasterclass subscription is a **FeedBurner** feed whose
-  27 entries all link to `feeds.feedburner.com`, pointing its evidence at the
-  wrong host. Fixed by also using the hosts a feed *declares* — its own URL host
-  and its advertised `link` host (696 of 2,881 feeds differ between the two).
-  **Unmatched articles 698 → 66; confident 45 → 473**, with guitarmasterclass's
-  463-article cluster going from "no feed" to confident. A declared host makes a
-  feed a candidate but only makes it confident when the feed is also stocked, or
-  a one-article stub on the right host would swallow the site's backlog.
-  Third cause, not fixed: `tutsplus.com/posts.atom` publishes to
-  `photography.`/`design.`/`code.tutsplus.com`, never `music.tutsplus.com` —
-  subdomains are distinct hosts and an eTLD+1 fallback was already rejected.
-- **Barring a subscription as a destination** (`non_feed_subscriptions`, UI
-  "not a feed"). This was Josh's actual ask, which I first misread as being
-  about the saved articles: *"the 'not a feed' I'm talking about are some of the
-  actual feeds added"* — guitarplayer.com's subscription is a single scraped
-  article URL, so it is on exactly the right host and is precisely the wrong
-  place to file 303 articles. Marking bars it as a target on both preview and
-  apply; the subscription and its entry are untouched. Distinct from the
-  host-level decision below and labelled apart, since both can appear on one row.
-- **"One-off saves" per host.** Josh: some of these "need to be converted to just
-  single saved items" — dummies.com, python.plainenglish.io and the like never
-  came from a feed, so the filer could only keep re-proposing them. Marking a
-  host drops it from the worklist for good; the saved articles are untouched
-  (verified: entries and stars unchanged), since they already *are* standalone
-  saves. Marked hosts stay reviewable in a collapsed section with undo. New meta
-  table `autofile_non_feed_hosts`, created in `ensure_meta_schema` so the
-  startup per-user migration covers existing tenants.
-  (Sized mid-session at 735 no-feed articles across 49 hosts; Josh then
-  subscribed to feeds for the four biggest, so see the end-of-session numbers
-  below for where it landed.)
-- **Filing is batched.** One uncapped call over a big host runs past a minute
-  and is cut off in flight: observed live as `POST /saved/autofile → status 0,
-  16180ms`, where 278 articles *were* filed but the reply never arrived, so the
-  list looked untouched ("I just allegedly filed a bunch, still see them").
-  Each call now caps at `_AUTOFILE_BATCH` and reports `remaining`; the client
-  loops with progress on the button. Verified against a copy of the live
-  library: 1,279 guitarworld articles filed across 9 batched POSTs,
-  `lectio:saved` 4,334 → 2,777, 1,322 stars landing on the target feed.
-- **The action is pinned to the bottom** of the ~180-row list and carries the
-  running total ("File 1279 article(s) from 1 host(s)"), since the selection
-  isn't on screen from down there. Disabled when nothing is selected.
-- **The site's own feed outranks aggregators.** Feeds that link outward (Hacker
-  News, link blogs) became candidates for every host they ever linked to — HN
-  appeared for 16 hosts, and one link blog outranked a site's own feed 23 posts
-  to 11. On-host candidates now rank first, and off-host ones no longer make a
-  host "ambiguous" when a real feed exists. **Ambiguous articles 181 → 28,
-  confident hosts 87 → 103.**
-- **Nothing is pre-checked.** The intended workflow is passes — file a chunk,
-  re-scan, continue — so `confident` now drives a *label* ("strong match — N
-  posts from this host"), not a selection. Same rule as the dupe dialog.
-- **Same-titled candidates are disambiguated in the option label.** Josh hit
-  dropdowns whose entries "looked identical"; when two candidate feeds for one
-  host share a title, the URL is folded into the label rather than left to the
-  hover title, which is unreachable on touch/e-ink anyway. Hosts whose candidate
-  titles are unique keep the clean label.
-- **YouTube feeds are never valid targets** (`_autofile_excluded_targets`,
-  enforced on preview *and* apply). A saved page is never really a video-channel
-  post, and channels often share a name with the blog they accompany — with only
-  titles visible, a YouTube feed is exactly what you'd pick by mistake. Currently
-  a no-op on live data (no saved youtube.com articles, and a YouTube feed can
-  only ever be a candidate for the youtube.com host), but 693 of 2,879 feeds are
-  YouTube, so the first saved YT link would have hit it.
-- **The target's feed URL is shown**, inline and as a hover title on both the
-  select and each option. Feed titles are often deliberately unlike their URLs
-  ("The Woodshed" living at `rss.beehiiv.com/feeds/XYZ.xml`), so a title alone
-  doesn't identify what you're filing into. Inline rather than hover-only
-  because hover doesn't exist on touch or e-ink.
-
-Covered by `tests/services/test_saved_autofile.py` (17 cases) and
-`tests/unit/test_autofile_excluded_targets.py` (4), and verified in a browser
-against a copy of the real library: 175 rows, 86 pre-checked, 49 disabled for
-having no feed, guitarplayer.com correctly not pre-checked. The YouTube bar was
-verified with two feeds sharing the title "The Woodshed" (one blog, one channel):
-the channel is absent from the picker, and posting it directly to apply is
-rejected.
-
-**Where it actually ended up (re-measured against live data at end of session
-2026-07-21 — every number above predates the filing and is kept only as the
-reasoning trail):**
-
-| | |
-|---|---|
-| `lectio:saved` entries | **4,334 → 424** |
-| real (kept) saves left | **403 across 65 hosts** |
-| still unmatched | 370 — and **303 of those are guitarplayer.com** |
-| strong match remaining | 6 |
-
-The four big no-feed hosts are **gone from the list entirely**: Josh subscribed
-to real feeds for guitarmasterclass.net, guitarchalk.com, music.tutsplus.com and
-quickreads.net and filed them. What remains is a genuine long tail — 46 hosts
-with no feed, most holding one or two articles.
-
-**Still open in this area:**
-- **guitarplayer.com's 303** are the single biggest remaining item and have no
-  good home: the site's own subscription is a scraped one-article stub (now
-  barred as a target), and probing showed many of its article URLs soft-404.
-  Options are a real guitarplayer feed, "one-off saves", or deletion — Josh's
-  call, not automatable.
-- **Match at import time — DONE 2026-07-22, but as a *report*, not a file.**
-  The import now runs the autofile matcher over just the rows it created and
-  says so: "N of these match feeds you already follow (M sites) — review under
-  Settings → Feeds → Utilities → File saved articles."
-
-  **Deliberately does not auto-file**, which is a change from how this item was
-  originally written. Filing exists behind a per-host review precisely because
-  "exactly one candidate feed" is not the same as a trustworthy one — the
-  guitarplayer.com stub would have swallowed 303 articles — and Josh's own
-  refinement was that confidence drives a *label*, never a selection. Filing
-  silently at import would bypass both. The value was never the automation; it
-  was that an import used to land in Uncategorized with nothing said, which is
-  how a 4,000-article backlog accumulates unnoticed.
-
-  `_current_autofile_plan(restrict_to=...)` was extracted from the preview route
-  so both share one assembly; the `restrict_to` filter keeps the count about
-  *this* import rather than the whole backlog. The matcher is wrapped so a
-  failure can never fail an import that has already committed.
-- **✅ SOLVED 2026-07-22: the orphaned star rows were the archive backfill.**
-  Cause found and fixed; the sweep is still outstanding and needs the go-ahead.
-
-  **`backfill_saved_entries_from_archive` was re-creating them at every
-  startup.** The function exists to recover from a meta-DB reset where the
-  starred-archive DB survived: it inserts a `saved_entries` row for every
-  `complete` `archived_entry`. But **an archive row outlives its entry** —
-  filing a saved article hard-deletes the `lectio:saved` source (and correctly
-  deletes its star row) while leaving the archive row untouched. So the next
-  boot dutifully "restored" a star pointing at a tombstone.
-
-  Every prediction the old note got wrong is explained by this:
-  - *"Not reproducible"* — correct, and it never would be: the orphan is not
-    created by the move at all. It needs **a move followed by a restart**.
-  - *"Stamped today, so written during the session"* — right, and it is an
-    `INSERT` (defaulting `saved_at` to `CURRENT_TIMESTAMP`), not a survival.
-  - *"The only writer that stamps CURRENT_TIMESTAMP is `save_article`"* —
-    **wrong**, and this is what sent the investigation the wrong way. Roughly
-    ten call sites insert `(feed_url, entry_id)` without `saved_at` and so
-    default it to now; the archive backfill is one of them.
-
-  **Verified against live data, 100% match**: all 4,264 orphaned `lectio:saved`
-  star rows have a `complete` archive row, and 0 have none. The star-row count
-  (4,667) equals the complete-archive count (4,667) exactly.
-
-  **It was also self-perpetuating**, which vindicates the old note's one correct
-  instinct ("don't ship the sweep without reproducing, or it will just run again
-  next session"): a sweep would have deleted all 4,264 and the very next restart
-  would have re-created every one. The count grew 3,593 → 4,264 between sessions
-  for exactly this reason, and 671 fresh rows landed at 21:00 local on 2026-07-21
-  on a restart alone.
-
-  **Fixed** in `backfill_saved_entries_from_archive`
-  ([services/starred_archive.py:324](services/starred_archive.py#L324)): it now
-  restores a star only when reader still holds the entry, and logs how many
-  archive rows it skipped as stale. Non-destructive by design — no archived
-  content is deleted — and it stops new orphans permanently. Covered by
-  `tests/services/test_starred_archive_backfill.py` (7 cases), including that a
-  failing reader lookup is treated as missing rather than resurrecting a star.
-
-  **A second bug in the same function, found while verifying the first — this
-  one was actively firing.** After the fix above shipped and the container
-  restarted, star rows still climbed 14,566 → 14,732. The 166 new rows were
-  **not** orphans: every one was a **manually tagged entry on a live feed**,
-  163 of them on the dead `heyscriptingguy` feed.
-
-  **Tag-as-keep broke this function's core inference.** It reasons "has a
-  complete archive ⇒ was starred", which was true when written. Since the flip a
-  *tag* archives too, so `archived_entry` is now a **superset** of the starred
-  set — and the backfill was converting tagged entries into starred ones.
-
-  **Tonight's Part C pass 1 was the trigger**, which makes this a self-inflicted
-  wound worth understanding: retro-archiving 3,581 tagged entries meant that as
-  each archive completed, the next startup would star it. Measured mid-run:
-  1,769 tagged entries already starred, 29 more queued, **3,385 archives still
-  pending** — i.e. left alone it would have manufactured ~3,581 redundant stars
-  and inflated Saved by that much. That is precisely what #5 exists to undo, so
-  pass 1 would have quietly re-created #5's entire backlog.
-
-  **Fixed** in the same function: an entry carrying a manual tag is never
-  star-restored (its archive is explained by the tag), and if the manual-tag
-  lookup fails the backfill restores *nothing* rather than guessing — inventing
-  thousands of stars is far worse than skipping a recovery path. Entries both
-  starred and tagged are skipped too; this is disaster recovery, and losing one
-  real star beats inventing thousands. Bulk `_manually_tagged_entry_keys()` in
-  main.py backs it so the startup pass stays one query, not thousands.
-
-  **Consequence for #5: its number is now a moving target.** The 1,603 measured
-  earlier tonight became 1,769 during the run. Re-measure immediately before
-  acting, and note ~166 of the affected set are stars *this session created*.
-
-  **Still open:**
-  - **The 166 already-converted stars** — tagged entries starred by the buggy
-    backfill before it was fixed. They are indistinguishable from a genuine
-    star-and-tag, so they cannot be surgically reverted; #5's cleanup is what
-    removes them, which is an argument for running #5 sooner.
-  - **The sweep** — delete `saved_entries` rows whose entry is gone (4,508
-    total, 4,264 on `lectio:saved`). Bulk delete, needs Josh's go-ahead. Now
-    worth doing, because the fix means it stays swept.
-  - **Orphaned archive rows — RESOLVED 2026-07-23.** These surfaced as
-    user-visible **phantom duplicates**: the Read/Saved view renders starred
-    entries from archive rows (`get_archived_entry_detail`), so an orphaned
-    `lectio:saved` capture showed as a second copy of the moved article, with
-    its own worse content (a comments thread, an empty husk). Both decisions
-    taken, not either/or: `_move_entry_to_feed` now re-keys the capture onto the
-    target (or deletes it if the target already has one), and
-    `scripts/dedupe_orphan_archives.py` cleaned the backlog — **4,076 redundant
-    deleted, 502 true orphans left** (fully-gone articles, invisible, not a dup).
-    `lectio:saved` archive rows 4,650 → 574. New service primitives:
-    `has_complete_archive` / `delete_archive` / `rekey_archive`. A 597MB export
-    of the deleted rows is parked at `/data/deleted_saved_archives_*.sqlite` as a
-    safety net — delete once confident. Archive not VACUUMed (needs ~8GB scratch
-    the disk lacks; freed pages get reused).
-- **⚠ Inline SVG in feed content is mangled at ingest.** Found 2026-07-21 while
-  redoing the docs screenshots. feedparser parses an HTML-escaped
-  `<description>` as HTML, where a trailing slash is meaningless — so
-  `<rect/><circle/><path/>` becomes `<rect><circle><path>`, every shape nested
-  inside the rect, which cannot contain shapes. The browser paints the rect and
-  drops the rest, i.e. **any feed shipping inline SVG art renders as a flat
-  colour block**, and the inline-SVG thumbnail feature (PR #29) degrades to a
-  solid rectangle. Lectio's own sanitizers are innocent: `svg_sanitize` and
-  `sanitize_html` both round-trip the markup correctly — the damage is done
-  before either sees it.
-  - Reproduce: feed a `<description>` containing `<svg><rect/><circle/></svg>`
-    through `feedparser.parse` and look for `</rect>` in the result.
-  - The screenshot tooling now emits explicit end tags, which survive the HTML
-    parse; that is a workaround for the demo, **not** a fix for real feeds. A
-    real fix means re-parsing SVG subtrees as XML at ingest (or repairing the
-    nesting in `sanitize_html`, which already special-cases `<svg>`).
-  - A `data:` image dodges the parser entirely but Lectio's sanitizer strips
-    data URIs from `src`, so that is not an escape hatch either.
-- **Soft-404 detection — DONE 2026-07-22.** `_check_saved_url` only counted
-  404/410, so a site that answers 200 for an article it no longer has read as
-  alive. `_looks_like_soft_404` adds a `soft_dead` flag, surfaced in the dupe
-  dialog as an amber **"probably gone"** badge.
-
-  **It is advisory and never arms a delete.** `_sdApplySelection` still keys on
-  `dead` alone, so a URL-shape guess can't pre-check a destructive box — same
-  rule as the rest of that dialog.
-
-  **The first implementation was wrong and live data caught it.** An
-  ancestor-only rule (`/lessons/x` → `/lessons`) matched the Plan's original
-  description but flagged **0 of 14** sampled guitarplayer URLs, because the
-  site redirects *across* sections: `/technique/<article>` → `/lessons`, which
-  shares no path prefix and isn't named like an index. The real signal is that a
-  2+ segment article path collapsed onto a **single-segment section page**.
-  After the fix, the same sample: **9 soft-404, 1 hard dead, 2 alive, 2
-  redirects correctly left alone** — one of those being
-  `/technique/exploring-ty-tabors-guitar-magic` →
-  `/lessons/exploring-ty-tabors-guitar-magic`, a genuine section move where the
-  article still exists. Same depth in, same depth out, so it isn't flagged.
-
-  Worth reusing that shape: **depth lost = content gone; depth preserved = URL
-  reshaped.** Relevant to any retention pass, and to the guitarplayer.com 303.
-
-Original analysis, kept for the reasoning:
-
-| | |
-|---|---|
-| saved articles in `lectio:saved` (the unfiled pile) | **4,334** |
-| exact host match to a subscribed feed | **3,974 (91.7%)** |
-| of those, host maps to >1 feed (ambiguous) | **29 (0.7%)** |
-| no match | 339 (7.8%) |
-
-**Use exact-host matching only.** A registrable-domain (eTLD+1) fallback tier was
-tested and adds just **0.5%** (21 items) while introducing the `.co.uk`-style
-public-suffix problem — not worth it. Strip `www.`, match saved-entry host against
-both the feed URL host and the feed's site `link` host; that's the whole algorithm.
-
-Ambiguity is a non-issue at 0.7%, so a straightforward "review the proposed
-mapping, then apply" flow works — no clever disambiguation UI needed.
-
-**Most of the machinery already exists.** `/entries/move-to-feed-batch`
-([main.py:21440](main.py#L21440)) does batched moves today, `_MOVE_BATCH_CAP` = 500.
-What's missing is only the *auto-match proposal* and a review screen. Two
-behaviors of `_move_entry_to_feed` ([main.py:13327](main.py#L13327)) to know:
-
-- If the target feed no longer holds the article (usual case — it aged out of the
-  feed window, which is *why* it was URL-saved), the entry is **synthesized** into
-  the target. So this works even for long-gone originals.
-- The source entry can't be deleted (reader owns feed entries), so it stays in
-  `lectio:saved` marked read and stripped of star/tags. Functionally invisible,
-  but ~3,974 husks will accumulate — worth a thought re: retention/purge.
-- Per move it may scan the target feed's entries to link-match. At ~4k moves that
-  is not free; batch in chunks and expect it to run for a while.
-
-**Falls out for free: a subscription-discovery signal.** The 339 unmatched are
-concentrated in a handful of hosts Josh clearly reads but doesn't subscribe to —
-`guitarchalk.com` (151), `texasbluesalley.com` (62), `joanwestenberg.com` (46) =
-259 of 339 from three sites. "You've saved 151 articles from this domain and don't
-subscribe" is a strong add-feed prompt, and reuses the existing discovery path.
-
-Note this also supersedes most of the single-post-page workaround (see "Single-post
-pages" in Later): Josh's instinct is to file such pages into *a related real feed*,
-which is exactly what this does.
-
-### 5. Unstar items that carry tags — DONE 2026-07-28
-
-Built as `services/unstar_tagged.py` (pure decision layer) +
-`GET /saved/unstar-tagged/preview` + `POST /saved/unstar-tagged`. Read-only
-preview returns per-tag counts, the archived_at-loss count, and suggested
-queue-like opt-outs; apply recomputes server-side under the given `keep_tags`
-and deletes only the star row.
-
-**UI shipped 2026-07-28** — Settings → Utilities → **Unstar tagged articles**,
-verified in a browser against a seeded instance. Two decisions worth keeping:
-
-- **The panel inverts the API's opt-out.** Rendering `keep_tags` directly would
-  arrive with all 58 tags checked, making "unstar everything" the default and
-  unchecking the destructive act — against the no-preselected-bulk-actions rule.
-  The panel selects tags to *clear* and derives `keep_tags = all − selected`.
-- **The button count comes from the server, not from summing rows.** An entry is
-  protected by *any* kept tag, so an article tagged `python`+`books` survives a
-  `python`-only selection despite being counted in the `python` row. Each
-  selection change re-previews for the honest total.
-
-Queue-like tags are flagged and excluded from "select all topical tags"; the
-archived_at warning fires before a one-way loss of Read Mode progress.
-
-**Not yet run against live data** — the live set was ~1,603 stars across 58 tags
-at last measure, and those numbers are now days old. Re-run the scan and review
-the tag list before applying anything.
-
-Dry-run on live data at build time: **1,767 affected across 60 tags, 24 carrying
-archived_at, zero queue-like names.** The count includes the ~166 tag-created
-stars from the backfill bug (now indistinguishable from genuine star+tag), which
-is fine — this is exactly the cleanup that removes them.
-
-The rest of this entry is the original analysis, still valid as the reasoning.
-
-
-
-After the tag-as-keep flip a tag *is* a keep signal, so a star on an already-tagged
-item is redundant — it only clutters Saved, which should be the read-later queue.
-Josh's idea: do it at DB level now, add a Utilities button for later upkeep.
-
-**RE-MEASURED 2026-07-22 (post-filing — these are the current numbers):**
-
-| | before #4 | now |
-|---|---|---|
-| star rows total | 13,895 | 14,566 |
-| **starred AND tagged (affected set)** | 1,643 | **1,603** |
-| ↳ in `lectio:saved` | 554 | **31** |
-| ↳ in real feeds | 1,089 | **1,572** |
-| share of all star rows | 14.9% | 11.0% |
-| ↳ carrying `archived_at` (Read Mode state) | 371 (all rows) | **29** |
-| distinct tags on the set | 57 | 58 |
-
-**The conclusion holds and is now stronger.** #4 moved the affected items out of
-`lectio:saved` and onto real feeds (554 → 31) rather than changing the size of
-the set, so this is still ~1,600 redundant stars. The tag distribution is
-essentially unchanged — `misc` 319, `linux-stuff` 211, `c++` 201,
-`science-+-math` 143, `games-to-play` 97, `python` 85 — and a fresh search for
-read/todo/later/queue/inbox/pending/unread-ish tag names again returns
-**nothing**. Topical filing tags, safe to unstar.
-
-Only **29** rows carry `archived_at`, so the Read Mode state at risk is now
-trivial (was 371 across the whole table). Still worth an opt-out rather than a
-blind delete, but it is no longer a reason to hesitate.
-
-Caveat carried forward: the star-row total includes the 4,264 orphans, so
-"share of all star rows" is understated. Run the orphan sweep (#4) first and the
-real share is nearer 15%.
-
-**Original measurement 2026-07-21 — this is safe, and I checked the thing that
-would have made it unsafe:**
-
-| | |
-|---|---|
-| manually tagged entries | 16,686 |
-| starred entries | 11,050 |
-| **starred AND tagged (the affected set)** | **1,643 (14.9% of starred)** |
-| ↳ in `lectio:saved` / in real feeds | 554 / 1,089 |
-
-**The risk I went looking for was read-later tags, and there are none.** Earlier
-notes describe a `#toread` vs `#todo` pattern — buckets *under* a star — and
-blanket-unstarring those would have gutted the read-later queue. All **57** distinct
-tags on the affected set are topical filing tags: `misc` (319), `linux-stuff` (208),
-`c++` (200), `science-+-math` (184), `games-to-play` (97), `python` (85), `guitar`
-(59)… A targeted search for read/todo/later/queue/inbox-ish names returned
-**nothing**. So the affected items are "filed by topic," not "queued to read", and
-unstarring them is exactly the decluttering intended.
-
-**Nothing is lost by unstarring a tagged entry — verified, don't re-derive:**
-
-- **Pruning**: `_prune_entries` ([main.py:21192](main.py#L21192)) protects starred
-  and manually-tagged entries **independently** (tagged excluded in SQL, starred
-  skipped in Python), so the tag alone keeps them.
-- **Archive**: the unstar route ([main.py:22689](main.py#L22689)) only enqueues
-  removal `if not get_manual_tags_for_entry(...)` — a tagged entry keeps its
-  capture. A **raw DB delete bypasses that path entirely**, which here is *safer*,
-  not riskier: no removal is ever enqueued, so archives simply stay.
-
-**Two things a DB-level run must handle** (they're why this shouldn't be a bare
-`DELETE`):
-
-1. **Cache/generation invalidation.** Deleting `saved_entries` rows behind the
-   app's back leaves unread/tag counts stale until restart — and the unread-count
-   cache is generation-guarded, so it won't self-heal. Either run it through the
-   app's own invalidation helpers or restart the container after.
-2. **`archived_at` is on this row.** 371 rows carry Read Mode's archived state;
-   deleting a row discards it. Moot for items leaving Saved, but check the overlap
-   with the affected 1,643 before running rather than after.
-
-**Build it tag-selectable, not blanket.** The distribution is clean today, but
-`games-to-play` (97) and `books` (43) are plausibly aspirational queues Josh may
-want to keep starred. A preview listing counts per tag with opt-out beats an
-all-or-nothing button, and it's what makes the Utilities version safe to re-run
-later when the tag vocabulary has drifted.
-
-**Sequencing:** run this *after* #4 (auto-file), since filing merges curation
-between duplicate copies and changes which entries carry stars and tags. Doing it
-first means operating on a set that #4 will rearrange underneath you.
-
-### 6. Cross-feed duplicate scan — the dupes you can actually feel
+- **guitarplayer.com's 303 articles** are the single biggest item and have no
+  good home: the site's own subscription is a scraped one-article stub (barred
+  as a target), and probing showed many of its article URLs soft-404. A real
+  guitarplayer feed, "one-off saves", or deletion — Josh's call, not automatable.
+- **The orphaned-star sweep** — delete `saved_entries` rows whose entry is gone
+  (4,508 total, 4,264 on `lectio:saved`). The cause was found and fixed
+  (`backfill_saved_entries_from_archive` re-created them at every startup, and a
+  second bug in the same function was starring *tagged* entries), so a sweep now
+  stays swept. Bulk delete against live data — **needs a go-ahead**.
+- **166 already-converted stars** — tagged entries starred by that backfill
+  before it was fixed. Indistinguishable from a genuine star-and-tag, so they
+  cannot be surgically reverted; the unstar-tagged pass is what removes them.
+### Cross-feed duplicate scan — the dupes you can actually feel
 
 **RE-MEASURED 2026-07-22 — #4 collapsed almost all of this, exactly as predicted.
 This item is now small enough to question whether it is worth building at all.**
@@ -2195,7 +357,7 @@ same class of hazard as the pre-armed delete in #1a — be conservative by defau
 entries that no longer exist. Harmless but they inflate counts; worth a sweep
 while in here.
 
-### 7. Finish the Instapaper clone (Read Mode follow-ups)
+### Finish the Instapaper clone (Read Mode follow-ups)
 
 The read-later app shipped across PRs #137–#144 (Save any article, Saved sidebar
 view, Read Mode at `GET /read`). These are the deferred finishing touches, moved up
@@ -2330,323 +492,7 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   | 2026-06 | 6,091 | **the migration's own run date** |
   | 2026-07+ | 419 | actually starred in Lectio |
 
-### 7c. Importers fabricated publish dates — FIXED + REPAIRED 2026-07-29
-
-Two capture paths stored "when this arrived in Lectio" as "when this was
-published", and every date-based decision then trusted it:
-
-- **Instapaper import** used the CSV's *save* timestamp as `published`, so a 2015
-  article bookmarked in 2019 read as published 2019. **3,308 entries.**
-- **Save-article (URL capture)** used `now()` at capture time. 5 entries.
-
-Both now write `services.saved_articles.UNKNOWN_PUBLISHED` (the Unix epoch).
-**1970 rather than NULL is the load-bearing choice**: `entry_effective_date`
-falls back published → updated → added, so clearing the field would silently
-substitute the *import* date — the same wrong answer by a longer route. The epoch
-is visibly not a publish date, sorts to the end of every order, and is
-searchable, which makes these findable rather than merely untrusted.
-
-`scripts/repair_fabricated_publish_dates.py` reset the 3,310 already stored (JSON
-log alongside the other repair logs, so it is reversible). It matches only two
-*exact* signatures — `published == saved_at` and `published == first_updated` —
-and **preserves `entry_date_overrides`** (4 rows; an explicit correction outranks
-any inference). A looser rule would have destroyed the **22,543** user-added
-entries that carry genuine publish dates from the Inoreader migration.
-
-⚠ The lesson generalizes: **an importer must never invent a field it does not
-have.** A missing date is recoverable; a plausible wrong one is not, because
-nothing downstream can tell it apart from real data.
-
-  **This retires #5.** Those 1,786 starred+tagged items get archived like the
-  rest, keeping tag *and* capture, instead of being unstarred and losing the TODO
-  axis. **⚠ The bulk path deliberately does not write `read_history`** — capped at
-  2,000 rows, it is the only reverse-chronological record of what has been dealt
-  with, and 9,000 bulk archives would evict all of it.
-
-  **PR E (after): pinned tags.** Promote any tag to a top-level node in both
-  modes. Store the pin **separately from the tag name** — Josh floated a `##tag`
-  sigil, but that is the same magic-value-in-user-data problem as the `#archive`
-  auto-tag: typing `#inbox` instead of `##inbox` would silently change behavior,
-  and both `parse_manual_hashtags` and `normalize_tag_value` would have to learn
-  the sigil.
-
-- **⚠ #5's premise may no longer hold.** It unstars starred+tagged entries because
-  "after tag-as-keep a tag is a keep signal, so the star is redundant." Under the
-  workflow above star = TODO and tag = filing, so starred+tagged means "filed, and
-  I still have to deal with it" — an ordinary state, not redundancy. Unstarring
-  the 1,786 affected items would erase the TODO axis from everything already
-  filed, with no undo. Re-decide before running it.
-
-- **Read Mode has no per-row actions.** Archive/Delete exist only inside the
-  reader, so the email-triage flow the model describes (deal with it from the
-  list, without opening) isn't actually possible yet. Deferred 2026-07-29.
-
-- **⚠ `read_history` is capped at 2,000 rows** (`READ_HISTORY_CAP`,
-  [main.py:9098](main.py#L9098)) and is currently full — oldest entry 2026-07-08,
-  about three weeks. Dropping the regular-app Archive view was made conditional
-  on History being browsable in reverse order, which it is (`ORDER BY read_at
-  DESC`). But Archive and Delete now both write history, so triage volume flows
-  through that cap and the window will shrink. Read Mode's Archive node is the
-  durable record; History is a convenience. Raising the cap is a one-line change
-  and awaiting a number.
-- ~~**Tag from inside Read Mode**~~ — **DONE 2026-07-28.** A `#n` button opens a
-  panel of every tag in the library as large toggles (applied first, inverted),
-  tap to add or remove, with "+ New" revealing a text field only when needed.
-  Each tap applies immediately and sends the whole desired set
-  (`append_mode=0`), so closing half way still saved. The server's reply is the
-  truth and the panel re-renders from it. Note the new-tag field is
-  space-separated like the main app's, so "brand new tag" is three tags — the
-  placeholder says so, since there is no autocomplete here to make it obvious.
-- ~~**Saved counts disagree between the two modes**~~ — **FIXED 2026-07-28.**
-  The regular sidebar showed **24,695**, Read Mode **9,979**: the sidebar counts
-  **kept** (starred OR tagged), `_read_mode_saved_index` counted **starred,
-  non-archived**. Archiving was never the gap (23 rows) — it was
-  tagged-but-not-starred (16,479 tagged vs 10,002 starred).
-  **The list was already right**, which is what settled it:
-  `resolve_reader_backlog(star_only=True)` resolves against
-  `kept_entries_set = saved_entries_set | tagged_entries_set`, so the tree
-  numbers never matched the list they opened. The index now counts kept-minus-
-  archived. Only starred rows can be Archived (`archived_at` lives on
-  `saved_entries`), so a tagged-but-unstarred entry is always in the inbox.
-
-  **Josh's rule, which decided it:** *"eInk should really just be a slightly
-  simpler version of regular, mostly just the look, and eink specific things like
-  page instead of scroll."* Read Mode may differ in **presentation** (paging, high
-  contrast, big tap targets, inverted state blocks) and in genuinely
-  paging-specific behavior (mark-read on last page, the Archive done-axis). It
-  must **not** carry a different data model — same kept definition, same effective
-  date, same sort options, same tag vocabulary. A number that differs between the
-  modes is a bug to reconcile, not a feature.
-- **Excise the dormant in-app star-mode tree/JS** that the Read Mode hijack
-  bypasses — dead weight now that the sidebar row opens `/read`. Pairs naturally
-  with the dead-code sweep in Later's "Code health".
-- **Optional per-image `grayscale(1)`** — e-ink nicety, lowest value.
-
-Reassess the "pinned saved-tag shortcuts" and "badge counts total instead of
-unread" ideas *after* #4 lands — auto-filing changes what the tree looks like, so
-judging those now would be premature.
-
-### 7a. Feed tags — Real Python has none to pull (2026-07-29)
-
-Reported as "can pull some tags from page". Checked, and there is nothing to
-pull without evading a bot wall:
-
-- **The Atom feed carries zero `<category>` elements** — 0 across 50 entries.
-- **The page fallback cannot run.** `extract_page_tags` already fires whenever a
-  feed supplies no tags (main.py, via the lead-image source-HTML cache or its
-  deferred fetch), but `realpython.com` answers a non-browser client with a
-  Cloudflare interstitial ("Just a moment…"), so there is no article HTML to
-  scan. Fixing this means spoofing a browser UA, which we don't do.
-
-Same class as the bot-walled feeds blocking #10 (see `inoreader-replacement`).
-
-### 7b. Offline reading on the Supernote — WORKS (2026-07-30)
-
-**Confirmed on the device: WiFi off, article opens.** A service worker serves the
-navigation itself, which is what makes it work at all — the browser has no launcher,
-so Read Mode is reached from a saved hyperlink, and a cache the browser cannot
-navigate to is useless.
-
-Route taken, after the alternatives were eliminated by measurement:
-
-- **Downloads are impossible.** The Supernote's WebView has no download handler:
-  `<a download>` is a silent no-op and long-press offers only text selection. That
-  killed self-contained HTML, EPUB-by-download, and bundles in one go.
-- **Service workers DO register** there (Android 11 WebView, Chrome 96), precache,
-  and intercept navigation.
-
-Two bugs found on the way, both mine, both instructive:
-
-- `ignoreSearch` in the offline fallback stripped the query string, and for `/read`
-  the query string IS the article's identity — so every article matched the cached
-  BROWSE page and re-rendered the list. A cache miss that looked like a navigation
-  going nowhere.
-- **Article and image coverage diverged.** The page cached every `.rm-item-link` in
-  the DOM (up to 150 rows) while asking the manifest for images from only the first
-  20, so most cached articles had no pictures. Reported as "seemed like images
-  weren't included". Both halves now derive from one `OFFLINE_ARTICLE_COUNT`.
-
-Residual limitation: images at **cross-origin** URLs still cannot be cached — a
-no-cors response is opaque and indistinguishable from a failure. Measured small: 3
-of 45 images across 25 Inbox articles, because most reader images are already
-same-origin (`/starred-asset/…` from the archive, or `/api/img`). If it ever
-matters, routing reader images through `/api/img` would close it.
-
-### 7c-2. Epoch-dated articles — 2,030 of 3,308 recovered offline (2026-07-29)
-
-The Instapaper importer had stored save timestamps as publish dates; repairing that
-left 3,308 entries at the Unix epoch. `scripts/recover_publish_dates.py` recovered
-**2,030 (61%) with no network requests at all** — every date came from page HTML
-already captured in the starred archive, which also means it works for articles
-whose sites are long dead:
-
-| source | n |
-|---|---|
-| `article:published_time` (Open Graph) | 1,811 |
-| URL path (`/2019/07/06/`) | 90 |
-| JSON-LD `datePublished` | 89 |
-| `<time datetime=…>` | 40 |
-
-**The save date as an upper bound is what makes the `<time>` tier safe.** The HTML
-was captured *recently*, not when the article was saved, so a stray `<time>` can be
-years newer than the article (a comment, a "latest posts" rail). You cannot save
-something before it is published, so a candidate later than the Instapaper save
-timestamp + 1 day is rejected. That guard threw out ~189 dates a plain regex sweep
-would have accepted.
-
-**Re-fetch now learns a date too (2026-07-30).** `mine_publish_date` runs on the
-page a re-fetch already fetched — no extra request, since `fetch_readability_article`
-and `fetch_full_page_article` hand the raw body back through a `capture` dict
-(readability strips head metadata, which is where the date lives). It writes **only
-when the entry has no date or sits at the epoch**, and never over an
-`entry_date_overrides` row: re-fetch used to *move* `published` and destroyed 105
-real dates before that was caught.
-
-**Batch-fetching the stragglers is NOT worth it — measured 2026-07-30.**
-`scripts/fetch_missing_publish_dates.py` exists (date-only probe, paced, guarded)
-but a 25-entry sample returned **zero** dates and a per-host probe across 8 hosts
-also returned zero. The remaining entries cluster on sites that publish no date
-metadata: blog.guitar-pro.com (96), joanwestenberg.com (45), what-if.xkcd.com (45),
-datagenetics.com (27). One host answered 404 carrying the 404 page's own date,
-which is what the slug and save-date guards are for. Sample with `--limit` before
-any future full pass.
-
-**Only 253 remain at 1970** (down from 1,278 — feed refreshes re-ingested most of
-the rest with real dates), deliberately: 324 have no captured HTML, the rest have HTML
-with no date in it. Guessing there would re-create the original bug. `<time>` is
-tried last for the same reason — a page has many, and the first is often a
-comment's.
-
-Manual `entry_date_overrides` are never touched; an explicit correction outranks
-anything inferred.
-
-### 7d. Re-fetch: undo + Wayback fallback — DONE 2026-07-30
-
-Two entries were wrecked by re-fetch in two days, each defeating the guard in a way
-the previous case did not predict:
-
-- **the-digital-reader** — a parked "Empowering Relationships" page returning **200**
-  for a 2019 post. Unrecoverable: the archive copy had been rewritten too.
-- **informit** — `/articles/article.aspx?p=…&WT.rss_a=<title>`. The subject lived
-  only in the query string, and the path word "articles" matched the site index
-  title "Articles | InformIT", so the slug guard passed it. Recovered from the
-  07-28 backup, then upgraded from a Wayback snapshot Josh found by hand — the feed
-  had only ever carried a 472-byte teaser, so the entry is now better than it was.
-
-**The lesson: stop sharpening the heuristic.** It failed twice on cases that could
-not have been foreseen. A re-fetch now snapshots the previous body into
-`entry_content_edits.original_content` (INSERT OR IGNORE, so the first original
-wins), which lights up the existing Revert control for free — a bad result is one
-click to undo rather than a backup dive.
-
-And the guard alone left the user stuck, so a refusal now falls back to
-`archive.org/wayback/available`. The guard still applies to the archived fetch, so a
-snapshot of the same parked page is refused too.
-
-### 7c-4. accu.org: an image-less post with nine chrome images (2026-07-29)
-
-Reported three times as "img-less post, getting a social icon". Each fix revealed
-the next piece of chrome, which is the useful finding:
-
-1. `/img/bsky.png` → rejected by filename → **`/img/mastadon.png`** (the site
-   misspells Mastodon, so a name list is always one spelling behind);
-2. social row stripped structurally → **`ads.accu.org/www/delivery/avw.php`**;
-3. ad servers rejected → **`/img/accu/join.png`**, a "Join ACCU" banner.
-
-**Two general fixes shipped** and both are worth having everywhere:
-`_strip_social_link_images` drops `<a href="<social host>">…<img></a>` before
-scoring (spelling-independent — every icon shares an anchor to the network), and
-`is_ad_url` rejects ad-server hosts plus the Revive/OpenX `/www/delivery/*.php`
-shape.
-
-**But the page is not solvable by heuristics, and further attempts are wasted.**
-It has no `<article>`, no `<main>`, and no content-ish container class (Bootstrap
-`panel-body`), so container-scoping cannot separate the remaining nine chrome
-images from an article image that does not exist. Any scorer will keep finding
-*something*.
-
-**The right answer for this feed is the existing per-feed escape hatch**: Feed
-Properties → lead-image strategy → **None**, which `_is_feed_none_strategy` already
-honors. Reach for that rather than a fourth rejection rule.
-
-### 7c-3. Bot-walled pages: no server-side tags available (2026-07-29)
-
-Two feeds where the tags Josh can see are rendered by the site's JavaScript and are
-unreachable from the server. **Not code bugs — do not spend time on them.**
-
-- **behance.net** — the feed carries **zero** `<category>` elements, and the gallery
-  page answers a non-browser client with a JS challenge (`js_challenge_value`
-  cookie + `window.location.reload()`). Page extraction *did* work 2026-07-13 →
-  07-20 (793 tag rows captured, e.g. "Adobe Photoshop" ×39), then stopped dead, so
-  the wall went up around 07-20. Any Behance entry ingested after that has no tags
-  and cannot get them.
-- **realpython.com** — feed has no `<category>` either; the page returns a
-  Cloudflare interstitial. See 7a.
-
-Both would need browser-shaped requests, which Lectio deliberately does not send
-(see the good-web-citizen rule). Worth re-testing occasionally: Behance's wall
-appeared mid-July, so it may lift the same way. If it does, the existing background
-source-fetch fills the tags in with no work from us.
-
-⚠ Knock-on to check if Behance thumbnails ever look wrong: lead-image extraction
-uses the same source-page fetch, so it went blind on the same date.
-
-**Behance titles arrive mangled, and that is upstream too** (checked 2026-08-02).
-Titles render as `City Identity for Gy?r` and `Portrait Collection ? July 2026`;
-one is `?ONEFANS????????`. Those are literal `0x3F` bytes **in the feed FeedBurner
-serves** — verified against the raw bytes, and the feed declares `encoding="utf-8"`
-while containing them, so something upstream encoded non-ASCII with
-`errors="replace"` before we ever fetch it. Nothing to fix on our side, and no
-amount of re-parsing recovers characters that were destroyed at the source. The
-only remedies are a **Re-fetch content** per entry (the gallery page has the real
-title, when the JS wall lets us at it) or finding a non-FeedBurner Behance feed.
-Do not re-investigate this as an encoding bug in our parser.
-
-### 7e. Batch re-fetch over a folder or feed — script + UI, 2026-07-30
-
-`scripts/refetch_scope.py`. Josh: "Needs to be gentle!" — so pacing is the design:
-2s global gap, **10s per host**, hosts dropped after 4 consecutive failures, nothing
-parallel, and the runtime estimate accounts for the per-host delay (a single-feed
-scope is one host, so 89 articles is 89x10s, not 89x2s — understating the runtime of
-a deliberately slow job is the one number that must not be wrong).
-
-Safe to run in bulk only because every single-re-fetch protection applies per entry:
-the slug guard refuses a wrong page instead of overwriting, the previous body is
-snapshotted so any result is revertible, a refusal falls back to the archive, and a
-missing publish date is learned.
-
-**Proven on informit** (4-article slice): all four live pages now serve the section
-index, so the guard refused every one and **the Wayback fallback recovered every
-one** — 13k-28k characters each where the feed carried teasers. 89 kept articles on
-that feed, ~15 min for the full pass.
-
-**Shipped as a UI action too (2026-07-30).** Right-click a feed or folder in the
-Saved tree → *Re-fetch all articles…*: `GET /saved/refetch-scope/preview` shows the
-count, host count and runtime before you commit, `POST /saved/refetch-scope` runs it
-on a background thread (via `_run_in_user_context`, so the thread keeps the tenancy
-user), and status polling reports progress and the outcome breakdown. The same menu
-item cancels a run. One job at a time per user — two overlapping runs would each
-honor the pacing and together double the rate every host sees.
-
-Pacing now lives in `services/refetch_batch.py` and is imported by both the route and
-the script, so the two cannot drift.
-
-A second scope started while one runs is **queued**, not refused (Josh, same day:
-"I cannot queue/start a batch for another Feed/Folder while one is running"), and a
-fixed status pill shows the running scope, progress, measured time remaining and the
-queue — the batch had no visible surface at all once its toast faded.
-
-Deferred from the UI version: resumability across a restart, and a per-run log file
-like the script writes.
-
-⚠ **The restart gap bit immediately (2026-07-31).** A batch on the informit feed was
-killed 4 minutes in by a container rebuild — 29 of 89 articles done, no trace in the
-logs because only the completion line logs. Re-running is safe, but a job with no
-persistence and no start/interrupt logging is invisible after the fact. Worth either
-persisting the queue+cursor to the meta DB, or at minimum logging a start line and
-marking the job interrupted on the next boot.
-
-### 7c-1. Page tag extraction grabs the sentence, not the anchors (2026-07-29)
+### Page tag extraction grabs the sentence, not the anchors (2026-07-29)
 
 gottadeal posts carry a real category line on the page:
 
@@ -2701,20 +547,9 @@ Also still open from the same pass: Real Python's page tag block mixes taxonomie
 (`beginner`/`intermediate`/`advanced`/`basics`) would express that where coverage
 cannot — it is fixed vocabulary, not per-feed frequency.
 
-### 8. Small daily-friction items (cheap; slot between the bigger pieces)
+### Small daily-friction items (cheap; slot between the bigger pieces)
 
-- ~~**Tag autocomplete while typing**~~ — **DONE 2026-08-02.** One control,
-  `attachTagAutocomplete`, now serves both callers as the plan required. The
-  per-entry input was already on it; the rule form's tag_filter field now is
-  too, fed by `GET /rules/tag-vocabulary` (scope-resolved through the same
-  `resolve_rule_feed_urls` the rule uses, normalized through
-  `normalize_tag_value`, with per-tag entry counts). The two grammars differ
-  only where they genuinely differ — comma separation and the `-`/`+`/`++`
-  sign, which survives completion while the per-entry `#` is overwritten. See
-  ARCHITECTURE "Feed-provided tag suggestions" for why the control consumes
-  Enter with `stopImmediatePropagation`.
-- **Batch-align Uncategorized saved items into Feeds** — *promoted out of this
-  list; see Now #4.* Measured 2026-07-21 and it turned out far higher-yield than
+  list; see "Auto-file saved articles".* Measured 2026-07-21 and it turned out far higher-yield than
   a "small item."
 - **No way to reach a feed in Feeds from a post in Saved** (2026-08-04). Saved
   is where you notice a feed misbehaving; Feeds is where you fix it, and there
@@ -2737,227 +572,7 @@ cannot — it is fixed vocabulary, not per-feed frequency.
   against a visible list rather than against a guess.** Still Josh's call: which
   tags to drop is a taste judgement, not a derivable one.
 
-### 8b. Publish dates a re-fetch overwrote — FIXED + REPAIRED 2026-07-25
-
-Cause fixed: `replace_entry_content` bumped `entries.published` to now to surface
-a re-pulled capture, which is wrong twice over (Pub is a publication date, not a
-last-touched date; and under the Pub-oldest sort in use the bump *buried* the
-article instead of surfacing it). It now bumps **Received** instead.
-
-Damage repaired the same day with `scripts/restore_bumped_publish_dates.py
---apply`: **101 restored, 101 corroborated, 0 uncorroborated** (second user: 0).
-Drift ran up to 16 years — LWN "What every programmer should know about memory,
-Part 1" read 2026-07-25 instead of 2012-05-03. Undo snapshot at
-`data/users/u_40208f374ac18038598b39/restored_publish_dates_20260725-054213.json`;
-a follow-up dry-run reports 0 candidates.
-
-The script stays in the tree because the recovery source (starred archive
-`published_at`, cross-checked against reader's `recent_sort`) is generic — if any
-other path is ever found bumping published, re-run the dry-run first.
-
-### 8d. Tushar feed consolidation — DONE 2026-07-25
-
-Two subscriptions to one blog (`sadh.life/rss`, dead; `tush.ar/rss.xml`, live).
-Josh ran Edit Website twice on the old feed (seeding `sadh.life → tush.ar` and
-`tushar.lol → tush.ar`, migrating 14 then 1) and then Combine — which matched by
-GUID and synthesized nothing. Survivor: 18 entries, 16 stars, 15 manual tags, no
-orphaned star rows, no entry left on a dead host.
-
-Fallout, since fixed: the combine stranded the offline captures (see
-ARCHITECTURE "Combining feeds carries the offline captures"). 85 orphaned
-archive rows library-wide — not just this feed — repaired with
-`scripts/repair_orphaned_archives.py --apply`; undo snapshot (with blobs) at
-`data/users/u_40208f374ac18038598b39/repaired_orphan_archives_20260725-071313.json`.
-A follow-up dry-run reports 0.
-
-Still open: `tusharsadhwani.dev` and `tushar.bio` are two more dead domains of
-his with **no** entries in the library. Nothing to migrate; declaring them via
-Feed Properties → Other domains only future-proofs the dedupe alias map.
-
-### 8e. Comic thumbnails — FIXED 2026-07-25; tinyview + DA mature still open
-
-Reported as "the comic image loads but there's no thumb". Cause: the cached
-**lead image** (which is what the list thumbnail derives from) was site chrome,
-while the article's own `<img>` came from the feed body and rendered fine.
-
-- **gunnerkrigg** was a real code bug: the panel is `class="comic_image"` and the
-  webcomic class pattern listed hyphen spellings only, so the Archives banner won
-  the scan for 49 strips. Fixed; the id pattern already accepted both spellings.
-- **smbc / misfile** extracted correctly already — their rows were just stale,
-  from before the webcomic strategy was set. Confirmed by both fixing themselves
-  once re-derived.
-- `scripts/reset_webcomic_chrome_lead_images.py --apply` cleared **202 rows
-  across 19 images** on webcomic feeds (gunnerkrigg 49, qwantz 39, webtoons 20,
-  harkavagrant, tethered, badmachinery…). Undo snapshot at
-  `data/users/u_40208f374ac18038598b39/reset_webcomic_lead_images_20260726-000945.json`.
-  The detector is generic: a panel is unique per strip, so an image cached as the
-  lead for many entries of one webcomic feed is chrome by definition.
-
-**Closed 2026-07-26** — all four reported comics resolve to their panel
-(atomic-robo 1.2MB `…494`, gunnerkrigg, smbc, whomp). Three further causes were
-found behind the first: the blind `/comicsthumbs/`→`/comics/` rewrite existed in
-*two* places (thumbnail path as well as body), five `_fetch_source_lead_image`
-call sites on the render/revalidate paths never passed `is_webcomic` (so a page
-scanned there returned site chrome), and `_derive_article_lead_image` bypassed
-the cache for webcomic feeds, showing the inline thumbnail instead of the cached
-panel. **tinyview** now has a plugin (`TinyviewPlugin`) — its panels were in the
-served HTML all along as `cdn.tinyview.com` URLs; the scan was picking
-`assets.tinyview.com` chrome. Its feed also has `inject_source_images` on so all
-panels render, not just the first.
-
-**tinyview follow-up FIXED 2026-07-28.** With `inject_source_images` on, the post
-rendered **14 images: 5 real panels, 5 chrome, 4 broken**. Two causes, both fixed
-generically rather than per-site:
-
-- **Plugins only ever fed the lead-image *scorer*.**
-  `extract_source_gallery_urls` doesn't rank — it takes everything acceptable —
-  so `TinyviewPlugin`'s −200 for `assets.tinyview.com` never applied, and the
-  skeleton GIF, wordmark and three icons8 buttons walked straight in. The gallery
-  now drops anything a plugin scores at or below `_PLUGIN_CHROME_SCORE`.
-- **The site emits every panel twice** — once under the entry's dated path
-  (`/<comic>/<yyyy>/<mm>/<dd>/<slug>/IMG_*.jpeg`, **200**) and once bare
-  (`/<comic>/IMG_*.jpeg`, **404**). `_drop_duplicate_basenames` collapses a
-  repeated filename, preferring the copy whose path carries the entry's slug.
-
-Verified against the live page: 14 → the 5 panels, each confirmed 200.
-
-**qwantz FIXED 2026-07-28 — the same miss, one step further.** Reported as "no
-longer shows the comics, just a pterodactyl", right after the feed's strategy was
-set to `webcomic` (which invalidates the cached leads and re-scans). The scan then
-picked `qwantz.com/pteranodon.png` — a decorative image sitting first in document
-order — for **all 44 strips**.
-
-Cause: qwantz marks its panel `class="comic"`, a **bare** token. The *id* pattern
-has always accepted a bare `comic`; `_WEBCOMIC_IMG_CLASS_RE` only took the
-hyphen/underscore spellings, so `_extract_webcomic_panel_image` returned `None`
-and the generic fallback let chrome win. Proven against the live page: the old
-pattern returns `None`, the new one returns `comics/comic2-5197.png`.
-
-The bare alternative uses **lookarounds, not `\b`** — `\b` would also fire inside
-`comic-nav` and hand the panel bonus to navigation buttons. Pinned by a test.
-
-`scripts/reset_webcomic_chrome_lead_images.py --apply` then cleared the poisoned
-rows (qwantz 44, birdandmoon 4); they re-derive on next view. **Run order
-matters** — the script's own docstring says to fix the picker first, or
-re-derivation just reproduces the bad pick.
-
-### 8f. DeviantArt mature images expire in ~15 minutes — FIXED: render-time re-signing
-
-Measured 2026-07-26, correcting two earlier wrong readings. DA signs *mature*
-deviations' wixmp URLs with a very short life: a freshly-signed URL expires in
-**~15 minutes** (0.01 days), and every variant shares the expiry, so there is no
-permanent thumbnail to prefer. Ordinary deviations are signed permanently
-(21,564 of 21,568 entries).
-
-**Nightly maintenance cannot fix this** — a 3am re-sign yields images dead by
-3:15 — so the hook was written, measured, and deliberately removed rather than
-shipped. What exists now:
-
-- `main.refresh_expiring_deviantart_images(within_seconds=…, apply=…)` — finds
-  entries whose stored image token has expired and re-signs them via the API,
-  using `get_deviantart_user_token()` (DA access tokens last an hour, so reading
-  `app_settings` directly 401s on any scheduled run).
-- `services.deviantart.image_token_expiry` / `fetch_fresh_image_url`.
-- `scripts/refresh_expired_deviantart_images.py` — manual catch-up; makes the
-  image work *right now*, which is all a batch pass can promise.
-
-**Shipped 2026-07-26:** `_resign_expired_deviantart_images` runs on entry-detail
-render, just before the hotlink-proxy rewrite. It re-signs only an image whose
-token has *already* expired **and** whose bytes the `/api/img` cache does not
-already hold — the cache key drops the signing token
-(`_img_cache_key_url`/`_IMG_CACHE_VOLATILE_PARAMS`, and `wixmp.com` was already
-in `_HOTLINK_IMG_HOSTS`), so once an image has been fetched under any valid
-token it answers forever. That makes it one API call per *image*, not per view,
-and the 21,564 permanently-signed images never reach the API at all. The fresh
-URL is persisted so the list thumbnail starts from it too.
-
-**Superseded note (kept for the reasoning):** Not an age gate:
-DA signs mature deviations' image URLs with a ~7-day JWT and **every** variant
-shares the expiry (checked live: `content.src` and both thumbs all
-`exp=1785040938`), so there is no permanent thumbnail to prefer — the fix first
-proposed would not have worked. `scripts/refresh_expired_deviantart_images.py`
-re-fetches expired ones from the API and rewrites the stored HTML; 4 refreshed,
-0 stale after. **Worth scheduling**: each refresh buys about another week, so
-mature deviations rot again without a periodic pass.
-
-**Superseded — the old open list:**
-
-1. **tinyview** — a different animal. It is a JS app, and what got scraped is
-   `Tinyview_skeleton-animation.gif`, the pre-hydration loading skeleton, which
-   renders as "a mockup of the whole webpage sans images". Its rows were cleared
-   with the rest, but re-derivation will find the same skeleton until the site
-   gets a plugin/adapter (`services/lead_image_plugins.py`) that knows where the
-   panel lives — or the feed is treated as needing a rendered fetch.
-2. **DeviantArt mature deviations** — a separate bug, not a lead-image one: the
-   entry (`CC48A953-…`, "Tifa and Aerith - Hot Spring") has **no stored content
-   at all**, so neither image nor thumb can exist. Suspect the DA sync silently
-   drops mature items (scope/param on the API call). Needs its own pass.
-
-### 8c. Flaky test `test_tampered_hash_fails` — FIXED 2026-07-26
-
-The test flipped the **last** base64 character of a scrypt digest, which is not
-always a real change: when the digest length leaves slack bits in that
-character, several values decode to identical bytes, so verification correctly
-succeeded and the test failed on working code. It now flips a bit in the
-*decoded* digest, which always changes the bytes.
-
-Rate was never pinned down — seen failing in a full run, reproduced at 4/300
-hashes once, then 0/400 in a later sample. The fix removes the class rather than
-narrowing the odds, which matters more now that CI is the only reviewer.
-
-### 8g. Extension save should MERGE into the existing post — DONE 2026-07-26
-
-**Shipped in `d5c171b`** (`services/saved_articles.py`:
-`_find_subscribed_entry_for_url` + `_merge_save_into_entry`, plus
-`tests/services/test_save_merges_into_existing.py`). Verified still present
-2026-07-28 — this entry had been left in future tense, which is how #7's
-"archived-aware node counts" nearly got rebuilt after it had already shipped.
-**Check the code before starting anything in this file.**
-
-The design sketch below is what was built, kept as the rationale. **Still open
-from this item: the time-to-read estimate** at the very bottom — that was a
-pairing suggestion, not part of the merge, and it never shipped.
-
-**The goal, in Josh's words (2026-07-26):** "open any article webpage, save it via
-extension, and that would get merged into the post, with no loss of data."
-
-Before this, an extension save always created a *new* `lectio:saved` entry, even when
-the article is already subscribed. One Medium article ended up in three places —
-the feed's own `/p/<hash>` copy (15KB **plus the five feed tags**), an empty
-auto-filed capture, and the 44KB extension capture — with the body on one, the
-tags on another, and nothing joining them. Moving copies around then lost the
-body outright (fixed 2026-07-26, "carry the body when the target copy is
-emptier"), but the copies themselves are the real problem.
-
-**Matching is already solved, which is the good news.** Both Medium copies carry
-the *same* `link` (the long article URL) even though their ids differ, so
-`normalize_entry_link_for_dedupe` — with `get_dedupe_host_aliases` for declared
-domain migrations — pairs them exactly. No per-site logic needed.
-
-Design sketch:
-
-- On save, look for an existing entry whose normalized link matches, across all
-  feeds, before creating anything. Prefer the **feed-provided** entry as the
-  survivor: it keeps updating, and it is the one carrying `entry_feed_tags`.
-- Merge rather than replace: longest body wins (the extension capture usually,
-  pinned via `entry_content_overrides` so refresh can't thin it), union of feed
-  tags and manual tags, star set, earliest real **Pub** date kept (not the save
-  time — see the Received/Pub fix), existing title kept unless pinned.
-- Only when nothing matches does a new `lectio:saved` entry get created, exactly
-  as now.
-
-This subsumes several open items: the empty-capture case, tags-stranded-on-a-twin,
-and much of the cross-feed duplicate work in #6 — a save that merges is a
-duplicate that never happens. It is also the natural home for the entry-level
-merge tool #6 wants ("keep the better body, union the tags"), since both need the
-same primitive.
-
-Worth pairing with a **time-to-read estimate** (Josh, same day): word count over
-~220 wpm. Cheap to compute, but decide first whether it is derived at render or
-stamped at ingest into a column (sortable/filterable later), and whether it shows
-in the post list, the article header, or both.
-
-### 8a. Article cleanup — Phase 2: promote a removal into a per-feed rule
+### Article cleanup — Phase 2: promote a removal into a per-feed rule
 
 Phase 1 shipped 2026-07-24: the pane's **Clean up article** (🧹) removes elements
 by hand and `entry_content_edits` records both the pristine body and the ops that
@@ -3013,106 +628,13 @@ sample size:
   that's the shape that would actually justify building this. Until then the
   hand-cleanup from Phase 1 is doing the job.
 
-### 9. Tag-as-keep — Part C: pass 1 DONE 2026-07-22, pass 2 still deferred
+### Tag-as-keep — Part C, pass 2
 
-**Pass 1 ran with `--apply` on 2026-07-22: 3,581 archives enqueued** (dry-run and
-apply agreed; the Plan's earlier ~3,596 estimate was accurate). Live DBs were
-backed up first. The archive worker drains the queue in the background — expect a
-long tail of 404s, since most of these are dead/unsubscribed feeds. Check
-progress with `SELECT status, COUNT(*) FROM archived_entry GROUP BY status` in
-the user's `lectio_starred_archive.sqlite`; at kickoff it read
-`complete 14567 / pending 3576 / failed 3 / in_progress 1`.
-
-Pass 2 (Wayback) was **not** run and stays gated on the #10 triage list.
-
-The original write-up follows.
-
-
-
-The semantics flip shipped (PR #150): tagging keeps + full-archives, archive kept
-while starred OR tagged, unified **Kept** view, keep-on-unsubscribe (`kept_feeds`).
-The backfill script (`scripts/migrate_tag_as_keep.py`) is **written and committed**,
-and its dry-run has run against live data. Dry-run is the *default*; writes are
-gated behind `--apply`.
-
-**The two passes have different gates — decouple them** (this is the change from the
-earlier "wait for triage" framing):
-
-- **Pass 1, retro-archive: run it now.** It needs **no** triage. Finding replacements
-  for dead feeds is about *resubscribing*, which has nothing to do with capturing
-  content already collected. And it has a decay clock — it archives content from
-  dead/unsubscribed feeds, which keeps getting less recoverable. The script already
-  supports running it alone: `--only archive --apply`. The Plan's own stated order
-  ("retro-archive first, then Wayback only the DNS-dead residual") always implied
-  this; the triage gate was inherited from pass 2 and applied to both by accident.
-- **Pass 2, Wayback: keep deferred.** This one genuinely benefits from triage — you
-  want to know which feeds are truly dead before spending Archive.org lookups, since
-  a live-but-403 site is better served by the archive worker's own page fetch. Gate
-  it on the triage list from #9.
-
-Caveat when running pass 1: it enqueues ~3,596 archive jobs, each a page fetch
-against mostly-dead hosts, so expect a long slow tail of 404s and watch worker load.
-Note `--limit` caps **Wayback lookups only** — it does not throttle pass 1.
-
-**Scope interaction with #1** (checked 2026-07-21, don't re-derive): at the default
-`--scope dead-unsub` the saved feed is **not** touched, so the dupe work and Part C
-are independent. `_at_risk_feeds` is `kept_feeds ∪ feed_failure_state(failures ≥ N)`,
-and `lectio:saved` has updates disabled (so never fails) and is never unsubscribed —
-it lands in neither set. **At `--scope all` it does matter**: saved articles are
-starred and `curated = tagged | starred`, so duplicate saves would each get
-retro-archived — wasted capture you then delete. If a `--scope all` run is ever
-planned, do the #1 dedup first.
-
-Two passes (`--scope dead-unsub` default, YouTube always excluded):
-1. **Retro-archive** every tagged entry with no `complete` archive row
-   (`enqueue_archive`, per-user). Dry-run: **~3,596** dead/unsub candidates
-   (~15k across the whole library at `--scope all`).
-2. **Wayback backfill** empty curated posts (<300 chars): closest Archive.org
-   snapshot → readability-extract → fill reader `entries.content` (JSON shape).
-   Dry-run: **~1,101** dead/unsub candidates, concentrated in a few feeds
-   (CodeProject 541, etc.). Refine before running: many are newsletters/digests
-   (no full article to recover) or 403 bot-walls where the *site* is alive (the
-   archive worker's live page-fetch beats Wayback). Order: retro-archive first,
-   then Wayback only the DNS-dead residual.
-
-### 10a. EEA geo-blocks are NOT a migration loss (2026-07-30)
-
-Some US local-news sites answer **451 Unavailable For Legal Reasons** to any EEA
-IP — a GDPR position by the publisher, not a bot wall:
-
-> "We recognise you are attempting to access this website from a country belonging
-> to the European Economic Area (EEA) … and therefore cannot grant you access."
-
-The VPS is in Germany, so these refuse Lectio, and the *feed* URL 451s identically
-— server-side fetching cannot work, and routing around a legal geo-restriction is
-not something to build. thecentersquare.com is the example.
-
-**But Inoreader is Sofia-based (Innologica), so it is EEA too and these sites never
-worked there either.** Josh confirmed he does not recall that site working in Ino.
-So this costs the migration nothing — do not log it as a regression when comparing
-coverage.
-
-**Resolution: the host migration, not a proxy.** Josh is leaving OVH when the
-prepaid year ends; a non-EEA host makes these feeds work with no code at all. A
-per-feed `proxy_url` was designed and deliberately NOT built — one feed does not
-justify the machinery, and the obvious free option is doubtful: a Cloudflare Worker
-egresses from the colo nearest its caller, so a call from Germany likely leaves
-Frankfurt and gets 451'd exactly as before. Untested, and cheap to test if it ever
-matters (a ~12-line Worker plus `curl "…/?u=https://ifconfig.co/country"`).
-
-⚠ **Re-check EEA-blocked feeds after the host move** — thecentersquare.com is the
-known one, and any US local-news feed that failed to subscribe is a candidate.
-
-Distinguish it from the other walls when triaging: 451 = geo (legal, unfixable);
-403 + "Just a moment…" = Cloudflare (washingtonstatestandard, realpython, behance);
-plain 403 = ordinary bot rules. Only the middle kind might ever lift on its own.
-
-**The way through for an individual article is the browser extension** — the user's
-own browser has a non-EEA IP and posts the page Lectio cannot reach. 451 is already
-in `_BLOCKED_STATUSES`, so a re-fetch says "blocked, use the extension" rather than
-offering to delete the article as gone.
-
-### 10. Inoreader replacement — the migration (start ~Dec 2026)
+Pass 1 ran with `--apply` 2026-07-22: **3,581 archives enqueued** and drained by
+the worker. Pass 2 — the Wayback tier for entries whose live page is gone — is
+still deferred, and is a single command with a decay clock: run it any time, it
+queues behind nothing.
+### Inoreader replacement — the migration (start ~Dec 2026)
 
 **Scheduled, not urgent**: renewal is 2027-03-16, so starting around Dec 2026 leaves
 ~3 months to validate before the date. Pulling it earlier buys nothing; the plan is
@@ -3151,7 +673,7 @@ Sequence: connect Ino → comparison report (9a) → triage/replace dead feeds �
 pass 2 (#8) → proxy the only-Ino feeds (9b) → let the plan lapse 2027-03-16 (annual
 SaaS rarely prorates; worth asking, but plan to ride it out).
 
-### 11. Full-content fetch at ingest for body-less feeds
+### Full-content fetch at ingest for body-less feeds
 
 meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
 description/content element at all; older stored entries have bodies, so this
@@ -3161,7 +683,7 @@ per-feed opt-in in Feed Properties, capped/throttled like enhancement. Overlaps
 with #9: some "we can't fetch" feeds get fixed here instead of via the Ino proxy,
 so it's worth revisiting once the comparison report sizes set (a).
 
-### 12. Page-weight reduction — follow-ups (main work landed 2026-07-15)
+### Page-weight reduction — follow-ups (main work landed 2026-07-15)
 
 The 12.95MB landing render (2.9k feeds) was cut by lazy-loading the
 Settings → Feeds table (5.6MB), the Stale list (3.8MB), and the sidebar
@@ -3183,14 +705,14 @@ feed rows (2.7MB), and by moving the ~580KB inline script to
 User-reported friction on already-shipped surfaces. Code pointers verified
 2026-07-21.
 
-> **Most of this section was promoted into Now #1**, which treats the dupe cluster
+> **Most of this section was promoted into "Saved dedup workflow"**, which treats the dupe cluster
 > as one project (correctness+safety → repeat-session UX). Tag autocomplete and the
-> tag autocomplete went to Now #8 and the Uncategorized batch-align to Now #4
+> tag autocomplete went to "Small daily-friction items" and the Uncategorized batch-align to "Auto-file saved articles"
 > (it measured far bigger than expected). Everything stays documented here in
 > full; the Now entries are summaries. Nothing in this section is still deferred
 > except where noted inline.
 
-**Bugs** — *promoted to Now #1a; both dupe-scan bugs SHIPPED 2026-07-21, see there
+**Bugs** — *promoted to the Saved dedup workflow; both dupe-scan bugs shipped 2026-07-21, see there
 for what actually changed and why the `normalize_article_url` half was dropped.*
 
 - ~~**`http://` and `https://` count as different URLs in the Saved dupe scan.**~~
@@ -3219,7 +741,7 @@ for what actually changed and why the `normalize_article_url` half was dropped.*
   it carries `scope` but not the selected tree node, so a search from inside a
   node also loses that context. Likeliest culprit; confirm before fixing.
 
-**Saved dupe-scan UX** (all in the dupe dialog) — *promoted to Now #1b*
+**Saved dupe-scan UX** (all in the dupe dialog) — *promoted to the Saved dedup workflow*
 
 - **"Not duplicates" action** — needs persistent per-pair suppression so a
   rejected group stops reappearing on every scan. New storage; the only item
@@ -3299,10 +821,10 @@ Make Lectio usable as a read-it-later app.
   Instapaper's read/archive split" is DONE** — Read Mode shipped it 2026-07-12 as
   the `saved_entries.archived_at` state (keeps the star; "done" as a separate axis
   from read/unread). Struck to stop it reading as outstanding. Still open, but
-  **reassess only after Now #4** since auto-filing changes what the tree looks
+  **reassess only after auto-filing** since auto-filing changes what the tree looks
   like: pinned saved-tag shortcuts under the Saved Articles row, and a badge
   counting total saved instead of unread (if unread proves the wrong default).
-- **The Read Mode follow-ups listed above are now Now #7** ("finish the Instapaper
+- **The Read Mode follow-ups listed above are now under "Finish the Instapaper clone"** ("finish the Instapaper
   clone") — they stay documented here for context, but the actionable list and its
   ordering live in Now.
 
@@ -3316,7 +838,7 @@ a stream.
 Current workaround (his): save as a Saved Article → create a feed → move the entry
 into it. Two things make that unsatisfying, and they're separate problems:
 
-1. **The capture is bad** — that's Now #2 (readability returns 6.7% of this
+1. **The capture is bad** — that is what the full-page capture mode is for (readability returns 6.7% of this
    particular page, and the wrong node). Fixing raw/full-page save makes the
    workaround *work*, and is the cheap immediate win.
 2. **The workflow is a hack** — "save, then manufacture a feed, then move it" is
@@ -3328,7 +850,7 @@ into it. Two things make that unsatisfying, and they're separate problems:
    "track this page" instead of failing.
 
 **Josh's stated preference (2026-07-21) is not a synthetic single-page feed — it's
-to file such pages into an existing, at-least-related real feed.** That's Now #4,
+to file such pages into an existing, at-least-related real feed.** That is what auto-filing does,
 which does exactly this in bulk. So the first-class single-page subscription is
 mostly *superseded*: build #2's raw-capture fix (makes the content good) and #4's
 auto-file (puts it somewhere sensible), then reassess. Only revisit page-monitoring
@@ -3352,7 +874,7 @@ history. Covers MakeUseOf, Lifehacker, How-To-Geek, freeCodeCamp, and other
 tagged-RSS firehoses.
 
 **The four candidate firehoses are VERIFIED (2026-07-21) — all carry
-`<category>`, so all four are set-up-able today (Now #8, config not code):**
+`<category>`, so all four are set-up-able today (config not code):**
 
 | feed | items | cats/item | distinct | vocabulary |
 |---|---|---|---|---|
@@ -3392,7 +914,7 @@ Remaining follow-ups:
 - Multi-word tags are *stored* hyphenated (`windows-11`) but can be **typed
   naturally** in rule lists (comma-separated; see the parser note above) — the
   earlier "must hyphenate" reading was wrong. ~~Still worth a tag autocomplete
-  in the rule form fed from `entry_feed_tags`~~ — **DONE 2026-08-02** (Now #8),
+  in the rule form fed from `entry_feed_tags`~~ — **DONE 2026-08-02**,
   one shared control as required, and it fills in the hyphenated stored form
   from whatever you type.
 
@@ -3501,7 +1023,7 @@ extension keeps working too.
 
 ### Saved-articles dupe scan follow-ups (deferred)
 
-> **Deprioritized 2026-07-21 by the cross-feed measurement (Now #6).** Fuzzy
+> **Deprioritized 2026-07-21 by the cross-feed measurement (see "Cross-feed duplicate scan").** Fuzzy
 > matching was the theory for "there must be more dupes"; the measurement says the
 > missing dupes aren't fuzzy, they're **out of scope** — the scan only reads
 > `lectio:saved` while the Saved view shows all starred items, and 447 of ~490
@@ -3518,29 +1040,6 @@ extension keeps working too.
   stay sane at 10k+ saved items. Add only if the exact tiers leave real dupes
   behind after the Instapaper-import cleanup.
 
-### CI flake: "database is locked" from leaked background threads
-
-Seen 2026-07-28 on PR #155: `test_feed_link_xss.py::test_entry_detail_empties_unsafe_link`
-errored with `StorageError: while opening database: database is locked`, while
-the other **1914 passed**. Passes locally, twice, on the full suite — CI-only.
-
-Not a missing pragma: `_LectioReaderStorage` already sets
-`busy_timeout=10000` and opens with `timeout=30.0`.
-
-The mechanism is almost certainly the one behind the
-`PytestUnhandledThreadExceptionWarning` the suite already emits (e.g. "no such
-table: feed_media_scan"): background threads started by one test outlive it,
-and because tenancy is a **global**, a leaked thread resolves paths against
-whatever the *next* test just configured — so it opens and locks a DB it was
-never meant to touch. Same family as the earlier flaky-CI work (reader
-busy_timeout + the startup-backfill gate), and the same family as the
-`test_youtube_playlist_rules` flake logged 2026-07-21.
-
-A real fix gates background threads in tests (a fixture that refuses to start
-them, or joins them on teardown) rather than widening timeouts. Worth doing:
-with CI as the only reviewer, a suite that reddens at random teaches you to
-ignore the one signal you have.
-
 ### Code health (deferred — low value, no user impact)
 
 **Flaky test seen 2026-07-21:**
@@ -3556,13 +1055,13 @@ nobody references":
 
 - **`server_posts_total` / `server_posts_sent`** — read in `templates/index.html`
   with `is defined` guards but **never set anywhere in Python**, so they're always
-  empty. Found 2026-07-21 while checking the posts list for Now #3.
+  empty. Found 2026-07-21 while checking the posts list for "Filter this view".
 - **`templates/js/_layout_shell.js` and `templates/js/_pull_to_refresh.js`** —
   unreferenced leftovers from an earlier extraction attempt (was filed under
   page-weight follow-ups; it's a dead-code item, not a perf one). Confirm nothing
   external uses them, then drop.
 - **The dormant in-app star-mode tree/JS** that the Read Mode hijack bypasses —
-  see Now #7, which lists it as a Read Mode follow-up. Same sweep.
+  see "Finish the Instapaper clone", which lists it as a Read Mode follow-up. Same sweep.
 - **`LECTIO_SECURITY_MODE`** — set to `"multi"` by
   `scripts/refresh_screenshots.py` for the Administration capture, but **nothing
   in the app reads it**; `grep -rn SECURITY_MODE --include=*.py` matches only
@@ -3690,6 +1189,24 @@ Other:
   panel. A generic "scrape all panels" feature needs a real multi-panel exemplar to
   design against; revisit if one turns up.
 
+- **Dead feed-redirector links — automation is exhausted** (investigated
+  2026-07-22; recorded so nobody re-investigates). 37 starred redirector links,
+  and every automatic recovery path returns zero: no archive rows, no live
+  redirect chain (feedproxy.google.com 404s), no Archive.org snapshots.
+  `scripts/backfill_canonical_links.py` reports `0/37 recoverable`. A host+slug
+  reconstruction tier was considered and rejected — ~13 entries, a verification
+  fetch each, on mostly dead 2013-era blogs. Resolved instead by **Edit URL**,
+  which covers the 22 opaque ids no heuristic could reach. The loss is only the
+  *link*: 36 of 37 still hold their content and read fine.
+- **Some pages have no server-side tags to pull** (2026-07-29; do not spend time
+  on these). behance.net ships zero `<category>` elements and renders its gallery
+  tags in JavaScript; Real Python's Atom feed carries no categories and its page
+  is bot-walled. Real Python's page tag block also mixes taxonomies (`ai` is a
+  topic, `intermediate` is a skill level) — a four-word stop-list would express
+  that where the coverage rule cannot.
+- **EEA geo-blocks are not a migration loss** (2026-07-30). Some US local-news
+  sites answer **451 Unavailable For Legal Reasons** to any EEA IP — a GDPR
+  position by the publisher, not a bot wall. Nothing to work around.
 ## Backburner
 
 - **Deployment genericization** (after multi-user phases) — make base

@@ -31,294 +31,51 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 |---|---|
 | ![Dark mode](docs/screenshots/1dark.png) | ![Light mode](docs/screenshots/2light.png) |
 
-More shots (settings, automation, feed properties, tags, history, admin) are in
-the **[Screenshots wiki page](https://github.com/joshg253/Lectio/wiki/Screenshots)**.
+| Read Mode (e-ink) | Saved articles |
+|---|---|
+| ![Read Mode](docs/screenshots/13readmode.png) | ![Saved](docs/screenshots/12saved.png) |
+
+More shots — the phone layout, Save Article, settings, automation, feed
+properties, tags, history and admin — are on the
+**[Screenshots wiki page](https://github.com/joshg253/Lectio/wiki/Screenshots)**.
+All of them are generated from synthetic demo data, never a real library.
 
 ---
 
-## Feature highlights
+## What it does
 
-Full detail lives in the wiki — **[Features](https://github.com/joshg253/Lectio/wiki/Features)**
-and **[Multi-user & APIs](https://github.com/joshg253/Lectio/wiki/Multi-user-and-APIs)**.
-The short version:
+The full tour — every feature, organized by area — is on the
+**[Features wiki page](https://github.com/joshg253/Lectio/wiki/Features)**. The
+short version:
 
-- **Fast triage** — three-pane reader, keyboard nav, context menus, manual and
-  feed-provided tags, read history, search (with a Search button and a clear
-  control; in the Saved view it also matches the saved article's text, not just
-  its title), and a Readability/web-view proxy.
-  Bulk mark-as-read shows an **Undo** toast that restores exactly that batch.
-- **Rich content** — embeds that actually render (curated trusted-host
-  allowlist), inline podcast audio (including audio borrowed from a separate
-  host feed), file attachments, recovered YouTube/Bandcamp/SoundCloud embeds,
-  and a **persistent audio player** bar that keeps playing as you navigate.
-- **Lead images** — per-feed extraction strategies with side-by-side
-  comparison, smart crop/fit tuning, caption sourcing, junk-image rejection,
-  and full-resolution webcomic panels. A configurable **portrait-image max
-  width** (Settings → Appearance) keeps tall images from dominating the pane
-  while wide images stay full-width. Feeds that carry no image at all still get
-  a cover when the page nominates one, so an entry that is pure prose plus a
-  download link isn't left blank.
-- **Images keep the author's layout, and stay a sane size** — an image the author
-  set left or right keeps its float, with the text wrapping around it as written
-  (it stacks full-width on a phone, where a half-column image reads worse than a
-  whole one). Oversized images are re-encoded rather than served whole: a 4K PNG
-  is within the dimension cap yet can still weigh 12 MB, so anything past a byte
-  budget becomes WebP — losslessly for logos, diagrams and line art, where lossy
-  compression would smear the edges. The budget lives in **Administration → Image
-  cache**, beside retention and max dimension.
-- **Automation** — highlight, mark-as-read, tag-filter, deduplicate,
-  email-article, outbound-webhook, save-to-Instapaper, **save/star-article**
-  (auto-saves into a pinned Saved **Inbox**), add-to-YouTube-playlist, and
-  add-to-Quire rules; scoped to all feeds, a folder, a feed, or a
-  multi-selected set; run history shows exactly what each run touched. Once the
-  list grows past a screenful, a **type filter** above it narrows to one kind of
-  rule — chips for the types you actually use, each with its count — and the list
-  keeps its scroll position when you toggle a rule rather than jumping to the top.
-  A **tag-filter** rule's tag list autocompletes from the tags the feeds in that
-  rule's scope have actually published, **with the number of posts carrying
-  each** — so you can see that a tag is on 9 of 10 posts before you filter on it,
-  instead of guessing at a vocabulary you've never seen. Type multi-word tags
-  naturally (`+Steam Deck`); the suggestion fills in the stored form. If a
-  tag-filter test finds **nothing**, it now says why when the cause is a
-  rescuing tag — `-mac, +pc` cuts nothing on a feed that tags every PC game's
-  Mac release, and silently matching zero is otherwise indistinguishable from
-  working. The same goes for a `+tag`-only filter, which rescues from drops but
-  never cuts on its own: the test says so and points at `++tag` (keep only
-  these) and `-tag` (drop these). A post's feed-tag chips show the first eight
-  with a **+N more** to reveal the rest — some publishers ship 28 tags a post and
-  bury the useful one, and a tag with no chip can't be filtered on at all.
-  Clicking a tag in the Saved sidebar stays in Saved, rather than throwing you
-  into the Feeds view with an empty list.
-  Opening the rule form from a feed's right-click menu scrolls the
-  form into view rather than leaving it off-screen at the top of a long list.
-- **Keep vs. to-do** — **tagging a post keeps it forever**: it triggers a full
-  offline capture (page + images) so tagged posts survive a dead feed, while
-  **starring** is the lightweight "needs dealing with" marker. A post is kept
-  (never auto-pruned, archived offline) whenever it's starred **or** tagged; the
-  unified **Saved** view browses everything kept, filterable per feed and per tag.
-  Typing a tag **autocompletes from your existing tags**, so they stay consistent
-  instead of sprouting near-duplicates.
-- **Read-it-later** — save any page via menu, bookmarklet, `/api/save` (share
-  sheets), or a browser extension that ships the rendered page past paywalls;
-  saved articles get offline capture, tags, and an e-ink **Read Mode** at
-  `/read` (paginated, Supernote-friendly). It's the same library in an e-ink
-  shape rather than a separate app: the same kept items, the same dates, the
-  same tags. You can **sort** (newest / oldest / received — oldest is how you
-  read a comic backlog), see each post's **date** in the list and under the
-  headline, and **tag from the device** by tapping names in a panel rather than
-  typing.
-
-  **Archive and Delete are the two ways to deal with a saved item.** A star
-  means *to-do*, not *unread* — you can read something and still not have
-  decided what to do with it — so saved items carry a second layer beyond
-  read/unread. **Archive** means "done, but keep the contents": it drops the
-  star, takes the item out of the inbox, and marks it read, while tags, the
-  offline copy, and protection from cleanup all survive. **Delete** means "done,
-  and I don't need this": star and tags both go (with a confirm naming the
-  tags), along with the offline copy. Neither removes an ordinary feed post —
-  it simply goes back to being one. Both mark the item read, because acting on
-  something from the list *is* dealing with it, and both show up in **History**.
-
-  **Inbox** holds what you have starred and not yet dealt with — a star means
-  *to-do*, so tagged-but-unstarred articles live under **Tags** instead of
-  padding the queue. It opens most-recently-starred, because a to-do pile is
-  ordered by when you added to it; pick another order and it sticks, and leaving
-  the Inbox restores whatever order that view had before.
-
-  **All Saved** sits next to it with everything kept — the same set the main
-  app's Saved view shows.
-
-  An article is marked read when you
-  reach its **last page**, not when you open it — so browsing the backlog to
-  decide what to read no longer clears it behind you. A one-page article counts
-  as read as soon as it's open, since the whole thing is on screen.
-  A **Scan Saved for duplicates**
-  utility (with side-by-side Compare and dead-link checking) cleans up
-  same-article-different-URL saves — it never pre-selects anything, and only
-  **Check URLs** arms a copy for deletion, and only when that copy's link is
-  provably dead. Titles are editable inline in the dialog (✎), for saved copies
-  whose title has drifted from the live post; **Re-fetch content** re-extracts an
-  article in place, to repair a bad initial capture or to pull the full text of a
-  post whose feed only sent a teaser. It works on **any post with a link** —
-  captures (including ones already filed onto a real feed) and ordinary feed posts
-  alike, so a truncated article can be fixed without first tagging it — and the
-  result is pinned, so the next refresh can't put the thin version back. Worth
-  trying whenever a capture came out wrong, since a page that extracted badly once
-  often extracts correctly later. A re-fetch updates the article's **Received**
-  date, never its **Pub** date — Pub stays the date it was published.
-  For a page the reader mangles outright — a manual or docs-style page whose
-  text is scattered rather than sitting in one article body — **Capture the
-  whole page** (a checkbox on Save Article, and **Re-fetch full page** in the
-  post menu) keeps everything instead of extracting. It's off by default on
-  purpose: on a normal blog post it also keeps the nav and sidebars that
-  extraction strips, so it's the escape hatch, not the better setting.
-  Starring or tagging a post whose feed only sent a **teaser** re-fetches it
-  automatically — a full article is never re-fetched, because the live page may
-  since have become a paywall or a 404 and overwriting a good copy at the moment
-  you decided to keep it is the worst possible trade. Bulk auto-tagging never
-  triggers it; only starring or tagging something yourself does.
-  **File saved articles** matches
-  unfiled saves to the subscribed feed they came from (grouped by host, reviewed
-  per host before anything moves) — the usual case after importing a read-later
-  library built from feeds; an **Instapaper CSV import**
-  brings your whole library over with tags and archive state — and tells you how
-  much of it belongs to feeds you already follow, so a fresh import doesn't
-  quietly become an unfiled backlog; **Unstar tagged articles** clears stars that
-  a tag has made redundant — since a tag keeps an article on its own, a star on
-  a tagged article is just clutter in the read-later queue. You pick which tags
-  to clear, tag by tag, and nothing is preselected. Tags whose names suggest a
-  reading queue (`to-read`, `later`) are flagged and left out of "select all",
-  because there the star *is* the queue rather than a redundant copy. Only the
-  star is removed: the tag, the article, its read state and its offline copy all
-  stay. An article carrying several tags keeps its star until every one of those
-  tags is selected, so the count on the button is the honest total rather than
-  the sum of the rows.
-- **Clean up article** (🧹 in the reading pane) — an Aardvark-style editor for a
-  post's body. Hovering outlines the element under the cursor and clicking
-  removes it; `W`/`N` widen and narrow the selection, `I` isolates (keeps only
-  what's selected and drops everything else), `Ctrl+Z` undoes, `Esc` cancels.
-  Nothing is written until **Save**, and **Revert cleanup** (📄 next to it)
-  restores the article exactly as the feed served it. Good for share widgets,
-  "related stories" blocks, newsletter footers, and the player chrome that
-  captured pages drag along. What you removed is recorded per post, so a future
-  release can promote a removal into a rule for the whole feed.
-- **Archive old stars** — the Saved Inbox holds what you starred and have not
-  dealt with, so years of older stars sit in it forever. Pick a cutoff (a week, a
-  month, a year) and archive everything older in one pass: it leaves the Inbox and
-  is marked read, while tags, the offline copy and protection from cleanup are all
-  kept, and anything can be un-archived. Shows the age spread and the resulting
-  Inbox size before you commit.
-- **Re-fetch is undoable, and falls back to the Internet Archive.** Re-pulling an
-  article stores the previous body first, so *Revert* puts it back if the result is
-  worse. If the publisher now serves a parked page or a section index over the
-  article's own URL, Lectio notices, refuses to overwrite your copy with it, and
-  asks the Wayback Machine for the real one.
-- **Batch re-fetch a feed or folder** — right-click a feed or folder in the Saved
-  tree and pick *Re-fetch all articles…* to re-pull every kept article in it. It
-  tells you the count, how many sites it touches and how long it will take before
-  you commit, then runs in the background so you can keep reading. **It is
-  deliberately slow**: requests are paced globally and per site, sites are visited
-  in rotation rather than in runs, and a site that keeps failing is dropped. Every
-  protection the single-article re-fetch has still applies to each article, so a
-  wrong page is refused rather than written and any one result stays revertible.
-  **Starting a second one queues it** rather than refusing — one batch runs at a
-  time, but you shouldn't have to wait at the keyboard and remember to come back.
-  A status pill in the bottom-left corner shows what is running, how far along it
-  is, the measured time remaining and what is queued behind it, with **Stop** for
-  the current batch and **Remove** for anything queued. It survives a reload and
-  shows up in any tab.
-- **Phone layout** — below 720px the three panes stack and one shows at a time
-  (folders → posts → article), with a back control on each and Back stepping down
-  the stack rather than leaving the page. It is the *same* app, not a second
-  reader, so lead images, per-feed thumbnail crop and zoom, embeds and the
-  full-image webcomic view all work there without being ported.
-- **Landscape is 40/60, and the divider drags** — a rotated phone gets the list
-  and the article at 40/60 rather than an even split, resizable by fingertip and
-  remembered separately from the desktop's three-pane widths.
-- **Swipe left or right in an article** to move through the list.
-- **Save articles to read without a connection** — Read Mode's *Save 20 for
-  offline* precaches the next articles in the current node, images included, and
-  reports articles and images separately (images failing is a degraded read;
-  articles failing is no feature). Built for the Supernote, whose browser has no
-  download handler at all, so a service worker serving the navigation is the only
-  in-browser route left. Pressing it again saves the next 20 you *don't already
-  have*, not the next 20 by position — so new arrivals at the top of the Inbox
-  can't shift the list out from under the cursor and leave a gap.
-- **Archive, Delete and mark-read work offline too** — the action applies on the
-  spot and is queued on the device, then replayed when the connection returns, so
-  reading on a train is not read-only. A badge shows *"3 changes waiting to sync"*
-  in both the reader and the article list while anything is still pending, and
-  the queue survives the browser being killed. Tagging queues too; the only
-  difference offline is cosmetic — a tag you type is shown exactly as typed until
-  it syncs, because the tidied-up name (`Guitar Lessons` → `guitar-lessons`) comes
-  back from the server.
-- **Folders are a drawer on a phone** — a hamburger top-left slides the tree over
-  the post list rather than replacing it, so you can see what you are leaving.
-  Tapping the dimmed list, or picking a folder, closes it.
-- **Curation state reads at a glance** — grey outline when unset, filled accent
-  when set, for all three axes: unread, starred, tagged. On a phone, tapping the
-  tag button reveals a finger-sized ✕ on each tag, since the desktop's hover-to-
-  reveal control is unreachable by touch.
-- **Saved's two sections share the column** — collapse *Folders* and *Tags* rises
-  to fill the space, its header directly under the collapsed one. Collapsed, Tags
-  still parks at the bottom; open alongside an expanded Folders, it takes about
-  an even share of what is left after the app chrome.
-- **The sidebar splits by mode** — *Feeds* is the folder list and nothing else;
-  *Saved* has two independently collapsible sections, **Folders** and **Tags**. A
-  tag only ever filtered kept articles, so it now lives only where it applies.
-- **On a phone the article view is one pinned row** — `< Posts`, then mark/star/tag,
-  then reader view / web view / open in tab / share. Title, byline and feed · date
-  scroll away with the article instead of taking half the screen. Suggestion chips
-  and the +/- filter triangles are omitted there.
-- **Feed Properties is tabbed by job** — *Info*, *Content* (what arrives: dev.to
-  filters, YouTube Shorts, subscriber-only posts), *Tuning* (how it looks: images,
-  thumbnails, feed type), *Maintenance*, *History*, *Automations*.
-- **Hide subscriber-only posts** — a per-feed toggle for paywalled feeds. A paid
-  Substack post arrives as nothing but a "Read more" link, which Lectio spots
-  without any marker from the publisher, and marks read at fetch time so it drops
-  out of Unread while staying findable under All.
-- **Bulk actions on the view you drilled into** — pick a tag (optionally narrowed
-  to one feed) and either **unstar everything here** or **delete the tag
-  everywhere**. The button carries the real count, so the set is stated before you
-  press it. Both work in Read Mode too, as visible buttons rather than a
-  right-click menu, and deleting a tag there takes two taps.
-- **Feed tag suggestions** — tags the feed (or its page) provides appear as chips
-  under a post, so filing is one tap. A chip you never want from that feed gets an
-  **×**; it stays hidden until you restore it from Feed Properties → *Hidden tags*.
-  Nothing is hidden automatically: a feed tagging every post "Lessons" is boilerplate
-  by any measure and still exactly the tag you want when filing a guitar lesson.
-- **Sort is remembered per view** — Feeds and Saved each keep their own order, so
-  reading a publish-date backlog in one doesn't re-sort the other. Views with a
-  natural order of their own (the Saved Inbox opens most-recently-starred) use it
-  without disturbing what you last chose; leaving them restores it.
-- **Retention** — per-folder *Delete after read* (nightly), a **Purge old
-  posts** utility with preview, and tombstones that keep deleted posts from
-  resurrecting (swept only after they leave the publisher's feed window).
-  Starred and tagged posts are never auto-deleted.
-- **Feed management** — OPML, resilient RSS/Atom auto-discovery (survives
-  stale autodiscovery links and schemeless input, and prefers a blog's own feed
-  over the domain-wide firehose on multisite hosts like
-  `devblogs.microsoft.com/<blog>/`). Sites that advertise no feed at all but
-  hide its address in the page are handled too — paste a Tapas series URL
-  (`tapas.io/series/<slug>`, the numeric form, or any episode link) and it
-  resolves to that series' feed. When a site advertises a feed that is
-  provably gone, it says so and offers a Page Feed rather than handing back an
-  address that can't be subscribed. Page Feeds for feedless
-  sites, dev.to filtered feeds, YouTube & DeviantArt sync, Bluesky image
-  recovery, per-folder refresh cadence, feed compare, fetch history,
-  duplicate-feed scanning, and curation-preserving unsubscribe/combine/move —
-  unsubscribing a feed that has starred/tagged posts defaults to **keeping**
-  them: the feed leaves the tree but its curated items stay browsable per feed
-  in Saved. Per-post fixes: delete (tombstoned), edit date, edit title, and
-  **edit URL** — repoint a post at a moved or dead source link (a retired
-  feedproxy/FeedBurner redirector, or a site reorganization), then **Re-fetch
-  content** to pull the article from its new home. The star, tags and read
-  state are kept: only the link changes. Per-feed, **edit Website** in Feed
-  Properties when an author moved domains without updating their feed's
-  `<guid>`/`<link>`: it rewrites every post link onto the new domain (carrying
-  stars/tags/read state), records the rule so re-ingested items stay corrected,
-  and fixes the site link, favicon and duplicate-scan pairing too. For an author
-  who moved more than once, **Other domains** in the same dialog lists every
-  domain declared for that feed and lets you add or remove one by hand — needed
-  because edit Website can only declare a domain it can still see in the feed,
-  which leaves an *older* dead domain with no way in. Adding one migrates any
-  posts still on it; a domain with none left is still worth declaring, since it
-  pairs old saved links with their current twins in the duplicate scan.
-- **Integrations** — Reddit (submit + authenticated fetching), Pinterest
-  (pin lead images), Quire (tasks), Instapaper, email (Resend), webhooks;
-  per-user OAuth with optional shared-instance credentials. On Star can
-  fan out to any of them.
-- **Reliability** — conditional GET, per-feed/domain backoff, GUID-churn
-  suppression, WebSub real-time push, WAL-mode SQLite, and browser-identity
-  fetch fallback for feeds whose servers refuse the default client.
-- **Multi-user** — isolated per-user databases with shared content caches;
-  **GReader**, **Fever**, and **Miniflux v1** API compatibility.
-- **Data portability** — Takeout-style ZIP export/import, online-safe
-  backups, and one-shot migrators for **Inoreader, Miniflux, FreshRSS, and
-  tt-rss** (feed URLs canonicalized so variants merge, not duplicate).
-- **Browser-extension quick subscribe** — answers Feedbin/Nextcloud News
-  `?subscribe=` URL patterns, so RSSHub-Radar's quick-subscribe drops feeds
-  straight into the Add Feed dialog.
+- **Triage first.** Three-pane reader, keyboard nav everywhere, context menus,
+  bulk mark-as-read that updates in place, per-view remembered sort, and a
+  layout that collapses to two panes on a tablet and one on a phone.
+- **Tagging a post keeps it forever.** A tag triggers a full offline capture —
+  page, readability text, every image, and any files the post links to — so a
+  kept article survives the site going down. Stars are the to-do pile; tags are
+  the keep pile.
+- **Read-it-later built in.** Save any page (menu, bookmarklet, `/api/save`, or
+  the browser extension) with no feed needed, then read it in **Read Mode**, an
+  e-ink-friendly reading app at `/read` that works offline — including
+  Archive, Delete and mark-read, which queue and drain when you reconnect.
+- **Content that actually renders.** Feed sanitization is Lectio's own, so
+  embeds survive: sandboxed players from a curated host allowlist, inline SVG
+  and MathML, recovered YouTube embeds, podcast audio (even when it lives in a
+  separate host feed), and images kept at the author's layout and a sane size.
+- **Automation.** Highlight, mark-as-read, tag-filter, deduplicate, and
+  send-to-destination rules (Instapaper, Pinterest, Reddit, Quire, email,
+  YouTube playlists, webhooks) at any scope, with dry-run and run history.
+- **Feed management that expects the real web.** Resilient auto-discovery,
+  Page Feeds for feedless sites, dev.to and DeviantArt adapters, conditional
+  GET, per-feed and per-domain backoff, GUID-churn suppression, feed compare,
+  duplicate scanning, and unsubscribe that keeps your curation.
+- **Fix a post in place.** Edit its date, title or URL; clean up its body with
+  an Aardvark-style element remover; re-fetch its content — undoably, with an
+  Internet Archive fallback — one post, or a whole feed or folder at a time.
+- **Yours to run.** Isolated per-user databases with shared content caches,
+  Google Reader / Fever / Miniflux v1 APIs, WebSub push, Takeout-style
+  export/import, and no build step: plain HTML and JS, no bundler, no framework.
 
 ---
 

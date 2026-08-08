@@ -2,6 +2,35 @@
 
 Lectio is a self-hosted feed reader built around the `reader` Python library. The goal is a fast triage workflow with a clean multi-user architecture and VPS-friendly deployment.
 
+## Contents
+
+Grouped by theme; the sections themselves stay in their historical order,
+because the prose cross-references its neighbours by direction.
+
+**Foundations**  
+[Layering](#layering) · [Reader-first philosophy](#reader-first-philosophy) · [Deployment path](#deployment-path) · [Extension strategy](#extension-strategy) · [Security direction](#security-direction)
+
+**Storage, tenancy and identity**  
+[Multi-user tenancy](#multi-user-tenancy) · [Feed URL normalization](#feed-url-normalization) · [Duplicate entry suppression](#duplicate-entry-suppression) · [Hard-deleting a single entry (tombstones)](#hard-deleting-a-single-entry-tombstones)
+
+**Interface and view state**  
+[View state model](#view-state-model) · [Page weight: lazy HTML fragments](#page-weight-lazy-html-fragments) · [Adaptive layout model](#adaptive-layout-model) · [Folder tree & the Uncategorized folder](#folder-tree--the-uncategorized-folder) · [Entry sort window (Pub Old / Pub New)](#entry-sort-window-pub-old--pub-new) · [Remembered sort: Feeds and Saved keep their own](#remembered-sort-feeds-and-saved-keep-their-own) · [Async bulk mark-read](#async-bulk-mark-read)
+
+**Feeds: discovery, ingest, automation**  
+[Feed discovery: which feed a page actually means](#feed-discovery-which-feed-a-page-actually-means) · [Feed auto-taggers](#feed-auto-taggers) · [Feed-provided tag suggestions (`entry_feed_tags`)](#feed-provided-tag-suggestions-entry_feed_tags) · [dev.to filtered feeds](#devto-filtered-feeds) · [DeviantArt integration](#deviantart-integration) · [Combining feeds carries the offline captures](#combining-feeds-carries-the-offline-captures) · [WebSub (PubSubHubbub)](#websub-pubsubhubbub)
+
+**Reading surfaces**  
+[Read Mode — e-ink reading app (`GET /read`)](#read-mode--e-ink-reading-app-get-read) · [Offline reading and offline acting (`static/sw.js`, `static/outbox.js`)](#offline-reading-and-offline-acting-staticswjs-staticoutboxjs) · [Floated images, and why margins are not kept](#floated-images-and-why-margins-are-not-kept) · [Titles render a tiny inline allowlist](#titles-render-a-tiny-inline-allowlist)
+
+**Images**  
+[Lead image pipeline](#lead-image-pipeline) · [Image bytes: the dimension cap is not a size cap](#image-bytes-the-dimension-cap-is-not-a-size-cap) · [Transparency: `convert("RGB")` paints line art black](#transparency-convertrgb-paints-line-art-black) · [Thumbnails must reuse the image proxy's bytes](#thumbnails-must-reuse-the-image-proxys-bytes) · [DeviantArt mature images: signed for minutes, cached for good](#deviantart-mature-images-signed-for-minutes-cached-for-good)
+
+**Saved articles, capture and editing**  
+[Saved articles (read-it-later capture)](#saved-articles-read-it-later-capture) · [Saving an article you already subscribe to](#saving-an-article-you-already-subscribe-to) · [Re-fetch on keep](#re-fetch-on-keep) · [Node bulk actions, and what a re-fetch may replace](#node-bulk-actions-and-what-a-re-fetch-may-replace) · [Keeping the files a post links to](#keeping-the-files-a-post-links-to) · [Editing a post's published date (overrides)](#editing-a-posts-published-date-overrides) · [Editing a post's body — Aardvark-style cleanup](#editing-a-posts-body--aardvark-style-cleanup)
+
+**Client APIs**  
+[GReader API](#greader-api) · [Fever API](#fever-api)
+
 ## Layering
 
 - UI/API layer: web routes, handlers, presentation state.
@@ -1774,6 +1803,104 @@ The budget is an instance setting (**Administration → Image cache**), with the
 var as its default — the same shape as `LECTIO_IMG_CACHE_MAX_DIM` beside it, and
 admin-only for the same reason: it decides how every user's images are stored.
 
+## Transparency: `convert("RGB")` paints line art black
+
+`Image.convert("RGB")` keeps whatever RGB sits *under* the alpha channel, and for
+line art that is black — so a transparent PNG becomes a solid black rectangle.
+Measured on `what-if.xkcd.com/imgs/a/138`: mean luminance **33** the naive way
+against **235** composited onto white. Two paths had it, in two disguises:
+
+- **`/thumb`** called `.convert("RGB")` outright, and now composites onto white
+  first. White rather than a theme colour because the output is a JPEG cached and
+  shared across users and themes, so the background is chosen once — and this
+  kind of image (diagrams, logos, line art) is drawn for a light page. The
+  zoom<1 letterbox canvas follows the same rule: white when the source had alpha,
+  black for photos.
+- **The starred archive** tested `"A" in img.mode`, which is `False` for a
+  *palette* PNG (mode `"P"`, transparency in `img.info`) — so precisely the
+  images this breaks were the ones it flattened. WebP carries alpha, so capture
+  keeps it, and normalization moved ahead of the resize since LANCZOS on a
+  palette image resamples palette indices rather than colours.
+
+**Neither fix reaches bytes already stored.** A saved entry's images are rewritten
+to `/starred-asset/<hash>` at render time, so the body shows the stored copy, not
+the live image — only a re-fetch restores the alpha
+(`scripts/repair_flattened_archive_images.py`; 143 what-if assets restored
+2026-08-04). Candidates are found from the **WebP header** rather than by
+decoding: an asset declaring no alpha whose source format *can* carry it is a
+suspect, a 32-byte read instead of decoding 25k images (a decode scan did not
+finish in ten minutes). A candidate is only rewritten when the re-fetched source
+has a *meaningful* alpha channel — xkcd's book covers have a fully opaque alpha
+channel and artwork that is simply dark, and an earlier pass "repaired" those into
+byte-identical output and reported a fix that never happened.
+
+Cached thumbnails were already black too, so the fix needed a cache bust:
+`_THUMB_RENDER_VERSION` joins the cache key (the same idiom as the existing `_p2`
+suffix), so old entries are never looked up again and each thumbnail re-renders on
+first view — no mass delete of the 59k-row, 431 MB cache and no refetch storm.
+
+At render time the theme paints behind transparent images via `--img-backdrop`,
+white in *both* themes: transparent article images are overwhelmingly black line
+art drawn for a light page, and an image that changed appearance when you toggled
+the theme would be worse than one that never does. Setting the variable to
+`transparent` restores the untouched look with no re-fetch — which is the point of
+doing it in CSS rather than in the stored bytes. Deliberately not applied in Read
+Mode, where `#reader-columns *` forces `background: transparent !important` for
+e-ink contrast and transparent art already lands on white.
+
+## Keeping the files a post links to
+
+Some posts are a wrapper around a download: guitar-pro's tab posts link `.gp`
+files and PDF lyric sheets that disappear with the article. A per-feed extension
+list (`feed_display_prefs.attachment_exts`) drives a scan of the captured HTML on
+star/tag, storing matches through the existing `_archive_asset` — which already
+stores non-image bytes untouched and dedupes per `(entry, source_url)`, so
+attachments inherit retention and the orphan sweep for free and differ from images
+only in how they are **found**. 25 MB per file (`ATTACHMENT_MAX_BYTES`).
+
+What counts as a file is the whole design:
+
+- **No bare wildcard.** `*` on an ordinary post also matches every link to a
+  homepage, a category or a social profile. A **prefix** pattern is allowed
+  (`gp*` → gp/gp3/gp4/gp5/gpx) because it still names a family of file types and
+  cannot reach a page, and it must be at least two characters — `p*` (pdf, png,
+  ppt, psd…) is a wildcard wearing a hat.
+- **Page extensions are refused everywhere** (`html`, `php`, `aspx`, `jsp`, …),
+  dropped on save *and* re-checked in the finder, so a stored value cannot smuggle
+  one through. Dropped rather than rejected: typing "pdf html" means the pdf, and
+  the UI says which were ignored.
+- **Any host, matched on the URL path.** A same-host rule was rejected —
+  guitar-pro serves tabs from `assets-wp.guitar-pro.eu` while the post is on
+  `blog.guitar-pro.com`, so it would miss exactly the case this exists for.
+  Path-only matching also keeps `/post.php?download=song.gp` a page.
+- **Anchors are judged on the path, not the whole URL.** Requiring an href to
+  *end* in an image extension let a Pinterest `/pin/create/button/?…&media=….jpg`
+  share button be stored as an asset. Capture refuses HTML outright as well,
+  whatever led it there.
+- **The Attachments list is decided by stored content type**, not guessed from
+  the URL, so a Gravatar (`/avatar/<hash>?s=48`) and an extension-less CDN path
+  stop being offered as files without needing a re-capture.
+- **Named data attributes are decoded, never a blind base64 sweep.** guitar-pro
+  ships `<span class="obflink" data-o="<base64>">`, reachable by a browser and
+  invisible to an href scan; `data-o`/`data-url`/`data-href`/`data-link`/
+  `data-file` are decoded and the result still has to satisfy the feed's
+  extension list. This widens where links are *found*, not what counts as a file.
+
+**Enclosures are captured unconditionally**, without the extension list: an
+`<enclosure>` is the publisher *declaring* that a file belongs to the post
+(Standard Ebooks attaches the epub), which is a stronger claim than a body link.
+Audio is skipped (podcast enclosures are large and stream fine) and images are
+already captured as images.
+
+An archived asset is addressed by content hash, so a bare `download` attribute
+made the browser save `cfc24ad676…` with no extension — unopenable and
+unidentifiable. The name derived from the source URL's basename is carried in
+three places: the Attachments list, in-body links rewritten to the archive (unless
+the publisher set their own `download` name), and the `/starred-asset/` route via
+`Content-Disposition`, so "Save link as" and a pasted URL are named too. Skipped
+for images/audio/video, which render inline and would only be made un-viewable by
+an attachment disposition.
+
 ## Thumbnails must reuse the image proxy's bytes
 
 `/thumb` fetched its source URL directly and never consulted `img_cache`. For an
@@ -1965,7 +2092,7 @@ Three functions run at startup to apply strategy and display defaults without us
 
 All three skip feeds where `feed_lead_image_strategy.manual=1` (user has explicitly chosen a strategy in Feed Properties). To add a new tagger, follow the same pattern and register it in `lifespan()`.
 
-## Feed-provided tag suggestions (`entry_feed_tags`)
+## Remembered sort: Feeds and Saved keep their own
 
 **Feeds and Saved remember their sort separately**, and a remembered sort is only
 written by an *explicit* choice. Both halves were bugs:
@@ -1989,6 +2116,23 @@ what it is handed; the regular sort menu has no entry for `starred`, so nothing
 rendered as active and the toolbar showed "Published newest" while the list was
 ordered by star date. Reported as the Feed view reverting to "Pub new" after
 switching in and out of e-ink mode.
+
+**A sort is a pair, and any path that can put half of one into a URL can rewrite
+the preference.** This bug has now happened twice in different code. Refreshing a
+feed rewrote the remembered sort because `refreshCurrentFeedOrFolder` substituted
+its own `'desc'` for an absent `sort_dir` — absent because the templates emit the
+parameter only when it differs from `DEFAULT_SORT_DIR` ("asc"), so the JS default
+had simply never agreed with the server's. `build_sort_query` then put
+`&sort_dir=desc` in the redirect, the index persisted it as an *explicit* choice,
+and the preference was gone. It could only bite someone whose preference was
+oldest-first. The Read Mode Inbox had the same shape from the other side: its sort
+*key* was guarded against persisting but its *direction* was not, so visiting the
+Inbox flipped Saved from oldest-first to newest-first and it stayed. The fix in
+both cases is to pass the parameter through rather than invent one — absent means
+"not in the URL", the redirect carries nothing, and the remembered preference
+stands. Suspect this first the next time an order "won't stick".
+
+## Node bulk actions, and what a re-fetch may replace
 
 **Node bulk actions are scoped to the drilled-into view, and Read Mode gets buttons
 rather than a menu.** `_scope_starred_keys(folder_id, list_feed_url, tag)` resolves
@@ -2045,6 +2189,8 @@ safe: `replace_entry_content(pin_content=not is_capture)` writes an
 the fuller copy. Without that pin the re-fetch would be silently undone, which is
 exactly the failure the original refusal existed to prevent.
 
+## Titles render a tiny inline allowlist
+
 **Titles render a tiny inline allowlist, by escape-then-restore.** Feeds put `<em>`
 in titles — and they also put `std::vector<T>` and `#include <chrono>` in them.
 Measured on the live library: of 21 titles containing angle brackets, only 6 are
@@ -2062,6 +2208,8 @@ Records carry both forms. `title_html` is used where the title is visible text (
 rows, the entry-pane headline, Read Mode rows and the reader headline);
 `title_plain` — the same string with those tags stripped — is used everywhere that
 cannot render markup: `title=` attributes, `<title>`, exports, email.
+
+## Feed-provided tag suggestions (`entry_feed_tags`)
 
 **Numbers-only tags are dropped at capture, from feed categories and page scraping
 alike.** They are comment counts, post ids, pagination and bare years — Josh's test
