@@ -227,9 +227,84 @@ def _freecodecamp_feed_url(url: str) -> str | None:
     return f"https://www.freecodecamp.org/{path}/rss/"
 
 
+_TAPAS_HOSTS = frozenset({"tapas.io", "www.tapas.io", "m.tapas.io"})
+
+
+def _tapas_feed_url(url: str) -> str | None:
+    """Tapas series feeds live at ``tapas.io/rss/series/<numeric id>``.
+
+    Only the numeric form can be mapped without a fetch. A slug URL
+    (``/series/club_cryptid``) carries its id in the page body instead — see
+    _tapas_feed_from_body, which reads it out of the HTML discovery already
+    fetched. Handling the numeric case here keeps it a zero-request rewrite.
+
+    (``tapastic.com`` is rewritten to ``tapas.io`` by URL normalization before
+    discovery ever sees it — see _DOMAIN_ALIASES in main.py.)"""
+    parsed = urlparse(url)
+    if (parsed.hostname or "").lower() not in _TAPAS_HOSTS:
+        return None
+    segments = [s for s in parsed.path.split("/") if s]
+    if len(segments) != 2 or segments[0].lower() != "series" or not segments[1].isdigit():
+        return None
+    return f"https://tapas.io/rss/series/{segments[1]}"
+
+
 _SITE_FEED_REWRITES = [
     _pinboard_feed_url, _artstation_feed_url, _behance_feed_url, _freecodecamp_feed_url,
+    _tapas_feed_url,
 ]
+
+# The page's *own* series id. `seriesId: N` is a script variable that appears
+# exactly once on a series page, so it is unambiguous and tried first. Episode
+# pages don't carry it and fall back to data-series-id, which appears on
+# recommendation cards too — hence "first match", the page's own series.
+_TAPAS_SERIES_ID_RES = (
+    re.compile(r"seriesId:\s*(\d+)"),
+    re.compile(r'data-series-id="(\d+)"'),
+)
+
+
+def _tapas_feed_from_body(final_url: str, html: str) -> str | None:
+    """Resolve a Tapas slug or episode URL to its series feed, from the HTML.
+
+    Tapas advertises no ``<link rel="alternate">`` at all — its only alternate
+    is the mobile page — and the canonical link points at the latest *episode*,
+    not the series. So a pasted ``/series/<slug>`` URL is invisible to generic
+    discovery; the series id exists only in the page body. This is the same
+    trick the community userscripts use, at no extra request: discovery has
+    already fetched this HTML."""
+    parsed = urlparse(final_url)
+    if (parsed.hostname or "").lower() not in _TAPAS_HOSTS:
+        return None
+    segments = [s for s in parsed.path.split("/") if s]
+    if not segments or segments[0].lower() not in ("series", "episode"):
+        return None
+    for pattern in _TAPAS_SERIES_ID_RES:
+        match = pattern.search(html)
+        if match:
+            return f"https://tapas.io/rss/series/{match.group(1)}"
+    return None
+
+
+# Run when generic autodiscovery finds no <link rel="alternate">: given the page
+# HTML already in hand, return a feed URL. For sites whose feed address is
+# derivable only from the body, never from the URL alone.
+_SITE_BODY_FEED_EXTRACTORS = [_tapas_feed_from_body]
+
+
+def feed_url_from_page_body(final_url: str, html: str) -> str | None:
+    """First known-site feed URL derivable from this page's HTML, or None."""
+    for extractor in _SITE_BODY_FEED_EXTRACTORS:
+        try:
+            found = extractor(final_url, html)
+        except Exception:
+            # Same contract as the URL rewriters: a bug here degrades to "no
+            # feed found", it does not break Add Feed — but it is logged.
+            _LOGGER.exception("body feed extractor %s failed for %r", extractor.__name__, final_url)
+            continue
+        if found:
+            return found
+    return None
 
 
 def rewrite_known_site_url(url: str) -> str:
@@ -459,6 +534,14 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
         seen.add(absolute)
         feeds.append({"url": absolute, "title": attrs.get("title", "").strip() or None})
 
+    if not feeds:
+        # Nothing advertised: some sites hide the feed address in the page body
+        # (Tapas). Falls through to the liveness check below like any other
+        # candidate, so a stale id is caught rather than offered.
+        from_body = feed_url_from_page_body(final_url, resp.text[:200_000])
+        if from_body:
+            feeds.append({"url": from_body, "title": None})
+
     stale_advertised: list[dict] = []
     gone_advertised: list[dict] = []
     if feeds:
@@ -600,6 +683,13 @@ def discover_feed_urls_ex(url: str, *, timeout: float = 10.0) -> tuple[list[str]
             absolute = urljoin(final_url, href)
             if absolute not in candidates:
                 candidates.append(absolute)
+
+    if not candidates:
+        # Feed address hidden in the page body (Tapas) — same call, same slice
+        # of the same HTML as probe_url, so the two cannot disagree.
+        from_body = feed_url_from_page_body(final_url, resp.text[:200_000])
+        if from_body:
+            candidates.append(from_body)
 
     # This mirrors probe_url's rules deliberately: probe_url previews what the
     # Add dialog shows, but the Add route itself re-discovers through here, so

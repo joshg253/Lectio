@@ -278,7 +278,10 @@ The short version:
 - **Feed management** — OPML, resilient RSS/Atom auto-discovery (survives
   stale autodiscovery links and schemeless input, and prefers a blog's own feed
   over the domain-wide firehose on multisite hosts like
-  `devblogs.microsoft.com/<blog>/`). When a site advertises a feed that is
+  `devblogs.microsoft.com/<blog>/`). Sites that advertise no feed at all but
+  hide its address in the page are handled too — paste a Tapas series URL
+  (`tapas.io/series/<slug>`, the numeric form, or any episode link) and it
+  resolves to that series' feed. When a site advertises a feed that is
   provably gone, it says so and offers a Page Feed rather than handing back an
   address that can't be subscribed. Page Feeds for feedless
   sites, dev.to filtered feeds, YouTube & DeviantArt sync, Bluesky image
