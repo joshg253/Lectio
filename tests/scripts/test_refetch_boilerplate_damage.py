@@ -43,9 +43,17 @@ class FakeBodyEntry:
 class FakeReader:
     """Only what the script asks of a reader: entry lookup, link, and bodies.
 
-    `bodies` maps feed_url -> {entry_id: body html}; it drives _still_sharing_text,
-    which decides whether an entry is already repaired. Default: every entry has a
-    unique body, so nothing is filtered as already-repaired unless a test says so.
+    `bodies` maps feed_url -> {entry_id: body html} and feeds
+    `StarredArchiveService.body_text_sharing_state`, which decides whether an
+    entry is still damaged (its text is shared with a sibling) or already
+    repaired (unique).
+
+    **The default is SHARED text**, not unique: every entry on a feed gets the
+    same body, plus one extra sibling holding it too. Sharing needs two entries,
+    and these tests are about the snapshot/link partition — a unique default
+    would mark every victim already-repaired and filter the whole scope away
+    before the logic under test ran. Tests that care about the repaired case
+    pass `bodies` explicitly.
     """
 
     def __init__(self, entries, bodies=None):
