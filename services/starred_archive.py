@@ -392,6 +392,49 @@ class StarredArchiveService:
         with self._recent_lock:
             self._recent_extractions.clear()
 
+    def body_text_sharing_state(
+        self, keys: list[tuple[str, str]], *, min_chars: int = 120
+    ) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+        """``(sharing, bodied)`` for *keys*, judged on the READER's current bodies.
+
+        The archive is written asynchronously, so it lags every repair and cannot
+        answer "is this entry damaged *now*". Measured 2026-08-07: of 594 entries
+        the archive flagged, 327 held perfectly good bodies, and 129 of 131
+        just-repaired entries still had their pre-repair extraction stored. Use
+        the archive to find candidates; use this to decide.
+
+        ``bodied`` is those with a body long enough to judge; ``sharing`` is the
+        subset whose text another entry on the same feed also holds. Returned
+        separately so "no text to look at" is never mistaken for "unique text" —
+        an entry with no reader row is gone, not repaired.
+        """
+        feeds = {f for f, _e in keys}
+        by_feed: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+        reader = self._get_reader()
+        for feed_url in feeds:
+            try:
+                entries = reader.get_entries(feed=feed_url)
+            except Exception:  # noqa: BLE001 — a vanished feed is not an error here
+                continue
+            for entry in entries:
+                body = " ".join(c.value or "" for c in (getattr(entry, "content", None) or []))
+                text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip()
+                if len(text) < min_chars:
+                    continue
+                fingerprint = self.extraction_fingerprint(body)
+                if fingerprint:
+                    by_feed[feed_url][fingerprint].append(entry.id)
+
+        sharing: set[tuple[str, str]] = set()
+        bodied: set[tuple[str, str]] = set()
+        for feed_url, groups in by_feed.items():
+            for ids in groups.values():
+                bodied.update((feed_url, e) for e in ids)
+                if len(ids) > 1:
+                    sharing.update((feed_url, e) for e in ids)
+        wanted = set(keys)
+        return sharing & wanted, bodied & wanted
+
     def extraction_matches_sibling(self, feed_url: str, entry_id: str,
                                    html_text: str, *, min_chars: int = 120) -> bool:
         """True when this extraction is byte-identical to another entry's.

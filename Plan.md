@@ -302,6 +302,37 @@ Two consequences, the second much worse than the first:
 a different article, **or the extraction was the feed's boilerplate again**", so
 the intent was documented and the implementation simply missed the second key.
 
+### The revert script would have undone the repair — FIXED 2026-08-07
+
+Caught before it ran. `revert_boilerplate_refetches.py` restores from a snapshot
+for everything the ARCHIVE flags, and the archive lags every repair — so after
+the repair ran it offered to restore **158** entries when only 42 were still
+damaged. The other ~116 had just been fixed, and restoring them would have put
+the boilerplate straight back.
+
+Both scripts now share one reader-based judgement,
+`StarredArchiveService.body_text_sharing_state`, so they cannot disagree about
+which entries are damaged *now*. The revert script skips anything already
+holding unique text and says so.
+
+It also no longer claims a snapshot is worth restoring when the snapshot is
+itself boilerplate: every re-fetch snapshots what it replaced, so a repair run
+fills that table with the very thing it was removing. `_useful_snapshots` applies
+the same uniqueness test to the stored original.
+
+**Final state of the boilerplate epic**, all 594 accounted for:
+
+| | |
+|---|---|
+| already fine (stale archive row only) | 328 |
+| restorable from a snapshot, no network | 42 |
+| no longer exist in the reader | 197 |
+| unrecoverable — page and Wayback both give boilerplate | 27 |
+
+The 27 are the floor: a clean run attempts them, the guard refuses all of them,
+no hosts get dropped and nothing is written. That is the repair finished, not a
+failure.
+
 ### Refreshing a feed rewrote the remembered sort — FIXED 2026-08-07
 
 Reported: "my sort keeps reverting back to Pub new (I'm generally always using

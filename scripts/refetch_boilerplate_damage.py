@@ -77,7 +77,12 @@ _MIN_EXTRACTION_CHARS = 120
 
 
 def _has_snapshot(keys: list[tuple[str, str]]) -> set[tuple[str, str]]:
-    """Which of *keys* the revert script could restore without the network."""
+    """Which of *keys* have a stored original at all.
+
+    Having one is not the same as it being WORTH restoring — see
+    `_useful_snapshots`. A re-fetch snapshots whatever it replaces, so a repair
+    run leaves behind snapshots full of the boilerplate it was trying to remove.
+    """
     try:
         meta = sqlite3.connect(str(tenancy.meta_db_path()))
     except sqlite3.Error:
@@ -93,6 +98,54 @@ def _has_snapshot(keys: list[tuple[str, str]]) -> set[tuple[str, str]]:
         meta.close()
     wanted = set(keys)
     return {(str(f), str(e)) for f, e in rows if (str(f), str(e)) in wanted}
+
+
+
+def _useful_snapshots(keys: set[tuple[str, str]]) -> set[tuple[str, str]]:
+    """Of *keys*, those whose stored original looks like an article, not chrome.
+
+    `entry_content_edits` is written by every re-fetch, so after a repair run the
+    table is full of snapshots holding the boilerplate that run replaced.
+    Restoring one of those swaps one wrong body for another. Measured on the live
+    library 2026-08-07: all 46 snapshots against still-damaged entries had been
+    written that same day by the repair itself, and none held a real original.
+
+    The test is the same one used everywhere else — is this text unique on its
+    feed? — applied to the snapshot rather than the current body.
+    """
+    if not keys:
+        return set()
+    by_feed: dict[str, dict[str, list[str]]] = collections.defaultdict(
+        lambda: collections.defaultdict(list))
+    fingerprint = main.starred_archive_service.extraction_fingerprint
+    meta = sqlite3.connect(str(tenancy.meta_db_path()))
+    meta.row_factory = sqlite3.Row
+    try:
+        for feed_url, entry_id in keys:
+            row = meta.execute(
+                "SELECT original_content FROM entry_content_edits"
+                " WHERE feed_url = ? AND entry_id = ?", (feed_url, entry_id)).fetchone()
+            if not row or not row["original_content"]:
+                continue
+            raw = str(row["original_content"])
+            try:
+                body = " ".join(c.get("value") or "" for c in json.loads(raw))
+            except Exception:  # noqa: BLE001 — plain HTML, not the JSON list form
+                body = raw
+            text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip()
+            if len(text) < _MIN_EXTRACTION_CHARS:
+                continue
+            fp = fingerprint(body)
+            if fp:
+                by_feed[feed_url][fp].append(entry_id)
+    finally:
+        meta.close()
+    useful: set[tuple[str, str]] = set()
+    for feed_url, groups in by_feed.items():
+        for ids in groups.values():
+            if len(ids) == 1:
+                useful.add((feed_url, ids[0]))
+    return useful
 
 
 def targets(only_feed: str | None) -> tuple[list[tuple[str, str, str]], dict[str, int]]:
@@ -111,11 +164,14 @@ def targets(only_feed: str | None) -> tuple[list[tuple[str, str, str]], dict[str
     # alone, the next run would spend ~90 network re-fetches re-repairing entries
     # that are already fine. An entry whose CURRENT body is unique on its feed is
     # not damaged, whatever the archive still says.
-    _sharing, _bodied = _text_sharing_state(list(victims))
+    _sharing, _bodied = main.starred_archive_service.body_text_sharing_state(
+        list(victims), min_chars=_MIN_EXTRACTION_CHARS)
     already_fixed = _bodied - _sharing
     victims = [k for k in victims if k not in already_fixed]
 
-    restorable = _has_snapshot(victims)
+    # Only a snapshot that is not itself boilerplate is worth diverting to the
+    # revert script; the rest still want the network.
+    restorable = _useful_snapshots(_has_snapshot(victims))
     skipped = {"has_snapshot": 0, "entry_gone": 0, "no_http_link": 0,
                "already_repaired": len(already_fixed)}
 
@@ -137,59 +193,13 @@ def targets(only_feed: str | None) -> tuple[list[tuple[str, str, str]], dict[str
     return rows, skipped
 
 
-def _text_sharing_state(
-    keys: list[tuple[str, str]],
-) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
-    """``(sharing, bodied)`` for *keys*, read from the reader.
-
-    ``bodied`` is those with a body long enough to judge at all; ``sharing`` is
-    the subset whose text another entry on the same feed also holds. The two are
-    returned separately because "unique text" and "no text to look at" must not
-    be conflated — an entry with no reader row would otherwise be reported as
-    repaired when it is simply gone.
-
-    Reads the READER, not the archive. The archive is written asynchronously, so
-    straight after a run it does not yet contain what the run produced — using it
-    here would report a clean bill of health for exactly the failure this checks
-    for. The reader is also what the user actually reads.
-
-    Compares each rewritten entry against every entry on its feed, not just the
-    other rewritten ones: replacing one boilerplate with a *different* entry's
-    existing body is the same defect.
-    """
-    feeds = {f for f, _e in keys}
-    by_feed: dict[str, dict[str, list[str]]] = collections.defaultdict(
-        lambda: collections.defaultdict(list))
-    fingerprint = main.starred_archive_service.extraction_fingerprint
-    with main.get_reader() as reader:
-        for feed_url in feeds:
-            for entry in reader.get_entries(feed=feed_url):
-                body = " ".join(c.value or "" for c in (entry.content or []))
-                text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip()
-                if len(text) < _MIN_EXTRACTION_CHARS:
-                    continue
-                fp = fingerprint(body)
-                if fp:
-                    by_feed[feed_url][fp].append(entry.id)
-
-    shared: set[tuple[str, str]] = set()
-    bodied: set[tuple[str, str]] = set()
-    for feed_url, groups in by_feed.items():
-        for ids in groups.values():
-            bodied.update((feed_url, e) for e in ids)
-            if len(ids) > 1:
-                shared.update((feed_url, e) for e in ids)
-    wanted = set(keys)
-    return shared & wanted, bodied & wanted
-
-
 def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None:
     rows, skipped = targets(only_feed)
     total_skipped = sum(skipped.values())
     scope = only_feed or "every feed"
     print(f"[{uid}] {len(rows) + total_skipped:,} entr(ies) hold a sibling-shared "
           f"extraction in {scope}")
-    print(f"      {skipped['has_snapshot']:,} have a snapshot — run "
+    print(f"      {skipped['has_snapshot']:,} have a snapshot worth restoring — run "
           "scripts/revert_boilerplate_refetches.py for those, it needs no network")
     print(f"      {skipped['already_repaired']:,} already hold unique text — repaired by an "
           "earlier run; the archive just has not caught up")
@@ -248,7 +258,8 @@ def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None
     # afterwards. A repair that cannot audit itself is not finished.
     written = [(r["feed_url"], r["entry_id"]) for r in log if r.get("ok")]
     if written:
-        bad = sorted(_text_sharing_state(written)[0])
+        bad = sorted(main.starred_archive_service.body_text_sharing_state(
+            written, min_chars=_MIN_EXTRACTION_CHARS)[0])
         print(f"\n      verification: of {len(written):,} rewritten, "
               f"{len(written) - len(bad):,} hold text unique on their feed, "
               f"{len(bad):,} still share text with a sibling.")
