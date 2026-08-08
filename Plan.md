@@ -105,15 +105,20 @@ claycomix correctly resolves to **no panel** now, so the caller falls back to
 
 ### 0. Next up, in this order (agreed 2026-08-06)
 
+**All three are done as of 2026-08-07. This list is finished; delete it once
+something replaces it.**
+
 1. ~~**Dependency / stack update (§0c).**~~ **DONE 2026-08-06.** feedparser did
    have a code change behind it, though not the predicted one — see §0c.
-2. **The 565 boilerplate-damaged entries.** Documented under "Re-fetch replacing
-   an article with a feed's boilerplate" below. **The script is written and
-   tested (2026-08-06); what remains is running it with `--apply`**, which is
-   368 live network re-fetches and wants a go-ahead.
-3. **Saved Inbox = the whole star pile (§0b).** Unblocked (the chunking bug was
-   a stale build, not a bug) and still open. Feature work: the Inbox works
-   today, it is just showing the wrong set.
+2. ~~**The 565 boilerplate-damaged entries.**~~ **DONE 2026-08-07.** Ran to
+   completion; everything recoverable was recovered. See the closing table under
+   "Re-fetch replacing an article with a feed's boilerplate".
+3. ~~**Saved Inbox = the whole star pile (§0b).**~~ **SHIPPED — merged as PR
+   #178** (`saved-inbox`), on main and live. §0b's own heading still says
+   "UNBLOCKED on `saved-inbox-wip`", which is what made it read as open long
+   after it had landed; that branch no longer exists locally or on the remote
+   because it was merged. Checked 2026-08-07 against the reflog and the deployed
+   code — `kept=starred` is wired at templates/index.html:267.
 
 Parked, deliberately:
 
@@ -826,7 +831,7 @@ end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, 
 excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 `py/full-ssrf` was.
 
-### 0b. Saved Inbox = every star, newest-star-first — UNBLOCKED on `saved-inbox-wip`
+### 0b. Saved Inbox = every star, newest-star-first — SHIPPED (PR #178, on main)
 
 **What it does.** Saved → Inbox was a pinned link to the `inbox` **tag**, which
 only the save_article automation ever writes — it showed 3 items against 9,577
