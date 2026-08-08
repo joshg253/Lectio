@@ -10550,7 +10550,17 @@ def _is_feed_subscribed(conn: sqlite3.Connection, feed_url: str) -> bool:
 
 
 def _queue_media_audio_scan(feed_url: str) -> None:
-    """Background-scan a feed for media:content audio (deduped, tenancy-bound)."""
+    """Background-scan a feed for media:content audio (deduped, tenancy-bound).
+
+    Honours LECTIO_DISABLE_STARTUP_BACKFILL for the reason conftest sets it: a
+    daemon writing the per-user meta DB races the test's own ops on the same
+    temp DB and surfaces as an intermittent "database is locked". That switch
+    already covered the *startup* daemons; this one is spawned per request, so
+    it slipped through and kept failing CI from a test that never touches it
+    (test_feed_link_xss, which only renders a post list).
+    """
+    if os.getenv("LECTIO_DISABLE_STARTUP_BACKFILL", "0") == "1":
+        return
     uid = tenancy.current_user_id()
     key = (uid, feed_url)
     with _media_scan_lock:
