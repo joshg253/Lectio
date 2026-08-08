@@ -29,10 +29,23 @@ body is damaged just the same and no future feed refresh will repair it.
 **The guard now works in this script's favour.** A page that still extracts to
 the same boilerplate is refused rather than written, so an entry that cannot be
 recovered keeps what it has instead of being re-damaged. Those are reported as
-`refused` — not failures, and not fixed either. Expect a lot of them from the
-feeds that were damaged most: `blogs.technet.com` and `channel9.msdn.com` no
-longer exist, so the archive fallback is the only route and often there is no
-snapshot to find.
+`refused` — not failures, and not fixed either.
+
+**Two lessons from the first apply run (2026-08-07), both now built in:**
+
+- *The guard had no memory of its own batch.* Archiving is asynchronous, so
+  entry 2 could be written the same wrong text as entry 1 seconds earlier and
+  still pass, because entry 1's extraction had not been archived yet. It wrote
+  identical comment-section text to five supernote entries this way. The guard
+  now remembers what it has allowed this run.
+- *Detection over-reports, because the archive lags.* 129 of the 131 entries the
+  run rewrote still had their pre-run extraction stored, so they still looked
+  damaged. Worse, the same lag had been inflating the count from the start: of
+  594 flagged, 327 had perfectly good bodies. Scope is now filtered by what the
+  READER holds, which is what a person actually reads.
+
+A run therefore also **verifies itself** at the end, re-checking what it wrote,
+because "the write was allowed" is not the same as "the article came back".
 
 Entries whose reader row is gone are skipped: the archive still lists them, but
 there is nothing left to write a body back to.
@@ -45,8 +58,10 @@ there is nothing left to write a body back to.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import os
+import re
 import sqlite3
 import sys
 from collections import Counter
@@ -57,9 +72,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import main  # noqa: E402
 from services import refetch_batch, tenancy  # noqa: E402
 
+# Same floor the guard uses: a short body can legitimately coincide.
+_MIN_EXTRACTION_CHARS = 120
+
 
 def _has_snapshot(keys: list[tuple[str, str]]) -> set[tuple[str, str]]:
-    """Which of *keys* the revert script could restore without the network."""
+    """Which of *keys* have a stored original at all.
+
+    Having one is not the same as it being WORTH restoring — see
+    `_useful_snapshots`. A re-fetch snapshots whatever it replaces, so a repair
+    run leaves behind snapshots full of the boilerplate it was trying to remove.
+    """
     try:
         meta = sqlite3.connect(str(tenancy.meta_db_path()))
     except sqlite3.Error:
@@ -77,6 +100,54 @@ def _has_snapshot(keys: list[tuple[str, str]]) -> set[tuple[str, str]]:
     return {(str(f), str(e)) for f, e in rows if (str(f), str(e)) in wanted}
 
 
+
+def _useful_snapshots(keys: set[tuple[str, str]]) -> set[tuple[str, str]]:
+    """Of *keys*, those whose stored original looks like an article, not chrome.
+
+    `entry_content_edits` is written by every re-fetch, so after a repair run the
+    table is full of snapshots holding the boilerplate that run replaced.
+    Restoring one of those swaps one wrong body for another. Measured on the live
+    library 2026-08-07: all 46 snapshots against still-damaged entries had been
+    written that same day by the repair itself, and none held a real original.
+
+    The test is the same one used everywhere else — is this text unique on its
+    feed? — applied to the snapshot rather than the current body.
+    """
+    if not keys:
+        return set()
+    by_feed: dict[str, dict[str, list[str]]] = collections.defaultdict(
+        lambda: collections.defaultdict(list))
+    fingerprint = main.starred_archive_service.extraction_fingerprint
+    meta = sqlite3.connect(str(tenancy.meta_db_path()))
+    meta.row_factory = sqlite3.Row
+    try:
+        for feed_url, entry_id in keys:
+            row = meta.execute(
+                "SELECT original_content FROM entry_content_edits"
+                " WHERE feed_url = ? AND entry_id = ?", (feed_url, entry_id)).fetchone()
+            if not row or not row["original_content"]:
+                continue
+            raw = str(row["original_content"])
+            try:
+                body = " ".join(c.get("value") or "" for c in json.loads(raw))
+            except Exception:  # noqa: BLE001 — plain HTML, not the JSON list form
+                body = raw
+            text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip()
+            if len(text) < _MIN_EXTRACTION_CHARS:
+                continue
+            fp = fingerprint(body)
+            if fp:
+                by_feed[feed_url][fp].append(entry_id)
+    finally:
+        meta.close()
+    useful: set[tuple[str, str]] = set()
+    for feed_url, groups in by_feed.items():
+        for ids in groups.values():
+            if len(ids) == 1:
+                useful.add((feed_url, ids[0]))
+    return useful
+
+
 def targets(only_feed: str | None) -> tuple[list[tuple[str, str, str]], dict[str, int]]:
     """The damaged entries that need the network, plus why the others were left.
 
@@ -86,8 +157,23 @@ def targets(only_feed: str | None) -> tuple[list[tuple[str, str, str]], dict[str
     that quietly narrowed the first into the second would be lying about scope.
     """
     victims = main.starred_archive_service.sibling_extraction_entries(only_feed)
-    restorable = _has_snapshot(victims)
-    skipped = {"has_snapshot": 0, "entry_gone": 0, "no_http_link": 0}
+
+    # Detection reads the ARCHIVE, which is written asynchronously and lags a
+    # repair badly: after the first apply run, 129 of 131 rewritten entries still
+    # had their pre-run extraction stored, so they all still looked damaged. Left
+    # alone, the next run would spend ~90 network re-fetches re-repairing entries
+    # that are already fine. An entry whose CURRENT body is unique on its feed is
+    # not damaged, whatever the archive still says.
+    _sharing, _bodied = main.starred_archive_service.body_text_sharing_state(
+        list(victims), min_chars=_MIN_EXTRACTION_CHARS)
+    already_fixed = _bodied - _sharing
+    victims = [k for k in victims if k not in already_fixed]
+
+    # Only a snapshot that is not itself boilerplate is worth diverting to the
+    # revert script; the rest still want the network.
+    restorable = _useful_snapshots(_has_snapshot(victims))
+    skipped = {"has_snapshot": 0, "entry_gone": 0, "no_http_link": 0,
+               "already_repaired": len(already_fixed)}
 
     rows: list[tuple[str, str, str]] = []
     with main.get_reader() as reader:
@@ -113,8 +199,10 @@ def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None
     scope = only_feed or "every feed"
     print(f"[{uid}] {len(rows) + total_skipped:,} entr(ies) hold a sibling-shared "
           f"extraction in {scope}")
-    print(f"      {skipped['has_snapshot']:,} have a snapshot — run "
+    print(f"      {skipped['has_snapshot']:,} have a snapshot worth restoring — run "
           "scripts/revert_boilerplate_refetches.py for those, it needs no network")
+    print(f"      {skipped['already_repaired']:,} already hold unique text — repaired by an "
+          "earlier run; the archive just has not caught up")
     print(f"      {skipped['entry_gone']:,} no longer exist in the reader; "
           f"{skipped['no_http_link']:,} have no http(s) link")
     print(f"      {len(rows):,} can be re-fetched")
@@ -145,6 +233,10 @@ def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None
               f"refused={stats['mismatch']} dead={stats['dead']} failed={stats['failed']}",
               flush=True)
 
+    # Start with no in-run memory, so a previous run's allowances cannot refuse
+    # a legitimate write here.
+    main.starred_archive_service.forget_recent_extractions()
+
     stats, log = refetch_batch.run_paced(
         ordered,
         lambda f, e: main._refresh_captured_article_for_current_user(f, e, "readability"),
@@ -158,6 +250,27 @@ def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None
           f"page gone {stats['dead']:,} | failed {stats['failed']:,} | "
           f"host dropped {stats['skipped_host']:,}")
     print(f"      log: {out}")
+
+    # Verify the run's own output. "recovered" only means a write was allowed at
+    # the time; it does not mean the article came back. The first apply run
+    # reported 131 recovered and every one of them turned out to share text with
+    # a sibling — new boilerplate in place of old — and that was found by hand,
+    # afterwards. A repair that cannot audit itself is not finished.
+    written = [(r["feed_url"], r["entry_id"]) for r in log if r.get("ok")]
+    if written:
+        bad = sorted(main.starred_archive_service.body_text_sharing_state(
+            written, min_chars=_MIN_EXTRACTION_CHARS)[0])
+        print(f"\n      verification: of {len(written):,} rewritten, "
+              f"{len(written) - len(bad):,} hold text unique on their feed, "
+              f"{len(bad):,} still share text with a sibling.")
+        if bad:
+            print("      Those are NOT repaired — the page gave boilerplate again.")
+            for _feed_url, entry_id in bad[:5]:
+                print(f"        {entry_id[:84]}")
+            if len(bad) > 5:
+                print(f"        … and {len(bad) - 5:,} more")
+            print("      Re-running will not help them; they need a different source.")
+
     print("      Every write snapshotted what it replaced, so any one is revertible —")
     print("      though what it replaced was the boilerplate, not the lost original.")
     print("      Restart the app so nothing serves a cached render.")

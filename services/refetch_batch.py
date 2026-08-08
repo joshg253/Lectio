@@ -112,8 +112,15 @@ def run_paced(
         if result.get("ok"):
             stats["archive" if result.get("from_archive") else "ok"] += 1
             host_failures[host] = 0
-        elif result.get("mismatch"):
-            stats["mismatch"] += 1          # stored copy deliberately left alone
+        elif result.get("mismatch") or result.get("boilerplate"):
+            # Stored copy deliberately left alone. `boilerplate` is a SECOND
+            # refusal key that this branch originally missed, so every guard
+            # refusal was counted as a failure — and, far worse, counted against
+            # the host. On the 2026-08-07 repair run that dropped hosts purely
+            # because their pages kept extracting to boilerplate, cutting the run
+            # from 368 attempts to 223. The site answered perfectly well; a
+            # refusal is the guard working and must never penalise it.
+            stats["mismatch"] += 1
             host_failures[host] = 0
         elif result.get("dead"):
             stats["dead"] += 1

@@ -52,6 +52,17 @@ def find_boilerplate_entries(only_feed: str | None) -> list[tuple[str, str]]:
 
 def revert_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
     victims = find_boilerplate_entries(only_feed)
+    # Detection reads the ARCHIVE, which lags every repair, so it still lists
+    # entries whose body is now perfectly good. Restoring one of those would put
+    # the boilerplate BACK. Before this filter, the script offered to restore 158
+    # entries when only 42 were still damaged — the other ~116 had just been
+    # repaired by scripts/refetch_boilerplate_damage.py.
+    _sharing, _bodied = main.starred_archive_service.body_text_sharing_state(list(victims))
+    _healthy = _bodied - _sharing
+    if _healthy:
+        print(f"[{user_id}] {len(_healthy):,} flagged entr(ies) already hold unique text"
+              " — skipping them; the archive simply has not caught up", flush=True)
+    victims = [k for k in victims if k not in _healthy]
     feeds = {f for f, _ in victims}
     print(f"[{user_id}] {len(victims):,} entr(ies) share an extraction with a sibling"
           f" across {len(feeds)} feed(s)", flush=True)

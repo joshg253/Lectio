@@ -27,7 +27,7 @@ import sqlite3
 import threading
 import time
 import zlib
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -116,6 +116,10 @@ class StarredArchiveService:
         self._background_user_ids = background_user_ids or (
             lambda: [tenancy.DEFAULT_USER_ID]
         )
+        # Guards the in-run extraction memory (see extraction_matches_sibling):
+        # the archive worker thread and a foreground re-fetch both reach it.
+        self._recent_extractions: dict[str, OrderedDict] = {}
+        self._recent_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._worker_thread: threading.Thread | None = None
         # Wakes the worker when a new entry is enqueued, instead of waiting
@@ -345,6 +349,95 @@ class StarredArchiveService:
                     out.extend((feed_url, e) for e in entry_ids)
         return out
 
+    # Extractions this process has ALLOWED but that may not be archived yet.
+    # feed_url -> {fingerprint: (entry_id, monotonic_ts)}, newest last.
+    #
+    # The archive is written asynchronously (enqueue_archive), so during a bulk
+    # re-fetch the guard below cannot see its own run's writes: entry 1 is
+    # allowed, entry 2 gets the SAME wrong text seconds later and is allowed too
+    # because entry 1's new extraction has not landed yet. A 368-entry repair run
+    # on 2026-08-07 wrote identical comment-section text to five supernote
+    # entries exactly this way, and all 131 of its "successes" ended up sharing
+    # text with a sibling. The guard was sound for the one-at-a-time interactive
+    # case it was written for and simply had no memory of the current batch.
+    _RECENT_PER_FEED = 300
+    _RECENT_TTL_SECONDS = 6 * 3600
+
+    def _note_allowed_extraction(self, feed_url: str, entry_id: str, fingerprint: str) -> None:
+        with self._recent_lock:
+            feed = self._recent_extractions.setdefault(feed_url, OrderedDict())
+            feed[fingerprint] = (entry_id, time.monotonic())
+            feed.move_to_end(fingerprint)
+            while len(feed) > self._RECENT_PER_FEED:
+                feed.popitem(last=False)
+
+    def _recent_sibling_entry(self, feed_url: str, entry_id: str, fingerprint: str) -> str | None:
+        """Entry id this run already wrote this exact extraction to, if any."""
+        now = time.monotonic()
+        with self._recent_lock:
+            feed = self._recent_extractions.get(feed_url)
+            if not feed:
+                return None
+            hit = feed.get(fingerprint)
+            if not hit:
+                return None
+            other_id, ts = hit
+            if now - ts > self._RECENT_TTL_SECONDS:
+                feed.pop(fingerprint, None)
+                return None
+            return other_id if other_id != entry_id else None
+
+    def forget_recent_extractions(self) -> None:
+        """Drop the in-run memory. For tests and for starting a repair clean."""
+        with self._recent_lock:
+            self._recent_extractions.clear()
+
+    def body_text_sharing_state(
+        self, keys: list[tuple[str, str]], *, min_chars: int = 120
+    ) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+        """``(sharing, bodied)`` for *keys*, judged on the READER's current bodies.
+
+        The archive is written asynchronously, so it lags every repair and cannot
+        answer "is this entry damaged *now*". Measured 2026-08-07: of 594 entries
+        the archive flagged, 327 held perfectly good bodies, and 129 of 131
+        just-repaired entries still had their pre-repair extraction stored. Use
+        the archive to find candidates; use this to decide.
+
+        ``bodied`` is those with a body long enough to judge; ``sharing`` is the
+        subset whose text another entry on the same feed also holds. Returned
+        separately so "no text to look at" is never mistaken for "unique text" —
+        an entry with no reader row is gone, not repaired.
+        """
+        feeds = {f for f, _e in keys}
+        by_feed: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+        # `with`, like every other _get_reader() call in this module: the reader
+        # owns DB connections, and this runs once per repair or revert pass, so
+        # a bare call leaks one every time.
+        with self._get_reader() as reader:
+            for feed_url in feeds:
+                try:
+                    entries = reader.get_entries(feed=feed_url)
+                except Exception:  # noqa: BLE001 — a vanished feed is not an error here
+                    continue
+                for entry in entries:
+                    body = " ".join(c.value or "" for c in (getattr(entry, "content", None) or []))
+                    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip()
+                    if len(text) < min_chars:
+                        continue
+                    fingerprint = self.extraction_fingerprint(body)
+                    if fingerprint:
+                        by_feed[feed_url][fingerprint].append(entry.id)
+
+        sharing: set[tuple[str, str]] = set()
+        bodied: set[tuple[str, str]] = set()
+        for feed_url, groups in by_feed.items():
+            for ids in groups.values():
+                bodied.update((feed_url, e) for e in ids)
+                if len(ids) > 1:
+                    sharing.update((feed_url, e) for e in ids)
+        wanted = set(keys)
+        return sharing & wanted, bodied & wanted
+
     def extraction_matches_sibling(self, feed_url: str, entry_id: str,
                                    html_text: str, *, min_chars: int = 120) -> bool:
         """True when this extraction is byte-identical to another entry's.
@@ -360,6 +453,12 @@ class StarredArchiveService:
         fingerprint = self.extraction_fingerprint(html_text)
         if not fingerprint:
             return False
+        # This run's own writes first — they are not in the archive yet.
+        _recent = self._recent_sibling_entry(feed_url, entry_id, fingerprint)
+        if _recent:
+            LOGGER.info("re-fetch: extraction matches %s written earlier this run on %s",
+                        _recent, feed_url)
+            return True
         try:
             with self._get_archive_connection() as conn:
                 rows = conn.execute(
@@ -369,7 +468,7 @@ class StarredArchiveService:
                     (feed_url, entry_id),
                 ).fetchall()
         except sqlite3.Error:
-            return False
+            return False        # cannot judge; do not record a maybe
         for row in rows:
             try:
                 other = zlib.decompress(row["readability_html_zlib"]).decode("utf-8", "replace")
@@ -379,6 +478,9 @@ class StarredArchiveService:
                 LOGGER.info("re-fetch: extraction matches sibling %s on %s",
                             row["entry_id"], feed_url)
                 return True
+        # Allowed. Remember it, so the next entry in this batch is measured
+        # against it even though archiving has not caught up.
+        self._note_allowed_extraction(feed_url, entry_id, fingerprint)
         return False
 
     def source_url_for_asset(self, asset_hash: str) -> str | None:

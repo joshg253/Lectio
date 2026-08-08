@@ -134,3 +134,24 @@ def test_no_rows_is_not_an_error(clock):
     assert log == [] and calls == []
     assert stats["ok"] == 0
     assert clock.sleeps == []
+
+
+def test_a_boilerplate_refusal_is_a_refusal_not_a_failure(clock):
+    """The guard sets `boilerplate`, not `mismatch`. Both mean "left alone"."""
+    rows = [("f", "e0", "https://h.example.com/a")]
+    stats, log, _calls = _run(rows, {"e0": {"ok": False, "boilerplate": True,
+                                            "error": "extracted to the same text"}}, clock)
+    assert stats["mismatch"] == 1
+    assert stats["failed"] == 0
+
+
+def test_boilerplate_refusals_never_get_a_host_dropped(clock):
+    # This is the expensive half. Counting refusals against the host dropped
+    # whole sites mid-run and cut the 2026-08-07 repair from 368 attempts to 223.
+    n = refetch_batch.HOST_FAILURE_LIMIT + 4
+    rows = [("f", f"e{i}", "https://guarded.example.com/p") for i in range(n)]
+    results = {f"e{i}": {"ok": False, "boilerplate": True} for i in range(n)}
+    stats, _log, calls = _run(rows, results, clock)
+    assert len(calls) == n, "the host was dropped by refusals"
+    assert stats["skipped_host"] == 0
+    assert stats["mismatch"] == n

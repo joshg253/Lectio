@@ -105,15 +105,20 @@ claycomix correctly resolves to **no panel** now, so the caller falls back to
 
 ### 0. Next up, in this order (agreed 2026-08-06)
 
+**All three are done as of 2026-08-07. This list is finished; delete it once
+something replaces it.**
+
 1. ~~**Dependency / stack update (§0c).**~~ **DONE 2026-08-06.** feedparser did
    have a code change behind it, though not the predicted one — see §0c.
-2. **The 565 boilerplate-damaged entries.** Documented under "Re-fetch replacing
-   an article with a feed's boilerplate" below. **The script is written and
-   tested (2026-08-06); what remains is running it with `--apply`**, which is
-   368 live network re-fetches and wants a go-ahead.
-3. **Saved Inbox = the whole star pile (§0b).** Unblocked (the chunking bug was
-   a stale build, not a bug) and still open. Feature work: the Inbox works
-   today, it is just showing the wrong set.
+2. ~~**The 565 boilerplate-damaged entries.**~~ **DONE 2026-08-07.** Ran to
+   completion; everything recoverable was recovered. See the closing table under
+   "Re-fetch replacing an article with a feed's boilerplate".
+3. ~~**Saved Inbox = the whole star pile (§0b).**~~ **SHIPPED — merged as PR
+   #178** (`saved-inbox`), on main and live. §0b's own heading still says
+   "UNBLOCKED on `saved-inbox-wip`", which is what made it read as open long
+   after it had landed; that branch no longer exists locally or on the remote
+   because it was merged. Checked 2026-08-07 against the reflog and the deployed
+   code — `kept=starred` is wired at templates/index.html:267.
 
 Parked, deliberately:
 
@@ -234,6 +239,118 @@ The import path canonicalizes, so these predate it or arrive by another route
 (OPML import before the canonicalization existed, discovery, the extension). A
 one-off normalization pass over `folder_feeds` would make the two spellings
 converge, but nothing is broken by leaving them.
+
+### Boilerplate repair: the guard had no memory of its own run — FIXED 2026-08-07
+
+The first `--apply` run (368 targets, 223 attempted before host-dropping) reported
+**131 recovered**. Two things were wrong with that number, and both are now fixed.
+
+**1. The guard could not see its own batch.** `extraction_matches_sibling`
+compares against extractions in the ARCHIVE, and archiving is asynchronous. So
+entry 1 gets comment-section text and is allowed (the archive still holds the old
+boilerplate, which differs); entry 2 gets the *same* text seconds later and is
+allowed too, because entry 1's new extraction has not landed. Five supernote
+entries ended up sharing *"Received my open box Nomad in near new condition…"* —
+a reader comment — written by the run itself. The guard was correct for the
+one-at-a-time interactive case it was built for and simply had no memory of a
+batch. It now keeps a bounded, per-feed record of what it has allowed this run
+and refuses a match against that as well as against the archive.
+
+Real blast radius: **41 of 131**, not all of them. My first measurement said all
+131 and was wrong — see below.
+
+**2. Detection over-reports, badly, because the archive lags.** Measuring damage
+from `archived_entry.readability_html_zlib` flags an entry whose archive row is
+stale even when its actual body is fine. After the run, **129 of the 131**
+rewritten entries still had their pre-run extraction stored. And the same lag had
+been inflating the figure from the very beginning: of the 594 flagged, **327 hold
+perfectly good unique bodies**. Scope is now filtered by what the READER holds.
+
+The corrected picture, and it is a much smaller job than "565":
+
+| | |
+|---|---|
+| flagged by the archive | 594 |
+| **already fine** (stale archive row only) | **327** |
+| restorable from a local snapshot, no network | 46 |
+| no longer exist in the reader | 197 |
+| **actually need re-fetching** | **24** |
+
+**Runs now verify themselves.** "The write was allowed" is not "the article came
+back", and the difference was found by hand, afterwards, only because the numbers
+looked odd. Each run re-checks what it wrote — against the reader, not the
+archive, since the archive cannot yet know — and reports how many still share
+text with a sibling.
+
+A methodological note worth keeping: I reported "all 131 are new damage" from an
+archive-based measurement, then had to correct it to 41 once the reader was
+checked. **The archive is not evidence of current state.** Ask the reader.
+
+### A guard refusal was counted as a host failure — FIXED 2026-08-07
+
+Third defect in the same repair, found by running it. `run_paced` classified an
+outcome as a refusal on `result["mismatch"]`, but the boilerplate guard sets a
+*different* key, `result["boilerplate"]`. So every guard refusal was counted as
+a **failure** — and failures count against the host, four in a row dropping it
+for the rest of the run.
+
+Two consequences, the second much worse than the first:
+
+- Reporting lied. The 24-entry run showed "failed 21" when all 21 were the guard
+  correctly refusing to overwrite good data with boilerplate again.
+- **It silently cut the big run short.** The first 368-entry pass attempted only
+  223 and reported 145 "host dropped" — hosts eliminated not by broken sites but
+  by their pages honestly extracting to boilerplate. The sites answered fine
+  every time.
+
+`run_paced`'s docstring already said `mismatch` "covers a refusal — the page was
+a different article, **or the extraction was the feed's boilerplate again**", so
+the intent was documented and the implementation simply missed the second key.
+
+### The revert script would have undone the repair — FIXED 2026-08-07
+
+Caught before it ran. `revert_boilerplate_refetches.py` restores from a snapshot
+for everything the ARCHIVE flags, and the archive lags every repair — so after
+the repair ran it offered to restore **158** entries when only 42 were still
+damaged. The other ~116 had just been fixed, and restoring them would have put
+the boilerplate straight back.
+
+Both scripts now share one reader-based judgement,
+`StarredArchiveService.body_text_sharing_state`, so they cannot disagree about
+which entries are damaged *now*. The revert script skips anything already
+holding unique text and says so.
+
+It also no longer claims a snapshot is worth restoring when the snapshot is
+itself boilerplate: every re-fetch snapshots what it replaced, so a repair run
+fills that table with the very thing it was removing. `_useful_snapshots` applies
+the same uniqueness test to the stored original.
+
+**The boilerplate epic is CLOSED, 2026-08-07.** The revert restored 46 entries
+and the numbers close:
+
+| | |
+|---|---|
+| hold unique text — fine | **368** |
+| no longer exist in the reader | 197 |
+| unrecoverable — page and Wayback both give boilerplate | 27 |
+
+368 + 197 + 27 = 592. Nothing recoverable is left. The 27 are the floor: a run
+attempts them, the guard refuses every one, no hosts are dropped and nothing is
+written — the repair finished, not a failure. Re-running any of this is a no-op.
+
+Known cosmetic inconsistency, left alone deliberately: the repair script counts
+snapshots *worth* restoring (`_useful_snapshots`) while the revert script
+restores every snapshot it finds, so they reported 42 and 46. Restoring a
+snapshot that is itself boilerplate is harmless — it replaces boilerplate with
+boilerplate — and with nothing left to restore there is no target for the fix.
+
+**What this exercise actually cost, worth remembering.** Five defects, every one
+found by RUNNING the thing rather than reading it: the guard had no memory of
+its own batch; detection trusted a store that lags; refusals were counted as
+host failures and silently cut a run by 145 attempts; the revert script would
+have undone the repair; and a patch of mine left a duplicate function shadowing
+the real one. The self-verification step now built into a run exists because
+none of these announced themselves.
 
 ### Refreshing a feed rewrote the remembered sort — FIXED 2026-08-07
 
@@ -714,7 +831,7 @@ end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, 
 excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 `py/full-ssrf` was.
 
-### 0b. Saved Inbox = every star, newest-star-first — UNBLOCKED on `saved-inbox-wip`
+### 0b. Saved Inbox = every star, newest-star-first — SHIPPED (PR #178, on main)
 
 **What it does.** Saved → Inbox was a pinned link to the `inbox` **tag**, which
 only the save_article automation ever writes — it showed 3 items against 9,577
