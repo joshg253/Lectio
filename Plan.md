@@ -320,18 +320,32 @@ itself boilerplate: every re-fetch snapshots what it replaced, so a repair run
 fills that table with the very thing it was removing. `_useful_snapshots` applies
 the same uniqueness test to the stored original.
 
-**Final state of the boilerplate epic**, all 594 accounted for:
+**The boilerplate epic is CLOSED, 2026-08-07.** The revert restored 46 entries
+and the numbers close:
 
 | | |
 |---|---|
-| already fine (stale archive row only) | 328 |
-| restorable from a snapshot, no network | 42 |
+| hold unique text — fine | **368** |
 | no longer exist in the reader | 197 |
 | unrecoverable — page and Wayback both give boilerplate | 27 |
 
-The 27 are the floor: a clean run attempts them, the guard refuses all of them,
-no hosts get dropped and nothing is written. That is the repair finished, not a
-failure.
+368 + 197 + 27 = 592. Nothing recoverable is left. The 27 are the floor: a run
+attempts them, the guard refuses every one, no hosts are dropped and nothing is
+written — the repair finished, not a failure. Re-running any of this is a no-op.
+
+Known cosmetic inconsistency, left alone deliberately: the repair script counts
+snapshots *worth* restoring (`_useful_snapshots`) while the revert script
+restores every snapshot it finds, so they reported 42 and 46. Restoring a
+snapshot that is itself boilerplate is harmless — it replaces boilerplate with
+boilerplate — and with nothing left to restore there is no target for the fix.
+
+**What this exercise actually cost, worth remembering.** Five defects, every one
+found by RUNNING the thing rather than reading it: the guard had no memory of
+its own batch; detection trusted a store that lags; refusals were counted as
+host failures and silently cut a run by 145 attempts; the revert script would
+have undone the repair; and a patch of mine left a duplicate function shadowing
+the real one. The self-verification step now built into a run exists because
+none of these announced themselves.
 
 ### Refreshing a feed rewrote the remembered sort — FIXED 2026-08-07
 
