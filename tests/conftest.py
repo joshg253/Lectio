@@ -22,6 +22,11 @@ os.environ.setdefault("LECTIO_DATA_DIR", str(_TEST_DATA_DIR))
 # intermittent "database is locked" (flaky CI). This kill switch skips those
 # daemons; tests that need one invoke the service/function directly.
 os.environ.setdefault("LECTIO_DISABLE_STARTUP_BACKFILL", "1")
+# Parse with the installed feedparser, not reader's vendored copy — the same
+# thing services/__init__.py does, repeated here because a test may import
+# `reader` without importing main.py or any service first. See that module for
+# why the vendored copy is not an option. Must precede any reader import.
+os.environ.setdefault("READER_NO_VENDORED_FEEDPARSER", "1")
 
 import socket  # noqa: E402
 

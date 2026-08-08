@@ -38,6 +38,14 @@ def _parse_month_first_pubdate(date_string: str):
 
 
 feedparser.registerDateHandler(_parse_month_first_pubdate)
+
+# Imported here, ahead of the reader imports below, purely for its side effect:
+# services/__init__.py sets READER_NO_VENDORED_FEEDPARSER so reader parses with
+# the feedparser imported above (and thus with the date handler just registered)
+# rather than its vendored copy. See that module for why.
+# This import's position is load-bearing, not alphabetical — hence the I001.
+import services  # noqa: F401,I001
+
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles

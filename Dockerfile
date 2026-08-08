@@ -5,7 +5,13 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
-    LECTIO_DATA_DIR=/data
+    LECTIO_DATA_DIR=/data \
+    # services/__init__.py sets this too, but only for code that imports the
+    # services package before `reader`. Setting it image-wide means an ad-hoc
+    # `docker compose exec ... python -c "import reader"` works as well; without
+    # it reader loads its vendored feedparser 6.0.11, which needs the sgmllib3k
+    # module that feedparser 6.0.13 dropped. See ARCHITECTURE.md.
+    READER_NO_VENDORED_FEEDPARSER=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libxml2 \

@@ -27,6 +27,7 @@ import sqlite3
 import threading
 import time
 import zlib
+from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -290,6 +291,59 @@ class StarredArchiveService:
         text = re.sub(r"<[^>]+>", " ", html_text or "")
         text = re.sub(r"\s+", " ", text).strip()
         return hashlib.sha256(text.encode("utf-8")).hexdigest() if text else ""
+
+    def sibling_extraction_entries(
+        self, only_feed: str | None = None, *, min_chars: int = 120
+    ) -> list[tuple[str, str]]:
+        """Every stored extraction that another entry on the same feed shares.
+
+        The bulk, after-the-fact form of ``extraction_matches_sibling``: that one
+        asks "would writing this be boilerplate?" one entry at a time as a
+        re-fetch happens, this one asks "which stored extractions already are?"
+        across the whole archive. Same test, same ``min_chars`` exemption, so a
+        sweep and the live guard can never disagree about what counts.
+
+        Returns ``(feed_url, entry_id)`` for **all** members of each matching
+        group — with only the fingerprint to go on there is no way to tell which
+        of them was the article and which the furniture, and in the damage this
+        was written for they are all the furniture.
+        """
+        by_feed: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+        # Two complete statements rather than one built by concatenation. The
+        # value was always a bound parameter and never interpolated, but a `+`
+        # beside a SQL string is exactly the shape SQL-injection scanners look
+        # for, and arguing with a scanner every time beats writing the two
+        # literals once.
+        _BASE = ("SELECT feed_url, entry_id, readability_html_zlib FROM archived_entry"
+                 " WHERE readability_html_zlib IS NOT NULL")
+        _BY_FEED = ("SELECT feed_url, entry_id, readability_html_zlib FROM archived_entry"
+                    " WHERE readability_html_zlib IS NOT NULL AND feed_url = ?")
+        try:
+            with self._get_archive_connection() as conn:
+                if only_feed:
+                    rows = conn.execute(_BY_FEED, (only_feed,)).fetchall()
+                else:
+                    rows = conn.execute(_BASE).fetchall()
+        except sqlite3.Error:
+            return []
+        for row in rows:
+            try:
+                html_text = zlib.decompress(row["readability_html_zlib"]).decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001 — an unreadable blob is not evidence
+                continue
+            text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html_text or "")).strip()
+            if len(text) < min_chars:
+                continue
+            fingerprint = self.extraction_fingerprint(html_text)
+            if fingerprint:
+                by_feed[str(row["feed_url"])][fingerprint].append(str(row["entry_id"]))
+
+        out: list[tuple[str, str]] = []
+        for feed_url, groups in by_feed.items():
+            for entry_ids in groups.values():
+                if len(entry_ids) > 1:
+                    out.extend((feed_url, e) for e in entry_ids)
+        return out
 
     def extraction_matches_sibling(self, feed_url: str, entry_id: str,
                                    html_text: str, *, min_chars: int = 120) -> bool:

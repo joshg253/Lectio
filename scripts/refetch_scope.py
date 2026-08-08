@@ -27,12 +27,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import random
 import sys
-import time
-from collections import defaultdict
 from datetime import datetime
-from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -101,42 +97,15 @@ def run(uid: str, folder_id: int | None, feed_url: str | None,
         print("  dry run — re-run with --apply to write")
         return
 
-    stats = {"ok": 0, "archive": 0, "mismatch": 0, "dead": 0, "failed": 0, "skipped_host": 0}
-    log: list[dict] = []
-    host_failures: dict[str, int] = defaultdict(int)
-    host_last: dict[str, float] = {}
+    def progress(i: int, total: int, stats: dict[str, int]) -> None:
+        print(f"   {i:>5}/{total}  ok={stats['ok']} archive={stats['archive']} "
+              f"refused={stats['mismatch']} dead={stats['dead']} failed={stats['failed']}")
 
-    for i, (f, e, link) in enumerate(ordered, 1):
-        host = (urlparse(link).netloc or "").lower()
-        if host_failures[host] >= _HOST_FAILURE_LIMIT:
-            stats["skipped_host"] += 1
-            continue
-        wait = _PER_HOST_DELAY - (time.monotonic() - host_last.get(host, 0.0))
-        if wait > 0:
-            time.sleep(wait)
-        time.sleep(_GLOBAL_DELAY * (0.5 + random.random()))
-        host_last[host] = time.monotonic()
-
-        result = main._refresh_captured_article_for_current_user(f, e, "readability")
-        if result.get("ok"):
-            stats["archive" if result.get("from_archive") else "ok"] += 1
-            host_failures[host] = 0
-        elif result.get("mismatch"):
-            stats["mismatch"] += 1          # stored copy deliberately left alone
-            host_failures[host] = 0
-        elif result.get("dead"):
-            stats["dead"] += 1
-            host_failures[host] = 0
-        else:
-            stats["failed"] += 1
-            host_failures[host] += 1
-        log.append({"feed_url": f, "entry_id": e, "link": link,
-                    "ok": bool(result.get("ok")), "error": result.get("error"),
-                    "from_archive": result.get("from_archive"),
-                    "dated": result.get("dated")})
-        if i % 10 == 0:
-            print(f"   {i:>5}/{len(ordered)}  ok={stats['ok']} archive={stats['archive']} "
-                  f"refused={stats['mismatch']} dead={stats['dead']} failed={stats['failed']}")
+    stats, log = refetch_batch.run_paced(
+        ordered,
+        lambda f, e: main._refresh_captured_article_for_current_user(f, e, "readability"),
+        on_progress=progress,
+    )
 
     out = tenancy.meta_db_path().parent / f"refetch_scope_{datetime.now():%Y%m%d-%H%M%S}.json"
     out.write_text(json.dumps(log, indent=2))

@@ -11,7 +11,10 @@ sees a run of back-to-back hits, and nothing parallel.
 from __future__ import annotations
 
 import logging
+import random
+import time
 from collections import defaultdict
+from collections.abc import Callable
 from urllib.parse import urlparse
 
 LOGGER = logging.getLogger(__name__)
@@ -60,3 +63,69 @@ def estimate_seconds(rows: list[tuple[str, str, str]]) -> float:
         counts[host_of(row[2])] += 1
     busiest = max(counts.values())
     return max(len(rows) * GLOBAL_DELAY * 1.5, busiest * PER_HOST_DELAY)
+
+
+def run_paced(
+    rows: list[tuple[str, str, str]],
+    refetch: Callable[[str, str], dict],
+    *,
+    on_progress: Callable[[int, int, dict[str, int]], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    jitter: Callable[[], float] = random.random,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> tuple[dict[str, int], list[dict]]:
+    """Re-fetch every row, obeying the pacing above. Serial, by design.
+
+    *rows* are ``(feed_url, entry_id, link)`` and are taken in the order given —
+    interleave them with :func:`interleave_by_host` first. *refetch* is the
+    per-entry call (in practice ``_refresh_captured_article_for_current_user``);
+    every guard, snapshot and archive fallback it carries applies per entry,
+    which is what makes running this over hundreds of articles reasonable.
+
+    Returns ``(stats, log)``. Callers report and persist those; the outcome
+    vocabulary is fixed here so two callers cannot count the same result under
+    different names. ``mismatch`` covers a refusal — the page was a different
+    article, or the extraction was the feed's boilerplate again — and a refusal
+    is a success for the stored copy, which is left exactly as it was.
+
+    The clock and randomness are injected so a test can run this instantly
+    without either mocking out the pacing (which would stop testing it) or
+    actually waiting ten seconds a host.
+    """
+    stats = {"ok": 0, "archive": 0, "mismatch": 0, "dead": 0, "failed": 0, "skipped_host": 0}
+    log: list[dict] = []
+    host_failures: dict[str, int] = defaultdict(int)
+    host_last: dict[str, float] = {}
+
+    for i, (feed_url, entry_id, link) in enumerate(rows, 1):
+        host = host_of(link)
+        if host_failures[host] >= HOST_FAILURE_LIMIT:
+            stats["skipped_host"] += 1
+            continue
+        wait = PER_HOST_DELAY - (monotonic() - host_last.get(host, 0.0))
+        if wait > 0:
+            sleep(wait)
+        sleep(GLOBAL_DELAY * (0.5 + jitter()))
+        host_last[host] = monotonic()
+
+        result = refetch(feed_url, entry_id)
+        if result.get("ok"):
+            stats["archive" if result.get("from_archive") else "ok"] += 1
+            host_failures[host] = 0
+        elif result.get("mismatch"):
+            stats["mismatch"] += 1          # stored copy deliberately left alone
+            host_failures[host] = 0
+        elif result.get("dead"):
+            stats["dead"] += 1
+            host_failures[host] = 0
+        else:
+            stats["failed"] += 1
+            host_failures[host] += 1
+        log.append({"feed_url": feed_url, "entry_id": entry_id, "link": link,
+                    "ok": bool(result.get("ok")), "error": result.get("error"),
+                    "from_archive": result.get("from_archive"),
+                    "dated": result.get("dated")})
+        if on_progress and i % 10 == 0:
+            on_progress(i, len(rows), dict(stats))
+
+    return stats, log

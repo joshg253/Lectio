@@ -24,13 +24,12 @@ whether they carry captures from the extension).
 
 ### 0. Next up, in this order (agreed 2026-08-06)
 
-1. **Dependency / stack update (§0c).** Nothing is broken; this is the routine
-   sweep that belongs on a credit-reset day, and feedparser's is the one with a
-   real code change behind it.
+1. ~~**Dependency / stack update (§0c).**~~ **DONE 2026-08-06.** feedparser did
+   have a code change behind it, though not the predicted one — see §0c.
 2. **The 565 boilerplate-damaged entries.** Documented under "Re-fetch replacing
-   an article with a feed's boilerplate" below. The guard is in and the 27
-   restorable ones are restored; what is left needs the body re-acquired from
-   the network, which is a different job from the revert script.
+   an article with a feed's boilerplate" below. **The script is written and
+   tested (2026-08-06); what remains is running it with `--apply`**, which is
+   368 live network re-fetches and wants a go-ahead.
 3. **Saved Inbox = the whole star pile (§0b).** Unblocked (the chunking bug was
    a stale build, not a bug) and still open. Feature work: the Inbox works
    today, it is just showing the wrong set.
@@ -42,21 +41,75 @@ Parked, deliberately:
   hunting it cold — Josh will flag it if it recurs.
 - **The husk-feed re-check**, dated above. Not before 2026-08-13.
 
-### 0c. Dependency / stack update — DUE, not started
+### 0c. Dependency / stack update — DONE 2026-08-06
+
+**feedparser 6.0.12 → 6.0.14 is in.** The code change it needed was not the one
+predicted below, and the real finding is bigger than the bump:
+
+- Nothing in Lectio imports `sgmllib`. feedparser 6.0.13 replaced its own
+  `import sgmllib` with a self-contained `feedparser.sgml` and dropped the
+  `sgmllib3k` dependency — an internal change, no caller work.
+- **`reader` was never using the feedparser we bump.** It ships
+  `reader._vendor.feedparser` (6.0.11) and prefers it unless
+  `READER_NO_VENDORED_FEEDPARSER` is set. That vendored copy does a bare
+  `import sgmllib`, satisfied only transitively by feedparser 6.0.12's
+  `sgmllib3k` dep — so the moment `uv` pruned `sgmllib3k`, every `reader` import
+  died with `ModuleNotFoundError`. That is what the bump actually broke, and it
+  broke loudly (all 2551 tests errored at collection), not quietly.
+- The quiet part is what it exposed: for as long as the vendored copy was in
+  use, **the whole §0c premise was false** — bumping feedparser never touched
+  the code that parses the library. And `main.py`'s `_parse_month_first_pubdate`
+  handler, registered on the installed feedparser specifically so ingest would
+  understand `"May 11, 2026 19:15:50 +0000"`, was registered on a module ingest
+  never called. It only ever applied to Lectio's own direct `feedparser.parse`
+  calls.
+
+Resolved by pointing `reader` at the installed feedparser
+(`services/__init__.py` sets `READER_NO_VENDORED_FEEDPARSER=1`; `main.py` and
+`tests/conftest.py` establish it before their `reader` imports). Ingest now
+parses with 6.0.14 and the date handler reaches it.
+`tests/services/test_feedparser_wiring.py` pins all three facts.
+
+Verified beyond the suite, as this section demanded: 10 real feeds / 194 entries
+fetched once and parsed by **both** 6.0.11-vendored and 6.0.14-installed —
+titles, `published` strings, parsed date tuples, links, content lengths, tag and
+enclosure counts **identical, zero differences**. Then a live ingest through
+Lectio's own `SanitizingFeedparserParser` into a scratch DB: Atom (xkcd,
+what-if), RSS (Ars Technica), a YouTube channel feed and a DeviantArt `file://`
+feed all landed fully dated, titled and bodied; the bot-walled feed failed
+cleanly with its 403 as before. One YouTube URL 403'd on `reader`'s fetcher
+during that run while the same URL had returned 200 to a direct request a minute
+earlier — fetch-layer, unrelated to parsing, and not investigated.
+
+Then confirmed at library scale on the deployed build: a scheduler pass
+retrieved **294 feeds** (rss20 170, atom10 123, rss10 1) with **3 exceptions —
+all Reddit HTTP 429**, i.e. rate limiting, not parsing. 16 new entries ingested,
+all 16 with both a date and a title.
+
+**The routine batch is in too** (2026-08-06): certifi 2026.6.17 → 2026.7.22,
+fastapi 0.138.0 → 0.141.1, uvicorn 0.49.0 → 0.52.1, httpx2 (+ httpcore2)
+2.4.0 → 2.9.1. Lockfile only — `uv lock --upgrade-package`, not `uv add`, since
+this project pins floors in `pyproject.toml` only where a floor means something
+and lets the lock choose versions. Nothing else moved: `starlette` stayed at
+1.3.1, `httpx` at 0.28.1. 2554 tests pass and the app boots on the new
+fastapi/uvicorn with `/`, `/entries`, `/settings` and `/saved` all serving and a
+warning-free startup log.
+
+**§0c is now complete.**
 
 Versions as installed 2026-08-06, checked against PyPI the same day. Only
-feedparser needs code written; the rest are version bumps that want a test run
+feedparser needed code written; the rest are version bumps that want a test run
 and a look at the app.
 
 | Package | Installed | Latest | Note |
 |---|---|---|---|
-| feedparser | 6.0.12 | **6.0.14** | **The only one with a code change behind it.** 6.0.13 dropped the vendored `sgmllib`, so the import has to be swapped. Do it alone and first — it parses every feed in the library, and a silent regression here surfaces days later as "some feeds stopped updating", not as a failed upgrade. |
+| feedparser | ~~6.0.12~~ | **6.0.14 — DONE** | See above. The code change was real but not the predicted one: `reader`'s vendored copy had to be switched off, not an import swapped. |
 | certifi | 2026.6.17 | **2026.7.22** | It is a CA bundle; newer is the whole point. |
 | fastapi | 0.138.0 | **0.141.1** | Routine. |
 | uvicorn | 0.49.0 | **0.52.1** | Routine. |
 | httpx2 | 2.4.0 | **2.9.1** | **Test-only.** It is in the `dev` extra because starlette's TestClient prefers it; no runtime code imports it. A bump here can only break the suite, never the app. |
 | httpx | 0.28.1 | 0.28.1 | **Already current — do not "upgrade" it to 2.x.** `httpx2` is a *separate package*, not httpx's next major. Every runtime caller (`main.py`, `services/url_guard.py`, and eight other services) imports `httpx`, and swapping them is a migration, not a version bump. Not in scope here. |
-| reader | 3.26 | 3.26 | Already current. Read the changelog before any future bump — it owns the entry store, and Lectio reaches into `reader._storage.get_db()` in several places. |
+| reader | 3.26 | 3.26 | Already current. Read the changelog before any future bump — it owns the entry store, and Lectio reaches into `reader._storage.get_db()` in several places. Its vendored feedparser is now switched off, so a `reader` bump no longer silently changes which parser ingest uses — but check that `READER_NO_VENDORED_FEEDPARSER` is still the opt-out. |
 
 **Order:** feedparser alone, verify a real refresh cycle, commit. Then the
 routine three (certifi, fastapi, uvicorn) together, plus httpx2. Keeping
@@ -386,6 +439,43 @@ restores from `entry_content_edits.original_content`, needing no network — but
 **only 27 had a snapshot**; the other 565 were overwritten before that table
 existed and their feed-served body is gone. The archive is no help: its
 `content_html_zlib` is copied from the reader entry, which was already clobbered.
+
+**The 565: `scripts/refetch_boilerplate_damage.py`, written 2026-08-06, not yet
+run for real.** With no stored original the only surviving copy of each article
+is on the internet, so this is a re-fetch run rather than a restore. It shares
+everything with `refetch_scope.py` except scope — same pacing, slug guard,
+snapshot-before-write, Wayback fallback and date mining, now all through
+`services.refetch_batch.run_paced` so the two cannot drift. Scope differs in one
+way that matters: `refetch_scope` takes *kept* articles, this takes the damaged
+entries kept or not, because an unkept entry's body is damaged just the same and
+no future feed refresh repairs it.
+
+The shipped guard now works in the repair's favour: a page that still extracts
+to the same boilerplate is **refused**, so an unrecoverable entry keeps what it
+has instead of being re-damaged.
+
+What the dry run says about the real 565 (2026-08-06):
+
+| | |
+|---|---|
+| have a snapshot | 27 — the revert script's job, already done |
+| **no longer exist in the reader** | **197** — the archive row outlived the entry; nothing to write back to |
+| no http(s) link | 0 |
+| **actually re-fetchable** | **368**, across 35 hosts, ~22 min at the pacing |
+
+So "565 need the network" and "368 can be attempted" are different numbers, and
+the script prints both rather than quietly narrowing one into the other.
+
+Temper expectations on the 368: the biggest cohort is `blogs.technet.com` (132)
+and `channel9.msdn.com`, hosts Microsoft retired outright, plus 26
+`www.inoreader.com` proxy URLs. For those the Wayback fallback is the only route
+and will often come up empty — expect a large `refused`/`dead` column. That is
+the guard doing its job, not a failure.
+
+**Left to do:** run it with `--apply`. It is 368 outbound requests and a bulk
+write to the live library, so it wants a go-ahead rather than being folded into
+a build. Suggested shape: `--limit 20 --apply` first, read the log, then the
+rest.
 
 **Not covered by this guard:** a re-fetch that grabs a *different unique*
 article. Entry 26031 came back as a piece about sandbox-game rendering — unique

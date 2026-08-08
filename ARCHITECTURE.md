@@ -542,6 +542,25 @@ feeds must be excluded from the global caches.
   standing between feed HTML and a `| safe` render — it drops scriptable tags,
   all `on*` handlers, `style`, `javascript:`/`vbscript:`/`data:` URLs (incl.
   control-char-obfuscated), and `object`/`embed`/`form`.
+- **One feedparser per process, and it is the installed one** — `reader` ships a
+  vendored feedparser (`reader._vendor.feedparser`) and uses it by default, so
+  for a long time Lectio ran two copies at different versions: the vendored one
+  parsed every feed at ingest, while the `import feedparser` in `main.py` only
+  served Lectio's own direct `feedparser.parse` calls (feed comparison, podcast
+  enclosure sniffing, YouTube embed recovery). Two consequences, both silent:
+  the date handler `main.py` registers for day-of-week-less RFC 2822 dates
+  (`_parse_month_first_pubdate`) never reached ingest, and dependency bumps to
+  feedparser never touched the code that parses the library. `services/__init__.py`
+  now sets `READER_NO_VENDORED_FEEDPARSER=1` so `reader` uses the installed
+  feedparser. It is a `setdefault`, so an operator can still force the vendored
+  copy — but the vendored copy in `reader` 3.26 is 6.0.11, whose `sgml.py` does a
+  bare `import sgmllib`; that module came in transitively from feedparser's
+  `sgmllib3k` dependency, which feedparser 6.0.13 dropped in favor of a
+  self-contained `feedparser.sgml`. So on feedparser ≥ 6.0.13 the vendored copy
+  does not import at all. The variable must be set before anything imports
+  `reader`, which is why `main.py` and `tests/conftest.py` — both of which reach
+  `reader` ahead of the services package — establish it themselves.
+  `tests/services/test_feedparser_wiring.py` pins the invariant.
 - **Link fields are feed input too** — that allowlist only covers URLs *inside*
   content HTML. An entry's own `link` is equally attacker-controlled, and Jinja
   escaping protects the attribute *context*, not the scheme: `href="{{ link }}"`
@@ -910,10 +929,17 @@ publisher and the next refresh would overwrite it anyway.
 **Batch re-fetch shares its pacing with the CLI, because a politeness guarantee
 that holds in one entry point is not a guarantee.** `services/refetch_batch.py`
 owns the delays (`GLOBAL_DELAY`, `PER_HOST_DELAY`, `HOST_FAILURE_LIMIT`), the
-host interleave and the runtime estimate; both `POST /saved/refetch-scope` and
-`scripts/refetch_scope.py` import them rather than defining their own. Bulk
-re-fetch spends someone else's bandwidth, so pacing is the design and not a
-setting.
+host interleave, the runtime estimate and — since a second CLI caller appeared —
+`run_paced`, the serial loop that applies all of them and returns a fixed
+outcome vocabulary (`ok / archive / mismatch / dead / failed / skipped_host`).
+`POST /saved/refetch-scope`, `scripts/refetch_scope.py` and
+`scripts/refetch_boilerplate_damage.py` all go through it rather than defining
+their own. Bulk re-fetch spends someone else's bandwidth, so pacing is the design
+and not a setting; fixing the vocabulary in one place is the same idea applied to
+reporting, so two callers cannot count the same result under different names.
+`run_paced` takes its clock and jitter as arguments purely so a test can assert
+on the delays instead of stubbing them out — pacing that is only tested by not
+being tested is not pacing.
 
 Three details are load-bearing:
 
@@ -958,6 +984,31 @@ stored title. Thresholds are calibrated against 1,192 captured articles: p95
 anchor-text ratio 0.32, p98 0.46, so the detector fires at 0.40 with a 20-anchor
 floor. Note the guard protects the *first* destruction only; once an entry holds
 the wrong page, its stored title is the wrong page's title.
+
+**A third guard catches the case the other two structurally cannot: the page is
+the right article, and readability returned the site's furniture.** Neither
+title nor length separates those — the title stays correct and the boilerplate
+is often *longer* than the post it replaced (commandlinefu.com's "is the place
+to record those command-line gems…"). What does separate them is that chrome
+extracts *identically for every post on a feed*, so `extraction_matches_sibling`
+refuses an extraction byte-identical to one already stored against a **different
+entry of the same feed**. Three properties are deliberate: the fingerprint is
+over visible text, not markup, because attribute order and whitespace vary
+between runs while the words do not; the comparison is scoped to one feed,
+because the same text under two feeds is a syndicated post rather than
+furniture; and extractions under 120 characters are exempt, because a two-line
+stub can legitimately coincide and refusing those would block real re-fetches.
+
+`sibling_extraction_entries` is the same test in bulk — "which stored
+extractions already are boilerplate?" rather than "would writing this one be?" —
+and lives next to the guard rather than in the repair scripts, because two
+implementations of one judgement is how a repair script starts disagreeing with
+the thing that prevents the damage. Both `scripts/revert_boilerplate_refetches.py`
+(restores from a local snapshot, no network) and
+`scripts/refetch_boilerplate_damage.py` (re-acquires from the network when there
+is no snapshot) call it. In the second, the live guard also becomes the repair's
+safety net: a page that still extracts to the same boilerplate is refused, so an
+unrecoverable entry keeps what it has rather than being re-damaged.
 
 Scope is kept articles (starred or tagged) with an `http(s)` link — the same rule
 the single-article button uses, because an unkept feed entry is rewritten by the
