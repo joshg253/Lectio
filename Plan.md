@@ -61,8 +61,6 @@ document) and `#unspliced-comic` whole. Excluding the spliced container from the
 match list is not enough, because the *outer* container matches and its first
 image is the spliced one; it is removed from the HTML instead.
 
-**Second cause, found only after deploying (2026-08-07).** pbf came good; mahonoir did not. Its feed ships a per-entry social card as an `<enclosure>` (`0312csss.jpg`, 1200×630), and `extract_entry_thumbnail_url` took that immediately after the cache check — before any source-page lookup — so the panel extractor was never reached and the card was cached as the lead image. Webcomic feeds now skip the feed-XML thumbnail there too (the backfill path always did), except in fast/list mode where there is nothing better to show.
-
 **claycomix was never a lead-image problem at all (clarified 2026-08-07).** The
 thumbnail (`564-1.jpg`, the og:image preview) is *correct*; what was missing was
 the full strip from the **article body** — and the body already contained it.
@@ -83,7 +81,24 @@ nothing stays strippable, which preserves the thumbnail-wrapper behaviour that
 that used basename alone. The list thumbnail resolves independently, so it is
 untouched.
 
-**Still open: claycomix.** It resolves to `564-1.jpg`, the post's own `og:image` (1996×1349) — reported as "no change", which is literally true since that is what was stored before. The in-content strip is `depcom564.800.jpg` (800×2455). Both are the comic in different layouts, so which one is *wanted* is a judgement call, not a bug diagnosis — awaiting a decision rather than guessing.
+**mahonoir needed the opposite treatment, and the enclosure fix was backed out
+(2026-08-07).** Its feed body carries no image at all — one "The post … appeared
+first on …" paragraph — while advertising a per-entry social card as its
+`<enclosure>`. An earlier fix made webcomic feeds ignore that enclosure so the
+panel became the lead; that was wrong once the card was confirmed to be the
+*wanted* list thumbnail, and it is reverted. Nothing can be recovered from the
+body the way claycomix's could, because the body never had it, so the panel is
+fetched from the source page and placed into the article, and the separate hero
+is dropped in the same move (otherwise the card and the comic both render). The
+list thumbnail is untouched: the resolved lead is captured in
+`_resolved_lead_for_cache` before this runs, and that is what reaches
+`entry_lead_images`.
+
+Injection happens **after** `_strip_lead_image_opener`, not before: injecting
+first would hand the new `<img>` to it as the body's opener and it would be
+removed again. Cost is a source-page fetch on the render path, limited to
+webcomic feeds whose body has no image, and served from `_source_html_cache`
+when the page was already pulled this session.
 
 claycomix correctly resolves to **no panel** now, so the caller falls back to
 `og:image` — the post's own curated image — instead of a sibling's thumbnail.

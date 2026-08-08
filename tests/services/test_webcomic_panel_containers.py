@@ -162,72 +162,84 @@ def test_an_unclosed_container_does_not_swallow_the_document(svc):
 
 
 # ---------------------------------------------------------------------------
-# A webcomic feed's own <enclosure> is usually not the comic.
+# A webcomic feed that ships no image at all in the body.
 #
-# mahonoir.com ships a per-entry social card (0312csss.jpg, 1200x630) beside a
-# page whose panel is 1080x1620. extract_entry_thumbnail_url took the enclosure
-# before ever consulting the source page, so the card was returned and then
-# cached as the lead image — the container fix alone could not surface, because
-# the panel extractor was never called. fetch_and_store_lead_images_for_feed has
-# always skipped the feed-XML thumbnail for webcomics; this path had not.
+# mahonoir.com's entries are one "The post … appeared first on …" paragraph,
+# while the feed advertises a per-entry social card as its <enclosure>. That
+# card is a good LIST THUMBNAIL and a poor article: the entry rendered as a
+# share graphic with no comic. Unlike claycomix nothing can be recovered from
+# the body, because the body never had it — so the panel is fetched and placed
+# in the article, and the separate hero is dropped so the two do not both show.
 # ---------------------------------------------------------------------------
 
-class FakeEnclosure:
-    def __init__(self, href, type_):
-        self.href = href
-        self.type = type_
+import main  # noqa: E402
+
+BODYLESS = "<p>The post <a href='#'>Chapter 3 page 12</a> appeared first on Maho Noir.</p>"
+CARD_URL = "https://mahonoir.com/wp-content/uploads/2026/05/0312csss.jpg"
+PANEL_URL = "https://mahonoir.com/wp-content/uploads/2026/05/031201.jpg.webp"
 
 
-class FakeEntry:
-    def __init__(self, feed_url, entry_id, link, enclosures=()):
-        self.feed_url = feed_url
-        self.id = entry_id
-        self.link = link
-        self.enclosures = list(enclosures)
+class _Entry:
+    link = "https://mahonoir.com/comic/dead-shall-rise-chapter-3-page-12/"
+    feed_url = "https://mahonoir.com/comic/feed"
 
 
-def _webcomic_svc(monkeypatch, webcomic: bool):
-    svc = LeadImageService(
-        get_meta_connection=lambda: sqlite3.connect(":memory:"),
-        get_reader=lambda: None,
-        user_agent="test",
-        extract_video_id=lambda _u: None,
-        cache={},
-        fetched_at_cache={},
-    )
-    monkeypatch.setattr(svc, "_is_feed_webcomic", lambda _f: webcomic)
-    monkeypatch.setattr(svc, "_is_feed_none_strategy", lambda _f: False)
-    return svc
+@pytest.fixture
+def webcomic_injection(monkeypatch):
+    monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
+    monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image",
+                        lambda _l, is_webcomic=False: PANEL_URL)
 
 
-CARD = "https://mahonoir.com/wp-content/uploads/2026/05/0312csss.jpg"
+def _inject(content, lead=CARD_URL):
+    return main._inject_webcomic_panel_into_bodyless_entry(
+        content, _Entry, _Entry.feed_url, lead)
 
 
-def _entry():
-    return FakeEntry(
-        "https://mahonoir.com/comic/feed",
-        "https://mahonoir.com/?post_type=comic&p=1317",
-        "https://mahonoir.com/comic/dead-shall-rise-chapter-3-page-12/",
-        [FakeEnclosure(CARD, "image/jpeg")],
-    )
+def test_the_panel_is_put_into_an_image_less_body(webcomic_injection):
+    content, lead = _inject(BODYLESS)
+    assert PANEL_URL in content
+    assert "appeared first on" in content, "the original body was discarded"
 
 
-def test_a_webcomic_enclosure_does_not_pre_empt_the_source_page(monkeypatch):
-    svc = _webcomic_svc(monkeypatch, webcomic=True)
-    monkeypatch.setattr(svc, "_fetch_source_lead_image", lambda *a, **k: "https://mahonoir.com/panel.jpg")
-    got = svc.extract_entry_thumbnail_url(_entry(), include_source_lookup=True)
-    assert got != CARD, "the social card won again"
+def test_the_hero_is_dropped_so_the_card_and_comic_do_not_both_show(webcomic_injection):
+    _content, lead = _inject(BODYLESS)
+    assert lead is None
 
 
-def test_a_normal_feeds_enclosure_is_still_used(monkeypatch):
-    """The skip must be scoped to webcomic feeds — enclosures are right elsewhere."""
-    svc = _webcomic_svc(monkeypatch, webcomic=False)
-    got = svc.extract_entry_thumbnail_url(_entry(), include_source_lookup=True)
-    assert got == CARD
+def test_a_body_that_has_its_own_image_is_left_alone(webcomic_injection):
+    body = '<p><img src="https://mahonoir.com/own.jpg"></p>'
+    content, lead = _inject(body)
+    assert content == body and lead == CARD_URL
 
 
-def test_fast_mode_still_uses_the_enclosure(monkeypatch):
-    """In list rendering there is nothing better to offer, so a card beats a blank."""
-    svc = _webcomic_svc(monkeypatch, webcomic=True)
-    got = svc.extract_entry_thumbnail_url(_entry(), include_source_lookup=False, fast_only=True)
-    assert got == CARD
+def test_non_webcomic_feeds_are_untouched(monkeypatch):
+    monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: False)
+    content, lead = _inject(BODYLESS)
+    assert content == BODYLESS and lead == CARD_URL
+
+
+def test_no_panel_found_leaves_the_entry_as_it_was(monkeypatch):
+    monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
+    monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image",
+                        lambda _l, is_webcomic=False: None)
+    content, lead = _inject(BODYLESS)
+    assert content == BODYLESS and lead == CARD_URL
+
+
+def test_a_failing_fetch_never_breaks_the_render(monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
+    monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image", boom)
+    content, lead = _inject(BODYLESS)
+    assert content == BODYLESS and lead == CARD_URL
+
+
+def test_the_injected_url_is_attribute_escaped(monkeypatch):
+    monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
+    monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image",
+                        lambda _l, is_webcomic=False: 'https://x/a.jpg" onerror="alert(1)')
+    content, _lead = _inject(BODYLESS)
+    assert 'onerror="alert(1)"' not in content
+    assert "&quot;" in content

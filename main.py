@@ -14468,6 +14468,47 @@ def _collapse_block_spacers(content_html):
     return out or None
 
 
+_HAS_IMG_RE = re.compile(r"<img\b", re.IGNORECASE)
+
+
+def _inject_webcomic_panel_into_bodyless_entry(content_html, entry, feed_url: str, lead_image_url):
+    """Put the comic in the article when a webcomic feed ships a body without one.
+
+    mahonoir.com's feed carries no image at all — only a "The post … appeared
+    first on …" paragraph — while advertising a per-entry social card as its
+    `<enclosure>`. That card is a good LIST THUMBNAIL and a poor article: reading
+    the entry showed a share graphic and no comic. Unlike claycomix, nothing can
+    be recovered from the body, because the body never had it.
+
+    So the panel is fetched from the source page and placed in the article. The
+    separate hero is dropped in the same move, or the card and the comic both
+    render. The list thumbnail is unaffected: the caller captured the resolved
+    lead in `_resolved_lead_for_cache` before this ran, and that is what reaches
+    `entry_lead_images`.
+
+    Narrow on purpose — webcomic feeds only, and only when the body has no image
+    of its own — because it costs a source-page fetch on the render path. The
+    fetch is served from `_source_html_cache` when the same page was already
+    pulled this session.
+    """
+    if not feed_url or not lead_image_service._is_feed_webcomic(feed_url):
+        return content_html, lead_image_url
+    if content_html and _HAS_IMG_RE.search(content_html):
+        return content_html, lead_image_url
+    link = str(getattr(entry, "link", "") or "")
+    if not link.startswith(("http://", "https://")):
+        return content_html, lead_image_url
+    try:
+        panel = lead_image_service._fetch_source_lead_image(link, is_webcomic=True)
+    except Exception:  # noqa: BLE001 — an article without its comic beats a 500
+        LOGGER.warning("[webcomic] panel injection failed for %s", link, exc_info=True)
+        return content_html, lead_image_url
+    if not panel:
+        return content_html, lead_image_url
+    figure = f'<p><img src="{html.escape(panel, quote=True)}" alt="" /></p>'
+    return figure + (content_html or ""), None
+
+
 def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_lead_in_article: bool):
     """Dedup the lead image against the article body. Returns (content_html, lead_image_url).
 
@@ -15259,6 +15300,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         _resolved_lead_for_cache = lead_image_url
         content_html, lead_image_url = _strip_lead_image_opener(
             content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article
+        )
+        # AFTER the strip, deliberately: injecting first would hand the new <img>
+        # to _strip_lead_image_opener as the body's opener and it would be
+        # removed again.
+        content_html, lead_image_url = _inject_webcomic_panel_into_bodyless_entry(
+            content_html, entry, str(entry.feed_url), lead_image_url
         )
         content_html = _collapse_block_spacers(_strip_ad_images(content_html))
 
