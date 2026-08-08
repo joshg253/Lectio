@@ -63,6 +63,26 @@ image is the spliced one; it is removed from the HTML instead.
 
 **Second cause, found only after deploying (2026-08-07).** pbf came good; mahonoir did not. Its feed ships a per-entry social card as an `<enclosure>` (`0312csss.jpg`, 1200×630), and `extract_entry_thumbnail_url` took that immediately after the cache check — before any source-page lookup — so the panel extractor was never reached and the card was cached as the lead image. Webcomic feeds now skip the feed-XML thumbnail there too (the backfill path always did), except in fast/list mode where there is nothing better to show.
 
+**claycomix was never a lead-image problem at all (clarified 2026-08-07).** The
+thumbnail (`564-1.jpg`, the og:image preview) is *correct*; what was missing was
+the full strip from the **article body** — and the body already contained it.
+`_strip_lead_image_opener` deleted it. That branch fires when the body's opening
+image is not the lead image, and its comment assumed one situation: the opener is
+a small placeholder (ComicControl's `/comicsthumbs/foo.jpg` beside the full
+`/comics/foo.jpg`) and the lead is the upgrade. claycomix is the exact inverse —
+the opener is the full 800x2455 strip and the lead is a 1996x1349 preview — so
+the comic was stripped out and the preview shown in its place. It appeared
+nowhere.
+
+Deleting content now needs positive evidence: the opener is kept (and the
+separate hero dropped, the same call the floated-image branch already makes) only
+when it is BOTH a different picture from the lead (basename, ignoring `-WxH`
+resize suffixes) AND declares full-size dimensions. An opener that declares
+nothing stays strippable, which preserves the thumbnail-wrapper behaviour that
+`test_thumbnail_wrapper_imgs_stripped` pins — that test caught a first attempt
+that used basename alone. The list thumbnail resolves independently, so it is
+untouched.
+
 **Still open: claycomix.** It resolves to `564-1.jpg`, the post's own `og:image` (1996×1349) — reported as "no change", which is literally true since that is what was stored before. The in-content strip is `depcom564.800.jpg` (800×2455). Both are the comic in different layouts, so which one is *wanted* is a judgement call, not a bug diagnosis — awaiting a decision rather than guessing.
 
 claycomix correctly resolves to **no panel** now, so the caller falls back to

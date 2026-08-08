@@ -14271,6 +14271,58 @@ _FLOAT_STYLE_RE = re.compile(r"float:\s*(?:left|right)", re.IGNORECASE)
 _CLOSE_A_RE = re.compile(r"</a\s*>", re.IGNORECASE)
 _TUMBLR_MEDIA_PREFIX_RE = re.compile(r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/", re.IGNORECASE)
 
+_OPENER_SRC_RE = re.compile(r"<img\b[^>]*?\bsrc=[\"']([^\"']+)[\"']", re.IGNORECASE | re.DOTALL)
+# WordPress and most CDNs spell a resize as a -WxH suffix on the basename.
+_IMG_SIZE_SUFFIX_RE = re.compile(r"-\d{2,5}x\d{2,5}(?=\.[A-Za-z0-9]+$)")
+
+
+_OPENER_DIM_RE = re.compile(r"\b(width|height)=[\"']?(\d{2,5})", re.IGNORECASE)
+_SRCSET_WIDTH_RE = re.compile(r"\s(\d{2,5})w(?:,|\s|$)")
+# Below this, an opener is a thumbnail standing in for something better.
+_FULL_SIZE_IMAGE_MIN_PX = 400
+
+
+def _opener_is_own_full_image(opener_html: str, lead_image_url: str | None) -> bool:
+    """True when the opener <img> is a full-size picture of its own, not a stand-in.
+
+    Decides whether hoisting the lead may DELETE the opener from the body. Two
+    situations reach here looking alike:
+
+      * the opener is a PLACEHOLDER for the lead — ComicControl's
+        ``/comicsthumbs/foo.jpg`` beside the full ``/comics/foo.jpg``, or a bare
+        thumbnail in a body that is otherwise a line of text. Stripping is an
+        upgrade.
+      * the opener IS the article — claycomix ships the full 800x2455 strip in
+        the body while og:image is a 1996x1349 preview. Stripping deleted the
+        comic and showed the preview in its place, so the strip appeared nowhere.
+
+    Deleting content needs positive evidence, but the placeholder case has to
+    keep working, so both tests must pass: a different picture from the lead
+    (basename, ignoring ``-WxH`` resize suffixes), AND declared dimensions that
+    say full-size. An opener that declares nothing stays strippable, which is
+    the long-standing behaviour for thumbnail-wrapper bodies.
+    """
+    if not lead_image_url:
+        return False
+    m = _OPENER_SRC_RE.search(opener_html or "")
+    if not m:
+        return False
+
+    def _key(url: str) -> str:
+        name = urlparse(html.unescape(url)).path.rsplit("/", 1)[-1]
+        return _IMG_SIZE_SUFFIX_RE.sub("", name).lower()
+
+    src_key = _key(m.group(1))
+    if not src_key or src_key == _key(lead_image_url):
+        return False        # same picture, resized or relocated — a placeholder
+
+    biggest = max(
+        [int(v) for _a, v in _OPENER_DIM_RE.findall(opener_html)]
+        + [int(w) for w in _SRCSET_WIDTH_RE.findall(opener_html)]
+        + [0]
+    )
+    return biggest >= _FULL_SIZE_IMAGE_MIN_PX
+
 
 _ad_asset_hashes_cache = _PerUserDict()
 _ad_asset_hashes_lock = threading.Lock()
@@ -14485,10 +14537,26 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
                     "", content_html, flags=re.IGNORECASE,
                 ).strip() or None
         else:
-            # lead_image_url isn't in the opener's <img> src — the opener is a
-            # different image (e.g. a comicsthumbs placeholder) while lead_image_url
-            # is the full-size source image. Raw-strip the opener; restore any
-            # anchored "New comic!" link text.
+            # lead_image_url isn't in the opener's <img> src. Two very different
+            # situations look identical here, and stripping is only right for one:
+            #
+            #   * the opener is a small PLACEHOLDER for the lead (ComicControl's
+            #     /comicsthumbs/foo.jpg beside the full /comics/foo.jpg). Strip
+            #     it — the hero shows the better copy of the same picture.
+            #   * the opener is a DIFFERENT, often better picture than the lead.
+            #     claycomix puts the full 800x2455 strip in the body while
+            #     og:image is a 1996x1349 preview; stripping deleted the comic
+            #     from the article and showed the preview in its place, so the
+            #     actual strip appeared nowhere at all.
+            #
+            # A placeholder shares its basename with the lead; a different
+            # picture does not. When they differ, keep the author's image where
+            # they put it and drop the separate hero — the same call the floated
+            # -image branch above makes. The list thumbnail is resolved
+            # independently (get_cached_entry_thumbnail), so it is unaffected.
+            if _opener_is_own_full_image(_m.group(0), lead_image_url):
+                return content_html, None
+            # Raw-strip the opener; restore any anchored "New comic!" link text.
             _matched_opener = _m.group(0)
             content_html = content_html[_m.end():].lstrip() or None
             _a_opener_m = re.search(r"<a\b[^>]*>", _matched_opener, re.IGNORECASE)
