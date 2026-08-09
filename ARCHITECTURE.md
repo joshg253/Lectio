@@ -2386,6 +2386,27 @@ untouched.
 
 **A plugin that suppresses everything is a claim about the feed, not just the page.** `WebtoonsPlugin` skipped source scraping *and* returned no fallback, on the stated belief that "the feed and og:image return the series thumbnail for every episode". Only half was true. An episode page's og:image really is the series thumbnail — byte-identical across episodes — but every Webtoons `<description>` carries that episode's own panel on the same CDN, distinct per episode on all nine subscribed feeds. The result was the series thumbnail on every strip, served from cache rows written before the plugin existed, while the real panel sat unused in the entry body. The plugin now reads the body like `BloggerPlugin` does, keeps `should_skip_source_lookup`, and narrows `should_bypass_cached_url` to URLs whose basename is `thumbnail.*` — so stale thumbnails are re-resolved and a good cached panel is left alone instead of being re-derived on every render.
 
+**The feed's image and the article's image are different questions, and on
+Tapas they have different answers.** `/sa/` is *series art* — one picture per
+episode, thumbnail-grade, and all the RSS feed carries. `/c/` is the episode's
+actual content, one URL per panel, so a four-panel episode arrives in the feed
+as a single image. `_inject_tapas_episode_panels` fetches the episode page and
+puts the `/c/` panels in the body, strips the `/sa/` picture out of it, and
+drops the separate hero — otherwise the thumbnail renders above the comic it is
+a thumbnail of. The **list** thumbnail is untouched, because the caller captured
+the resolved lead in `_resolved_lead_for_cache` before the body rewrite; that
+split is what lets one entry have a thumbnail-grade image in the list and the
+real comic in the article.
+
+The `/c/` URLs are signed and short-lived (`?__token__=exp=…~acl=…`), which
+drives two decisions. The page is **re-read** rather than the URLs stored, since
+a stored URL is dead within the hour; and `__token__` joins
+`_IMG_CACHE_VOLATILE_PARAMS`, so `/api/img` caches the bytes under a
+token-stripped key and keeps answering after every token expires. The page fetch
+is synchronous on the render path — narrow enough to afford (Tapas links only,
+and only when the body has no `/c/` image already) and *not* deferrable the way
+a caption is, because deferring would show the wrong picture now.
+
 **Tapas is the same shape on a different host, and needed its own plugin.** An
 episode page's og:image is a social *card* (`.png` on `us-a.tapas.io`) while the
 panel is a `.jpg` on the same CDN inside `<content:encoded>`. The card is

@@ -121,6 +121,11 @@ if the publisher happens to ship the same one. They're a suggestion, not an
 automatic tag; a tag rule already covers that. Picking a tag from the
 autocomplete applies it straight away rather than making you confirm.
 
+Some comic hosts publish a thumbnail where the comic should be. A Tapas feed
+carries one *series art* image per episode — fine in the post list, wrong in the
+article, since a four-panel episode is four images on the page. Lectio reads the
+episode and shows the panels, keeping the feed's picture as the list thumbnail.
+
 Transparent images keep their transparency and the theme paints behind them
 (`--img-backdrop`, white in both themes) — black line art on a dark page was
 otherwise invisible.

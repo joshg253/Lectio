@@ -14535,6 +14535,85 @@ def _inject_webcomic_panel_into_bodyless_entry(content_html, entry, feed_url: st
     return figure + (content_html or ""), None
 
 
+# Tapas serves two different things from the same CDN: `/sa/` is *series art* —
+# one image per episode, thumbnail-grade, and what the RSS feed ships — while
+# `/c/` is the episode's actual content, one URL per panel. An episode with four
+# panels arrives in the feed as a single `/sa/` picture.
+_TAPAS_CONTENT_IMG_RE = re.compile(
+    r'https://[a-z0-9-]+\.tapas\.io/c/[^"\'\s<>\\]+', re.IGNORECASE
+)
+_TAPAS_SERIES_ART_RE = re.compile(
+    r'<img\b[^>]*\bsrc=["\'][^"\']*//[a-z0-9-]+\.tapas\.io/sa/[^"\']*["\'][^>]*>',
+    re.IGNORECASE,
+)
+# A Tapas body is literally `<p>null</p><img src=…/>` when the author wrote no
+# caption — the API's null serialized into the feed.
+_TAPAS_NULL_PARA_RE = re.compile(r"<p>\s*null\s*</p>", re.IGNORECASE)
+_TAPAS_MAX_PANELS = 60
+
+
+def _inject_tapas_episode_panels(content_html, entry, feed_url: str, lead_image_url):
+    """Put the actual comic in a Tapas article, not the series art.
+
+    The feed's `<content:encoded>` is one `/sa/` image — the same asset the
+    episode page uses as its thumbnail. It makes a good LIST THUMBNAIL and a
+    poor article: a four-panel episode read as a single picture, and the reader
+    reported it as "comic img is wrong, but good for thumb". The panels live on
+    the page as `/c/` URLs, one per panel.
+
+    The list thumbnail is unaffected — the caller captured the resolved lead in
+    `_resolved_lead_for_cache` before this ran. The separate hero *is* dropped,
+    or the thumbnail renders above the comic it is a thumbnail of.
+
+    Costs a source-page fetch on the render path, so it is narrow: Tapas links
+    only, and only when the body has no `/c/` image already. The `/c/` URLs are
+    signed and short-lived, which is why the page is re-read rather than the
+    URLs stored — and why `__token__` is stripped from the image proxy's cache
+    key, so the *bytes* are cached once and outlive every token.
+    """
+    link = str(getattr(entry, "link", "") or "")
+    try:
+        host = urlparse(link).hostname or ""
+    except ValueError:
+        return content_html, lead_image_url
+    host = host.lower()
+    if not (host == "tapas.io" or host.endswith(".tapas.io")):
+        return content_html, lead_image_url
+    if content_html and _TAPAS_CONTENT_IMG_RE.search(content_html):
+        return content_html, lead_image_url  # already has the real panels
+    try:
+        fetched = lead_image_service.fetch_source_html_now(link)
+    except Exception:  # noqa: BLE001 — the series art beats a 500
+        LOGGER.warning("[tapas] panel fetch failed for %s", link, exc_info=True)
+        return content_html, lead_image_url
+    if not fetched:
+        return content_html, lead_image_url
+    _base, page_html = fetched
+
+    panels: list[str] = []
+    seen: set[str] = set()
+    for raw in _TAPAS_CONTENT_IMG_RE.findall(page_html):
+        url = html.unescape(raw).rstrip("\\")
+        # Same file, different token, is the same panel — compare without it.
+        key = url.split("?", 1)[0]
+        if key in seen:
+            continue
+        seen.add(key)
+        panels.append(url)
+        if len(panels) >= _TAPAS_MAX_PANELS:
+            break
+    if not panels:
+        return content_html, lead_image_url
+
+    body = content_html or ""
+    body = _TAPAS_SERIES_ART_RE.sub("", body)      # the thumbnail is not the article
+    body = _TAPAS_NULL_PARA_RE.sub("", body).strip()
+    figures = "".join(
+        f'<p><img src="{html.escape(u, quote=True)}" alt="" /></p>' for u in panels
+    )
+    return figures + body, None
+
+
 def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_lead_in_article: bool):
     """Dedup the lead image against the article body. Returns (content_html, lead_image_url).
 
@@ -15331,6 +15410,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # to _strip_lead_image_opener as the body's opener and it would be
         # removed again.
         content_html, lead_image_url = _inject_webcomic_panel_into_bodyless_entry(
+            content_html, entry, str(entry.feed_url), lead_image_url
+        )
+        content_html, lead_image_url = _inject_tapas_episode_panels(
             content_html, entry, str(entry.feed_url), lead_image_url
         )
         content_html = _collapse_block_spacers(_strip_ad_images(content_html))
@@ -30745,6 +30827,11 @@ def _img_cache_store(cache_key: str, body: bytes, content_type: str) -> None:
 # loading after the original short-lived URL expires. The full URL (with token) is
 # still used for the actual fetch.
 _IMG_CACHE_VOLATILE_PARAMS = frozenset({
+    # Tapas signs its episode art as `?__token__=exp=…~acl=…` — one param
+    # carrying the whole grant. Stripping it means the bytes cache once and keep
+    # answering after the token expires, which is what makes a re-read of an old
+    # episode free instead of a re-fetch of the page for fresh URLs.
+    "__token__",
     "jwt", "token", "sig", "signature", "expires", "exp",
     "x-amz-algorithm", "x-amz-credential", "x-amz-date", "x-amz-expires",
     "x-amz-security-token", "x-amz-signature", "x-amz-signedheaders",

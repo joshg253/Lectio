@@ -2633,6 +2633,29 @@ class LeadImageService:
             dropped.update(g for g in group if g != preferred)
         return [u for u in urls if u not in dropped]
 
+    def fetch_source_html_now(self, entry_link: str) -> tuple[str, str] | None:
+        """``(base_url, html_text)`` for a source page, fetching it when the
+        session cache has no copy.
+
+        **Synchronous**, so callers on the render path must be narrow — this is
+        for the cases where the page is the only place the article's real
+        content exists and deferring to the next open would show the wrong
+        thing now (see _inject_tapas_episode_panels). Everything that merely
+        *enriches* an entry should use queue_source_html_fetch instead.
+        """
+        cached = self._source_html_cache.get(entry_link)
+        if cached:
+            return cached
+        result = self._fetch_page_html(entry_link)
+        if not result:
+            return None
+        source_html, final_url, _ = result
+        self._source_html_cache[entry_link] = (final_url, source_html)
+        self._source_html_cache.move_to_end(entry_link)
+        if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
+            self._source_html_cache.popitem(last=False)
+        return (final_url, source_html)
+
     def get_cached_source_html(self, entry_link: str) -> tuple[str, str] | None:
         """Return ``(base_url, html_text)`` for a source page already in the cache,
         or ``None`` on a miss. Network-free — the caller primes the cache via
