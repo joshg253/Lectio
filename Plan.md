@@ -285,34 +285,6 @@ articles"). What remains:
 - **166 already-converted stars** — tagged entries starred by that backfill
   before it was fixed. Indistinguishable from a genuine star-and-tag, so they
   cannot be surgically reverted; the unstar-tagged pass is what removes them.
-### Combine drops uncurated posts, including unread ones — found 2026-08-08
-
-Combining the two Sarah's Scribbles Webtoons feeds lost the removed feed's one
-post — **unread**, and it did not reappear on the survivor. Not a bug against the
-code's stated contract, but almost certainly wrong against what "combine" means.
-
-`_migrate_curation` does synthesize a source entry into the survivor when it
-matches nothing there — its docstring says so — but the set it walks is
-`ids = set(src_tags) | set(src_stars)`, plus entries holding an archive row. An
-entry with no tag, no star and no capture is never visited, so it is neither
-matched nor synthesized, and it goes when `reader.delete_feed` runs. For an
-*unsubscribe* that is right. For a *combine* — an explicit "these two are the
-same feed" — silently dropping unread posts is not.
-
-The pieces to do it already exist: the guid/normalized-link matcher that decides
-whether a source entry has a twin, and `_synthesize_entry` for when it does not.
-What needs deciding is scope, because a combine of a large old feed could
-otherwise dump thousands of read posts into the survivor:
-
-- **unmatched and unread only** — the narrow read, and the one that would have
-  saved this post;
-- **all unmatched** — truest to "merge", but noisy on an old feed;
-- **show the count in the combine dialog** and let the user choose, which is the
-  house style for anything bulk.
-
-The lost post is recoverable: it is not tombstoned, and the source feed still
-serves that single item.
-
 ### Removing a feed leaks its per-feed meta rows — measured 2026-08-08
 
 Noticed after combining the two Sarah's Scribbles Webtoons feeds. The combine
@@ -346,7 +318,9 @@ So a safe sweep excludes three sets, not one: feeds reader still has, feeds with
 archive rows, and `kept_feeds`. Two things to do, and the first matters more:
 
 1. **Fix the leak** — have feed removal reuse the same table list the rename path
-   already maintains, minus the tables an archive orphan still needs.
+   already maintains, minus the tables an archive orphan still needs. Combine no
+   longer contributes: it re-keys each entry's meta rows onto the survivor
+   (`_rekey_entry_meta`). Plain unsubscribe still leaks.
 2. **Sweep the backlog** once, behind the exclusions above. Bulk delete on live
    data, so it wants a go-ahead. The dev/localhost 11,250 are free.
 

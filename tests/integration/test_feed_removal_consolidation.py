@@ -518,7 +518,7 @@ class TestMigrateCuration:
             with main.get_meta_connection() as conn:
                 counts = main._migrate_curation(reader, conn, FEED2, FEED)
 
-        assert counts == {"tags": 1, "stars": 1, "synth": 1, "archives": 0}
+        assert counts == {"tags": 1, "stars": 1, "synth": 1, "archives": 0, "entries": 1}
         with main.get_reader() as reader:
             keys = [main._extract_tag_key(t) for t in reader.get_tags((FEED, "e1"))]
         assert f"{main.MANUAL_TAG_KEY_PREFIX}python" in keys
@@ -551,11 +551,18 @@ class TestMigrateCuration:
             keys = [main._extract_tag_key(t) for t in reader.get_tags((FEED, "e1"))]
         assert f"{main.MANUAL_TAG_KEY_PREFIX}git" in keys
 
-    def test_no_curation_is_noop(self, env):
+    def test_an_uncurated_entry_moves_too(self, env):
+        """Was `test_no_curation_is_noop`, and the no-op was the bug: combining
+        two feeds silently dropped every post that carried no tag, star or
+        capture. A combine says "these two are the same feed", so the entries
+        move whatever their state."""
         _add_feed_to_folder(FEED, _root_folder_id())
         _add_feed_to_folder(FEED2, _root_folder_id())
         _add_entry(FEED2, "e1", "https://example.test/a")  # untagged, unstarred
         with main.get_reader() as reader:
             with main.get_meta_connection() as conn:
                 counts = main._migrate_curation(reader, conn, FEED2, FEED)
-        assert counts == {"tags": 0, "stars": 0, "synth": 0, "archives": 0}
+            moved = reader.get_entry((FEED, "e1"), None)
+        assert counts == {"tags": 0, "stars": 0, "synth": 1, "archives": 0, "entries": 1}
+        assert moved is not None, "the post must land on the survivor"
+        assert moved.read is False

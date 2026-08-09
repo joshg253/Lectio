@@ -16007,19 +16007,90 @@ def feed_curation_items(reader, conn: sqlite3.Connection, feed_url: str) -> list
     return items
 
 
-def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_url: str) -> dict:
-    """Migrate manual tags and stars from a feed being removed onto the surviving
-    feed, so consolidating duplicates never drops curation.
+# Per-entry meta keyed on (feed_url, entry_id). When an entry moves between
+# feeds these have to move with it or the entry arrives stripped: no thumbnail,
+# no captured feed tags, and any hand-made correction (title, date, link, body)
+# silently reverted. Feed-scoped tables are deliberately absent — they belong to
+# the feed being removed, not to its entries.
+_ENTRY_META_TABLES = (
+    "entry_lead_images",
+    "entry_feed_tags",
+    "entry_content_edits",
+    "entry_content_overrides",
+    "entry_date_overrides",
+    "entry_link_overrides",
+    "entry_title_overrides",
+    "entry_media_audio",
+    "entry_media_video",
+    "entry_read_state",
+    "read_history",
+    "archived_entries",
+)
 
-    Mirrors the reconcile_duplicate_feeds.py --merge logic for the in-app dedup
-    path: each source entry that carries a manual tag or a star is matched to a
-    survivor entry by GUID, else by normalized link; when neither matches, the
-    source entry is synthesized into the survivor feed so its tag/star has a home.
-    Moved stars are removed from the source feed's saved_entries rows.
 
-    Returns {"tags": n, "stars": n, "synth": n, "archives": n}.
+def _rekey_entry_meta(conn: sqlite3.Connection, from_feed: str, from_id: str,
+                      to_feed: str, to_id: str) -> None:
+    """Repoint one entry's meta rows at its new (feed_url, entry_id).
+
+    INSERT OR IGNORE then DELETE, per table: the survivor may already have its
+    own row (it is the twin the source matched onto), and its own value wins —
+    it belongs to the entry that is staying. Best-effort per table so a missing
+    one on an older tenant cannot fail a combine.
     """
-    counts = {"tags": 0, "stars": 0, "synth": 0, "archives": 0}
+    if (from_feed, from_id) == (to_feed, to_id):
+        return
+    for table in _ENTRY_META_TABLES:
+        try:
+            info = list(conn.execute(f"PRAGMA table_info({table})"))
+            # Skip an INTEGER PRIMARY KEY (a rowid alias, e.g. read_history.id):
+            # copying it verbatim collides with the row we are copying *from*,
+            # INSERT OR IGNORE drops the copy, and the DELETE below then loses
+            # the row outright. Omitting it lets SQLite assign a fresh one.
+            cols = [r[1] for r in info
+                    if not (r[5] and str(r[2] or "").upper() == "INTEGER")]
+            if not cols:
+                continue
+            names = ", ".join(cols)
+            picks = ", ".join(
+                "?" if c == "feed_url" else ("?" if c == "entry_id" else c) for c in cols
+            )
+            params = [to_feed if c == "feed_url" else to_id for c in cols
+                      if c in ("feed_url", "entry_id")]
+            conn.execute(
+                f"INSERT OR IGNORE INTO {table} ({names}) SELECT {picks} FROM {table}"
+                " WHERE feed_url = ? AND entry_id = ?",
+                (*params, from_feed, from_id),
+            )
+            conn.execute(
+                f"DELETE FROM {table} WHERE feed_url = ? AND entry_id = ?",
+                (from_feed, from_id),
+            )
+        except sqlite3.Error:
+            LOGGER.debug("[dedup] meta re-key skipped for %s", table, exc_info=True)
+
+
+def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_url: str) -> dict:
+    """Move a removed feed's **entries** onto the surviving feed, with their state.
+
+    Each source entry is matched to a survivor entry by GUID, else by normalized
+    link; when neither matches it is synthesized into the survivor. Manual tags,
+    stars, read/unread state, the offline capture and the per-entry meta rows
+    (lead image, feed tags, overrides, history) all follow.
+
+    **Every entry moves, not just curated ones.** This used to walk
+    ``set(src_tags) | set(src_stars)`` — an entry with no tag, no star and no
+    capture was never visited, so it was neither matched nor synthesized and
+    simply vanished when ``reader.delete_feed`` ran. Combining the two Sarah's
+    Scribbles Webtoons feeds silently lost an unread post that way. Dropping
+    uncurated entries is right for an *unsubscribe*; for a combine — an explicit
+    "these two are the same feed" — it is not.
+
+    Read state is carried rather than reset, so combining a large old feed adds
+    its history to the survivor without dumping thousands of posts into unread.
+
+    Returns {"tags": n, "stars": n, "synth": n, "archives": n, "entries": n}.
+    """
+    counts = {"tags": 0, "stars": 0, "synth": 0, "archives": 0, "entries": 0}
 
     # Which source entries actually hold an offline capture. Read once: the loop
     # below would otherwise open an archive connection per entry just to
@@ -16067,7 +16138,8 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
         )
     }
 
-    ids = set(src_tags) | set(src_stars)
+    # Every source entry, not just the curated ones — see the docstring.
+    ids = set(src_entries)
     if not ids and not src_archived_ids:
         return counts
 
@@ -16128,14 +16200,31 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
             )
             if cur.rowcount > 0:  # count real inserts, not IGNOREd existing rows
                 counts["stars"] += 1
+        # Read state follows the entry. Without this a synthesized entry lands
+        # unread by default, so combining an old feed would dump its whole read
+        # history into the survivor's unread count. Only ever marks a survivor
+        # entry read — a twin already read there is not resurrected as unread by
+        # an unread source copy.
+        _src = src_entries.get(sid)
+        if _src is not None and _src.read:
+            try:
+                reader.mark_entry_as_read((keep_url, target_id))
+                conn.execute(
+                    "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
+                    " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
+                    (keep_url, target_id, datetime.now().isoformat()),
+                )
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("[dedup] read-state carry failed %s -> %s", sid, target_id)
+        _rekey_entry_meta(conn, remove_url, sid, keep_url, target_id)
+        counts["entries"] += 1
 
-    # Captures on entries carrying neither a star nor a tag are never visited by
-    # the loop above — it walks curation, not entries — yet they strand exactly
-    # the same way once this feed is deleted (a star removed later leaves the
-    # capture behind; that is what an "archive-only orphan" is). Re-key any whose
-    # article exists on the survivor. One with no counterpart there is left
-    # alone: synthesizing an entry purely to host a capture would put an
-    # uncurated row in the survivor, and the orphan view is already its home.
+    # Archive rows whose entry reader no longer holds — the loop above walks
+    # entries, so these are invisible to it. They strand the same way once this
+    # feed is deleted. Re-key any whose article exists on the survivor; one with
+    # no counterpart there is left alone, since synthesizing an entry purely to
+    # host a capture would invent a post that never existed, and the orphan view
+    # is already that capture's home.
     for aid in src_archived_ids - ids:
         _target_id, _synth = _resolve(aid)
         if _synth:

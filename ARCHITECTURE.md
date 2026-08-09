@@ -2062,6 +2062,27 @@ What keeps it cheap is the proxy's byte cache, which was already most of the ans
 
 `scripts/refresh_expired_deviantart_images.py` remains as a manual catch-up over the same routine. Note it must use `get_deviantart_user_token()` rather than reading `deviantart_access_token` directly: DA access tokens last an hour, so any batch reading the stored value 401s on almost every run.
 
+## Combining feeds moves the entries, not just the curation
+
+`_migrate_curation` used to walk `set(src_tags) | set(src_stars)` — curation,
+not entries. A post with no tag, no star and no capture was never visited, so it
+was neither matched onto a survivor twin nor synthesized, and it vanished when
+`reader.delete_feed` ran. Combining two subscriptions to the same Webtoons comic
+silently lost an unread post that way. Dropping uncurated entries is correct for
+an *unsubscribe*; for a combine — the user asserting these two feeds are the same
+feed — it is not, so the loop now walks every source entry.
+
+Two things make that safe at scale. **Read state is carried, not reset**, or
+combining an old feed would dump its entire history into the survivor's unread
+count; a survivor twin that is already read is never resurrected as unread by an
+unread source copy. And **per-entry meta follows the entry**
+(`_rekey_entry_meta`: lead image, captured feed tags, content/title/date/link
+overrides, media, read state, history), because a post that arrives with no
+thumbnail and its hand-made title correction reverted is a worse outcome than
+one that did not move. The re-key omits INTEGER PRIMARY KEY columns — copying
+`read_history.id` verbatim collides with the row being copied from, so
+`INSERT OR IGNORE` drops the copy and the follow-up `DELETE` loses the row.
+
 ## Combining feeds carries the offline captures
 
 `_migrate_curation` moves a removed feed's manual tags and stars onto the survivor, and now its **starred-archive rows** too (`rekey_archive`, which carries the asset links and refuses to clobber a capture the survivor already has). Without that the captures stayed keyed to a feed that was about to be deleted: the articles were fine, but their offline copies became unreachable and the Saved view rendered them as archive-only *orphans* — from the archive row's own stale `link`, which is how it surfaced, as a combined feed's articles still showing their old dead URLs. Measured on the live library 2026-07-25, past combines had stranded **85** of them; `scripts/repair_orphaned_archives.py` re-attached them (64 re-keyed, 3 where the stranded row was the *better* capture and replaced a thinner twin, 18 redundant drops, 14 links refreshed).
