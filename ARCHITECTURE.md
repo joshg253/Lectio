@@ -1126,22 +1126,29 @@ be a real topic elsewhere. It hides a chip; it does not forget a fact, so the
 lives in Feed Properties → **Hidden tags**, because a mis-clicked × must have a way
 back and that list is the only place the decision is visible.
 
-**Boilerplate feed tags are suppressed by coverage, not by a blocklist.** A tag a
-feed puts on essentially every entry carries no per-entry signal and crowds out
-the ones that do. Measured on the live library: 2,525 slickdeals posts tagged
-`Popular Deals`, 576 r/VinylDeals posts tagged `VinylDeals`, all 555
-talkpython.fm episodes carrying the same eight tags — 661 (feed, tag) pairs in
-total, against 51,028 kept.
+**Boilerplate feed tags are hidden by the user, per (feed, tag) — nothing is
+filtered automatically, and that is a decision, not an omission.** Two automatic
+heuristics were built and both reverted on 2026-07-29 (`1381cbc`).
 
-`FeedTagService.low_signal_tags` hides any tag on ≥90% of a feed's tagged entries,
-with a 10-entry floor because below that coverage is noise (three of four entries
-sharing a tag is not boilerplate). A coverage rule needs no maintenance and adapts
-per feed: `python` survives on a Python-heavy feed precisely because it is not on
-literally everything, which a junk-word list could never express.
+*Coverage* — suppress a tag carried by ~every entry of a feed — caught the
+motivating cases exactly: `Popular Deals` on slickdeals, `VinylDeals`,
+talkpython's eight-tag block. It also hid `Lessons` on a guitarplayer tag feed,
+where `Lessons` is precisely the right tag. These chips exist for **filing**, not
+for telling entries apart, so uniformity is not disqualifying. *Feed-name echo*
+— uniform, and the tag's tokens are a subset of the feed's title — failed the
+same way, because a tag feed puts its tag in its own name ("Latest from Guitar
+Player in Lessons").
 
-It filters the **suggestions only** — the stored rows are untouched, since the
-table is also the data foundation for tag-filtered feed adapters, where "every
-post in this feed is tagged VinylDeals" is a fact worth keeping.
+`VinylDeals` is a place, `Lessons` is a kind of content, and nothing in feed
+metadata carries that distinction. The asymmetry picks the default: an unwanted
+chip is cheap because it is ignored, a wanted chip that is hidden is invisible.
+So the suppression list is the user's — `suppressed_tags` /
+`set_tag_suppressed`, edited from the chip's × and reviewable under Feed
+Properties → Hidden tags.
+
+Suppression hides a **chip**; it never forgets a fact. The stored rows are
+untouched, since the table is also the data foundation for tag-filtered feed
+adapters, where "every post in this feed is tagged VinylDeals" is worth keeping.
 
 `reader` discards entry categories (RSS/Atom `<category>`) at ingest — its `Entry` type has no tags attribute — so Lectio captures them itself at the only point the raw feedparser result exists: `SanitizingFeedparserParser.__call__` (`services/reader_sanitize.py`). After `_process_feed`, the parser hands `(entry_id, tags)` pairs to an **injected sink** (`set_entry_tag_sink`, wired in `main` to `FeedTagService.record_entry_tags`), keeping services free of main/DB imports. Design notes:
 
