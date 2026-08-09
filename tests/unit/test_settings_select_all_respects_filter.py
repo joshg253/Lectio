@@ -80,3 +80,38 @@ def test_the_filter_still_marks_non_matching_rows_hidden():
     """The gate above is meaningless if the filter stops using `hidden`."""
     src = _src()
     assert "fr.hidden = !feedMatch;" in src
+
+
+def test_a_header_checkbox_selects_every_match_across_folders():
+    """The per-folder boxes only ever reach their own folder, so a search
+    spanning several of them ("best" hitting four) had no "select what I
+    searched for" — you had to tick each folder in turn.
+
+    Driven in Chromium: filtered, the header box checks 2 of 6 rows across 2
+    folders with 0 hidden-but-checked and the toolbar reading "2 selected";
+    unfiltered it checks all 6 and lights the folder boxes."""
+    src = _src()
+    assert "syncGlobalCheck" in src
+    m = re.search(r"e\.target\.id === 'sfc-check-all-global'(.*?)return;", src, re.S)
+    assert m, "the header checkbox needs its own branch"
+    assert "selectableFeedRows(null)" in m.group(1), \
+        "it must reuse the same filter-aware row set as the per-folder boxes"
+
+
+def test_the_header_checkbox_lives_in_the_table_header():
+    header = (Path(__file__).resolve().parents[2] / "templates"
+              / "_settings_feeds_folders.html").read_text(encoding="utf-8")
+    thead = re.search(r"<thead>.*?</thead>", header, re.S)
+    assert thead, "the folders table should still have a header row"
+    assert 'id="sfc-check-all-global"' in thead.group(0), \
+        "it belongs in the header's checkbox column, not floating above the table"
+
+
+def test_the_header_state_follows_the_filter():
+    """Its tooltip carries the count — the column is 2rem wide, too narrow for
+    a visible label — so it has to be recomputed when the match set changes."""
+    src = _src()
+    assert "window.syncFeedSelectionHeader" in src
+    filt = re.search(r"const applyFolderFilter = .*?\n      \};", src, re.S)
+    assert filt, "applyFolderFilter should still exist"
+    assert "syncFeedSelectionHeader" in filt.group(0)

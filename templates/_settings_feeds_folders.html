@@ -21,7 +21,7 @@
     <col style="width: 4.75rem" />
     <col style="width: 2rem" />
   </colgroup>
-  <thead><tr><th>Folder</th><th style="text-align:right">Feeds</th><th>Refresh</th><th></th><th class="sfc-col-check" title="Select for comparison"></th></tr></thead>
+  <thead><tr><th>Folder</th><th style="text-align:right">Feeds</th><th>Refresh</th><th></th><th class="sfc-col-check">{# Select every feed the filter is showing, across folders — the per-folder boxes below only ever reach their own folder, so a search spanning several of them had no "select what I searched for". With no filter it selects everything, which is what a header checkbox reads as anyway. The count lives in the tooltip because the column is 2rem wide; the toolbar states it again once something is selected. #}<input type="checkbox" id="sfc-check-all-global" title="Select all feeds" aria-label="Select all feeds" /></th></tr></thead>
   <tbody>
   {% for row in child_rows %}
   {% set failing = folder_failing_counts.get(row.id, 0) %}
