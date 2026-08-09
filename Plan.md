@@ -341,32 +341,6 @@ Two things that could follow from it, neither started: give the backfill an
 explicit "include read entries" mode for repair runs, or have
 `clear_lead_image_cache` refuse to clear rows the backfill will not revisit.
 
-### A domain alias rewrites the host but not the scheme — found 2026-08-08
-
-Two dead `http://tapastic.com/rss/series/N` feeds sat next to their live
-`https://tapas.io/rss/series/N` twins, failing every refresh, and the duplicate
-scanner never flagged them. `_DOMAIN_ALIASES` rewrites `tapastic.com` →
-`tapas.io` but preserves the scheme, so the husk normalized to
-`http://tapas.io/...` while the working feed is `https://...` — different
-strings, so `get_feed_duplicates` (which groups on `normalize_feed_url`) put
-them in different groups.
-
-The husks are gone, but the gap is general. Measured across 2,883 feeds, exactly
-**two** other pairs differ only by scheme, and both are real duplicates that are
-live and fetching:
-
-| | http | https |
-|---|---:|---:|
-| Azius Blog | 7 entries | 6 entries |
-| Featured Projects (Behance/FeedBurner) | 106 entries | 153 entries |
-
-**The fix is in the comparison, not the normalizer.** Rewriting `http` → `https`
-in `normalize_feed_url` would be wrong — some hosts really are http-only, and
-that function decides the stored subscription URL. Grouping
-scheme-insensitively inside `get_feed_duplicates`, keeping `https` as the
-survivor, is narrow and safe. Small, but it closes a class where the two copies
-diverge silently: the Behance pair is 47 entries apart.
-
 ### Duplicate *feeds* are invisible to every scanner — measured 2026-08-08
 
 Two subscriptions to Sarah's Scribbles on Webtoons (`title_no=50260`, 20 entries;

@@ -566,3 +566,65 @@ class TestMigrateCuration:
         assert counts == {"tags": 0, "stars": 0, "synth": 1, "archives": 0, "entries": 1}
         assert moved is not None, "the post must land on the survivor"
         assert moved.read is False
+
+
+class TestDuplicateScanGroupsAcrossSchemes:
+    """A domain alias rewrites the host but keeps the scheme, so a legacy
+    `http://` subscription and its `https://` twin normalized to different
+    strings and never grouped. Two dead tapastic.com feeds sat beside their live
+    tapas.io twins, failing every refresh, unflagged."""
+
+    def _keys(self, dup):
+        return {(d["keep"], d["remove"]) for d in dup["same_folder"]}
+
+    def test_a_scheme_only_pair_is_found_and_https_survives(self, env):
+        root = _root_folder_id()
+        _add_feed_to_folder("http://azius.com/blog/feed", root)
+        _add_feed_to_folder("https://azius.com/blog/feed", root)
+        import json
+        dup = json.loads(main.get_feed_duplicates().body)
+        assert ("https://azius.com/blog/feed", "http://azius.com/blog/feed") in self._keys(dup)
+
+    def test_a_domain_alias_across_schemes_groups_too(self, env):
+        """The reported case: http tapastic husk vs https tapas.io twin."""
+        root = _root_folder_id()
+        _add_feed_to_folder("http://tapastic.com/rss/series/4879", root)
+        _add_feed_to_folder("https://tapas.io/rss/series/4879", root)
+        import json
+        dup = json.loads(main.get_feed_duplicates().body)
+        assert ("https://tapas.io/rss/series/4879",
+                "http://tapastic.com/rss/series/4879") in self._keys(dup)
+
+    def test_the_survivor_is_always_a_subscribed_url(self, env):
+        """`keep` used to be the canonical *string*, which is not always one of
+        the variants — then every variant was offered for removal against a URL
+        nobody is subscribed to."""
+        root = _root_folder_id()
+        subscribed = {"http://example.test/feed/", "https://example.test/feed/"}
+        for u in subscribed:
+            _add_feed_to_folder(u, root)
+        import json
+        dup = json.loads(main.get_feed_duplicates().body)
+        pairs = self._keys(dup)
+        assert pairs, "the pair must be detected"
+        for keep, remove in pairs:
+            assert keep in subscribed, f"survivor {keep} is not subscribed"
+            assert remove in subscribed
+            assert keep != remove
+
+    def test_unrelated_feeds_are_not_grouped(self, env):
+        root = _root_folder_id()
+        _add_feed_to_folder("https://a.test/feed", root)
+        _add_feed_to_folder("https://b.test/feed", root)
+        import json
+        dup = json.loads(main.get_feed_duplicates().body)
+        assert dup["same_folder"] == [] and dup["cross_folder"] == []
+
+    def test_a_trailing_slash_pair_still_keeps_the_canonical_spelling(self, env):
+        """The behaviour this function already had must not regress."""
+        root = _root_folder_id()
+        _add_feed_to_folder("https://slash.test/feed", root)
+        _add_feed_to_folder("https://slash.test/feed/", root)
+        import json
+        dup = json.loads(main.get_feed_duplicates().body)
+        assert ("https://slash.test/feed", "https://slash.test/feed/") in self._keys(dup)

@@ -26566,20 +26566,41 @@ def get_feed_duplicates():
     for folder_id, feed_url, folder_name in rows:
         url_folders.setdefault(feed_url, []).append((folder_id, folder_name))
 
-    # canonical → [url, url/, ...] — group all URL variants by their normalized form
+    # canonical → [url, url/, ...] — group all URL variants by their normalized
+    # form, **ignoring the scheme**. A domain alias rewrites the host but keeps
+    # the scheme (`_DOMAIN_ALIASES`), so a legacy `http://tapastic.com/…`
+    # subscription normalized to `http://tapas.io/…` while its live twin was
+    # `https://…` — different strings, different groups, and two dead feeds sat
+    # beside their working copies failing every refresh without ever being
+    # flagged. Scheme is folded here, in the *comparison*, and deliberately not
+    # in `normalize_feed_url`: that function decides the stored subscription URL,
+    # and some hosts really are http-only.
+    def _dupe_group_key(url: str) -> str:
+        canonical = normalize_feed_url(url)
+        return canonical.split("://", 1)[-1] if "://" in canonical else canonical
+
     by_canonical: dict[str, list[str]] = {}
     for url in url_folders:
-        canonical = normalize_feed_url(url)
-        by_canonical.setdefault(canonical, []).append(url)
+        by_canonical.setdefault(_dupe_group_key(url), []).append(url)
 
     same_folder: list[dict] = []
     cross_folder: list[dict] = []
 
-    for canonical, variants in by_canonical.items():
+    for _group_key, variants in by_canonical.items():
         if len(variants) < 2:
             continue
-        # Always keep the canonical (no trailing slash) form; remove the slash variant(s).
-        keep = canonical
+        # The survivor has to be a URL somebody is actually subscribed to. This
+        # used to be the canonical *string*, which is not always one of the
+        # variants — when it was not, every variant got offered for removal
+        # against a URL that does not exist, and `url_folders.get(keep)` came
+        # back empty so all of them looked cross-folder. Prefer https, then the
+        # already-canonical spelling (no trailing slash), then shortest.
+        keep = min(variants, key=lambda u: (
+            not u.startswith("https://"),
+            normalize_feed_url(u) != u,
+            len(u),
+            u,
+        ))
         for remove in variants:
             if remove == keep:
                 continue

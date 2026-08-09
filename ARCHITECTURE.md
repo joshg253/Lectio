@@ -911,6 +911,27 @@ DeviantArt's legacy `backend.deviantart.com/rss.xml` is behind a CloudFront WAF 
 
 Dev.to's RSS (front page and per-tag) is an unfiltered firehose that mixes languages, while its public unauthenticated JSON API (`GET https://dev.to/api/articles`) exposes a per-article `language` label, reaction counts, and a `top=N` ranking window. `services/devto.py` follows the DeviantArt/FakeFeedz synthetic-feed pattern: one polite API request per refresh, client-side filtering (the API ignores `?language=`; we filter on dev.to's *own* `language` field, deliberately not our own detection), then render to `file://` RSS under `DATA_DIR/devto-feeds/` for `reader` to ingest. Per-feed config (tag, top-window days, English-only, min reactions, tags_exclude) lives in the per-user meta table `devto_feeds`; the Add Feed dialog detects dev.to front-page/tag URLs client-side (mirroring `parse_devto_url` — user/org pages are left to their normal small RSS) and reveals the filter fields, and the config is editable later via feed Properties → Tuning (`POST /devto-feeds/{id}/config`). Cover images seed the lead-image cache via the same sink mechanism as DeviantArt; deletion is dispatched in `purge_orphaned_feed` alongside the other rendered-feed types. Filter changes shape what arrives from then on — already-ingested entries are kept.
 
+## Duplicate feeds: the scheme is folded in the comparison, not the URL
+
+`get_feed_duplicates` groups subscriptions by `normalize_feed_url` **with the
+scheme stripped**. It has to be stripped somewhere, because `_DOMAIN_ALIASES`
+rewrites a host without touching the scheme: a legacy `http://tapastic.com/…`
+subscription normalized to `http://tapas.io/…` while its live twin was
+`https://…`, so the two never grouped and a dead feed sat beside a working copy
+failing every refresh, unflagged. Two more such pairs were live on the same
+library, already diverged — the Behance one by 47 entries.
+
+It is folded **here rather than in `normalize_feed_url`** because that function
+decides the stored subscription URL, and some hosts really are http-only;
+forcing https there would break them. The comparison has no such obligation.
+
+The survivor is chosen from the variants that are actually subscribed —
+preferring `https`, then the already-canonical spelling, then the shortest.
+`keep` used to be the canonical *string*, which is not necessarily one of the
+variants; when it was not, `url_folders.get(keep)` came back empty, so every
+variant looked cross-folder and was offered for removal against a URL nobody was
+subscribed to.
+
 ## Duplicate entry suppression
 
 Two mechanisms prevent duplicate articles from accumulating in the reader DB:
