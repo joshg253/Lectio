@@ -4,32 +4,6 @@ Open work only. Anything shipped lives in git history and, where it still
 explains why the code looks the way it does, in ARCHITECTURE.md.
 
 ## Now
-### The "database is locked" CI flake — SOLVED 2026-08-09
-
-Both sources found, and the diagnostics were the method: it never reproduced
-locally, so the evidence had to be collected inside the run that failed.
-
-**Source one** — `_queue_media_audio_scan` spawned a daemon writing the per-user
-meta DB. `LECTIO_DISABLE_STARTUP_BACKFILL` covered daemons started at *startup*;
-that one is per request and slipped through. Gated 2026-08-08.
-
-**Source two took the diagnostics to see.** The flake fired on PR #188 and the
-dump named it outright: the thread list held one `_run_in_user_context` thread
-inside `backfill_entry_list` → `_fetch_source_lead_image` →
-`is_safe_outbound_url` → `socket.getaddrinfo`, a DNS lookup, while the test's
-own fixture was opening the same per-user meta DB. The lock probe reported every
-file "writable now", which fits exactly: the daemon takes the DB, the fixture
-collides, and it is free again a moment later.
-
-**Rendering a post list spawns that daemon** — which is why it kept failing in
-tests that had nothing to do with the branch under review. Any test that renders
-a list could lose the race. Now behind the same switch as the other two.
-
-Worth keeping: the leaked-handle theory cost a day and was wrong. What worked
-was refusing to ship a no-op teardown carrying an authoritative comment about a
-refuted cause, and instead making the next failure explain itself. The
-diagnostics stay for the next one.
-
 ### Parked, deliberately
 
 - **makeuseof re-fetch returns white images.** Seen once during testing
@@ -64,17 +38,6 @@ diagnostics stay for the next one.
   screenshot tooling emits explicit end tags to dodge it, which is a workaround
   for the demo, not a fix.
 ### CodeQL board triage
-
-**Alert 184 (`py/reflective-xss`, `/read/offline`) — dismissed 2026-08-04 as a
-false positive.** Same class and same rationale as the `build_reader_page`
-dismissal on PR #144: everything the route embeds is allowlist-sanitized —
-`article_html` on every branch of `resolve_reader_article_html` (archive at
-capture, live via `sanitize_readability_html`, stored via `reader_sanitize` at
-ingest), `<title>` via `html.escape`, `<h1>` via `sanitize_inline_title`
-(escape-then-restore, so no attribute or unknown tag survives a round trip), and
-dateline/source/lead-image URLs via `html.escape`. CodeQL flags it because our
-BeautifulSoup sanitizer is not a recognized sanitizer, and the taint source is
-the `feed_url`/`entry_id` query params that select the row.
 
 **Still open on the board (5), not yet triaged:**
 
@@ -147,109 +110,64 @@ that drops to 2 once a source is over a GB. Also worth noting the archive grew
 7.2 → 7.9GB overnight capturing 3,581 retro-archive pages, so the number this
 is sized against keeps moving.
 
-### "Filter this view" — ⚠ BLOCKED on a decision (see finding 3 below)
+### "Filter this view" — ⚠ BLOCKED on a decision
 
-**Do not start this as written.** The premise that the client holds the whole
-list is false as of 2026-07-22; pick between options (a)/(b)/(c) in finding 3
-first. The `post-item-filtered` footgun below is still correct and still applies
-whichever option wins.
-
-Josh's framing (2026-07-21) is the right one: **"actual search" vs "filter search"**
-are different tools. Search is a server-side query that changes *what is fetched*;
-a filter narrows *what is already in front of you*, instantly, so you can then act
-on the result as a set. Settings → Feeds already has the filter flavor
+**Do not start this as written** — needs a decision below first. Josh's framing:
+**"actual search" vs "filter search"** are different tools. Search is a
+server-side query that changes *what is fetched*; a filter narrows *what is
+already in front of you*, instantly, so you can then act on the result as a
+set. Settings → Feeds already has this pattern
 ([templates/index.html:1938](templates/index.html#L1938), logic at
-[static/js/app.js:10594](static/js/app.js#L10594) — debounced 200ms, matches
-folder name OR feed name OR feed URL, toggles `hidden`, shows an empty state).
-Port that pattern to the posts list.
+[static/js/app.js:10594](static/js/app.js#L10594)); port it to the posts list.
+"Move all visible to feed" already exists
+([static/js/app.js:7045](static/js/app.js#L7045)) and post rows already carry
+`data-post-link`/`data-post-title` ([templates/index.html:629](templates/index.html#L629)),
+so the filter itself needs no server change — but the *move* action does.
 
-**Most of this already works — three findings from checking (2026-07-21):**
+**Why it's blocked:** the server sends 250 posts on first load
+([main.py:16591](main.py#L16591)), then further chunks capped at 2,000. A
+client-side filter only spans what's currently in the DOM, so "Move N shown"
+on a 1,321-match filter would silently move a fraction of it — the exact
+footgun this item exists to avoid. **The existing `Move visible to feed…` has
+this bug today** too ([static/js/app.js:7332](static/js/app.js#L7332)):
+its claim to cover "whatever survives the active filters" is only true under
+250 results. Worth fixing regardless of whether the new filter gets built.
 
-1. **"Move all visible to feed" already exists**
-   ([static/js/app.js:7045](static/js/app.js#L7045)), so the "attach everything
-   shown to a feed" half is built. Only the filter is missing.
-2. **The data is already in the DOM.** Every row carries `data-post-link` and
-   `data-post-title` ([templates/index.html:629](templates/index.html#L629)), so a
-   URL/title filter needs **no** server change.
-3. ~~**The server sends the whole list, not a page**~~ — **WRONG, corrected
-   2026-07-22. Read this before building anything here.** The server sends **250
-   posts** on first load ([main.py:16591](main.py#L16591)); the client then pulls
-   further chunks of `CHUNK_SIZE` (10) via `chunk`/`chunk_delta`, **capped at
-   2,000** (`limit = min(requested_chunk * CHUNK_SIZE, 2000)`). Almost certainly
-   introduced by the page-weight work (#12, PR #146) after this finding was
-   written.
+**Decision needed — three ways forward:**
+- **(a) Honest partial.** Filter what is loaded; label the button with both
+  numbers ("Move 84 shown of 250 loaded"). Cheap, not the "whole set" guarantee.
+- **(b) Load-all, then filter.** Pull all chunks to the 2,000 cap before
+  filtering. Correct guarantee, but re-inflates the page weight #12 cut, and
+  still truncates above 2,000.
+- **(c) Server-side filter.** Pass the filter term as a query param, move by
+  *predicate* not by id list. The only option correct at any size, but a
+  server change that overlaps existing search.
 
-   **This invalidates the design below, so don't build it as specified.** A
-   client-side filter spans only the ~250 rows currently in the DOM, so
-   "Move N shown" would silently move a fraction of a filtered set — the exact
-   footgun this item set out to avoid, relocated from the scroll window to the
-   fetch window. A 1,321-match filter is precisely the case that breaks.
+Leaning **(c)** for the move action, **(a)** for the instant-feedback filter
+itself — filter locally for feel, resolve the move server-side against the
+same predicate.
 
-   **It also re-explains Josh's original report.** "Only the literally visible
-   stuff moved" was read as scroll-chunking; it is really server-side
-   pagination. **The existing `Move visible to feed…` has this bug today** — it
-   collects `document.querySelectorAll('.posts .post-item')`
-   ([static/js/app.js:7332](static/js/app.js#L7332)) and its comment claims that
-   is "whatever survives the active filters (tag, search, unread, star)", which
-   is only true when the result set is under 250. Worth fixing regardless of
-   whether the filter gets built.
+**⚠ The footgun — read before implementing.** `post-item-hidden` is already
+taken by the scroll-chunking reveal
+([static/js/app.js:11491](static/js/app.js#L11491)), and "move all visible"
+selects `.posts .post-item` without excluding it. The moment a filter reuses
+that same hidden mechanism, filtering to one domain and clicking "move all
+visible" would move the *entire unfiltered list* — a silent, bulk mis-file.
+So: give the filter its own class (`post-item-filtered`, not
+`post-item-hidden`), update the move-visible selector to respect it, and
+restate the button copy as "move the N shown" from the same predicate.
 
-   **Three ways forward — needs a decision before any code:**
-   - **(a) Honest partial.** Filter what is loaded; label the button with both
-     numbers ("Move 84 shown of 250 loaded"). Cheap, keeps the promise small
-     and true, but is not the "act on the whole set" capability wanted.
-   - **(b) Load-all, then filter.** On engaging the filter, keep pulling chunks
-     to the 2,000 cap before filtering. Delivers the intended guarantee, but
-     re-inflates the page weight that #12 spent a release cutting, and still
-     silently truncates above 2,000.
-   - **(c) Server-side filter.** Pass the filter term as a query param and let
-     the server narrow, then move by *predicate* rather than by a list of ids.
-     The only option that is correct at any size, and the only one where "move
-     everything matching" is truthful — but it is a server change and overlaps
-     the existing search.
+**What "visible" means, settled:** move everything matching the active
+filters (server-side tag/search/unread/star *plus* the new client-side
+filter), regardless of scroll position — not just the rows currently
+painted (scroll-chunking is a rendering optimization, not user intent).
 
-   Leaning **(c)** for the move action and **(a)** for the typing-feels-instant
-   filter, i.e. filter locally for feedback but resolve the *move* server-side
-   against the same predicate. That keeps "everything I filtered to, nothing I
-   didn't" honest without re-loading thousands of rows into the DOM.
+**Sequencing vs "Auto-file saved articles":** build this first — roughly a
+day, general-purpose, and the manual escape hatch for what auto-filing can't
+resolve. Don't hand-grind the bulk of it by hand; that's what auto-filing is for.
 
-**⚠ The footgun — read before implementing.** `post-item-hidden` is *already taken*
-by the scroll-chunking reveal ([static/js/app.js:11491](static/js/app.js#L11491)),
-and "move all visible" selects `.posts .post-item` **without** excluding it. Today
-that's merely mis-labeled ("visible" actually means "everything the server
-returned"). But the moment a filter reuses the same hidden mechanism, *filter to
-one domain and "move all visible" would move the entire unfiltered list to that
-feed* — a silent, bulk, hard-to-undo mis-file. So:
-
-- give the filter its **own** class (e.g. `post-item-filtered`), not
-  `post-item-hidden`; and
-- update the move-visible selector to respect it, and restate the button copy as
-  "move the N shown" with the count coming from the same predicate.
-
-**Josh confirmed 2026-07-21: "only the literally visible stuff moved."** One
-ambiguity to settle, because both readings are defensible and one is useless:
-
-- ✅ **What to build** — move everything matching the **active filters** (server-side
-  tag/search/unread/star *plus* the new client-side filter), regardless of how far
-  the list has been scrolled.
-- ❌ **Not** the strictly-literal reading — "only the rows currently painted." The
-  scroll-chunk reveals 10 at a time, so that would silently move ~10 of a filtered
-  1,321 and look like it worked.
-
-The distinction: **scroll-chunking is a rendering optimization, not a user
-intent.** Filters are something the user *chose*; the scroll window isn't. So the
-guarantee to implement is "everything I filtered to, nothing I didn't." Put the
-resolved count in the button (**"Move 1,321 shown"**) so the set is stated before
-the click and can never be guessed at.
-
-**Sequencing note vs #4:** build this first — it's roughly a day (filter is a copy
-of an existing one, move already exists), it's a *general* capability worth having
-forever, and it's the manual escape hatch for the cases #4 can't resolve (the 7.8%
-with no match and the 0.7% ambiguous). But **don't hand-grind the 92% with it** —
-that's what #4 automates; use this for the tail and for spot work.
-
-(The dead `server_posts_total` / `server_posts_sent` plumbing noticed while checking
-this is filed with the other dead-code items under "Code health" in Later.)
+(The dead `server_posts_total` / `server_posts_sent` plumbing noticed while
+checking this is filed under "Code health" in Later.)
 
 ### Auto-file saved articles — the tail
 
@@ -269,42 +187,6 @@ articles"). What remains:
 - **166 already-converted stars** — tagged entries starred by that backfill
   before it was fixed. Indistinguishable from a genuine star-and-tag, so they
   cannot be surgically reverted; the unstar-tagged pass is what removes them.
-### A repair run through `docker compose exec` needs a restart — 2026-08-08
-
-Worth stating once, because it produced a run of "you said that was fixed and I
-still see it". An exec is a **different process** from uvicorn. Writes land in
-the shared SQLite files and are real, but the server's in-process caches never
-learn about them:
-
-- `_meta_structure_cache` (folder → feed map, backs the sidebar and Settings →
-  Feeds). Calling `invalidate_meta_structure_cache()` inside the exec clears
-  *that* process's copy and does nothing to the server. 29 ghost folder rows
-  were deleted from the DB and kept rendering until the container restarted.
-- `LeadImageService._cache` — a plain dict, populated lazily per
-  `(feed_url, entry_id)`. The server can serve a stale thumbnail *and* write its
-  own value back over the repair.
-
-So: restart after any out-of-band repair, then verify. Checked while chasing
-this — there is exactly one container and one uvicorn worker (no `--workers`),
-so this is only ever staleness, never a second instance.
-
-### Clearing the lead-image cache is not a repair — found 2026-08-08
-
-`clear_lead_image_cache` + `fetch_and_store_lead_images_for_feed` looks like the
-obvious way to re-derive a feed's thumbnails. It is not: the backfill loop
-deliberately visits only entries that are **unread, saved or manually tagged**,
-so clearing first leaves every *read* entry with no row at all and nothing ever
-comes back for it. Doing exactly that across the 15 Tapas feeds took them from
-33 correct / 54 wrong to 20 correct / **124 unresolved** — worse than before.
-
-The repair that works resolves per entry and stores the result directly
-(`_plugin_or_source_lead_image` + `store_entry_lead_image`), which reached all
-144. Worth remembering before the next "just clear it and let it rebuild".
-
-Two things that could follow from it, neither started: give the backfill an
-explicit "include read entries" mode for repair runs, or have
-`clear_lead_image_cache` refuse to clear rows the backfill will not revisit.
-
 ### The feeds filter matches substrings inside opaque ids — 2026-08-09
 
 Searching `htm` in Settings → Feeds returned five feeds and **none of them were
@@ -356,210 +238,55 @@ measurement is what decides whether any of it is worth automating.
 
 ### Cross-feed duplicate scan — the dupes you can actually feel
 
-**RE-MEASURED 2026-07-22 — #4 collapsed almost all of this, exactly as predicted.
-This item is now small enough to question whether it is worth building at all.**
+**RE-MEASURED 2026-07-22 — auto-filing collapsed almost all of this.** Before
+auto-filing, all-starred items held ~490 duplicate groups (~520 extra
+copies), 447 of them cross-feed (`lectio:saved` ↔ the same article starred
+in its real feed). After auto-filing: **65 groups, 87 extra copies** — only
+3 remain saved↔real (auto-filing's `_move_entry_to_feed`, matching by GUID
+then normalized link, merges those for free), leaving 44 groups that are
+genuinely two legitimate subscriptions carrying the same article (a site
+plus an aggregator) and 18 same-feed.
 
-| set scanned | groups | extra copies |
-|---|---|---|
-| all starred, measured 2026-07-21 (pre-filing) | ~490 | ~520 |
-| **all starred, measured 2026-07-22 (post-filing)** | **65** | **87** |
+**Recommendation: don't build a dedicated cross-feed scanner UI.** 87 copies
+across 65 groups doesn't justify a dedicated surface, and the 44 cross-sub
+groups are a judgment call (which subscription should own the post?) rather
+than mechanical dedup. Either fold the homepage-link guard + cross-feed
+grouping into the *existing* `/saved/duplicates` scan, or leave it —
+Josh's call.
 
-Breakdown of the 65 (10,058 starred entries carry a usable link; 323 skipped as
-homepage-like):
+**⚠ Guard against homepage-links, if this is ever built.** The raw
+measurement found one bogus 244-copy group — `romhacking.net`'s feed uses
+the site homepage as every entry's `link` — so any cross-feed scan needs to
+ignore bare-domain/homepage links and flag oversized groups for review
+rather than presenting them as confident matches (same hazard class as the
+pre-armed-delete lesson elsewhere in this doc).
 
-| | groups |
-|---|---|
-| cross-feed, saved ↔ real feed | **3** (was 447) |
-| cross-feed, between two real feeds | **44** (was 46) |
-| same-feed | 18 |
-| oversized (≥10 copies) | **0** |
-
-**The dominant class is gone.** Auto-filing merged the saved copy onto the feed
-entry where it was already starred, taking saved↔real from 447 groups to 3 — the
-mechanism the Plan predicted (`_move_entry_to_feed` matches by GUID, else
-normalized link). What is left is the 44 "subscribed to a site *and* an
-aggregator that carries it" groups, which #4 was never going to touch.
-
-**The romhacking.net 244-copy false positive did not survive either**, and not by
-luck: the homepage guard sketched below (skip bare-domain/index links) removes it
-along with 322 other homepage-linked entries, and with it every oversized group.
-So the guard is validated — but it is now guarding a scan that finds 87 deletable
-copies.
-
-**Recommendation: don't build the cross-feed scanner UI.** 87 copies across 65
-groups is a smaller pile than the ~490 that justified a dedicated surface, and
-44 of the groups are a judgment call (which of two legitimate subscriptions
-should own the post?) rather than a mechanical dedup. Either fold the homepage
-guard + cross-feed grouping into the *existing* `/saved/duplicates` scan so it
-stops being blind to the class, or leave it. Josh's call.
-
-**Original analysis 2026-07-21 — Josh's hunch ("there's gotta be more dupes in
-there") was correct, and the reason the scan disagreed is that it was looking at
-the wrong set:**
-
-| set scanned | duplicate groups | extra copies |
-|---|---|---|
-| `lectio:saved` only — what `/saved/duplicates` does today | 5 | 5 |
-| all starred items (what the Saved **view** actually shows) | **~490** | **~520** |
-
-Breakdown of the ~490: **447 groups are cross-feed** — the same article URL-saved
-into `lectio:saved` *and* starred in its real feed; 46 are between two real feeds
-(subscribed to a site plus an aggregator that carries it, e.g. martinfowler.com
-articles appearing 3–5×).
-
-**#4 collapses most of this for free.** `_move_entry_to_feed` matches into the
-target feed by GUID, else normalized link — so auto-filing a saved copy onto the
-feed where it's *already* starred merges the curation onto the existing entry and
-the duplicate disappears. **Run #4 first, then re-measure**; the residual is what
-actually needs a scan.
-
-**⚠ Guard against homepage-links before building any cross-feed scan.** The raw
-measurement found a single bogus group of **244 copies** — `romhacking.net`, whose
-feed uses the site homepage as *every* entry's `link`. Grouping on normalized link
-alone would offer to delete 243 unrelated articles in one click. Any cross-feed
-scan needs to ignore bare-domain/homepage links, and should cap + flag oversized
-groups for review rather than presenting them as confident matches. (This is the
-same class of hazard as the pre-armed delete in #1a — be conservative by default.)
-
-**Also found: 354 orphan star rows.** `saved_entries` holds 4,669 rows for
-`lectio:saved` but reader has only 4,334 matching entries, so 354 stars point at
-entries that no longer exist. Harmless but they inflate counts; worth a sweep
-while in here.
+**Also found: 354 orphan star rows** — `saved_entries` holds 4,669 rows for
+`lectio:saved` but reader has only 4,334 matching entries. Harmless but
+inflates counts; worth a sweep if the orphan-star cleanup above ever runs.
 
 ### Finish the Instapaper clone (Read Mode follow-ups)
 
-The read-later app shipped across PRs #137–#144 (Save any article, Saved sidebar
-view, Read Mode at `GET /read`). These are the deferred finishing touches, moved up
-from Later now that "finish it" is the stated goal. All were explicitly parked as
-"build on demand" — this is that demand. Full context under
-"Instapaper-alternative" in Later.
+The read-later app (Save any article, Saved sidebar view, Read Mode at
+`GET /read`) and its deferred finishing touches (archived-aware counts,
+mark-read-after-last-page, image prefetch, dates/sort/Archive-button
+readability, Delete/Archive working on tag-kept items, and the Archive vs.
+Delete model — Archive keeps tags/offline capture, Delete releases both) all
+shipped 2026-07-28/29. Full rationale in ARCHITECTURE.md. One piece from
+that work is not yet safe to use:
 
-- ~~**Archived-aware node counts**~~ — **already done, the item was stale.**
-  Shipped 2026-07-12 in `e9faf10` ("inbox-scoped Read Mode counts/tags"), the
-  same day Read Mode landed: `_read_mode_saved_index` splits archived from
-  inbox, and the folder/tag nodes count the inbox only. Verified 2026-07-28.
-  (The main app's Saved sidebar `get_saved_counts_by_folder` *is* total-saved,
-  but deliberately — the Kept view defaults to All, so the whole backlog is the
-  meaningful number there. Not the same surface, not a bug.)
-- ~~**Mark-read only after the last page**~~ — **DONE 2026-07-28.** The server
-  no longer marks on render; `static/reader.js` posts to `/entries/read` once
-  pagination settles *and* the last page is reached, reusing that route's async
-  branch rather than adding an endpoint. **Settling is a readiness check, not a
-  delay** — a cold load measures a 12-page article as one page until its CSS
-  lands, which trips "last page reached" on open. Caught in review re-testing;
-  the fix polls until `readyState === 'complete'` and every image has resolved,
-  capped at ~5s.
-  Verified in a browser: peek at 1/12 stays unread, 12/12 marks read, one-page
-  article marks on open. **Applies to both scopes** — the peek problem is the
-  same in the feeds scope, and the scope isn't visible from inside the reader.
-- ~~**Prefetch the next article**~~ — **DONE 2026-07-28, via images only.**
-  The obvious form was blocked: the reader page is `Cache-Control: no-store`
-  ([main.py:16307](main.py#L16307)), so `rel="prefetch"` would fetch the next
-  article and discard it. Of the three options — (a) images only, (b) relax the
-  page to `private, max-age=…`, (c) client-side HTML swap — **(a) shipped**:
-  it's where the flash actually comes from, and it leaves both the page's
-  no-store posture and the reader's navigation model untouched.
-  `prefetchNextImages` parses the next article in a detached `DOMParser`
-  document and warms up to 12 same-origin images, hung off the settle rather
-  than a fixed delay from load.
-  **Depends on the mark-read change above** — fetching the next article's HTML
-  would previously have marked it read unseen.
-- ~~**Dates, sort order, and a readable Archive button**~~ — **DONE 2026-07-28.**
-  Reported while reading on the Supernote: the Archive control "just looks like
-  an empty checkbox" (it was ▢/▣ — the shape said nothing about archiving and the
-  filled/empty difference was invisible at button size; now ▤, the glyph the tree
-  already uses, with state shown by inverting the button), no date on posts (now
-  the publish date, falling back to received, under the reader headline and on
-  each browse row), and **no way to sort** (Newest / Oldest / Received; the
-  backlog always took sort_by/sort_dir, Read Mode just pinned them). The chosen
-  order rides the URL through `_read_scope_params`, so Next/Prev walk the list
-  the same way instead of reverting at the first hop.
-- ~~**Delete/Archive were no-ops on tagged items**~~ — **FIXED 2026-07-28**, and
-  it was made urgent by the counts fix above: once Read Mode showed all kept
-  items, the majority of the backlog (16,479 tagged vs 10,002 starred) had no
-  working way to be filed or dismissed from the device. Both buttons still
-  advanced to the next article, so they looked like they worked.
-  **Josh's rule:** *Delete removes star and tags; Archive just removes it from
-  the inbox.* Delete now clears tags **then** unstars — that order matters,
-  because the unstar route only removes the offline archive when no tags remain.
-  Archive is hidden for a tag-kept item rather than silently doing nothing.
-- **Archive for tag-kept items** — **schema landed 2026-07-29 (PR A).** The
-  separate-table option won: `saved_entries` row existence means "starred" in 115
-  places across 13 files, so a `kept_only` column would have needed every one of
-  them audited, and any miss turns an archived item back into a starred one.
-  `archived_entries` leaves all 115 untouched. Legacy `saved_entries.archived_at`
-  is lifted on every boot (`INSERT OR IGNORE`) and no longer read.
-
-  **Josh's workflow definition (2026-07-29), which drove the whole design:**
-  *Archive = mark this To Read item as read, keep its contents. Delete = I'm done
-  with this, don't necessarily delete it now but don't protect it anymore.* A star
-  is a **TODO**, not a keep — saved items needed a second read/unread layer
-  because you can read something and still not have decided what to do with it.
-  The model is triaging an email inbox from the list without opening things.
-
-  | | Archive | Delete |
-  |---|---|---|
-  | star (TODO) | removed | removed |
-  | tags | kept | cleared |
-  | read state | marked read | marked read |
-  | inbox | out | out |
-  | offline capture | kept | released |
-  | pruning | exempt | not protected |
-
-  **PR B landed 2026-07-29**: Archive unstars + marks read (both levels, plus
-  `read_history`), works on tag-kept items, and `archived_entries` membership is
-  now a third keep signal in `entry_has_keep_signal` and `_prune_entries`. Delete
-  became `POST /entries/discard` — one route instead of a client-side chain,
-  because the tags-before-unstar ordering is a storage-layer property.
-
-  **PR C landed 2026-07-29**: Inbox = starred − archived (was kept − archived =
-  24,672, the whole library); tag tree counts *filed* items so it doesn't empty;
-  new `starred` sort (`saved_at`) as the Inbox default; `resume_sort` so that
-  order doesn't follow you out; Read Mode Tags section renders open.
-
-  **All Saved node added** the same day, after the Inbox narrowing landed: the
-  ~15k tagged-but-unstarred items were still reachable under Tags, but Read Mode
-  had no flat "everything kept" view while the main app did.
-
-  **Not built, by decision:** row-level Archive/Delete in the Read Mode list
-  ("ignore for now"), and an Archive view in the regular app ("don't think we
-  need it at all", conditional on History being browsable in reverse order).
-
-  **PR D landed 2026-07-29**: Settings → Feeds → Utilities → **Archive old
-  stars**. Cutoff chips (7d/30d/90d/6mo/1yr) with an age-spread table, because a
-  lone total cannot be sanity-checked before thousands of items move. Manual,
-  never automatic. Measured live:
-
-  | cutoff | archives | Inbox left |
-  |---|---|---|
-  | 7 days | 9,827 | 175 |
-  | **30 days** | **9,581** | **421** |
-  | 90 days | 3,461 | 6,541 |
-  | 1 year | 3,130 | 6,872 |
-
-  **⚠ DO NOT RUN IT YET — `saved_at` is not a real star date for most rows.**
-  Measured 2026-07-29: **6,091 of 10,002 stars carry a `saved_at` in 2026-06**,
-  which is when multi-user went live and the data was migrated — the migration
-  stamped its own run date instead of preserving the original. Those are largely
-  years-old Inoreader stars wearing a seven-week-old timestamp. (This is the
-  "1–3 month bucket holds 6,120" figure, which was first misread as the filing
-  run.) So a 30-day cutoff sweeps 6,091 articles in and a 90-day cutoff protects
-  them, neither for any real reason.
-
-  **Fix before this is usable: offer the date basis, and default to publish
-  date.** Publish date asks the better question anyway ("articles from 2019 I
-  have still never opened"). Josh also said he still wants to go through most of
-  this material, so the whole premise of a bulk cutoff is his call rather than a
-  given.
-
-  **Star provenance, measured 2026-07-29** — only 419 of 10,002 stars were made
-  by hand in Lectio:
-
-  | `saved_at` | stars | meaning |
-  |---|---|---|
-  | before 2026-06 | 3,492 | real dates, read out of the Instapaper CSV |
-  | 2026-06 | 6,091 | **the migration's own run date** |
-  | 2026-07+ | 419 | actually starred in Lectio |
+**⚠ Settings → Feeds → Utilities → Archive old stars — DO NOT RUN YET.**
+The cutoff (7d/30d/90d/6mo/1yr) sorts on `saved_at`, but `saved_at` is not a
+real star date for most rows: 6,091 of 10,002 stars carry a `saved_at` in
+2026-06, which is when multi-user went live and the migration stamped its
+own run date instead of preserving the original — mostly years-old
+Inoreader stars wearing a seven-week-old timestamp. A 30-day cutoff would
+sweep those 6,091 in and a 90-day cutoff would protect them, neither for
+any real reason. **Fix before use: offer the date basis, default to
+publish date** (asks the better question anyway — "articles from 2019 I
+have still never opened"). Only 419 of 10,002 stars have a genuine
+Lectio-made `saved_at`; the rest are either real pre-migration dates
+(3,492) or the migration timestamp (6,091).
 
 ### Page tag extraction grabs the sentence, not the anchors (2026-07-29)
 
@@ -597,9 +324,9 @@ Example: `https://gottadeal.com/deals/woot-up-to-80-off-petopia-deals-…-475022
 no feed metadata expresses it. **A useless chip is ignored; a hidden wanted one is
 invisible** — so everything is shown and the user dismisses per (feed, tag).
 
-**BUILT 2026-07-29:** `suppressed_feed_tags(feed_url, tag)`, an × on each chip
-(`POST /feed-tags/dismiss`), and an undo list at Feed Properties → *Hidden tags*.
-Case-insensitive, per feed, and it never deletes the stored `entry_feed_tags` rows.
+**Resolution shipped 2026-07-29:** manual per-(feed, tag) dismissal
+(`suppressed_feed_tags`, × on each chip, undo at Feed Properties → *Hidden
+tags*) instead of a third heuristic.
 
 **More page-tag examples Josh flagged, not yet handled** (2026-07-29). All are
 "there IS a usable tag here and we are not taking it", i.e. the same tier work:
@@ -669,33 +396,23 @@ What's left:
   value; if most cleanups are one-offs, this stays deferred.
 
 **MEASURED 2026-07-28 — stays deferred, and the design needs one change first.**
-Corpus is only 4 edited entries / 67 ops (Phase 1 shipped 07-24), so the repeat
-rate itself is *unmeasurable*, not proven low — but two findings don't depend on
-sample size:
-
-| finding | number |
-|---|---|
-| edited entries | 4, across 4 **distinct hosts** |
-| ...of those, filed under `lectio:saved` | **3** |
-| ops carrying a promotable `tag.class` | 47 / 67 (70%) |
-| ops that are **tag-only** (no id, no class) | **20 / 67 (30%)** |
-| selectors recurring across entries | **0** |
+Corpus is too small (4 edited entries / 67 ops) to measure the repeat rate,
+but two findings hold regardless:
 
 - **⚠ `feed_url` is the wrong rule key.** Three of the four edits are on
-  `lectio:saved`, which is a pseudo-feed holding saved articles from everywhere —
-  currentaffairs.org, dummies.com and reactormag.com all share that one
-  `feed_url`. A `feed_content_rules` row keyed on it would apply one site's strip
-  to unrelated sites. **Key on the entry-link host instead**, with the feed as a
-  secondary scope for real feeds. This also fits the six hand-coded per-site
-  strips better — those are per-*site* already.
-- **30% of ops can't be promoted at all**, confirming the derivation caveat
-  above: they have no id and no class, so `tag.class` degenerates to a bare tag
-  that would match every `<p>`/`<svg>` on the site. The matcher must skip these,
-  which means a promotion UI has to show "12 of 49 removals are promotable" or it
-  will look broken.
-- Re-measure once there are edits on **≥3 entries of the same real feed** —
-  that's the shape that would actually justify building this. Until then the
-  hand-cleanup from Phase 1 is doing the job.
+  `lectio:saved`, a pseudo-feed holding saved articles from everywhere, so a
+  `feed_content_rules` row keyed on it would apply one site's strip to
+  unrelated sites. **Key on the entry-link host instead**, with the feed as a
+  secondary scope for real feeds — also fits the six hand-coded per-site
+  strips better, since those are per-*site* already.
+- **30% of ops can't be promoted at all** (no id, no class, so `tag.class`
+  degenerates to a bare tag matching every `<p>`/`<svg>` on the site). The
+  matcher must skip these; a promotion UI has to show "12 of 49 removals are
+  promotable" or it will look broken.
+
+Re-measure once there are edits on **≥3 entries of the same real feed** —
+that's the shape that would justify building this. Until then Phase 1's
+hand-cleanup is doing the job.
 
 ### Tag-as-keep — Part C, pass 2
 
@@ -767,135 +484,89 @@ feed rows (2.7MB), and by moving the ~580KB inline script to
   fetch (posts + tree + shells, ~200KB now); a render-splitting/fragment
   endpoint for `.pane-posts`/`.pane-entry` would cut server time further.
 
+### main.py / index.html breakup — extraction map (2026-08-09, investigation only)
+
+`main.py` is 32,112 lines (266 route handlers) and `index.html` is 3,130
+lines; CLAUDE.md calls for a routes/services/storage split main.py has only
+partly grown into. Mapped 2026-08-09, not yet started — this is the plan to
+execute from, not a same-session change (a file this size needs incremental
+extraction with tests between steps, not a rewrite).
+
+**What's already there to build on:** a `services/` package (40+ modules)
+already exists and is one-directional by convention
+(`services/saved_articles.py:79` documents "services must not import
+main"). `index.html` already has two `{% include %}`s and a proven
+`data-lazy-src` panel-fetch pattern (`_settings_feeds_folders.html`,
+`_settings_feeds_stale.html`, served from `/settings/feeds/panel/{name}`,
+main.py:30245) for large optional content. `static/js/app.js` (15,736
+lines) was already extracted from an inline `<script>` in the page-weight
+work — but a *prior* JS-splitting attempt left dead files
+(`templates/js/_layout_shell.js`/`_pull_to_refresh.js`, filed under
+"Code health" for deletion): verify any new split is actually wired into a
+`<script src>`, not just written and abandoned.
+
+**Landmines to respect:** ~7 module-level `PerUserDict` caches
+(`_meta_structure_cache`, `unread_counts_cache`, etc.) plus ~10 more locks
+and 19 `global` statements must stay singletons — route modules can import
+them but must not redefine them, and every `invalidate_*` call site has to
+stay wired to the same instance. `get_reader()`/thread-local pooling and
+`lifespan` (main.py:1928) are startup-order-sensitive. The shared rendering
+core — `_home_inner`, `list_entries_for_feeds`, `get_entry_detail`,
+`build_reader_page` — is reused by `/`, `/read`, pane-swap, and the
+greader/fever/v1 compat APIs; it is the entangled core, not a clean
+per-feature boundary, and should be its own project, not part of a
+mechanical file split.
+
+**Proposed order, safest → riskiest:**
+1. Integration OAuth/credential blocks (DeviantArt, YouTube, Pinterest,
+   Reddit, Inoreader, Quire) → thin `routes/integrations_*.py` modules —
+   self-contained, minimal shared-state coupling.
+2. Post-refresh automation pipeline (`_run_*_rules_after_refresh`,
+   main.py:7024–7908) → `services/automation_rules.py` — called only from
+   refresh routes.
+3. `index.html` modals (settings tabs, feed/folder properties, add-feed,
+   save-article, context menus — ~20 blocks, main.py:1528–3120) →
+   `templates/_*.html`, following the existing lazy-panel pattern for
+   anything large.
+4. Dedup engine (main.py:5401–6324) → `services/dedup.py` — Plan.md already
+   flags this as wanted but deferred until characterization tests exist
+   ("Consolidate the dedup routes" under Code health); do this step
+   alongside that work, not before it.
+5. Route modules by URL prefix (`routes/feeds.py`, `entries.py`, `saved.py`,
+   `settings.py`, `admin.py`, `greader.py`, `v1_api.py`, …) — mechanical
+   once the caches/locks above are confirmed importable as shared
+   singletons (worth a `state.py` module for them first).
+6. `ensure_meta_schema` (main.py:3279, ~1040 lines, linear DDL) — already
+   flagged low-priority/cosmetic; do last if at all.
+7. The shared rendering core — do not attempt as part of a mechanical
+   split; treat as its own carefully-tested project.
+
 ## Later
 
-### Saved / Tags / dupe-scan friction (reported 2026-07-21)
+### Saved / Tags friction — still open
 
-User-reported friction on already-shipped surfaces. Code pointers verified
-2026-07-21.
+Everything else reported in this 2026-07-21 pass shipped (dupe-scan
+http/https + auto-select fixes are covered under "Saved dedup workflow" in
+Now; tag autocomplete, including the automation-rule-form wiring, is DONE —
+see "Small daily-friction items"). Two items remain:
 
-> **Most of this section was promoted into "Saved dedup workflow"**, which treats the dupe cluster
-> as one project (correctness+safety → repeat-session UX). Tag autocomplete and the
-> tag autocomplete went to "Small daily-friction items" and the Uncategorized batch-align to "Auto-file saved articles"
-> (it measured far bigger than expected). Everything stays documented here in
-> full; the Now entries are summaries. Nothing in this section is still deferred
-> except where noted inline.
-
-**Bugs** — *promoted to the Saved dedup workflow; both dupe-scan bugs shipped 2026-07-21, see there
-for what actually changed and why the `normalize_article_url` half was dropped.*
-
-- ~~**`http://` and `https://` count as different URLs in the Saved dupe scan.**~~
-  **DONE.** The analysis below was right about the mechanism — the slug tier
-  rescues only twins whose slug clears the guards — and that is exactly the split
-  the data showed (5 rescued, 4 fell to "possible"). The "deeper cause" half was
-  **not** built: zero twins remained inside `lectio:saved` to merge.
-  Confirmed: `normalize_entry_link_for_dedupe` ([main.py:4920](main.py#L4920))
-  strips only the fragment and trailing slash — the scheme survives, so the
-  `_canon` ("same URL") tier never matches an http/https pair. They *may* still
-  group via the `_slug` tier (`_safe_dedup_entry_slug`,
-  [main.py:4996](main.py#L4996)) since that uses only the last path segment, but
-  only when the slug clears the length/hyphen guards — so short or dateless
-  paths slip through entirely. Fix is to fold the scheme (and almost certainly
-  `www.`) into the canonical form. **Note the deeper cause**: `normalize_article_url`
-  ([services/saved_articles.py:40](services/saved_articles.py#L40)) also preserves
-  the scheme, and saved entries are keyed by that normalized URL — so an http and
-  an https save of one article become two *entries* in the first place. Fixing
-  only the scan hides the symptom; fixing normalization prevents new pairs but
-  does not merge existing ones. Probably want both, plus a one-off merge.
-- **Saved search button does nothing.** Needs repro detail on *which* surface.
-  The main-app toolbar search (`toolbar-search-btn`) *is* wired
-  ([static/js/app.js:12976](static/js/app.js#L12976)). Read Mode's search
-  ([templates/read_mode.html:85](templates/read_mode.html#L85)) is a plain GET
-  form with **no submit button at all** and no JS — it only submits on Enter, and
-  it carries `scope` but not the selected tree node, so a search from inside a
-  node also loses that context. Likeliest culprit; confirm before fixing.
-
-**Saved dupe-scan UX** (all in the dupe dialog) — *promoted to the Saved dedup workflow*
-
-- **"Not duplicates" action** — needs persistent per-pair suppression so a
-  rejected group stops reappearing on every scan. New storage; the only item
-  here that isn't cosmetic.
-- **Collapse the two Confirmed/Possible sections** — collapsible, so a long
-  confirmed list doesn't bury the possible tier.
-- **Resizable / larger dialog.**
-- **More obvious per-item status** — e.g. a 404 rendered in red rather than
-  neutral text (URL status already comes from `/saved/duplicates/check-urls`,
-  [main.py:22031](main.py#L22031)).
-- ~~**Change the auto-select rule**~~ — **DONE 2026-07-21** (shipped with the
-  http/https fix, not with the rest of this UX batch). One correction to the
-  note below: "Check All" is *"Check all URLs"*, the liveness probe — not a
-  select-all. Auto-select *only* 404
-  items; if every item in a group is 404, select none (never auto-arm a delete
-  that removes the whole group). Current behavior confirmed 2026-07-21: the
-  confirmed tier renders with `preselect = true`
-  ([static/js/app.js:957](static/js/app.js#L957)), so row 0 is tagged "keep" and
-  every other copy arrives **already checked**, with a one-click "Check All"
-  beside it. The possible tier already preselects nothing and is fine.
-
-**Saved organization**
-
-- **Batch-align Uncategorized saved items into Feeds** — bulk assignment with
-  auto-match by domain, instead of one-at-a-time. Distinct from the existing
-  `scripts/categorize_uncategorized.py` orphan-*feed* cleanup: this is about
-  saved *articles*, and it should be in-app rather than a script.
-
-**Tags**
-
-- **Autocomplete while typing** — per-entry tagging SHIPPED 2026-07-24. A shared
-  token-aware control (`attachTagAutocomplete`, exposed on `window`) suggests from
-  `get_all_manual_tag_names()` as you type each whitespace-separated tag; the
-  names are a page-load JSON snapshot (`#lectio-tag-names`). **Still to do:** wire
-  the same control into the automation rule form, fed from `entry_feed_tags`
-  (feed-provided tags) rather than manual tags — a different source, same widget.
+- **Saved search button does nothing.** The main-app toolbar search is
+  wired ([static/js/app.js:12976](static/js/app.js#L12976)); Read Mode's
+  search ([templates/read_mode.html:85](templates/read_mode.html#L85)) is a
+  plain GET form with **no submit button** and no JS — submits only on
+  Enter, and loses the selected tree node's `scope`. Likeliest culprit;
+  confirm before fixing.
+- **Batch-align Uncategorized saved items into Feeds** — bulk assignment
+  with auto-match by domain, instead of one-at-a-time. Distinct from
+  `scripts/categorize_uncategorized.py` (that's orphan *feeds*; this is
+  saved *articles*, and should be in-app).
 
 ### Instapaper-alternative: reader-only view for saved/starred items
 
-Make Lectio usable as a read-it-later app.
-
-- SHIPPED 2026-07-09: **Save any article** (no feed needed) — modal, bookmarklet,
-  and token-authenticated `/api/save`; readability capture into the local
-  `lectio:saved` feed, auto-star + starred-archive offline capture (see
-  ARCHITECTURE "Saved articles"). Note: the starred archive already stores a
-  readability-extracted copy + images for every starred entry, so the earlier
-  "beef up Star to capture full content" item was largely already covered at the
-  archive level; what remains is surfacing it (below).
-- SHIPPED 2026-07-09: **Saved Articles sidebar view** — first-class tree row
-  (unread-starred badge) opening the whole starred backlog in the familiar
-  three-pane layout; the read filter now composes with starred (All / Unread
-  narrowing), and the toolbar Tags submenu slices the backlog by tag within
-  the view (user pattern: `#toread` vs `#todo` — "read later" vs "deal with
-  later" are different buckets under one star).
-- SHIPPED 2026-07-12: **Read Mode** (`GET /read`) — a standalone, light-themed
-  e-ink reading app for the saved backlog, opened by hijacking the **Saved
-  Articles** sidebar row (see ARCHITECTURE "Read Mode"). 2-pane browse (saved
-  tree = folders + tag buckets + Archive, pinned) → open an item in the
-  paginated reader (CSS columns; tap/swipe/keys, no scroll; `static/reader.{css,js}`)
-  → close back to the 2-pane. New **Archive** state on `saved_entries.archived_at`
-  (keeps the star, the "done" axis instead of read/unread; Archive node + Search
-  reach archived items); the reader header's Archive/Delete(unstar) advance to the
-  next item. Follow-ups (build on demand): excise the now-dormant in-app star-mode
-  tree/JS that the hijack bypasses; archived-aware node counts (tree counts are
-  currently total-saved); mark-read only after the last page; prefetch next
-  article to cut e-ink flashes; optional per-image `grayscale(1)`. A possible
-  env-gated higher-quality extraction backend (Instapaper's paid Instaparser API,
-  evaluated + rejected as third-party/paid) belongs to the "full-content fetch at
-  ingest" item below, not here. Two CodeQL alerts on the Read Mode PR (#144) were
-  dismissed as false positives: `py/reflective-xss` on `build_reader_page`
-  (`article_html` is allowlist-sanitized upstream via `html_sanitize.sanitize_html`
-  — the same trust model as the existing reader-view responses; our BeautifulSoup
-  sanitizer isn't a CodeQL-recognized sanitizer) and `js/xss-through-dom` on
-  `reader.js` `go()` (nav targets are exclusively app-generated same-origin `/read`
-  paths, and `go()` further validates same-origin via `new URL()`).
-- Save Article follow-up ideas. **The "archive (unstar-on-read) flow to mimic
-  Instapaper's read/archive split" is DONE** — Read Mode shipped it 2026-07-12 as
-  the `saved_entries.archived_at` state (keeps the star; "done" as a separate axis
-  from read/unread). Struck to stop it reading as outstanding. Still open, but
-  **reassess only after auto-filing** since auto-filing changes what the tree looks
-  like: pinned saved-tag shortcuts under the Saved Articles row, and a badge
-  counting total saved instead of unread (if unread proves the wrong default).
-- **The Read Mode follow-ups listed above are now under "Finish the Instapaper clone"** ("finish the Instapaper
-  clone") — they stay documented here for context, but the actionable list and its
-  ordering live in Now.
+The read-it-later app (Save any article, Saved Articles sidebar view, Read
+Mode at `GET /read`) shipped 2026-07-09/12 — rationale in ARCHITECTURE.md
+("Saved articles", "Read Mode"). Its remaining follow-ups now live under
+"Finish the Instapaper clone" in Now.
 
 ### Single-post pages as first-class entries (the "feed" that is one document)
 
@@ -980,12 +651,6 @@ Remaining follow-ups:
   client-side on `tag_list`.
 - freeCodeCamp per-tag Ghost RSS (`/news/tag/<slug>/rss/`) remains a fallback
   if include-list recall from the main feed's window is insufficient.
-- Multi-word tags are *stored* hyphenated (`windows-11`) but can be **typed
-  naturally** in rule lists (comma-separated; see the parser note above) — the
-  earlier "must hyphenate" reading was wrong. ~~Still worth a tag autocomplete
-  in the rule form fed from `entry_feed_tags`~~ — **DONE 2026-08-02**,
-  one shared control as required, and it fills in the hyphenated stored form
-  from whatever you type.
 
 ### New subscription missing from feed tree (but posts show)
 
@@ -1042,21 +707,15 @@ someone runs one). Each is "manual action → rule type" reusing the existing en
 (own per-run cap, "configured?" gate, run-log entry, not-idempotent guard). Small
 per destination.
 
-**Readit (wereadit.com)** — send-to-Readit share button was built 2026-07-09
-and **REMOVED 2026-07-10**: their `/api/bookmarklet/save` is unreachable
-outside their own extension (Cloudflare challenges server traffic AND the
-browser CORS preflight; a no-preflight simple-request fallback verifiably
-didn't deliver). No dead controls — revisit as a standard destination only if
-Readit CORS-enables/exempts the endpoint (issue draft handed to Josh for
-github.com/mahmoudalwadia/readit-extension). **Import from Readit** likewise
-blocked until Readit exposes an export/RSS/API of saves.
-
-**Reverse integration SHIPPED 2026-07-10**: Lectio now speaks the Readit
-extension's save protocol (`/api/bookmarklet/save`, see ARCHITECTURE
-"Extension save protocol") — pointing the extension's Backend at Lectio gives
-one-click rendered-DOM capture into Saved Articles (paywalled pages arrive
-with full text). Captured-DOM re-saves refresh the stored content and bump
-the entry (the clean-the-page-then-resave workflow).
+**Readit (wereadit.com)** — send-to-Readit is blocked: their
+`/api/bookmarklet/save` is unreachable outside their own extension
+(Cloudflare challenges both server traffic and the browser CORS preflight).
+Revisit only if Readit CORS-enables the endpoint (issue draft handed to
+Josh for github.com/mahmoudalwadia/readit-extension). **Import from Readit**
+likewise blocked until they expose an export/RSS/API of saves. The reverse
+direction works today — Lectio speaks the Readit extension's save protocol
+(see ARCHITECTURE "Extension save protocol"), so pointing the extension's
+Backend at Lectio is a one-click capture path already.
 
 ### Lectio browser extension (fork of readit-extension)
 
@@ -1208,26 +867,15 @@ Other:
   `RedirectResponse(url=_safe_next(...))` may re-flag; dismiss with the same
   rationale.
 
-- **Entries nothing can date sort by received time** — an entry with a NULL
-  `published`, no dated permalink and no date in its title has no publication
-  date to find, so it sorts by when the reader first saw it. That is now the
-  *only* remaining case: the two bugs that used to dominate this bucket were
-  fixed 2026-08-04 (see below). A one-time backfill persisting the inferred date
-  could still be added if the ordering of those specific entries ever matters.
-
-  **Fixed 2026-08-04 — sentinel dates, and unreachable inference.** Two defects
-  that hid each other. (1) A missing date stored as a *sentinel* — the Unix epoch
-  from an importer, or year 0001 from a parser — is **truthy**, and every date
-  fallback here is an `or` chain, so it beat every fallback instead of falling
-  through like the NULL it stood for. 312 entries across 31 feeds. (2) The
-  URL/title inference was **dead code**: it sat behind `entry_effective_date`,
-  which already fell back to the received date and so was never falsy, meaning
-  `url_inferred_pubdate` had never once run. The visible symptom was an entry
-  with `2025-11-22` in its own URL showing no usable date at all. Split into
-  `entry_publication_date` (may return None — what lets the UI say "no date"
-  honestly) and `entry_effective_date` (always returns something, for the sort
-  and the bulk age actions), with `real_published_date` normalizing sentinels to
-  None. `_URL_PUBDATE_RE` also gained the `/YYYY-MM-DD/` permalink shape.
+- **Entries with no date anywhere sort by received time** — an entry with a
+  NULL `published`, no dated permalink and no date in its title has no
+  publication date to find, so it sorts by when the reader first saw it.
+  (Two bugs that used to inflate this bucket — truthy sentinel dates beating
+  real fallbacks, and dead URL/title date-inference code — were fixed
+  2026-08-04; `entry_publication_date`/`entry_effective_date`/
+  `real_published_date` in main.py are the relevant functions.) A one-time
+  backfill persisting the inferred date could still be added if the
+  ordering of these specific entries ever matters.
 
 - **Reddit OAuth app registration blocked (access request DENIED 2026-07-19)** —
   Reddit killed free OAuth2 app registration as part of the 2023 API crackdown. The
