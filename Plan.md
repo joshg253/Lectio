@@ -312,6 +312,25 @@ archive rows, and `kept_feeds`. Two things to do, and the first matters more:
 2. **Sweep the backlog** once, behind the exclusions above. Bulk delete on live
    data, so it wants a go-ahead. The dev/localhost 11,250 are free.
 
+### A repair run through `docker compose exec` needs a restart — 2026-08-08
+
+Worth stating once, because it produced a run of "you said that was fixed and I
+still see it". An exec is a **different process** from uvicorn. Writes land in
+the shared SQLite files and are real, but the server's in-process caches never
+learn about them:
+
+- `_meta_structure_cache` (folder → feed map, backs the sidebar and Settings →
+  Feeds). Calling `invalidate_meta_structure_cache()` inside the exec clears
+  *that* process's copy and does nothing to the server. 29 ghost folder rows
+  were deleted from the DB and kept rendering until the container restarted.
+- `LeadImageService._cache` — a plain dict, populated lazily per
+  `(feed_url, entry_id)`. The server can serve a stale thumbnail *and* write its
+  own value back over the repair.
+
+So: restart after any out-of-band repair, then verify. Checked while chasing
+this — there is exactly one container and one uvicorn worker (no `--workers`),
+so this is only ever staleness, never a second instance.
+
 ### Clearing the lead-image cache is not a repair — found 2026-08-08
 
 `clear_lead_image_cache` + `fetch_and_store_lead_images_for_feed` looks like the
