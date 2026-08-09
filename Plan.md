@@ -304,31 +304,54 @@ Two things that could follow from it, neither started: give the backfill an
 explicit "include read entries" mode for repair runs, or have
 `clear_lead_image_cache` refuse to clear rows the backfill will not revisit.
 
-### Duplicate *feeds* are invisible to every scanner — measured 2026-08-08
+### The feeds filter matches substrings inside opaque ids — 2026-08-09
 
-Two subscriptions to Sarah's Scribbles on Webtoons (`title_no=50260`, 20 entries;
-`title_no=677113`, 1 entry from 2021) are plainly the same comic, and nothing
-finds them. `get_feed_duplicates` groups by `normalize_feed_url`, so it only ever
-sees slash and format variants of **one address**; two different `title_no`
-values never group. The entry-level scans cannot help either — measured, the two
-feeds share **zero** titles and **zero** links, because 677113 only ever had one
-episode and it is not in the other's window.
+Searching `htm` in Settings → Feeds returned five feeds and **none of them were
+what the search meant**: `html5hive.org`, `lostnig`**htm**`are.com`, two YouTube
+channel ids that happen to contain the letters
+(`…UCFD2HkPKmPBBAEu-gih`**hTm**`A`), and a real RSS feed living at a `.html`
+path. `applyFolderFilter` does a plain `includes()` over the whole URL, so a
+short query lands inside domains and — worse — inside opaque query-string
+values, where a match can never be meaningful.
 
-What does identify them is the feed **title**. Measured across the live library
-(2,886 feeds):
+Two of five hits were channel-id noise. The fix is to match on host and path and
+ignore query-string *values* (keeping their keys), which kills the channel-id
+class without losing anything real. Worth doing while the filter is fresh: it is
+also the surface the new header select-all acts on, so noise in the match set is
+noise in what gets selected.
 
-| signal | groups | feeds covered | verdict |
-|---|---|---|---|
-| same host + path, differing query only | 10 | **740** | useless — almost all YouTube `videos.xml?channel_id=…` |
+### Find duplicate feeds by title — 32 groups, 72 feeds
+
+The scheme-insensitive grouping shipped 2026-08-08 catches URL variants of one
+address. It cannot catch **the same publication subscribed under two different
+addresses**, which is the case that actually recurs: two Webtoons `title_no`
+values for one comic, a Tumblr and a Tapas copy of Cryptid Club. The entry-level
+scans cannot reach it either: the two Sarah's Scribbles Webtoons feeds shared
+**zero** titles and **zero** links, because the second only ever had one episode
+and it was not in the other's window. Measured across 2,886 feeds, feed **title**
+is the only signal that finds them:
+
+| signal | groups | feeds | verdict |
+|---|---:|---:|---|
+| same host + path, differing query | 10 | 740 | useless — nearly all YouTube `videos.xml?channel_id=…` |
 | **same feed title** | **32** | **72** | a real, reviewable list |
 
-The title groups are mostly genuine: `sarah's scribbles ×3`, `cryptid club ×2`,
-`fantasyanime ×3`, `nine inch nails ×3`, and 15 same-host pairs. The obvious
-guard is a generic-title floor — `news ×7` is 7 unrelated sites, not a duplicate
-— plus keeping it advisory: a same-title pair can legitimately be a site's blog
-and its podcast. Nothing should be pre-checked, per the usual rule.
+Mostly genuine: `sarah's scribbles ×3`, `cryptid club ×2`, `fantasyanime ×3`,
+`nine inch nails ×3`, plus 15 same-host pairs. Needs a generic-title floor —
+`news ×7` is seven unrelated sites — and it stays advisory, because a same-title
+pair can legitimately be a site's blog and its podcast. Nothing pre-checked, per
+the usual rule. A third tier in the Dupes tab.
 
-Worth building as a third tier in the Dupes tab. Not started.
+### Characterize the 259 failing feeds
+
+9% of the library errors on every refresh cycle and nobody has looked at the
+shape of it. The useful split is dead (host gone, 404/410 forever) vs bot-walled
+(403 that a browser identity or a different route might get past) vs moved (a
+redirect or a discoverable replacement), because each wants a different action —
+unsubscribe, force-subscribe, or Change URL. Two of them turned out to be dead
+`tapastic.com` husks duplicating live feeds, which suggests the pile has other
+easy wins in it. Nothing here is urgent; it is a measurement job first, and the
+measurement is what decides whether any of it is worth automating.
 
 ### Cross-feed duplicate scan — the dupes you can actually feel
 
