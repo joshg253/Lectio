@@ -153,9 +153,10 @@ Mostly genuine: `sarah's scribbles ×3`, `cryptid club ×2`, `fantasyanime ×3`,
 pair can legitimately be a site's blog and its podcast. Nothing pre-checked, per
 the usual rule. A third tier in the Dupes tab.
 
-### "Filter this view" — ⚠ BLOCKED on a decision
+### "Filter this view" — ready to build (decision confirmed 2026-08-09)
 
-**Do not start this as written** — needs a decision below first. Josh's framing:
+**Decision confirmed:** **(c)** server-side move + **(a)** local instant-feedback
+filter (see below) — no longer blocked, ready to build. Josh's framing:
 **"actual search" vs "filter search"** are different tools. Search is a
 server-side query that changes *what is fetched*; a filter narrows *what is
 already in front of you*, instantly, so you can then act on the result as a
@@ -176,19 +177,19 @@ this bug today** too ([static/js/app.js:7332](static/js/app.js#L7332)):
 its claim to cover "whatever survives the active filters" is only true under
 250 results. Worth fixing regardless of whether the new filter gets built.
 
-**Decision needed — three ways forward:**
-- **(a) Honest partial.** Filter what is loaded; label the button with both
-  numbers ("Move 84 shown of 250 loaded"). Cheap, not the "whole set" guarantee.
-- **(b) Load-all, then filter.** Pull all chunks to the 2,000 cap before
-  filtering. Correct guarantee, but re-inflates the page weight #12 cut, and
-  still truncates above 2,000.
-- **(c) Server-side filter.** Pass the filter term as a query param, move by
-  *predicate* not by id list. The only option correct at any size, but a
-  server change that overlaps existing search.
+**The three options that were on the table** (kept for context — (c)+(a) won):
+- (a) Honest partial: filter what's loaded, label the button with both numbers.
+  Cheap but not a whole-set guarantee.
+- (b) Load-all then filter: pull all chunks to the 2,000 cap first. Correct
+  guarantee, but re-inflates the page weight the last optimization pass cut,
+  and still truncates above 2,000.
+- **(c) Server-side filter — chosen for the move action.** Pass the filter
+  term as a query param, move by *predicate* not by id list. Correct at any
+  size, overlaps existing search (acceptable).
 
-Leaning **(c)** for the move action, **(a)** for the instant-feedback filter
-itself — filter locally for feel, resolve the move server-side against the
-same predicate.
+**(c)** for the move action, **(a)** for the instant-feedback filter itself —
+filter locally for feel, resolve the move server-side against the same
+predicate.
 
 **⚠ The footgun — read before implementing.** `post-item-hidden` is already
 taken by the scroll-chunking reveal
@@ -218,15 +219,17 @@ Built and run 2026-07-21: `lectio:saved` went **4,334 → 424**, and the four bi
 no-feed hosts are gone from the list. Rationale is in ARCHITECTURE.md ("Saved
 articles"). What remains:
 
-- **guitarplayer.com's 303 articles** are the single biggest item and have no
-  good home: the site's own subscription is a scraped one-article stub (barred
-  as a target), and probing showed many of its article URLs soft-404. A real
-  guitarplayer feed, "one-off saves", or deletion — Josh's call, not automatable.
-- **The orphaned-star sweep** — delete `saved_entries` rows whose entry is gone
-  (4,508 total, 4,264 on `lectio:saved`). The cause was found and fixed
+- **guitarplayer.com's 303 articles** — the site's own subscription is a
+  scraped one-article stub (barred as a target), and probing showed many
+  article URLs soft-404. **Decision confirmed 2026-08-09: look for/build a
+  real guitarplayer feed** rather than leaving them as one-off saves or
+  deleting — worth the investigation despite the soft-404s.
+- **The orphaned-star sweep — GO-AHEAD CONFIRMED 2026-08-09.** Delete
+  `saved_entries` rows whose entry is gone (4,508 total, 4,264 on
+  `lectio:saved`). The cause was found and fixed
   (`backfill_saved_entries_from_archive` re-created them at every startup, and a
   second bug in the same function was starring *tagged* entries), so a sweep now
-  stays swept. Bulk delete against live data — **needs a go-ahead**.
+  stays swept. Cleared to run — bulk delete against live data, but confirmed.
 - **166 already-converted stars** — tagged entries starred by that backfill
   before it was fixed. Indistinguishable from a genuine star-and-tag, so they
   cannot be surgically reverted; the unstar-tagged pass is what removes them.
@@ -253,12 +256,14 @@ then normalized link, merges those for free), leaving 44 groups that are
 genuinely two legitimate subscriptions carrying the same article (a site
 plus an aggregator) and 18 same-feed.
 
-**Recommendation: don't build a dedicated cross-feed scanner UI.** 87 copies
-across 65 groups doesn't justify a dedicated surface, and the 44 cross-sub
-groups are a judgment call (which subscription should own the post?) rather
-than mechanical dedup. Either fold the homepage-link guard + cross-feed
-grouping into the *existing* `/saved/duplicates` scan, or leave it —
-Josh's call.
+**Decision confirmed 2026-08-09: fold it into the existing `/saved/duplicates`
+scan, as its own section/tier — not merged into the Confirmed/Possible
+groups.** Same shape as the "Find duplicate feeds by title" third tier in
+the Dupes tab: a distinct, separately-labeled section so the 44
+judgment-call cross-sub groups (which subscription should own the post?)
+don't get conflated with the mechanical-dedup Confirmed/Possible tiers. Not
+a whole new dedicated surface — 87 copies across 65 groups doesn't justify
+that.
 
 **⚠ Guard against homepage-links, if this is ever built.** The raw
 measurement found one bogus 244-copy group — `romhacking.net`'s feed uses
