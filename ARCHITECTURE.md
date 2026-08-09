@@ -911,6 +911,28 @@ DeviantArt's legacy `backend.deviantart.com/rss.xml` is behind a CloudFront WAF 
 
 Dev.to's RSS (front page and per-tag) is an unfiltered firehose that mixes languages, while its public unauthenticated JSON API (`GET https://dev.to/api/articles`) exposes a per-article `language` label, reaction counts, and a `top=N` ranking window. `services/devto.py` follows the DeviantArt/FakeFeedz synthetic-feed pattern: one polite API request per refresh, client-side filtering (the API ignores `?language=`; we filter on dev.to's *own* `language` field, deliberately not our own detection), then render to `file://` RSS under `DATA_DIR/devto-feeds/` for `reader` to ingest. Per-feed config (tag, top-window days, English-only, min reactions, tags_exclude) lives in the per-user meta table `devto_feeds`; the Add Feed dialog detects dev.to front-page/tag URLs client-side (mirroring `parse_devto_url` — user/org pages are left to their normal small RSS) and reveals the filter fields, and the config is editable later via feed Properties → Tuning (`POST /devto-feeds/{id}/config`). Cover images seed the lead-image cache via the same sink mechanism as DeviantArt; deletion is dispatched in `purge_orphaned_feed` alongside the other rendered-feed types. Filter changes shape what arrives from then on — already-ingested entries are kept.
 
+## Removing a feed: what goes, and what a surviving capture protects
+
+Feed removal used to clean two marker tables and leave everything keyed on
+`(feed_url, entry_id)` behind. Measured on the live library before the fix:
+**51,672 dead rows across 551 removed feeds**, almost all of it two derived
+caches (24,443 `entry_lead_images`, 27,049 `entry_read_state`).
+
+**It is a per-entry question, not `DELETE ... WHERE feed_url = ?`, because a
+capture can outlive its feed.** The Saved view renders those archive orphans and
+reads their thumbnail and hand-made corrections from these very tables — 2,547
+rows were still being displayed that way. `_purge_dead_entry_meta` therefore
+stages the feed's surviving `archived_entry` ids in a temp table and deletes
+only what is not among them. A temp table rather than a bound `NOT IN` list: a
+feed can hold thousands of captures, past SQLite's variable limit, and chunking
+a `NOT IN` is actively wrong — each chunk would delete the ids named in every
+other chunk. If the archive cannot be read the function deletes **nothing**,
+because leaking rows is recoverable and blanking an orphan's thumbnail is not.
+
+Two tables are deliberately excluded. `read_history` is a log of what you read,
+not state owned by a subscription, so unsubscribing must not rewrite it.
+`saved_entries` belongs to the star/keep paths.
+
 ## Duplicate feeds: the scheme is folded in the comparison, not the URL
 
 `get_feed_duplicates` groups subscriptions by `normalize_feed_url` **with the

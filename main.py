@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import collections
 import base64
+import contextlib
 import hashlib
 import html
 import io
@@ -16267,6 +16268,96 @@ _ENTRY_META_TABLES = (
 )
 
 
+# Per-entry meta a removed feed leaves behind. Cleaned only for entries with no
+# surviving capture — see _purge_dead_entry_meta.
+#
+# `read_history` is deliberately NOT here. It is a log of what you read, not
+# state belonging to a subscription; unsubscribing should not rewrite your
+# history. Neither is `saved_entries`, which the star/keep paths own.
+_DEAD_ENTRY_META_TABLES = (
+    "entry_lead_images",
+    "entry_feed_tags",
+    "entry_content_edits",
+    "entry_content_overrides",
+    "entry_date_overrides",
+    "entry_link_overrides",
+    "entry_title_overrides",
+    "entry_media_audio",
+    "entry_media_video",
+    "entry_read_state",
+    "archived_entries",
+)
+
+
+def _purge_dead_entry_meta(conn: sqlite3.Connection, feed_url: str) -> int:
+    """Drop per-entry meta for a removed feed's entries that are really gone.
+
+    Feed removal cleaned two marker tables and left everything keyed on
+    `(feed_url, entry_id)` behind: 25,504 `entry_lead_images` rows had piled up
+    across 371 removed feeds.
+
+    **A capture can outlive its feed**, and that is what makes this a per-entry
+    question rather than a `DELETE ... WHERE feed_url = ?`. The Saved view
+    renders those archive orphans, and it reads their thumbnail and any
+    hand-made corrections from these very tables — 1,923 of the orphaned rows
+    were still being displayed. So entries with a surviving `archived_entry` row
+    keep their meta; only the rest is dropped.
+
+    Returns the number of rows deleted.
+    """
+    try:
+        with archive_conn() as _ac:
+            captured = {
+                str(r[0]) for r in _ac.execute(
+                    "SELECT entry_id FROM archived_entry WHERE feed_url = ?", (feed_url,)
+                )
+            }
+    except sqlite3.Error:
+        # Cannot prove what is still captured, so delete nothing. Leaking rows
+        # is recoverable; blanking a Saved orphan's thumbnail is not.
+        LOGGER.warning("[purge] archive unreadable; keeping entry meta for %s", feed_url)
+        return 0
+
+    deleted = 0
+    if not captured:
+        for table in _DEAD_ENTRY_META_TABLES:
+            try:
+                cur = conn.execute(f"DELETE FROM {table} WHERE feed_url = ?", (feed_url,))
+                deleted += cur.rowcount or 0
+            except sqlite3.Error:
+                LOGGER.debug("[purge] meta cleanup skipped for %s", table, exc_info=True)
+        return deleted
+
+    # The captured set goes in a temp table rather than a bound `NOT IN` list.
+    # A feed can hold thousands of captures, past SQLite's variable limit, and
+    # chunking a NOT IN is actively wrong: each chunk would delete the captures
+    # named in every *other* chunk.
+    try:
+        conn.execute("CREATE TEMP TABLE IF NOT EXISTS _purge_captured (entry_id TEXT PRIMARY KEY)")
+        conn.execute("DELETE FROM _purge_captured")
+        conn.executemany(
+            "INSERT OR IGNORE INTO _purge_captured (entry_id) VALUES (?)",
+            [(eid,) for eid in captured],
+        )
+    except sqlite3.Error:
+        LOGGER.warning("[purge] could not stage captured ids; keeping entry meta for %s", feed_url)
+        return 0
+
+    for table in _DEAD_ENTRY_META_TABLES:
+        try:
+            cur = conn.execute(
+                f"DELETE FROM {table} WHERE feed_url = ?"
+                " AND entry_id NOT IN (SELECT entry_id FROM _purge_captured)",
+                (feed_url,),
+            )
+            deleted += cur.rowcount or 0
+        except sqlite3.Error:
+            LOGGER.debug("[purge] meta cleanup skipped for %s", table, exc_info=True)
+    with contextlib.suppress(sqlite3.Error):
+        conn.execute("DROP TABLE IF EXISTS _purge_captured")
+    return deleted
+
+
 def _rekey_entry_meta(conn: sqlite3.Connection, from_feed: str, from_id: str,
                       to_feed: str, to_id: str) -> None:
     """Repoint one entry's meta rows at its new (feed_url, entry_id).
@@ -16799,6 +16890,10 @@ def purge_orphaned_feed(
         conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (feed_url,))
     except Exception:  # noqa: BLE001
         LOGGER.warning("[purge] kept_feeds/needs_replacement/folder cleanup failed for %s", feed_url)
+
+    _dead_meta = _purge_dead_entry_meta(conn, feed_url)
+    if _dead_meta:
+        LOGGER.info("[purge] dropped %d dead per-entry meta row(s) for %s", _dead_meta, feed_url)
 
     # Step 4 — WebSub unsubscribe (best-effort; websub_service may be None).
     if websub_service:
