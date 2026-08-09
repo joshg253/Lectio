@@ -2459,6 +2459,25 @@ Fill mode's `fill_zoom` multiplier (`feed_display_prefs.fill_zoom`, NULL = defau
 
 **Direct-load fallback:** `/thumb` fetches the source image *from the server*, so a host that IP-blocks datacenter traffic (e.g. Cloudflare 403, washingtonstatestandard.com) makes `/thumb` 502 and the list thumbnail break — even though the browser's own (residential) IP can fetch the image fine. The list `<img>` carries the raw image URL in `data-direct`; on a `/thumb` error its `onerror` (`window.thumbImgFallback`, defined pre-body so it exists before any load fails) retries once with that direct URL, letting the browser load the image itself. CSS `object-fit:cover` sizes the un-resized image to the tile. This recovers the thumbnail without evading the block server-side (it's the user's own client fetching, exactly as the article view already does). Only `http(s)` direct URLs are retried, and only once (a `data-triedDirect` guard prevents an error loop); if the direct load also fails, the tile collapses to `is-empty` as before. The same helper backs the JS-derived list thumbnail (it sets `data-direct` to the lead-image URL).
 
+## Folder Properties counts in SQL, not by hydrating entries
+
+`get_folder_properties` looped `reader.get_entries(feed=url)` over every feed in
+the folder and counted in Python. On the Deals folder — 17 feeds, 31,843 entries
+— the dialog took **74 seconds**; the root folder, which resolves to every feed
+in the library, was far worse. Nothing the dialog shows needs an `Entry` object:
+a count, an unread count and the oldest date per feed are all aggregates. (A
+`newest` date was being computed the same expensive way and never read.)
+
+It now issues one `GROUP BY feed` per 900-URL chunk — chunked because the root
+folder is past SQLite's bound-variable limit — using
+`COALESCE(published, first_updated)`, the same expression the entry sort window
+uses so an undated entry falls back to when reader first saw it instead of
+sorting as NULL. Deals answers in 0.25s and the root folder in 1.18s, with
+identical totals.
+
+The trade is deliberate: `oldest` no longer honours per-entry date overrides,
+and it feeds only the articles-per-week estimate on this one dialog.
+
 ## Async bulk mark-read
 
 `/feeds/mark-read`, `/folders/mark-read`, and `/entries/mark-older-than-read` serve two response modes controlled by the `X-Requested-With` request header:

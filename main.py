@@ -9569,25 +9569,50 @@ def get_folder_properties(folder_id: int) -> dict:
     unread_articles = 0
     feed_stats: dict[str, dict] = {}
 
+    # Aggregate in SQL instead of hydrating every entry. This used to loop
+    # `reader.get_entries(feed=url)` and count in Python, which on the Deals
+    # folder — 17 feeds, 31,843 entries — made Folder Properties take **74
+    # seconds**. Nothing on this dialog needs an Entry object: only a count, an
+    # unread count, and the oldest date per feed. (`newest` was computed the
+    # same expensive way and never read.)
+    #
+    # `coalesce(published, first_updated)` is the expression the entry sort
+    # window already uses, for the same reason: an entry with no published date
+    # should fall back to when reader first saw it rather than sort as NULL.
+    # The trade is that `oldest` no longer honours per-entry date overrides,
+    # and it feeds only the articles-per-week estimate below.
+    def _as_utc(raw) -> datetime | None:
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(raw))
+        except ValueError:
+            return None
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    urls = sorted(feed_urls)
     with get_reader() as reader:
-        for url in feed_urls:
-            for entry in reader.get_entries(feed=url):
-                total_articles += 1
-                if not entry.read:
-                    unread_articles += 1
-                fs = feed_stats.setdefault(url, {
-                    "title": None,
-                    "count": 0,
-                    "oldest": None,
-                    "newest": None,
-                })
-                fs["count"] += 1
-                published = entry_effective_date(entry)
-                if published:
-                    if fs["oldest"] is None or published < fs["oldest"]:
-                        fs["oldest"] = published
-                    if fs["newest"] is None or published > fs["newest"]:
-                        fs["newest"] = published
+        db = reader._storage.get_db()
+        # Chunked: the root folder resolves to every feed in the library, well
+        # past SQLite's bound-variable limit.
+        for start in range(0, len(urls), 900):
+            chunk = urls[start:start + 900]
+            placeholders = ",".join("?" * len(chunk))
+            rows = db.execute(
+                f"""
+                SELECT feed, COUNT(*), SUM(CASE WHEN read THEN 0 ELSE 1 END),
+                       MIN(COALESCE(published, first_updated))
+                FROM entries WHERE feed IN ({placeholders}) GROUP BY feed
+                """,
+                chunk,
+            ).fetchall()
+            for feed_url_row, count, unread, oldest in rows:
+                count = int(count or 0)
+                total_articles += count
+                unread_articles += int(unread or 0)
+                feed_stats[str(feed_url_row)] = {
+                    "title": None, "count": count, "oldest": _as_utc(oldest),
+                }
 
         for url in list(feed_stats):
             feed_obj = reader.get_feed(url, None)
