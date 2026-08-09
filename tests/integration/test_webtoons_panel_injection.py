@@ -119,3 +119,35 @@ def test_a_single_slice_episode_still_renders_it():
     page = f'<img class="_images" data-url="{only}">'
     out, _ = _inject(page=page)
     assert _srcs(out) == [main._webtoons_public_slice_url(only)]
+
+
+def test_page_chrome_is_stripped_from_the_body_too():
+    """A body that came from a page scrape carries Webtoons' spacer asset;
+    it is chrome, not a panel, and must not survive into the article."""
+    body = FEED_BODY + '<img src="https://webtoons-static.pstatic.net/image/bg_transparency.png"/>'
+    out, _ = _inject(body=body)
+    assert "webtoons-static" not in out
+    assert len(_srcs(out)) == 3
+
+
+def test_stripping_is_linear_on_a_pathological_tag():
+    """The one-pattern version was polynomial (py/polynomial-redos, alert 192):
+    matching the <img> and its src together needed two `[^"\']*` runs around the
+    host, so a tag repeating the host backtracked quadratically. Feed HTML is
+    attacker-influenced, so this is a real input."""
+    import time
+    nasty = '<img ' + ('src="//swebtoon-phinf.pstatic.net/a" ' * 4000) + '>'
+    start = time.monotonic()
+    out, _ = _inject(body=nasty)
+    assert time.monotonic() - start < 2.0, "stripping must not backtrack"
+    # The injected panels are themselves swebtoon URLs, so the check is that
+    # nothing of the body survived: exactly the three slices remain.
+    assert _srcs(out) == [main._webtoons_public_slice_url(u) for u in SLICES], (
+        "only the three slices survive; the pathological body is gone")
+
+
+def test_a_src_with_an_html_entity_still_matches_its_host():
+    body = '<img src="https://swebtoon-phinf.pstatic.net/x.jpg?a=1&amp;b=2"/>'
+    out, _ = _inject(body=body)
+    assert len(_srcs(out)) == 3, "the body image is stripped despite the entity"
+    assert "x.jpg" not in out

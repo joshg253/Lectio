@@ -14542,17 +14542,46 @@ def _inject_webcomic_panel_into_bodyless_entry(content_html, entry, feed_url: st
 _TAPAS_CONTENT_IMG_RE = re.compile(
     r'https://[a-z0-9-]+\.tapas\.io/c/[^"\'\s<>\\]+', re.IGNORECASE
 )
-_TAPAS_SERIES_ART_RE = re.compile(
-    r'<img\b[^>]*\bsrc=["\'][^"\']*//[a-z0-9-]+\.tapas\.io/sa/[^"\']*["\'][^>]*>',
-    re.IGNORECASE,
-)
+# Matching an <img> *and* its src in one pattern needs two `[^"\']*` runs around
+# the host, and on feed-supplied HTML CodeQL rightly called that polynomial: a
+# tag carrying many repetitions of `//x.tapas.io/sa/` backtracks quadratically
+# (py/polynomial-redos, alert 192, raised on this very branch). The tag scan is
+# one linear `[^>]*` instead, and the host test runs in Python on the extracted
+# src — which is also a more honest test than a regex spelling of a hostname.
+_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_IMG_SRC_RE = re.compile(r"""\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.IGNORECASE)
+
+
+def _img_src(tag: str) -> str:
+    m = _IMG_SRC_RE.search(tag)
+    if not m:
+        return ""
+    return html.unescape((m.group(1) or m.group(2) or "").strip())
+
+
+def _strip_imgs(content_html: str, is_target) -> str:
+    """Drop every `<img>` whose src `is_target` accepts. Linear in the input."""
+    return _IMG_TAG_RE.sub(
+        lambda m: "" if is_target(_img_src(m.group(0))) else m.group(0),
+        content_html,
+    )
+
+
+def _is_tapas_series_art(src: str) -> bool:
+    """`/sa/` on the Tapas CDN — series art, i.e. the thumbnail, not the comic."""
+    try:
+        parsed = urlparse(src)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    return (host == "tapas.io" or host.endswith(".tapas.io")) and parsed.path.startswith("/sa/")
 # A Tapas body is literally `<p>null</p><img src=…/>` when the author wrote no
 # caption — the API's null serialized into the feed.
 _TAPAS_NULL_PARA_RE = re.compile(r"<p>\s*null\s*</p>", re.IGNORECASE)
 _TAPAS_MAX_PANELS = 60
 
 
-def _panels_into_body(content_html, panels: list[str], strip_re: re.Pattern):
+def _panels_into_body(content_html, panels: list[str], is_stripped_img):
     """Replace a thumbnail-grade body with the real panels.
 
     Shared by the Tapas and Webtoons injections: strip the feed's own picture
@@ -14561,7 +14590,7 @@ def _panels_into_body(content_html, panels: list[str], strip_re: re.Pattern):
     comic it is a thumbnail of — and put the panels in front of whatever prose
     is left. Returns ``(content_html, lead_image_url)``.
     """
-    body = strip_re.sub("", content_html or "")
+    body = _strip_imgs(content_html or "", is_stripped_img)
     body = _TAPAS_NULL_PARA_RE.sub("", body).strip()
     figures = "".join(
         f'<p><img src="{html.escape(u, quote=True)}" alt="" /></p>' for u in panels
@@ -14577,10 +14606,21 @@ _WEBTOONS_SLICE_RE = re.compile(
     r'<img\b[^>]*\bclass="[^"]*\b_images\b[^"]*"[^>]*>', re.IGNORECASE
 )
 _WEBTOONS_DATA_URL_RE = re.compile(r'\bdata-url="([^"]+)"', re.IGNORECASE)
-_WEBTOONS_BODY_IMG_RE = re.compile(
-    r'<img\b[^>]*\bsrc=["\'][^"\']*//s?webtoon-phinf\.pstatic\.net/[^"\']*["\'][^>]*>',
-    re.IGNORECASE,
-)
+# The feed's own picture, plus Webtoons page chrome (`webtoons-static`, e.g. the
+# `bg_transparency.png` spacer) — neither belongs in the article once the real
+# slices are in. A host set rather than a regex, for the ReDoS reason above.
+_WEBTOONS_IMG_HOSTS = frozenset({
+    "webtoon-phinf.pstatic.net",
+    "swebtoon-phinf.pstatic.net",
+    "webtoons-static.pstatic.net",
+})
+
+
+def _is_webtoons_body_img(src: str) -> bool:
+    try:
+        return (urlparse(src).hostname or "").lower() in _WEBTOONS_IMG_HOSTS
+    except ValueError:
+        return False
 _WEBTOONS_MAX_PANELS = 80
 
 
@@ -14644,7 +14684,7 @@ def _inject_webtoons_episode_panels(content_html, entry, feed_url: str, lead_ima
     # A single-slice episode whose one slice is already the feed's image (Sarah's
     # Scribbles) gains nothing from the rewrite — but it costs nothing either,
     # and the strip-then-inject leaves exactly the same picture in place.
-    return _panels_into_body(content_html, panels, _WEBTOONS_BODY_IMG_RE)
+    return _panels_into_body(content_html, panels, _is_webtoons_body_img)
 
 
 def _inject_tapas_episode_panels(content_html, entry, feed_url: str, lead_image_url):
@@ -14700,7 +14740,7 @@ def _inject_tapas_episode_panels(content_html, entry, feed_url: str, lead_image_
     if not panels:
         return content_html, lead_image_url
 
-    return _panels_into_body(content_html, panels, _TAPAS_SERIES_ART_RE)
+    return _panels_into_body(content_html, panels, _is_tapas_series_art)
 
 
 def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_lead_in_article: bool):
