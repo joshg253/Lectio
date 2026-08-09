@@ -4,39 +4,13 @@ Open work only. Anything shipped lives in git history and, where it still
 explains why the code looks the way it does, in ARCHITECTURE.md.
 
 ## Now
-### Parked, deliberately
 
-- **makeuseof re-fetch returns white images.** Seen once during testing
-  2026-08-06 and never investigated. Waiting on a second sighting rather than
-  hunting it cold — Josh will flag it if it recurs.
-- **440 stored feed URLs are non-canonical.** Surfaced by the OPML round-trip
-  duplication fix (which canonicalizes both sides of the comparison now, so
-  re-importing your own export is a no-op). Why they are non-canonical was never
-  chased: they predate the canonicalization or arrive by another route. A
-  one-off normalization pass over `folder_feeds` would converge the spellings,
-  but nothing is broken by leaving them.
-- **A re-fetch that returns a *different unique* article.** The sibling-text
-  guard cannot see this shape — entry 26031 came back as a piece about
-  sandbox-game rendering, unique text and all. The slug/title mismatch guard is
-  what should have caught it and did not. Worth investigating if it recurs.
-- **The scheduler's trickle case.** The stall watchdog bounds it but does not
-  prevent it: a host feeding one byte per 29s keeps a pass "advancing" per-read
-  but not per-feed. If that shows up, the fix is a per-feed wall-clock budget in
-  `update_feeds`, not a shorter read deadline.
-- **The Wayback timestamp as a date source.** The availability API returns the
-  *closest* snapshot, so its timestamp is whatever crawl happened to be nearest.
-  A real first-capture date needs the CDX API sorted ascending; probed
-  2026-08-04, it worked (what-if/105 → 2014-07-19) but timed out on 2 of 3 tries.
-  Worth revisiting only if a cluster shows up with no other date source.
-- **Inline SVG in feed content is mangled at ingest.** feedparser parses an
-  HTML-escaped `<description>` as HTML, where a trailing slash is meaningless, so
-  `<rect/><circle/><path/>` becomes `<rect><circle><path>` — every shape nested
-  inside the rect, which cannot contain them. The browser paints the rect and
-  drops the rest, so **any feed shipping inline SVG art renders as a flat colour
-  block**. Lectio's own sanitizers are innocent; the damage is done before either
-  sees it. A real fix means re-parsing SVG subtrees as XML at ingest. The
-  screenshot tooling emits explicit end tags to dodge it, which is a workaround
-  for the demo, not a fix.
+Roughly ordered: quick/concrete fixes first, then cheap UX wins, then items
+that need a decision or go-ahead from Josh before they can move, then
+measurement/investigation jobs, then scheduled or genuinely low-urgency
+work, then the two standing watch-lists, then the one big multi-session
+project last.
+
 ### CodeQL board triage
 
 **Still open on the board (5), not yet triaged:**
@@ -60,27 +34,59 @@ end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, 
 excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 `py/full-ssrf` was.
 
-### Offline actions — two pieces left
+### The feeds filter matches substrings inside opaque ids — 2026-08-09
 
-Shipped 2026-08-01 and confirmed on the Supernote 2026-08-02; design rationale is
-in ARCHITECTURE.md ("Offline reading and offline acting"). What was left undone:
+Searching `htm` in Settings → Feeds returned five feeds and **none of them were
+what the search meant**: `html5hive.org`, `lostnig`**htm**`are.com`, two YouTube
+channel ids that happen to contain the letters
+(`…UCFD2HkPKmPBBAEu-gih`**hTm**`A`), and a real RSS feed living at a `.html`
+path. `applyFolderFilter` does a plain `includes()` over the whole URL, so a
+short query lands inside domains and — worse — inside opaque query-string
+values, where a match can never be meaningful.
 
-- **The stale-action guard.** The conflict rule as shipped is plain
-  last-writer-wins: a queued action replays over whatever the server now holds.
-  "If the server state already moved, accept the server's version" needs a
-  per-entry modification time the schema does not carry (`archived_entries` has
-  `archived_at`, `saved_entries` has `saved_at`, tags and read state have
-  nothing), so it is a schema question, not a client tweak. Low urgency — the
-  only conflicting writer is Josh on another device, within minutes. Worth doing
-  only if a surprising revert is actually observed.
-- **An offline star/unstar.** Scoped in but not built: the reader has no star
-  control, only Archive (which unstars) and Delete. Adding one is a UI question
-  first, and Read Mode deliberately has few controls.
+Two of five hits were channel-id noise. The fix is to match on host and path and
+ignore query-string *values* (keeping their keys), which kills the channel-id
+class without losing anything real. Worth doing while the filter is fresh: it is
+also the surface the new header select-all acts on, so noise in the match set is
+noise in what gets selected.
 
-Deliberately *not* built: a `synced_actions` idempotency table. The four routes
-the outbox drives are already idempotent set-state operations, so replaying one
-is a no-op; an action-id table would cost a meta-DB schema change plus the
-startup per-user migration for no behavioral change.
+### Backups: retention is count-based and size-blind
+
+`scripts/backup_databases.py --keep 5` means five generations of an **8.4GB**
+starred archive — ~40GB on a 72GB disk. Two safety backups taken during the
+2026-07-22 session took the disk to **98% (1.9GB free)** on their own; deleting
+the older set brought it back to 86%. Nothing schedules backups (no cron), so
+this only bites when someone runs it repeatedly — which is exactly what a busy
+session does.
+
+Wants a size budget rather than a count: `--max-bytes`, or a `--keep` default
+that drops to 2 once a source is over a GB. Also worth noting the archive grew
+7.2 → 7.9GB overnight capturing 3,581 retro-archive pages, so the number this
+is sized against keeps moving.
+
+### Small daily-friction items (cheap; slot between the bigger pieces)
+
+- **No way to reach a feed in Feeds from a post in Saved** (2026-08-04). Saved
+  is where you notice a feed misbehaving; Feeds is where you fix it, and there
+  is no route between them. Both feed-name links (post list and entry pane)
+  deliberately carry `star_only` through, so they navigate *within* Saved —
+  verified: clicking a post's feed name twice yields the identical URL both
+  times. With ~2,900 feeds, "switch tabs and find it" is not an answer. Josh
+  remembered a second click jumping to Feeds; that behaviour is not in the code
+  — most likely what he saw was the SPA expanding the feed's containing folder
+  in the sidebar tree ([index.html:1133](templates/index.html#L1133)), which
+  looks like a scope switch. Suggested: an **"Open in Feeds"** entry in the post
+  right-click menu, which already holds feed-scoped actions (*Mark Feed as
+  Read*, *Move to feed…*) but nothing that navigates. Cheap, and discoverable
+  where the other feed actions already are.
+- **Set up the four verified firehose tag_filter rules** — config, not code; the
+  engine already ships. Vocabularies verified 2026-07-21, see "Tag filtering for
+  firehose feeds" in Later for the per-feed data and suggested rule shapes.
+  **The rule form now autocompletes the tag list from each feed's own captured
+  vocabulary with post counts (above), so this is now typing four short specs
+  against a visible list rather than against a guess.** Still Josh's call: which
+  tags to drop is a taste judgement, not a derivable one.
+
 ### Saved dedup workflow — repeat-session polish
 
 The correctness and safety work is done (2026-07-21) and **the scan currently
@@ -96,19 +102,28 @@ one item:
   cannot fix.
 - **Red 404 status**, **collapsible Confirmed/Possible sections**, **resizable
   dialog** — cheap, all in the same dialog, do them in one pass.
-### Backups: retention is count-based and size-blind
 
-`scripts/backup_databases.py --keep 5` means five generations of an **8.4GB**
-starred archive — ~40GB on a 72GB disk. Two safety backups taken during the
-2026-07-22 session took the disk to **98% (1.9GB free)** on their own; deleting
-the older set brought it back to 86%. Nothing schedules backups (no cron), so
-this only bites when someone runs it repeatedly — which is exactly what a busy
-session does.
+### Find duplicate feeds by title — 32 groups, 72 feeds
 
-Wants a size budget rather than a count: `--max-bytes`, or a `--keep` default
-that drops to 2 once a source is over a GB. Also worth noting the archive grew
-7.2 → 7.9GB overnight capturing 3,581 retro-archive pages, so the number this
-is sized against keeps moving.
+The scheme-insensitive grouping shipped 2026-08-08 catches URL variants of one
+address. It cannot catch **the same publication subscribed under two different
+addresses**, which is the case that actually recurs: two Webtoons `title_no`
+values for one comic, a Tumblr and a Tapas copy of Cryptid Club. The entry-level
+scans cannot reach it either: the two Sarah's Scribbles Webtoons feeds shared
+**zero** titles and **zero** links, because the second only ever had one episode
+and it was not in the other's window. Measured across 2,886 feeds, feed **title**
+is the only signal that finds them:
+
+| signal | groups | feeds | verdict |
+|---|---:|---:|---|
+| same host + path, differing query | 10 | 740 | useless — nearly all YouTube `videos.xml?channel_id=…` |
+| **same feed title** | **32** | **72** | a real, reviewable list |
+
+Mostly genuine: `sarah's scribbles ×3`, `cryptid club ×2`, `fantasyanime ×3`,
+`nine inch nails ×3`, plus 15 same-host pairs. Needs a generic-title floor —
+`news ×7` is seven unrelated sites — and it stays advisory, because a same-title
+pair can legitimately be a site's blog and its podcast. Nothing pre-checked, per
+the usual rule. A third tier in the Dupes tab.
 
 ### "Filter this view" — ⚠ BLOCKED on a decision
 
@@ -187,43 +202,6 @@ articles"). What remains:
 - **166 already-converted stars** — tagged entries starred by that backfill
   before it was fixed. Indistinguishable from a genuine star-and-tag, so they
   cannot be surgically reverted; the unstar-tagged pass is what removes them.
-### The feeds filter matches substrings inside opaque ids — 2026-08-09
-
-Searching `htm` in Settings → Feeds returned five feeds and **none of them were
-what the search meant**: `html5hive.org`, `lostnig`**htm**`are.com`, two YouTube
-channel ids that happen to contain the letters
-(`…UCFD2HkPKmPBBAEu-gih`**hTm**`A`), and a real RSS feed living at a `.html`
-path. `applyFolderFilter` does a plain `includes()` over the whole URL, so a
-short query lands inside domains and — worse — inside opaque query-string
-values, where a match can never be meaningful.
-
-Two of five hits were channel-id noise. The fix is to match on host and path and
-ignore query-string *values* (keeping their keys), which kills the channel-id
-class without losing anything real. Worth doing while the filter is fresh: it is
-also the surface the new header select-all acts on, so noise in the match set is
-noise in what gets selected.
-
-### Find duplicate feeds by title — 32 groups, 72 feeds
-
-The scheme-insensitive grouping shipped 2026-08-08 catches URL variants of one
-address. It cannot catch **the same publication subscribed under two different
-addresses**, which is the case that actually recurs: two Webtoons `title_no`
-values for one comic, a Tumblr and a Tapas copy of Cryptid Club. The entry-level
-scans cannot reach it either: the two Sarah's Scribbles Webtoons feeds shared
-**zero** titles and **zero** links, because the second only ever had one episode
-and it was not in the other's window. Measured across 2,886 feeds, feed **title**
-is the only signal that finds them:
-
-| signal | groups | feeds | verdict |
-|---|---:|---:|---|
-| same host + path, differing query | 10 | 740 | useless — nearly all YouTube `videos.xml?channel_id=…` |
-| **same feed title** | **32** | **72** | a real, reviewable list |
-
-Mostly genuine: `sarah's scribbles ×3`, `cryptid club ×2`, `fantasyanime ×3`,
-`nine inch nails ×3`, plus 15 same-host pairs. Needs a generic-title floor —
-`news ×7` is seven unrelated sites — and it stays advisory, because a same-title
-pair can legitimately be a site's blog and its podcast. Nothing pre-checked, per
-the usual rule. A third tier in the Dupes tab.
 
 ### Characterize the 259 failing feeds
 
@@ -343,31 +321,6 @@ Also still open from the same pass: Real Python's page tag block mixes taxonomie
 (`beginner`/`intermediate`/`advanced`/`basics`) would express that where coverage
 cannot — it is fixed vocabulary, not per-feed frequency.
 
-### Small daily-friction items (cheap; slot between the bigger pieces)
-
-  list; see "Auto-file saved articles".* Measured 2026-07-21 and it turned out far higher-yield than
-  a "small item."
-- **No way to reach a feed in Feeds from a post in Saved** (2026-08-04). Saved
-  is where you notice a feed misbehaving; Feeds is where you fix it, and there
-  is no route between them. Both feed-name links (post list and entry pane)
-  deliberately carry `star_only` through, so they navigate *within* Saved —
-  verified: clicking a post's feed name twice yields the identical URL both
-  times. With ~2,900 feeds, "switch tabs and find it" is not an answer. Josh
-  remembered a second click jumping to Feeds; that behaviour is not in the code
-  — most likely what he saw was the SPA expanding the feed's containing folder
-  in the sidebar tree ([index.html:1133](templates/index.html#L1133)), which
-  looks like a scope switch. Suggested: an **"Open in Feeds"** entry in the post
-  right-click menu, which already holds feed-scoped actions (*Mark Feed as
-  Read*, *Move to feed…*) but nothing that navigates. Cheap, and discoverable
-  where the other feed actions already are.
-- **Set up the four verified firehose tag_filter rules** — config, not code; the
-  engine already ships. Vocabularies verified 2026-07-21, see "Tag filtering for
-  firehose feeds" in Later for the per-feed data and suggested rule shapes.
-  **The rule form now autocompletes the tag list from each feed's own captured
-  vocabulary with post counts (above), so this is now typing four short specs
-  against a visible list rather than against a guess.** Still Josh's call: which
-  tags to drop is a taste judgement, not a derivable one.
-
 ### Article cleanup — Phase 2: promote a removal into a per-feed rule
 
 Phase 1 shipped 2026-07-24: the pane's **Clean up article** (🧹) removes elements
@@ -420,6 +373,29 @@ Pass 1 ran with `--apply` 2026-07-22: **3,581 archives enqueued** and drained by
 the worker. Pass 2 — the Wayback tier for entries whose live page is gone — is
 still deferred, and is a single command with a decay clock: run it any time, it
 queues behind nothing.
+
+### Offline actions — two pieces left
+
+Shipped 2026-08-01 and confirmed on the Supernote 2026-08-02; design rationale is
+in ARCHITECTURE.md ("Offline reading and offline acting"). What was left undone:
+
+- **The stale-action guard.** The conflict rule as shipped is plain
+  last-writer-wins: a queued action replays over whatever the server now holds.
+  "If the server state already moved, accept the server's version" needs a
+  per-entry modification time the schema does not carry (`archived_entries` has
+  `archived_at`, `saved_entries` has `saved_at`, tags and read state have
+  nothing), so it is a schema question, not a client tweak. Low urgency — the
+  only conflicting writer is Josh on another device, within minutes. Worth doing
+  only if a surprising revert is actually observed.
+- **An offline star/unstar.** Scoped in but not built: the reader has no star
+  control, only Archive (which unstars) and Delete. Adding one is a UI question
+  first, and Read Mode deliberately has few controls.
+
+Deliberately *not* built: a `synced_actions` idempotency table. The four routes
+the outbox drives are already idempotent set-state operations, so replaying one
+is a no-op; an action-id table would cost a meta-DB schema change plus the
+startup per-user migration for no behavioral change.
+
 ### Inoreader replacement — the migration (start ~Dec 2026)
 
 **Scheduled, not urgent**: renewal is 2027-03-16, so starting around Dec 2026 leaves
@@ -483,6 +459,43 @@ feed rows (2.7MB), and by moving the ~580KB inline script to
 - **Optional**: the pane-swap path still renders the full page server-side per
   fetch (posts + tree + shells, ~200KB now); a render-splitting/fragment
   endpoint for `.pane-posts`/`.pane-entry` would cut server time further.
+
+### Parked, deliberately
+
+Genuinely nothing to do here until one of these recurs or a lead turns up —
+not scheduled, just watched.
+
+- **makeuseof re-fetch returns white images.** Seen once during testing
+  2026-08-06 and never investigated. Waiting on a second sighting rather than
+  hunting it cold — Josh will flag it if it recurs.
+- **440 stored feed URLs are non-canonical.** Surfaced by the OPML round-trip
+  duplication fix (which canonicalizes both sides of the comparison now, so
+  re-importing your own export is a no-op). Why they are non-canonical was never
+  chased: they predate the canonicalization or arrive by another route. A
+  one-off normalization pass over `folder_feeds` would converge the spellings,
+  but nothing is broken by leaving them.
+- **A re-fetch that returns a *different unique* article.** The sibling-text
+  guard cannot see this shape — entry 26031 came back as a piece about
+  sandbox-game rendering, unique text and all. The slug/title mismatch guard is
+  what should have caught it and did not. Worth investigating if it recurs.
+- **The scheduler's trickle case.** The stall watchdog bounds it but does not
+  prevent it: a host feeding one byte per 29s keeps a pass "advancing" per-read
+  but not per-feed. If that shows up, the fix is a per-feed wall-clock budget in
+  `update_feeds`, not a shorter read deadline.
+- **The Wayback timestamp as a date source.** The availability API returns the
+  *closest* snapshot, so its timestamp is whatever crawl happened to be nearest.
+  A real first-capture date needs the CDX API sorted ascending; probed
+  2026-08-04, it worked (what-if/105 → 2014-07-19) but timed out on 2 of 3 tries.
+  Worth revisiting only if a cluster shows up with no other date source.
+- **Inline SVG in feed content is mangled at ingest.** feedparser parses an
+  HTML-escaped `<description>` as HTML, where a trailing slash is meaningless, so
+  `<rect/><circle/><path/>` becomes `<rect><circle><path>` — every shape nested
+  inside the rect, which cannot contain them. The browser paints the rect and
+  drops the rest, so **any feed shipping inline SVG art renders as a flat colour
+  block**. Lectio's own sanitizers are innocent; the damage is done before either
+  sees it. A real fix means re-parsing SVG subtrees as XML at ingest. The
+  screenshot tooling emits explicit end tags to dodge it, which is a workaround
+  for the demo, not a fix.
 
 ### main.py / index.html breakup — extraction map (2026-08-09, investigation only)
 
