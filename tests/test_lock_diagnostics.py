@@ -54,6 +54,21 @@ def test_probe_reports_a_held_write_lock(tmp_path):
     assert "writable now" in conftest._probe_lock(path)
 
 
+def test_the_probe_says_so_when_it_cannot_open_the_file(tmp_path):
+    """A probe that failed silently would read as "no problem here", which is
+    the one thing this dump must never do — every line of it gets trusted in a
+    post-mortem. (Raised in review on PR #186: the happy paths were covered and
+    the error path was not.)"""
+    unopenable = str(tmp_path / "no-such-dir" / "db.sqlite")
+    message = conftest._probe_lock(unopenable)
+
+    assert message, "the probe must never return an empty verdict"
+    assert "could not open" in message or "probe failed" in message, message
+    # And it must not be mistaken for a clean result.
+    assert "writable now" not in message
+    assert "STILL LOCKED" not in message
+
+
 def test_the_dump_names_a_live_background_thread(tmp_path):
     release = threading.Event()
     started = threading.Event()
