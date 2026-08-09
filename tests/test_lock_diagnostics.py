@@ -1,12 +1,16 @@
-"""The "database is locked" CI flake does not reproduce locally, so the only
-way to catch it is to dump evidence inside the run that fails (see the
+"""The "database is locked" CI flake did not reproduce locally, so the only way
+to catch it was to dump evidence inside the run that fails (see the
 pytest_exception_interact hook in conftest). These pin the pieces that dump
 depends on — if one silently starts returning nothing, the next red build
-teaches us nothing again."""
+teaches us nothing again.
+
+**It worked.** On 2026-08-09 the flake fired on PR #188 and the dump named the
+cause outright; the last test here pins the fix."""
 from __future__ import annotations
 
 import sqlite3
 import threading
+from pathlib import Path
 
 import conftest
 import pytest
@@ -70,3 +74,28 @@ def test_the_dump_names_a_live_background_thread(tmp_path):
     assert "lectio-test-suspect" in text
     # The stack is the point: a stray daemon mid-write is the leading suspect.
     assert "release.wait(5)" in text or "in wait" in text
+
+
+def test_the_list_render_backfill_daemon_is_gated_in_tests():
+    """The flake's second source, named by these diagnostics on 2026-08-09.
+
+    The failing run's thread dump held one `_run_in_user_context` thread inside
+    `backfill_entry_list` -> `_fetch_source_lead_image` -> `is_safe_outbound_url`
+    -> `socket.getaddrinfo` — a DNS lookup — while the test's own fixture was
+    opening the same per-user meta DB. Rendering a post list spawns that daemon,
+    so any test that renders a list could lose the race. That is exactly why it
+    kept failing in tests with nothing to do with the branch under review.
+
+    A source assertion because the spawn lives inside the home handler, and
+    "no thread was started" cannot be observed without racing the thing itself.
+    """
+    src = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    marker = 'uncached_posts = [p for p in posts if not p.get("thumbnail_url")]'
+    start = src.find(marker)
+    assert start != -1, "the list-render backfill spawn should still be here"
+    spawn = src.find("threading.Thread(", start)
+    assert spawn != -1
+    assert "LECTIO_DISABLE_STARTUP_BACKFILL" in src[start:spawn], (
+        "this daemon must honour the same switch as the startup and media-scan "
+        "daemons, or it races the test's own DB"
+    )

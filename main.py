@@ -20449,6 +20449,19 @@ def _home_inner(
     # Prioritize lead-image backfill for entries currently visible in this chunk.
     # Fire-and-forget: returns immediately; semaphore prevents concurrent pile-up.
     uncached_posts = [p for p in posts if not p.get("thumbnail_url")]
+    # Honours LECTIO_DISABLE_STARTUP_BACKFILL for the reason conftest sets it,
+    # and this is the daemon that was behind the long-running "database is
+    # locked" CI flake. Caught 2026-08-09 by the diagnostics dump: the failing
+    # run's thread list held one `_run_in_user_context` thread inside
+    # `backfill_entry_list → _fetch_source_lead_image → is_safe_outbound_url →
+    # socket.getaddrinfo`, i.e. a DNS lookup, while the test's own fixture was
+    # opening the same per-user meta DB. That switch already covered the
+    # *startup* daemons and the per-request media scan; rendering a post list
+    # spawns this one, so any test that renders a list could lose the race —
+    # which is exactly why it kept failing in tests that had nothing to do with
+    # the branch under review.
+    if uncached_posts and os.getenv("LECTIO_DISABLE_STARTUP_BACKFILL", "0") == "1":
+        uncached_posts = []
     if uncached_posts:
         # Re-bind the request's tenancy user inside the daemon thread; a bare
         # thread does not inherit contextvars, so backfill_entry_list would
