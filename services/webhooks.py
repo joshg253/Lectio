@@ -14,9 +14,13 @@ Two payload formats:
 """
 from __future__ import annotations
 
+import logging
+
 import httpx
 
 from services.url_guard import UnsafeURLError, ensure_safe_outbound_url
+
+LOGGER = logging.getLogger("lectio")
 
 WEBHOOK_VALID_FORMATS = frozenset({"generic", "ifttt"})
 
@@ -76,5 +80,6 @@ def send_webhook(url: str, payload: dict) -> tuple[bool, str | None]:
         if 200 <= resp.status_code < 300:
             return True, None
         return False, f"HTTP {resp.status_code}"
-    except Exception as exc:  # noqa: BLE001 — surface any transport error to the caller
-        return False, str(exc)
+    except Exception as exc:  # noqa: BLE001 — log the detail, don't hand raw exception text back
+        LOGGER.warning("webhook delivery to %s failed: %s", url, exc, exc_info=True)
+        return False, "delivery failed (connection or transport error)"
