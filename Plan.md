@@ -64,6 +64,13 @@ that drops to 2 once a source is over a GB. Also worth noting the archive grew
 7.2 → 7.9GB overnight capturing 3,581 retro-archive pages, so the number this
 is sized against keeps moving.
 
+### Tag-as-keep — Part C, pass 2
+
+Pass 1 ran with `--apply` 2026-07-22: **3,581 archives enqueued** and drained by
+the worker. Pass 2 — the Wayback tier for entries whose live page is gone — is
+still deferred, and is a single command with a decay clock: run it any time, it
+queues behind nothing.
+
 ### Small daily-friction items (cheap; slot between the bigger pieces)
 
 - **No way to reach a feed in Feeds from a post in Saved** (2026-08-04). Saved
@@ -86,6 +93,27 @@ is sized against keeps moving.
   vocabulary with post counts (above), so this is now typing four short specs
   against a visible list rather than against a guess.** Still Josh's call: which
   tags to drop is a taste judgement, not a derivable one.
+- **Saved search button does nothing** (promoted from Later, 2026-07-21 report).
+  The main-app toolbar search is wired
+  ([static/js/app.js:12976](static/js/app.js#L12976)); Read Mode's search
+  ([templates/read_mode.html:85](templates/read_mode.html#L85)) is a plain GET
+  form with **no submit button** and no JS — submits only on Enter, and loses
+  the selected tree node's `scope`. Likeliest culprit; confirm before fixing.
+- **Dead code sweep** (promoted from "Code health" in Later, 2026-07-21 finds)
+  — delete-the-unused-thing, no design work: `server_posts_total` /
+  `server_posts_sent` (read in `templates/index.html` with `is defined`
+  guards but never set anywhere in Python); the orphaned
+  `templates/js/_layout_shell.js` / `_pull_to_refresh.js` (unreferenced
+  leftovers from an earlier extraction attempt — confirm nothing external
+  uses them first); the dead `LECTIO_SECURITY_MODE` line in
+  `scripts/refresh_screenshots.py` (nothing in the app reads it since auth
+  became unconditional). Do all three together in one pass.
+
+### Batch-align Uncategorized saved items into Feeds (promoted from Later)
+
+Bulk assignment with auto-match by domain, instead of one-at-a-time.
+Distinct from `scripts/categorize_uncategorized.py` (that's orphan
+*feeds*; this is saved *articles*, and should be in-app).
 
 ### Saved dedup workflow — repeat-session polish
 
@@ -367,13 +395,6 @@ Re-measure once there are edits on **≥3 entries of the same real feed** —
 that's the shape that would justify building this. Until then Phase 1's
 hand-cleanup is doing the job.
 
-### Tag-as-keep — Part C, pass 2
-
-Pass 1 ran with `--apply` 2026-07-22: **3,581 archives enqueued** and drained by
-the worker. Pass 2 — the Wayback tier for entries whose live page is gone — is
-still deferred, and is a single command with a decay clock: run it any time, it
-queues behind nothing.
-
 ### Offline actions — two pieces left
 
 Shipped 2026-08-01 and confirmed on the Supernote 2026-08-02; design rationale is
@@ -395,55 +416,6 @@ Deliberately *not* built: a `synced_actions` idempotency table. The four routes
 the outbox drives are already idempotent set-state operations, so replaying one
 is a no-op; an action-id table would cost a meta-DB schema change plus the
 startup per-user migration for no behavioral change.
-
-### Inoreader replacement — the migration (start ~Dec 2026)
-
-**Scheduled, not urgent**: renewal is 2027-03-16, so starting around Dec 2026 leaves
-~3 months to validate before the date. Pulling it earlier buys nothing; the plan is
-already paid and won't prorate.
-
-The blocker is **bot-blocking**: feeds Inoreader can fetch but Lectio can't.
-Publishers allowlist known aggregators (Inoreader/Feedly) by UA/IP; Lectio fetches
-from the VPS IP with an honest UA and gets 403'd (the 🟢 "blocked" bucket in the
-Failing Feeds filter — isocpp 752, libhunt newsletters, etc.). Good-citizen policy
-forbids spoofing Ino's UA or evading IP blocks; Lectio already auto-escalates to
-browser-UA on refusal (`browser_ua_feeds`), which recovers some 403s but not
-IP/aggregator-only blocks.
-
-Both steps reuse the **existing** `services/inoreader.py` (OAuth +
-`get_subscriptions` + `get_stream_contents`).
-
-**9a — Comparison report** (read-only; start here). Cross-reference Inoreader
-subscriptions vs Lectio feeds and flag three sets:
-
-- **(a) in-Ino-with-recent-items but failing-in-Lectio** = the "Ino can, we can't"
-  risk set. This is also the **triage list that gates Part C pass 2 (#8)**, produced
-  mechanically instead of by hand, and it names the feeds that need 9b.
-- **(b) in Ino, not in Lectio** — subscriptions never migrated.
-- **(c) in Lectio, not in Ino** — Lectio-only, safe to ignore for the cutover.
-
-Turns "safe to drop Ino?" into a concrete checklist.
-
-**9b — Inoreader as fetch-proxy.** The step that actually lets Ino lapse, and
-legitimate rather than evasion — Ino *is* the subscriber. A per-feed "fetch via
-Inoreader" toggle pulling items from `stream/contents` instead of the origin, for
-the stubborn bot-walled feeds in set (a). Keep Ino connected as a quiet backend, not
-the reader. **Scope depends on how big set (a) turns out to be — run 9a first and let
-the count decide whether this is worth building at all.**
-
-Sequence: connect Ino → comparison report (9a) → triage/replace dead feeds → Part C
-pass 2 (#8) → proxy the only-Ino feeds (9b) → let the plan lapse 2027-03-16 (annual
-SaaS rarely prorates; worth asking, but plan to ride it out).
-
-### Full-content fetch at ingest for body-less feeds
-
-meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
-description/content element at all; older stored entries have bodies, so this
-is upstream). A per-feed "fetch full content from the source page at ingest"
-option (readability pipeline already exists) would fix such feeds generally —
-per-feed opt-in in Feed Properties, capped/throttled like enhancement. Overlaps
-with #9: some "we can't fetch" feeds get fixed here instead of via the Ino proxy,
-so it's worth revisiting once the comparison report sizes set (a).
 
 ### Page-weight reduction — follow-ups (main work landed 2026-07-15)
 
@@ -556,23 +528,55 @@ mechanical file split.
 
 ## Later
 
-### Saved / Tags friction — still open
+### Inoreader replacement — the migration (start ~Dec 2026)
 
-Everything else reported in this 2026-07-21 pass shipped (dupe-scan
-http/https + auto-select fixes are covered under "Saved dedup workflow" in
-Now; tag autocomplete, including the automation-rule-form wiring, is DONE —
-see "Small daily-friction items"). Two items remain:
+**Scheduled, not urgent**: renewal is 2027-03-16, so starting around Dec 2026 leaves
+~3 months to validate before the date. Pulling it earlier buys nothing; the plan is
+already paid and won't prorate.
 
-- **Saved search button does nothing.** The main-app toolbar search is
-  wired ([static/js/app.js:12976](static/js/app.js#L12976)); Read Mode's
-  search ([templates/read_mode.html:85](templates/read_mode.html#L85)) is a
-  plain GET form with **no submit button** and no JS — submits only on
-  Enter, and loses the selected tree node's `scope`. Likeliest culprit;
-  confirm before fixing.
-- **Batch-align Uncategorized saved items into Feeds** — bulk assignment
-  with auto-match by domain, instead of one-at-a-time. Distinct from
-  `scripts/categorize_uncategorized.py` (that's orphan *feeds*; this is
-  saved *articles*, and should be in-app).
+The blocker is **bot-blocking**: feeds Inoreader can fetch but Lectio can't.
+Publishers allowlist known aggregators (Inoreader/Feedly) by UA/IP; Lectio fetches
+from the VPS IP with an honest UA and gets 403'd (the 🟢 "blocked" bucket in the
+Failing Feeds filter — isocpp 752, libhunt newsletters, etc.). Good-citizen policy
+forbids spoofing Ino's UA or evading IP blocks; Lectio already auto-escalates to
+browser-UA on refusal (`browser_ua_feeds`), which recovers some 403s but not
+IP/aggregator-only blocks.
+
+Both steps reuse the **existing** `services/inoreader.py` (OAuth +
+`get_subscriptions` + `get_stream_contents`).
+
+**9a — Comparison report** (read-only; start here). Cross-reference Inoreader
+subscriptions vs Lectio feeds and flag three sets:
+
+- **(a) in-Ino-with-recent-items but failing-in-Lectio** = the "Ino can, we can't"
+  risk set. This is also the **triage list that gates Part C pass 2**, produced
+  mechanically instead of by hand, and it names the feeds that need 9b.
+- **(b) in Ino, not in Lectio** — subscriptions never migrated.
+- **(c) in Lectio, not in Ino** — Lectio-only, safe to ignore for the cutover.
+
+Turns "safe to drop Ino?" into a concrete checklist.
+
+**9b — Inoreader as fetch-proxy.** The step that actually lets Ino lapse, and
+legitimate rather than evasion — Ino *is* the subscriber. A per-feed "fetch via
+Inoreader" toggle pulling items from `stream/contents` instead of the origin, for
+the stubborn bot-walled feeds in set (a). Keep Ino connected as a quiet backend, not
+the reader. **Scope depends on how big set (a) turns out to be — run 9a first and let
+the count decide whether this is worth building at all.**
+
+Sequence: connect Ino → comparison report (9a) → triage/replace dead feeds → Tag-as-keep
+Part C pass 2 (Now) → proxy the only-Ino feeds (9b) → let the plan lapse 2027-03-16
+(annual SaaS rarely prorates; worth asking, but plan to ride it out).
+
+### Full-content fetch at ingest for body-less feeds
+
+meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
+description/content element at all; older stored entries have bodies, so this
+is upstream). A per-feed "fetch full content from the source page at ingest"
+option (readability pipeline already exists) would fix such feeds generally —
+per-feed opt-in in Feed Properties, capped/throttled like enhancement. Overlaps
+with Inoreader replacement above: some "we can't fetch" feeds get fixed here
+instead of via the Ino proxy, so it's worth revisiting once the comparison
+report sizes set (a).
 
 ### Instapaper-alternative: reader-only view for saved/starred items
 
@@ -791,25 +795,13 @@ earlier flaky-CI work (reader `busy_timeout` + startup-backfill gate) and the
 `PytestUnhandledThreadExceptionWarning` noise the suite still emits — a
 background thread racing the test's DB. Not chased; note the run if it recurs.
 
-**Dead code sweep** — do these together in one pass, they're all "delete the thing
-nobody references":
+**Dead code sweep, remaining piece** — the three cheapest finds (`server_posts_total`/
+`server_posts_sent`, the orphaned `templates/js/_layout_shell.js`/`_pull_to_refresh.js`,
+the dead `LECTIO_SECURITY_MODE` line) were promoted to Now ("Small daily-friction
+items") since they're zero-risk deletes. One left here, more involved:
 
-- **`server_posts_total` / `server_posts_sent`** — read in `templates/index.html`
-  with `is defined` guards but **never set anywhere in Python**, so they're always
-  empty. Found 2026-07-21 while checking the posts list for "Filter this view".
-- **`templates/js/_layout_shell.js` and `templates/js/_pull_to_refresh.js`** —
-  unreferenced leftovers from an earlier extraction attempt (was filed under
-  page-weight follow-ups; it's a dead-code item, not a perf one). Confirm nothing
-  external uses them, then drop.
 - **The dormant in-app star-mode tree/JS** that the Read Mode hijack bypasses —
-  see "Finish the Instapaper clone", which lists it as a Read Mode follow-up. Same sweep.
-- **`LECTIO_SECURITY_MODE`** — set to `"multi"` by
-  `scripts/refresh_screenshots.py` for the Administration capture, but **nothing
-  in the app reads it**; `grep -rn SECURITY_MODE --include=*.py` matches only
-  that one line. A leftover from before auth became unconditional (`AUTH_ENABLED
-  = True`), so the admin instance is multi-user whether or not it is set.
-  Harmless but misleading — it reads as a supported switch. Found 2026-07-21
-  while repairing the screenshot tooling; drop the line.
+  see "Finish the Instapaper clone" in Now, which lists it as a Read Mode follow-up.
 
 Other:
 - **Centralize schemeless-URL normalization** (Sourcery, PR #148): the
