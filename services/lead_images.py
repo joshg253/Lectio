@@ -349,9 +349,14 @@ class LeadImageService:
     # tell it from `Cert-ad1.png`. Two Tapas panels were rejected this way, and
     # the wixmp host-trust in _is_image_url_acceptable was added for exactly the
     # same class ("ad87 in a UUID") one host at a time. This generalizes it.
+    # Anything *starting* with a UUID, not just a bare one: Webtoons appends a
+    # numeric id straight onto the last group with no separator
+    # (`53e3fa05-ad49-…-782469d45a92` + `12398245534840153981.jpg`), and a
+    # trailing-separator-only rule missed it — so `-ad49-` was read as an ad
+    # slot and a real panel was rejected. A name that opens with a UUID is
+    # machine-generated whatever follows it.
     _UUID_BASENAME_RE = re.compile(
-        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-        r"(?:[._-][^/]*)?$",
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[^/]*$",
         re.IGNORECASE,
     )
     # Advertisement images flagged by their alt/title text (e.g. SE Radio's

@@ -14552,6 +14552,101 @@ _TAPAS_NULL_PARA_RE = re.compile(r"<p>\s*null\s*</p>", re.IGNORECASE)
 _TAPAS_MAX_PANELS = 60
 
 
+def _panels_into_body(content_html, panels: list[str], strip_re: re.Pattern):
+    """Replace a thumbnail-grade body with the real panels.
+
+    Shared by the Tapas and Webtoons injections: strip the feed's own picture
+    out of the body (it is the list thumbnail, not the article), drop the
+    separate hero with it — otherwise the thumbnail renders directly above the
+    comic it is a thumbnail of — and put the panels in front of whatever prose
+    is left. Returns ``(content_html, lead_image_url)``.
+    """
+    body = strip_re.sub("", content_html or "")
+    body = _TAPAS_NULL_PARA_RE.sub("", body).strip()
+    figures = "".join(
+        f'<p><img src="{html.escape(u, quote=True)}" alt="" /></p>' for u in panels
+    )
+    return figures + body, None
+
+
+# The episode's own slices carry class="_images"; their `data-url` is the real
+# source (the `src` is a spinner placeholder). Bounding on the class matters —
+# the page also embeds a recommendation strip of other series, and a looser scan
+# swept 62 URLs into an episode that has 50.
+_WEBTOONS_SLICE_RE = re.compile(
+    r'<img\b[^>]*\bclass="[^"]*\b_images\b[^"]*"[^>]*>', re.IGNORECASE
+)
+_WEBTOONS_DATA_URL_RE = re.compile(r'\bdata-url="([^"]+)"', re.IGNORECASE)
+_WEBTOONS_BODY_IMG_RE = re.compile(
+    r'<img\b[^>]*\bsrc=["\'][^"\']*//s?webtoon-phinf\.pstatic\.net/[^"\']*["\'][^>]*>',
+    re.IGNORECASE,
+)
+_WEBTOONS_MAX_PANELS = 80
+
+
+def _webtoons_public_slice_url(url: str) -> str:
+    """The publicly fetchable spelling of an episode slice.
+
+    The page serves slices from `webtoon-phinf`, which answers **403 to anything
+    without a `webtoons.com` Referer** — including a browser loading the image
+    from our page. The sibling `swebtoon-phinf` host serves the same path with no
+    Referer at all (verified 200 on every slice of three different series), and
+    it is the host the RSS feed itself uses. So we rewrite to it rather than
+    forging a Referer we do not have: same bytes, nobody's hotlink policy
+    circumvented, and no image-proxy change needed.
+    """
+    url = html.unescape(url).strip()
+    url = url.split("?", 1)[0]                       # ?type=q90 / ?type=optimize
+    return url.replace("//webtoon-phinf.", "//swebtoon-phinf.")
+
+
+def _inject_webtoons_episode_panels(content_html, entry, feed_url: str, lead_image_url):
+    """Put the whole strip in a Webtoons article, not the one image the feed sends.
+
+    A Webtoons episode is a vertical strip cut into slices — 50 of them on a
+    Backchannel chapter, 8 on MercWorks, 5 on False Knees — and the RSS feed
+    carries exactly one image. That single picture is a fine list thumbnail and
+    a poor article. Same trade as the Tapas injection above, and the same
+    guarantee: the list thumbnail is untouched because the caller captured the
+    resolved lead in `_resolved_lead_for_cache` before this ran.
+    """
+    link = str(getattr(entry, "link", "") or "")
+    try:
+        host = (urlparse(link).hostname or "").lower()
+    except ValueError:
+        return content_html, lead_image_url
+    if not (host == "webtoons.com" or host.endswith(".webtoons.com")):
+        return content_html, lead_image_url
+    try:
+        fetched = lead_image_service.fetch_source_html_now(link)
+    except Exception:  # noqa: BLE001 — the feed's image beats a 500
+        LOGGER.warning("[webtoons] panel fetch failed for %s", link, exc_info=True)
+        return content_html, lead_image_url
+    if not fetched:
+        return content_html, lead_image_url
+    _base, page_html = fetched
+
+    panels: list[str] = []
+    seen: set[str] = set()
+    for tag in _WEBTOONS_SLICE_RE.findall(page_html):
+        m = _WEBTOONS_DATA_URL_RE.search(tag)
+        if not m:
+            continue
+        url = _webtoons_public_slice_url(m.group(1))
+        if not url.startswith("https://") or url in seen:
+            continue
+        seen.add(url)
+        panels.append(url)
+        if len(panels) >= _WEBTOONS_MAX_PANELS:
+            break
+    if not panels:
+        return content_html, lead_image_url
+    # A single-slice episode whose one slice is already the feed's image (Sarah's
+    # Scribbles) gains nothing from the rewrite — but it costs nothing either,
+    # and the strip-then-inject leaves exactly the same picture in place.
+    return _panels_into_body(content_html, panels, _WEBTOONS_BODY_IMG_RE)
+
+
 def _inject_tapas_episode_panels(content_html, entry, feed_url: str, lead_image_url):
     """Put the actual comic in a Tapas article, not the series art.
 
@@ -14605,13 +14700,7 @@ def _inject_tapas_episode_panels(content_html, entry, feed_url: str, lead_image_
     if not panels:
         return content_html, lead_image_url
 
-    body = content_html or ""
-    body = _TAPAS_SERIES_ART_RE.sub("", body)      # the thumbnail is not the article
-    body = _TAPAS_NULL_PARA_RE.sub("", body).strip()
-    figures = "".join(
-        f'<p><img src="{html.escape(u, quote=True)}" alt="" /></p>' for u in panels
-    )
-    return figures + body, None
+    return _panels_into_body(content_html, panels, _TAPAS_SERIES_ART_RE)
 
 
 def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_lead_in_article: bool):
@@ -15413,6 +15502,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             content_html, entry, str(entry.feed_url), lead_image_url
         )
         content_html, lead_image_url = _inject_tapas_episode_panels(
+            content_html, entry, str(entry.feed_url), lead_image_url
+        )
+        content_html, lead_image_url = _inject_webtoons_episode_panels(
             content_html, entry, str(entry.feed_url), lead_image_url
         )
         content_html = _collapse_block_spacers(_strip_ad_images(content_html))

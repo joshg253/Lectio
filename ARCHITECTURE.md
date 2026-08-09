@@ -2407,6 +2407,22 @@ untouched.
 
 **A plugin that suppresses everything is a claim about the feed, not just the page.** `WebtoonsPlugin` skipped source scraping *and* returned no fallback, on the stated belief that "the feed and og:image return the series thumbnail for every episode". Only half was true. An episode page's og:image really is the series thumbnail — byte-identical across episodes — but every Webtoons `<description>` carries that episode's own panel on the same CDN, distinct per episode on all nine subscribed feeds. The result was the series thumbnail on every strip, served from cache rows written before the plugin existed, while the real panel sat unused in the entry body. The plugin now reads the body like `BloggerPlugin` does, keeps `should_skip_source_lookup`, and narrows `should_bypass_cached_url` to URLs whose basename is `thumbnail.*` — so stale thumbnails are re-resolved and a good cached panel is left alone instead of being re-derived on every render.
 
+**Webtoons is the same trade, and the hotlink gate is dodged rather than
+forged.** An episode is a vertical strip cut into slices — 50 on a Backchannel
+chapter, 8 on MercWorks, 5 on False Knees — and the feed carries exactly one
+image. The slices are on the page as `<img class="_images" data-url=…>`; the
+class is what bounds them, because the page also embeds a recommendation strip
+of other series and a looser scan swept 62 URLs into an episode that has 50.
+
+The page serves them from `webtoon-phinf`, which answers **403 to any request
+without a `webtoons.com` Referer** — including a browser loading the image off a
+Lectio page. The sibling `swebtoon-phinf` host serves the same paths with no
+Referer at all, and is the host the RSS feed itself uses, so
+`_webtoons_public_slice_url` rewrites to it and drops the `?type=` resize.
+Verified 200 on every slice of three series. That is the difference between
+routing around a gate and forging a header we do not have; it also means no
+image-proxy change.
+
 **The feed's image and the article's image are different questions, and on
 Tapas they have different answers.** `/sa/` is *series art* — one picture per
 episode, thumbnail-grade, and all the RSS feed carries. `/c/` is the episode's

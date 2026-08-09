@@ -1861,6 +1861,10 @@ def test_a_uuid_filename_is_not_read_as_an_ad_slot(tmp_path: Path):
         "https://us-a.tapas.io/sa/34/811959d7-ad1c-47c0-8ee1-570d77204f48.jpg",
         # The same class in the other name-based filters.
         "https://cdn.test/6566d9f3-5857-4a02-98f2-f1941bb0f8f0.png",
+        # Webtoons appends a numeric id straight onto the UUID's last group
+        # with no separator, which a trailing-separator-only rule missed.
+        "https://swebtoon-phinf.pstatic.net/20251231_227/x_JPEG/"
+        "53e3fa05-ad49-4593-b2ac-782469d45a9212398245534840153981.jpg",
     ):
         assert svc._is_image_url_acceptable(url, None, None) is True, url
 
