@@ -2,6 +2,35 @@
 
 Lectio is a self-hosted feed reader built around the `reader` Python library. The goal is a fast triage workflow with a clean multi-user architecture and VPS-friendly deployment.
 
+## Contents
+
+Grouped by theme; the sections themselves stay in their historical order,
+because the prose cross-references its neighbours by direction.
+
+**Foundations**  
+[Layering](#layering) · [Reader-first philosophy](#reader-first-philosophy) · [Deployment path](#deployment-path) · [Extension strategy](#extension-strategy) · [Security direction](#security-direction)
+
+**Storage, tenancy and identity**  
+[Multi-user tenancy](#multi-user-tenancy) · [Feed URL normalization](#feed-url-normalization) · [Duplicate entry suppression](#duplicate-entry-suppression) · [Hard-deleting a single entry (tombstones)](#hard-deleting-a-single-entry-tombstones)
+
+**Interface and view state**  
+[View state model](#view-state-model) · [Page weight: lazy HTML fragments](#page-weight-lazy-html-fragments) · [Adaptive layout model](#adaptive-layout-model) · [Folder tree & the Uncategorized folder](#folder-tree--the-uncategorized-folder) · [Entry sort window (Pub Old / Pub New)](#entry-sort-window-pub-old--pub-new) · [Remembered sort: Feeds and Saved keep their own](#remembered-sort-feeds-and-saved-keep-their-own) · [Async bulk mark-read](#async-bulk-mark-read)
+
+**Feeds: discovery, ingest, automation**  
+[Feed discovery: which feed a page actually means](#feed-discovery-which-feed-a-page-actually-means) · [Feed auto-taggers](#feed-auto-taggers) · [Feed-provided tag suggestions (`entry_feed_tags`)](#feed-provided-tag-suggestions-entry_feed_tags) · [dev.to filtered feeds](#devto-filtered-feeds) · [DeviantArt integration](#deviantart-integration) · [Combining feeds carries the offline captures](#combining-feeds-carries-the-offline-captures) · [WebSub (PubSubHubbub)](#websub-pubsubhubbub)
+
+**Reading surfaces**  
+[Read Mode — e-ink reading app (`GET /read`)](#read-mode--e-ink-reading-app-get-read) · [Offline reading and offline acting (`static/sw.js`, `static/outbox.js`)](#offline-reading-and-offline-acting-staticswjs-staticoutboxjs) · [Floated images, and why margins are not kept](#floated-images-and-why-margins-are-not-kept) · [Titles render a tiny inline allowlist](#titles-render-a-tiny-inline-allowlist)
+
+**Images**  
+[Lead image pipeline](#lead-image-pipeline) · [Image bytes: the dimension cap is not a size cap](#image-bytes-the-dimension-cap-is-not-a-size-cap) · [Transparency: `convert("RGB")` paints line art black](#transparency-convertrgb-paints-line-art-black) · [Thumbnails must reuse the image proxy's bytes](#thumbnails-must-reuse-the-image-proxys-bytes) · [DeviantArt mature images: signed for minutes, cached for good](#deviantart-mature-images-signed-for-minutes-cached-for-good)
+
+**Saved articles, capture and editing**  
+[Saved articles (read-it-later capture)](#saved-articles-read-it-later-capture) · [Saving an article you already subscribe to](#saving-an-article-you-already-subscribe-to) · [Re-fetch on keep](#re-fetch-on-keep) · [Node bulk actions, and what a re-fetch may replace](#node-bulk-actions-and-what-a-re-fetch-may-replace) · [Keeping the files a post links to](#keeping-the-files-a-post-links-to) · [Editing a post's published date (overrides)](#editing-a-posts-published-date-overrides) · [Editing a post's body — Aardvark-style cleanup](#editing-a-posts-body--aardvark-style-cleanup)
+
+**Client APIs**  
+[GReader API](#greader-api) · [Fever API](#fever-api)
+
 ## Layering
 
 - UI/API layer: web routes, handlers, presentation state.
@@ -1774,6 +1803,104 @@ The budget is an instance setting (**Administration → Image cache**), with the
 var as its default — the same shape as `LECTIO_IMG_CACHE_MAX_DIM` beside it, and
 admin-only for the same reason: it decides how every user's images are stored.
 
+## Transparency: `convert("RGB")` paints line art black
+
+`Image.convert("RGB")` keeps whatever RGB sits *under* the alpha channel, and for
+line art that is black — so a transparent PNG becomes a solid black rectangle.
+Measured on `what-if.xkcd.com/imgs/a/138`: mean luminance **33** the naive way
+against **235** composited onto white. Two paths had it, in two disguises:
+
+- **`/thumb`** called `.convert("RGB")` outright, and now composites onto white
+  first. White rather than a theme colour because the output is a JPEG cached and
+  shared across users and themes, so the background is chosen once — and this
+  kind of image (diagrams, logos, line art) is drawn for a light page. The
+  zoom<1 letterbox canvas follows the same rule: white when the source had alpha,
+  black for photos.
+- **The starred archive** tested `"A" in img.mode`, which is `False` for a
+  *palette* PNG (mode `"P"`, transparency in `img.info`) — so precisely the
+  images this breaks were the ones it flattened. WebP carries alpha, so capture
+  keeps it, and normalization moved ahead of the resize since LANCZOS on a
+  palette image resamples palette indices rather than colours.
+
+**Neither fix reaches bytes already stored.** A saved entry's images are rewritten
+to `/starred-asset/<hash>` at render time, so the body shows the stored copy, not
+the live image — only a re-fetch restores the alpha
+(`scripts/repair_flattened_archive_images.py`; 143 what-if assets restored
+2026-08-04). Candidates are found from the **WebP header** rather than by
+decoding: an asset declaring no alpha whose source format *can* carry it is a
+suspect, a 32-byte read instead of decoding 25k images (a decode scan did not
+finish in ten minutes). A candidate is only rewritten when the re-fetched source
+has a *meaningful* alpha channel — xkcd's book covers have a fully opaque alpha
+channel and artwork that is simply dark, and an earlier pass "repaired" those into
+byte-identical output and reported a fix that never happened.
+
+Cached thumbnails were already black too, so the fix needed a cache bust:
+`_THUMB_RENDER_VERSION` joins the cache key (the same idiom as the existing `_p2`
+suffix), so old entries are never looked up again and each thumbnail re-renders on
+first view — no mass delete of the 59k-row, 431 MB cache and no refetch storm.
+
+At render time the theme paints behind transparent images via `--img-backdrop`,
+white in *both* themes: transparent article images are overwhelmingly black line
+art drawn for a light page, and an image that changed appearance when you toggled
+the theme would be worse than one that never does. Setting the variable to
+`transparent` restores the untouched look with no re-fetch — which is the point of
+doing it in CSS rather than in the stored bytes. Deliberately not applied in Read
+Mode, where `#reader-columns *` forces `background: transparent !important` for
+e-ink contrast and transparent art already lands on white.
+
+## Keeping the files a post links to
+
+Some posts are a wrapper around a download: guitar-pro's tab posts link `.gp`
+files and PDF lyric sheets that disappear with the article. A per-feed extension
+list (`feed_display_prefs.attachment_exts`) drives a scan of the captured HTML on
+star/tag, storing matches through the existing `_archive_asset` — which already
+stores non-image bytes untouched and dedupes per `(entry, source_url)`, so
+attachments inherit retention and the orphan sweep for free and differ from images
+only in how they are **found**. 25 MB per file (`ATTACHMENT_MAX_BYTES`).
+
+What counts as a file is the whole design:
+
+- **No bare wildcard.** `*` on an ordinary post also matches every link to a
+  homepage, a category or a social profile. A **prefix** pattern is allowed
+  (`gp*` → gp/gp3/gp4/gp5/gpx) because it still names a family of file types and
+  cannot reach a page, and it must be at least two characters — `p*` (pdf, png,
+  ppt, psd…) is a wildcard wearing a hat.
+- **Page extensions are refused everywhere** (`html`, `php`, `aspx`, `jsp`, …),
+  dropped on save *and* re-checked in the finder, so a stored value cannot smuggle
+  one through. Dropped rather than rejected: typing "pdf html" means the pdf, and
+  the UI says which were ignored.
+- **Any host, matched on the URL path.** A same-host rule was rejected —
+  guitar-pro serves tabs from `assets-wp.guitar-pro.eu` while the post is on
+  `blog.guitar-pro.com`, so it would miss exactly the case this exists for.
+  Path-only matching also keeps `/post.php?download=song.gp` a page.
+- **Anchors are judged on the path, not the whole URL.** Requiring an href to
+  *end* in an image extension let a Pinterest `/pin/create/button/?…&media=….jpg`
+  share button be stored as an asset. Capture refuses HTML outright as well,
+  whatever led it there.
+- **The Attachments list is decided by stored content type**, not guessed from
+  the URL, so a Gravatar (`/avatar/<hash>?s=48`) and an extension-less CDN path
+  stop being offered as files without needing a re-capture.
+- **Named data attributes are decoded, never a blind base64 sweep.** guitar-pro
+  ships `<span class="obflink" data-o="<base64>">`, reachable by a browser and
+  invisible to an href scan; `data-o`/`data-url`/`data-href`/`data-link`/
+  `data-file` are decoded and the result still has to satisfy the feed's
+  extension list. This widens where links are *found*, not what counts as a file.
+
+**Enclosures are captured unconditionally**, without the extension list: an
+`<enclosure>` is the publisher *declaring* that a file belongs to the post
+(Standard Ebooks attaches the epub), which is a stronger claim than a body link.
+Audio is skipped (podcast enclosures are large and stream fine) and images are
+already captured as images.
+
+An archived asset is addressed by content hash, so a bare `download` attribute
+made the browser save `cfc24ad676…` with no extension — unopenable and
+unidentifiable. The name derived from the source URL's basename is carried in
+three places: the Attachments list, in-body links rewritten to the archive (unless
+the publisher set their own `download` name), and the `/starred-asset/` route via
+`Content-Disposition`, so "Save link as" and a pasted URL are named too. Skipped
+for images/audio/video, which render inline and would only be made un-viewable by
+an attachment disposition.
+
 ## Thumbnails must reuse the image proxy's bytes
 
 `/thumb` fetched its source URL directly and never consulted `img_cache`. For an
@@ -1913,6 +2040,8 @@ When every advertised link is dead and nothing else answers, what happens next d
 - **Gone (404/410)** — report "no feed found", naming the dead address and pointing at Page Feed. Handing the link back produced the worst outcome available: the dialog says it found a feed, the add route then refuses it, and nothing appears in the feed list. The failure toast already offers a "Create page feed" button, so this lands the user where they need to be.
 - **Refused (403, 429, 5xx)** — still offered. The server declined to answer a HEAD; that is not proof the feed is absent, and reader's real GET may get through. This is the bot-walled case the last resort exists for.
 
+**Two kinds of known-site rule.** `_SITE_FEED_REWRITES` are pure URL functions (Pinboard, ArtStation, Behance, freeCodeCamp, and the numeric Tapas form) — no network, applied before the fetch. `_SITE_BODY_FEED_EXTRACTORS` are the other shape: the feed address exists only in the page body, so they run *after* the fetch, against HTML discovery already has. Tapas is the case that needed it — it advertises no `<link rel="alternate">` at all (its only alternate is the mobile page) and its canonical link points at the latest *episode*, not the series, so `tapas.io/series/<slug>` is invisible to generic discovery. The series id lives in the markup as `seriesId:` / `data-series-id`, which is what the community userscripts scrape by hand. Extractors run only when nothing was advertised, and their result flows into the same liveness check as any advertised link, so a stale id is caught rather than offered. Both entry points call the same helper on the same slice of the same HTML — see the divergence warning above.
+
 ## Saving an article you already subscribe to
 
 An extension save used to create a `lectio:saved` entry unconditionally, so an article you already follow ended up as two posts — and they were never equivalent. The feed entry carries the publisher's tags (`entry_feed_tags`) and keeps updating; the capture carries a body the server often cannot fetch at all (Medium and treblezine refuse this host outright). Split apart you get an article with tags and no text beside one with text and no tags, which is exactly what happened to a Medium post on 2026-07-26 — before a "move to feed" onto the empty twin dropped its 44KB body entirely.
@@ -1963,7 +2092,7 @@ Three functions run at startup to apply strategy and display defaults without us
 
 All three skip feeds where `feed_lead_image_strategy.manual=1` (user has explicitly chosen a strategy in Feed Properties). To add a new tagger, follow the same pattern and register it in `lifespan()`.
 
-## Feed-provided tag suggestions (`entry_feed_tags`)
+## Remembered sort: Feeds and Saved keep their own
 
 **Feeds and Saved remember their sort separately**, and a remembered sort is only
 written by an *explicit* choice. Both halves were bugs:
@@ -1987,6 +2116,23 @@ what it is handed; the regular sort menu has no entry for `starred`, so nothing
 rendered as active and the toolbar showed "Published newest" while the list was
 ordered by star date. Reported as the Feed view reverting to "Pub new" after
 switching in and out of e-ink mode.
+
+**A sort is a pair, and any path that can put half of one into a URL can rewrite
+the preference.** This bug has now happened twice in different code. Refreshing a
+feed rewrote the remembered sort because `refreshCurrentFeedOrFolder` substituted
+its own `'desc'` for an absent `sort_dir` — absent because the templates emit the
+parameter only when it differs from `DEFAULT_SORT_DIR` ("asc"), so the JS default
+had simply never agreed with the server's. `build_sort_query` then put
+`&sort_dir=desc` in the redirect, the index persisted it as an *explicit* choice,
+and the preference was gone. It could only bite someone whose preference was
+oldest-first. The Read Mode Inbox had the same shape from the other side: its sort
+*key* was guarded against persisting but its *direction* was not, so visiting the
+Inbox flipped Saved from oldest-first to newest-first and it stayed. The fix in
+both cases is to pass the parameter through rather than invent one — absent means
+"not in the URL", the redirect carries nothing, and the remembered preference
+stands. Suspect this first the next time an order "won't stick".
+
+## Node bulk actions, and what a re-fetch may replace
 
 **Node bulk actions are scoped to the drilled-into view, and Read Mode gets buttons
 rather than a menu.** `_scope_starred_keys(folder_id, list_feed_url, tag)` resolves
@@ -2043,6 +2189,8 @@ safe: `replace_entry_content(pin_content=not is_capture)` writes an
 the fuller copy. Without that pin the re-fetch would be silently undone, which is
 exactly the failure the original refusal existed to prevent.
 
+## Titles render a tiny inline allowlist
+
 **Titles render a tiny inline allowlist, by escape-then-restore.** Feeds put `<em>`
 in titles — and they also put `std::vector<T>` and `#include <chrono>` in them.
 Measured on the live library: of 21 titles containing angle brackets, only 6 are
@@ -2060,6 +2208,8 @@ Records carry both forms. `title_html` is used where the title is visible text (
 rows, the entry-pane headline, Read Mode rows and the reader headline);
 `title_plain` — the same string with those tags stripped — is used everywhere that
 cannot render markup: `title=` attributes, `<title>`, exports, email.
+
+## Feed-provided tag suggestions (`entry_feed_tags`)
 
 **Numbers-only tags are dropped at capture, from feed categories and page scraping
 alike.** They are comment counts, post ids, pagination and bare years — Josh's test
@@ -2119,193 +2269,6 @@ be a real topic elsewhere. It hides a chip; it does not forget a fact, so the
 `entry_feed_tags` rows stay and keep feeding the tag-filtered feed adapters. Undo
 lives in Feed Properties → **Hidden tags**, because a mis-clicked × must have a way
 back and that list is the only place the decision is visible.
-
-**"All Saved" is a separate node**, not a mode of the Inbox: everything kept
-minus archived, i.e. what the main app's Saved view shows. The Inbox has to stay
-narrow to be a queue, but the two modes disagreeing about what *exists* is the
-mismatch Read Mode is meant not to have — the tagged-but-unstarred items are all
-reachable under Tags, and this is the flat view of them. It carries `kept=all`
-through every hop, because it is otherwise indistinguishable from the Inbox
-(same root folder, no tag, no archive, no search) and would silently inherit the
-Inbox's starred-only scope and star-date default.
-
-Two consequences worth stating, both from live reports:
-
-- **The Inbox opens most-recently-starred** (`sort=starred` → `saved_entries.
-  saved_at`, a fourth sort key beside post/received/history). A to-do pile is
-  ordered by when you added to it; an old article starred today belongs at the
-  top, which is exactly what publish-date order gets wrong. `saved_at` is stored
-  in two shapes (SQLite `CURRENT_TIMESTAMP` and ISO-8601 from imports), so it is
-  parsed rather than string-sorted — `' '` sorts before `'T'`, which would
-  scramble a single day's stars.
-- **That order must not follow you out.** `resume_sort` stows the order you were
-  using when you entered the Inbox and hands it back on the way out, so leaving
-  neither drags most-recently-starred into a folder where nothing is starred nor
-  resets a folder you had set to Oldest. Same shape as the main app's
-  `resume_read_filter`, which restores your filter when you close History.
-
-The Read Mode **Tags** section now renders open. It was a collapsed `<details>`,
-which was fine while tags were a side-bucket of a kept-everything inbox; now that
-filed items are reachable *only* there, collapsing them made them look absent.
-
-**Prefetching the next article warms its images, not its page.** The e-ink flash
-on advance is mostly image decode, and the reader page itself is `no-store`, so a
-`<link rel="prefetch">` would fetch the next article and immediately discard it —
-cost with no benefit. Instead `prefetchNextImages` fetches the next article's
-HTML, parses it in a **detached `DOMParser` document** (runs no scripts, loads no
-resources — it only reads `src` attributes), and warms up to
-`PREFETCH_MAX_IMAGES` images via `new Image()`.
-
-Warming is restricted by `isWarmableImagePath` to the two endpoints article
-images are actually rewritten to: `/api/img` (`public, max-age=86400`) and
-`/starred-asset/` (a year, immutable). Same-origin alone is too loose — a feed's
-broken *relative* `src` resolves against our own origin and would be prefetched
-into a 404, and other same-origin assets (a `/static/` placeholder) are already
-cached or not worth a request. These two are also the only paths with a real
-`max-age`, which is the entire reason prefetching works here when prefetching the
-page does not. The cap exists because a lesson-length article can carry 50+
-images. The prefetch is hung off
-the **settle** (plus `PREFETCH_DELAY_MS`) rather than a fixed delay from load, so
-warming the next article never competes with rendering the one being read — on a
-slow load settling can itself take seconds, and a fixed timer would fire straight
-into it. Failures are swallowed: a prefetch must never disturb reading.
-
-**This is only safe because rendering no longer marks read.** Fetching the next
-article's HTML to discover its images would otherwise have marked it read without
-it ever being seen — the two changes are ordered, not independent.
-
-**Two scopes** (`?scope=`). `saved` (default, above) reads the starred backlog
-with the Archive axis. `feeds` is ordinary **unread feed reading**:
-`_build_feeds_mode_context` renders a simplified feeds tree (All Feeds + folders
-with unread counts) → `list_entries_for_feeds(star_only=False, read_filter=
-'unread')` → the same paginated reader, minus the Archive/Delete controls (marked
-read on open). Entry points are additive (the feeds three-pane app is unchanged):
-an app-menu **Read Mode (e-ink)** link, and a **Supernote auto-detect** — a
-tablet whose UA contains `supernote` hitting `/` is redirected to
-`/read?scope=feeds`; the Read Mode exit link (`/?full=1`) opts back into the full
-app and sets a `lectio_full_app` cookie so in-app navigation isn't re-redirected.
-
-## Hard-deleting a single entry (tombstones)
-
-The entry context menu's **Delete post…** (`POST /entries/delete`) hard-removes one garbage entry (spam, corrupted post). reader's public `delete_entry` only covers user-added entries, so feed-provided ones go through the storage-level delete — the same API reader's own `entry_dedupe` plugin uses. A tombstone row in the meta DB (`deleted_entries`, keyed feed_url + entry_id) records the deletion, and the refresh service purges any tombstoned entry a refresh re-ingested (`purge_tombstoned_entries`, runs after every update batch, before enhancement) — otherwise the entry would resurrect on every fetch while still inside the publisher's feed window. Tombstones are kept forever (tiny rows; the guid could reappear any time the publisher republishes).
-
-## Editing a post's published date (overrides)
-
-**Edit date…** (`POST /entries/set-date`) fixes garbage publish dates (epoch-0 entries sink to the bottom of every date sort). reader's `EntryData` is ingest-owned with no public setter, and the entry list sorts in SQL on reader's `entries.published` column — so the corrected date is written directly into that column (via `reader._storage.get_db()`), in reader's naive-UTC `YYYY-MM-DD HH:MM:SS` format. A meta-DB override row (`entry_date_overrides`) records the correction, and the refresh service re-pins it after every update batch (`reapply_entry_date_overrides`) in case a refresh re-ingested the feed's original value. Clearing the date deletes the override row only — the stored value stays until the feed next updates the entry.
-
-**Edit title…** (`POST /entries/set-title`) is the same mechanism aimed at `entries.title` (`entry_title_overrides`, re-pinned by `reapply_entry_title_overrides`): it fixes "(untitled)" posts and garbage feed titles, and renames saved articles whose readability-extracted title is off (for `lectio:saved` entries the feed never refreshes, so the direct column write alone would already stick; the override row is kept anyway for uniformity).
-
-**Canonical entry links** (`entry_link_overrides`, re-pinned by `reapply_entry_link_overrides`) rewrite feed-redirector links — FeedBurner's feedproxy.google.com / feeds.feedburner.com and CNAMEd burner domains (the `/~r/` path signature), FeedsPortal — to the URL the redirect resolves to, so the title's href outlives the redirector service (feedproxy is already dead). Detection lives in `services/link_canonical.py`. Three write paths: (1) the **starred-archive capture** already fetches the source page on every star, so its `on_canonical_link` hook canonicalizes at zero extra requests (and the archive row + relative-URL resolution follow the final URL); (2) **Save Article** pre-resolves redirector URLs before storing; (3) the **Inoreader importer** picks whichever of an item's `canonical`/`alternate` hrefs isn't a redirector. For stars whose redirector died before any of this existed, `scripts/backfill_canonical_links.py` recovers the real URL from the starred archive's captured page HTML (`rel=canonical` / `og:url`) — dry-run by default, `--live-resolve` for still-alive redirectors. Ordinary redirects (http→https, trailing slash) are never rewritten: only known-redirector sources qualify.
-
-**Edit URL…** (`POST /entries/set-link`) is the manual write path into that same `entry_link_overrides` table, and exists because every automatic path can fail at once. Measured on the live library (2026-07-22): of 37 starred redirector links, **zero** were recoverable — no captured archive HTML to mine, feedproxy.google.com answers 404 with no redirect chain, and Archive.org holds no snapshot of the redirector URLs. 22 of the 37 are opaque ids (`~3/vGL5XCHkyww/`) with not even a slug to reconstruct from. When the machine can't resolve it, the user can: find the article's new home by hand, pin it here, then **Re-fetch content** to pull the body from that address.
-
-**Only `link` changes — never the entry id.** For a Lectio capture the id *is* the original URL, and it keys the `saved_entries` star row, manual tags, and archive rows; re-keying would scatter all three. Changing the link alone suffices because both the "open original" href and `refresh_filed_article` read `link` first, falling back to the id. The route accepts http(s) only — `safe_link_url` also passes `mailto:`/`tel:`, which are legitimate hrefs but not source URLs a re-fetch could follow.
-
-**Other domains** (`POST /feeds/url-rewrites`, `…/delete`; listed in the `/feeds/properties` payload) is the direct way to manage `feed_url_rewrites`, added 2026-07-25. Edit Website below can only seed a rule for a host it can *infer* — the channel `<link>`, or the host most posts link to — so an author's *older* dead domain, one with no surviving entries to infer from, had no way in at all. It also had no way out: nothing rendered the rules, and no route deleted one, so a wrong alias could only be undone in SQL. Adding one migrates matching entries inline through the same `migrate_feed_host_rewrite` Edit Website calls; a domain with nothing left on it reports 0 migrated and the rule still stands, because it governs ingest and the global dedupe alias map from then on. Removing one stops future rewrites only — entries already migrated keep their new ids, since the old id is gone and re-deriving it would scatter the star, tags and archive rows that followed it. Hosts are accepted as bare domains or pasted URLs, with `www.` dropped to match how `get_dedupe_host_aliases` stores its keys.
-
-**Edit Website…** (`POST /feeds/set-website`) is the *feed*-level counterpart, for an author who moved domains without updating their feed's `<guid>`/`<link>`. Unlike Edit URL, the id here *must* change: the feed keeps re-serving the old-domain guid, so a link-only override is undone every refresh. Editing the Website seeds a `feed_url_rewrites` rule (old channel-link host → new Website host) — which rewrites the host at *ingest*, before reader derives ids — and migrates the existing posts inline via `migrate_feed_host_rewrite`/`migrate_entry_to_new_host` (recreate under the rewritten id, carry star+archived_at, manual tags, read state and the offline archive, delete the old). The batch `scripts/apply_feed_url_rewrites.py` now imports that same per-entry logic from `main`, so the one-off and the UI share one implementation. A subtlety this surfaced: the list/pane link **rebase** (`_rebase_proxy_entry_link`, built to move feedburner-proxied entry links onto the publisher host named in the feed's channel `<link>`) would take a feed whose channel link still names the *dead* host and rewrite already-correct entry links back onto it. The caller now folds the channel link through the declared migrations (`get_dedupe_host_aliases` → `_rewrite_url_host`) before rebasing, so a declared migration wins; the same fold corrects the Feed Properties Website field and the favicon lookup.
-
-## Editing a post's body — Aardvark-style cleanup
-
-**Clean up article** (🧹 in the pane; `POST /entries/content/clean`) arms `.entry-content` into an element-picker: hover outlines the node under the cursor, click or `R` removes it, `I` isolates it, `W`/`N` widen and narrow the selection, `Ctrl+Z` undoes. It is the manual counterpart to `_apply_feed_content_cleanups` — the hand-coded per-site strips (NASA nav, mynorthwest's related block, JWPlayer control DOM) exist because there was no way for the user to do it themselves; this is that way.
-
-**The browser sends what it removed, not the edited HTML.** Each op is a structural path (element-child indexes from the content root) plus a fingerprint of the node — tag, id, classes, normalized text prefix, element-child count, and the last path segment of `src` with any `/api/img?u=` wrapper unwrapped. `services/content_edits.py` replays that list server-side. Posting the DOM back would be simpler and wrong: the rendered body is not the stored body (hotlink images are routed through `/api/img`, `referrerpolicy` is injected, starred assets are rewritten to local copies, and app.js rewrites more `src`s on error), so the edited DOM would bake render-time artifacts into stored content. The op list is also the durable record of *what* was removed, which is what a per-feed rule would be promoted from.
-
-Matching is two-tier because the rendered tree and the stored tree are not guaranteed identical: walk the path and accept where it lands only if the fingerprint agrees; otherwise search the whole tree for the best fingerprint match and accept it only if it is unambiguous. An op matching neither is returned as `unmatched` rather than guessed at — a rendered-only node (an injected embed, something a render-time cleanup already removed) genuinely has nothing to delete, and silently deleting the wrong node is the one outcome worth failing over. Ops apply in order against a tree that mutates as it goes, mirroring the client, whose paths are derived from the DOM as it stands at each click.
-
-**Persistence reuses the re-fetch path.** The result is sanitized through the normal allowlist (a cleanup must not be a way to widen what a body may contain) and written into reader's `entries.content` via `saved_articles.replace_entry_content` with `pin_content=True`, so `reapply_entry_content_overrides` re-pins it after every refresh and the feed can't re-serve the junk. `entry_content_edits` snapshots the pristine body **on the first edit only** (repeated cleanups must still revert to the feed's version, not to the previous cleanup) alongside the accumulated ops; `POST /entries/content/revert` restores it and drops both the pin and the edit row. While an edit exists, `_inject_recovered_source_embeds` is skipped for that entry — re-adding an embed the user just deleted is the one way a cleanup could look undone.
-
-Saving or reverting re-renders **only the article pane**, via `window.lectioReloadEntryPane` (app.js's `loadEntryPaneWithoutFullRefresh`, exposed for this). The sibling edit routes (title/date/URL) full-reload because what they change is *in the list*; a body edit is not, so a reload would rebuild the list and move the reader's place in it for no reason. The loader's post-swap `centerActivePostInView` keeps the open post where it was; measured on a 30-post list, the list's scroll position is unchanged across a cleanup save. A pane fetch that fails still falls back to a full reload — `/entries/pane` requires `folder_id`, so a URL lacking it (a hand-typed link) degrades rather than breaking.
-
-Deferred: promoting a recorded removal into a per-feed rule. That rule belongs at render time inside `_apply_feed_content_cleanups`, *not* as a bulk rewrite of stored bodies — feed-wide it would touch hundreds of entries irreversibly, and the render-time form covers old and new posts alike and can be switched off.
-
-## Feed discovery: which feed a page actually means
-
-Two entry points share one set of rules, and must: `probe_url` previews what the Add dialog shows, while the Add route itself re-discovers through `discover_feed_urls_ex`. Any divergence means the dialog promises one feed and the button subscribes to another — which is exactly what happened when the page-path fix below landed in only one of them.
-
-**Page path before site root.** Multisite WordPress puts a whole blog under a path (`devblogs.microsoft.com/oldnewthing/`) while the domain root serves a firehose of every blog on it. Probing the root first meant subscribing to "The Old New Thing" silently handed back "Microsoft for Developers". The more specific feed is the one the user asked for; a path with no feed of its own still falls through to the root.
-
-**Gone vs refused.** A stale `<link rel="alternate">` is discarded only when positively confirmed dead — 4xx/5xx under the current identity *and* a browser-identity retry, with 405/501 and network errors left alone. Redirects are now followed one guarded hop at a time (re-running the SSRF check per hop, so no probe is ever bounced blind to an internal address): a stale tag is often an `http://` URL whose 301 hid the 404 behind it.
-
-When every advertised link is dead and nothing else answers, what happens next depends on *why*:
-
-- **Gone (404/410)** — report "no feed found", naming the dead address and pointing at Page Feed. Handing the link back produced the worst outcome available: the dialog says it found a feed, the add route then refuses it, and nothing appears in the feed list. The failure toast already offers a "Create page feed" button, so this lands the user where they need to be.
-- **Refused (403, 429, 5xx)** — still offered. The server declined to answer a HEAD; that is not proof the feed is absent, and reader's real GET may get through. This is the bot-walled case the last resort exists for.
-
-## Saving an article you already subscribe to
-
-An extension save used to create a `lectio:saved` entry unconditionally, so an article you already follow ended up as two posts — and they were never equivalent. The feed entry carries the publisher's tags (`entry_feed_tags`) and keeps updating; the capture carries a body the server often cannot fetch at all (Medium and treblezine refuse this host outright). Split apart you get an article with tags and no text beside one with text and no tags, which is exactly what happened to a Medium post on 2026-07-26 — before a "move to feed" onto the empty twin dropped its 44KB body entirely.
-
-`save_article` now takes an injected `find_existing_entry`. `main._find_subscribed_entry_for_url` resolves an article URL to an entry in another feed by **canonical link**, not id: the two rarely agree (Medium's guid is `/p/<hash>` while the URL is the long slug) but both carry the same `link`, and `get_dedupe_host_aliases` folds declared domain migrations in. A feed-provided entry wins the tie — it keeps updating and holds the tags a capture cannot supply.
-
-The merge keeps whichever body is longer, pinned through `entry_content_overrides` so the feed's thinner copy can't overwrite it on the next refresh, then applies the resurface a save already implies: star, un-archive, mark unread. A save that finds nothing behaves exactly as before. Without the hook — any caller that doesn't pass it — behavior is unchanged, which is what keeps the service testable in isolation.
-
-This is the primitive the cross-feed duplicate work (Plan #6) needs as well: a save that merges is a duplicate that never happens.
-
-## DeviantArt mature images: signed for minutes, cached for good
-
-DeviantArt serves images from wixmp with a signed JWT in the query string. Ordinary deviations are signed permanently; **mature** ones are signed for about **15 minutes**, and every variant (`content.src` and every thumb) shares the expiry — so there is no long-lived variant to prefer, and a stored URL is normally dead by the time the post is read, showing neither image nor thumbnail.
-
-Nothing scheduled can fix that: a nightly re-sign yields images dead a quarter of an hour later. The re-sign therefore happens **on open** — `_resign_expired_deviantart_images`, run in `get_entry_detail` just before the hotlink-proxy rewrite.
-
-What keeps it cheap is the proxy's byte cache, which was already most of the answer: `wixmp.com` is in `_HOTLINK_IMG_HOSTS`, so these images render through `/api/img`, and `_img_cache_key_url` strips `token`/`sig`/`exp` (`_IMG_CACHE_VOLATILE_PARAMS`) from the cache key. Once the bytes are cached under *any* valid token they answer for every later one. So the re-sign fires only when a token has already expired **and** the cache has no copy — one API call per image over its lifetime, not one per view — and a permanently-signed image (21,564 of 21,568 on the live library) never reaches the API at all. The fresh URL is persisted back onto the entry so the list thumbnail starts from it too.
-
-`scripts/refresh_expired_deviantart_images.py` remains as a manual catch-up over the same routine. Note it must use `get_deviantart_user_token()` rather than reading `deviantart_access_token` directly: DA access tokens last an hour, so any batch reading the stored value 401s on almost every run.
-
-## Combining feeds carries the offline captures
-
-`_migrate_curation` moves a removed feed's manual tags and stars onto the survivor, and now its **starred-archive rows** too (`rekey_archive`, which carries the asset links and refuses to clobber a capture the survivor already has). Without that the captures stayed keyed to a feed that was about to be deleted: the articles were fine, but their offline copies became unreachable and the Saved view rendered them as archive-only *orphans* — from the archive row's own stale `link`, which is how it surfaced, as a combined feed's articles still showing their old dead URLs. Measured on the live library 2026-07-25, past combines had stranded **85** of them; `scripts/repair_orphaned_archives.py` re-attached them (64 re-keyed, 3 where the stranded row was the *better* capture and replaced a thinner twin, 18 redundant drops, 14 links refreshed).
-
-Two subtleties the fix has to respect. The migration loop walks *curation*, not entries, so a capture on an entry carrying neither star nor tag is never visited — a sweep after the loop re-keys those, but only when the article exists on the survivor; synthesizing an entry purely to host a capture would put an uncurated row in the survivor, and the orphan view is already that capture's home. And the archived id set is read **once** up front, because the per-entry alternative opens an archive connection for every entry just to learn that most have nothing to move.
-
-## Entry sort window (Pub Old / Pub New)
-
-`reader` only sorts newest-first, so for large folders (`> PER_FEED_QUERY_THRESHOLD`
-feeds) `list_entries` fetches the sort window with a direct SQL query and then
-enriches only the surviving rows. Both directions order by
-`coalesce(published, first_updated)` so an entry that carries no `published`
-falls back to when the reader first saw it instead of sorting as NULL. Previously
-the ascending path ordered by raw `published`, and since SQLite sorts NULLs first
-under `ASC`, date-less imported entries filled the `LIMIT` window and were then
-re-dated to their (recent) import time — pushing genuinely old posts out of view.
-Imports set a real `published` at ingest where possible: the Inoreader parser
-(`_coerce_published`) falls back from the item's `published` to `crawlTimeMsec` /
-`timestampUsec`, so newly imported entries carry their true age.
-
-## Feed auto-taggers
-
-Three functions run at startup to apply strategy and display defaults without user action:
-
-- `_auto_tag_artwork_feeds()` — matches `artstation.com` and `deviantart.com` feed URLs → `strategy=artwork`.
-- `_auto_tag_webcomic_feeds()` — matches feeds in folders whose name contains "comic" → `strategy=webcomic`. Artwork wins if both conditions apply.
-- `_auto_tag_github_release_feeds()` — matches `github.com/*/releases.atom` URLs → `strategy=og_scrape` + `show_lead_image_as_thumb=0`. GitHub generates a unique social-preview card per release; thumbnails are suppressed because the card is contextual rather than a post image.
-
-All three skip feeds where `feed_lead_image_strategy.manual=1` (user has explicitly chosen a strategy in Feed Properties). To add a new tagger, follow the same pattern and register it in `lifespan()`.
-
-## Feed-provided tag suggestions (`entry_feed_tags`)
-
-**Feeds and Saved remember their sort separately**, and a remembered sort is only
-written by an *explicit* choice. Both halves were bugs:
-
-- One shared `sort_by`/`sort_dir` pair meant picking an order in Saved silently
-  re-sorted Feeds. They are different jobs — a publish-date backlog versus a
-  to-do pile — so `sort_setting_keys(star_only)` splits them. The unprefixed keys
-  stay Feeds' so existing installs keep the value they had.
-- The index used to re-save the remembered sort on **every** plain load, passing
-  it through `normalize_sort_by` first. So any stored value the normalizer did not
-  recognize was silently replaced by the default — the preference destroying
-  itself with nothing to show it had happened. Persisting only when the request
-  carries an explicit `sort_by` also gives node-specific defaults (Read Mode's
-  Inbox opens star-date-ordered) somewhere to live: applied without a URL param,
-  they cannot overwrite the scope's remembered order, so leaving the node
-  restores it.
-
-**`normalize_sort_by` keeps `starred` behind `allow_starred=True`.** It exists for
-Read Mode's Inbox, and blessing it globally let it reach the index, which persists
-what it is handed; the regular sort menu has no entry for `starred`, so nothing
-rendered as active and the toolbar showed "Published newest" while the list was
-ordered by star date. Reported as the Feed view reverting to "Pub new" after
-switching in and out of e-ink mode.
 
 **Boilerplate feed tags are suppressed by coverage, not by a blocklist.** A tag a
 feed puts on essentially every entry carries no per-entry signal and crowds out
@@ -2377,6 +2340,8 @@ The **caption** source-HTML fetch (`queue_source_html_fetch` → `fetch_entry_im
 
 - **Plugin verdicts now apply here too.** `LeadImagePlugin.source_score_adjustment` only ever fed the scorer, so `TinyviewPlugin`'s −200 for `assets.tinyview.com` (skeleton animation, wordmark, icons8 buttons) demoted those URLs for the lead image while leaving them first-class gallery entries. Anything scored at or below `_PLUGIN_CHROME_SCORE` is now skipped — a plugin scoring that low is calling a URL chrome, not merely ranking it lower.
 - **Duplicate filenames collapse** (`_drop_duplicate_basenames`). A server-rendered app often emits an image twice, at its real location and at a fallback path that 404s; tinyview ships each panel as both `/<comic>/<yyyy>/<mm>/<dd>/<slug>/IMG_*.jpeg` (200) and `/<comic>/IMG_*.jpeg` (404). Which is real can't be known without fetching, but it can be inferred — prefer the URL whose path carries the entry's own slug, since that is the copy filed under this post. Falls back to first-seen order, so sites without the pattern are untouched.
+
+**A plugin that suppresses everything is a claim about the feed, not just the page.** `WebtoonsPlugin` skipped source scraping *and* returned no fallback, on the stated belief that "the feed and og:image return the series thumbnail for every episode". Only half was true. An episode page's og:image really is the series thumbnail — byte-identical across episodes — but every Webtoons `<description>` carries that episode's own panel on the same CDN, distinct per episode on all nine subscribed feeds. The result was the series thumbnail on every strip, served from cache rows written before the plugin existed, while the real panel sat unused in the entry body. The plugin now reads the body like `BloggerPlugin` does, keeps `should_skip_source_lookup`, and narrows `should_bypass_cached_url` to URLs whose basename is `thumbnail.*` — so stale thumbnails are re-resolved and a good cached panel is left alone instead of being re-derived on every render.
 
 The strategy comparison cache (`feed_strategy_cache`) also stores `image_alt` and `image_title` per strategy so the Tuning tab can display them below each card without a live fetch.
 

@@ -583,19 +583,39 @@ class TumblrPlugin:
 
 @dataclass(frozen=True)
 class WebtoonsPlugin:
-    """Webtoons Canvas — the feed and og:image return the series thumbnail for
-    every episode.  Suppress image resolution entirely; there is no
-    episode-specific image accessible without authentication."""
+    """Webtoons — take the panel from the feed, never from the episode page.
+
+    An episode page's og:image is the *series* thumbnail: the same
+    ``.../thumbnail.jpg`` on every episode of a series (verified across two
+    False Knees episodes, which return byte-identical og:image URLs). So source
+    scraping stays off.
+
+    The feed is a different story. Every ``<description>`` carries that
+    episode's own panel on the same CDN — distinct per episode across all nine
+    subscribed Webtoons feeds, 6 of 6 unique on each — and it serves 200 to an
+    ordinary fetch. This plugin previously suppressed image resolution
+    altogether, on the belief that the feed only repeated the series thumbnail;
+    it does not, and the result was every episode showing the series thumbnail
+    (or nothing) while the real panel sat unused in the entry body."""
 
     _HOST: str = "webtoons.com"
+    _MEDIA_HOST: str = "pstatic.net"
 
     def _is_target(self, url: str) -> bool:
         return self._HOST in urlparse(url).netloc.lower()
 
+    @staticmethod
+    def _is_series_thumbnail(url: str) -> bool:
+        """A ``.../thumbnail.<ext>`` basename — the series-wide og:image."""
+        name = urlparse(url).path.rsplit("/", 1)[-1].lower()
+        return name.rsplit(".", 1)[0] == "thumbnail"
+
     def should_bypass_cached_url(self, *, entry_link: str, cached_url: str) -> bool:
-        # Any previously cached URL came from source scraping (series thumbnail).
-        # Always bypass so re-resolution runs and stores None.
-        return self._is_target(entry_link)
+        # Only the series thumbnail: a cached episode panel is the right answer
+        # and re-resolving it every render would be pure churn. Rows cached
+        # before this plugin learned to read the feed body are thumbnails, so
+        # they still get replaced.
+        return self._is_target(entry_link) and self._is_series_thumbnail(cached_url)
 
     def should_skip_source_lookup(self, *, entry_link: str) -> bool:
         return self._is_target(entry_link)
@@ -607,6 +627,18 @@ class WebtoonsPlugin:
         return 0
 
     def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None:
+        if not self._is_target(entry_link):
+            return None
+        for source in (content_html, summary):
+            if not isinstance(source, str):
+                continue
+            m = re.search(
+                r'src=["\']([^"\']*' + re.escape(self._MEDIA_HOST) + r'[^"\']+\.(?:png|jpe?g|gif|webp))["\']',
+                source,
+                re.IGNORECASE,
+            )
+            if m and not self._is_series_thumbnail(m.group(1)):
+                return html.unescape(m.group(1).strip())
         return None
 
 

@@ -577,3 +577,112 @@ class TestFreeCodeCampFeedRewrite:
     def test_non_news_path_unchanged(self):
         url = "https://www.freecodecamp.org/learn/"
         assert rewrite_known_site_url(url) == url
+
+
+class TestTapasDiscovery:
+    """Tapas advertises no <link rel=alternate> at all — its only alternate is
+    the mobile page, and the canonical link points at the latest *episode*. So
+    the series id has to come from the URL (numeric form) or the page body
+    (slug form), which is what the community userscripts do by hand."""
+
+    def test_numeric_series_url_is_a_pure_rewrite(self):
+        assert rewrite_known_site_url("https://tapas.io/series/217452") == \
+            "https://tapas.io/rss/series/217452"
+
+    def test_www_and_mobile_hosts(self):
+        for url in ("https://www.tapas.io/series/2007", "https://m.tapas.io/series/2007"):
+            assert rewrite_known_site_url(url) == "https://tapas.io/rss/series/2007"
+
+    def test_trailing_slash_and_case(self):
+        assert rewrite_known_site_url("https://Tapas.io/series/62967/") == \
+            "https://tapas.io/rss/series/62967"
+
+    def test_slug_url_is_left_for_the_body_extractor(self):
+        # No fetch here, so the rewriter must not invent an id from the slug.
+        url = "https://tapas.io/series/club_cryptid"
+        assert rewrite_known_site_url(url) == url
+
+    def test_feed_url_passes_through(self):
+        url = "https://tapas.io/rss/series/217452"
+        assert rewrite_known_site_url(url) == url
+
+    def test_episode_url_is_not_rewritten(self):
+        url = "https://tapas.io/episode/2294111"
+        assert rewrite_known_site_url(url) == url
+
+    def test_slug_page_resolves_through_the_body(self):
+        # Shape of the real page: a recommendation card's id appears in the
+        # markup before the page's own `seriesId:` script variable.
+        html = (
+            '<html><head><link rel="alternate" media="only screen and (max-width: 640px)"'
+            ' href="https://m.tapas.io/episode/2294111">'
+            '<link rel="canonical" href="https://tapas.io/episode/2294111"/></head>'
+            '<body><a class="card" data-series-id="96914">something else</a>'
+            '<script>var seriesId: 217452;</script></body></html>'
+        )
+        with patch("services.feed_discovery._guarded_get",
+                   return_value=_mock_response("https://tapas.io/series/club_cryptid", "text/html", html)):
+            with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
+                result = discover_feed_urls("https://tapas.io/series/club_cryptid")
+        assert result == ["https://tapas.io/rss/series/217452"]
+
+    def test_episode_page_falls_back_to_the_first_data_series_id(self):
+        # Episode pages carry no `seriesId:`; the first data-series-id is the
+        # episode's own series, the rest are recommendation cards.
+        html = (
+            '<div data-series-id="155459"><h1>FANGS</h1></div>'
+            '<a data-series-id="58981">recommended</a>'
+        )
+        with patch("services.feed_discovery._guarded_get",
+                   return_value=_mock_response("https://tapas.io/episode/1234567", "text/html", html)):
+            with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
+                result = discover_feed_urls("https://tapas.io/episode/1234567")
+        assert result == ["https://tapas.io/rss/series/155459"]
+
+    def test_a_tapas_page_with_no_id_falls_through(self):
+        html = "<html><body>nothing useful here</body></html>"
+        no_match = MagicMock()
+        no_match.is_success = False
+        with patch("services.feed_discovery._guarded_get",
+                   return_value=_mock_response("https://tapas.io/series/gone", "text/html", html)):
+            with patch("services.feed_discovery._guarded_head", return_value=no_match):
+                result = discover_feed_urls("https://tapas.io/series/gone")
+        assert result == []
+
+    def test_the_body_extractor_does_not_fire_on_other_hosts(self):
+        # data-series-id is a generic-looking attribute; it must not be read on
+        # a site that merely happens to use the same name.
+        html = '<div data-series-id="999">not tapas</div>'
+        no_match = MagicMock()
+        no_match.is_success = False
+        with patch("services.feed_discovery._guarded_get",
+                   return_value=_mock_response("https://example.com/series/x", "text/html", html)):
+            with patch("services.feed_discovery._guarded_head", return_value=no_match):
+                result = discover_feed_urls("https://example.com/series/x")
+        assert result == []
+
+    def test_an_advertised_feed_still_wins_over_the_body(self):
+        html = (
+            '<link rel="alternate" type="application/rss+xml" href="/real/feed.xml" />'
+            '<div data-series-id="217452"></div>'
+        )
+        with patch("services.feed_discovery._guarded_get",
+                   return_value=_mock_response("https://tapas.io/series/club_cryptid", "text/html", html)):
+            with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
+                result = discover_feed_urls("https://tapas.io/series/club_cryptid")
+        assert result == ["https://tapas.io/real/feed.xml"]
+
+    def test_the_dialog_preview_and_the_add_path_agree(self):
+        # probe_url previews what Add Feed shows; discover_feed_urls_ex is what
+        # the button actually subscribes. A body extractor wired into only one
+        # of them would promise one feed and subscribe another.
+        # Padded past 512 bytes: a shorter body trips probe_url's
+        # empty-response / bot-protection guard before discovery runs.
+        html = '<div data-series-id="217452"></div>' + "<p>episode</p>" * 60
+        url = "https://tapas.io/series/club_cryptid"
+        with patch("services.feed_discovery._guarded_get",
+                   return_value=_mock_response(url, "text/html", html)):
+            with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
+                preview = probe_url(url)
+                added = discover_feed_urls(url)
+        assert [f["url"] for f in preview["feeds"]] == added == ["https://tapas.io/rss/series/217452"]
