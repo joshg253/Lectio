@@ -324,6 +324,23 @@ archive rows, and `kept_feeds`. Two things to do, and the first matters more:
 2. **Sweep the backlog** once, behind the exclusions above. Bulk delete on live
    data, so it wants a go-ahead. The dev/localhost 11,250 are free.
 
+### Clearing the lead-image cache is not a repair — found 2026-08-08
+
+`clear_lead_image_cache` + `fetch_and_store_lead_images_for_feed` looks like the
+obvious way to re-derive a feed's thumbnails. It is not: the backfill loop
+deliberately visits only entries that are **unread, saved or manually tagged**,
+so clearing first leaves every *read* entry with no row at all and nothing ever
+comes back for it. Doing exactly that across the 15 Tapas feeds took them from
+33 correct / 54 wrong to 20 correct / **124 unresolved** — worse than before.
+
+The repair that works resolves per entry and stores the result directly
+(`_plugin_or_source_lead_image` + `store_entry_lead_image`), which reached all
+144. Worth remembering before the next "just clear it and let it rebuild".
+
+Two things that could follow from it, neither started: give the backfill an
+explicit "include read entries" mode for repair runs, or have
+`clear_lead_image_cache` refuse to clear rows the backfill will not revisit.
+
 ### Duplicate *feeds* are invisible to every scanner — measured 2026-08-08
 
 Two subscriptions to Sarah's Scribbles on Webtoons (`title_no=50260`, 20 entries;
