@@ -4,31 +4,32 @@ Open work only. Anything shipped lives in git history and, where it still
 explains why the code looks the way it does, in ARCHITECTURE.md.
 
 ## Now
-### The "database is locked" CI flake — source two still unexplained
+### The "database is locked" CI flake — SOLVED 2026-08-09
 
-Source one was found and fixed on 2026-08-08: `_queue_media_audio_scan` spawned a
-daemon writing the per-user meta DB, and `LECTIO_DISABLE_STARTUP_BACKFILL` only
-covered daemons started at *startup*. Now gated — the suite ends `2629 passed`
-with no `no such table: feed_media_scan` warning.
+Both sources found, and the diagnostics were the method: it never reproduced
+locally, so the evidence had to be collected inside the run that failed.
 
-**Source two has no explanation.** `test_saved_inbox_chunking` failed at fixture
-setup with no thread exception in the log, and it does not reproduce here: that
-file passes on repeat and the full suite passes every run. The leaked-handle
-theory was measured and **refuted** — 18 leaked SQLite fds with an autouse
-teardown, 18 without it, 5 across a full 2,629-test run, nowhere near any limit.
-The teardown was reverted rather than shipped, because a no-op carrying an
-authoritative comment about a refuted cause is worse than nothing. The same tree
-later passed with only a commit *message* changed, which confirms a flake and is
-not evidence of a fix.
+**Source one** — `_queue_media_audio_scan` spawned a daemon writing the per-user
+meta DB. `LECTIO_DISABLE_STARTUP_BACKFILL` covered daemons started at *startup*;
+that one is per request and slipped through. Gated 2026-08-08.
 
-**Nothing more to do until it fires again**, and when it does it now collects its
-own evidence: `pytest_exception_interact` in `tests/conftest.py` dumps live
-thread stacks, every open SQLite file, and a `BEGIN IMMEDIATE` probe per DB
-saying whether the lock is still held. Costs nothing on a green run.
+**Source two took the diagnostics to see.** The flake fired on PR #188 and the
+dump named it outright: the thread list held one `_run_in_user_context` thread
+inside `backfill_entry_list` → `_fetch_source_lead_image` →
+`is_safe_outbound_url` → `socket.getaddrinfo`, a DNS lookup, while the test's
+own fixture was opening the same per-user meta DB. The lock probe reported every
+file "writable now", which fits exactly: the daemon takes the DB, the fixture
+collides, and it is free again a moment later.
 
-Ruled out, so don't retry it: `-p no:randomly` is moot — **pytest-randomly is not
-installed** and there is no pytest config, so collection order is already
-deterministic. Whatever this is, it is timing, not ordering.
+**Rendering a post list spawns that daemon** — which is why it kept failing in
+tests that had nothing to do with the branch under review. Any test that renders
+a list could lose the race. Now behind the same switch as the other two.
+
+Worth keeping: the leaked-handle theory cost a day and was wrong. What worked
+was refusing to ship a no-op teardown carrying an authoritative comment about a
+refuted cause, and instead making the next failure explain itself. The
+diagnostics stay for the next one.
+
 ### Parked, deliberately
 
 - **makeuseof re-fetch returns white images.** Seen once during testing
