@@ -1729,8 +1729,8 @@ _SECURITY_HEADERS_ENABLED = os.getenv("LECTIO_SECURITY_HEADERS", "0") == "1"
 # Paths that are always public (no login required)
 _AUTH_EXEMPT_PREFIXES = (
     "/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save",
-    "/api/bookmarklet/save", "/dev/feeds/", "/fever", "/greader/", "/websub/",
-    "/sw.js",
+    "/api/bookmarklet/save", "/dev/feeds/", "/fever", "/greader/", "/v1/",
+    "/websub/", "/sw.js",
 )
 
 manual_refresh_lock = threading.Lock()
@@ -2445,7 +2445,10 @@ class _TenancyMiddleware:
 # Paths exempt from CSRF validation. /login is the auth gate itself (rate-
 # limited separately). /static and /healthz are GET-only anyway, but listing
 # explicitly documents intent.
-_CSRF_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save", "/api/bookmarklet/save", "/fever", "/greader/", "/websub/")
+_CSRF_EXEMPT_PREFIXES = (
+    "/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save",
+    "/api/bookmarklet/save", "/fever", "/greader/", "/v1/", "/websub/",
+)
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _CSRF_SESSION_KEY = "csrf_token"
 _CSRF_HEADER_NAME = "x-csrf-token"
