@@ -628,3 +628,39 @@ class TestDuplicateScanGroupsAcrossSchemes:
         import json
         dup = json.loads(main.get_feed_duplicates().body)
         assert ("https://slash.test/feed", "https://slash.test/feed/") in self._keys(dup)
+
+
+class TestRemovalLeavesNoGhostInTheTree:
+    """Removing a feed deleted it from reader but left `folder_feeds` pointing
+    at it, so Settings → Feeds went on listing a subscription that no longer
+    exists — rendered from the folder row alone, with a failing badge. The 29
+    article-URL husks rehomed to Saved Articles on 2026-08-06 all came back as
+    ghosts this way and were reported as "non-feeds I thought we cleared out".
+    """
+
+    def _folder_rows(self, url):
+        with main.get_meta_connection() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM folder_feeds WHERE feed_url = ?", (url,)
+            ).fetchone()[0]
+
+    def test_purging_a_feed_removes_its_folder_row(self, env):
+        _add_feed_to_folder(FEED, _root_folder_id())
+        assert self._folder_rows(FEED) == 1
+        with main.get_reader() as reader:
+            with main.get_meta_connection() as conn:
+                main.purge_orphaned_feed(reader, conn, FEED, archive_pending=False)
+                conn.commit()
+            assert reader.get_feed(FEED, None) is None
+        assert self._folder_rows(FEED) == 0, "a folder row with no feed is a ghost in the tree"
+
+    def test_other_feeds_keep_their_folder_rows(self, env):
+        root = _root_folder_id()
+        _add_feed_to_folder(FEED, root)
+        _add_feed_to_folder(FEED2, root)
+        with main.get_reader() as reader:
+            with main.get_meta_connection() as conn:
+                main.purge_orphaned_feed(reader, conn, FEED, archive_pending=False)
+                conn.commit()
+        assert self._folder_rows(FEED) == 0
+        assert self._folder_rows(FEED2) == 1

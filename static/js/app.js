@@ -11168,7 +11168,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           panel.hidden = !isActive;
           panel.style.display = isActive ? 'flex' : 'none';
         });
-        if (tabName === 'feeds') void window._loadLazySettingsPanel(document.getElementById('settings-folders-lazy'));
+        if (tabName === 'feeds') void window._loadLazySettingsPanel(document.getElementById('settings-folders-lazy'))
+          .then(() => window.syncFeedSelectionHeader?.());
         if (tabName === 'stats') void loadStatsData();
         if (tabName === 'automation') {
           window._hlLoadFalseMatches?.();
@@ -12498,6 +12499,9 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           if (showFolder) anyVisible = true;
           if (toggle) toggle.setAttribute('aria-expanded', String(anyFeedMatch));
         });
+        // The match set just changed, so the header checkbox's state and its
+        // "Select all N matching feeds" tooltip have to change with it.
+        window.syncFeedSelectionHeader?.();
         const panel = table.parentElement;
         let empty = panel.querySelector('.feeds-folder-search-empty');
         if (q && !anyVisible) {
@@ -12935,8 +12939,47 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
 
       // Listen for checkbox changes anywhere in the feeds tab (covers dynamically
       // shown rows after folder expand).
+      // `hidden` on a feed row means two different things: the folder is
+      // collapsed (a rendering state nobody chose per-feed) or the row was
+      // filtered out (a choice the user just made). Select-all must respect the
+      // second and ignore the first, so visibility only counts while the filter
+      // box has something in it.
+      function feedFilterActive() {
+        const box = document.getElementById('feeds-folder-search-input');
+        return !!(box && box.value.trim());
+      }
+      function selectableFeedRows(folderId) {
+        const filtering = feedFilterActive();
+        const sel = folderId == null
+          ? '.settings-feed-row'
+          : `.settings-feed-row[data-folder-feeds="${folderId}"]`;
+        return [...feedsTab.querySelectorAll(sel)].filter(r => !(filtering && r.hidden));
+      }
+
+      // Header checkbox: every feed the filter is showing, across folders. The
+      // per-folder boxes only ever reach their own folder, so a search spanning
+      // several of them ("best" hitting four folders) had no way to select what
+      // was searched for — you had to tick each folder in turn.
+      window.syncFeedSelectionHeader = () => syncGlobalCheck();
+      function syncGlobalCheck() {
+        const cb = document.getElementById('sfc-check-all-global');
+        if (!cb) return;
+        const rows = selectableFeedRows(null);
+        const boxes = rows.map(r => r.querySelector('.sfc-check')).filter(Boolean);
+        const checked = boxes.filter(b => b.checked).length;
+        cb.checked = boxes.length > 0 && checked === boxes.length;
+        cb.indeterminate = checked > 0 && checked < boxes.length;
+        cb.disabled = boxes.length === 0;
+        // The column is 2rem wide, so the set is stated in the tooltip rather
+        // than a visible label; the sfc toolbar restates it after the click.
+        const what = feedFilterActive() ? 'matching feeds' : 'feeds';
+        cb.title = `Select all ${boxes.length} ${what}`;
+        cb.setAttribute('aria-label', cb.title);
+      }
+
       function syncFolderCheck(folderId) {
-        const boxes = [...feedsTab.querySelectorAll(`.settings-feed-row[data-folder-feeds="${folderId}"] .sfc-check`)];
+        const boxes = selectableFeedRows(folderId)
+          .map(r => r.querySelector('.sfc-check')).filter(Boolean);
         const folderCb = feedsTab.querySelector(`.sfc-check-all[data-folder-check="${folderId}"]`);
         if (!folderCb) return;
         const checked = boxes.filter(b => b.checked).length;
@@ -12945,19 +12988,40 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       }
 
       feedsTab.addEventListener('change', (e) => {
+        if (e.target.id === 'sfc-check-all-global') {
+          const on = e.target.checked;
+          selectableFeedRows(null).forEach(r => {
+            const cb = r.querySelector('.sfc-check');
+            if (cb) cb.checked = on;
+          });
+          e.target.indeterminate = false;
+          new Set([...feedsTab.querySelectorAll('.settings-feed-row')]
+            .map(r => r.dataset.folderFeeds).filter(Boolean)).forEach(syncFolderCheck);
+          updateToolbar();
+          panel.hidden = true;
+          return;
+        }
         if (e.target.classList.contains('sfc-check-all')) {
           // Folder-level select-all: (un)check every feed in that folder, even
-          // when the folder is collapsed (the checkboxes exist in the DOM).
+          // when the folder is collapsed (the checkboxes exist in the DOM) —
+          // but never a feed the filter has hidden. Selecting rows the user
+          // cannot see is how a bulk unsubscribe hits feeds nobody chose;
+          // reported after filtering to a few Slickdeals feeds and finding
+          // "select all" had taken the whole library.
           const fid = e.target.dataset.folderCheck;
-          feedsTab.querySelectorAll(`.settings-feed-row[data-folder-feeds="${fid}"] .sfc-check`)
-            .forEach(cb => { cb.checked = e.target.checked; });
+          selectableFeedRows(fid).forEach(r => {
+            const cb = r.querySelector('.sfc-check');
+            if (cb) cb.checked = e.target.checked;
+          });
           e.target.indeterminate = false;
+          syncGlobalCheck();
           updateToolbar();
           panel.hidden = true;
         } else if (e.target.classList.contains('sfc-check')) {
           updateToolbar();
           const row = e.target.closest('.settings-feed-row');
           if (row) syncFolderCheck(row.dataset.folderFeeds);
+          syncGlobalCheck();
           // Collapse the panel when selection changes so it does not show stale results.
           panel.hidden = true;
         }

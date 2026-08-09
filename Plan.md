@@ -4,48 +4,32 @@ Open work only. Anything shipped lives in git history and, where it still
 explains why the code looks the way it does, in ARCHITECTURE.md.
 
 ## Now
-### ⏰ Check on or after 2026-08-13: did the husk feeds come back?
+### The "database is locked" CI flake — SOLVED 2026-08-09
 
-29 article URLs had been subscribed as feeds and were rehomed 2026-08-06. The
-Add-Feed door they *could* have come through is now shut (a page that reads fine
-but has no feed can no longer be force-subscribed), **but that was never proven
-to be the door they used** — `create_feed` already refused that shape, so they
-arrived by some other route: an older version, an OPML import, or the extension.
+Both sources found, and the diagnostics were the method: it never reproduced
+locally, so the evidence had to be collected inside the run that failed.
 
-One command settles it:
+**Source one** — `_queue_media_audio_scan` spawned a daemon writing the per-user
+meta DB. `LECTIO_DISABLE_STARTUP_BACKFILL` covered daemons started at *startup*;
+that one is per request and slipped through. Gated 2026-08-08.
 
-    uv run python scripts/rehome_article_feeds.py     # dry run, writes nothing
+**Source two took the diagnostics to see.** The flake fired on PR #188 and the
+dump named it outright: the thread list held one `_run_in_user_context` thread
+inside `backfill_entry_list` → `_fetch_source_lead_image` →
+`is_safe_outbound_url` → `socket.getaddrinfo`, a DNS lookup, while the test's
+own fixture was opening the same per-user meta DB. The lock probe reported every
+file "writable now", which fits exactly: the daemon takes the DB, the fixture
+collides, and it is free again a moment later.
 
-**Zero** means the door is shut and this reminder can be deleted. **Anything
-above zero means there is a second door**, and the URLs it reports are the
-evidence for finding it — check what they have in common (host, import batch,
-whether they carry captures from the extension).
+**Rendering a post list spawns that daemon** — which is why it kept failing in
+tests that had nothing to do with the branch under review. Any test that renders
+a list could lose the race. Now behind the same switch as the other two.
 
-### The "database is locked" CI flake — source two still unexplained
+Worth keeping: the leaked-handle theory cost a day and was wrong. What worked
+was refusing to ship a no-op teardown carrying an authoritative comment about a
+refuted cause, and instead making the next failure explain itself. The
+diagnostics stay for the next one.
 
-Source one was found and fixed on 2026-08-08: `_queue_media_audio_scan` spawned a
-daemon writing the per-user meta DB, and `LECTIO_DISABLE_STARTUP_BACKFILL` only
-covered daemons started at *startup*. Now gated — the suite ends `2629 passed`
-with no `no such table: feed_media_scan` warning.
-
-**Source two has no explanation.** `test_saved_inbox_chunking` failed at fixture
-setup with no thread exception in the log, and it does not reproduce here: that
-file passes on repeat and the full suite passes every run. The leaked-handle
-theory was measured and **refuted** — 18 leaked SQLite fds with an autouse
-teardown, 18 without it, 5 across a full 2,629-test run, nowhere near any limit.
-The teardown was reverted rather than shipped, because a no-op carrying an
-authoritative comment about a refuted cause is worse than nothing. The same tree
-later passed with only a commit *message* changed, which confirms a flake and is
-not evidence of a fix.
-
-**Nothing more to do until it fires again**, and when it does it now collects its
-own evidence: `pytest_exception_interact` in `tests/conftest.py` dumps live
-thread stacks, every open SQLite file, and a `BEGIN IMMEDIATE` probe per DB
-saying whether the lock is still held. Costs nothing on a green run.
-
-Ruled out, so don't retry it: `-p no:randomly` is moot — **pytest-randomly is not
-installed** and there is no pytest config, so collection order is already
-deterministic. Whatever this is, it is timing, not ordering.
 ### Parked, deliberately
 
 - **makeuseof re-fetch returns white images.** Seen once during testing
@@ -285,44 +269,24 @@ articles"). What remains:
 - **166 already-converted stars** — tagged entries starred by that backfill
   before it was fixed. Indistinguishable from a genuine star-and-tag, so they
   cannot be surgically reverted; the unstar-tagged pass is what removes them.
-### Removing a feed leaks its per-feed meta rows — measured 2026-08-08
+### A repair run through `docker compose exec` needs a restart — 2026-08-08
 
-Noticed after combining the two Sarah's Scribbles Webtoons feeds. The combine
-itself was correct — the removed feed carried no stars, tags or archive rows, so
-its single uncurated 2021 episode was rightly dropped — but it left a row behind
-in `entry_lead_images`, and that turns out to be the normal outcome.
+Worth stating once, because it produced a run of "you said that was fixed and I
+still see it". An exec is a **different process** from uvicorn. Writes land in
+the shared SQLite files and are real, but the server's in-process caches never
+learn about them:
 
-**The rename path and the removal path disagree.** `change_feed_url` carries a
-15-table `_feed_url_tables` list (archive, folders, saved, read state, history,
-lead images, feed tags, prefs, …). `purge_orphaned_feed` deletes the reader feed
-and cleans exactly two tables: `kept_feeds` and `feeds_needing_replacement`.
-Everything else keyed on `feed_url` stays.
+- `_meta_structure_cache` (folder → feed map, backs the sidebar and Settings →
+  Feeds). Calling `invalidate_meta_structure_cache()` inside the exec clears
+  *that* process's copy and does nothing to the server. 29 ghost folder rows
+  were deleted from the DB and kept rendering until the container restarted.
+- `LeadImageService._cache` — a plain dict, populated lazily per
+  `(feed_url, entry_id)`. The server can serve a stale thumbnail *and* write its
+  own value back over the repair.
 
-Accumulated on the live library, `entry_lead_images` alone:
-
-| | rows | feeds |
-|---|---:|---:|
-| on feeds reader no longer has | **25,504** | 371 |
-| …of those, feeds that still have **archive** rows | **1,923** | 38 |
-| …dev/localhost test feeds | 11,250 | 6 |
-| …genuinely dead | 12,331 | 327 |
-
-**The middle row is the trap, and it is why this is not a one-line DELETE.** The
-Saved view renders archive orphans — entries whose feed is gone but whose capture
-survives — so 1,923 of those rows are still displayed. `kept_feeds` is a second
-exclusion: it is empty today, which makes "not in reader" *look* safe, but an
-unsubscribe-with-keep would put rows there and the naive sweep would then blank
-thumbnails in the Kept view.
-
-So a safe sweep excludes three sets, not one: feeds reader still has, feeds with
-archive rows, and `kept_feeds`. Two things to do, and the first matters more:
-
-1. **Fix the leak** — have feed removal reuse the same table list the rename path
-   already maintains, minus the tables an archive orphan still needs. Combine no
-   longer contributes: it re-keys each entry's meta rows onto the survivor
-   (`_rekey_entry_meta`). Plain unsubscribe still leaks.
-2. **Sweep the backlog** once, behind the exclusions above. Bulk delete on live
-   data, so it wants a go-ahead. The dev/localhost 11,250 are free.
+So: restart after any out-of-band repair, then verify. Checked while chasing
+this — there is exactly one container and one uvicorn worker (no `--workers`),
+so this is only ever staleness, never a second instance.
 
 ### Clearing the lead-image cache is not a repair — found 2026-08-08
 
@@ -341,31 +305,54 @@ Two things that could follow from it, neither started: give the backfill an
 explicit "include read entries" mode for repair runs, or have
 `clear_lead_image_cache` refuse to clear rows the backfill will not revisit.
 
-### Duplicate *feeds* are invisible to every scanner — measured 2026-08-08
+### The feeds filter matches substrings inside opaque ids — 2026-08-09
 
-Two subscriptions to Sarah's Scribbles on Webtoons (`title_no=50260`, 20 entries;
-`title_no=677113`, 1 entry from 2021) are plainly the same comic, and nothing
-finds them. `get_feed_duplicates` groups by `normalize_feed_url`, so it only ever
-sees slash and format variants of **one address**; two different `title_no`
-values never group. The entry-level scans cannot help either — measured, the two
-feeds share **zero** titles and **zero** links, because 677113 only ever had one
-episode and it is not in the other's window.
+Searching `htm` in Settings → Feeds returned five feeds and **none of them were
+what the search meant**: `html5hive.org`, `lostnig`**htm**`are.com`, two YouTube
+channel ids that happen to contain the letters
+(`…UCFD2HkPKmPBBAEu-gih`**hTm**`A`), and a real RSS feed living at a `.html`
+path. `applyFolderFilter` does a plain `includes()` over the whole URL, so a
+short query lands inside domains and — worse — inside opaque query-string
+values, where a match can never be meaningful.
 
-What does identify them is the feed **title**. Measured across the live library
-(2,886 feeds):
+Two of five hits were channel-id noise. The fix is to match on host and path and
+ignore query-string *values* (keeping their keys), which kills the channel-id
+class without losing anything real. Worth doing while the filter is fresh: it is
+also the surface the new header select-all acts on, so noise in the match set is
+noise in what gets selected.
 
-| signal | groups | feeds covered | verdict |
-|---|---|---|---|
-| same host + path, differing query only | 10 | **740** | useless — almost all YouTube `videos.xml?channel_id=…` |
+### Find duplicate feeds by title — 32 groups, 72 feeds
+
+The scheme-insensitive grouping shipped 2026-08-08 catches URL variants of one
+address. It cannot catch **the same publication subscribed under two different
+addresses**, which is the case that actually recurs: two Webtoons `title_no`
+values for one comic, a Tumblr and a Tapas copy of Cryptid Club. The entry-level
+scans cannot reach it either: the two Sarah's Scribbles Webtoons feeds shared
+**zero** titles and **zero** links, because the second only ever had one episode
+and it was not in the other's window. Measured across 2,886 feeds, feed **title**
+is the only signal that finds them:
+
+| signal | groups | feeds | verdict |
+|---|---:|---:|---|
+| same host + path, differing query | 10 | 740 | useless — nearly all YouTube `videos.xml?channel_id=…` |
 | **same feed title** | **32** | **72** | a real, reviewable list |
 
-The title groups are mostly genuine: `sarah's scribbles ×3`, `cryptid club ×2`,
-`fantasyanime ×3`, `nine inch nails ×3`, and 15 same-host pairs. The obvious
-guard is a generic-title floor — `news ×7` is 7 unrelated sites, not a duplicate
-— plus keeping it advisory: a same-title pair can legitimately be a site's blog
-and its podcast. Nothing should be pre-checked, per the usual rule.
+Mostly genuine: `sarah's scribbles ×3`, `cryptid club ×2`, `fantasyanime ×3`,
+`nine inch nails ×3`, plus 15 same-host pairs. Needs a generic-title floor —
+`news ×7` is seven unrelated sites — and it stays advisory, because a same-title
+pair can legitimately be a site's blog and its podcast. Nothing pre-checked, per
+the usual rule. A third tier in the Dupes tab.
 
-Worth building as a third tier in the Dupes tab. Not started.
+### Characterize the 259 failing feeds
+
+9% of the library errors on every refresh cycle and nobody has looked at the
+shape of it. The useful split is dead (host gone, 404/410 forever) vs bot-walled
+(403 that a browser identity or a different route might get past) vs moved (a
+redirect or a discoverable replacement), because each wants a different action —
+unsubscribe, force-subscribe, or Change URL. Two of them turned out to be dead
+`tapastic.com` husks duplicating live feeds, which suggests the pile has other
+easy wins in it. Nothing here is urgent; it is a measurement job first, and the
+measurement is what decides whether any of it is worth automating.
 
 ### Cross-feed duplicate scan — the dupes you can actually feel
 

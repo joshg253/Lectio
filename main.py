@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import collections
 import base64
+import contextlib
 import hashlib
 import html
 import io
@@ -9569,25 +9570,50 @@ def get_folder_properties(folder_id: int) -> dict:
     unread_articles = 0
     feed_stats: dict[str, dict] = {}
 
+    # Aggregate in SQL instead of hydrating every entry. This used to loop
+    # `reader.get_entries(feed=url)` and count in Python, which on the Deals
+    # folder — 17 feeds, 31,843 entries — made Folder Properties take **74
+    # seconds**. Nothing on this dialog needs an Entry object: only a count, an
+    # unread count, and the oldest date per feed. (`newest` was computed the
+    # same expensive way and never read.)
+    #
+    # `coalesce(published, first_updated)` is the expression the entry sort
+    # window already uses, for the same reason: an entry with no published date
+    # should fall back to when reader first saw it rather than sort as NULL.
+    # The trade is that `oldest` no longer honours per-entry date overrides,
+    # and it feeds only the articles-per-week estimate below.
+    def _as_utc(raw) -> datetime | None:
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(raw))
+        except ValueError:
+            return None
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    urls = sorted(feed_urls)
     with get_reader() as reader:
-        for url in feed_urls:
-            for entry in reader.get_entries(feed=url):
-                total_articles += 1
-                if not entry.read:
-                    unread_articles += 1
-                fs = feed_stats.setdefault(url, {
-                    "title": None,
-                    "count": 0,
-                    "oldest": None,
-                    "newest": None,
-                })
-                fs["count"] += 1
-                published = entry_effective_date(entry)
-                if published:
-                    if fs["oldest"] is None or published < fs["oldest"]:
-                        fs["oldest"] = published
-                    if fs["newest"] is None or published > fs["newest"]:
-                        fs["newest"] = published
+        db = reader._storage.get_db()
+        # Chunked: the root folder resolves to every feed in the library, well
+        # past SQLite's bound-variable limit.
+        for start in range(0, len(urls), 900):
+            chunk = urls[start:start + 900]
+            placeholders = ",".join("?" * len(chunk))
+            rows = db.execute(
+                f"""
+                SELECT feed, COUNT(*), SUM(CASE WHEN read THEN 0 ELSE 1 END),
+                       MIN(COALESCE(published, first_updated))
+                FROM entries WHERE feed IN ({placeholders}) GROUP BY feed
+                """,
+                chunk,
+            ).fetchall()
+            for feed_url_row, count, unread, oldest in rows:
+                count = int(count or 0)
+                total_articles += count
+                unread_articles += int(unread or 0)
+                feed_stats[str(feed_url_row)] = {
+                    "title": None, "count": count, "oldest": _as_utc(oldest),
+                }
 
         for url in list(feed_stats):
             feed_obj = reader.get_feed(url, None)
@@ -16242,6 +16268,96 @@ _ENTRY_META_TABLES = (
 )
 
 
+# Per-entry meta a removed feed leaves behind. Cleaned only for entries with no
+# surviving capture — see _purge_dead_entry_meta.
+#
+# `read_history` is deliberately NOT here. It is a log of what you read, not
+# state belonging to a subscription; unsubscribing should not rewrite your
+# history. Neither is `saved_entries`, which the star/keep paths own.
+_DEAD_ENTRY_META_TABLES = (
+    "entry_lead_images",
+    "entry_feed_tags",
+    "entry_content_edits",
+    "entry_content_overrides",
+    "entry_date_overrides",
+    "entry_link_overrides",
+    "entry_title_overrides",
+    "entry_media_audio",
+    "entry_media_video",
+    "entry_read_state",
+    "archived_entries",
+)
+
+
+def _purge_dead_entry_meta(conn: sqlite3.Connection, feed_url: str) -> int:
+    """Drop per-entry meta for a removed feed's entries that are really gone.
+
+    Feed removal cleaned two marker tables and left everything keyed on
+    `(feed_url, entry_id)` behind: 25,504 `entry_lead_images` rows had piled up
+    across 371 removed feeds.
+
+    **A capture can outlive its feed**, and that is what makes this a per-entry
+    question rather than a `DELETE ... WHERE feed_url = ?`. The Saved view
+    renders those archive orphans, and it reads their thumbnail and any
+    hand-made corrections from these very tables — 1,923 of the orphaned rows
+    were still being displayed. So entries with a surviving `archived_entry` row
+    keep their meta; only the rest is dropped.
+
+    Returns the number of rows deleted.
+    """
+    try:
+        with archive_conn() as _ac:
+            captured = {
+                str(r[0]) for r in _ac.execute(
+                    "SELECT entry_id FROM archived_entry WHERE feed_url = ?", (feed_url,)
+                )
+            }
+    except sqlite3.Error:
+        # Cannot prove what is still captured, so delete nothing. Leaking rows
+        # is recoverable; blanking a Saved orphan's thumbnail is not.
+        LOGGER.warning("[purge] archive unreadable; keeping entry meta for %s", feed_url)
+        return 0
+
+    deleted = 0
+    if not captured:
+        for table in _DEAD_ENTRY_META_TABLES:
+            try:
+                cur = conn.execute(f"DELETE FROM {table} WHERE feed_url = ?", (feed_url,))
+                deleted += cur.rowcount or 0
+            except sqlite3.Error:
+                LOGGER.debug("[purge] meta cleanup skipped for %s", table, exc_info=True)
+        return deleted
+
+    # The captured set goes in a temp table rather than a bound `NOT IN` list.
+    # A feed can hold thousands of captures, past SQLite's variable limit, and
+    # chunking a NOT IN is actively wrong: each chunk would delete the captures
+    # named in every *other* chunk.
+    try:
+        conn.execute("CREATE TEMP TABLE IF NOT EXISTS _purge_captured (entry_id TEXT PRIMARY KEY)")
+        conn.execute("DELETE FROM _purge_captured")
+        conn.executemany(
+            "INSERT OR IGNORE INTO _purge_captured (entry_id) VALUES (?)",
+            [(eid,) for eid in captured],
+        )
+    except sqlite3.Error:
+        LOGGER.warning("[purge] could not stage captured ids; keeping entry meta for %s", feed_url)
+        return 0
+
+    for table in _DEAD_ENTRY_META_TABLES:
+        try:
+            cur = conn.execute(
+                f"DELETE FROM {table} WHERE feed_url = ?"
+                " AND entry_id NOT IN (SELECT entry_id FROM _purge_captured)",
+                (feed_url,),
+            )
+            deleted += cur.rowcount or 0
+        except sqlite3.Error:
+            LOGGER.debug("[purge] meta cleanup skipped for %s", table, exc_info=True)
+    with contextlib.suppress(sqlite3.Error):
+        conn.execute("DROP TABLE IF EXISTS _purge_captured")
+    return deleted
+
+
 def _rekey_entry_meta(conn: sqlite3.Connection, from_feed: str, from_id: str,
                       to_feed: str, to_id: str) -> None:
     """Repoint one entry's meta rows at its new (feed_url, entry_id).
@@ -16752,12 +16868,32 @@ def purge_orphaned_feed(
     except Exception:  # noqa: BLE001
         LOGGER.warning("[purge] entry_feed_tags cleanup failed for %s", feed_url)
 
-    # Drop any kept-feed / needs-replacement markers for a feed being removed.
+    # Drop any kept-feed / needs-replacement markers for a feed being removed,
+    # and its folder membership.
+    #
+    # The folder row is the one users actually see leak. Removing a feed deletes
+    # it from reader but left `folder_feeds` pointing at it, so Settings → Feeds
+    # went on listing a subscription that no longer exists — rendered from the
+    # folder row alone, with a failing badge, indistinguishable from a real dead
+    # feed. The 29 article-URL husks rehomed to Saved Articles on 2026-08-06 all
+    # came back as ghosts this way and were reported as "non-feeds I thought we
+    # cleared out". Callers that manage folders themselves (the dedupe route,
+    # `_migrate_curation`'s combine) already delete the row first; this is
+    # idempotent, and it is the backstop for every caller that does not.
+    #
+    # Safe unconditionally: an unsubscribe-with-keep is defined as leaving the
+    # tree — its curated items stay reachable through the Kept view, which does
+    # not read folder_feeds.
     try:
         conn.execute("DELETE FROM kept_feeds WHERE feed_url = ?", (feed_url,))
         conn.execute("DELETE FROM feeds_needing_replacement WHERE feed_url = ?", (feed_url,))
+        conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (feed_url,))
     except Exception:  # noqa: BLE001
-        LOGGER.warning("[purge] kept_feeds/needs_replacement cleanup failed for %s", feed_url)
+        LOGGER.warning("[purge] kept_feeds/needs_replacement/folder cleanup failed for %s", feed_url)
+
+    _dead_meta = _purge_dead_entry_meta(conn, feed_url)
+    if _dead_meta:
+        LOGGER.info("[purge] dropped %d dead per-entry meta row(s) for %s", _dead_meta, feed_url)
 
     # Step 4 — WebSub unsubscribe (best-effort; websub_service may be None).
     if websub_service:
