@@ -285,6 +285,32 @@ articles"). What remains:
 - **166 already-converted stars** — tagged entries starred by that backfill
   before it was fixed. Indistinguishable from a genuine star-and-tag, so they
   cannot be surgically reverted; the unstar-tagged pass is what removes them.
+### Duplicate *feeds* are invisible to every scanner — measured 2026-08-08
+
+Two subscriptions to Sarah's Scribbles on Webtoons (`title_no=50260`, 20 entries;
+`title_no=677113`, 1 entry from 2021) are plainly the same comic, and nothing
+finds them. `get_feed_duplicates` groups by `normalize_feed_url`, so it only ever
+sees slash and format variants of **one address**; two different `title_no`
+values never group. The entry-level scans cannot help either — measured, the two
+feeds share **zero** titles and **zero** links, because 677113 only ever had one
+episode and it is not in the other's window.
+
+What does identify them is the feed **title**. Measured across the live library
+(2,886 feeds):
+
+| signal | groups | feeds covered | verdict |
+|---|---|---|---|
+| same host + path, differing query only | 10 | **740** | useless — almost all YouTube `videos.xml?channel_id=…` |
+| **same feed title** | **32** | **72** | a real, reviewable list |
+
+The title groups are mostly genuine: `sarah's scribbles ×3`, `cryptid club ×2`,
+`fantasyanime ×3`, `nine inch nails ×3`, and 15 same-host pairs. The obvious
+guard is a generic-title floor — `news ×7` is 7 unrelated sites, not a duplicate
+— plus keeping it advisory: a same-title pair can legitimately be a site's blog
+and its podcast. Nothing should be pre-checked, per the usual rule.
+
+Worth building as a third tier in the Dupes tab. Not started.
+
 ### Cross-feed duplicate scan — the dupes you can actually feel
 
 **RE-MEASURED 2026-07-22 — #4 collapsed almost all of this, exactly as predicted.

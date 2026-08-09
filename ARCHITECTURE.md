@@ -2341,7 +2341,36 @@ The **caption** source-HTML fetch (`queue_source_html_fetch` → `fetch_entry_im
 - **Plugin verdicts now apply here too.** `LeadImagePlugin.source_score_adjustment` only ever fed the scorer, so `TinyviewPlugin`'s −200 for `assets.tinyview.com` (skeleton animation, wordmark, icons8 buttons) demoted those URLs for the lead image while leaving them first-class gallery entries. Anything scored at or below `_PLUGIN_CHROME_SCORE` is now skipped — a plugin scoring that low is calling a URL chrome, not merely ranking it lower.
 - **Duplicate filenames collapse** (`_drop_duplicate_basenames`). A server-rendered app often emits an image twice, at its real location and at a fallback path that 404s; tinyview ships each panel as both `/<comic>/<yyyy>/<mm>/<dd>/<slug>/IMG_*.jpeg` (200) and `/<comic>/IMG_*.jpeg` (404). Which is real can't be known without fetching, but it can be inferred — prefer the URL whose path carries the entry's own slug, since that is the copy filed under this post. Falls back to first-seen order, so sites without the pattern are untouched.
 
+**A plugin verdict is only as good as the paths that honor it.**
+`should_skip_source_lookup` was consulted on 3 of the 12 `_fetch_source_lead_image`
+call sites, and the storing paths in `fetch_and_store_lead_images_for_feed` were
+not among them — so a plugin-owned host could resolve correctly on the render
+path and then be overwritten by a background revalidation that scraped the page
+anyway. Webtoons episodes went back to the series thumbnail hours after the
+plugin was fixed, which is how this surfaced. Storing paths now go through
+`_plugin_or_source_lead_image`: the plugin's own answer wins, a plugin that
+forbids scraping gets no scrape, and a forbidding plugin with no answer yields
+NULL rather than a scraped one. The old code stored NULL outright for any
+skip-source host, which blanked panels the plugin could have named.
+
+**Name heuristics must not run against machine-generated filenames.**
+`_AD_URL_PATTERNS`'s `[-_]ad[0-9]` exists for `Cert-ad1.png` and cannot tell it
+from `-ad27-` inside `ff52deff-c6a8-448d-ad27-a3c3d14c719c.jpg` — two Tapas
+panels were rejected as ad slots that way. The wixmp host-trust a few lines
+above was added for exactly this class ("ad87 in a UUID") one host at a time;
+`_UUID_BASENAME_RE` generalizes it. Only the *filename* half is exempted: the
+pattern does two jobs, and `/ads/` still names a directory, so a UUID sitting in
+an ads directory is still an ad. Path-, host- and dimension-based checks are
+untouched.
+
 **A plugin that suppresses everything is a claim about the feed, not just the page.** `WebtoonsPlugin` skipped source scraping *and* returned no fallback, on the stated belief that "the feed and og:image return the series thumbnail for every episode". Only half was true. An episode page's og:image really is the series thumbnail — byte-identical across episodes — but every Webtoons `<description>` carries that episode's own panel on the same CDN, distinct per episode on all nine subscribed feeds. The result was the series thumbnail on every strip, served from cache rows written before the plugin existed, while the real panel sat unused in the entry body. The plugin now reads the body like `BloggerPlugin` does, keeps `should_skip_source_lookup`, and narrows `should_bypass_cached_url` to URLs whose basename is `thumbnail.*` — so stale thumbnails are re-resolved and a good cached panel is left alone instead of being re-derived on every render.
+
+**Tapas is the same shape on a different host, and needed its own plugin.** An
+episode page's og:image is a social *card* (`.png` on `us-a.tapas.io`) while the
+panel is a `.jpg` on the same CDN inside `<content:encoded>`. The card is
+distinct per episode, so unlike Webtoons nothing in the URL says which is which
+— `TapasPlugin` therefore takes the body image and treats a non-`.jpg` cached
+value as the card worth re-resolving.
 
 The strategy comparison cache (`feed_strategy_cache`) also stores `image_alt` and `image_title` per strategy so the Tuning tab can display them below each card without a live fetch.
 

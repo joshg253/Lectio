@@ -643,6 +643,61 @@ class WebtoonsPlugin:
 
 
 @dataclass(frozen=True)
+class TapasPlugin:
+    """Tapas — the same shape as Webtoons, on a different host.
+
+    An episode page's og:image is a **social card** (`.png` on `us-a.tapas.io`),
+    distinct per episode so it does not look like a series thumbnail, but it is
+    not the comic. The panel is in the feed's own `<content:encoded>` as a
+    `.jpg` on the same CDN. Verified on episode 2721164 ("Rudolph"): og:image is
+    `.../sa/34/00700065-….png`, the body carries `.../sa/18/cb6052ae-….jpg`.
+
+    The distinct-per-episode part is why this needed its own plugin rather than
+    the thumbnail-basename test Webtoons uses — nothing in the *URL* says which
+    is the card. What separates them is where they came from."""
+
+    _HOST: str = "tapas.io"
+    _MEDIA_HOST: str = "tapas.io"
+
+    def _is_target(self, url: str) -> bool:
+        host = urlparse(url).netloc.lower()
+        return host == self._HOST or host.endswith("." + self._HOST)
+
+    def should_bypass_cached_url(self, *, entry_link: str, cached_url: str) -> bool:
+        # Bypass anything that is not the feed's own panel spelling. The cards
+        # are .png and the panels .jpg on the same CDN, so the extension is the
+        # only URL-level signal — enough to force a re-resolve of a cached card
+        # without churning a cached panel on every render.
+        if not self._is_target(entry_link):
+            return False
+        return not urlparse(cached_url).path.lower().endswith((".jpg", ".jpeg"))
+
+    def should_skip_source_lookup(self, *, entry_link: str) -> bool:
+        return self._is_target(entry_link)
+
+    def extra_candidate_attrs(self, *, source_url: str) -> tuple[str, ...]:
+        return ()
+
+    def source_score_adjustment(self, *, source_url: str, attrs: dict[str, str], resolved_url: str) -> int:
+        return 0
+
+    def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None:
+        if not self._is_target(entry_link):
+            return None
+        for source in (content_html, summary):
+            if not isinstance(source, str):
+                continue
+            m = re.search(
+                r'src=["\']([^"\']*' + re.escape(self._MEDIA_HOST) + r'[^"\']+\.(?:png|jpe?g|gif|webp))["\']',
+                source,
+                re.IGNORECASE,
+            )
+            if m:
+                return html.unescape(m.group(1).strip())
+        return None
+
+
+@dataclass(frozen=True)
 class BloggerPlugin:
     """Blogger / blogspot blogs include the post image in the RSS content.
     The og:image is a social-media landscape crop (w1200-h630), not the
@@ -1141,6 +1196,7 @@ DEFAULT_LEAD_IMAGE_PLUGINS: tuple[LeadImagePlugin, ...] = (
     TumblrPlugin(),
     QwantzPlugin(),
     WebtoonsPlugin(),
+    TapasPlugin(),
     BloggerPlugin(),
     TheRockCocksPlugin(),
     ComicFuryPlugin(),
