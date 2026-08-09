@@ -140,7 +140,7 @@ def _candidates(conn, host: str | None) -> list[tuple[str, str]]:
 
 def repair_for_user(user_id: str, apply: bool, host: str | None, limit: int) -> int:
     print(f"[{user_id}] scanning the archive for flattened images…", flush=True)
-    with main.get_starred_archive_connection() as conn:
+    with main.archive_conn() as conn:
         cands = _candidates(conn, host)
     print(f"[{user_id}] {len(cands):,} candidate asset(s)"
           + (f" on {host}" if host else "") + " — re-fetching to check for alpha",
@@ -187,7 +187,7 @@ def repair_for_user(user_id: str, apply: bool, host: str | None, limit: int) -> 
 
         if not apply:
             continue
-        with main.get_starred_archive_connection() as conn:
+        with main.archive_conn() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO archived_asset"
                 " (asset_hash, data, content_type, width, height, byte_size, created_at)"

@@ -82,7 +82,7 @@ def _enclosure_urls(feed_url: str, entry_id: str) -> list[str]:
 
 
 def backfill_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
-    with main.get_starred_archive_connection() as conn:
+    with main.archive_conn() as conn:
         rows = conn.execute(
             "SELECT feed_url, entry_id, source_html_zlib, content_html_zlib,"
             "       readability_html_zlib"
@@ -109,7 +109,7 @@ def backfill_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
 
     # Skip anything already linked to this entry — re-running must be free.
     todo: list[tuple[str, str, str]] = []
-    with main.get_starred_archive_connection() as conn:
+    with main.archive_conn() as conn:
         for feed_url, entry_id, url in wanted:
             got = conn.execute(
                 "SELECT 1 FROM archived_asset_link"
@@ -157,7 +157,7 @@ def backfill_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
             host_fail[netloc] += 1
             print(f"    skip {url[:70]}: {type(exc).__name__}: {exc}", flush=True)
             continue
-        with main.get_starred_archive_connection() as conn:
+        with main.archive_conn() as conn:
             ok = conn.execute(
                 "SELECT 1 FROM archived_asset_link"
                 " WHERE feed_url = ? AND entry_id = ? AND source_url = ?",

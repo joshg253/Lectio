@@ -103,10 +103,10 @@ when the page was already pulled this session.
 claycomix correctly resolves to **no panel** now, so the caller falls back to
 `og:image` — the post's own curated image — instead of a sibling's thumbnail.
 
-### Archive connections are never closed — OPEN, wants its own PR
+### Archive connections are never closed — FIXED 2026-08-08
 
-Found 2026-08-08 while chasing the CI flake, and **not fixed** — it is
-pre-existing, broad, and had nothing to do with the PR in hand.
+Found while chasing the CI flake below; fixed in its own change once the flake
+work was separated from it.
 
 `get_starred_archive_connection()` returns a **fresh** `sqlite3.Connection` per
 call (no pool, unlike the reader and meta handles). Every call site then does:
@@ -135,12 +135,37 @@ open at session end against an fd limit of ~10⁹. The leak is real but small in
 practice, because CPython refcounting collects most of them promptly. It is
 worth fixing on its own merits, not as a flake fix.
 
-**The fix is not a blind find-and-replace.** Swapping to
-`with closing(conn) as c:` closes but drops the commit that the current form
-provides, which the writing call sites depend on. The correct shape is
-`with closing(self._get_archive_connection()) as conn, conn:` — close *and*
-commit — applied per call site with an eye to which ones actually write. Worth
-a pass over the read-only ones first, where plain `closing` is enough.
+**The fix was not a blind find-and-replace.** Swapping to
+`with closing(conn) as c:` closes but drops the commit that the old form
+provided, which the writing call sites depend on.
+
+**What shipped.** One context manager per layer that does both —
+`StarredArchiveService._archive_conn()` and `main.archive_conn()`:
+
+```python
+conn = get_starred_archive_connection()
+try:
+    with conn:          # unchanged transaction semantics: commit, or roll back
+        yield conn
+finally:
+    conn.close()        # the part that was missing
+```
+
+All 31 service call sites, 3 in `main.py`, and 7 across `scripts/` now go
+through it. One site keeps the raw factory on purpose: `_set_orphan_entry_date`
+guards `connect()` itself in a `try` and must see that failure *before* the
+body runs, which a context manager defers to `__enter__` — it uses
+`with closing(_arch), _arch as arch:` and says why in a comment.
+
+Two test files were injecting a single shared connection as the "factory", so
+the service closed the handle their own assertions then used. They now hand out
+a fresh connection per call, matching the real factory's contract.
+`tests/services/test_archive_connection_lifecycle.py` pins all three halves:
+reads and writes close, the write is still committed, and a failing call site
+rolls back *and* closes.
+
+Not a flake fix, and it did not turn out to be one: the suite still passes and
+the second lock source below is still unexplained.
 
 ### The "database is locked" CI flake — HALF FIXED, half unexplained
 
@@ -179,20 +204,40 @@ Also worth recording: the same tree later passed. The red and green runs on
 PR #185 differed only in a commit *message*. That is confirmation it is a flake,
 not evidence of a fix.
 
-**It will recur on an unrelated PR.** Catching it needs diagnostics inside the
-CI run — which connection holds the lock at failure time — because it does not
-reproduce on this machine. A `-p no:randomly` run, or dumping
-`PRAGMA lock_status` / open connections on failure, is the next step. Guessing
-one red build at a time is not.
+**It will recur on an unrelated PR** — so the next red build now collects its
+own evidence. `pytest_exception_interact` in `tests/conftest.py` fires on any
+failure whose *exception chain* says "database is locked" (reader wraps the
+sqlite3 error, so the phrase sits a link or two down) and dumps:
+
+- every live thread with a stack — a stray background daemon mid-write is the
+  leading suspect, and it is the one thing a post-hoc log cannot show;
+- every SQLite file the process has open, from `/proc/self/fd`, with `-wal`
+  size;
+- a `BEGIN IMMEDIATE` probe at `timeout=0` per DB, which says whether the lock
+  is **still held** a moment later or had already been released.
+
+It writes both a report section (so it lands in the FAILURES block) and real
+stderr with capture disabled (so it survives a run that dies before the
+summary), and is capped at 3 dumps so a cascade can't bury the first. Costs
+nothing on a green run. Verified against a deliberately locked DB, and
+`tests/test_lock_diagnostics.py` pins the pieces so they can't quietly start
+returning nothing.
+
+One correction to the earlier note: a `-p no:randomly` run is moot —
+**pytest-randomly is not installed** and there is no pytest config, so
+collection order is already deterministic. Whatever this is, it is timing, not
+ordering.
 
 ### 0. Next up, in this order (agreed 2026-08-06)
 
 **All three are done as of 2026-08-07.** Two items opened on 2026-08-08 and
-documented above replace them:
+documented above replaced them, and both are now done too:
 
-1. **Archive connections are never closed** — 31 call sites, wants its own PR.
-2. **The "database is locked" CI flake** — half fixed; the second source needs
-   diagnostics inside a CI run, since it does not reproduce locally.
+1. ~~**Archive connections are never closed**~~ — **DONE 2026-08-08.** All 41
+   call sites go through a commit-and-close context manager.
+2. **The "database is locked" CI flake** — source one fixed; source two still
+   unexplained, but the next occurrence now dumps thread stacks and per-DB lock
+   state from inside the CI run. Nothing more to do until it fires again.
 
 1. ~~**Dependency / stack update (§0c).**~~ **DONE 2026-08-06.** feedparser did
    have a code change behind it, though not the predicted one — see §0c.
