@@ -3233,10 +3233,23 @@ class LeadImageService:
             return None
 
         if _use_urllib:
+            # urlopen follows redirects itself with no per-hop revalidation, unlike
+            # url_guard.safe_get above — a custom redirect handler closes that gap.
+            if not url_guard.is_safe_outbound_url(url):
+                return None
             try:
+                import urllib.error as _uerr
                 import urllib.request as _ureq
+
+                class _SafeRedirectHandler(_ureq.HTTPRedirectHandler):
+                    def redirect_request(self, req, fp, code, msg, headers, newurl):
+                        if not url_guard.is_safe_outbound_url(newurl):
+                            raise _uerr.HTTPError(newurl, code, "Blocked unsafe redirect target", headers, fp)
+                        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+                _opener = _ureq.build_opener(_SafeRedirectHandler)
                 _req = _ureq.Request(url, headers={"User-Agent": self._user_agent})
-                with _ureq.urlopen(_req, timeout=10) as _resp:
+                with _opener.open(_req, timeout=10) as _resp:
                     _html = _resp.read().decode("utf-8", errors="replace")
                     _final = _resp.url
                     _corp = _resp.headers.get("cross-origin-resource-policy", "").lower()

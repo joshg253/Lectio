@@ -21676,9 +21676,13 @@ def _guid_type(ids: list[str]) -> str:
 
 def _compare_one_feed(url: str) -> dict:
     """Fetch and parse one feed URL, returning metadata for the Add Feed comparison picker."""
+    from services import url_guard
     _headers = {"User-Agent": "Lectio/1.0 (feed comparison; +https://github.com/joshg253/Lectio)"}
     try:
-        resp = httpx.get(url, timeout=10.0, follow_redirects=True, headers=_headers)
+        with url_guard.build_client(timeout=10.0, headers=_headers) as client:
+            resp = url_guard.safe_get(client, url, headers=_headers)
+    except url_guard.UnsafeURLError:
+        return {"url": url, "error": "This URL points at a private/internal address and cannot be fetched."}
     except Exception as exc:
         return {"url": url, "error": str(exc).split("\n")[0][:120]}
     if not resp.is_success:
