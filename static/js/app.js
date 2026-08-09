@@ -12935,8 +12935,25 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
 
       // Listen for checkbox changes anywhere in the feeds tab (covers dynamically
       // shown rows after folder expand).
+      // `hidden` on a feed row means two different things: the folder is
+      // collapsed (a rendering state nobody chose per-feed) or the row was
+      // filtered out (a choice the user just made). Select-all must respect the
+      // second and ignore the first, so visibility only counts while the filter
+      // box has something in it.
+      function feedFilterActive() {
+        const box = document.getElementById('feeds-folder-search-input');
+        return !!(box && box.value.trim());
+      }
+      function selectableFeedRows(folderId) {
+        const filtering = feedFilterActive();
+        return [...feedsTab.querySelectorAll(
+          `.settings-feed-row[data-folder-feeds="${folderId}"]`
+        )].filter(r => !(filtering && r.hidden));
+      }
+
       function syncFolderCheck(folderId) {
-        const boxes = [...feedsTab.querySelectorAll(`.settings-feed-row[data-folder-feeds="${folderId}"] .sfc-check`)];
+        const boxes = selectableFeedRows(folderId)
+          .map(r => r.querySelector('.sfc-check')).filter(Boolean);
         const folderCb = feedsTab.querySelector(`.sfc-check-all[data-folder-check="${folderId}"]`);
         if (!folderCb) return;
         const checked = boxes.filter(b => b.checked).length;
@@ -12947,10 +12964,16 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       feedsTab.addEventListener('change', (e) => {
         if (e.target.classList.contains('sfc-check-all')) {
           // Folder-level select-all: (un)check every feed in that folder, even
-          // when the folder is collapsed (the checkboxes exist in the DOM).
+          // when the folder is collapsed (the checkboxes exist in the DOM) —
+          // but never a feed the filter has hidden. Selecting rows the user
+          // cannot see is how a bulk unsubscribe hits feeds nobody chose;
+          // reported after filtering to a few Slickdeals feeds and finding
+          // "select all" had taken the whole library.
           const fid = e.target.dataset.folderCheck;
-          feedsTab.querySelectorAll(`.settings-feed-row[data-folder-feeds="${fid}"] .sfc-check`)
-            .forEach(cb => { cb.checked = e.target.checked; });
+          selectableFeedRows(fid).forEach(r => {
+            const cb = r.querySelector('.sfc-check');
+            if (cb) cb.checked = e.target.checked;
+          });
           e.target.indeterminate = false;
           updateToolbar();
           panel.hidden = true;
