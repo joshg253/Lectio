@@ -1890,3 +1890,24 @@ def test_path_based_rejections_survive_an_opaque_name(tmp_path: Path):
     assert svc._is_image_url_acceptable(
         "https://example.test/ads/ff52deff-c6a8-448d-ad27-a3c3d14c719c.jpg", None, None
     ) is False
+
+
+def test_the_on_open_fetch_is_skipped_for_a_plugin_owned_host(tmp_path: Path):
+    """`queue_source_fetch` is the on-open path, so it is the one a *user*
+    triggers by clicking an entry — and it persisted whatever the page gave it.
+    That is how Webtoons episodes kept reacquiring the series thumbnail after
+    the backfill's storing paths were fixed."""
+    svc = _build_service(tmp_path / "meta.sqlite3", [])
+    scraped: list[str] = []
+    svc._fetch_source_lead_image = (  # type: ignore[method-assign]
+        lambda entry_link, is_webcomic=False: scraped.append(entry_link) or "https://cdn.test/og.png"
+    )
+    svc._plugin_should_skip_source_lookup = (  # type: ignore[method-assign]
+        lambda *, entry_link: "plugin-owned.test" in entry_link
+    )
+
+    svc.queue_source_fetch("https://f.test/feed", "e1", "https://plugin-owned.test/episode/1")
+    svc.wait_for_source_fetch("https://f.test/feed", "e1", timeout=1.0)
+
+    assert scraped == []
+    assert svc.get_cached_lead_image_url("https://f.test/feed", "e1") is None

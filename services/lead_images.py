@@ -3588,6 +3588,15 @@ class LeadImageService:
         in flight, the call is a no-op.  Callers that need to wait for completion
         can call wait_for_source_fetch() after this returns.
         """
+        # A plugin that forbids the source page forbids it here too. This is the
+        # *on-open* fetch, so it is the path a user triggers by clicking an
+        # entry — which is how Webtoons episodes kept reacquiring the series
+        # thumbnail after the storing paths in the backfill were fixed: opening
+        # a post scraped its page and persisted the og:image over the panel the
+        # plugin had just resolved. Nothing to fetch and nothing to store; the
+        # resolve path uses the plugin's own answer.
+        if self._plugin_should_skip_source_lookup(entry_link=entry_link):
+            return
         key = (feed_url, entry_id)
         if key in self._source_fetch_in_progress:
             return
