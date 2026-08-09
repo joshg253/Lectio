@@ -16752,12 +16752,28 @@ def purge_orphaned_feed(
     except Exception:  # noqa: BLE001
         LOGGER.warning("[purge] entry_feed_tags cleanup failed for %s", feed_url)
 
-    # Drop any kept-feed / needs-replacement markers for a feed being removed.
+    # Drop any kept-feed / needs-replacement markers for a feed being removed,
+    # and its folder membership.
+    #
+    # The folder row is the one users actually see leak. Removing a feed deletes
+    # it from reader but left `folder_feeds` pointing at it, so Settings → Feeds
+    # went on listing a subscription that no longer exists — rendered from the
+    # folder row alone, with a failing badge, indistinguishable from a real dead
+    # feed. The 29 article-URL husks rehomed to Saved Articles on 2026-08-06 all
+    # came back as ghosts this way and were reported as "non-feeds I thought we
+    # cleared out". Callers that manage folders themselves (the dedupe route,
+    # `_migrate_curation`'s combine) already delete the row first; this is
+    # idempotent, and it is the backstop for every caller that does not.
+    #
+    # Safe unconditionally: an unsubscribe-with-keep is defined as leaving the
+    # tree — its curated items stay reachable through the Kept view, which does
+    # not read folder_feeds.
     try:
         conn.execute("DELETE FROM kept_feeds WHERE feed_url = ?", (feed_url,))
         conn.execute("DELETE FROM feeds_needing_replacement WHERE feed_url = ?", (feed_url,))
+        conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (feed_url,))
     except Exception:  # noqa: BLE001
-        LOGGER.warning("[purge] kept_feeds/needs_replacement cleanup failed for %s", feed_url)
+        LOGGER.warning("[purge] kept_feeds/needs_replacement/folder cleanup failed for %s", feed_url)
 
     # Step 4 — WebSub unsubscribe (best-effort; websub_service may be None).
     if websub_service:

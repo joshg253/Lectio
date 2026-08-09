@@ -303,7 +303,12 @@ archive rows, and `kept_feeds`. Two things to do, and the first matters more:
 1. **Fix the leak** — have feed removal reuse the same table list the rename path
    already maintains, minus the tables an archive orphan still needs. Combine no
    longer contributes: it re-keys each entry's meta rows onto the survivor
-   (`_rekey_entry_meta`). Plain unsubscribe still leaks.
+   (`_rekey_entry_meta`), and `folder_feeds` is now cleaned by
+   `purge_orphaned_feed` itself — that one was the user-visible half, since a
+   folder row outliving its feed renders in Settings → Feeds as a failing
+   subscription that does not exist (29 of them, the article-URL husks rehomed
+   2026-08-06; deleted 2026-08-08 after confirming every capture was on Saved
+   Articles). The rest of the tables still leak on a plain unsubscribe.
 2. **Sweep the backlog** once, behind the exclusions above. Bulk delete on live
    data, so it wants a go-ahead. The dev/localhost 11,250 are free.
 
