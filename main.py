@@ -14535,6 +14535,214 @@ def _inject_webcomic_panel_into_bodyless_entry(content_html, entry, feed_url: st
     return figure + (content_html or ""), None
 
 
+# Tapas serves two different things from the same CDN: `/sa/` is *series art* —
+# one image per episode, thumbnail-grade, and what the RSS feed ships — while
+# `/c/` is the episode's actual content, one URL per panel. An episode with four
+# panels arrives in the feed as a single `/sa/` picture.
+_TAPAS_CONTENT_IMG_RE = re.compile(
+    r'https://[a-z0-9-]+\.tapas\.io/c/[^"\'\s<>\\]+', re.IGNORECASE
+)
+# Matching an <img> *and* its src in one pattern needs two `[^"\']*` runs around
+# the host, and on feed-supplied HTML CodeQL rightly called that polynomial: a
+# tag carrying many repetitions of `//x.tapas.io/sa/` backtracks quadratically
+# (py/polynomial-redos, alert 192, raised on this very branch). The tag scan is
+# one linear `[^>]*` instead, and the host test runs in Python on the extracted
+# src — which is also a more honest test than a regex spelling of a hostname.
+_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_IMG_SRC_RE = re.compile(r"""\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.IGNORECASE)
+
+
+def _img_src(tag: str) -> str:
+    m = _IMG_SRC_RE.search(tag)
+    if not m:
+        return ""
+    return html.unescape((m.group(1) or m.group(2) or "").strip())
+
+
+def _strip_imgs(content_html: str, is_target) -> str:
+    """Drop every `<img>` whose src `is_target` accepts. Linear in the input."""
+    return _IMG_TAG_RE.sub(
+        lambda m: "" if is_target(_img_src(m.group(0))) else m.group(0),
+        content_html,
+    )
+
+
+def _is_tapas_series_art(src: str) -> bool:
+    """`/sa/` on the Tapas CDN — series art, i.e. the thumbnail, not the comic."""
+    try:
+        parsed = urlparse(src)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    return (host == "tapas.io" or host.endswith(".tapas.io")) and parsed.path.startswith("/sa/")
+# A Tapas body is literally `<p>null</p><img src=…/>` when the author wrote no
+# caption — the API's null serialized into the feed.
+_TAPAS_NULL_PARA_RE = re.compile(r"<p>\s*null\s*</p>", re.IGNORECASE)
+_TAPAS_MAX_PANELS = 60
+
+
+def _panels_into_body(content_html, panels: list[str], is_stripped_img):
+    """Replace a thumbnail-grade body with the real panels.
+
+    Shared by the Tapas and Webtoons injections: strip the feed's own picture
+    out of the body (it is the list thumbnail, not the article), drop the
+    separate hero with it — otherwise the thumbnail renders directly above the
+    comic it is a thumbnail of — and put the panels in front of whatever prose
+    is left. Returns ``(content_html, lead_image_url)``.
+    """
+    body = _strip_imgs(content_html or "", is_stripped_img)
+    body = _TAPAS_NULL_PARA_RE.sub("", body).strip()
+    figures = "".join(
+        f'<p><img src="{html.escape(u, quote=True)}" alt="" /></p>' for u in panels
+    )
+    return figures + body, None
+
+
+# The episode's own slices carry class="_images"; their `data-url` is the real
+# source (the `src` is a spinner placeholder). Bounding on the class matters —
+# the page also embeds a recommendation strip of other series, and a looser scan
+# swept 62 URLs into an episode that has 50.
+_WEBTOONS_SLICE_RE = re.compile(
+    r'<img\b[^>]*\bclass="[^"]*\b_images\b[^"]*"[^>]*>', re.IGNORECASE
+)
+_WEBTOONS_DATA_URL_RE = re.compile(r'\bdata-url="([^"]+)"', re.IGNORECASE)
+# The feed's own picture, plus Webtoons page chrome (`webtoons-static`, e.g. the
+# `bg_transparency.png` spacer) — neither belongs in the article once the real
+# slices are in. A host set rather than a regex, for the ReDoS reason above.
+_WEBTOONS_IMG_HOSTS = frozenset({
+    "webtoon-phinf.pstatic.net",
+    "swebtoon-phinf.pstatic.net",
+    "webtoons-static.pstatic.net",
+})
+
+
+def _is_webtoons_body_img(src: str) -> bool:
+    try:
+        return (urlparse(src).hostname or "").lower() in _WEBTOONS_IMG_HOSTS
+    except ValueError:
+        return False
+_WEBTOONS_MAX_PANELS = 80
+
+
+def _webtoons_public_slice_url(url: str) -> str:
+    """The publicly fetchable spelling of an episode slice.
+
+    The page serves slices from `webtoon-phinf`, which answers **403 to anything
+    without a `webtoons.com` Referer** — including a browser loading the image
+    from our page. The sibling `swebtoon-phinf` host serves the same path with no
+    Referer at all (verified 200 on every slice of three different series), and
+    it is the host the RSS feed itself uses. So we rewrite to it rather than
+    forging a Referer we do not have: same bytes, nobody's hotlink policy
+    circumvented, and no image-proxy change needed.
+    """
+    url = html.unescape(url).strip()
+    url = url.split("?", 1)[0]                       # ?type=q90 / ?type=optimize
+    return url.replace("//webtoon-phinf.", "//swebtoon-phinf.")
+
+
+def _inject_webtoons_episode_panels(content_html, entry, feed_url: str, lead_image_url):
+    """Put the whole strip in a Webtoons article, not the one image the feed sends.
+
+    A Webtoons episode is a vertical strip cut into slices — 50 of them on a
+    Backchannel chapter, 8 on MercWorks, 5 on False Knees — and the RSS feed
+    carries exactly one image. That single picture is a fine list thumbnail and
+    a poor article. Same trade as the Tapas injection above, and the same
+    guarantee: the list thumbnail is untouched because the caller captured the
+    resolved lead in `_resolved_lead_for_cache` before this ran.
+    """
+    link = str(getattr(entry, "link", "") or "")
+    try:
+        host = (urlparse(link).hostname or "").lower()
+    except ValueError:
+        return content_html, lead_image_url
+    if not (host == "webtoons.com" or host.endswith(".webtoons.com")):
+        return content_html, lead_image_url
+    try:
+        fetched = lead_image_service.fetch_source_html_now(link)
+    except Exception:  # noqa: BLE001 — the feed's image beats a 500
+        LOGGER.warning("[webtoons] panel fetch failed for %s", link, exc_info=True)
+        return content_html, lead_image_url
+    if not fetched:
+        return content_html, lead_image_url
+    _base, page_html = fetched
+
+    panels: list[str] = []
+    seen: set[str] = set()
+    for tag in _WEBTOONS_SLICE_RE.findall(page_html):
+        m = _WEBTOONS_DATA_URL_RE.search(tag)
+        if not m:
+            continue
+        url = _webtoons_public_slice_url(m.group(1))
+        if not url.startswith("https://") or url in seen:
+            continue
+        seen.add(url)
+        panels.append(url)
+        if len(panels) >= _WEBTOONS_MAX_PANELS:
+            break
+    if not panels:
+        return content_html, lead_image_url
+    # A single-slice episode whose one slice is already the feed's image (Sarah's
+    # Scribbles) gains nothing from the rewrite — but it costs nothing either,
+    # and the strip-then-inject leaves exactly the same picture in place.
+    return _panels_into_body(content_html, panels, _is_webtoons_body_img)
+
+
+def _inject_tapas_episode_panels(content_html, entry, feed_url: str, lead_image_url):
+    """Put the actual comic in a Tapas article, not the series art.
+
+    The feed's `<content:encoded>` is one `/sa/` image — the same asset the
+    episode page uses as its thumbnail. It makes a good LIST THUMBNAIL and a
+    poor article: a four-panel episode read as a single picture, and the reader
+    reported it as "comic img is wrong, but good for thumb". The panels live on
+    the page as `/c/` URLs, one per panel.
+
+    The list thumbnail is unaffected — the caller captured the resolved lead in
+    `_resolved_lead_for_cache` before this ran. The separate hero *is* dropped,
+    or the thumbnail renders above the comic it is a thumbnail of.
+
+    Costs a source-page fetch on the render path, so it is narrow: Tapas links
+    only, and only when the body has no `/c/` image already. The `/c/` URLs are
+    signed and short-lived, which is why the page is re-read rather than the
+    URLs stored — and why `__token__` is stripped from the image proxy's cache
+    key, so the *bytes* are cached once and outlive every token.
+    """
+    link = str(getattr(entry, "link", "") or "")
+    try:
+        host = urlparse(link).hostname or ""
+    except ValueError:
+        return content_html, lead_image_url
+    host = host.lower()
+    if not (host == "tapas.io" or host.endswith(".tapas.io")):
+        return content_html, lead_image_url
+    if content_html and _TAPAS_CONTENT_IMG_RE.search(content_html):
+        return content_html, lead_image_url  # already has the real panels
+    try:
+        fetched = lead_image_service.fetch_source_html_now(link)
+    except Exception:  # noqa: BLE001 — the series art beats a 500
+        LOGGER.warning("[tapas] panel fetch failed for %s", link, exc_info=True)
+        return content_html, lead_image_url
+    if not fetched:
+        return content_html, lead_image_url
+    _base, page_html = fetched
+
+    panels: list[str] = []
+    seen: set[str] = set()
+    for raw in _TAPAS_CONTENT_IMG_RE.findall(page_html):
+        url = html.unescape(raw).rstrip("\\")
+        # Same file, different token, is the same panel — compare without it.
+        key = url.split("?", 1)[0]
+        if key in seen:
+            continue
+        seen.add(key)
+        panels.append(url)
+        if len(panels) >= _TAPAS_MAX_PANELS:
+            break
+    if not panels:
+        return content_html, lead_image_url
+
+    return _panels_into_body(content_html, panels, _is_tapas_series_art)
+
+
 def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_lead_in_article: bool):
     """Dedup the lead image against the article body. Returns (content_html, lead_image_url).
 
@@ -15333,6 +15541,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         content_html, lead_image_url = _inject_webcomic_panel_into_bodyless_entry(
             content_html, entry, str(entry.feed_url), lead_image_url
         )
+        content_html, lead_image_url = _inject_tapas_episode_panels(
+            content_html, entry, str(entry.feed_url), lead_image_url
+        )
+        content_html, lead_image_url = _inject_webtoons_episode_panels(
+            content_html, entry, str(entry.feed_url), lead_image_url
+        )
         content_html = _collapse_block_spacers(_strip_ad_images(content_html))
 
         # Fallback: check the alt text on the main image on the source page.
@@ -16007,19 +16221,90 @@ def feed_curation_items(reader, conn: sqlite3.Connection, feed_url: str) -> list
     return items
 
 
-def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_url: str) -> dict:
-    """Migrate manual tags and stars from a feed being removed onto the surviving
-    feed, so consolidating duplicates never drops curation.
+# Per-entry meta keyed on (feed_url, entry_id). When an entry moves between
+# feeds these have to move with it or the entry arrives stripped: no thumbnail,
+# no captured feed tags, and any hand-made correction (title, date, link, body)
+# silently reverted. Feed-scoped tables are deliberately absent — they belong to
+# the feed being removed, not to its entries.
+_ENTRY_META_TABLES = (
+    "entry_lead_images",
+    "entry_feed_tags",
+    "entry_content_edits",
+    "entry_content_overrides",
+    "entry_date_overrides",
+    "entry_link_overrides",
+    "entry_title_overrides",
+    "entry_media_audio",
+    "entry_media_video",
+    "entry_read_state",
+    "read_history",
+    "archived_entries",
+)
 
-    Mirrors the reconcile_duplicate_feeds.py --merge logic for the in-app dedup
-    path: each source entry that carries a manual tag or a star is matched to a
-    survivor entry by GUID, else by normalized link; when neither matches, the
-    source entry is synthesized into the survivor feed so its tag/star has a home.
-    Moved stars are removed from the source feed's saved_entries rows.
 
-    Returns {"tags": n, "stars": n, "synth": n, "archives": n}.
+def _rekey_entry_meta(conn: sqlite3.Connection, from_feed: str, from_id: str,
+                      to_feed: str, to_id: str) -> None:
+    """Repoint one entry's meta rows at its new (feed_url, entry_id).
+
+    INSERT OR IGNORE then DELETE, per table: the survivor may already have its
+    own row (it is the twin the source matched onto), and its own value wins —
+    it belongs to the entry that is staying. Best-effort per table so a missing
+    one on an older tenant cannot fail a combine.
     """
-    counts = {"tags": 0, "stars": 0, "synth": 0, "archives": 0}
+    if (from_feed, from_id) == (to_feed, to_id):
+        return
+    for table in _ENTRY_META_TABLES:
+        try:
+            info = list(conn.execute(f"PRAGMA table_info({table})"))
+            # Skip an INTEGER PRIMARY KEY (a rowid alias, e.g. read_history.id):
+            # copying it verbatim collides with the row we are copying *from*,
+            # INSERT OR IGNORE drops the copy, and the DELETE below then loses
+            # the row outright. Omitting it lets SQLite assign a fresh one.
+            cols = [r[1] for r in info
+                    if not (r[5] and str(r[2] or "").upper() == "INTEGER")]
+            if not cols:
+                continue
+            names = ", ".join(cols)
+            picks = ", ".join(
+                "?" if c == "feed_url" else ("?" if c == "entry_id" else c) for c in cols
+            )
+            params = [to_feed if c == "feed_url" else to_id for c in cols
+                      if c in ("feed_url", "entry_id")]
+            conn.execute(
+                f"INSERT OR IGNORE INTO {table} ({names}) SELECT {picks} FROM {table}"
+                " WHERE feed_url = ? AND entry_id = ?",
+                (*params, from_feed, from_id),
+            )
+            conn.execute(
+                f"DELETE FROM {table} WHERE feed_url = ? AND entry_id = ?",
+                (from_feed, from_id),
+            )
+        except sqlite3.Error:
+            LOGGER.debug("[dedup] meta re-key skipped for %s", table, exc_info=True)
+
+
+def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_url: str) -> dict:
+    """Move a removed feed's **entries** onto the surviving feed, with their state.
+
+    Each source entry is matched to a survivor entry by GUID, else by normalized
+    link; when neither matches it is synthesized into the survivor. Manual tags,
+    stars, read/unread state, the offline capture and the per-entry meta rows
+    (lead image, feed tags, overrides, history) all follow.
+
+    **Every entry moves, not just curated ones.** This used to walk
+    ``set(src_tags) | set(src_stars)`` — an entry with no tag, no star and no
+    capture was never visited, so it was neither matched nor synthesized and
+    simply vanished when ``reader.delete_feed`` ran. Combining the two Sarah's
+    Scribbles Webtoons feeds silently lost an unread post that way. Dropping
+    uncurated entries is right for an *unsubscribe*; for a combine — an explicit
+    "these two are the same feed" — it is not.
+
+    Read state is carried rather than reset, so combining a large old feed adds
+    its history to the survivor without dumping thousands of posts into unread.
+
+    Returns {"tags": n, "stars": n, "synth": n, "archives": n, "entries": n}.
+    """
+    counts = {"tags": 0, "stars": 0, "synth": 0, "archives": 0, "entries": 0}
 
     # Which source entries actually hold an offline capture. Read once: the loop
     # below would otherwise open an archive connection per entry just to
@@ -16067,7 +16352,8 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
         )
     }
 
-    ids = set(src_tags) | set(src_stars)
+    # Every source entry, not just the curated ones — see the docstring.
+    ids = set(src_entries)
     if not ids and not src_archived_ids:
         return counts
 
@@ -16128,14 +16414,31 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
             )
             if cur.rowcount > 0:  # count real inserts, not IGNOREd existing rows
                 counts["stars"] += 1
+        # Read state follows the entry. Without this a synthesized entry lands
+        # unread by default, so combining an old feed would dump its whole read
+        # history into the survivor's unread count. Only ever marks a survivor
+        # entry read — a twin already read there is not resurrected as unread by
+        # an unread source copy.
+        _src = src_entries.get(sid)
+        if _src is not None and _src.read:
+            try:
+                reader.mark_entry_as_read((keep_url, target_id))
+                conn.execute(
+                    "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
+                    " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
+                    (keep_url, target_id, datetime.now().isoformat()),
+                )
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("[dedup] read-state carry failed %s -> %s", sid, target_id)
+        _rekey_entry_meta(conn, remove_url, sid, keep_url, target_id)
+        counts["entries"] += 1
 
-    # Captures on entries carrying neither a star nor a tag are never visited by
-    # the loop above — it walks curation, not entries — yet they strand exactly
-    # the same way once this feed is deleted (a star removed later leaves the
-    # capture behind; that is what an "archive-only orphan" is). Re-key any whose
-    # article exists on the survivor. One with no counterpart there is left
-    # alone: synthesizing an entry purely to host a capture would put an
-    # uncurated row in the survivor, and the orphan view is already its home.
+    # Archive rows whose entry reader no longer holds — the loop above walks
+    # entries, so these are invisible to it. They strand the same way once this
+    # feed is deleted. Re-key any whose article exists on the survivor; one with
+    # no counterpart there is left alone, since synthesizing an entry purely to
+    # host a capture would invent a post that never existed, and the orphan view
+    # is already that capture's home.
     for aid in src_archived_ids - ids:
         _target_id, _synth = _resolve(aid)
         if _synth:
@@ -26395,20 +26698,41 @@ def get_feed_duplicates():
     for folder_id, feed_url, folder_name in rows:
         url_folders.setdefault(feed_url, []).append((folder_id, folder_name))
 
-    # canonical → [url, url/, ...] — group all URL variants by their normalized form
+    # canonical → [url, url/, ...] — group all URL variants by their normalized
+    # form, **ignoring the scheme**. A domain alias rewrites the host but keeps
+    # the scheme (`_DOMAIN_ALIASES`), so a legacy `http://tapastic.com/…`
+    # subscription normalized to `http://tapas.io/…` while its live twin was
+    # `https://…` — different strings, different groups, and two dead feeds sat
+    # beside their working copies failing every refresh without ever being
+    # flagged. Scheme is folded here, in the *comparison*, and deliberately not
+    # in `normalize_feed_url`: that function decides the stored subscription URL,
+    # and some hosts really are http-only.
+    def _dupe_group_key(url: str) -> str:
+        canonical = normalize_feed_url(url)
+        return canonical.split("://", 1)[-1] if "://" in canonical else canonical
+
     by_canonical: dict[str, list[str]] = {}
     for url in url_folders:
-        canonical = normalize_feed_url(url)
-        by_canonical.setdefault(canonical, []).append(url)
+        by_canonical.setdefault(_dupe_group_key(url), []).append(url)
 
     same_folder: list[dict] = []
     cross_folder: list[dict] = []
 
-    for canonical, variants in by_canonical.items():
+    for _group_key, variants in by_canonical.items():
         if len(variants) < 2:
             continue
-        # Always keep the canonical (no trailing slash) form; remove the slash variant(s).
-        keep = canonical
+        # The survivor has to be a URL somebody is actually subscribed to. This
+        # used to be the canonical *string*, which is not always one of the
+        # variants — when it was not, every variant got offered for removal
+        # against a URL that does not exist, and `url_folders.get(keep)` came
+        # back empty so all of them looked cross-folder. Prefer https, then the
+        # already-canonical spelling (no trailing slash), then shortest.
+        keep = min(variants, key=lambda u: (
+            not u.startswith("https://"),
+            normalize_feed_url(u) != u,
+            len(u),
+            u,
+        ))
         for remove in variants:
             if remove == keep:
                 continue
@@ -30656,6 +30980,11 @@ def _img_cache_store(cache_key: str, body: bytes, content_type: str) -> None:
 # loading after the original short-lived URL expires. The full URL (with token) is
 # still used for the actual fetch.
 _IMG_CACHE_VOLATILE_PARAMS = frozenset({
+    # Tapas signs its episode art as `?__token__=exp=…~acl=…` — one param
+    # carrying the whole grant. Stripping it means the bytes cache once and keep
+    # answering after the token expires, which is what makes a re-read of an old
+    # episode free instead of a re-fetch of the page for fresh URLs.
+    "__token__",
     "jwt", "token", "sig", "signature", "expires", "exp",
     "x-amz-algorithm", "x-amz-credential", "x-amz-date", "x-amz-expires",
     "x-amz-security-token", "x-amz-signature", "x-amz-signedheaders",

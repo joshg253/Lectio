@@ -342,6 +342,23 @@ class LeadImageService:
         r"(?:[-_/]ads?[-_./]|[-_]ad[0-9]|/advert|/fblast/)",
         re.IGNORECASE,
     )
+
+    # A basename that is just a UUID (optionally with a suffix) carries **no
+    # naming signal**, so every name-based heuristic can only misfire on it:
+    # `…-ad27-…` inside a UUID is not an ad slot, and `[-_]ad[0-9]` above cannot
+    # tell it from `Cert-ad1.png`. Two Tapas panels were rejected this way, and
+    # the wixmp host-trust in _is_image_url_acceptable was added for exactly the
+    # same class ("ad87 in a UUID") one host at a time. This generalizes it.
+    # Anything *starting* with a UUID, not just a bare one: Webtoons appends a
+    # numeric id straight onto the last group with no separator
+    # (`53e3fa05-ad49-…-782469d45a92` + `12398245534840153981.jpg`), and a
+    # trailing-separator-only rule missed it — so `-ad49-` was read as an ad
+    # slot and a real panel was rejected. A name that opens with a UUID is
+    # machine-generated whatever follows it.
+    _UUID_BASENAME_RE = re.compile(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[^/]*$",
+        re.IGNORECASE,
+    )
     # Advertisement images flagged by their alt/title text (e.g. SE Radio's
     # "banner ad that says ..."). Kept tight to avoid rejecting article images
     # that merely discuss advertising.
@@ -1730,6 +1747,38 @@ class LeadImageService:
 
         return None
 
+    def _plugin_or_source_lead_image(self, entry: object, entry_link: str, *, is_webcomic: bool) -> str | None:
+        """What a *storing* path should persist for this entry.
+
+        `should_skip_source_lookup` is a plugin saying "the page will lie to
+        you" — but it was only consulted on 3 of the 12 `_fetch_source_lead_image`
+        call sites, and the storing paths in the backfill loop below were not
+        among them. So a plugin-owned host could have the right image resolved
+        on the render path and then overwritten by a background revalidation
+        that scraped the page anyway. That is exactly how Webtoons episodes went
+        back to showing the series thumbnail hours after the plugin was fixed.
+
+        Storing paths go through here instead: the plugin's own answer wins, a
+        plugin that forbids scraping gets no scrape, and everything else is
+        unchanged.
+        """
+        if not self._plugin_should_skip_source_lookup(entry_link=entry_link):
+            return self._fetch_source_lead_image(entry_link, is_webcomic=is_webcomic)
+        content_html = None
+        for chunk in (getattr(entry, "content", None) or ()):
+            value = getattr(chunk, "value", None)
+            if isinstance(value, str) and value.strip():
+                content_html = value
+                break
+        preferred = self._plugin_fallback_lead_image_url(
+            entry_link=entry_link,
+            content_html=content_html,
+            summary=getattr(entry, "summary", None),
+        )
+        if preferred and self._is_image_url_acceptable(preferred, None, None):
+            return preferred
+        return None
+
     def fetch_and_store_lead_images_for_feed(self, feed_url: str, force_retry_negative: bool = False) -> None:
         """Backfill source-page lead images for entries missing inline images."""
         try:
@@ -1802,7 +1851,8 @@ class LeadImageService:
                         entry_link = str(getattr(entry, "link", "") or "")
                         if not entry_link:
                             continue
-                        source_image = self._fetch_source_lead_image(entry_link, is_webcomic=self._is_feed_webcomic(feed_url))
+                        source_image = self._plugin_or_source_lead_image(
+                            entry, entry_link, is_webcomic=self._is_feed_webcomic(feed_url))
                         if source_image:
                             self.store_entry_lead_image(feed_url_str, entry_id_str, source_image)
                         else:
@@ -1856,7 +1906,13 @@ class LeadImageService:
                     continue
 
             if self._plugin_should_skip_source_lookup(entry_link=entry_link):
-                self.store_entry_lead_image(feed_url_str, entry_id_str, None)
+                # Ask the plugin rather than storing None outright: a plugin
+                # that refuses the source page may still be able to name the
+                # image from the feed body (Webtoons, Tapas), and storing None
+                # here would blank a perfectly good panel.
+                plugin_image = self._plugin_or_source_lead_image(
+                    entry, entry_link, is_webcomic=strategy == "webcomic")
+                self.store_entry_lead_image(feed_url_str, entry_id_str, plugin_image)
                 time.sleep(0.05)
                 continue
             # For feeds whose images are reliably inline, source scraping rarely
@@ -2582,6 +2638,29 @@ class LeadImageService:
             dropped.update(g for g in group if g != preferred)
         return [u for u in urls if u not in dropped]
 
+    def fetch_source_html_now(self, entry_link: str) -> tuple[str, str] | None:
+        """``(base_url, html_text)`` for a source page, fetching it when the
+        session cache has no copy.
+
+        **Synchronous**, so callers on the render path must be narrow — this is
+        for the cases where the page is the only place the article's real
+        content exists and deferring to the next open would show the wrong
+        thing now (see _inject_tapas_episode_panels). Everything that merely
+        *enriches* an entry should use queue_source_html_fetch instead.
+        """
+        cached = self._source_html_cache.get(entry_link)
+        if cached:
+            return cached
+        result = self._fetch_page_html(entry_link)
+        if not result:
+            return None
+        source_html, final_url, _ = result
+        self._source_html_cache[entry_link] = (final_url, source_html)
+        self._source_html_cache.move_to_end(entry_link)
+        if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
+            self._source_html_cache.popitem(last=False)
+        return (final_url, source_html)
+
     def get_cached_source_html(self, entry_link: str) -> tuple[str, str] | None:
         """Return ``(base_url, html_text)`` for a source page already in the cache,
         or ``None`` on a miss. Network-free — the caller primes the cache via
@@ -2775,6 +2854,10 @@ class LeadImageService:
                     skip_logo_patterns = True
             except ValueError:
                 pass
+        # Name-based heuristics are meaningless against a machine-generated
+        # filename and can only produce false positives there — see
+        # _UUID_BASENAME_RE. Path- and dimension-based checks still apply.
+        opaque_name = bool(self._UUID_BASENAME_RE.match(parsed.path.rsplit("/", 1)[-1]))
         if (self._TRACKER_URL_PATTERNS.search(parsed.netloc)
                 or self._TRACKER_URL_PATTERNS.search(parsed.path)
                 or self._TRACKER_URL_PATTERNS.search(image_url)):
@@ -2862,7 +2945,13 @@ class LeadImageService:
             return False
         # Advertisement images (e.g. .../Cert-ad1.png) are never article content.
         # Checked against the path so query strings can't introduce false matches.
-        if self._AD_URL_PATTERNS.search(parsed.path):
+        # Directory always, filename only when it carries naming signal. The
+        # pattern does two jobs — `/ads/` names a directory, `[-_]ad[0-9]` names
+        # a file — and only the second one misreads a UUID.
+        _ad_dir, _, _ad_name = parsed.path.rpartition("/")
+        if self._AD_URL_PATTERNS.search(_ad_dir + "/"):
+            return False
+        if not opaque_name and self._AD_URL_PATTERNS.search("/" + _ad_name):
             return False
 
         path = parsed.path.lower()
@@ -3527,6 +3616,15 @@ class LeadImageService:
         in flight, the call is a no-op.  Callers that need to wait for completion
         can call wait_for_source_fetch() after this returns.
         """
+        # A plugin that forbids the source page forbids it here too. This is the
+        # *on-open* fetch, so it is the path a user triggers by clicking an
+        # entry — which is how Webtoons episodes kept reacquiring the series
+        # thumbnail after the storing paths in the backfill were fixed: opening
+        # a post scraped its page and persisted the og:image over the panel the
+        # plugin had just resolved. Nothing to fetch and nothing to store; the
+        # resolve path uses the plugin's own answer.
+        if self._plugin_should_skip_source_lookup(entry_link=entry_link):
+            return
         key = (feed_url, entry_id)
         if key in self._source_fetch_in_progress:
             return

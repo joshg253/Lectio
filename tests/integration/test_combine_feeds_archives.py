@@ -107,3 +107,110 @@ def test_combine_with_no_archive_is_still_fine(configured):
         with main.get_reader() as reader:
             counts = main._migrate_curation(reader, conn, OLD, NEW)
     assert counts["stars"] == 1 and counts["archives"] == 0
+
+
+UNCURATED = "https://tush.ar/post/only-on-the-old-feed/"
+
+
+def test_an_uncurated_unread_post_moves_to_the_survivor(configured):
+    """The reported loss: combining the two Sarah's Scribbles Webtoons feeds
+    dropped the removed feed's single post because it carried no tag, no star
+    and no capture — `_migrate_curation` walked curation, not entries, so it was
+    never matched and never synthesized."""
+    with main.get_reader() as reader:
+        reader.add_entry({
+            "feed_url": OLD, "id": UNCURATED, "link": UNCURATED,
+            "title": "only on the old feed",
+        })
+        with main.get_meta_connection() as conn:
+            counts = main._migrate_curation(reader, conn, OLD, NEW)
+
+        survivors = {e.id: e for e in reader.get_entries(feed=NEW)}
+
+    assert UNCURATED in survivors, "an uncurated post must still move"
+    assert survivors[UNCURATED].title == "only on the old feed"
+    assert survivors[UNCURATED].read is False, "an unread post arrives unread"
+    assert counts["synth"] >= 1
+
+
+def test_read_state_is_carried_rather_than_reset(configured):
+    """Otherwise combining an old feed dumps its whole history into unread."""
+    read_id = "https://tush.ar/post/already-read/"
+    with main.get_reader() as reader:
+        reader.add_entry({"feed_url": OLD, "id": read_id, "link": read_id, "title": "read one"})
+        reader.mark_entry_as_read((OLD, read_id))
+        with main.get_meta_connection() as conn:
+            main._migrate_curation(reader, conn, OLD, NEW)
+        moved = reader.get_entry((NEW, read_id))
+
+    assert moved.read is True
+
+
+def test_a_read_twin_on_the_survivor_is_not_resurrected_as_unread(configured):
+    """SHARED_ID exists on both feeds. If the survivor's copy is already read,
+    an unread source copy must not drag it back into the unread list."""
+    with main.get_reader() as reader:
+        reader.mark_entry_as_read((NEW, SHARED_ID))
+        reader.mark_entry_as_unread((OLD, SHARED_ID))
+        with main.get_meta_connection() as conn:
+            main._migrate_curation(reader, conn, OLD, NEW)
+        assert reader.get_entry((NEW, SHARED_ID)).read is True
+
+
+def test_per_entry_meta_follows_the_entry(configured):
+    """A moved post arriving with no thumbnail and its hand-made title
+    correction reverted is a worse outcome than not moving it."""
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at)"
+            " VALUES (?, ?, ?, ?)",
+            (OLD, UNCURATED, "https://cdn.test/panel.jpg", 1786232800.0),
+        )
+        conn.execute(
+            "INSERT INTO entry_title_overrides (feed_url, entry_id, title) VALUES (?, ?, ?)",
+            (OLD, UNCURATED, "corrected title"),
+        )
+        conn.commit()
+    with main.get_reader() as reader:
+        reader.add_entry({
+            "feed_url": OLD, "id": UNCURATED, "link": UNCURATED, "title": "t",
+        })
+        with main.get_meta_connection() as conn:
+            main._migrate_curation(reader, conn, OLD, NEW)
+
+    with main.get_meta_connection() as conn:
+        img = conn.execute(
+            "SELECT image_url FROM entry_lead_images WHERE feed_url = ? AND entry_id = ?",
+            (NEW, UNCURATED),
+        ).fetchone()
+        title = conn.execute(
+            "SELECT title FROM entry_title_overrides WHERE feed_url = ? AND entry_id = ?",
+            (NEW, UNCURATED),
+        ).fetchone()
+        left = conn.execute(
+            "SELECT COUNT(*) FROM entry_lead_images WHERE feed_url = ?", (OLD,)
+        ).fetchone()[0]
+
+    assert img is not None and img[0] == "https://cdn.test/panel.jpg"
+    assert title is not None and title[0] == "corrected title"
+    assert left == 0, "the source rows are the leak this also closes"
+
+
+def test_rekeying_read_history_does_not_lose_the_row(configured):
+    """read_history has an INTEGER PRIMARY KEY. Copying it verbatim collides
+    with the row being copied from, so INSERT OR IGNORE drops the copy and the
+    DELETE then loses the row outright."""
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO read_history (feed_url, entry_id, title, link, feed_title, read_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (OLD, UNCURATED, "t", UNCURATED, "old feed", "2026-08-08T00:00:00"),
+        )
+        conn.commit()
+        main._rekey_entry_meta(conn, OLD, UNCURATED, NEW, UNCURATED)
+        conn.commit()
+        rows = conn.execute(
+            "SELECT feed_url FROM read_history WHERE entry_id = ?", (UNCURATED,)
+        ).fetchall()
+
+    assert [r[0] for r in rows] == [NEW]

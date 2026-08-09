@@ -911,6 +911,27 @@ DeviantArt's legacy `backend.deviantart.com/rss.xml` is behind a CloudFront WAF 
 
 Dev.to's RSS (front page and per-tag) is an unfiltered firehose that mixes languages, while its public unauthenticated JSON API (`GET https://dev.to/api/articles`) exposes a per-article `language` label, reaction counts, and a `top=N` ranking window. `services/devto.py` follows the DeviantArt/FakeFeedz synthetic-feed pattern: one polite API request per refresh, client-side filtering (the API ignores `?language=`; we filter on dev.to's *own* `language` field, deliberately not our own detection), then render to `file://` RSS under `DATA_DIR/devto-feeds/` for `reader` to ingest. Per-feed config (tag, top-window days, English-only, min reactions, tags_exclude) lives in the per-user meta table `devto_feeds`; the Add Feed dialog detects dev.to front-page/tag URLs client-side (mirroring `parse_devto_url` — user/org pages are left to their normal small RSS) and reveals the filter fields, and the config is editable later via feed Properties → Tuning (`POST /devto-feeds/{id}/config`). Cover images seed the lead-image cache via the same sink mechanism as DeviantArt; deletion is dispatched in `purge_orphaned_feed` alongside the other rendered-feed types. Filter changes shape what arrives from then on — already-ingested entries are kept.
 
+## Duplicate feeds: the scheme is folded in the comparison, not the URL
+
+`get_feed_duplicates` groups subscriptions by `normalize_feed_url` **with the
+scheme stripped**. It has to be stripped somewhere, because `_DOMAIN_ALIASES`
+rewrites a host without touching the scheme: a legacy `http://tapastic.com/…`
+subscription normalized to `http://tapas.io/…` while its live twin was
+`https://…`, so the two never grouped and a dead feed sat beside a working copy
+failing every refresh, unflagged. Two more such pairs were live on the same
+library, already diverged — the Behance one by 47 entries.
+
+It is folded **here rather than in `normalize_feed_url`** because that function
+decides the stored subscription URL, and some hosts really are http-only;
+forcing https there would break them. The comparison has no such obligation.
+
+The survivor is chosen from the variants that are actually subscribed —
+preferring `https`, then the already-canonical spelling, then the shortest.
+`keep` used to be the canonical *string*, which is not necessarily one of the
+variants; when it was not, `url_folders.get(keep)` came back empty, so every
+variant looked cross-folder and was offered for removal against a URL nobody was
+subscribed to.
+
 ## Duplicate entry suppression
 
 Two mechanisms prevent duplicate articles from accumulating in the reader DB:
@@ -2062,6 +2083,27 @@ What keeps it cheap is the proxy's byte cache, which was already most of the ans
 
 `scripts/refresh_expired_deviantart_images.py` remains as a manual catch-up over the same routine. Note it must use `get_deviantart_user_token()` rather than reading `deviantart_access_token` directly: DA access tokens last an hour, so any batch reading the stored value 401s on almost every run.
 
+## Combining feeds moves the entries, not just the curation
+
+`_migrate_curation` used to walk `set(src_tags) | set(src_stars)` — curation,
+not entries. A post with no tag, no star and no capture was never visited, so it
+was neither matched onto a survivor twin nor synthesized, and it vanished when
+`reader.delete_feed` ran. Combining two subscriptions to the same Webtoons comic
+silently lost an unread post that way. Dropping uncurated entries is correct for
+an *unsubscribe*; for a combine — the user asserting these two feeds are the same
+feed — it is not, so the loop now walks every source entry.
+
+Two things make that safe at scale. **Read state is carried, not reset**, or
+combining an old feed would dump its entire history into the survivor's unread
+count; a survivor twin that is already read is never resurrected as unread by an
+unread source copy. And **per-entry meta follows the entry**
+(`_rekey_entry_meta`: lead image, captured feed tags, content/title/date/link
+overrides, media, read state, history), because a post that arrives with no
+thumbnail and its hand-made title correction reverted is a worse outcome than
+one that did not move. The re-key omits INTEGER PRIMARY KEY columns — copying
+`read_history.id` verbatim collides with the row being copied from, so
+`INSERT OR IGNORE` drops the copy and the follow-up `DELETE` loses the row.
+
 ## Combining feeds carries the offline captures
 
 `_migrate_curation` moves a removed feed's manual tags and stars onto the survivor, and now its **starred-archive rows** too (`rekey_archive`, which carries the asset links and refuses to clobber a capture the survivor already has). Without that the captures stayed keyed to a feed that was about to be deleted: the articles were fine, but their offline copies became unreachable and the Saved view rendered them as archive-only *orphans* — from the archive row's own stale `link`, which is how it surfaced, as a combined feed's articles still showing their old dead URLs. Measured on the live library 2026-07-25, past combines had stranded **85** of them; `scripts/repair_orphaned_archives.py` re-attached them (64 re-keyed, 3 where the stranded row was the *better* capture and replaced a thinner twin, 18 redundant drops, 14 links refreshed).
@@ -2341,7 +2383,73 @@ The **caption** source-HTML fetch (`queue_source_html_fetch` → `fetch_entry_im
 - **Plugin verdicts now apply here too.** `LeadImagePlugin.source_score_adjustment` only ever fed the scorer, so `TinyviewPlugin`'s −200 for `assets.tinyview.com` (skeleton animation, wordmark, icons8 buttons) demoted those URLs for the lead image while leaving them first-class gallery entries. Anything scored at or below `_PLUGIN_CHROME_SCORE` is now skipped — a plugin scoring that low is calling a URL chrome, not merely ranking it lower.
 - **Duplicate filenames collapse** (`_drop_duplicate_basenames`). A server-rendered app often emits an image twice, at its real location and at a fallback path that 404s; tinyview ships each panel as both `/<comic>/<yyyy>/<mm>/<dd>/<slug>/IMG_*.jpeg` (200) and `/<comic>/IMG_*.jpeg` (404). Which is real can't be known without fetching, but it can be inferred — prefer the URL whose path carries the entry's own slug, since that is the copy filed under this post. Falls back to first-seen order, so sites without the pattern are untouched.
 
+**A plugin verdict is only as good as the paths that honor it.**
+`should_skip_source_lookup` was consulted on 3 of the 12 `_fetch_source_lead_image`
+call sites, and the storing paths in `fetch_and_store_lead_images_for_feed` were
+not among them — so a plugin-owned host could resolve correctly on the render
+path and then be overwritten by a background revalidation that scraped the page
+anyway. Webtoons episodes went back to the series thumbnail hours after the
+plugin was fixed, which is how this surfaced. Storing paths now go through
+`_plugin_or_source_lead_image`: the plugin's own answer wins, a plugin that
+forbids scraping gets no scrape, and a forbidding plugin with no answer yields
+NULL rather than a scraped one. The old code stored NULL outright for any
+skip-source host, which blanked panels the plugin could have named.
+
+**Name heuristics must not run against machine-generated filenames.**
+`_AD_URL_PATTERNS`'s `[-_]ad[0-9]` exists for `Cert-ad1.png` and cannot tell it
+from `-ad27-` inside `ff52deff-c6a8-448d-ad27-a3c3d14c719c.jpg` — two Tapas
+panels were rejected as ad slots that way. The wixmp host-trust a few lines
+above was added for exactly this class ("ad87 in a UUID") one host at a time;
+`_UUID_BASENAME_RE` generalizes it. Only the *filename* half is exempted: the
+pattern does two jobs, and `/ads/` still names a directory, so a UUID sitting in
+an ads directory is still an ad. Path-, host- and dimension-based checks are
+untouched.
+
 **A plugin that suppresses everything is a claim about the feed, not just the page.** `WebtoonsPlugin` skipped source scraping *and* returned no fallback, on the stated belief that "the feed and og:image return the series thumbnail for every episode". Only half was true. An episode page's og:image really is the series thumbnail — byte-identical across episodes — but every Webtoons `<description>` carries that episode's own panel on the same CDN, distinct per episode on all nine subscribed feeds. The result was the series thumbnail on every strip, served from cache rows written before the plugin existed, while the real panel sat unused in the entry body. The plugin now reads the body like `BloggerPlugin` does, keeps `should_skip_source_lookup`, and narrows `should_bypass_cached_url` to URLs whose basename is `thumbnail.*` — so stale thumbnails are re-resolved and a good cached panel is left alone instead of being re-derived on every render.
+
+**Webtoons is the same trade, and the hotlink gate is dodged rather than
+forged.** An episode is a vertical strip cut into slices — 50 on a Backchannel
+chapter, 8 on MercWorks, 5 on False Knees — and the feed carries exactly one
+image. The slices are on the page as `<img class="_images" data-url=…>`; the
+class is what bounds them, because the page also embeds a recommendation strip
+of other series and a looser scan swept 62 URLs into an episode that has 50.
+
+The page serves them from `webtoon-phinf`, which answers **403 to any request
+without a `webtoons.com` Referer** — including a browser loading the image off a
+Lectio page. The sibling `swebtoon-phinf` host serves the same paths with no
+Referer at all, and is the host the RSS feed itself uses, so
+`_webtoons_public_slice_url` rewrites to it and drops the `?type=` resize.
+Verified 200 on every slice of three series. That is the difference between
+routing around a gate and forging a header we do not have; it also means no
+image-proxy change.
+
+**The feed's image and the article's image are different questions, and on
+Tapas they have different answers.** `/sa/` is *series art* — one picture per
+episode, thumbnail-grade, and all the RSS feed carries. `/c/` is the episode's
+actual content, one URL per panel, so a four-panel episode arrives in the feed
+as a single image. `_inject_tapas_episode_panels` fetches the episode page and
+puts the `/c/` panels in the body, strips the `/sa/` picture out of it, and
+drops the separate hero — otherwise the thumbnail renders above the comic it is
+a thumbnail of. The **list** thumbnail is untouched, because the caller captured
+the resolved lead in `_resolved_lead_for_cache` before the body rewrite; that
+split is what lets one entry have a thumbnail-grade image in the list and the
+real comic in the article.
+
+The `/c/` URLs are signed and short-lived (`?__token__=exp=…~acl=…`), which
+drives two decisions. The page is **re-read** rather than the URLs stored, since
+a stored URL is dead within the hour; and `__token__` joins
+`_IMG_CACHE_VOLATILE_PARAMS`, so `/api/img` caches the bytes under a
+token-stripped key and keeps answering after every token expires. The page fetch
+is synchronous on the render path — narrow enough to afford (Tapas links only,
+and only when the body has no `/c/` image already) and *not* deferrable the way
+a caption is, because deferring would show the wrong picture now.
+
+**Tapas is the same shape on a different host, and needed its own plugin.** An
+episode page's og:image is a social *card* (`.png` on `us-a.tapas.io`) while the
+panel is a `.jpg` on the same CDN inside `<content:encoded>`. The card is
+distinct per episode, so unlike Webtoons nothing in the URL says which is which
+— `TapasPlugin` therefore takes the body image and treats a non-`.jpg` cached
+value as the card worth re-resolving.
 
 The strategy comparison cache (`feed_strategy_cache`) also stores `image_alt` and `image_title` per strategy so the Tuning tab can display them below each card without a live fetch.
 

@@ -285,6 +285,88 @@ articles"). What remains:
 - **166 already-converted stars** — tagged entries starred by that backfill
   before it was fixed. Indistinguishable from a genuine star-and-tag, so they
   cannot be surgically reverted; the unstar-tagged pass is what removes them.
+### Removing a feed leaks its per-feed meta rows — measured 2026-08-08
+
+Noticed after combining the two Sarah's Scribbles Webtoons feeds. The combine
+itself was correct — the removed feed carried no stars, tags or archive rows, so
+its single uncurated 2021 episode was rightly dropped — but it left a row behind
+in `entry_lead_images`, and that turns out to be the normal outcome.
+
+**The rename path and the removal path disagree.** `change_feed_url` carries a
+15-table `_feed_url_tables` list (archive, folders, saved, read state, history,
+lead images, feed tags, prefs, …). `purge_orphaned_feed` deletes the reader feed
+and cleans exactly two tables: `kept_feeds` and `feeds_needing_replacement`.
+Everything else keyed on `feed_url` stays.
+
+Accumulated on the live library, `entry_lead_images` alone:
+
+| | rows | feeds |
+|---|---:|---:|
+| on feeds reader no longer has | **25,504** | 371 |
+| …of those, feeds that still have **archive** rows | **1,923** | 38 |
+| …dev/localhost test feeds | 11,250 | 6 |
+| …genuinely dead | 12,331 | 327 |
+
+**The middle row is the trap, and it is why this is not a one-line DELETE.** The
+Saved view renders archive orphans — entries whose feed is gone but whose capture
+survives — so 1,923 of those rows are still displayed. `kept_feeds` is a second
+exclusion: it is empty today, which makes "not in reader" *look* safe, but an
+unsubscribe-with-keep would put rows there and the naive sweep would then blank
+thumbnails in the Kept view.
+
+So a safe sweep excludes three sets, not one: feeds reader still has, feeds with
+archive rows, and `kept_feeds`. Two things to do, and the first matters more:
+
+1. **Fix the leak** — have feed removal reuse the same table list the rename path
+   already maintains, minus the tables an archive orphan still needs. Combine no
+   longer contributes: it re-keys each entry's meta rows onto the survivor
+   (`_rekey_entry_meta`). Plain unsubscribe still leaks.
+2. **Sweep the backlog** once, behind the exclusions above. Bulk delete on live
+   data, so it wants a go-ahead. The dev/localhost 11,250 are free.
+
+### Clearing the lead-image cache is not a repair — found 2026-08-08
+
+`clear_lead_image_cache` + `fetch_and_store_lead_images_for_feed` looks like the
+obvious way to re-derive a feed's thumbnails. It is not: the backfill loop
+deliberately visits only entries that are **unread, saved or manually tagged**,
+so clearing first leaves every *read* entry with no row at all and nothing ever
+comes back for it. Doing exactly that across the 15 Tapas feeds took them from
+33 correct / 54 wrong to 20 correct / **124 unresolved** — worse than before.
+
+The repair that works resolves per entry and stores the result directly
+(`_plugin_or_source_lead_image` + `store_entry_lead_image`), which reached all
+144. Worth remembering before the next "just clear it and let it rebuild".
+
+Two things that could follow from it, neither started: give the backfill an
+explicit "include read entries" mode for repair runs, or have
+`clear_lead_image_cache` refuse to clear rows the backfill will not revisit.
+
+### Duplicate *feeds* are invisible to every scanner — measured 2026-08-08
+
+Two subscriptions to Sarah's Scribbles on Webtoons (`title_no=50260`, 20 entries;
+`title_no=677113`, 1 entry from 2021) are plainly the same comic, and nothing
+finds them. `get_feed_duplicates` groups by `normalize_feed_url`, so it only ever
+sees slash and format variants of **one address**; two different `title_no`
+values never group. The entry-level scans cannot help either — measured, the two
+feeds share **zero** titles and **zero** links, because 677113 only ever had one
+episode and it is not in the other's window.
+
+What does identify them is the feed **title**. Measured across the live library
+(2,886 feeds):
+
+| signal | groups | feeds covered | verdict |
+|---|---|---|---|
+| same host + path, differing query only | 10 | **740** | useless — almost all YouTube `videos.xml?channel_id=…` |
+| **same feed title** | **32** | **72** | a real, reviewable list |
+
+The title groups are mostly genuine: `sarah's scribbles ×3`, `cryptid club ×2`,
+`fantasyanime ×3`, `nine inch nails ×3`, and 15 same-host pairs. The obvious
+guard is a generic-title floor — `news ×7` is 7 unrelated sites, not a duplicate
+— plus keeping it advisory: a same-title pair can legitimately be a site's blog
+and its podcast. Nothing should be pre-checked, per the usual rule.
+
+Worth building as a third tier in the Dupes tab. Not started.
+
 ### Cross-feed duplicate scan — the dupes you can actually feel
 
 **RE-MEASURED 2026-07-22 — #4 collapsed almost all of this, exactly as predicted.

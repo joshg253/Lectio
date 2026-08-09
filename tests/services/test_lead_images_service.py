@@ -1781,3 +1781,137 @@ def test_bare_banner_is_not_an_ad():
     assert not L.is_ad_url("https://x.test/img/site-banner.png")
     # A section ABOUT sponsors is not a creative: only the filename is matched.
     assert not L.is_ad_url("https://x.test/sponsors/our-partners-hero.jpg")
+
+
+def test_a_storing_path_honors_a_plugin_that_forbids_the_source_page(tmp_path: Path):
+    """`should_skip_source_lookup` was consulted on 3 of 12 `_fetch_source_lead_image`
+    call sites, and the backfill's storing paths were not among them — so a
+    plugin-owned host got the right image on the render path and had it
+    overwritten by a background revalidation that scraped the page anyway.
+    That is how Webtoons episodes went back to the series thumbnail hours after
+    the plugin was fixed."""
+    entry = _FakeEntry(
+        feed_url="https://example.test/feed",
+        entry_id="e1",
+        link="https://plugin-owned.test/episode/1",
+        content_html='<img src="https://cdn.test/panel.jpg"/>',
+    )
+    svc = _build_service(tmp_path / "meta.sqlite3", [entry])
+
+    scraped: list[str] = []
+
+    def _never(entry_link, is_webcomic=False):
+        scraped.append(entry_link)
+        return "https://cdn.test/social-card.png"
+
+    svc._fetch_source_lead_image = _never  # type: ignore[method-assign]
+    svc._plugin_should_skip_source_lookup = (  # type: ignore[method-assign]
+        lambda *, entry_link: "plugin-owned.test" in entry_link
+    )
+    svc._plugin_fallback_lead_image_url = (  # type: ignore[method-assign]
+        lambda *, entry_link, content_html, summary: "https://cdn.test/panel.jpg"
+    )
+
+    got = svc._plugin_or_source_lead_image(entry, entry.link, is_webcomic=True)
+
+    assert got == "https://cdn.test/panel.jpg"
+    assert scraped == [], "the page must not be fetched when a plugin forbids it"
+
+
+def test_a_storing_path_still_scrapes_for_hosts_no_plugin_claims(tmp_path: Path):
+    entry = _FakeEntry(
+        feed_url="https://example.test/feed", entry_id="e1",
+        link="https://ordinary.test/post/1",
+    )
+    svc = _build_service(tmp_path / "meta.sqlite3", [entry])
+    svc._fetch_source_lead_image = (  # type: ignore[method-assign]
+        lambda entry_link, is_webcomic=False: "https://cdn.test/og.jpg"
+    )
+    svc._plugin_should_skip_source_lookup = lambda *, entry_link: False  # type: ignore[method-assign]
+
+    assert svc._plugin_or_source_lead_image(
+        entry, entry.link, is_webcomic=False
+    ) == "https://cdn.test/og.jpg"
+
+
+def test_a_forbidding_plugin_with_no_answer_yields_none_not_a_scrape(tmp_path: Path):
+    entry = _FakeEntry(
+        feed_url="https://example.test/feed", entry_id="e1",
+        link="https://plugin-owned.test/episode/1",
+    )
+    svc = _build_service(tmp_path / "meta.sqlite3", [entry])
+    svc._fetch_source_lead_image = (  # type: ignore[method-assign]
+        lambda entry_link, is_webcomic=False: "https://cdn.test/social-card.png"
+    )
+    svc._plugin_should_skip_source_lookup = lambda *, entry_link: True  # type: ignore[method-assign]
+    svc._plugin_fallback_lead_image_url = (  # type: ignore[method-assign]
+        lambda *, entry_link, content_html, summary: None
+    )
+
+    assert svc._plugin_or_source_lead_image(entry, entry.link, is_webcomic=True) is None
+
+
+def test_a_uuid_filename_is_not_read_as_an_ad_slot(tmp_path: Path):
+    """`[-_]ad[0-9]` exists for `Cert-ad1.png`, and it cannot tell that from
+    `-ad27-` inside a UUID. Two Tapas panels were rejected that way, and the
+    wixmp host-trust was added for the same class one host at a time."""
+    svc = _build_service(tmp_path / "meta.sqlite3", [])
+    for url in (
+        "https://us-a.tapas.io/sa/a3/ff52deff-c6a8-448d-ad27-a3c3d14c719c.jpg",
+        "https://us-a.tapas.io/sa/34/811959d7-ad1c-47c0-8ee1-570d77204f48.jpg",
+        # The same class in the other name-based filters.
+        "https://cdn.test/6566d9f3-5857-4a02-98f2-f1941bb0f8f0.png",
+        # Webtoons appends a numeric id straight onto the UUID's last group
+        # with no separator, which a trailing-separator-only rule missed.
+        "https://swebtoon-phinf.pstatic.net/20251231_227/x_JPEG/"
+        "53e3fa05-ad49-4593-b2ac-782469d45a9212398245534840153981.jpg",
+    ):
+        assert svc._is_image_url_acceptable(url, None, None) is True, url
+
+
+def test_a_real_ad_slot_name_is_still_rejected(tmp_path: Path):
+    """The UUID exemption must not blunt the filter it protects."""
+    svc = _build_service(tmp_path / "meta.sqlite3", [])
+    for url in (
+        "https://example.test/img/Cert-ad1.png",
+        "https://example.test/ads/banner.png",
+        "https://example.test/advert/x.jpg",
+    ):
+        assert svc._is_image_url_acceptable(url, None, None) is False, url
+
+
+def test_a_uuid_name_with_a_suffix_is_still_opaque(tmp_path: Path):
+    svc = _build_service(tmp_path / "meta.sqlite3", [])
+    assert svc._is_image_url_acceptable(
+        "https://cdn.test/ff52deff-c6a8-448d-ad27-a3c3d14c719c-1200x800.jpg", None, None
+    ) is True
+
+
+def test_path_based_rejections_survive_an_opaque_name(tmp_path: Path):
+    """Only *name* heuristics are skipped — a UUID sitting in an ads directory
+    is still an ad."""
+    svc = _build_service(tmp_path / "meta.sqlite3", [])
+    assert svc._is_image_url_acceptable(
+        "https://example.test/ads/ff52deff-c6a8-448d-ad27-a3c3d14c719c.jpg", None, None
+    ) is False
+
+
+def test_the_on_open_fetch_is_skipped_for_a_plugin_owned_host(tmp_path: Path):
+    """`queue_source_fetch` is the on-open path, so it is the one a *user*
+    triggers by clicking an entry — and it persisted whatever the page gave it.
+    That is how Webtoons episodes kept reacquiring the series thumbnail after
+    the backfill's storing paths were fixed."""
+    svc = _build_service(tmp_path / "meta.sqlite3", [])
+    scraped: list[str] = []
+    svc._fetch_source_lead_image = (  # type: ignore[method-assign]
+        lambda entry_link, is_webcomic=False: scraped.append(entry_link) or "https://cdn.test/og.png"
+    )
+    svc._plugin_should_skip_source_lookup = (  # type: ignore[method-assign]
+        lambda *, entry_link: "plugin-owned.test" in entry_link
+    )
+
+    svc.queue_source_fetch("https://f.test/feed", "e1", "https://plugin-owned.test/episode/1")
+    svc.wait_for_source_fetch("https://f.test/feed", "e1", timeout=1.0)
+
+    assert scraped == []
+    assert svc.get_cached_lead_image_url("https://f.test/feed", "e1") is None
