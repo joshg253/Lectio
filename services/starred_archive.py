@@ -694,7 +694,9 @@ class StarredArchiveService:
             "content_html": content_html,
         }
 
-    def get_orphan_saved_entries(self, live_feed_urls: set[str]) -> list[dict[str, Any]]:
+    def get_orphan_saved_entries(
+        self, live_feed_urls: set[str], search_terms: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         """Return archive rows whose feed isn't in `live_feed_urls` AND are
         actually kept — starred or manually tagged (via orphan_entry_tags,
         since a reader-backed tag needs a reader resource these entries don't
@@ -709,6 +711,14 @@ class StarredArchiveService:
         archive still exists" as its own, weaker definition of kept. An
         uncurated leftover (feed long gone, never starred or tagged, or
         unstarred after the fact) is not shown as Saved.
+
+        *search_terms*, if given, filters to rows where every term appears
+        (case-insensitively) in title, link, feed_title, or author — the same
+        AND-across-terms rule the SQL-backed search paths use, applied here in
+        Python because orphans have no reader row for a SQL search to join
+        against. Metadata only, not the archived body text: orphans are a few
+        hundred to low thousands of rows at most, so this stays cheap without
+        needing to decompress every capture's content on every keystroke.
         """
         try:
             with self._archive_conn() as conn:
@@ -742,6 +752,11 @@ class StarredArchiveService:
             entry_id = str(row["entry_id"])
             if (feed_url, entry_id) not in starred and (feed_url, entry_id) not in tagged:
                 continue
+            if search_terms:
+                haystack = " ".join(str(row[c] or "") for c in
+                                     ("title", "link", "feed_title", "author")).lower()
+                if not all(term in haystack for term in search_terms):
+                    continue
             out.append(
                 {
                     "feed_url": feed_url,

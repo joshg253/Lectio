@@ -8286,6 +8286,14 @@ def normalize_search_query(value: str | None) -> str | None:
     return normalized or None
 
 
+def search_terms_from_query(value: str | None) -> list[str]:
+    """Lowercased, whitespace-split search tokens — the shared tokenization
+    every search surface (SQL-narrowed kept/feeds search, orphan-archive
+    metadata match) filters on, so a query means the same thing everywhere."""
+    normalized = normalize_search_query(value)
+    return [token.lower() for token in normalized.split()] if normalized else []
+
+
 def parse_manual_hashtags(raw_value: str | None) -> list[str]:
     if not raw_value:
         return []
@@ -12487,8 +12495,7 @@ def list_entries_for_feeds(
     normalized_read_filter = normalize_read_filter(read_filter)
     normalized_star_only = normalize_star_only(star_only)
     normalized_selected_tag = normalize_tag_value(selected_tag)
-    normalized_search_query = normalize_search_query(search_query)
-    search_terms = [token.lower() for token in normalized_search_query.split()] if normalized_search_query else []
+    search_terms = search_terms_from_query(search_query)
     # site:<host> narrows to entries on that link host; it never goes to the
     # text-matching paths (SQL or haystack), only the link-host filter below.
     search_terms, site_hosts = _split_site_terms(search_terms)
@@ -13345,6 +13352,7 @@ def merge_orphan_saved_entries(
     limit: int,
     only_feed_url: str | None = None,
     archived: bool | None = None,
+    search_terms: list[str] | None = None,
 ) -> list[dict]:
     """Append archive-only saved entries (orphans), then re-sort + clip.
 
@@ -13361,13 +13369,18 @@ def merge_orphan_saved_entries(
     When *only_feed_url* is given, restrict orphans to that single feed (matched
     canonically) — used when the user clicks the feed link of an orphaned save
     to browse just that unsubscribed feed's archived items.
+
+    *search_terms*, if given, is forwarded to the archive-metadata match (see
+    get_orphan_saved_entries) — the caller's search doesn't otherwise reach
+    orphans at all, since they have no reader row for the SQL search to join
+    against.
     """
     archived_keys = get_archived_saved_keys() if archived is not None else set()
     if archived is not None:
         posts = [p for p in posts
                  if ((str(p["feed_url"]), str(p["id"])) in archived_keys) == archived]
 
-    orphans = starred_archive_service.get_orphan_saved_entries(live_feed_urls)
+    orphans = starred_archive_service.get_orphan_saved_entries(live_feed_urls, search_terms)
     if archived is not None:
         orphans = [o for o in orphans
                    if ((str(o["feed_url"]), str(o["id"])) in archived_keys) == archived]
@@ -18760,13 +18773,14 @@ def resolve_reader_backlog(
     )
 
     # Parity with the Saved list: surface archive-only orphans (saves whose feed
-    # was unsubscribed) in the whole-backlog star view — root, no feed/tag/query.
+    # was unsubscribed) in the whole-backlog star view — root, no feed/tag. A
+    # search query narrows them (metadata match) rather than excluding them —
+    # orphans have no reader row for the SQL search path to reach otherwise.
     _merged_orphans = False
     if (
         star_only
         and not list_feed_url
         and not tag
-        and not search_query
         and selected_folder_id == root_id
     ):
         try:
@@ -18777,6 +18791,7 @@ def resolve_reader_backlog(
                 sort_dir=sort_dir,
                 limit=limit,
                 archived=archived,
+                search_terms=search_terms_from_query(search_query),
             )
             _merged_orphans = True
         except Exception as exc:  # noqa: BLE001
@@ -20987,9 +21002,11 @@ def _home_inner(
     )
 
     # Surface orphan archive entries (saved articles whose feed has been
-    # unsubscribed). Two entry points, both gated on the saved filter:
-    #   1. Root "All Feeds" with no feed/tag/query — orphans belong to no
-    #      folder, so per-folder views legitimately exclude them.
+    # unsubscribed). Two entry points, both gated on the saved filter. A search
+    # query narrows either (metadata match, passed through as search_terms)
+    # rather than excluding orphans outright:
+    #   1. Root "All Feeds" with no feed/tag — orphans belong to no folder, so
+    #      per-folder views legitimately exclude them.
     #   2. A specific feed selected that is no longer live (the user clicked
     #      the feed link on an orphaned save) — show just that feed's archive.
     orphan_only_feed = (
@@ -21006,6 +21023,7 @@ def _home_inner(
                 sort_dir=selected_sort_dir,
                 limit=limit,
                 only_feed_url=orphan_only_feed,
+                search_terms=search_terms_from_query(selected_query),
             )
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("orphan saved entry merge (feed %s) failed: %s", orphan_only_feed, exc)
@@ -21015,7 +21033,6 @@ def _home_inner(
         and selected_folder_id == root_id
         and not selected_feed_url
         and not selected_tag
-        and not selected_query
         # Orphans are read by definition (no live entry to be unread), so a
         # Saved view narrowed to unread excludes them.
         and selected_read_filter != "unread"
@@ -21031,6 +21048,7 @@ def _home_inner(
                 # vanished on return). An entry whose feed is live is not an
                 # orphan, whatever the folder tree says.
                 live_feed_urls=all_feed_urls | {saved_articles_service.SAVED_FEED_URL},
+                search_terms=search_terms_from_query(selected_query),
                 sort_by=selected_sort_by,
                 sort_dir=selected_sort_dir,
                 limit=limit,

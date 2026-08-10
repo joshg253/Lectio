@@ -33,7 +33,7 @@ def _orphans():
 
 def test_only_feed_url_filters_to_that_feed(monkeypatch):
     monkeypatch.setattr(
-        main.starred_archive_service, "get_orphan_saved_entries", lambda live: _orphans()
+        main.starred_archive_service, "get_orphan_saved_entries", lambda live, terms=None: _orphans()
     )
     out = main.merge_orphan_saved_entries(
         [],
@@ -50,7 +50,7 @@ def test_only_feed_url_filters_to_that_feed(monkeypatch):
 def test_only_feed_url_matches_canonically(monkeypatch):
     # Trailing-slash / scheme variance shouldn't hide the feed's saves.
     monkeypatch.setattr(
-        main.starred_archive_service, "get_orphan_saved_entries", lambda live: _orphans()
+        main.starred_archive_service, "get_orphan_saved_entries", lambda live, terms=None: _orphans()
     )
     out = main.merge_orphan_saved_entries(
         [],
@@ -65,9 +65,24 @@ def test_only_feed_url_matches_canonically(monkeypatch):
 
 def test_no_only_feed_url_keeps_all_orphans(monkeypatch):
     monkeypatch.setattr(
-        main.starred_archive_service, "get_orphan_saved_entries", lambda live: _orphans()
+        main.starred_archive_service, "get_orphan_saved_entries", lambda live, terms=None: _orphans()
     )
     out = main.merge_orphan_saved_entries(
         [], live_feed_urls=set(), sort_by="post", sort_dir="desc", limit=50
     )
     assert sorted(p["id"] for p in out) == ["e1", "e2"]
+
+
+def test_search_terms_are_forwarded_to_the_service(monkeypatch):
+    seen = {}
+
+    def fake(live, terms=None):
+        seen["terms"] = terms
+        return _orphans()
+
+    monkeypatch.setattr(main.starred_archive_service, "get_orphan_saved_entries", fake)
+    main.merge_orphan_saved_entries(
+        [], live_feed_urls=set(), sort_by="post", sort_dir="desc", limit=50,
+        search_terms=["crack"],
+    )
+    assert seen["terms"] == ["crack"]

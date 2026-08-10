@@ -69,12 +69,18 @@ def _svc(archive, meta):
     )
 
 
-def _add(archive, entry_id, *, status="complete"):
+def _add(archive, entry_id, *, status="complete", title="", link="", feed_title="", author=None):
     archive.execute(
-        "INSERT INTO archived_entry (feed_url, entry_id, status) VALUES (?, ?, ?)",
-        (FEED, entry_id, status),
+        "INSERT INTO archived_entry (feed_url, entry_id, status, title, link, feed_title, author)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (FEED, entry_id, status, title, link, feed_title, author),
     )
     archive.commit()
+
+
+def _star(meta, entry_id):
+    meta.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (FEED, entry_id))
+    meta.commit()
 
 
 def test_uncurated_orphan_is_excluded(archive, meta):
@@ -117,3 +123,43 @@ def test_incomplete_archive_still_excluded_regardless_of_curation(archive, meta)
     meta.commit()
     out = _svc(archive, meta).get_orphan_saved_entries(live_feed_urls=set())
     assert out == []
+
+
+def test_search_terms_match_title_case_insensitively(archive, meta):
+    _add(archive, "pshell", title="Working with PowerShell")
+    _add(archive, "other", title="Something else entirely")
+    _star(meta, "pshell")
+    _star(meta, "other")
+    out = _svc(archive, meta).get_orphan_saved_entries(live_feed_urls=set(), search_terms=["powershell"])
+    assert [o["id"] for o in out] == ["pshell"]
+
+
+def test_search_terms_all_must_match(archive, meta):
+    _add(archive, "both", title="Working with PowerShell scripts")
+    _add(archive, "one-only", title="Working with something else")
+    _star(meta, "both")
+    _star(meta, "one-only")
+    out = _svc(archive, meta).get_orphan_saved_entries(
+        live_feed_urls=set(), search_terms=["working", "powershell"]
+    )
+    assert [o["id"] for o in out] == ["both"]
+
+
+def test_search_terms_also_match_link_feed_title_and_author(archive, meta):
+    _add(archive, "by-link", title="x", link="https://example.test/needle-here")
+    _add(archive, "by-feed-title", title="x", feed_title="Needle Weekly")
+    _add(archive, "by-author", title="x", author="A. Needle")
+    _add(archive, "none", title="x")
+    for eid in ("by-link", "by-feed-title", "by-author", "none"):
+        _star(meta, eid)
+    out = _svc(archive, meta).get_orphan_saved_entries(live_feed_urls=set(), search_terms=["needle"])
+    assert sorted(o["id"] for o in out) == ["by-author", "by-feed-title", "by-link"]
+
+
+def test_no_search_terms_returns_all_curated_orphans(archive, meta):
+    _add(archive, "a", title="alpha")
+    _add(archive, "b", title="beta")
+    _star(meta, "a")
+    _star(meta, "b")
+    out = _svc(archive, meta).get_orphan_saved_entries(live_feed_urls=set(), search_terms=[])
+    assert sorted(o["id"] for o in out) == ["a", "b"]
