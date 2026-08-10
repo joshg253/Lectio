@@ -1729,8 +1729,8 @@ _SECURITY_HEADERS_ENABLED = os.getenv("LECTIO_SECURITY_HEADERS", "0") == "1"
 # Paths that are always public (no login required)
 _AUTH_EXEMPT_PREFIXES = (
     "/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save",
-    "/api/bookmarklet/save", "/dev/feeds/", "/fever", "/greader/", "/websub/",
-    "/sw.js",
+    "/api/bookmarklet/save", "/dev/feeds/", "/fever", "/greader/", "/v1/",
+    "/websub/", "/sw.js",
 )
 
 manual_refresh_lock = threading.Lock()
@@ -2445,7 +2445,10 @@ class _TenancyMiddleware:
 # Paths exempt from CSRF validation. /login is the auth gate itself (rate-
 # limited separately). /static and /healthz are GET-only anyway, but listing
 # explicitly documents intent.
-_CSRF_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save", "/api/bookmarklet/save", "/fever", "/greader/", "/websub/")
+_CSRF_EXEMPT_PREFIXES = (
+    "/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save",
+    "/api/bookmarklet/save", "/fever", "/greader/", "/v1/", "/websub/",
+)
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _CSRF_SESSION_KEY = "csrf_token"
 _CSRF_HEADER_NAME = "x-csrf-token"
@@ -14307,7 +14310,12 @@ def _apply_caption_source_pref(image_title_text, disp, entry, content_html):
 
 _LEAD_IMG_OPENER_RE = re.compile(
     r"^\s*(?:<!--.*?-->\s*)*"  # skip leading HTML comments (e.g. Ghost kg-card-begin)
-    r"(?:<p\b[^>]*>\s*(?:&nbsp;|\s)*</p>\s*)*"  # skip blank paragraphs (e.g. Blogger <p>&nbsp;</p>)
+    # skip blank paragraphs (e.g. Blogger <p>&nbsp;</p>). No leading \s* here:
+    # it would overlap with (?:&nbsp;|\s)* on plain whitespace, and the two
+    # adjacent whitespace-matching quantifiers are ambiguous enough on a run of
+    # spaces to blow up backtracking (ReDoS) when the trailing </p> never
+    # arrives — feed-supplied HTML is attacker-influenced here.
+    r"(?:<p\b[^>]*>(?:&nbsp;|\s)*</p>\s*)*"
     r"(?:<(?:p|figure|div)\b[^>]*>\s*){0,3}"
     r"(?:<a\b[^>]*>\s*)?"
     r"(?:<div\b[^>]*>\s*)?"   # allow one extra wrapper div after <a> (e.g. Substack image2-inset)
@@ -18401,12 +18409,21 @@ def _prepend_reader_lead_image(feed_url: str | None, entry_id: str | None, body:
 _MIN_ARCHIVED_ARTICLE_TEXT = 400
 
 
+_READER_TEXT_TAG_RE = re.compile(r"<[^>]{1,10000}>")
+
+
 def _reader_text_length(html_text: str | None) -> int:
     """Visible-text length of a fragment — tags carry no reading value, so a
-    markup-heavy widget must not out-measure real prose."""
+    markup-heavy widget must not out-measure real prose.
+
+    The tag-strip is bounded (``{1,10000}`` rather than ``+``): an unbounded
+    quantifier ahead of a required ``>`` re-scans to the end of the string at
+    every unmatched ``<`` in feed-supplied HTML, which is O(n^2) on adversarial
+    input (ReDoS). No real tag is anywhere near 10000 chars.
+    """
     if not html_text:
         return 0
-    return len(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html_text)).strip())
+    return len(re.sub(r"\s+", " ", _READER_TEXT_TAG_RE.sub(" ", html_text)).strip())
 
 
 def _reader_img_count(html_text: str | None) -> int:
@@ -18495,8 +18512,14 @@ def proxy_reader_images(content: str) -> str:
 
     content = _drop_feed_beacon_images(content)
     out = _READER_IMG_SRC_RE.sub(_rewrite, content)
+    # Bounded attribute-value quantifiers ({0,10000}, not *): an unbounded
+    # [^"]*/[^']* ahead of a required closing quote re-scans to end-of-string
+    # for every unclosed attribute in feed-supplied HTML — O(n^2) on
+    # adversarial input (ReDoS). No real attribute value is anywhere near
+    # 10000 chars.
     return re.sub(
-        r'\s+(?:srcset|data-srcset|data-src|data-lazy-src)\s*=\s*(?:"[^"]*"|\'[^\']*\')',
+        r'\s+(?:srcset|data-srcset|data-src|data-lazy-src)\s*=\s*'
+        r'(?:"[^"]{0,10000}"|\'[^\']{0,10000}\')',
         "", out, flags=re.IGNORECASE)
 
 
@@ -21676,9 +21699,13 @@ def _guid_type(ids: list[str]) -> str:
 
 def _compare_one_feed(url: str) -> dict:
     """Fetch and parse one feed URL, returning metadata for the Add Feed comparison picker."""
+    from services import url_guard
     _headers = {"User-Agent": "Lectio/1.0 (feed comparison; +https://github.com/joshg253/Lectio)"}
     try:
-        resp = httpx.get(url, timeout=10.0, follow_redirects=True, headers=_headers)
+        with url_guard.build_client(timeout=10.0, headers=_headers) as client:
+            resp = url_guard.safe_get(client, url, headers=_headers)
+    except url_guard.UnsafeURLError:
+        return {"url": url, "error": "This URL points at a private/internal address and cannot be fetched."}
     except Exception as exc:
         return {"url": url, "error": str(exc).split("\n")[0][:120]}
     if not resp.is_success:

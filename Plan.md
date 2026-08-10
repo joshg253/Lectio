@@ -13,17 +13,23 @@ project last.
 
 ### CodeQL board triage
 
-**Still open on the board (5), not yet triaged:**
+**FIXED 2026-08-09** — all 5 findings from the board:
 
-- `py/polynomial-redos` ×4 — [main.py:13882](main.py#L13882),
-  [13888](main.py#L13888) (`_LEAD_IMG_OPENER_RE` against stored content),
-  [17153](main.py#L17153) (`<[^>]+>` tag-strip in the visible-text measure),
-  [17244](main.py#L17244) (the `srcset` strip in `proxy_reader_images`). All four
-  run over **feed-supplied HTML**, which is attacker-influenced in the way that
-  matters for a ReDoS, so these are worth actually fixing rather than dismissing.
-- `py/stack-trace-exposure` — [main.py:21412](main.py#L21412), the webhook test
-  route returning `err` to the caller. Admin-only, but the fix (log the detail,
-  return a generic message) is smaller than the argument for keeping it.
+- `py/polynomial-redos` ×4: `_LEAD_IMG_OPENER_RE`'s blank-paragraph branch had
+  an adjacent `\s*` immediately before `(?:&nbsp;|\s)*`, both matching plain
+  whitespace — an ambiguous-quantifier ReDoS on a run of spaces with no
+  trailing `</p>`; dropped the redundant `\s*`. The tag-strip in
+  `_reader_text_length` and the attribute-value strip in
+  `proxy_reader_images`'s srcset removal both had unbounded quantifiers
+  (`[^>]+`, `[^"]*`/`[^']*`) ahead of a required closing delimiter, which
+  re-scan to end-of-string at every unmatched opener in feed-supplied HTML —
+  O(n^2) worst case; bounded both to `{0,10000}`/`{1,10000}` (no real tag or
+  attribute value approaches that length).
+- `py/stack-trace-exposure`: `send_webhook`'s exception branch returned
+  `str(exc)` (raw transport/connection detail) straight to the webhook-test
+  route's JSON response. Now logs the exception server-side and returns a
+  generic `"delivery failed (connection or transport error)"`; the `HTTP 500`-
+  style non-2xx branch is unchanged since a bare status code isn't sensitive.
 
 **If the reflective-XSS class keeps recurring**, the repo already has the pattern
 for it: `.github/codeql/queries/` holds guard-aware copies of the SSRF and

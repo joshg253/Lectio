@@ -699,11 +699,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             byFolder[d.folder_id].items.push(d);
           });
           list.innerHTML = Object.values(byFolder).map(({ name, items }) =>
-            `<div class="dedup-folder-group"><span class="dedup-folder-label">${name}</span>` +
+            `<div class="dedup-folder-group"><span class="dedup-folder-label">${_mfEscape(name)}</span>` +
             items.map(d =>
               `<div class="dedup-pair">` +
-              `<div class="dedup-pair-row"><span class="dedup-tag keep-tag">keep</span><span class="dedup-url">${d.keep}</span></div>` +
-              `<div class="dedup-pair-row"><span class="dedup-tag remove-tag">remove</span><span class="dedup-url">${d.remove}</span></div>` +
+              `<div class="dedup-pair-row"><span class="dedup-tag keep-tag">keep</span><span class="dedup-url">${_mfEscape(d.keep)}</span></div>` +
+              `<div class="dedup-pair-row"><span class="dedup-tag remove-tag">remove</span><span class="dedup-url">${_mfEscape(d.remove)}</span></div>` +
               `</div>`
             ).join('') + `</div>`
           ).join('');
@@ -721,12 +721,12 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             : `Found ${crossFolder.length} duplicate feed(s) across different folders — choose which folder(s) to keep each feed in:`;
           crossList.innerHTML = crossFolder.map((d, i) => {
             const checkboxes = d.all_folders.map(f =>
-              `<label class="dedup-folder-check"><input type="checkbox" name="cross_${i}_folder" value="${f.id}" checked> ${f.name}</label>`
+              `<label class="dedup-folder-check"><input type="checkbox" name="cross_${i}_folder" value="${_mfEscape(f.id)}" checked> ${_mfEscape(f.name)}</label>`
             ).join('');
-            return `<div class="dedup-cross-pair" data-index="${i}" data-keep="${d.keep}" data-remove="${d.remove}">` +
+            return `<div class="dedup-cross-pair" data-index="${i}" data-keep="${_mfEscape(d.keep)}" data-remove="${_mfEscape(d.remove)}">` +
               `<div class="dedup-pair">` +
-              `<div class="dedup-pair-row"><span class="dedup-tag keep-tag">keep</span><span class="dedup-url">${d.keep}</span></div>` +
-              `<div class="dedup-pair-row"><span class="dedup-tag remove-tag">remove</span><span class="dedup-url">${d.remove}</span></div>` +
+              `<div class="dedup-pair-row"><span class="dedup-tag keep-tag">keep</span><span class="dedup-url">${_mfEscape(d.keep)}</span></div>` +
+              `<div class="dedup-pair-row"><span class="dedup-tag remove-tag">remove</span><span class="dedup-url">${_mfEscape(d.remove)}</span></div>` +
               `</div>` +
               `<div class="dedup-folder-checks">${checkboxes}</div>` +
               `</div>`;
@@ -741,10 +741,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           const upgradeIntro = upgradeSection.querySelector('.dedup-upgrade-intro');
           upgradeIntro.textContent = `Found ${upgradable.length} feed(s) using an RSS format URL — check to upgrade to Atom:`;
           upgradeList.innerHTML = upgradable.map((d, i) =>
-            `<label class="dedup-upgrade-item"><input type="checkbox" class="dedup-upgrade-check" data-current="${d.current}" data-upgrade-to="${d.upgrade_to}" checked>` +
+            `<label class="dedup-upgrade-item"><input type="checkbox" class="dedup-upgrade-check" data-current="${_mfEscape(d.current)}" data-upgrade-to="${_mfEscape(d.upgrade_to)}" checked>` +
             `<div class="dedup-pair">` +
-            `<div class="dedup-pair-row"><span class="dedup-tag remove-tag">rss</span><span class="dedup-url">${d.current}</span></div>` +
-            `<div class="dedup-pair-row"><span class="dedup-tag keep-tag">atom</span><span class="dedup-url">${d.upgrade_to}</span></div>` +
+            `<div class="dedup-pair-row"><span class="dedup-tag remove-tag">rss</span><span class="dedup-url">${_mfEscape(d.current)}</span></div>` +
+            `<div class="dedup-pair-row"><span class="dedup-tag keep-tag">atom</span><span class="dedup-url">${_mfEscape(d.upgrade_to)}</span></div>` +
             `</div></label>`
           ).join('');
         } else {
