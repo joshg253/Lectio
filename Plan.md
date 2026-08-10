@@ -40,20 +40,6 @@ end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, 
 excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 `py/full-ssrf` was.
 
-### Backups: retention is count-based and size-blind
-
-`scripts/backup_databases.py --keep 5` means five generations of an **8.4GB**
-starred archive — ~40GB on a 72GB disk. Two safety backups taken during the
-2026-07-22 session took the disk to **98% (1.9GB free)** on their own; deleting
-the older set brought it back to 86%. Nothing schedules backups (no cron), so
-this only bites when someone runs it repeatedly — which is exactly what a busy
-session does.
-
-Wants a size budget rather than a count: `--max-bytes`, or a `--keep` default
-that drops to 2 once a source is over a GB. Also worth noting the archive grew
-7.2 → 7.9GB overnight capturing 3,581 retro-archive pages, so the number this
-is sized against keeps moving.
-
 ### Tag-as-keep — Part C, pass 2
 
 Pass 1 ran with `--apply` 2026-07-22: **3,581 archives enqueued** and drained by
