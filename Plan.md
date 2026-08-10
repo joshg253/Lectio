@@ -34,12 +34,6 @@ excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
   against a visible list rather than against a guess.** Still Josh's call: which
   tags to drop is a taste judgement, not a derivable one.
 
-### Batch-align Uncategorized saved items into Feeds (promoted from Later)
-
-Bulk assignment with auto-match by domain, instead of one-at-a-time.
-Distinct from `scripts/categorize_uncategorized.py` (that's orphan
-*feeds*; this is saved *articles*, and should be in-app).
-
 ### Saved dedup workflow — repeat-session polish
 
 The correctness and safety work is done (2026-07-21) and **the scan currently
