@@ -715,6 +715,9 @@
           data-post-link="{{ post.link or '' }}"
           data-post-title="{{ post.title or '' }}"
           data-post-folder-id="{{ feed_to_folder.get(post.feed_url, selected_folder_id) }}"
+          {# Orphan archives (feed fully unsubscribed) have no home in the Feeds
+             tree at all — "Open in Feeds" would land on an empty page. #}
+          data-post-orphan="{{ 1 if post.is_orphan_archive else 0 }}"
           data-thumb-crop="{{ post.thumb_crop or 'cover' }}"
           data-thumb-strategy="{{ post.thumb_strategy or '' }}"
           data-smart-ms="{{ post.smart_min_scale or '' }}"
@@ -1612,6 +1615,7 @@
   <div id="post-context-menu" class="context-menu" hidden>
     <button type="button" id="ctx-post-mark-read" class="context-menu-item">Mark as read</button>
     <button type="button" id="ctx-post-mark-feed-read" class="context-menu-item" hidden>Mark Feed as Read</button>
+    <button type="button" id="ctx-post-open-in-feeds" class="context-menu-item" hidden>Open in Feeds</button>
     <button type="button" id="ctx-post-mark-above-read" class="context-menu-item">Read above</button>
     <button type="button" id="ctx-post-mark-below-read" class="context-menu-item">Read below</button>
     <button type="button" id="ctx-post-copy-url" class="context-menu-item">Copy URL</button>
