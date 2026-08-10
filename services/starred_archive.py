@@ -732,23 +732,38 @@ class StarredArchiveService:
                 ).fetchall()
         except sqlite3.Error:
             return []
+        candidate_rows = [r for r in rows if str(r["feed_url"]) not in live_feed_urls]
+        if not candidate_rows:
+            return []
+        # Narrowed to the orphan candidates' own feed_urls rather than pulling
+        # every saved_entries/orphan_entry_tags row in the meta DB — the live
+        # library can carry thousands of stars, nearly all for feeds that are
+        # not orphaned at all.
+        candidate_feeds = sorted({str(r["feed_url"]) for r in candidate_rows})
+        starred: set[tuple[str, str]] = set()
+        tagged: set[tuple[str, str]] = set()
         try:
             with self._get_meta_connection() as meta_conn:
-                starred = {
-                    (str(f), str(e)) for f, e in
-                    meta_conn.execute("SELECT feed_url, entry_id FROM saved_entries")
-                }
-                tagged = {
-                    (str(f), str(e)) for f, e in
-                    meta_conn.execute("SELECT DISTINCT feed_url, entry_id FROM orphan_entry_tags")
-                }
+                for i in range(0, len(candidate_feeds), 900):
+                    chunk = candidate_feeds[i:i + 900]
+                    ph = ",".join("?" for _ in chunk)
+                    starred.update(
+                        (str(f), str(e)) for f, e in meta_conn.execute(
+                            f"SELECT feed_url, entry_id FROM saved_entries WHERE feed_url IN ({ph})",
+                            chunk,
+                        )
+                    )
+                    tagged.update(
+                        (str(f), str(e)) for f, e in meta_conn.execute(
+                            f"SELECT DISTINCT feed_url, entry_id FROM orphan_entry_tags WHERE feed_url IN ({ph})",
+                            chunk,
+                        )
+                    )
         except sqlite3.Error:
             starred, tagged = set(), set()
         out: list[dict[str, Any]] = []
-        for row in rows:
+        for row in candidate_rows:
             feed_url = str(row["feed_url"])
-            if feed_url in live_feed_urls:
-                continue
             entry_id = str(row["entry_id"])
             if (feed_url, entry_id) not in starred and (feed_url, entry_id) not in tagged:
                 continue

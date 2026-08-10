@@ -8486,21 +8486,22 @@ def delete_manual_tag_everywhere(tag: str | None) -> int:
         orphan_rows = conn.execute(
             "SELECT feed_url, entry_id FROM orphan_entry_tags WHERE tag = ?", (normalized,)
         ).fetchall()
-        for feed_url, entry_id in orphan_rows:
-            conn.execute(
-                "DELETE FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ? AND tag = ?",
-                (feed_url, entry_id, normalized),
-            )
-            removed += 1
-            remaining = conn.execute(
-                "SELECT 1 FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ? LIMIT 1",
-                (feed_url, entry_id),
-            ).fetchone()
-            if not remaining and not _entry_is_starred(feed_url, entry_id):
-                try:
-                    starred_archive_service.enqueue_removal(feed_url, entry_id)
-                except Exception as exc:  # noqa: BLE001
-                    LOGGER.warning("tag archive removal failed for %s/%s: %s", feed_url, entry_id, exc)
+        if orphan_rows:
+            # One bulk delete rather than per-row: the per-row "any tags left?"
+            # check below still needs a query per entry (it's asking about
+            # OTHER tags), but removing this one doesn't.
+            conn.execute("DELETE FROM orphan_entry_tags WHERE tag = ?", (normalized,))
+            removed += len(orphan_rows)
+            for feed_url, entry_id in orphan_rows:
+                remaining = conn.execute(
+                    "SELECT 1 FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ? LIMIT 1",
+                    (feed_url, entry_id),
+                ).fetchone()
+                if not remaining and not _entry_is_starred(feed_url, entry_id):
+                    try:
+                        starred_archive_service.enqueue_removal(feed_url, entry_id)
+                    except Exception as exc:  # noqa: BLE001
+                        LOGGER.warning("tag archive removal failed for %s/%s: %s", feed_url, entry_id, exc)
         conn.commit()
 
     if removed:
