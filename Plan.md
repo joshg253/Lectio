@@ -749,6 +749,16 @@ env line needed removing). One left here, more involved:
   see "Finish the Instapaper clone" in Now, which lists it as a Read Mode follow-up.
 
 Other:
+- **Deduplicate context-menu open handlers** (Sourcery, PR #193): the entry-pane
+  title and post-list item each have their own `contextmenu` listener in
+  `static/js/app.js` that populates the same dozen-plus `contextPost*` module
+  vars and calls the same `setMenuItemVisible(...)` sequence — two ~40-line
+  blocks that have to be kept in sync by hand (PR #193 added its two lines to
+  both). A shared `_openPostContextMenu(sourceEl, event)` taking the trigger
+  element would read every `data-post-*` attribute and set visibility once.
+  Predates #193; not chased there to keep that PR small. `'-1'` as the
+  Uncategorized-folder fallback is scattered the same way (4+ literal spots) —
+  worth a named constant in the same pass, not on its own.
 - **Centralize schemeless-URL normalization** (Sourcery, PR #148): the
   assume-https logic lives in both the add-feed dialog JS and `/feeds/discover`;
   a shared helper would prevent drift.
