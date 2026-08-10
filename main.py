@@ -13531,6 +13531,13 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     # resource — see set_manual_tags_for_entry), but they still support
     # tagging via orphan_entry_tags, same as Star already does via saved_entries.
     manual_tags = _get_orphan_manual_tags(feed_url, entry_id)
+    is_starred = _entry_is_starred(feed_url, entry_id)
+    # A surviving capture is not itself a keep signal — same star-OR-tag rule
+    # as every live entry (see get_orphan_saved_entries). Previously hardcoded
+    # True here, so an orphan with neither a star nor a tag (a leftover from
+    # before this table existed, or unstarred after the feed was already gone)
+    # looked identically "kept" to one you'd actually curated.
+    is_kept = is_starred or bool(manual_tags)
 
     return {
         "feed_url": feed_url,
@@ -13552,8 +13559,8 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "received_display": _fmt(received_at),
         "author": archived.get("author"),
         "read": True,
-        "saved": True,
-        "kept": True,
+        "saved": is_starred,
+        "kept": is_kept,
         "manual_tags": manual_tags,
         "manual_tags_text": " ".join(manual_tags),
         "feed_tag_suggestions": [],

@@ -148,3 +148,39 @@ def test_build_orphan_entry_detail_surfaces_real_tags(orphan_env, monkeypatch):
     assert detail is not None
     assert detail["manual_tags"] == ["pshell"]
     assert detail["manual_tags_text"] == "pshell"
+
+
+def _orphan_detail(monkeypatch):
+    monkeypatch.setattr(
+        main.starred_archive_service, "get_archived_entry_detail",
+        lambda f, e: {
+            "title": "t", "link": "https://gone.example/article-1", "content_html": "<p>hi</p>",
+            "feed_title": "Gone", "author": None, "published_at": None, "received_at": None,
+        },
+    )
+    monkeypatch.setattr(main.starred_archive_service, "get_entry_asset_map", lambda f, e: {})
+    return main._build_orphan_entry_detail(ORPHAN_FEED, ORPHAN_ENTRY)
+
+
+def test_orphan_with_no_signal_is_not_kept(orphan_env, monkeypatch):
+    detail = _orphan_detail(monkeypatch)
+    assert detail["kept"] is False
+    assert detail["saved"] is False
+
+
+def test_orphan_with_only_a_tag_is_kept_but_not_saved(orphan_env, monkeypatch):
+    main.set_manual_tags_for_entry(ORPHAN_FEED, ORPHAN_ENTRY, "pshell")
+    detail = _orphan_detail(monkeypatch)
+    assert detail["kept"] is True
+    assert detail["saved"] is False
+
+
+def test_orphan_with_only_a_star_is_kept_and_saved(orphan_env, monkeypatch):
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+            (ORPHAN_FEED, ORPHAN_ENTRY),
+        )
+    detail = _orphan_detail(monkeypatch)
+    assert detail["kept"] is True
+    assert detail["saved"] is True

@@ -2255,6 +2255,24 @@ falls back to this table only when `reader.get_entry()` misses. Normal
 (non-orphan) entries are untouched — this never becomes the primary path for
 anything `reader` can already answer.
 
+**A surviving capture is not itself a keep signal.** `_build_orphan_entry_detail`
+used to hardcode `"kept": True` for every orphan, purely because a complete
+`archived_entry` row existed — a weaker definition of kept than everywhere else
+in the app, where it strictly means star OR tag. Measured on the live library
+2026-08-09: of 1,279 orphans, 1,089 (85%) were already genuinely starred, but
+190 carried neither signal — mostly historical (the packtpub batch above, 89
+of them) rather than anything current-day tagging/starring produces. `kept` and
+`saved` on the orphan detail dict now reflect the real signals (star via
+`_entry_is_starred`, tag via `orphan_entry_tags`), and
+`get_orphan_saved_entries` filters to the same rule before the Saved/Kept view
+ever sees a row — an uncurated leftover capture no longer appears as Saved. It
+still opens fine via a direct link (`get_entry_detail`'s fallback doesn't
+gate on curation), so nothing is deleted or hidden from direct navigation —
+only the "is this Saved" list membership and flag changed. The user-visible
+effect: navigate to one of the 190 and it now looks correctly *un*starred and
+untagged, with the tools to fix that right there instead of looking identical
+to something you'd actually curated.
+
 **Searching the Kept view.** The kept branch in `list_entries_for_feeds` runs
 *ahead* of the generic `elif search_terms` fast path, so for a long time this was
 the one view where a search took no fast path at all: it hydrated every kept key

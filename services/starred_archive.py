@@ -695,11 +695,20 @@ class StarredArchiveService:
         }
 
     def get_orphan_saved_entries(self, live_feed_urls: set[str]) -> list[dict[str, Any]]:
-        """Return archive rows whose feed isn't in `live_feed_urls`.
+        """Return archive rows whose feed isn't in `live_feed_urls` AND are
+        actually kept — starred or manually tagged (via orphan_entry_tags,
+        since a reader-backed tag needs a reader resource these entries don't
+        have — see main.set_manual_tags_for_entry).
 
         Used by the saved-items list view to surface saves whose feed has been
         unsubscribed. Only complete archives appear (incomplete orphans would
         render with empty content; the unsubscribe guard prevents this anyway).
+
+        A capture surviving is not itself a keep signal — same rule as every
+        live entry (star OR tag), applied here too rather than treating "the
+        archive still exists" as its own, weaker definition of kept. An
+        uncurated leftover (feed long gone, never starred or tagged, or
+        unstarred after the fact) is not shown as Saved.
         """
         try:
             with self._archive_conn() as conn:
@@ -713,10 +722,25 @@ class StarredArchiveService:
                 ).fetchall()
         except sqlite3.Error:
             return []
+        try:
+            with self._get_meta_connection() as meta_conn:
+                starred = {
+                    (str(f), str(e)) for f, e in
+                    meta_conn.execute("SELECT feed_url, entry_id FROM saved_entries")
+                }
+                tagged = {
+                    (str(f), str(e)) for f, e in
+                    meta_conn.execute("SELECT DISTINCT feed_url, entry_id FROM orphan_entry_tags")
+                }
+        except sqlite3.Error:
+            starred, tagged = set(), set()
         out: list[dict[str, Any]] = []
         for row in rows:
             feed_url = str(row["feed_url"])
             if feed_url in live_feed_urls:
+                continue
+            entry_id = str(row["entry_id"])
+            if (feed_url, entry_id) not in starred and (feed_url, entry_id) not in tagged:
                 continue
             out.append(
                 {
