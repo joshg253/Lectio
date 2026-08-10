@@ -24,13 +24,6 @@ end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, 
 excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 `py/full-ssrf` was.
 
-### Tag-as-keep — Part C, pass 2
-
-Pass 1 ran with `--apply` 2026-07-22: **3,581 archives enqueued** and drained by
-the worker. Pass 2 — the Wayback tier for entries whose live page is gone — is
-still deferred, and is a single command with a decay clock: run it any time, it
-queues behind nothing.
-
 ### Small daily-friction items (cheap; slot between the bigger pieces)
 
 - **No way to reach a feed in Feeds from a post in Saved** (2026-08-04). Saved
