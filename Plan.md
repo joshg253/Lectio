@@ -24,16 +24,6 @@ end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, 
 excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 `py/full-ssrf` was.
 
-### Small daily-friction items (cheap; slot between the bigger pieces)
-
-- **Set up the four verified firehose tag_filter rules** — config, not code; the
-  engine already ships. Vocabularies verified 2026-07-21, see "Tag filtering for
-  firehose feeds" in Later for the per-feed data and suggested rule shapes.
-  **The rule form now autocompletes the tag list from each feed's own captured
-  vocabulary with post counts (above), so this is now typing four short specs
-  against a visible list rather than against a guess.** Still Josh's call: which
-  tags to drop is a taste judgement, not a derivable one.
-
 ### Saved dedup workflow — repeat-session polish
 
 The correctness and safety work is done (2026-07-21) and **the scan currently
@@ -554,34 +544,18 @@ lists per rule, any scope, auto-mark-read after refresh, dry-run/run-now/
 history. Covers MakeUseOf, Lifehacker, How-To-Geek, freeCodeCamp, and other
 tagged-RSS firehoses.
 
-**The four candidate firehoses are VERIFIED (2026-07-21) — all carry
-`<category>`, so all four are set-up-able today (config not code):**
+**The four originally-candidate firehoses are all resolved as of 2026-08-10**
+(checked against the live rule set): Rock Paper Shotgun and GamingOnLinux both
+have real tag_filter rules configured. HackerNoon is moot — no longer
+subscribed to the general firehose, replaced by four per-tag HackerNoon feeds
+(python/c++/cpp/cplusplus), which sidesteps the need for a rule entirely.
+PlayStation Blog was always the weak one (its tags are mostly game/studio
+names, not topics) and was never worth the effort per the original
+measurement.
 
-| feed | items | cats/item | distinct | vocabulary |
-|---|---|---|---|---|
-| HackerNoon | 20 | 7.8 | 140 | lowercase-hyphenated slugs |
-| GamingOnLinux | 50 | 5.8 | 81 | Title Case, controlled |
-| Rock Paper Shotgun | 100 | **13.2** | 298 | Title Case platform/genre |
-| PlayStation Blog | 10 | 2.9 | 20 | mostly game/studio names |
-
-Per-feed notes, worth reading before writing rules:
-
-- **Rock Paper Shotgun** is the standout — 13.2 tags/item of genuinely structured
-  platform/genre metadata (`PC` 92/100, `Single Player`, `PS5`, `RPG`,
-  `Third person`, `Shooter`). Precise include/exclude is easy here.
-- **GamingOnLinux** has the cleanest controlled vocabulary (`Steam`, `Proton`,
-  `Steam Deck`, `Native Linux`, `Open Source`, `Indie Game`) — small, stable, high
-  signal.
-- **HackerNoon** has a 140-tag long tail in only 20 items, so *exclude* lists will
-  be endless whack-a-mole — use **include** (`++`) mode. Note the editorial marker
-  `hackernoon-top-story`, which is a ready-made quality filter.
-- **PlayStation Blog** is the weak one: its tags are mostly game titles and studio
-  names rather than topics (`PS5` at 9/10 is the only real topical tag). Tag
-  filtering buys little; deprioritize or use it only to keep `PS5`.
-
-Multi-word tags are **not** a problem, despite the hyphenation note below:
-`parse_tag_filter_spec` ([main.py:5779](main.py#L5779)) splits on **commas, not
-spaces**, and `normalize_tag_value` hyphenates to the stored form — so
+Multi-word tags are **not** a problem: `parse_tag_filter_spec`
+([main.py:5779](main.py#L5779)) splits on **commas, not spaces**, and
+`normalize_tag_value` hyphenates to the stored form — so
 `+Steam Deck, -Xbox Series X/S` can be typed naturally.
 
 Remaining follow-ups:
