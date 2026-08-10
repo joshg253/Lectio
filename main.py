@@ -16141,8 +16141,25 @@ def normalize_youtube_feed_url(feed_url: str) -> str:
     return feed_url
 
 
-_FORMAT_SELECTOR_PARAMS = frozenset({"alt"})
+_FORMAT_SELECTOR_PARAMS = frozenset({"alt", "type", "feed"})
+# Both the param name AND value must match a known-safe combo before
+# normalize_feed_url strips it -- an allowlist, not a blanket "ignore this
+# query param" rule, so a hypothetical ?type=news vs ?type=sports category
+# selector is untouched (its values aren't in this set) while tosecdev.org's
+# ?type=atom/?type=rss and paizo.com's ?feed=json1/?feed=rss (reported
+# 2026-08-10) fold into one canonical form and pick up the existing
+# same_folder/cross_folder auto-handling, same as Blogger's ?alt=rss always
+# has. Genuinely unrecognized query differences still fall to the
+# never-pre-checked query_pairs tier in get_feed_duplicates.
 _FORMAT_SELECTOR_VALUES = frozenset({"rss", "rss2", "atom"})
+
+
+def _is_format_selector_value(value: str) -> bool:
+    # JSON Feed versioning is a moving target (json1 today; a hypothetical
+    # json2/jsonfeed tomorrow), so this family is prefix-matched rather than
+    # enumerated -- rss/atom aren't, since there's no equivalent versioned
+    # naming pattern to future-proof there.
+    return value in _FORMAT_SELECTOR_VALUES or value.startswith("json")
 
 
 _DOMAIN_ALIASES: dict[str, str] = {
@@ -16188,7 +16205,7 @@ def normalize_feed_url(feed_url: str) -> str:
             from urllib.parse import parse_qsl, urlencode
             all_pairs = parse_qsl(parsed.query, keep_blank_values=True)
             kept = [(k, v) for k, v in all_pairs
-                    if not (k in _FORMAT_SELECTOR_PARAMS and v.lower() in _FORMAT_SELECTOR_VALUES)]
+                    if not (k in _FORMAT_SELECTOR_PARAMS and _is_format_selector_value(v.lower()))]
             if len(kept) != len(all_pairs):
                 new_query = urlencode(kept)
                 feed_url = parsed._replace(path=path, query=new_query).geturl()
@@ -27014,17 +27031,21 @@ def get_feed_duplicates():
         url_folders.setdefault(feed_url, []).append((folder_id, folder_name))
 
     # canonical → [url, url/, ...] — group all URL variants by their normalized
-    # form, **ignoring the scheme**. A domain alias rewrites the host but keeps
-    # the scheme (`_DOMAIN_ALIASES`), so a legacy `http://tapastic.com/…`
-    # subscription normalized to `http://tapas.io/…` while its live twin was
-    # `https://…` — different strings, different groups, and two dead feeds sat
-    # beside their working copies failing every refresh without ever being
-    # flagged. Scheme is folded here, in the *comparison*, and deliberately not
-    # in `normalize_feed_url`: that function decides the stored subscription URL,
-    # and some hosts really are http-only.
+    # form, **ignoring the scheme and a leading www.**. A domain alias rewrites
+    # the host but keeps the scheme (`_DOMAIN_ALIASES`), so a legacy
+    # `http://tapastic.com/…` subscription normalized to `http://tapas.io/…`
+    # while its live twin was `https://…` — different strings, different
+    # groups, and two dead feeds sat beside their working copies failing every
+    # refresh without ever being flagged. www is the same class of false
+    # negative, reported 2026-08-10: `deathbulge.com/rss.xml` and
+    # `www.deathbulge.com/rss.xml` are the same feed, not two. Both folds are
+    # in the *comparison*, deliberately not in `normalize_feed_url`: that
+    # function decides the stored subscription URL, and some hosts really are
+    # http-only or www-only.
     def _dupe_group_key(url: str) -> str:
         canonical = normalize_feed_url(url)
-        return canonical.split("://", 1)[-1] if "://" in canonical else canonical
+        rest = canonical.split("://", 1)[-1] if "://" in canonical else canonical
+        return rest[4:] if rest.startswith("www.") else rest
 
     by_canonical: dict[str, list[str]] = {}
     for url in url_folders:
@@ -27098,7 +27119,113 @@ def get_feed_duplicates():
             "folders": [{"id": fid, "name": fname} for fid, fname in folders],
         })
 
-    return JSONResponse({"same_folder": same_folder, "cross_folder": cross_folder, "upgradable": upgradable})
+    # Fourth tier: same feed TITLE across genuinely different addresses --
+    # catches the same publication subscribed twice under two different URLs
+    # (a Tumblr and a Tapas copy of the same webcomic; two Webtoons title_no
+    # values for one comic), which the URL-scheme grouping above can't reach
+    # at all -- it only catches variants of ONE address, not two addresses
+    # for the same publication. Measured 2026-08-08 across 2,886 feeds: 32
+    # groups, 72 feeds. Advisory only, never auto-applied or pre-checked: a
+    # same-title pair can legitimately be a site's blog and its own podcast.
+    # GENERIC_TITLE_GROUP_MAX is the "generic-title floor" the measurement
+    # called for -- "news" (7 unrelated sites) is noise; every genuine match
+    # measured at 2-3 feeds, so 5 leaves headroom without admitting the noise.
+    GENERIC_TITLE_GROUP_MAX = 5
+    with get_reader() as reader:
+        by_title: dict[str, list[tuple[str, str]]] = {}
+        for f in reader.get_feeds():
+            url = str(f.url)
+            # A creator's blog/site and their YouTube channel very often share
+            # a title (the channel name), and subscribing to both is normal,
+            # not a duplicate -- pure noise for this signal, reported 2026-08-10.
+            if "youtube.com/feeds/videos.xml" in url:
+                continue
+            title = str(f.user_title or f.title or "").strip()
+            if title:
+                by_title.setdefault(title.casefold(), []).append((url, title))
+    title_groups: list[dict] = []
+    for entries in by_title.values():
+        if len(entries) < 2 or len(entries) > GENERIC_TITLE_GROUP_MAX:
+            continue
+        title_groups.append({
+            "title": entries[0][1],
+            "feeds": [
+                {
+                    "feed_url": feed_url,
+                    "folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(feed_url, [])],
+                }
+                for feed_url, _title in entries
+            ],
+        })
+    title_groups.sort(key=lambda g: len(g["feeds"]), reverse=True)
+
+    # Fifth tier: same host+path, different query -- a real duplicate class
+    # (tosecdev.org's ?type=atom vs ?type=rss, paizo.com's ?feed=json1 vs
+    # ?feed=rss), reported 2026-08-10. Deliberately separate from
+    # same_folder/cross_folder: those never require a per-pair decision
+    # (scheme/www are never meaningful), but a query param CAN be — a
+    # WordPress category/tag feed lives at the same path with a different
+    # query and is genuinely different content, not a duplicate. So unlike
+    # every tier above, nothing here is ever pre-checked; each pair needs an
+    # explicit include before "Remove duplicates" touches it. YouTube is
+    # excluded entirely: subscriptions sync bidirectionally
+    # (services/youtube_sync.py adds AND removes to mirror the real YouTube
+    # subscription list), so two distinct channel_ids are never a duplicate —
+    # this was the dominant noise source in the original broader measurement
+    # of this signal (740 feeds, "nearly all YouTube channel_id variance").
+    # DeviantArt's native gallery RSS is the same failure class realized at
+    # scale, reported 2026-08-10: every artist's feed is
+    # backend.deviantart.com/rss.xml, differing only by ?q=gallery:<user> —
+    # one shared endpoint for the whole site, so this signal grouped dozens
+    # of genuinely distinct subscriptions into "duplicates" of each other.
+    def _query_ignoring_key(url: str) -> str | None:
+        if "youtube.com/feeds/videos.xml" in url:
+            return None
+        if "backend.deviantart.com/rss.xml" in url:
+            return None
+        canonical = normalize_feed_url(url)
+        parsed = urlparse(canonical)
+        rest = f"{parsed.netloc}{parsed.path}"
+        return rest[4:] if rest.startswith("www.") else rest
+
+    by_loose: dict[str, list[str]] = {}
+    for url in url_folders:
+        key = _query_ignoring_key(url)
+        if key is not None:
+            by_loose.setdefault(key, []).append(url)
+
+    query_pairs: list[dict] = []
+    for variants in by_loose.values():
+        if len(variants) < 2:
+            continue
+        keep = min(variants, key=lambda u: (
+            not u.startswith("https://"),
+            normalize_feed_url(u) != u,
+            len(u), u,
+        ))
+        keep_strict = _dupe_group_key(keep)
+        for remove in variants:
+            if remove == keep or _dupe_group_key(remove) == keep_strict:
+                # Same strict key as keep -- already listed in same_folder or
+                # cross_folder above; don't list the identical pair twice.
+                continue
+            all_folders = {fid: fname for fid, fname in url_folders.get(keep, []) + url_folders.get(remove, [])}
+            query_pairs.append({
+                "keep": keep,
+                "remove": remove,
+                "keep_folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(keep, [])],
+                "remove_folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(remove, [])],
+                "all_folders": sorted(
+                    [{"id": fid, "name": fname} for fid, fname in all_folders.items()],
+                    key=lambda x: x["name"],
+                ),
+            })
+
+    return JSONResponse({
+        "same_folder": same_folder, "cross_folder": cross_folder,
+        "upgradable": upgradable, "title_groups": title_groups,
+        "query_pairs": query_pairs,
+    })
 
 
 def _rescue_unread_entries(reader, remove_url: str, keep_url: str) -> int:

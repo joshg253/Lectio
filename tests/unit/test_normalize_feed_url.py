@@ -50,6 +50,32 @@ def test_blogger_alt_rss_param_stripped():
     assert "example.blogspot.com" in result
 
 
+def test_type_format_selector_stripped():
+    """tosecdev.org's ?type=atom/?type=rss, reported 2026-08-10."""
+    result = normalize_feed_url("https://tosecdev.org/news?format=feed&type=rss")
+    assert "type=rss" not in result
+
+
+def test_feed_json1_format_selector_stripped():
+    """paizo.com's ?feed=json1/?feed=rss, reported 2026-08-10."""
+    result = normalize_feed_url("https://paizo.com/blog?feed=json1")
+    assert "feed=json1" not in result
+
+
+def test_feed_jsonfeed_variant_still_stripped():
+    """JSON Feed versioning is a moving target -- prefix-matched, not
+    enumerated, so a future json2/jsonfeed variant is covered too."""
+    result = normalize_feed_url("https://example.test/blog?feed=jsonfeed2")
+    assert "feed=jsonfeed2" not in result
+
+
+def test_type_with_an_unrecognized_value_is_kept():
+    """The allowlist is param+value together -- a category-style ?type=news
+    isn't a format selector and must not be silently dropped."""
+    result = normalize_feed_url("https://example.test/feed?type=news")
+    assert "type=news" in result
+
+
 # --- Domain alias normalization ---
 
 @pytest.mark.parametrize("raw, expected", [

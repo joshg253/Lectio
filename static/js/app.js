@@ -663,12 +663,32 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       }
     });
 
+    // Settings → Feeds → Utilities: each button's results render into their
+    // own panel, but the panels never hid each other, so running one utility
+    // after another just appended the new results below whatever was already
+    // showing. Called at the top of each utility's click handler.
+    const UTILITY_RESULT_PANEL_IDS = [
+      'dedup-inline-results', 'saved-dedup-results', 'purge-old-panel',
+      'multi-folder-results', 'unstar-tagged-results', 'archive-old-results',
+      'saved-autofile-results',
+    ];
+    function hideOtherUtilityResults(exceptId) {
+      for (const id of UTILITY_RESULT_PANEL_IDS) {
+        if (id === exceptId) continue;
+        const el = document.getElementById(id);
+        if (el) el.hidden = true;
+      }
+    }
+
     document.getElementById('dedup-feeds-btn')?.addEventListener('click', async () => {
+      hideOtherUtilityResults('dedup-inline-results');
       const resp = await fetch('/feeds/duplicates');
       const data = await resp.json();
       const sameFolder = data.same_folder || [];
       const crossFolder = data.cross_folder || [];
       const upgradable = data.upgradable || [];
+      const titleGroups = data.title_groups || [];
+      const queryPairs = data.query_pairs || [];
       const results = document.getElementById('dedup-inline-results');
       const intro = results.querySelector('.dedup-modal-intro');
       const list = results.querySelector('.dedup-modal-list');
@@ -676,10 +696,62 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const crossList = results.querySelector('.dedup-cross-list');
       const upgradeSection = results.querySelector('.dedup-upgrade-section');
       const upgradeList = results.querySelector('.dedup-upgrade-list');
+      const querySection = results.querySelector('.dedup-query-section');
+      const queryList = results.querySelector('.dedup-query-list');
+      const titleSection = results.querySelector('.dedup-title-section');
+      const titleList = results.querySelector('.dedup-title-list');
       const okBtn = document.getElementById('dedup-modal-ok');
 
       results.hidden = false;
-      const hasAnything = sameFolder.length > 0 || crossFolder.length > 0 || upgradable.length > 0;
+      const hasAnything = sameFolder.length > 0 || crossFolder.length > 0 || upgradable.length > 0 || queryPairs.length > 0;
+
+      // Query-differing pairs: unlike every tier above, a query param CAN be
+      // real content (a category/tag feed), so nothing here is ever
+      // pre-checked -- each pair needs an explicit include before "Remove
+      // duplicates" touches it. Renders (and can be acted on) independently
+      // of whether the auto-included tiers found anything.
+      if (queryPairs.length > 0) {
+        querySection.hidden = false;
+        querySection.querySelector('.saved-dedup-section-count').textContent = `(${queryPairs.length})`;
+        queryList.innerHTML = queryPairs.map((d, i) => {
+          const checkboxes = d.all_folders.map(f =>
+            `<label class="dedup-folder-check"><input type="checkbox" name="query_${i}_folder" value="${_mfEscape(f.id)}" checked> ${_mfEscape(f.name)}</label>`
+          ).join('');
+          return `<div class="dedup-query-pair" data-index="${i}" data-keep="${_mfEscape(d.keep)}" data-remove="${_mfEscape(d.remove)}">` +
+            `<label class="dedup-pair-row dedup-query-include"><input type="checkbox" class="dedup-query-check"> Include this pair</label>` +
+            `<div class="dedup-pair">` +
+            `<div class="dedup-pair-row"><span class="dedup-tag keep-tag">keep</span><span class="dedup-url">${_mfEscape(d.keep)}</span></div>` +
+            `<div class="dedup-pair-row"><span class="dedup-tag remove-tag">remove</span><span class="dedup-url">${_mfEscape(d.remove)}</span></div>` +
+            `</div>` +
+            `<div class="dedup-folder-checks">${checkboxes}</div>` +
+            `</div>`;
+        }).join('');
+      } else {
+        querySection.hidden = true;
+      }
+
+      // Advisory, so it renders regardless of whether the action tiers found
+      // anything — a title match is neither a duplicate nor an upgrade.
+      if (titleGroups.length > 0) {
+        titleSection.hidden = false;
+        titleSection.querySelector('.saved-dedup-section-count').textContent = `(${titleGroups.length})`;
+        titleList.innerHTML = titleGroups.map((g, gi) =>
+          `<div class="dedup-title-group" data-group-index="${gi}">` +
+          `<span class="dedup-title-group-title">${_mfEscape(g.title)}</span>` +
+          g.feeds.map(f => {
+            const folderNames = f.folders.map(fo => fo.name).join(', ') || 'Uncategorized';
+            return `<div class="dedup-pair-row dedup-title-feed-row">` +
+              `<input type="checkbox" class="dedup-title-feed-check" value="${_mfEscape(f.feed_url)}">` +
+              `<a class="dedup-url" href="#" data-feed-properties-url="${_mfEscape(f.feed_url)}" title="Open Feed Properties">${_mfEscape(f.feed_url)}</a>` +
+              ` <span class="saved-dedup-date">${_mfEscape(folderNames)}</span></div>`;
+          }).join('') +
+          `<button type="button" class="settings-secondary-btn dedup-title-compare-btn" disabled>Compare selected</button>` +
+          `<div class="dedup-title-compare-result" hidden></div>` +
+          `</div>`
+        ).join('');
+      } else {
+        titleSection.hidden = true;
+      }
 
       if (!hasAnything) {
         intro.textContent = 'No duplicate or upgradable feeds found.';
@@ -760,6 +832,155 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       }
     });
 
+    // Same-title duplicate groups: Compare inline (reuses /feeds/compare and
+    // the chip rendering the Folders tab's checkbox-compare already uses —
+    // buildCompareChips, defined below), then Combine inline (reuses
+    // /feeds/combine — same curation-migration engine the detected-duplicate
+    // tiers above use, just for a user-picked pair rather than an
+    // auto-detected one). Never auto-run: a same-title pair can legitimately
+    // be two different things, so comparing is a deliberate per-group click.
+    //
+    // A title match is a much weaker signal than the URL-scheme grouping
+    // above — a generic word like "News" can pull unrelated sites into the
+    // same group alongside a genuine pair (reported: wsdot.wa.gov + Minecraft
+    // Forum + two real tosecdev.org duplicates, all titled literally "News").
+    // Acting on the whole group as one cluster is wrong there, so each
+    // feed gets its own checkbox and Compare/Combine only ever touch the
+    // checked subset (min 2) — never the whole group.
+    document.getElementById('dedup-title-list')?.addEventListener('change', (e) => {
+      if (!e.target.classList.contains('dedup-title-feed-check')) return;
+      const group = e.target.closest('.dedup-title-group');
+      const checked = group.querySelectorAll('.dedup-title-feed-check:checked').length;
+      const compareBtn = group.querySelector('.dedup-title-compare-btn');
+      compareBtn.disabled = checked < 2;
+      compareBtn.textContent = checked >= 2 ? `Compare ${checked} selected` : 'Compare selected';
+      // Selection changed — any prior compare/combine result is for the old set.
+      const resultEl = group.querySelector('.dedup-title-compare-result');
+      resultEl.hidden = true;
+      resultEl.innerHTML = '';
+    });
+
+    document.getElementById('dedup-title-list')?.addEventListener('click', async (e) => {
+      const compareBtn = e.target.closest('.dedup-title-compare-btn');
+      if (compareBtn) {
+        const group = compareBtn.closest('.dedup-title-group');
+        const urls = [...group.querySelectorAll('.dedup-title-feed-check:checked')].map(cb => cb.value);
+        if (urls.length < 2) return;
+        const resultEl = group.querySelector('.dedup-title-compare-result');
+        compareBtn.disabled = true;
+        compareBtn.textContent = 'Comparing…';
+        try {
+          const qs = urls.map(u => 'url=' + encodeURIComponent(u)).join('&');
+          const r = await fetch('/feeds/compare?' + qs);
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const results = await r.json();
+
+          resultEl.innerHTML = '';
+          results.forEach((res, i) => {
+            const row = document.createElement('div');
+            row.className = 'dedup-title-compare-row';
+            const label = document.createElement('div');
+            label.className = 'dedup-folder-label';
+            label.textContent = urls[i];
+            row.append(label, buildCompareChips(res));
+            resultEl.append(row);
+          });
+
+          // Merge control: pick a survivor, optionally carry unread, combine.
+          const gi = group.dataset.groupIndex;
+          const combineWrap = document.createElement('div');
+          combineWrap.className = 'sfc-combine-panel dedup-title-combine';
+          const list = document.createElement('div');
+          list.className = 'sfc-combine-list';
+          urls.forEach((u, i) => {
+            const lbl = document.createElement('label');
+            lbl.className = 'sfc-combine-item';
+            const rb = document.createElement('input');
+            rb.type = 'radio'; rb.name = `dedup-title-survivor-${gi}`; rb.value = u;
+            if (i === 0) rb.checked = true;
+            const sp = document.createElement('span');
+            sp.textContent = u; sp.title = u;
+            lbl.append(rb, sp); list.append(lbl);
+          });
+          combineWrap.append(list);
+          const opts = document.createElement('label');
+          opts.className = 'sfc-combine-item';
+          const unreadCb = document.createElement('input');
+          unreadCb.type = 'checkbox';
+          opts.append(unreadCb, document.createTextNode(' Also carry over unread state'));
+          combineWrap.append(opts);
+          const actions = document.createElement('div');
+          actions.className = 'sfc-combine-actions';
+          const go = document.createElement('button');
+          go.type = 'button'; go.className = 'settings-secondary-btn';
+          go.textContent = `Combine ${urls.length} feeds`;
+          actions.append(go);
+          combineWrap.append(actions);
+          resultEl.append(combineWrap);
+
+          go.addEventListener('click', async () => {
+            const survivor = combineWrap.querySelector('input[type="radio"]:checked')?.value;
+            if (!survivor) return;
+            const sources = urls.filter(u => u !== survivor);
+            if (!confirm(`Combine ${sources.length} feed${sources.length === 1 ? '' : 's'} into "${survivor}"? Their stars, tags${unreadCb.checked ? ', and unread items' : ''} move over, then they're unsubscribed.`)) return;
+            go.disabled = true;
+            go.textContent = 'Combining…';
+            const body = new URLSearchParams();
+            body.set('survivor_url', survivor);
+            sources.forEach(u => body.append('source_url', u));
+            if (unreadCb.checked) body.set('move_unread', '1');
+            try {
+              const cr = await fetch('/feeds/combine', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-combine' },
+                credentials: 'same-origin', body: body.toString(),
+              });
+              const data = await cr.json().catch(() => ({}));
+              if (!data.ok) { alert(data.message || 'Combine failed.'); go.disabled = false; go.textContent = `Combine ${urls.length} feeds`; return; }
+              // Only the merged subset leaves the group — an unchecked sibling
+              // (wsdot + Minecraft Forum, say, both just coincidentally titled
+              // "News" alongside a genuine tosecdev pair) has nothing to do
+              // with this merge and must stay listed.
+              const merged = new Set(urls);
+              group.querySelectorAll('.dedup-title-feed-row').forEach(row => {
+                const cb = row.querySelector('.dedup-title-feed-check');
+                if (cb && merged.has(cb.value)) row.remove();
+              });
+              resultEl.hidden = true;
+              resultEl.innerHTML = '';
+              const remainingInGroup = group.querySelectorAll('.dedup-title-feed-row').length;
+              const titleSection = document.querySelector('.dedup-title-section');
+              if (remainingInGroup < 2) {
+                // Fewer than 2 left means nothing here can be compared/combined
+                // further — drop the whole group rather than leave a single
+                // orphaned row with dead controls.
+                group.remove();
+              } else {
+                compareBtn.disabled = true;
+                compareBtn.textContent = 'Compare selected';
+              }
+              const countEl = titleSection?.querySelector('.saved-dedup-section-count');
+              const remaining = document.querySelectorAll('.dedup-title-group').length;
+              if (countEl) countEl.textContent = `(${remaining})`;
+              if (remaining === 0 && titleSection) titleSection.hidden = true;
+              if (typeof showToastMessage === 'function') showToastMessage(data.message);
+            } catch (err) {
+              alert('Combine failed: ' + err);
+              go.disabled = false;
+              go.textContent = `Combine ${urls.length} feeds`;
+            }
+          });
+
+          resultEl.hidden = false;
+          compareBtn.hidden = true;
+        } catch (err) {
+          compareBtn.disabled = false;
+          compareBtn.textContent = 'Compare';
+          alert('Compare failed: ' + err);
+        }
+      }
+    });
+
     document.getElementById('dedup-modal-ok')?.addEventListener('click', async () => {
       const results = document.getElementById('dedup-inline-results');
       // Collect cross-folder choices
@@ -768,6 +989,17 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         const keep = pair.dataset.keep;
         const remove = pair.dataset.remove;
         const folderIds = [...pair.querySelectorAll('input[type="checkbox"]:checked')].map(cb => parseInt(cb.value));
+        crossChoices.push({ keep, remove, folder_ids: folderIds });
+      }
+      // Query-differing pairs: unlike every other tier, these are never
+      // pre-checked (a query param can be real content, not a duplicate) --
+      // only the ones the user explicitly ticked go in, reusing the exact
+      // same cross_folder_choices shape the backend already handles.
+      for (const pair of results.querySelectorAll('.dedup-query-pair')) {
+        if (!pair.querySelector('.dedup-query-check')?.checked) continue;
+        const keep = pair.dataset.keep;
+        const remove = pair.dataset.remove;
+        const folderIds = [...pair.querySelectorAll('.dedup-folder-checks input[type="checkbox"]:checked')].map(cb => parseInt(cb.value));
         crossChoices.push({ keep, remove, folder_ids: folderIds });
       }
       // Collect upgrade choices (only checked ones)
@@ -1044,8 +1276,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         : '');
 
     document.getElementById('saved-dedup-btn')?.addEventListener('click', async () => {
+      hideOtherUtilityResults('saved-dedup-results');
       const results = document.getElementById('saved-dedup-results');
       const intro = results.querySelector('.saved-dedup-intro');
+      const confirmedSection = results.querySelector('.saved-dedup-confirmed-section');
       const confirmedList = results.querySelector('.saved-dedup-confirmed-list');
       const possibleSection = results.querySelector('.saved-dedup-possible-section');
       const possibleList = results.querySelector('.saved-dedup-possible-list');
@@ -1066,6 +1300,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
 
       if (confirmed.length === 0 && possible.length === 0) {
         intro.textContent = `No duplicate saved articles found (${data.scanned} scanned).`;
+        confirmedSection.hidden = true;
         confirmedList.innerHTML = '';
         possibleSection.hidden = true;
         okBtn.hidden = true;
@@ -1074,17 +1309,20 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       }
       okBtn.hidden = false;
       if (checkAllBtn) checkAllBtn.hidden = false;
+      intro.textContent = `Scanned ${data.scanned} saved articles — nothing is selected yet. "keep" marks the copy the scan would keep (has content, then https, then oldest); run Check URLs to select copies whose links are dead.`;
       if (confirmed.length > 0) {
-        intro.textContent = `Found ${confirmed.length} duplicate group(s) among ${data.scanned} saved articles — nothing is selected yet. "keep" marks the copy the scan would keep (has content, then https, then oldest); run Check URLs to select copies whose links are dead:`;
+        confirmedSection.hidden = false;
+        confirmedSection.querySelector('.saved-dedup-section-count').textContent = `(${confirmed.length})`;
         confirmedList.innerHTML = savedDedupListHtml(confirmed, true);
       } else {
-        intro.textContent = `No confirmed duplicates among ${data.scanned} saved articles.`;
+        confirmedSection.hidden = true;
         confirmedList.innerHTML = '';
       }
       if (possible.length > 0) {
         possibleSection.hidden = false;
+        possibleSection.querySelector('.saved-dedup-section-count').textContent = `(${possible.length})`;
         possibleSection.querySelector('.saved-dedup-possible-intro').textContent =
-          `${possible.length} possible duplicate group(s) — same title or same extracted content under different URLs:`;
+          'Same title or same extracted content under different URLs:';
         possibleList.innerHTML = savedDedupListHtml(possible, false);
       } else {
         possibleSection.hidden = true;
@@ -1149,6 +1387,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     };
 
     document.getElementById('saved-autofile-btn')?.addEventListener('click', async () => {
+      hideOtherUtilityResults('saved-autofile-results');
       const results = document.getElementById('saved-autofile-results');
       const intro = results.querySelector('.saved-autofile-intro');
       const list = results.querySelector('.saved-autofile-list');
@@ -1397,6 +1636,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     };
 
     document.getElementById('unstar-tagged-btn')?.addEventListener('click', async () => {
+      hideOtherUtilityResults('unstar-tagged-results');
       const results = document.getElementById('unstar-tagged-results');
       const intro = results.querySelector('.unstar-tagged-intro');
       const list = results.querySelector('.unstar-tagged-list');
@@ -1567,6 +1807,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     };
 
     document.getElementById('archive-old-btn')?.addEventListener('click', () => {
+      hideOtherUtilityResults('archive-old-results');
       document.getElementById('archive-old-results').hidden = false;
       _aoRender();
     });
@@ -1612,6 +1853,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     // ── Purge old posts utility ────────────────────────────────────────────
     document.getElementById('purge-old-btn')?.addEventListener('click', () => {
       const panel = document.getElementById('purge-old-panel');
+      if (panel.hidden) hideOtherUtilityResults('purge-old-panel');
       panel.hidden = !panel.hidden;
     });
 
@@ -1720,6 +1962,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     });
 
     document.getElementById('multi-folder-btn')?.addEventListener('click', async () => {
+      hideOtherUtilityResults('multi-folder-results');
       const results = document.getElementById('multi-folder-results');
       const intro = results?.querySelector('.multi-folder-intro');
       const list = results?.querySelector('.multi-folder-list');
@@ -12383,7 +12626,13 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     }
 
     // Feeds tab: folder properties buttons + Fix URL Titles button.
-    document.getElementById('settings-tab-feeds')?.addEventListener('click', (e) => {
+    // Was scoped to settings-tab-feeds only, so data-feed-properties-url links
+    // added elsewhere in Settings (the Utilities tab's duplicate-feed scans)
+    // had no listener at all -- reported 2026-08-10. The other data-* handlers
+    // here only ever match elements that carry those attributes in the first
+    // place (all currently Feeds-tab markup), so widening the delegation root
+    // to the whole modal is safe and covers future tabs for free.
+    document.getElementById('settings-modal')?.addEventListener('click', (e) => {
       const toggleBtn = e.target.closest('[data-folder-toggle]');
       if (toggleBtn) {
         const fid = toggleBtn.dataset.folderToggle;

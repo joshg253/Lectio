@@ -5853,6 +5853,24 @@ body[data-keyboard-open="1"] .action-modal-panel {
   border-left: 2px solid var(--line);
   padding-left: 0.5rem;
 }
+.dedup-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  border-left: 2px solid var(--line);
+  padding-left: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+.dedup-title-group-title {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 0.1rem;
+}
+.dedup-title-compare-btn { margin-top: 0.3rem; align-self: flex-start; }
+.dedup-title-compare-result { margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.3rem; }
+.dedup-title-compare-row { display: flex; flex-direction: column; gap: 0.1rem; }
+.dedup-title-combine { margin-top: 0.4rem; padding-top: 0.4rem; border-top: 1px dashed var(--line); }
 .dedup-pair-row {
   display: flex;
   align-items: baseline;
@@ -6076,11 +6094,26 @@ a.dedup-url { color: inherit; }
   color: var(--muted);
   margin-left: 0.4rem;
 }
-.saved-dedup-possible-section {
+.saved-dedup-section {
   margin-top: 0.8rem;
+}
+.saved-dedup-section > summary {
+  cursor: pointer;
+  font-weight: 600;
+  list-style-position: outside;
+}
+.saved-dedup-section > summary .saved-dedup-section-count {
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 0.25rem;
+}
+.saved-dedup-section[open] {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+}
+.saved-dedup-section[open] > summary {
+  margin-bottom: 0.2rem;
 }
 .purge-old-controls {
   display: flex;
@@ -6114,6 +6147,15 @@ a.dedup-url { color: inherit; }
   flex-direction: column;
   gap: 0.35rem;
 }
+.dedup-query-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px dashed var(--line);
+}
+.dedup-query-include { font-weight: 600; cursor: pointer; }
 .dedup-folder-checks {
   display: flex;
   flex-wrap: wrap;
@@ -6343,6 +6385,16 @@ mark.highlight-mark {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+  /* The action button used to sit at the natural end of a long, scrollable
+     result list -- reported 2026-08-10: had to scroll all the way down past
+     dozens of groups to find "Remove duplicates". Sticking it to the bottom
+     of .settings-tab-panel (the actual scroll container) keeps it reachable
+     without hiding the results above it. */
+  position: sticky;
+  bottom: 0;
+  background: var(--elevated-bg);
+  margin-top: 0.5rem;
+  padding-bottom: 0.5rem;
 }
 .dedup-rescue-label {
   display: flex;
@@ -7443,13 +7495,17 @@ textarea.hl-draft-pattern {
 /* ── Settings modal ─────────────────────────────────────────────────── */
 .settings-modal-panel {
   min-width: min(520px, 100%);
-  max-width: 680px;
-  width: 94vw;
+  /* Default size unchanged (was a hard 680px cap); max-width only raised so
+     `resize` has real headroom to drag into — the old cap became the resize
+     ceiling too, leaving almost nothing to actually resize. */
+  width: min(680px, 94vw);
+  max-width: calc(100vw - 3rem);
   height: min(600px, 88vh);
+  max-height: calc(100vh - 4rem);
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  resize: none;
+  resize: both;
 }
 .settings-modal-header {
   display: flex;

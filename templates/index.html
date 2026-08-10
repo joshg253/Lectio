@@ -2578,6 +2578,16 @@
               <p class="action-modal-hint dedup-upgrade-hint">Read history will reset for upgraded feeds — existing entries will reappear as unread after the next refresh.</p>
               <div class="dedup-upgrade-list"></div>
             </div>
+            <details class="saved-dedup-section dedup-query-section" open hidden>
+              <summary>Same address, different query <span class="saved-dedup-section-count"></span></summary>
+              <p class="action-modal-hint">A query param can be a real duplicate (format selector) or genuinely different content (a category/tag feed) — nothing here is pre-checked. Check the ones you want removed, then use "Remove duplicates" below.</p>
+              <div id="dedup-query-list" class="dedup-query-list"></div>
+            </details>
+            <details class="saved-dedup-section dedup-title-section" open hidden>
+              <summary>Same title, different feed <span class="saved-dedup-section-count"></span></summary>
+              <p class="action-modal-hint">Review by hand — a same-title pair can legitimately be a site's blog and its own podcast, so nothing here is ever auto-applied. Click a feed to open its Properties.</p>
+              <div id="dedup-title-list" class="dedup-title-list"></div>
+            </details>
             <div class="dedup-inline-actions">
               <label id="dedup-rescue-label" class="dedup-rescue-label" hidden>
                 <input type="checkbox" id="dedup-rescue-unread" checked>
@@ -2588,12 +2598,16 @@
           </div>
           <div id="saved-dedup-results" hidden>
             <p class="action-modal-label saved-dedup-intro"></p>
-            <div class="saved-dedup-confirmed-list"></div>
-            <div class="saved-dedup-possible-section" hidden>
+            <details class="saved-dedup-section saved-dedup-confirmed-section" open hidden>
+              <summary>Confirmed <span class="saved-dedup-section-count"></span></summary>
+              <div class="saved-dedup-confirmed-list"></div>
+            </details>
+            <details class="saved-dedup-section saved-dedup-possible-section" open hidden>
+              <summary>Possible <span class="saved-dedup-section-count"></span></summary>
               <p class="action-modal-label saved-dedup-possible-intro"></p>
               <p class="action-modal-hint">Nothing below is preselected — check the copies you want removed.</p>
               <div class="saved-dedup-possible-list"></div>
-            </div>
+            </details>
             <div class="dedup-inline-actions">
               <button type="button" id="saved-dedup-checkall" class="settings-secondary-btn" hidden title="Probe every group's URLs (throttled, one group at a time) — dead links are flagged and selected for deletion; live and inconclusive copies are left alone">Check all URLs</button>
               <button type="button" id="saved-dedup-ok" class="danger" hidden>Delete selected copies</button>
