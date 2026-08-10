@@ -3363,6 +3363,22 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Manual tags for orphan-archive entries — entries whose feed is no
+        # longer in `reader` (see _build_orphan_entry_detail), so there is no
+        # reader resource for reader's own entry_tags to attach to. Star
+        # already works for orphans (saved_entries is meta-DB, no reader
+        # dependency); this gives tags the same independence rather than
+        # silently no-oping when reader.get_entry() misses.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS orphan_entry_tags (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                PRIMARY KEY(feed_url, entry_id, tag)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS entry_date_overrides (
@@ -8332,6 +8348,40 @@ def _entry_should_keep_archive(feed_url: str, entry_id: str) -> bool:
     return bool(get_manual_tags_for_entry(feed_url, entry_id))
 
 
+def _get_orphan_manual_tags(feed_url: str, entry_id: str) -> list[str]:
+    with get_meta_connection() as conn:
+        rows = conn.execute(
+            "SELECT tag FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        ).fetchall()
+    return sorted({str(r[0]) for r in rows})
+
+
+def _set_orphan_manual_tags(feed_url: str, entry_id: str, next_tags: list[str]) -> bool:
+    """Write the tag diff for an orphan-archive entry. Returns True if any tag
+    was newly added (mirrors set_manual_tags_for_entry's added_any)."""
+    with get_meta_connection() as conn:
+        existing = {
+            str(r[0]) for r in conn.execute(
+                "SELECT tag FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchall()
+        }
+        next_set = set(next_tags)
+        for removed in existing - next_set:
+            conn.execute(
+                "DELETE FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ? AND tag = ?",
+                (feed_url, entry_id, removed),
+            )
+        for added in next_set - existing:
+            conn.execute(
+                "INSERT OR IGNORE INTO orphan_entry_tags (feed_url, entry_id, tag) VALUES (?, ?, ?)",
+                (feed_url, entry_id, added),
+            )
+        conn.commit()
+        return bool(next_set - existing)
+
+
 def set_manual_tags_for_entry(feed_url: str, entry_id: str, raw_tags: str | None) -> list[str]:
     next_tags = parse_manual_hashtags(raw_tags)
 
@@ -8339,23 +8389,28 @@ def set_manual_tags_for_entry(feed_url: str, entry_id: str, raw_tags: str | None
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
         if not entry:
-            return []
+            # Orphan archive: the feed is gone from `reader`, so there is no
+            # resource for reader's own entry_tags to attach to. Star already
+            # works this way (saved_entries is meta-DB, no reader dependency)
+            # — give tags the same independence via orphan_entry_tags instead
+            # of silently no-oping.
+            added_any = _set_orphan_manual_tags(feed_url, entry_id, next_tags)
+        else:
+            resource_id = entry.resource_id
+            existing_tags = get_manual_tags_for_resource(reader, resource_id)
+            existing_set = set(existing_tags)
+            next_set = set(next_tags)
 
-        resource_id = entry.resource_id
-        existing_tags = get_manual_tags_for_resource(reader, resource_id)
-        existing_set = set(existing_tags)
-        next_set = set(next_tags)
+            for removed in existing_set - next_set:
+                reader.delete_tag(resource_id, f"{MANUAL_TAG_KEY_PREFIX}{removed}")
 
-        for removed in existing_set - next_set:
-            reader.delete_tag(resource_id, f"{MANUAL_TAG_KEY_PREFIX}{removed}")
-
-        for added in next_tags:
-            if added in existing_set:
-                continue
-            added_any = True
-            # Use presence-only tag (no JSON value) to avoid type issues
-            # with reader.set_tag's typed `value` parameter.
-            reader.set_tag(resource_id, f"{MANUAL_TAG_KEY_PREFIX}{added}")
+            for added in next_tags:
+                if added in existing_set:
+                    continue
+                added_any = True
+                # Use presence-only tag (no JSON value) to avoid type issues
+                # with reader.set_tag's typed `value` parameter.
+                reader.set_tag(resource_id, f"{MANUAL_TAG_KEY_PREFIX}{added}")
 
     invalidate_has_manual_tags_cache()
     invalidate_tag_counts_cache()
@@ -8414,6 +8469,31 @@ def delete_manual_tag_everywhere(tag: str | None) -> int:
             "delete_manual_tag_everywhere: %r removed from %d entries, %d failed",
             normalized, removed, failed,
         )
+
+    # Orphan archives keep this tag in orphan_entry_tags instead of reader's
+    # entry_tags (see set_manual_tags_for_entry) — remove it there too, or
+    # delete-everywhere would silently miss them and the tag would look gone
+    # from the sidebar while still sitting on an orphan.
+    with get_meta_connection() as conn:
+        orphan_rows = conn.execute(
+            "SELECT feed_url, entry_id FROM orphan_entry_tags WHERE tag = ?", (normalized,)
+        ).fetchall()
+        for feed_url, entry_id in orphan_rows:
+            conn.execute(
+                "DELETE FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ? AND tag = ?",
+                (feed_url, entry_id, normalized),
+            )
+            removed += 1
+            remaining = conn.execute(
+                "SELECT 1 FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ? LIMIT 1",
+                (feed_url, entry_id),
+            ).fetchone()
+            if not remaining and not _entry_is_starred(feed_url, entry_id):
+                try:
+                    starred_archive_service.enqueue_removal(feed_url, entry_id)
+                except Exception as exc:  # noqa: BLE001
+                    LOGGER.warning("tag archive removal failed for %s/%s: %s", feed_url, entry_id, exc)
+        conn.commit()
 
     if removed:
         invalidate_has_manual_tags_cache()
@@ -8562,6 +8642,29 @@ def rename_manual_tag_everywhere(old_tag: str | None, new_tag: str | None) -> tu
                 LOGGER.warning(
                     "rename_manual_tag_everywhere: failed on %s", entry.resource_id, exc_info=True
                 )
+
+    # Orphan archives keep tags in orphan_entry_tags instead of reader's
+    # entry_tags (see set_manual_tags_for_entry) — rename there too.
+    with get_meta_connection() as conn:
+        if not merged:
+            merged = conn.execute(
+                "SELECT 1 FROM orphan_entry_tags WHERE tag = ? LIMIT 1", (new_norm,)
+            ).fetchone() is not None
+        orphan_rows = conn.execute(
+            "SELECT feed_url, entry_id FROM orphan_entry_tags WHERE tag = ?", (old_norm,)
+        ).fetchall()
+        for feed_url, entry_id in orphan_rows:
+            conn.execute(
+                "DELETE FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ? AND tag = ?",
+                (feed_url, entry_id, old_norm),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO orphan_entry_tags (feed_url, entry_id, tag) VALUES (?, ?, ?)",
+                (feed_url, entry_id, new_norm),
+            )
+            updated += 1
+        conn.commit()
+
     if updated:
         invalidate_has_manual_tags_cache()
         invalidate_tag_counts_cache()
@@ -8626,9 +8729,10 @@ def migrate_spaced_manual_tags() -> int:
 def get_manual_tags_for_entry(feed_url: str, entry_id: str) -> list[str]:
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
-        if not entry:
-            return []
-        return get_manual_tags_for_resource(reader, entry.resource_id)
+        if entry:
+            return get_manual_tags_for_resource(reader, entry.resource_id)
+    # Orphan archive: no reader resource, tags live in orphan_entry_tags instead.
+    return _get_orphan_manual_tags(feed_url, entry_id)
 
 
 def _manually_tagged_entry_keys() -> set[tuple[str, str]]:
@@ -8986,6 +9090,12 @@ def has_any_manual_tags() -> bool:
             present = row is not None
         finally:
             conn.close()
+        if not present:
+            # Orphan archives keep tags in orphan_entry_tags (meta DB) instead
+            # of reader's entry_tags — check there too, or an orphan-only tag
+            # would make this probe (and everything gated on it) miss it.
+            with get_meta_connection() as meta_conn:
+                present = meta_conn.execute("SELECT 1 FROM orphan_entry_tags LIMIT 1").fetchone() is not None
     except Exception:
         present = True  # safe default — fall back to the slow path
     with _has_manual_tags_lock:
@@ -9126,6 +9236,7 @@ def get_all_manual_tag_names() -> list[str]:
     if not has_any_manual_tags():
         return []
     prefix = MANUAL_TAG_KEY_PREFIX
+    names: set[str] = set()
     try:
         conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
         try:
@@ -9134,12 +9245,23 @@ def get_all_manual_tag_names() -> list[str]:
             ).fetchall()
         finally:
             conn.close()
+        names.update(
+            name for (k,) in rows
+            if (name := str(k)[len(prefix):].strip().lower())
+        )
     except Exception:  # noqa: BLE001 — autocomplete is a nicety, never fail the page
-        return []
-    return sorted({
-        name for (k,) in rows
-        if (name := str(k)[len(prefix):].strip().lower())
-    })
+        pass
+    # Orphan-only tags (see set_manual_tags_for_entry) still belong in the
+    # autocomplete list — otherwise a tag used only on orphans is untypeable
+    # via suggestion.
+    try:
+        with get_meta_connection() as meta_conn:
+            names.update(
+                str(r[0]) for r in meta_conn.execute("SELECT DISTINCT tag FROM orphan_entry_tags").fetchall()
+            )
+    except Exception:  # noqa: BLE001
+        pass
+    return sorted(names)
 
 
 def get_favicon_url(feed_url: str, site_url: str | None = None) -> str | None:
@@ -13405,6 +13527,10 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
     published_at = archived.get("published_at")
     received_at = archived.get("received_at")
+    # Orphan archives can't carry reader-backed manual tags (no reader
+    # resource — see set_manual_tags_for_entry), but they still support
+    # tagging via orphan_entry_tags, same as Star already does via saved_entries.
+    manual_tags = _get_orphan_manual_tags(feed_url, entry_id)
 
     return {
         "feed_url": feed_url,
@@ -13428,8 +13554,8 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "read": True,
         "saved": True,
         "kept": True,
-        "manual_tags": [],
-        "manual_tags_text": "",
+        "manual_tags": manual_tags,
+        "manual_tags_text": " ".join(manual_tags),
         "feed_tag_suggestions": [],
         "feed_tag_chips_collapsed": FEED_TAG_CHIPS_COLLAPSED,
         "feed_tag_filter_signs": {},

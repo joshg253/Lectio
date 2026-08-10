@@ -2233,6 +2233,28 @@ never auto-pruned) whenever it's starred **or** manually tagged. Tag is the
   `kept_feeds` is created in `ensure_meta_schema` (covered by the startup
   per-user migration, so existing tenants don't 500).
 
+**Tagging orphan archives.** `_build_orphan_entry_detail` renders an entry whose
+feed is gone from `reader` entirely from its `archived_entry` row (see "Removing
+a feed" above). Star already worked on these — `apply_star_state` writes
+`saved_entries` directly by `(feed_url, entry_id)`, with no `reader` dependency
+— but manual tags piggyback on `reader`'s own `entry_tags`, keyed to a
+`resource_id` that only exists if `reader.get_entry()` finds something. An
+orphan has nothing there, so tagging one silently no-op'd: `set_manual_tags_for_entry`
+returned `[]`, the route reported `{"ok": true}`, and the UI cleared the input
+with no chip and no error (reported 2026-08-09, `#pshell` on an orphaned
+`packtpub.com/rss.xml` item — Packt migrated to `hub.packtpub.com` years earlier
+and the old feed was long gone, but the archive capture and its "kept" status
+survived).
+
+`orphan_entry_tags` (meta DB, `(feed_url, entry_id, tag)`) gives tags the same
+independence Star already had, as a fallback *only* — every manual-tag entry
+point (`get_manual_tags_for_entry`, `set_manual_tags_for_entry`,
+`delete_manual_tag_everywhere`, `rename_manual_tag_everywhere`,
+`has_any_manual_tags`, `get_all_manual_tag_names`) tries `reader` first and
+falls back to this table only when `reader.get_entry()` misses. Normal
+(non-orphan) entries are untouched — this never becomes the primary path for
+anything `reader` can already answer.
+
 **Searching the Kept view.** The kept branch in `list_entries_for_feeds` runs
 *ahead* of the generic `elif search_terms` fast path, so for a long time this was
 the one view where a search took no fast path at all: it hydrated every kept key
