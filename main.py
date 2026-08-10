@@ -3363,6 +3363,22 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Manual tags for orphan-archive entries — entries whose feed is no
+        # longer in `reader` (see _build_orphan_entry_detail), so there is no
+        # reader resource for reader's own entry_tags to attach to. Star
+        # already works for orphans (saved_entries is meta-DB, no reader
+        # dependency); this gives tags the same independence rather than
+        # silently no-oping when reader.get_entry() misses.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS orphan_entry_tags (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                PRIMARY KEY(feed_url, entry_id, tag)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS entry_date_overrides (
@@ -8270,6 +8286,14 @@ def normalize_search_query(value: str | None) -> str | None:
     return normalized or None
 
 
+def search_terms_from_query(value: str | None) -> list[str]:
+    """Lowercased, whitespace-split search tokens — the shared tokenization
+    every search surface (SQL-narrowed kept/feeds search, orphan-archive
+    metadata match) filters on, so a query means the same thing everywhere."""
+    normalized = normalize_search_query(value)
+    return [token.lower() for token in normalized.split()] if normalized else []
+
+
 def parse_manual_hashtags(raw_value: str | None) -> list[str]:
     if not raw_value:
         return []
@@ -8332,6 +8356,40 @@ def _entry_should_keep_archive(feed_url: str, entry_id: str) -> bool:
     return bool(get_manual_tags_for_entry(feed_url, entry_id))
 
 
+def _get_orphan_manual_tags(feed_url: str, entry_id: str) -> list[str]:
+    with get_meta_connection() as conn:
+        rows = conn.execute(
+            "SELECT tag FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        ).fetchall()
+    return sorted({str(r[0]) for r in rows})
+
+
+def _set_orphan_manual_tags(feed_url: str, entry_id: str, next_tags: list[str]) -> bool:
+    """Write the tag diff for an orphan-archive entry. Returns True if any tag
+    was newly added (mirrors set_manual_tags_for_entry's added_any)."""
+    with get_meta_connection() as conn:
+        existing = {
+            str(r[0]) for r in conn.execute(
+                "SELECT tag FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchall()
+        }
+        next_set = set(next_tags)
+        for removed in existing - next_set:
+            conn.execute(
+                "DELETE FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ? AND tag = ?",
+                (feed_url, entry_id, removed),
+            )
+        for added in next_set - existing:
+            conn.execute(
+                "INSERT OR IGNORE INTO orphan_entry_tags (feed_url, entry_id, tag) VALUES (?, ?, ?)",
+                (feed_url, entry_id, added),
+            )
+        conn.commit()
+        return bool(next_set - existing)
+
+
 def set_manual_tags_for_entry(feed_url: str, entry_id: str, raw_tags: str | None) -> list[str]:
     next_tags = parse_manual_hashtags(raw_tags)
 
@@ -8339,23 +8397,28 @@ def set_manual_tags_for_entry(feed_url: str, entry_id: str, raw_tags: str | None
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
         if not entry:
-            return []
+            # Orphan archive: the feed is gone from `reader`, so there is no
+            # resource for reader's own entry_tags to attach to. Star already
+            # works this way (saved_entries is meta-DB, no reader dependency)
+            # — give tags the same independence via orphan_entry_tags instead
+            # of silently no-oping.
+            added_any = _set_orphan_manual_tags(feed_url, entry_id, next_tags)
+        else:
+            resource_id = entry.resource_id
+            existing_tags = get_manual_tags_for_resource(reader, resource_id)
+            existing_set = set(existing_tags)
+            next_set = set(next_tags)
 
-        resource_id = entry.resource_id
-        existing_tags = get_manual_tags_for_resource(reader, resource_id)
-        existing_set = set(existing_tags)
-        next_set = set(next_tags)
+            for removed in existing_set - next_set:
+                reader.delete_tag(resource_id, f"{MANUAL_TAG_KEY_PREFIX}{removed}")
 
-        for removed in existing_set - next_set:
-            reader.delete_tag(resource_id, f"{MANUAL_TAG_KEY_PREFIX}{removed}")
-
-        for added in next_tags:
-            if added in existing_set:
-                continue
-            added_any = True
-            # Use presence-only tag (no JSON value) to avoid type issues
-            # with reader.set_tag's typed `value` parameter.
-            reader.set_tag(resource_id, f"{MANUAL_TAG_KEY_PREFIX}{added}")
+            for added in next_tags:
+                if added in existing_set:
+                    continue
+                added_any = True
+                # Use presence-only tag (no JSON value) to avoid type issues
+                # with reader.set_tag's typed `value` parameter.
+                reader.set_tag(resource_id, f"{MANUAL_TAG_KEY_PREFIX}{added}")
 
     invalidate_has_manual_tags_cache()
     invalidate_tag_counts_cache()
@@ -8414,6 +8477,32 @@ def delete_manual_tag_everywhere(tag: str | None) -> int:
             "delete_manual_tag_everywhere: %r removed from %d entries, %d failed",
             normalized, removed, failed,
         )
+
+    # Orphan archives keep this tag in orphan_entry_tags instead of reader's
+    # entry_tags (see set_manual_tags_for_entry) — remove it there too, or
+    # delete-everywhere would silently miss them and the tag would look gone
+    # from the sidebar while still sitting on an orphan.
+    with get_meta_connection() as conn:
+        orphan_rows = conn.execute(
+            "SELECT feed_url, entry_id FROM orphan_entry_tags WHERE tag = ?", (normalized,)
+        ).fetchall()
+        if orphan_rows:
+            # One bulk delete rather than per-row: the per-row "any tags left?"
+            # check below still needs a query per entry (it's asking about
+            # OTHER tags), but removing this one doesn't.
+            conn.execute("DELETE FROM orphan_entry_tags WHERE tag = ?", (normalized,))
+            removed += len(orphan_rows)
+            for feed_url, entry_id in orphan_rows:
+                remaining = conn.execute(
+                    "SELECT 1 FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ? LIMIT 1",
+                    (feed_url, entry_id),
+                ).fetchone()
+                if not remaining and not _entry_is_starred(feed_url, entry_id):
+                    try:
+                        starred_archive_service.enqueue_removal(feed_url, entry_id)
+                    except Exception as exc:  # noqa: BLE001
+                        LOGGER.warning("tag archive removal failed for %s/%s: %s", feed_url, entry_id, exc)
+        conn.commit()
 
     if removed:
         invalidate_has_manual_tags_cache()
@@ -8562,6 +8651,29 @@ def rename_manual_tag_everywhere(old_tag: str | None, new_tag: str | None) -> tu
                 LOGGER.warning(
                     "rename_manual_tag_everywhere: failed on %s", entry.resource_id, exc_info=True
                 )
+
+    # Orphan archives keep tags in orphan_entry_tags instead of reader's
+    # entry_tags (see set_manual_tags_for_entry) — rename there too.
+    with get_meta_connection() as conn:
+        if not merged:
+            merged = conn.execute(
+                "SELECT 1 FROM orphan_entry_tags WHERE tag = ? LIMIT 1", (new_norm,)
+            ).fetchone() is not None
+        orphan_rows = conn.execute(
+            "SELECT feed_url, entry_id FROM orphan_entry_tags WHERE tag = ?", (old_norm,)
+        ).fetchall()
+        for feed_url, entry_id in orphan_rows:
+            conn.execute(
+                "DELETE FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ? AND tag = ?",
+                (feed_url, entry_id, old_norm),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO orphan_entry_tags (feed_url, entry_id, tag) VALUES (?, ?, ?)",
+                (feed_url, entry_id, new_norm),
+            )
+            updated += 1
+        conn.commit()
+
     if updated:
         invalidate_has_manual_tags_cache()
         invalidate_tag_counts_cache()
@@ -8626,9 +8738,10 @@ def migrate_spaced_manual_tags() -> int:
 def get_manual_tags_for_entry(feed_url: str, entry_id: str) -> list[str]:
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
-        if not entry:
-            return []
-        return get_manual_tags_for_resource(reader, entry.resource_id)
+        if entry:
+            return get_manual_tags_for_resource(reader, entry.resource_id)
+    # Orphan archive: no reader resource, tags live in orphan_entry_tags instead.
+    return _get_orphan_manual_tags(feed_url, entry_id)
 
 
 def _manually_tagged_entry_keys() -> set[tuple[str, str]]:
@@ -8986,6 +9099,12 @@ def has_any_manual_tags() -> bool:
             present = row is not None
         finally:
             conn.close()
+        if not present:
+            # Orphan archives keep tags in orphan_entry_tags (meta DB) instead
+            # of reader's entry_tags — check there too, or an orphan-only tag
+            # would make this probe (and everything gated on it) miss it.
+            with get_meta_connection() as meta_conn:
+                present = meta_conn.execute("SELECT 1 FROM orphan_entry_tags LIMIT 1").fetchone() is not None
     except Exception:
         present = True  # safe default — fall back to the slow path
     with _has_manual_tags_lock:
@@ -9126,6 +9245,7 @@ def get_all_manual_tag_names() -> list[str]:
     if not has_any_manual_tags():
         return []
     prefix = MANUAL_TAG_KEY_PREFIX
+    names: set[str] = set()
     try:
         conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
         try:
@@ -9134,12 +9254,23 @@ def get_all_manual_tag_names() -> list[str]:
             ).fetchall()
         finally:
             conn.close()
+        names.update(
+            name for (k,) in rows
+            if (name := str(k)[len(prefix):].strip().lower())
+        )
     except Exception:  # noqa: BLE001 — autocomplete is a nicety, never fail the page
-        return []
-    return sorted({
-        name for (k,) in rows
-        if (name := str(k)[len(prefix):].strip().lower())
-    })
+        pass
+    # Orphan-only tags (see set_manual_tags_for_entry) still belong in the
+    # autocomplete list — otherwise a tag used only on orphans is untypeable
+    # via suggestion.
+    try:
+        with get_meta_connection() as meta_conn:
+            names.update(
+                str(r[0]) for r in meta_conn.execute("SELECT DISTINCT tag FROM orphan_entry_tags").fetchall()
+            )
+    except Exception:  # noqa: BLE001
+        pass
+    return sorted(names)
 
 
 def get_favicon_url(feed_url: str, site_url: str | None = None) -> str | None:
@@ -12365,8 +12496,7 @@ def list_entries_for_feeds(
     normalized_read_filter = normalize_read_filter(read_filter)
     normalized_star_only = normalize_star_only(star_only)
     normalized_selected_tag = normalize_tag_value(selected_tag)
-    normalized_search_query = normalize_search_query(search_query)
-    search_terms = [token.lower() for token in normalized_search_query.split()] if normalized_search_query else []
+    search_terms = search_terms_from_query(search_query)
     # site:<host> narrows to entries on that link host; it never goes to the
     # text-matching paths (SQL or haystack), only the link-host filter below.
     search_terms, site_hosts = _split_site_terms(search_terms)
@@ -13223,6 +13353,7 @@ def merge_orphan_saved_entries(
     limit: int,
     only_feed_url: str | None = None,
     archived: bool | None = None,
+    search_terms: list[str] | None = None,
 ) -> list[dict]:
     """Append archive-only saved entries (orphans), then re-sort + clip.
 
@@ -13239,13 +13370,18 @@ def merge_orphan_saved_entries(
     When *only_feed_url* is given, restrict orphans to that single feed (matched
     canonically) — used when the user clicks the feed link of an orphaned save
     to browse just that unsubscribed feed's archived items.
+
+    *search_terms*, if given, is forwarded to the archive-metadata match (see
+    get_orphan_saved_entries) — the caller's search doesn't otherwise reach
+    orphans at all, since they have no reader row for the SQL search to join
+    against.
     """
     archived_keys = get_archived_saved_keys() if archived is not None else set()
     if archived is not None:
         posts = [p for p in posts
                  if ((str(p["feed_url"]), str(p["id"])) in archived_keys) == archived]
 
-    orphans = starred_archive_service.get_orphan_saved_entries(live_feed_urls)
+    orphans = starred_archive_service.get_orphan_saved_entries(live_feed_urls, search_terms)
     if archived is not None:
         orphans = [o for o in orphans
                    if ((str(o["feed_url"]), str(o["id"])) in archived_keys) == archived]
@@ -13405,6 +13541,17 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
     published_at = archived.get("published_at")
     received_at = archived.get("received_at")
+    # Orphan archives can't carry reader-backed manual tags (no reader
+    # resource — see set_manual_tags_for_entry), but they still support
+    # tagging via orphan_entry_tags, same as Star already does via saved_entries.
+    manual_tags = _get_orphan_manual_tags(feed_url, entry_id)
+    is_starred = _entry_is_starred(feed_url, entry_id)
+    # A surviving capture is not itself a keep signal — same star-OR-tag rule
+    # as every live entry (see get_orphan_saved_entries). Previously hardcoded
+    # True here, so an orphan with neither a star nor a tag (a leftover from
+    # before this table existed, or unstarred after the feed was already gone)
+    # looked identically "kept" to one you'd actually curated.
+    is_kept = is_starred or bool(manual_tags)
 
     return {
         "feed_url": feed_url,
@@ -13426,10 +13573,10 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "received_display": _fmt(received_at),
         "author": archived.get("author"),
         "read": True,
-        "saved": True,
-        "kept": True,
-        "manual_tags": [],
-        "manual_tags_text": "",
+        "saved": is_starred,
+        "kept": is_kept,
+        "manual_tags": manual_tags,
+        "manual_tags_text": " ".join(manual_tags),
         "feed_tag_suggestions": [],
         "feed_tag_chips_collapsed": FEED_TAG_CHIPS_COLLAPSED,
         "feed_tag_filter_signs": {},
@@ -18627,13 +18774,14 @@ def resolve_reader_backlog(
     )
 
     # Parity with the Saved list: surface archive-only orphans (saves whose feed
-    # was unsubscribed) in the whole-backlog star view — root, no feed/tag/query.
+    # was unsubscribed) in the whole-backlog star view — root, no feed/tag. A
+    # search query narrows them (metadata match) rather than excluding them —
+    # orphans have no reader row for the SQL search path to reach otherwise.
     _merged_orphans = False
     if (
         star_only
         and not list_feed_url
         and not tag
-        and not search_query
         and selected_folder_id == root_id
     ):
         try:
@@ -18644,6 +18792,7 @@ def resolve_reader_backlog(
                 sort_dir=sort_dir,
                 limit=limit,
                 archived=archived,
+                search_terms=search_terms_from_query(search_query),
             )
             _merged_orphans = True
         except Exception as exc:  # noqa: BLE001
@@ -20854,9 +21003,11 @@ def _home_inner(
     )
 
     # Surface orphan archive entries (saved articles whose feed has been
-    # unsubscribed). Two entry points, both gated on the saved filter:
-    #   1. Root "All Feeds" with no feed/tag/query — orphans belong to no
-    #      folder, so per-folder views legitimately exclude them.
+    # unsubscribed). Two entry points, both gated on the saved filter. A search
+    # query narrows either (metadata match, passed through as search_terms)
+    # rather than excluding orphans outright:
+    #   1. Root "All Feeds" with no feed/tag — orphans belong to no folder, so
+    #      per-folder views legitimately exclude them.
     #   2. A specific feed selected that is no longer live (the user clicked
     #      the feed link on an orphaned save) — show just that feed's archive.
     orphan_only_feed = (
@@ -20873,6 +21024,7 @@ def _home_inner(
                 sort_dir=selected_sort_dir,
                 limit=limit,
                 only_feed_url=orphan_only_feed,
+                search_terms=search_terms_from_query(selected_query),
             )
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("orphan saved entry merge (feed %s) failed: %s", orphan_only_feed, exc)
@@ -20882,7 +21034,6 @@ def _home_inner(
         and selected_folder_id == root_id
         and not selected_feed_url
         and not selected_tag
-        and not selected_query
         # Orphans are read by definition (no live entry to be unread), so a
         # Saved view narrowed to unread excludes them.
         and selected_read_filter != "unread"
@@ -20898,6 +21049,7 @@ def _home_inner(
                 # vanished on return). An entry whose feed is live is not an
                 # orphan, whatever the folder tree says.
                 live_feed_urls=all_feed_urls | {saved_articles_service.SAVED_FEED_URL},
+                search_terms=search_terms_from_query(selected_query),
                 sort_by=selected_sort_by,
                 sort_dir=selected_sort_dir,
                 limit=limit,

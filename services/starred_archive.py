@@ -694,12 +694,31 @@ class StarredArchiveService:
             "content_html": content_html,
         }
 
-    def get_orphan_saved_entries(self, live_feed_urls: set[str]) -> list[dict[str, Any]]:
-        """Return archive rows whose feed isn't in `live_feed_urls`.
+    def get_orphan_saved_entries(
+        self, live_feed_urls: set[str], search_terms: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Return archive rows whose feed isn't in `live_feed_urls` AND are
+        actually kept — starred or manually tagged (via orphan_entry_tags,
+        since a reader-backed tag needs a reader resource these entries don't
+        have — see main.set_manual_tags_for_entry).
 
         Used by the saved-items list view to surface saves whose feed has been
         unsubscribed. Only complete archives appear (incomplete orphans would
         render with empty content; the unsubscribe guard prevents this anyway).
+
+        A capture surviving is not itself a keep signal — same rule as every
+        live entry (star OR tag), applied here too rather than treating "the
+        archive still exists" as its own, weaker definition of kept. An
+        uncurated leftover (feed long gone, never starred or tagged, or
+        unstarred after the fact) is not shown as Saved.
+
+        *search_terms*, if given, filters to rows where every term appears
+        (case-insensitively) in title, link, feed_title, or author — the same
+        AND-across-terms rule the SQL-backed search paths use, applied here in
+        Python because orphans have no reader row for a SQL search to join
+        against. Metadata only, not the archived body text: orphans are a few
+        hundred to low thousands of rows at most, so this stays cheap without
+        needing to decompress every capture's content on every keystroke.
         """
         try:
             with self._archive_conn() as conn:
@@ -713,11 +732,46 @@ class StarredArchiveService:
                 ).fetchall()
         except sqlite3.Error:
             return []
+        candidate_rows = [r for r in rows if str(r["feed_url"]) not in live_feed_urls]
+        if not candidate_rows:
+            return []
+        # Narrowed to the orphan candidates' own feed_urls rather than pulling
+        # every saved_entries/orphan_entry_tags row in the meta DB — the live
+        # library can carry thousands of stars, nearly all for feeds that are
+        # not orphaned at all.
+        candidate_feeds = sorted({str(r["feed_url"]) for r in candidate_rows})
+        starred: set[tuple[str, str]] = set()
+        tagged: set[tuple[str, str]] = set()
+        try:
+            with self._get_meta_connection() as meta_conn:
+                for i in range(0, len(candidate_feeds), 900):
+                    chunk = candidate_feeds[i:i + 900]
+                    ph = ",".join("?" for _ in chunk)
+                    starred.update(
+                        (str(f), str(e)) for f, e in meta_conn.execute(
+                            f"SELECT feed_url, entry_id FROM saved_entries WHERE feed_url IN ({ph})",
+                            chunk,
+                        )
+                    )
+                    tagged.update(
+                        (str(f), str(e)) for f, e in meta_conn.execute(
+                            f"SELECT DISTINCT feed_url, entry_id FROM orphan_entry_tags WHERE feed_url IN ({ph})",
+                            chunk,
+                        )
+                    )
+        except sqlite3.Error:
+            starred, tagged = set(), set()
         out: list[dict[str, Any]] = []
-        for row in rows:
+        for row in candidate_rows:
             feed_url = str(row["feed_url"])
-            if feed_url in live_feed_urls:
+            entry_id = str(row["entry_id"])
+            if (feed_url, entry_id) not in starred and (feed_url, entry_id) not in tagged:
                 continue
+            if search_terms:
+                haystack = " ".join(str(row[c] or "") for c in
+                                     ("title", "link", "feed_title", "author")).lower()
+                if not all(term in haystack for term in search_terms):
+                    continue
             out.append(
                 {
                     "feed_url": feed_url,
