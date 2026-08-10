@@ -11,27 +11,11 @@ measurement/investigation jobs, then scheduled or genuinely low-urgency
 work, then the two standing watch-lists, then the one big multi-session
 project last.
 
-### CodeQL board triage
+### CodeQL board — watch-note
 
-**FIXED 2026-08-09** — all 5 findings from the board:
-
-- `py/polynomial-redos` ×4: `_LEAD_IMG_OPENER_RE`'s blank-paragraph branch had
-  an adjacent `\s*` immediately before `(?:&nbsp;|\s)*`, both matching plain
-  whitespace — an ambiguous-quantifier ReDoS on a run of spaces with no
-  trailing `</p>`; dropped the redundant `\s*`. The tag-strip in
-  `_reader_text_length` and the attribute-value strip in
-  `proxy_reader_images`'s srcset removal both had unbounded quantifiers
-  (`[^>]+`, `[^"]*`/`[^']*`) ahead of a required closing delimiter, which
-  re-scan to end-of-string at every unmatched opener in feed-supplied HTML —
-  O(n^2) worst case; bounded both to `{0,10000}`/`{1,10000}` (no real tag or
-  attribute value approaches that length).
-- `py/stack-trace-exposure`: `send_webhook`'s exception branch returned
-  `str(exc)` (raw transport/connection detail) straight to the webhook-test
-  route's JSON response. Now logs the exception server-side and returns a
-  generic `"delivery failed (connection or transport error)"`; the `HTTP 500`-
-  style non-2xx branch is unchanged since a bare status code isn't sensitive.
-
-**If the reflective-XSS class keeps recurring**, the repo already has the pattern
+Board is at zero open alerts as of 2026-08-09 (PR #190 closed out the last 5:
+4× `py/polynomial-redos`, 1× `py/stack-trace-exposure` — detail in that PR's
+history). **If the reflective-XSS class keeps recurring**, the repo already has the pattern
 for it: `.github/codeql/queries/` holds guard-aware copies of the SSRF and
 path-injection queries that model our audited guards as sanitizer barriers, with
 the stock versions excluded in `codeql-config.yml`. A `LectioReflectiveXss.ql`
