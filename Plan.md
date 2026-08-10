@@ -46,15 +46,6 @@ excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
   vocabulary with post counts (above), so this is now typing four short specs
   against a visible list rather than against a guess.** Still Josh's call: which
   tags to drop is a taste judgement, not a derivable one.
-- **Dead code sweep** (promoted from "Code health" in Later, 2026-07-21 finds)
-  — delete-the-unused-thing, no design work: `server_posts_total` /
-  `server_posts_sent` (read in `templates/index.html` with `is defined`
-  guards but never set anywhere in Python); the orphaned
-  `templates/js/_layout_shell.js` / `_pull_to_refresh.js` (unreferenced
-  leftovers from an earlier extraction attempt — confirm nothing external
-  uses them first); the dead `LECTIO_SECURITY_MODE` line in
-  `scripts/refresh_screenshots.py` (nothing in the app reads it since auth
-  became unconditional). Do all three together in one pass.
 
 ### Batch-align Uncategorized saved items into Feeds (promoted from Later)
 
@@ -747,10 +738,12 @@ earlier flaky-CI work (reader `busy_timeout` + startup-backfill gate) and the
 `PytestUnhandledThreadExceptionWarning` noise the suite still emits — a
 background thread racing the test's DB. Not chased; note the run if it recurs.
 
-**Dead code sweep, remaining piece** — the three cheapest finds (`server_posts_total`/
-`server_posts_sent`, the orphaned `templates/js/_layout_shell.js`/`_pull_to_refresh.js`,
-the dead `LECTIO_SECURITY_MODE` line) were promoted to Now ("Small daily-friction
-items") since they're zero-risk deletes. One left here, more involved:
+**Dead code sweep, remaining piece** — the three cheapest finds
+(`server_posts_total`/`server_posts_sent`, the orphaned
+`templates/js/_layout_shell.js`/`_pull_to_refresh.js`, the dead
+`LECTIO_SECURITY_MODE` line) were completed 2026-08-10 (the JS files were already
+gone from an earlier extraction cleanup; only the template attributes and the
+env line needed removing). One left here, more involved:
 
 - **The dormant in-app star-mode tree/JS** that the Read Mode hijack bypasses —
   see "Finish the Instapaper clone" in Now, which lists it as a Read Mode follow-up.
