@@ -2275,17 +2275,29 @@ to something you'd actually curated.
 
 **Orphans and search.** `merge_orphan_saved_entries` used to be skipped
 outright whenever a search query was active (`not search_query` at both call
-sites) — reported 2026-08-09: searching turned up nothing for the packtpub
-orphan even after it was starred, because it was never in the candidate set
-search ran over. Orphans have no reader row, so the SQL-narrowed search paths
-(`_filter_star_keys_by_search` etc.) can't reach them regardless. Rather than
-excluding orphans from a search, `get_orphan_saved_entries` takes an optional
-`search_terms` list and matches it in Python against title/link/feed_title/
-author — same AND-across-terms rule as the rest of search, same tokenization
+sites) — reported 2026-08-09: searching "packtpub" turned up nothing, because
+orphans were never in the candidate set search ran over at all. Orphans have
+no reader row, so the SQL-narrowed search paths (`_filter_star_keys_by_search`
+etc.) can't reach them regardless. Rather than excluding orphans from a
+search, `get_orphan_saved_entries` takes an optional `search_terms` list and
+matches it in Python against title/link/feed_title/author — same
+AND-across-terms rule as the rest of search, same tokenization
 (`search_terms_from_query`), just not routed through SQL. Deliberately
 metadata-only, not the archived body text: decompressing every orphan's
 `content_html_zlib` on every search would cost more than the orphan set's size
 (low thousands at most) justifies today; revisit if that ever feels thin.
+
+**The discoverability dead-end this created, and why the 190 got deleted.**
+Once "kept" meant star-OR-tag, the 190 uncurated orphans stopped appearing
+*anywhere* — not the Kept view, not search — with no path back to one except
+an exact bookmarked URL (which is how the packtpub orphan was found in the
+first place). An item you cannot find is one you cannot curate, so leaving
+them stranded-but-present served no purpose. `scripts/purge_uncurated_orphan_archives.py`
+deletes exactly this set (orphan AND no star AND no tag) via the existing
+`delete_archive` cascade (asset rows and now-unreferenced asset blobs go with
+it). Run 2026-08-09: 190 deleted, 89 of them the packtpub batch. A curated
+orphan (star or tag) is untouched regardless of how old or how dead its feed
+is — this only ever removes captures with zero keep signal.
 
 **Searching the Kept view.** The kept branch in `list_entries_for_feeds` runs
 *ahead* of the generic `elif search_terms` fast path, so for a long time this was
