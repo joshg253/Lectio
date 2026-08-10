@@ -528,6 +528,32 @@ auto-file (puts it somewhere sensible), then reassess. Only revisit page-monitor
 if the "re-check the page for changes" half turns out to be the actual want — that
 part #4 does not cover.
 
+### DeviantArt: 543 individual gallery feeds may be redundant with the Watch feed — 2026-08-10
+
+Surfaced while investigating why the new "same address, different query"
+duplicate scanner was flooding with DeviantArt hits (fixed separately —
+`backend.deviantart.com` is now excluded from that signal entirely, since
+it's one shared endpoint for every artist).
+
+Confirmed in code: when DeviantArt is connected, adding an artist only
+Watches them (`deviantart_service.watch_user`) — "their posts arrive via
+the single combined Watch feed, so we don't create a per-artist local feed"
+(`main.py` ~line 22132). That's the *current* behavior. But the library
+still carries **543 individual artist feeds** alongside the one Watch
+feed: 521 rendered locally (`deviantart_feeds` table, `source='gallery'`)
+plus 22 legacy direct `backend.deviantart.com/rss.xml?q=gallery:<user>`
+subscriptions that predate the local-render pipeline entirely.
+
+**Working theory:** these predate the Watch-only behavior and were never
+cleaned up after the switch, so most/all of their content is now redundant
+with the Watch feed. **Needs verification before any bulk action** — check
+whether each artist's username is actually in the account's current
+DeviantArt watch list (via the API), and/or whether their entries already
+appear in the Watch feed's own content. Only once that's confirmed would
+unsubscribing the individual feeds (migrating any stars/tags via the
+existing combine mechanism first) make sense — not something to bulk-guess
+at.
+
 ### DeviantArt watchlist sync — remaining follow-up
 
 Auto-resume + reconcile SHIPPED 2026-07-08 (see ARCHITECTURE "Watch-list sync
