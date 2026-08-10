@@ -741,7 +741,7 @@ background thread racing the test's DB. Not chased; note the run if it recurs.
 **Dead code sweep, remaining piece** — the three cheapest finds
 (`server_posts_total`/`server_posts_sent`, the orphaned
 `templates/js/_layout_shell.js`/`_pull_to_refresh.js`, the dead
-`LECTIO_SECURITY_MODE` line) are done 2026-08-10 (the JS files were already
+`LECTIO_SECURITY_MODE` line) were completed 2026-08-10 (the JS files were already
 gone from an earlier extraction cleanup; only the template attributes and the
 env line needed removing). One left here, more involved:
 
