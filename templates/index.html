@@ -689,7 +689,7 @@
         </div>
       </div>
       {% endif %}
-      <div class="posts" data-chunk-size="10" data-server-posts-total="{{ server_posts_total if server_posts_total is defined else '' }}" data-server-posts-sent="{{ server_posts_sent if server_posts_sent is defined else '' }}">
+      <div class="posts" data-chunk-size="10">
         {% for post in posts %}
         {% set list_feed_query = '&list_feed_url=' ~ (selected_feed_url | urlencode) if selected_feed_url else '' %}
         {% set tag_query = '&tag=' ~ (selected_tag | urlencode) if selected_tag else '' %}

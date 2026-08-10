@@ -198,7 +198,6 @@ def main() -> int:
         admin_env = dict(os.environ, **{
             "LECTIO_DATA_DIR": str(admin_data_dir),
             "PYTHONPATH": str(ROOT),
-            "LECTIO_SECURITY_MODE": "multi",
             "LECTIO_ADMIN_USERNAME": admin_user,
             "LECTIO_ADMIN_PASSWORD": admin_pw,
             "LECTIO_SECRET_KEY": secrets.token_hex(32),
