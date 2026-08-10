@@ -2660,6 +2660,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     const unsubscribeFeedUrlInput = document.getElementById('context-unsubscribe-feed-url');
     const postMarkReadButton = document.getElementById('ctx-post-mark-read');
     const postMarkFeedReadButton = document.getElementById('ctx-post-mark-feed-read');
+    const postOpenInFeedsButton = document.getElementById('ctx-post-open-in-feeds');
     const postMarkAboveReadButton = document.getElementById('ctx-post-mark-above-read');
     const postMarkBelowReadButton = document.getElementById('ctx-post-mark-below-read');
     const postCopyUrlButton = document.getElementById('ctx-post-copy-url');
@@ -2835,6 +2836,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     let contextPostLink = '';
     let contextPostTitle = '';
     let contextPostFolderId = null;
+    let contextPostOrphan = false;
     let actionModalSubmitHandler = null;
     let sourceViewActive = false;
     let sourceLoadTimeoutId = null;
@@ -7026,11 +7028,13 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           contextPostLink = entryPaneTitle.getAttribute('data-post-link') || '';
           contextPostTitle = entryPaneTitle.getAttribute('data-post-title') || '';
           contextPostFolderId = entryPaneTitle.getAttribute('data-post-folder-id') || null;
+          contextPostOrphan = entryPaneTitle.getAttribute('data-post-orphan') === '1';
           if (postMarkReadButton) {
             postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
           }
           setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
           setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
+          setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
           setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
           setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
@@ -7388,11 +7392,13 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             contextPostLink = postItem.getAttribute('data-post-link') || '';
             contextPostTitle = postItem.getAttribute('data-post-title') || '';
             contextPostFolderId = postItem.getAttribute('data-post-folder-id') || null;
+            contextPostOrphan = postItem.getAttribute('data-post-orphan') === '1';
             if (postMarkReadButton) {
               postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
             }
             setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
             setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
+            setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
             setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
             setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
@@ -7723,6 +7729,35 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       markReadListFeedUrlInput.value = feedUrl;
       hideAllContextMenus();
       submitMarkReadAsync(markReadFeedForm, feedUrl);
+    });
+
+    // Saved's feed-name links deliberately stay within Saved (carry star_only
+    // through), so there was no route from a post back to the feed that owns
+    // it — its actual place in the Feeds tree. Feed Properties is already one
+    // right-click away on the feed name in the sidebar; this is for reaching
+    // that sidebar location in the first place, so it navigates to the
+    // feed's normal (non-Saved) post list — same URL shape Feed Properties'
+    // own "View posts" link uses — rather than popping a dialog.
+    postOpenInFeedsButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!contextPostFeedUrl) {
+        return;
+      }
+      const feedUrl = contextPostFeedUrl;
+      // data-post-folder-id is server-populated from feed_to_folder — the
+      // feed's REAL containing folder, unlike a sidebar-DOM lookup, which
+      // only works if the Feeds tree happens to be rendered (it isn't in
+      // Saved view, which is the case this button exists for).
+      const folderId = contextPostFolderId ?? '-1';
+      // feed_url/entry_id (not list_feed_url's own id) is the pair
+      // _entry_query_suffix expects to re-select a specific entry, same as
+      // every redirect-and-reselect route already does.
+      const entryQuery = contextPostEntryId
+        ? `&feed_url=${encodeURIComponent(feedUrl)}&entry_id=${encodeURIComponent(contextPostEntryId)}`
+        : '';
+      hideAllContextMenus();
+      window.location.href = `/?folder_id=${encodeURIComponent(folderId)}&list_feed_url=${encodeURIComponent(feedUrl)}&read_filter=all${entryQuery}`;
     });
 
     function adjustCountBadge(containerEl, delta) {
