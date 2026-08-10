@@ -46,12 +46,6 @@ excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
   vocabulary with post counts (above), so this is now typing four short specs
   against a visible list rather than against a guess.** Still Josh's call: which
   tags to drop is a taste judgement, not a derivable one.
-- **Saved search button does nothing** (promoted from Later, 2026-07-21 report).
-  The main-app toolbar search is wired
-  ([static/js/app.js:12976](static/js/app.js#L12976)); Read Mode's search
-  ([templates/read_mode.html:85](templates/read_mode.html#L85)) is a plain GET
-  form with **no submit button** and no JS — submits only on Enter, and loses
-  the selected tree node's `scope`. Likeliest culprit; confirm before fixing.
 - **Dead code sweep** (promoted from "Code health" in Later, 2026-07-21 finds)
   — delete-the-unused-thing, no design work: `server_posts_total` /
   `server_posts_sent` (read in `templates/index.html` with `is defined`
