@@ -34,22 +34,6 @@ end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, 
 excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 `py/full-ssrf` was.
 
-### The feeds filter matches substrings inside opaque ids — 2026-08-09
-
-Searching `htm` in Settings → Feeds returned five feeds and **none of them were
-what the search meant**: `html5hive.org`, `lostnig`**htm**`are.com`, two YouTube
-channel ids that happen to contain the letters
-(`…UCFD2HkPKmPBBAEu-gih`**hTm**`A`), and a real RSS feed living at a `.html`
-path. `applyFolderFilter` does a plain `includes()` over the whole URL, so a
-short query lands inside domains and — worse — inside opaque query-string
-values, where a match can never be meaningful.
-
-Two of five hits were channel-id noise. The fix is to match on host and path and
-ignore query-string *values* (keeping their keys), which kills the channel-id
-class without losing anything real. Worth doing while the filter is fresh: it is
-also the surface the new header select-all acts on, so noise in the match set is
-noise in what gets selected.
-
 ### Backups: retention is count-based and size-blind
 
 `scripts/backup_databases.py --keep 5` means five generations of an **8.4GB**
