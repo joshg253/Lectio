@@ -922,6 +922,49 @@ Examples:
 
 Temporary overrides must not silently overwrite remembered preferences. Leaving the override context should restore the base preference.
 
+### Filtering a view is not searching it
+
+Search and filter are different tools and are kept apart deliberately. **Search**
+(`q`) is a server-side query that changes *what is fetched*; it spans title, feed
+name, link, authors and summary. **Filter this view** (`#posts-filter-input`)
+narrows *what is already in front of you*, instantly, so the result can be acted
+on as a set — it matches only title, link and feed name, and is transient
+navigation state: a pane swap re-renders the toolbar and the filter comes back
+empty by design.
+
+Two mechanics make this safe.
+
+**The filter owns its own class.** `post-item-filtered`, never
+`post-item-hidden` — the latter belongs to the scroll-chunking reveal, and
+"move all shown" keys off it. One shared class would have turned a filtered bulk
+move into a whole-list bulk move: filter to one domain, click move, and the
+entire unfiltered list is silently re-filed. Keyboard navigation excludes both
+classes; while a filter is active the chunk window steps aside and reveals every
+match, because chunking exists to keep a 2,000-row list cheap to paint and the
+filter has already done that job.
+
+**Whole-set actions resolve server-side, by predicate.** The list route serves
+250 posts on first load and chunks to a 2,000 cap thereafter, so the browser
+holds a *page* of the view, not the view. An action that posts the ids it can
+see therefore covers a fraction of a large filter and says nothing about it —
+which `Move visible to feed…` did. `POST /entries/move-visible-to-feed` takes the
+*predicate* instead (folder scope, tag, search, read/star filters, and the filter
+term) and re-resolves it here at an effectively unbounded limit, mirroring the
+home route's scope derivation. That is correct at any size, and since there is no
+id payload to bound, `_MOVE_BATCH_CAP` does not apply to it. A `dry_run=1` call
+returns just the count so the confirm dialog can state the real number rather
+than the number of rows in the DOM — the dialog names both when they differ
+("Move the 60 shown posts… 46 are loaded here; all 60 are moved").
+
+"Shown" means everything matching the active filters regardless of scroll
+position: scroll-chunking is a rendering optimization, not user intent. Orphan
+archive rows (saves whose feed is gone) are excluded on both sides — there is no
+reader entry to move.
+
+`/entries/mark-range-read` solved the same page-vs-view problem earlier with
+`_RANGE_READ_LIMIT`; this is that lesson generalized from an anchor lookup to a
+whole-set action.
+
 ### Global audio player
 
 The persistent audio player is a deliberate exception to the pane-swap lifecycle.

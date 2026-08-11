@@ -687,6 +687,27 @@
             </button>
           </form>
         </div>
+        {# "Filter this view" is deliberately NOT the search box above it. Search
+           is a server query that changes what is fetched; this narrows what is
+           already on screen, instantly, so the result can be acted on as a set.
+           The bulk action it feeds resolves server-side against the same
+           predicate — see /entries/move-visible-to-feed. #}
+        <div class="posts-filter-row">
+          <span class="material-symbols-rounded posts-filter-icon" aria-hidden="true">filter_alt</span>
+          <input
+            id="posts-filter-input"
+            class="posts-filter-input"
+            type="search"
+            placeholder="Filter this view…"
+            aria-label="Filter the posts in this view by title, link, or feed"
+            autocomplete="off"
+          />
+          <span id="posts-filter-count" class="posts-filter-count" hidden></span>
+          <button type="button" id="posts-filter-clear" class="posts-filter-clear"
+                  aria-label="Clear filter" hidden>
+            <span class="material-symbols-rounded" aria-hidden="true">close</span>
+          </button>
+        </div>
       </div>
       {% endif %}
       <div class="posts" data-chunk-size="10">
@@ -1620,7 +1641,9 @@
     <button type="button" id="ctx-post-mark-below-read" class="context-menu-item">Read below</button>
     <button type="button" id="ctx-post-copy-url" class="context-menu-item">Copy URL</button>
     <button type="button" id="ctx-post-move-to-feed" class="context-menu-item">Move to feed…</button>
-    <button type="button" id="ctx-post-move-visible" class="context-menu-item">Move visible to feed…</button>
+    {# "shown", not "visible": this moves everything matching the active filters,
+       including rows scroll-chunking has not painted yet. #}
+    <button type="button" id="ctx-post-move-visible" class="context-menu-item">Move all shown to feed…</button>
     <button type="button" id="ctx-post-remove-tag-shown" class="context-menu-item danger" hidden>Remove this tag from all shown</button>
     <button type="button" id="ctx-post-automation" class="context-menu-item">Automation…</button>
     {# Edit and Re-fetch each collapse into a flyout: they are four and four

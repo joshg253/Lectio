@@ -3760,6 +3760,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           window.bindSwipeGestures();
         }
         setupPostChunks();
+        window.setupPostsFilter?.();
         if (typeof window.bindSinglePanePullToRefresh === 'function') {
           window.bindSinglePanePullToRefresh();
         }
@@ -8654,7 +8655,12 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     // Shared driver for the move-to-feed modal. `entries` is a list of
     // {feedUrl, entryId}; one entry uses the single endpoint, more uses the
     // batch endpoint. `bodyText` describes what's being moved.
-    async function openMoveToFeedModal(entries, bodyText, onDone) {
+    // `predicate` (optional) turns this into a whole-set move: instead of
+    // posting the ids the browser happens to hold, it posts the view's scope +
+    // filters and the server re-resolves them unclipped. `entries` still drives
+    // the target picker and the post-move row cleanup, which can only ever
+    // concern loaded rows anyway.
+    async function openMoveToFeedModal(entries, bodyText, onDone, predicate) {
       if (!entries.length) return;
       const modal = document.getElementById('move-entry-modal');
       const bodyEl = document.getElementById('move-entry-body');
@@ -8698,13 +8704,22 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         if (!targetUrl) return;
         confirmBtn.disabled = true;
         confirmBtn.textContent = 'Moving…';
-        const body = entries.length === 1
-          ? new URLSearchParams({ feed_url: entries[0].feedUrl, entry_id: entries[0].entryId, target_url: targetUrl })
-          : new URLSearchParams({
-              entries: JSON.stringify(entries.map(e => [e.feedUrl, e.entryId])),
-              target_url: targetUrl,
-            });
-        const endpoint = entries.length === 1 ? '/entries/move-to-feed' : '/entries/move-to-feed-batch';
+        let body;
+        let endpoint;
+        if (predicate) {
+          body = new URLSearchParams(predicate);
+          body.set('target_url', targetUrl);
+          endpoint = '/entries/move-visible-to-feed';
+        } else if (entries.length === 1) {
+          body = new URLSearchParams({ feed_url: entries[0].feedUrl, entry_id: entries[0].entryId, target_url: targetUrl });
+          endpoint = '/entries/move-to-feed';
+        } else {
+          body = new URLSearchParams({
+            entries: JSON.stringify(entries.map(e => [e.feedUrl, e.entryId])),
+            target_url: targetUrl,
+          });
+          endpoint = '/entries/move-to-feed-batch';
+        }
         try {
           const resp = await fetch(endpoint, { method: 'POST', body });
           const data = await resp.json();
@@ -9046,23 +9061,84 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       }
     });
 
-    postMoveVisibleButton?.addEventListener('click', (event) => {
+    // The scope + filters that define the list currently on screen, in the shape
+    // the server needs to re-resolve it. Read off the search form's hidden
+    // inputs rather than the URL: the server has already normalized them there
+    // (a search forces read_filter to `all`, for one), so this is the view as
+    // rendered rather than the view as requested.
+    function currentViewParams() {
+      const params = new URLSearchParams();
+      const form = document.querySelector('.posts-search-form');
+      if (form) {
+        for (const [key, value] of new FormData(form).entries()) {
+          if (String(value) !== '') params.set(key, String(value));
+        }
+      } else {
+        const url = new URL(window.location.href);
+        for (const key of ['folder_id', 'list_feed_url', 'tag', 'sort_by', 'sort_dir',
+                           'read_filter', 'star_only', 'kept', 'q']) {
+          const value = url.searchParams.get(key);
+          if (value) params.set(key, value);
+        }
+      }
+      if (!params.get('folder_id')) {
+        params.set('folder_id', new URL(window.location.href).searchParams.get('folder_id') || '1');
+      }
+      return params;
+    }
+
+    postMoveVisibleButton?.addEventListener('click', async (event) => {
       event.preventDefault();
       event.stopPropagation();
       hideAllContextMenus();
-      // "Visible" = every post currently rendered in the list — i.e. whatever
-      // survives the active filters (tag, search, unread, star).
-      const entries = Array.from(document.querySelectorAll('.posts .post-item'))
+      // "Shown" = everything matching the active filters — the server-side ones
+      // (tag, search, unread, star) plus the client-side filter box — regardless
+      // of scroll position. Scroll-chunking is a rendering optimization, not
+      // user intent, so `post-item-hidden` rows are in; `post-item-filtered`
+      // rows are the ones the user actually narrowed away, so they are out.
+      //
+      // Orphan archive rows are excluded: those are saves whose feed is gone, so
+      // there is no reader entry to move. The server's resolution omits them too.
+      const rows = Array.from(document.querySelectorAll('.posts .post-item:not(.post-item-filtered)'))
+        .filter(el => el.getAttribute('data-post-orphan') !== '1');
+      const entries = rows
         .map(el => ({
           feedUrl: el.getAttribute('data-post-feed-url') || '',
           entryId: el.getAttribute('data-post-entry-id') || '',
         }))
         .filter(e => e.feedUrl && e.entryId);
       if (!entries.length) return;
+
+      const predicate = currentViewParams();
+      predicate.set('filter_term', document.getElementById('posts-filter-input')?.value?.trim() || '');
+
+      // The browser holds a page of the view (250 on first load), so the row
+      // count is a floor, not the total. Ask the server what the predicate
+      // actually resolves to before naming a number in a bulk-action dialog.
+      let total = null;
+      try {
+        const body = new URLSearchParams(predicate);
+        body.set('dry_run', '1');
+        const resp = await fetch('/entries/move-visible-to-feed', { method: 'POST', body });
+        const data = await resp.json();
+        if (data.ok && Number.isFinite(data.count)) total = data.count;
+      } catch (_) { /* fall back to the honest partial count below */ }
+
+      if (total === null) {
+        showToastMessage('Could not count the matching posts — try again.');
+        return;
+      }
+      if (total === 0) return;
+
       openMoveToFeedModal(
         entries,
-        `Move the ${entries.length} visible post${entries.length === 1 ? '' : 's'} to another feed. ` +
-        'Posts already in the target feed are skipped.'
+        `Move the ${total} shown post${total === 1 ? '' : 's'} to another feed. ` +
+        (total > entries.length
+          ? `${entries.length} are loaded here; all ${total} are moved. `
+          : '') +
+        'Posts already in the target feed are skipped.',
+        null,
+        predicate,
       );
     });
 
@@ -14077,6 +14153,15 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
 
       function applyVisibleWindow() {
         const items = getPostItems();
+        // While "Filter this view" is active the chunk window steps aside and
+        // every match is revealed: chunking exists to keep a 2,000-row list
+        // cheap to paint, and a filter has already done that job. Leaving the
+        // window on top of it hid matches that were simply further down the
+        // list, which reads as the filter finding nothing.
+        if (window.postsFilterActive) {
+          items.forEach((item) => item.classList.remove('post-item-hidden'));
+          return;
+        }
         const boundedVisibleCount = Math.min(Math.max(visibleCount, chunkSize), items.length || chunkSize);
         visibleCount = boundedVisibleCount;
         items.forEach((item, index) => {
@@ -14092,8 +14177,16 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       // the end of the list; it needs the same "show me more" the scroll
       // sentinel triggers.
       window.revealNextPostChunk = () => revealNextChunk();
+      // The filter box re-runs the window after changing which rows are matches.
+      window.applyPostsChunkWindow = () => applyVisibleWindow();
 
       function revealNextChunk() {
+        // A narrow filter leaves the list too short to fill the viewport, which
+        // would otherwise make this chase server chunk after server chunk. The
+        // filter is a local narrowing of what is already here, and the bulk
+        // action it feeds resolves server-side, so the DOM does not need to be
+        // complete for it to be correct.
+        if (window.postsFilterActive) return;
         const items = getPostItems();
         // An empty list has no further chunks: chunk 1 is served pre-filtered,
         // so zero items means either a scope-tab landing (no posts by design —
@@ -14197,6 +14290,96 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     }
 
     setupPostChunks();
+
+    // "Filter this view" — narrows the list that is already on screen, as
+    // opposed to the search box above it, which is a server query that changes
+    // what is fetched. Matches post title, link URL, and source feed name (the
+    // same three fields /entries/move-visible-to-feed matches server-side, so
+    // the bulk move lands on exactly the set shown).
+    //
+    // The filter owns `post-item-filtered` and NEVER `post-item-hidden`: that
+    // one belongs to scroll-chunking, and "move the N shown" keys off it. One
+    // shared class would turn a filtered bulk move into a whole-list bulk move.
+    function postsFilterTerm() {
+      const box = document.getElementById('posts-filter-input');
+      return (box?.value || '').trim().toLowerCase();
+    }
+
+    function postsFilterMatches(item, term) {
+      if (!term) return true;
+      const title = item.getAttribute('data-post-title') || '';
+      const link = item.getAttribute('data-post-link') || '';
+      // The feed name is already text in the row; re-emitting it as an
+      // attribute would pay page weight for something the DOM already carries.
+      const feed = item.querySelector('.post-feed-link')?.textContent || '';
+      return `${title}\n${link}\n${feed}`.toLowerCase().includes(term);
+    }
+
+    function applyPostsFilter() {
+      const list = document.querySelector('.posts');
+      const countEl = document.getElementById('posts-filter-count');
+      const clearBtn = document.getElementById('posts-filter-clear');
+      if (!list) return;
+      const term = postsFilterTerm();
+      window.postsFilterActive = !!term;
+
+      let shown = 0;
+      const items = Array.from(list.querySelectorAll('.post-item'));
+      for (const item of items) {
+        const match = postsFilterMatches(item, term);
+        item.classList.toggle('post-item-filtered', !match);
+        if (match) shown += 1;
+      }
+      // Re-run the chunk window against the new match set: with a filter on it
+      // reveals everything, and on clear it re-collapses to the chunk.
+      window.applyPostsChunkWindow?.();
+
+      if (clearBtn) clearBtn.hidden = !term;
+      if (countEl) {
+        countEl.hidden = !term;
+        // Deliberately "of N loaded", not "of N": the browser holds a page of
+        // the view, not the view. The move action states the true server-side
+        // total separately rather than pretending this number is it.
+        countEl.textContent = term ? `${shown} of ${items.length} loaded` : '';
+      }
+    }
+
+    // Named apart from the window.* wrapper below on purpose: this file runs at
+    // global script scope, where `function setupPostsFilter()` and
+    // `window.setupPostsFilter` are the same binding — assigning the wrapper
+    // over it made the wrapper call itself.
+    function bindPostsFilter() {
+      const box = document.getElementById('posts-filter-input');
+      if (!box || box.dataset.filterBound === '1') return;
+      box.dataset.filterBound = '1';
+      let timer = null;
+      box.addEventListener('input', () => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(applyPostsFilter, 120);
+      });
+      // Escape clears rather than leaving a narrowed list behind an empty-looking
+      // box — the same reflex the search box's clear button serves.
+      box.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && box.value) {
+          event.stopPropagation();
+          box.value = '';
+          applyPostsFilter();
+        }
+      });
+      document.getElementById('posts-filter-clear')?.addEventListener('click', () => {
+        box.value = '';
+        applyPostsFilter();
+        box.focus();
+      });
+    }
+
+    // A pane swap re-renders the toolbar, so the box comes back empty; the flag
+    // has to come back with it or chunking stays disabled over the new list.
+    window.setupPostsFilter = () => {
+      window.postsFilterActive = false;
+      bindPostsFilter();
+    };
+    window.setupPostsFilter();
 
     function centerActivePostInView() {
       refreshPostChunkRefs();
@@ -15018,7 +15201,12 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     }
 
     function getVisiblePostItems() {
-      return Array.from(document.querySelectorAll('.posts .post-item:not(.post-item-hidden)'));
+      // Both exclusions matter: `post-item-hidden` is the un-revealed tail of
+      // the chunk window, `post-item-filtered` is what the filter box narrowed
+      // out. Keyboard nav must not step onto either.
+      return Array.from(document.querySelectorAll(
+        '.posts .post-item:not(.post-item-hidden):not(.post-item-filtered)'
+      ));
     }
 
     function getActivePostItem() {
@@ -15026,7 +15214,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       if (visiblePosts.length === 0) {
         return null;
       }
-      const activePost = document.querySelector('.posts .post-item.active:not(.post-item-hidden)');
+      const activePost = document.querySelector('.posts .post-item.active:not(.post-item-hidden):not(.post-item-filtered)');
       return activePost || visiblePosts[0];
     }
 
@@ -15046,7 +15234,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         return;
       }
 
-      const activePost = document.querySelector('.posts .post-item.active:not(.post-item-hidden)');
+      const activePost = document.querySelector('.posts .post-item.active:not(.post-item-hidden):not(.post-item-filtered)');
       let nextIndex = activePost ? visiblePosts.indexOf(activePost) + delta : 0;
 
       if (delta > 0 && nextIndex >= visiblePosts.length) {
@@ -15111,7 +15299,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         return;
       }
 
-      const activePost = document.querySelector('.posts .post-item.active:not(.post-item-hidden)');
+      const activePost = document.querySelector('.posts .post-item.active:not(.post-item-hidden):not(.post-item-filtered)');
       let nextIndex = activePost ? visiblePosts.indexOf(activePost) + delta : 0;
       nextIndex = Math.max(0, Math.min(visiblePosts.length - 1, nextIndex));
       setActivePostSelection(visiblePosts[nextIndex]);

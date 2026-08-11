@@ -34,65 +34,36 @@ end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, 
 excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 `py/full-ssrf` was.
 
-### "Filter this view" — ready to build (decision confirmed 2026-08-09)
+### "Filter this view" — shipped 2026-08-11, two follow-ups
 
-**Decision confirmed:** **(c)** server-side move + **(a)** local instant-feedback
-filter (see below) — no longer blocked, ready to build. Josh's framing:
-**"actual search" vs "filter search"** are different tools. Search is a
-server-side query that changes *what is fetched*; a filter narrows *what is
-already in front of you*, instantly, so you can then act on the result as a
-set. Settings → Feeds already has this pattern
-([templates/index.html:1938](templates/index.html#L1938), logic at
-[static/js/app.js:10594](static/js/app.js#L10594)); port it to the posts list.
-"Move all visible to feed" already exists
-([static/js/app.js:7045](static/js/app.js#L7045)) and post rows already carry
-`data-post-link`/`data-post-title` ([templates/index.html:629](templates/index.html#L629)),
-so the filter itself needs no server change — but the *move* action does.
+Built as decided: **(a)** a local instant-feedback filter over the posts list
+(`#posts-filter-input`, matching title / link / feed name) plus **(c)** a
+server-side *predicate* move, `POST /entries/move-visible-to-feed`, which
+re-resolves the view's scope and filters unclipped instead of posting the ids the
+browser holds. Rationale in ARCHITECTURE.md ("Filtering a view is not
+searching it"). The pre-existing truncation bug in `Move visible to feed…` is
+fixed by the same route — the menu item is now **Move all shown to feed…** and
+the dialog names both numbers when they differ ("Move the 60 shown posts… 46 are
+loaded here; all 60 are moved"). The `post-item-hidden` footgun was avoided as
+planned: the filter owns `post-item-filtered`, and the move/keyboard-nav
+selectors exclude both.
 
-**Why it's blocked:** the server sends 250 posts on first load
-([main.py:16591](main.py#L16591)), then further chunks capped at 2,000. A
-client-side filter only spans what's currently in the DOM, so "Move N shown"
-on a 1,321-match filter would silently move a fraction of it — the exact
-footgun this item exists to avoid. **The existing `Move visible to feed…` has
-this bug today** too ([static/js/app.js:7332](static/js/app.js#L7332)):
-its claim to cover "whatever survives the active filters" is only true under
-250 results. Worth fixing regardless of whether the new filter gets built.
+What was deliberately left:
 
-**The three options that were on the table** (kept for context — (c)+(a) won):
-- (a) Honest partial: filter what's loaded, label the button with both numbers.
-  Cheap but not a whole-set guarantee.
-- (b) Load-all then filter: pull all chunks to the 2,000 cap first. Correct
-  guarantee, but re-inflates the page weight the last optimization pass cut,
-  and still truncates above 2,000.
-- **(c) Server-side filter — chosen for the move action.** Pass the filter
-  term as a query param, move by *predicate* not by id list. Correct at any
-  size, overlaps existing search (acceptable).
-
-**(c)** for the move action, **(a)** for the instant-feedback filter itself —
-filter locally for feel, resolve the move server-side against the same
-predicate.
-
-**⚠ The footgun — read before implementing.** `post-item-hidden` is already
-taken by the scroll-chunking reveal
-([static/js/app.js:11491](static/js/app.js#L11491)), and "move all visible"
-selects `.posts .post-item` without excluding it. The moment a filter reuses
-that same hidden mechanism, filtering to one domain and clicking "move all
-visible" would move the *entire unfiltered list* — a silent, bulk mis-file.
-So: give the filter its own class (`post-item-filtered`, not
-`post-item-hidden`), update the move-visible selector to respect it, and
-restate the button copy as "move the N shown" from the same predicate.
-
-**What "visible" means, settled:** move everything matching the active
-filters (server-side tag/search/unread/star *plus* the new client-side
-filter), regardless of scroll position — not just the rows currently
-painted (scroll-chunking is a rendering optimization, not user intent).
-
-**Sequencing vs "Auto-file saved articles":** build this first — roughly a
-day, general-purpose, and the manual escape hatch for what auto-filing can't
-resolve. Don't hand-grind the bulk of it by hand; that's what auto-filing is for.
-
-(The dead `server_posts_total` / `server_posts_sent` plumbing noticed while
-checking this is filed under "Code health" in Later.)
+- **`list_entries_for_feeds` enriches every record it returns**, so both
+  whole-view routes (`/entries/move-visible-to-feed` and the older
+  `/entries/mark-range-read`) pay full display work — thumbnails, favicons,
+  formatted dates — for entries nobody will render. A `light_only=True` that
+  returns the pre-enrichment records would serve both; the move endpoint needs
+  only `feed_url`/`id`/`title`/`link`/`feed_title`, and mark-range-read needs
+  only `feed_url`/`id`. Not done because it touches a hot, heavily-shared
+  function and the existing unbounded caller has been fine in production;
+  measure before building.
+- **`/entries/mark-range-read` ignores the active search.** It passes scope,
+  tag, sort and read/star filters to `list_entries_for_feeds` but never `q`, so
+  "mark everything above this" inside a search resolves the anchor against the
+  unsearched list. Noticed while modeling the move route on it; not fixed here
+  because it is a separate behavior change with its own test surface.
 
 ### Auto-file saved articles — the tail
 

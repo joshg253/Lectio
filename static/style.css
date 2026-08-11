@@ -1848,6 +1848,13 @@ button:hover, .button-link:hover {
   display: none;
 }
 
+/* Kept strictly separate from .post-item-hidden, which the scroll-chunking
+   reveal owns. Sharing one class would make "move the N shown" — which selects
+   on the chunk class — silently target the whole unfiltered list. */
+.post-item-filtered {
+  display: none;
+}
+
 .posts-chunk-sentinel {
   height: 1px;
 }
@@ -1900,6 +1907,58 @@ button:hover, .button-link:hover {
 .topbar-search-go:hover { color: var(--fg, inherit); }
 .topbar-search-go .material-symbols-rounded { font-size: 1.1rem; }
 .topbar-search-clear[hidden] { display: none; }
+
+.posts-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.25rem;
+}
+
+.posts-filter-icon {
+  font-size: 1rem;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.posts-filter-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.15rem 0.35rem;
+}
+
+.posts-filter-input::placeholder { color: var(--muted); }
+
+.posts-filter-count {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.posts-filter-count[hidden] { display: none; }
+
+.posts-filter-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0.15rem 0.3rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.posts-filter-clear:hover { color: var(--fg, inherit); }
+.posts-filter-clear .material-symbols-rounded { font-size: 1rem; }
+.posts-filter-clear[hidden] { display: none; }
 
 .toolbar-search-hidden {
   display: none;
