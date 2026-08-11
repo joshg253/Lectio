@@ -13,6 +13,49 @@
   <meta name="theme-color" content="#15191d" />
   <title>{{ page_title or 'Lectio' }}</title>
   <script>
+    // ── Resume where you left off ────────────────────────────────────────────
+    // Runs before anything renders, so a resume is a redirect rather than a
+    // visible jump.
+    //
+    // Every attempt to stop Back leaving has failed on purpose, at two levels:
+    // Chrome marks script-pushed history entries skippable to defeat back-traps,
+    // and Android exits any app at its root. Installing as a WebAPK does not
+    // change the second. So this stops trying to keep you in the app and makes
+    // leaving cost nothing instead — reopening lands exactly where you were.
+    //
+    // Escape hatches, both deliberate: a URL that already carries a query is an
+    // explicit destination and is never overridden, and the Lectio wordmark
+    // links to /?home=1 so "take me to the top" still exists.
+    window.__lectioResume = null;
+    (function () {
+      try {
+        var KEY = 'lectio-last-position';
+        // Long enough to cover a weekend away; past that, dropping you back into
+        // a half-read article is a surprise rather than a convenience.
+        var MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+        var raw = window.localStorage.getItem(KEY);
+        if (!raw) return;
+        var saved = JSON.parse(raw);
+        if (!saved || !saved.url || !saved.ts) return;
+        if (Date.now() - saved.ts > MAX_AGE_MS) return;
+        var target = new URL(saved.url, window.location.origin);
+        if (target.origin !== window.location.origin) return;
+
+        // Already where we want to be: keep the payload so scroll can be
+        // restored once the panes exist.
+        if (target.pathname + target.search === window.location.pathname + window.location.search) {
+          window.__lectioResume = saved;
+          return;
+        }
+        // Only a bare "/" is treated as "just opened the app".
+        if (window.location.pathname !== '/' || window.location.search) return;
+        if (!target.search) return;   // nothing more specific than the landing
+        // replace(), not assign(): resuming must not leave a history entry that
+        // Back would immediately bounce off.
+        window.location.replace(target.href);
+      } catch (e) { /* resume is a convenience; never block the app */ }
+    })();
+
     window.CURRENT_SORT_BY = "{{ selected_sort_by }}";
     window.STATIC_ASSET_VERSION = "{{ static_asset_version }}";
     window.__lectioTheme = window.localStorage.getItem('lectio-theme') || 'dark';
@@ -175,7 +218,10 @@
             <a class="menu-item" href="/logout"><span class="material-symbols-rounded" aria-hidden="true">logout</span> Sign out</a>
           </div>
         </details>
-        <a class="menu-brand topbar-brand" href="/">Lectio</a>
+        {# ?home=1 rather than a bare "/": a bare "/" is what the resume handler
+           treats as "just opened the app" and redirects to your last position,
+           which would make the wordmark unable to reach the top. #}
+        <a class="menu-brand topbar-brand" href="/?home=1">Lectio</a>
         {% if debug_mode %}
         <div class="topbar-debug" id="topbar-debug">
           <button type="button" class="topbar-debug-btn" id="debug-bypass-cache-btn" title="Toggle cache bypass for current feed">
@@ -1311,6 +1357,75 @@
     // because then there is no tab to lose.
     for (const evt of ['pointerdown', 'touchstart', 'keydown']) {
       window.addEventListener(evt, () => { armDrawerBack(); }, { capture: true, passive: true });
+    }
+
+    // ── Remembering the position the resume handler reads ────────────────────
+    // localStorage, not sessionStorage: the whole point is surviving the tab
+    // closing, and sessionStorage dies with it.
+    const RESUME_KEY = 'lectio-last-position';
+
+    function currentScrollers() {
+      // Which element scrolls depends on the layout, exactly as it does for the
+      // chunking and pull-to-read code.
+      return {
+        posts: (window.isSingleMode && window.isSingleMode())
+          ? document.querySelector('.pane-posts')
+          : document.querySelector('.posts'),
+        entry: document.querySelector('.pane-entry'),
+      };
+    }
+
+    function rememberPosition() {
+      try {
+        // The landing is not a position worth returning to, and saving it would
+        // overwrite a real one every time the wordmark is clicked.
+        if (window.location.pathname !== '/' || !window.location.search) return;
+        const s = currentScrollers();
+        window.localStorage.setItem(RESUME_KEY, JSON.stringify({
+          url: window.location.pathname + window.location.search,
+          level: singlePaneLevel,
+          postsScroll: s.posts ? s.posts.scrollTop : 0,
+          entryScroll: s.entry ? s.entry.scrollTop : 0,
+          ts: Date.now(),
+        }));
+      } catch (e) { /* private mode, or quota — resume is optional */ }
+    }
+
+    // pagehide covers the cases that matter on a phone and that `unload` does
+    // not fire for reliably: the tab being closed, the app being swiped away,
+    // and Back leaving the document. visibilitychange catches backgrounding,
+    // which on Android is often the last event before the process is reaped.
+    window.addEventListener('pagehide', rememberPosition);
+    window.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') rememberPosition();
+    });
+    // Also on navigation, so a position exists even if the app is killed with no
+    // lifecycle event at all.
+    window.addEventListener('popstate', rememberPosition);
+    const _resumeOrigPush = history.pushState.bind(history);
+    history.pushState = function (...args) {
+      const out = _resumeOrigPush(...args);
+      rememberPosition();
+      return out;
+    };
+
+    // Restore scroll once the panes are actually rendered and sized. Two frames
+    // plus a short delay: the entry pane's height depends on images and the
+    // chunked post list grows as it reveals, so a scrollTop set too early lands
+    // against a shorter document and clamps to the bottom.
+    if (window.__lectioResume) {
+      const saved = window.__lectioResume;
+      const applyScroll = () => {
+        const s = currentScrollers();
+        if (s.entry && saved.entryScroll) s.entry.scrollTop = saved.entryScroll;
+        if (s.posts && saved.postsScroll) s.posts.scrollTop = saved.postsScroll;
+      };
+      window.addEventListener('load', () => {
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          applyScroll();
+          window.setTimeout(applyScroll, 400);
+        }));
+      });
     }
 
     // Registered before app.js loads, so stopImmediatePropagation() suppresses

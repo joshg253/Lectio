@@ -1110,6 +1110,46 @@ The sanitizer allows `target`/`rel` on `<a>` but never trusts them: it overwrite
 both on every external link and deletes them everywhere else, so a feed can
 neither choose its own target nor drop the `noopener`.
 
+### Resume where you left off
+
+Every attempt to stop Back leaving the app failed, and each failed *on purpose*
+at a different level:
+
+- **Chrome** marks script-pushed history entries skippable to defeat back-traps,
+  so the spare entry can be walked straight past.
+- **Android** exits any app at its root. Installing Lectio as a WebAPK — which
+  does work, the manifest and worker meet every installability check — does not
+  change that. A standalone install still exits on Back.
+
+So the app stops trying to keep you in it and makes leaving cost nothing
+instead. The current position (URL, pane level, post-list and article scroll) is
+written to `localStorage` — not `sessionStorage`, which dies with the tab, which
+is the exact event being defended against — on `pagehide`, on
+`visibilitychange` to hidden, and on every navigation. Opening the app then
+lands you back where you were.
+
+The restore runs in an inline script in `<head>`, before anything renders, so it
+is a `location.replace` rather than a visible jump — and `replace`, not `assign`,
+so resuming leaves no history entry for Back to bounce off.
+
+Three rules keep it from becoming its own trap:
+
+- **A URL with a query is an explicit destination** and is never overridden. Only
+  a bare `/` counts as "just opened the app".
+- **The wordmark links to `/?home=1`**, so "take me to the top" still exists.
+  Without the parameter it would be a bare `/` and would resume, leaving no way
+  to reach the landing.
+- **Positions older than 7 days are ignored** — long enough to cover a weekend
+  away, past which dropping you into a half-read article is a surprise rather
+  than a convenience.
+
+Scroll is re-applied after two animation frames plus a short delay, because the
+article pane's height depends on images and the chunked post list grows as it
+reveals; a `scrollTop` set too early lands against a shorter document and clamps.
+
+Read Mode does not participate — it has its own navigation model and no Back
+guard either (see Plan.md).
+
 ### Pull down in an article for Reader view
 
 On a phone, pulling down from the top of the article pane toggles Reader view,

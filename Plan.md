@@ -297,6 +297,17 @@ before leaving, and the Global Note no longer opens underneath the folder
 drawer. Rationale in ARCHITECTURE.md ("Back on a phone walks the view stack",
 "Pull down in an article for Reader view").
 
+- **Back leaving the app is now accepted, not fought.** Installing as a WebAPK
+  works (manifest + worker pass every installability check, confirmed via CDP:
+  zero errors) and it *still* exits, because Android exits any app at its root.
+  There is no configuration that changes that. Resume-on-open is the answer, and
+  the in-page guard is now a nicety rather than the mechanism. **Do not spend more
+  time trying to prevent the exit.** If resume ever misses a case, extend what is
+  saved rather than re-litigating the history stack.
+- **Read Mode has no resume.** `/read` keeps its own navigation and is untouched
+  by the position-saving above; the Supernote still reopens at the list. Worth
+  doing if it annoys, and cheap — the same localStorage key, a different restore
+  target.
 - **The Back guard is best-effort, by browser design.** Chrome's history
   manipulation intervention skips entries pushed without user activation, so a
   spare re-armed inside a `popstate` handler can be walked straight past — seen
