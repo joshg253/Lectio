@@ -1268,6 +1268,31 @@
     // exactly the one Back cannot be intercepted on without a spare.
     armDrawerBack();
 
+    // Nothing off-site opens in this tab. Following a link in place replaces the
+    // app and loses your position in the list; on a phone Back now toggles the
+    // folder drawer rather than leaving, so there is no cheap way back to it.
+    //
+    // Done by setting the anchor's own target in the CAPTURE phase, so the
+    // browser's normal activation does the opening: a real tab, never a scripted
+    // window.open, which is what a popup blocker stops and what a phone opens as
+    // an awkward floating window.
+    //
+    // Article-body links are already handled server-side by the sanitizer, which
+    // also covers Read Mode and offline captures; this is the net for everything
+    // else on the shell — settings hints, feed sites, anything injected later.
+    document.addEventListener('click', function (e) {
+      const a = e.target instanceof Element ? e.target.closest('a[href]') : null;
+      if (!a || a.target) return;
+      let u;
+      try { u = new URL(a.href, window.location.origin); } catch (err) { return; }
+      // Same-origin is app navigation. Non-http(s) (mailto:, tel:) must stay in
+      // place, or the handler is handed a blank tab it cannot close.
+      if (u.origin === window.location.origin) return;
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+    }, true);
+
     // Intercept internal app navigation links and perform SPA loads.
     // Do not intercept external links, modified clicks, or the brand/logo
     // (which must remain a bare `/`).

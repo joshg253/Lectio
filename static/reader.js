@@ -10,6 +10,27 @@
 (function () {
   "use strict";
 
+  // Off-site links leave the tab, same rule as the main app. Read Mode serves
+  // article HTML that was sanitized when it was stored, so bodies captured
+  // before the sanitizer started marking external links carry no target — this
+  // covers them. Capture phase, setting the anchor's own target so the browser
+  // opens a real tab rather than a scripted (blockable) window.
+  //
+  // Registered before the paginator's own early return: an article that fails to
+  // paginate still has links in it.
+  document.addEventListener("click", function (e) {
+    var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+    if (!a || a.target) return;
+    var u;
+    try { u = new URL(a.href, window.location.origin); } catch (err) { return; }
+    // Same-origin is reader navigation; non-http(s) (mailto:, tel:) must stay
+    // put or their handler is left holding a blank tab.
+    if (u.origin === window.location.origin) return;
+    if (u.protocol !== "http:" && u.protocol !== "https:") return;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+  }, true);
+
   var cols = document.getElementById("reader-columns");
   var viewport = document.getElementById("reader-viewport");
   var pageInfo = document.getElementById("reader-pageinfo");

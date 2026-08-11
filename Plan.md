@@ -305,6 +305,12 @@ drawer. Rationale in ARCHITECTURE.md ("Back on a phone walks the view stack",
   and you cannot Back your way to an earlier folder or feed — the tree is how you
   navigate. Closing the tab or switching apps still works normally, and desktop
   is untouched (`isSingleMode()` gates all of it).
+- **External links are marked in three places, and one of them is the real fix.**
+  The sanitizer marks them at ingest, so bodies stored *before* 2026-08-11 carry
+  no `target` and rely on the two client-side capture listeners (main app,
+  `reader.js`). A one-off pass re-sanitizing stored summaries would let the
+  listeners go, but they are ~10 lines each and also cover anything injected at
+  runtime, so there is no pressing reason to.
 - **The gesture's return trip is only as good as the button.** Pull-to-Reader
   dispatches a click on `#entry-readability-button`, so if activating Reader view
   fails (a dead source URL, say) the second pull tries to activate again rather

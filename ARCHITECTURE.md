@@ -1012,6 +1012,40 @@ hamburger that opens the drawer. Two controls rather than one that changes
 meaning, because a button reading "Folders" that does not open Folders is worse
 than either.
 
+### Off-site links never open in the reading tab
+
+Following a link in place replaces Lectio and loses your position in the list —
+and on a phone, where Back now toggles the folder drawer rather than leaving,
+there is no cheap way back to it.
+
+Every off-site `http(s)` link therefore opens in a new tab. This is done by
+setting the anchor's **own `target`**, never `window.open`: a real tab is what
+the browser's normal activation produces, whereas a scripted open is what popup
+blockers stop and what a phone renders as an awkward floating window. `rel` is
+set to `noopener noreferrer` alongside it — without `noopener` the opened page
+gets a handle on `window.opener` and can rewrite the reading tab out from under
+you (reverse tabnabbing).
+
+Deliberately narrow: same-origin links are app navigation, in-page fragments are
+how footnotes and tables of contents work and must stay put, and `mailto:`/`tel:`
+would hand a blank tab to a handler that cannot close it.
+
+It is enforced in three places because there is no single one that covers
+everything:
+
+- **`services/html_sanitize.py`** marks external links as it sanitizes. This is
+  the correct fix at the source, but sanitization runs at *ingest*, so it only
+  applies to content stored from that point on.
+- **`templates/index.html`** carries a capture-phase click listener for the main
+  app. This is what covers article bodies stored before the sanitizer change, and
+  anything injected into the shell later.
+- **`static/reader.js`** carries the same listener for Read Mode, which loads
+  none of `app.js` and serves HTML sanitized when it was stored.
+
+The sanitizer allows `target`/`rel` on `<a>` but never trusts them: it overwrites
+both on every external link and deletes them everywhere else, so a feed can
+neither choose its own target nor drop the `noopener`.
+
 ### Pull down in an article for Reader view
 
 On a phone, pulling down from the top of the article pane toggles Reader view,
