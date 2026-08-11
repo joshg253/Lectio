@@ -1025,6 +1025,20 @@ to the home screen; installed, Back at the root backgrounds the app instead of
 closing a tab, and the session survives. The in-page guard is the fallback for
 browser-tab use, not the primary answer.
 
+**Installability needs a service worker, not just a manifest** — and the main app
+did not register one. `offline-probe.js` registers `/sw.js`, but it is loaded only
+by Read Mode *and* early-returns without its own `rm-*` elements, so `/` had a
+manifest and no worker. The browser then declines to install and "Add to Home
+screen" degrades to a plain shortcut that opens in the browser — a tab, which
+dies with Back, which is the thing the manifest existed to prevent. `index.html`
+therefore registers `/sw.js` itself on load. That adds no caching of the main
+app: `_worthCaching` covers only `/read`, `/static/*` and `/api/img`, so its
+requests stay network-first and pass straight through.
+
+Note a true standalone install (an Android WebAPK) is minted by Chrome via Play
+Services. A Chromium derivative may still only offer a bookmark-style shortcut,
+in which case installing once from Chrome is what produces a real app icon.
+
 **This applies to every layout whose tree is a drawer — single *and* medium
 (721–1100px).** Gating it on single-pane mode alone was a bug: a tablet sits in
 medium, so the guard never armed and Back closed the tab there exactly as it had

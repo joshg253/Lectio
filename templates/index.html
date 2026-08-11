@@ -3373,5 +3373,29 @@
     <div class="refetch-pill-meta" id="refetch-pill-meta"></div>
     <div class="refetch-pill-queue" id="refetch-pill-queue"></div>
   </div>
+
+  <script>
+    // Register the offline worker for the MAIN app.
+    //
+    // A manifest alone does not make a site installable — the browser also wants
+    // a service worker controlling the start_url. Read Mode registered one (via
+    // offline-probe.js, which early-returns without its own rm-* elements and so
+    // never ran here), but "/" never did. The result was an app that advertised
+    // a manifest and still could not be installed: "Add to Home screen" degraded
+    // to a plain shortcut that opens in the browser — which is a tab, and dies
+    // with Back, which is the whole problem the manifest was meant to solve.
+    //
+    // The worker is served from "/" with Service-Worker-Allowed so its scope can
+    // cover the app (see the /sw.js route). It caches only /read, /static and
+    // /api/img, so registering it here adds no caching of the main app's HTML —
+    // requests stay network-first and pass straight through.
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
+          /* installability is a bonus; a failed registration must not break the app */
+        });
+      });
+    }
+  </script>
 </body>
 </html>
