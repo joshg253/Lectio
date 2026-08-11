@@ -1,7 +1,7 @@
 # Development helpers that use `uv` as the preferred runner.
 UV_CACHE_DIR=.uvcache
 
-.PHONY: lint types run test audit screenshots
+.PHONY: lint types run test audit screenshots clear-scratch
 
 lint:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run ruff check .
@@ -15,8 +15,15 @@ types:
 run:
 	LECTIO_REFRESH_DEBUG=1 LECTIO_DEBUG=1 UV_CACHE_DIR=$(UV_CACHE_DIR) uv run uvicorn main:app --reload --reload-exclude .venv --host 0.0.0.0 --port 8000
 
-test:
+# Clears first because /tmp is a 3.8G tmpfs and each full run leaves its
+# per-test SQLite scratch behind. Once it fills, pytest reports mass failures
+# that look like real regressions rather than an out-of-space error — so the
+# cleanup is part of the run, not a thing to remember afterwards.
+test: clear-scratch
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run pytest -q
+
+clear-scratch:
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run scripts/clear_dev_scratch.py --quiet
 
 # OSV-backed dependency scan. Mirrors the CI step; preview feature, so kept
 # separate from `test` (a preview-tool change shouldn't break local test runs).

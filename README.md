@@ -185,7 +185,8 @@ code is held to the rules while the backlog shrinks file by file. `git commit
 --no-verify` bypasses it.
 
 
-- **Tests** — pytest suite (unit, services, integration, scripts) under `tests/`. Run with `uv run pytest`.
+- **Tests** — pytest suite (unit, services, integration, scripts) under `tests/`. Run with `make test` (or `uv run pytest`).
+- **Scratch cleanup** — `make test` runs `make clear-scratch` first, and the local-verification workflow does the same before launching a dev server. On a host where `/tmp` is a small RAM-backed tmpfs, each full suite run leaves its per-test SQLite scratch behind; once `/tmp` fills, pytest reports *mass failures that look like real regressions* rather than an out-of-space error. `scripts/clear_dev_scratch.py` clears only known-disposable paths — never a bare `/tmp/*` sweep — and skips both the running session and anything under two days old, so a concurrent session is safe. `--dry-run` shows what would go.
 - **CI** — GitHub Actions runs the suite on Python 3.14 for every pull request and push to `main` ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Dependencies install from the locked `uv.lock` (`uv sync --frozen`), and the run treats any `DeprecationWarning` as an error so they surface immediately rather than accumulating.
 - **Dependency audit** — `uv audit` (OSV-backed) scans the locked dependencies for known vulnerabilities and deprecated packages. Run it locally with `make audit`; CI runs the same scan. It's a uv preview feature, so it's kept separate from `make test` locally and the CI step is informational (non-blocking) for now.
 
