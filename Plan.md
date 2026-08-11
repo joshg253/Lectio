@@ -297,8 +297,15 @@ before leaving, and the Global Note no longer opens underneath the folder
 drawer. Rationale in ARCHITECTURE.md ("Back on a phone walks the view stack",
 "Pull down in an article for Reader view").
 
-- **Back never exits the app on a phone, by request.** The first cut ended the
-  chain by letting the next press leave; in use that closed the tab mid-read.
+- **Read Mode has no equivalent Back guard.** `/read` (the Supernote view) is a
+  two-pane layout with the tree always visible, so there is no drawer for Back to
+  toggle at the end of its chain — the trick used in the main app has nothing to
+  land on. Back out of the Read Mode list still leaves. Left alone rather than
+  invented: a Back that visibly does nothing is worse than one that exits. If it
+  bites, the fix is to give Read Mode a collapsible tree first.
+- **Back never exits the app on a phone or tablet, by request.** The first cut
+  ended the chain by letting the next press leave; in use that closed the tab
+  mid-read.
   Back now toggles the folder drawer open/closed at the end of the chain,
   indefinitely. The trade is deliberate and worth restating before anyone
   "fixes" it: on a phone you cannot reverse out of Lectio to the previous site,

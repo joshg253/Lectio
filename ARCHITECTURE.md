@@ -983,6 +983,30 @@ duplicate of the current URL, so pushing and popping it are both visually
 silent — is pushed ahead of time by `armDrawerBack()`, and popping it is what
 toggles the drawer.
 
+**What gets protected is the bottom of this document's history, not a particular
+kind of URL.** The first version decided from the URL shape — arm only on a
+folder-scoped list, since an article or feed list "always has a real parent
+underneath". That holds only if you *navigated* there in this session. Reopen the
+app, restore a tab, or follow a bookmark straight to an article and there is no
+parent, so Back went cross-document and closed the tab — the exact bug the guard
+existed to prevent, still live on three of the four ways in.
+
+Position is therefore tracked directly: `history.pushState`/`replaceState` are
+wrapped to stamp a `lectioIdx` into the state, the loaded entry is stamped 0, and
+`popstate` traps when it lands back on 0. An *index* rather than a counter
+decremented on each `popstate` is what keeps Forward working — `popstate` fires
+in both directions, and only the state can say which way, or how far. (Once you
+Back all the way to the floor the re-pushed spare truncates forward history, so
+Forward stops there; mid-stack it is unaffected.)
+
+**This applies to every layout whose tree is a drawer — single *and* medium
+(721–1100px).** Gating it on single-pane mode alone was a bug: a tablet sits in
+medium, so the guard never armed and Back closed the tab there exactly as it had
+on the phone. Wide is deliberately excluded — the tree is a permanent column, so
+there is nothing to toggle, and a Back that visibly does nothing is a trap rather
+than a step. The guard also re-arms from `updateSingleMode()`, because rotating a
+tablet moves it between wide and medium after load.
+
 **Back therefore never exits the app in single-pane mode. That is deliberate**,
 and was asked for after a stray press closed the tab mid-read: this is a
 self-hosted reader you live in, and losing the session costs more than being able

@@ -1031,6 +1031,10 @@
         bodyEl.removeAttribute('data-compact-article');
       }
       updateVisualViewportInset();
+      // Rotating a tablet moves it between wide and medium, so the guard has to
+      // arm on layout change and not only at load. armDrawerBack is a no-op when
+      // already armed or when the layout has no drawer.
+      armDrawerBack();
     }
 
     function updateVisualViewportInset() {
@@ -1208,17 +1212,71 @@
     // the ordinary thing.
     let drawerBackSpare = false;
 
+    // Single mode is not the only layout with a drawer, and gating on it was the
+    // bug: a tablet sits in MEDIUM (721-1100px), where the tree is also an
+    // overlay with its own backdrop — so the guard never armed and Back closed
+    // the tab exactly as before. Wide is deliberately excluded: there the tree is
+    // a permanent column, so there is nothing to toggle, and a Back that visibly
+    // does nothing is a trap rather than a step.
+    function hasDrawerLayout() {
+      return layoutMode === 'single' || layoutMode === 'medium';
+    }
+
+    function drawerIsOpen() {
+      return layoutMode === 'single'
+        ? singlePaneLevel === 0
+        : bodyEl.getAttribute('data-medium-left-open') === '1';
+    }
+
+    function toggleDrawer() {
+      if (layoutMode === 'single') setSinglePaneLevel(singlePaneLevel === 0 ? 1 : 0);
+      else setMediumLeftOpen(!drawerIsOpen());
+    }
+
+    // What has to be protected is the BOTTOM of this document's history —
+    // whatever URL the app was loaded at — not a particular kind of URL.
+    //
+    // The first version guessed from the URL shape: it armed only on a
+    // folder-scoped list, on the reasoning that an article or a feed list always
+    // has a real parent underneath it. That holds only if you *navigated* there
+    // in this session. Reopen the app, restore a tab, or follow a bookmark
+    // straight to an article and there is no parent — so Back went
+    // cross-document and closed the tab, which is the bug this was meant to fix.
+    //
+    // So position is tracked instead, by stamping an index into history.state.
+    // An index (rather than a counter decremented on popstate) is what makes
+    // Forward safe: popstate fires for both directions and only the state can
+    // say which way we went, or how far.
+    let historyIndex = 0;
+
+    function _stamp(state, index) {
+      return Object.assign({}, state || {}, { lectioIdx: index });
+    }
+
+    const _origPushState = history.pushState.bind(history);
+    const _origReplaceState = history.replaceState.bind(history);
+
+    history.pushState = function (state, ...rest) {
+      // A push above the bottom means the spare is no longer the thing Back
+      // reaches first, so it stops being armed.
+      if (!(state && state.lectioDrawerSpare)) drawerBackSpare = false;
+      historyIndex += 1;
+      return _origPushState(_stamp(state, historyIndex), ...rest);
+    };
+
+    // replaceState swaps the current entry in place, so the index must ride
+    // along or the entry loses its position and reads as the bottom.
+    history.replaceState = function (state, ...rest) {
+      return _origReplaceState(_stamp(state, historyIndex), ...rest);
+    };
+
+    // Stamp the entry the document loaded on as index 0 — the floor.
+    _origReplaceState(_stamp(history.state, 0), '', window.location.href);
+
     function armDrawerBack() {
-      if (drawerBackSpare || !window.isSingleMode()) return;
-      let params;
-      try { params = new URL(window.location.href).searchParams; }
-      catch (e) { return; }
-      // An article and a feed-scoped list each have a real parent view sitting
-      // under them in history already; only the folder list has nothing.
-      if (params.has('entry_id') || params.has('list_feed_url')) return;
-      const hasScope = params.has('folder_id') || params.has('tag')
-        || params.has('q') || params.has('star_only');
-      if (!hasScope) return;
+      // Only ever one spare, only at the floor. Mid-stack there are real views
+      // to walk back through and the spare would sit in front of them.
+      if (drawerBackSpare || !hasDrawerLayout() || historyIndex !== 0) return;
       history.pushState({ lectioDrawerSpare: true, lectioPaneLevel: singlePaneLevel },
                         '', window.location.href);
       drawerBackSpare = true;
@@ -1230,10 +1288,16 @@
     // consumed: nothing navigated, so its pane reload would refetch the list we
     // are still standing on.
     window.addEventListener('popstate', (event) => {
-      if (window.isSingleMode() && drawerBackSpare) {
+      const landedAt = (event.state && typeof event.state.lectioIdx === 'number')
+        ? event.state.lectioIdx
+        : 0;
+      historyIndex = landedAt;
+
+      // Landing back on index 0 means the next Back would leave the document.
+      if (hasDrawerLayout() && landedAt === 0) {
         event.stopImmediatePropagation();
         // The end of the chain: flip the drawer rather than leaving.
-        setSinglePaneLevel(singlePaneLevel === 0 ? 1 : 0);
+        toggleDrawer();
         // Re-arm in the same breath. Consuming one entry and pushing one back
         // keeps the stack the same size, so this can run forever without
         // growing history — and without ever running out of presses.
@@ -1244,15 +1308,6 @@
       drawerBackSpare = false;
       if (window.isSingleMode()) restoreSinglePaneLevel();
     });
-
-    // Navigating forward invalidates the spare: whatever was pushed now sits
-    // above it, so the next Back is a real step back through the app.
-    const _origPushState = history.pushState.bind(history);
-    history.pushState = function (...args) {
-      const result = _origPushState(...args);
-      if (!(args[0] && args[0].lectioDrawerSpare)) drawerBackSpare = false;
-      return result;
-    };
 
     // Delegated so it survives pane swaps, which replace the entry pane wholesale.
     document.addEventListener('click', (event) => {
