@@ -10,7 +10,7 @@ Coverage matrix
 - remove_feed_from_folder (Site A): basic sanity, still delegates
 - /feeds/unsubscribe (Site B): now calls websub unsubscribe + DA/scraped paths
 - delete_folder (Site C): force-archives + websub-unsubscribes orphaned feeds
-- deduplicate_feeds (Site D): websub-unsubscribes the removed URL
+- purge_orphaned_feed via the dedup/combine call pattern (Site D): websub-unsubscribes the removed URL
 - get_push_active_feed_urls (Part B): verified vs pending/no-hub
 """
 from __future__ import annotations
@@ -376,7 +376,8 @@ class TestDeleteFolder:
 
 
 # ---------------------------------------------------------------------------
-# Site D — deduplicate_feeds (same-folder + cross-folder) and E (upgrade)
+# Site D — dedup/upgrade's purge_orphaned_feed call pattern (same-folder,
+# cross-folder, and combine/upgrade all route through it identically)
 # ---------------------------------------------------------------------------
 
 class TestDeduplicateWebSub:
@@ -629,6 +630,189 @@ class TestDuplicateScanGroupsAcrossSchemes:
         dup = json.loads(main.get_feed_duplicates().body)
         assert ("https://slash.test/feed", "https://slash.test/feed/") in self._keys(dup)
 
+    def test_a_www_pair_is_grouped_and_bare_host_survives(self, env):
+        """Reported 2026-08-10: deathbulge.com/rss.xml and
+        www.deathbulge.com/rss.xml are the same feed, not two -- caught
+        instead as noise by the by-title tier, when the regular scan should
+        have found it directly."""
+        root = _root_folder_id()
+        _add_feed_to_folder("https://deathbulge.com/rss.xml", root)
+        _add_feed_to_folder("https://www.deathbulge.com/rss.xml", root)
+        import json
+        dup = json.loads(main.get_feed_duplicates().body)
+        assert ("https://deathbulge.com/rss.xml", "https://www.deathbulge.com/rss.xml") in self._keys(dup)
+
+
+class TestDuplicateScanGroupsBySameTitle:
+    """The URL-scheme grouping only catches variants of ONE address. It can't
+    catch the same publication subscribed under two genuinely different
+    addresses (a Tumblr and a Tapas copy of the same webcomic) -- feed title
+    is the signal that finds those instead. Advisory only: never pre-checked,
+    no auto-apply action, since a same-title pair can legitimately be two
+    different things (a site's blog and its own podcast)."""
+
+    def _set_title(self, feed_url: str, title: str) -> None:
+        with main.get_reader() as reader:
+            reader.set_feed_user_title(feed_url, title)
+
+    def _title_groups(self):
+        import json
+        return json.loads(main.get_feed_duplicates().body)["title_groups"]
+
+    def test_two_feeds_sharing_a_title_are_grouped(self, env):
+        root = _root_folder_id()
+        _add_feed_to_folder("https://tumblr.test/comic", root)
+        _add_feed_to_folder("https://tapas.test/comic", root)
+        self._set_title("https://tumblr.test/comic", "Cryptid Club")
+        self._set_title("https://tapas.test/comic", "Cryptid Club")
+        groups = self._title_groups()
+        assert len(groups) == 1
+        assert groups[0]["title"] == "Cryptid Club"
+        assert {f["feed_url"] for f in groups[0]["feeds"]} == {
+            "https://tumblr.test/comic", "https://tapas.test/comic",
+        }
+
+    def test_title_matching_is_case_insensitive(self, env):
+        root = _root_folder_id()
+        _add_feed_to_folder("https://a.test/feed", root)
+        _add_feed_to_folder("https://b.test/feed", root)
+        self._set_title("https://a.test/feed", "Nine Inch Nails")
+        self._set_title("https://b.test/feed", "nine inch nails")
+        groups = self._title_groups()
+        assert len(groups) == 1
+        assert {f["feed_url"] for f in groups[0]["feeds"]} == {
+            "https://a.test/feed", "https://b.test/feed",
+        }
+
+    def test_a_unique_title_is_not_grouped(self, env):
+        root = _root_folder_id()
+        _add_feed_to_folder("https://solo.test/feed", root)
+        self._set_title("https://solo.test/feed", "Only One Of These")
+        assert self._title_groups() == []
+
+    def test_a_generic_title_shared_by_many_unrelated_feeds_is_excluded(self, env):
+        """The generic-title floor: "news" on 7 unrelated sites is noise, not
+        a duplicate -- every genuine match measured at 2-3 feeds."""
+        root = _root_folder_id()
+        for i in range(6):
+            url = f"https://site{i}.test/feed"
+            _add_feed_to_folder(url, root)
+            self._set_title(url, "News")
+        assert self._title_groups() == []
+
+    def test_folder_names_are_included_per_feed(self, env):
+        folder_a = _make_child_folder("Comics")
+        folder_b = _make_child_folder("Webtoons")
+        _add_feed_to_folder("https://a.test/feed", folder_a)
+        _add_feed_to_folder("https://b.test/feed", folder_b)
+        self._set_title("https://a.test/feed", "Sarah's Scribbles")
+        self._set_title("https://b.test/feed", "Sarah's Scribbles")
+        groups = self._title_groups()
+        assert len(groups) == 1
+        by_url = {f["feed_url"]: f for f in groups[0]["feeds"]}
+        assert by_url["https://a.test/feed"]["folders"][0]["name"] == "Comics"
+        assert by_url["https://b.test/feed"]["folders"][0]["name"] == "Webtoons"
+
+    def test_youtube_feeds_are_excluded_as_noise(self, env):
+        """A creator's blog and their YouTube channel routinely share a title
+        (the channel name) -- subscribing to both is normal, not a duplicate.
+        Reported 2026-08-10: wsdot.wa.gov + Minecraft Forum + two genuine
+        tosecdev.org duplicates, all literally titled "News" -- YouTube is the
+        same class of false positive."""
+        root = _root_folder_id()
+        _add_feed_to_folder("https://blog.test/feed", root)
+        _add_feed_to_folder(
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123", root,
+        )
+        self._set_title("https://blog.test/feed", "Some Creator")
+        self._set_title(
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123", "Some Creator",
+        )
+        assert self._title_groups() == []
+
+
+class TestDuplicateScanQueryDifferingPairs:
+    """Same host+path, different query -- a real duplicate class
+    (tosecdev.org's ?type=atom vs ?type=rss), but a query param can also
+    select genuinely different content (a WordPress category feed), so this
+    tier is never merged into same_folder/cross_folder's all-included
+    "Remove duplicates" click -- each pair needs its own explicit inclusion,
+    checked client-side. Reported 2026-08-10."""
+
+    def _query_pairs(self):
+        import json
+        return json.loads(main.get_feed_duplicates().body)["query_pairs"]
+
+    def test_a_differing_query_pair_with_an_unrecognized_selector_is_found(self, env):
+        """A param+value combo that isn't a recognized format selector still
+        needs a human, not an auto-fold -- exactly the WordPress-category
+        risk this tier exists for."""
+        root = _root_folder_id()
+        _add_feed_to_folder("https://example.test/news?variant=full", root)
+        _add_feed_to_folder("https://example.test/news?variant=summary", root)
+        pairs = self._query_pairs()
+        assert len(pairs) == 1
+        urls = {pairs[0]["keep"], pairs[0]["remove"]}
+        assert urls == {
+            "https://example.test/news?variant=full",
+            "https://example.test/news?variant=summary",
+        }
+
+    def test_recognized_format_selector_pairs_are_promoted_to_auto_handling(self, env):
+        """tosecdev.org's ?type=atom/?type=rss and paizo.com's
+        ?feed=json1/?feed=rss (reported 2026-08-10) are recognized format
+        selectors -- normalize_feed_url folds them to one canonical form, so
+        they pick up the existing same_folder auto-handling instead of
+        landing in the never-pre-checked query_pairs tier."""
+        root = _root_folder_id()
+        _add_feed_to_folder("https://tosecdev.test/news?format=feed&type=atom", root)
+        _add_feed_to_folder("https://tosecdev.test/news?format=feed&type=rss", root)
+        _add_feed_to_folder("https://paizo.test/blog?feed=json1", root)
+        _add_feed_to_folder("https://paizo.test/blog?feed=rss", root)
+        import json
+        dup = json.loads(main.get_feed_duplicates().body)
+        same_folder_urls = {(d["keep"], d["remove"]) for d in dup["same_folder"]}
+        assert any("tosecdev.test" in k for k, _r in same_folder_urls)
+        assert any("paizo.test" in k for k, _r in same_folder_urls)
+        assert dup["query_pairs"] == []
+
+    def test_youtube_feeds_are_excluded(self, env):
+        root = _root_folder_id()
+        _add_feed_to_folder(
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCabc", root,
+        )
+        _add_feed_to_folder(
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCdef", root,
+        )
+        assert self._query_pairs() == []
+
+    def test_deviantart_gallery_feeds_are_excluded(self, env):
+        """DeviantArt's native gallery RSS is one shared endpoint for every
+        artist, differing only by ?q=gallery:<user> -- reported 2026-08-10:
+        grouped dozens of genuinely distinct subscriptions as "duplicates"."""
+        root = _root_folder_id()
+        _add_feed_to_folder(
+            "https://backend.deviantart.com/rss.xml?q=gallery:rantz&type=deviation", root,
+        )
+        _add_feed_to_folder(
+            "https://backend.deviantart.com/rss.xml?q=gallery:yuumei&type=deviation", root,
+        )
+        assert self._query_pairs() == []
+
+    def test_a_pair_already_caught_by_scheme_or_www_fold_is_not_listed_twice(self, env):
+        """These differ only by scheme -- already same_folder/cross_folder's
+        job; listing them again here too would be double coverage."""
+        root = _root_folder_id()
+        _add_feed_to_folder("http://plain.test/feed", root)
+        _add_feed_to_folder("https://plain.test/feed", root)
+        assert self._query_pairs() == []
+
+    def test_unrelated_paths_are_not_grouped(self, env):
+        root = _root_folder_id()
+        _add_feed_to_folder("https://site.test/feed-a", root)
+        _add_feed_to_folder("https://site.test/feed-b", root)
+        assert self._query_pairs() == []
+
 
 class TestRemovalLeavesNoGhostInTheTree:
     """Removing a feed deleted it from reader but left `folder_feeds` pointing
@@ -664,3 +848,402 @@ class TestRemovalLeavesNoGhostInTheTree:
                 conn.commit()
         assert self._folder_rows(FEED) == 0
         assert self._folder_rows(FEED2) == 1
+
+
+class TestLazyFeedTitles:
+    """Feeds titled just "News", "Updates", etc are indistinguishable once
+    several show up together (reported 2026-08-10). Detection is a small
+    exact-match denylist -- never a length heuristic, so a short but
+    meaningful title ("XKCD") is never flagged. Advisory only: the frontend
+    renders an editable per-row suggestion, nothing is applied automatically."""
+
+    def _set_title(self, feed_url: str, title: str) -> None:
+        with main.get_reader() as reader:
+            reader.set_feed_user_title(feed_url, title)
+
+    def _lazy_titles(self):
+        import json
+        return json.loads(main.get_lazy_titles().body)["lazy_titles"]
+
+    def test_a_generic_title_is_flagged_with_a_suggested_rename(self, env):
+        _add_feed_to_folder("https://tosecdev.org/feed", _root_folder_id())
+        self._set_title("https://tosecdev.org/feed", "News")
+        results = self._lazy_titles()
+        assert len(results) == 1
+        assert results[0]["feed_url"] == "https://tosecdev.org/feed"
+        assert results[0]["title"] == "News"
+        assert results[0]["suggested_title"] == "Tosecdev - News"
+
+    def test_matching_is_case_and_whitespace_insensitive(self, env):
+        _add_feed_to_folder("https://example.test/feed", _root_folder_id())
+        self._set_title("https://example.test/feed", "  updates  ")
+        results = self._lazy_titles()
+        assert len(results) == 1
+
+    def test_a_meaningful_short_title_is_not_flagged(self, env):
+        _add_feed_to_folder("https://xkcd.test/feed", _root_folder_id())
+        self._set_title("https://xkcd.test/feed", "XKCD")
+        assert self._lazy_titles() == []
+
+    def test_www_and_tld_are_stripped_from_the_suggested_name(self, env):
+        _add_feed_to_folder("https://www.some-cool-blog.co.uk/feed", _root_folder_id())
+        self._set_title("https://www.some-cool-blog.co.uk/feed", "Blog")
+        results = self._lazy_titles()
+        assert results[0]["suggested_title"] == "Some Cool Blog - Blog"
+
+    def test_folder_names_are_included(self, env):
+        folder = _make_child_folder("Comics")
+        _add_feed_to_folder("https://a.test/feed", folder)
+        self._set_title("https://a.test/feed", "Posts")
+        results = self._lazy_titles()
+        assert results[0]["folders"][0]["name"] == "Comics"
+
+
+class TestFormatUpgradeAlternates:
+    """The Upgrade tier's `alternates` are same-family format-selector swaps
+    (rss2 -> atom, say) -- a real, near-guaranteed-to-exist option on sites
+    like WordPress, not a guess. Reported 2026-08-10: this used to guess at
+    a JSON Feed URL instead, which came back wrong twice live (404, then
+    500) while "wordpress can have ?feed=atom which work, and those aren't
+    being suggested but non-existent json are??" -- same-family swaps within
+    the enumerated rss/rss2/atom set are the actual reliable signal."""
+
+    def _upgradable(self):
+        import json
+        return json.loads(main.get_feed_duplicates().body)["upgradable"]
+
+    def test_a_feed_param_gets_same_family_alternates(self, env):
+        _add_feed_to_folder("https://example.test/blog?feed=rss2", _root_folder_id())
+        results = self._upgradable()
+        assert len(results) == 1
+        assert results[0]["current"] == "https://example.test/blog?feed=rss2"
+        assert set(results[0]["alternates"]) == {
+            "https://example.test/blog?feed=atom",
+            "https://example.test/blog?feed=rss",
+        }
+
+    def test_an_alt_param_gets_same_family_alternates(self, env):
+        _add_feed_to_folder("https://example.test/feed?alt=rss", _root_folder_id())
+        results = self._upgradable()
+        assert "https://example.test/feed?alt=atom" in results[0]["alternates"]
+
+    def test_no_alternate_already_subscribed_is_repeated(self, env):
+        root = _root_folder_id()
+        _add_feed_to_folder("https://example.test/blog?feed=rss2", root)
+        _add_feed_to_folder("https://example.test/blog?feed=atom", root)
+        results = self._upgradable()
+        assert "https://example.test/blog?feed=atom" not in results[0]["alternates"]
+
+    def test_root_level_feed_param_still_offers_alternates(self, env):
+        """The stripped-default candidate is skipped for a bare-root URL
+        (WordPress's ?feed=rss2 at "/" -- stripping it leaves nothing but
+        the homepage), but same-family alternates keep the query intact and
+        are still offered."""
+        _add_feed_to_folder("https://example.test/?feed=rss2", _root_folder_id())
+        results = self._upgradable()
+        assert len(results) == 1
+        assert results[0]["upgrade_to"] is None
+        assert set(results[0]["alternates"]) == {
+            "https://example.test/?feed=atom",
+            "https://example.test/?feed=rss",
+        }
+
+    def test_no_candidate_without_a_format_selector(self, env):
+        _add_feed_to_folder("https://example.test/feed?category=news", _root_folder_id())
+        assert self._upgradable() == []
+
+    def test_an_unrecognized_selector_value_does_not_count_as_a_second_match(self, env):
+        # format=feed isn't a recognized selector *value* (only the param
+        # name is on the allowlist), so only type=rss counts as the one
+        # match -- alternates still fire.
+        _add_feed_to_folder("https://example.test/feed?format=feed&type=rss", _root_folder_id())
+        results = self._upgradable()
+        assert len(results) == 1
+        assert "https://example.test/feed?format=feed&type=atom" in results[0]["alternates"]
+
+    def test_two_recognized_format_params_are_too_ambiguous_for_alternates(self, env):
+        _add_feed_to_folder("https://example.test/feed?alt=rss&type=atom", _root_folder_id())
+        results = self._upgradable()
+        assert results[0]["alternates"] == []
+
+
+class TestCombineFeedsSurvivorFolderPlacement:
+    """/feeds/combine's survivor is normally an existing subscription (every
+    detected-duplicate tier picks keep/remove from feeds already foldered) --
+    but the Upgrade tier's Compare candidates are brand-new URLs nobody has
+    subscribed to yet. Without placing the survivor into the sources' folders
+    it would land subscribed-but-folderless (invisible in the tree)."""
+
+    def _folders_of(self, url):
+        with main.get_meta_connection() as conn:
+            return {
+                r[0] for r in conn.execute(
+                    "SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (url,)
+                )
+            }
+
+    def test_new_survivor_inherits_the_sources_folders(self, env):
+        folder = _make_child_folder("Comics")
+        _add_feed_to_folder(FEED, folder)
+        new_url = "https://example.test/feed?feed=json1"
+        result = main.combine_feeds_route(
+            None, survivor_url=new_url, source_url=[FEED], move_unread="",
+        )
+        import json as _json
+        body = _json.loads(result.body)
+        assert body["ok"] is True
+        assert self._folders_of(new_url) == {folder}
+        with main.get_reader() as reader:
+            assert reader.get_feed(new_url, None) is not None
+
+    def test_already_subscribed_survivor_keeps_its_own_folders(self, env):
+        """Existing tiers (title/same-folder/cross-folder/query) always pass an
+        already-foldered survivor -- this must stay a no-op for them."""
+        folder_a = _make_child_folder("A")
+        folder_b = _make_child_folder("B")
+        _add_feed_to_folder(FEED, folder_a)
+        _add_feed_to_folder(FEED2, folder_b)
+        main.combine_feeds_route(
+            None, survivor_url=FEED, source_url=[FEED2], move_unread="",
+        )
+        assert self._folders_of(FEED) == {folder_a}
+
+
+class TestContentIdenticalFlag:
+    """`content_identical` gates the "suggested keep" bias in same_folder and
+    cross_folder. Reported 2026-08-10 (freac.org): ?type=rss carries
+    summaries only, ?type=atom carries full text -- a format-selector swap
+    is a real content difference, not a cosmetic one like scheme/www, so the
+    tie-break's pick must never be presented as a suggestion there."""
+
+    def _duplicates(self):
+        import json
+        return json.loads(main.get_feed_duplicates().body)
+
+    def test_scheme_only_variant_is_content_identical(self, env):
+        fid = _make_child_folder("Scheme")
+        _add_feed_to_folder("https://example.test/feed", fid)
+        _add_feed_to_folder("http://example.test/feed", fid)
+        same = self._duplicates()["same_folder"]
+        assert len(same) == 1
+        assert same[0]["content_identical"] is True
+
+    def test_format_selector_variant_is_not_content_identical(self, env):
+        fid = _make_child_folder("Format")
+        _add_feed_to_folder("https://www.freac.org/index.php?format=feed&type=rss", fid)
+        _add_feed_to_folder("https://www.freac.org/index.php?format=feed&type=atom", fid)
+        same = self._duplicates()["same_folder"]
+        assert len(same) == 1
+        assert same[0]["content_identical"] is False
+
+    def test_cross_folder_format_selector_variant_is_not_content_identical(self, env):
+        folder_a = _make_child_folder("A")
+        folder_b = _make_child_folder("B")
+        _add_feed_to_folder("https://www.freac.org/index.php?format=feed&type=rss", folder_a)
+        _add_feed_to_folder("https://www.freac.org/index.php?format=feed&type=atom", folder_b)
+        cross = self._duplicates()["cross_folder"]
+        assert len(cross) == 1
+        assert cross[0]["content_identical"] is False
+
+
+class TestLazyFeedTitlesFeedburner:
+    """FeedBurner is a proxy -- every burned feed shares feeds.feedburner.com
+    regardless of the real site, so a domain-based name guess is useless
+    there (reported 2026-08-10: "Feedburner -- Blog" for a Concept2 rowing
+    feed). Falls back to the URL's last path segment (the feed slug) instead."""
+
+    def _set_title(self, feed_url: str, title: str) -> None:
+        with main.get_reader() as reader:
+            reader.set_feed_user_title(feed_url, title)
+
+    def _lazy_titles(self):
+        import json
+        return json.loads(main.get_lazy_titles().body)["lazy_titles"]
+
+    def test_feedburner_uses_the_path_slug_not_the_host(self, env):
+        _add_feed_to_folder("https://feeds.feedburner.com/concept2", _root_folder_id())
+        self._set_title("https://feeds.feedburner.com/concept2", "Blog")
+        results = self._lazy_titles()
+        assert results[0]["suggested_title"] == "Concept2 - Blog"
+
+
+class TestSiteNameFromSubtitle:
+    """A feed's own <subtitle> beats a URL-based guess when present (reported
+    2026-08-10: TOSEC's feed carries subtitle "TOSEC - The Old School
+    Emulation Center", far better than anything tosecdev.org's domain
+    guesses). Most subtitles pair a short name with a tagline via a
+    separator; only the name half is used."""
+
+    def test_name_dash_tagline_takes_the_name_half(self):
+        assert main._site_name_from_subtitle(
+            "TOSEC - The Old School Emulation Center"
+        ) == "TOSEC"
+
+    def test_name_colon_tagline_takes_the_name_half(self):
+        assert main._site_name_from_subtitle("Kotaku: Gaming Reviews and News") == "Kotaku"
+
+    def test_short_subtitle_with_no_separator_is_used_whole(self):
+        assert main._site_name_from_subtitle("Concept2 Rowing") == "Concept2 Rowing"
+
+    def test_long_sentence_with_no_separator_is_rejected(self):
+        long_subtitle = "A very long description of what this site is about and why you should read it"
+        assert main._site_name_from_subtitle(long_subtitle) is None
+
+    def test_blank_subtitle_is_rejected(self):
+        assert main._site_name_from_subtitle("   ") is None
+
+
+class TestFormatUpgradeExcludesBareDomains:
+    """Stripping a format-selector query has to leave something feed-shaped
+    behind. WordPress's root-level ?feed=rss2 pattern is the failure case
+    (reported 2026-08-10): the query IS the whole address there, not
+    decoration on a working default -- stripping it leaves a bare domain
+    that serves the HTML homepage, not a feed."""
+
+    def _upgradable(self):
+        import json
+        return json.loads(main.get_feed_duplicates().body)["upgradable"]
+
+    def test_root_level_feed_param_stripped_default_is_not_offered(self, env):
+        """The stripped-default candidate specifically is excluded -- a
+        same-family alternate (which keeps the query) can still be offered,
+        covered by TestFormatUpgradeAlternates."""
+        _add_feed_to_folder("https://example.test/?feed=rss2", _root_folder_id())
+        results = self._upgradable()
+        assert results[0]["upgrade_to"] is None
+
+    def test_non_root_path_is_still_offered(self, env):
+        _add_feed_to_folder("https://tosecdev.org/news?type=rss", _root_folder_id())
+        results = self._upgradable()
+        assert len(results) == 1
+        assert results[0]["upgrade_to"] == "https://tosecdev.org/news"
+
+
+class TestDedupDismissal:
+    """"Not dupes" (reported 2026-08-10): a duplicate-scan group the user
+    explicitly says isn't a dupe stops being suggested. Matched by the exact
+    set of feed URLs shown in the group -- if the underlying feeds change,
+    the dismissal naturally stops applying rather than silently hiding some
+    other, unrelated group."""
+
+    def _duplicates(self):
+        import json
+        return json.loads(main.get_feed_duplicates().body)
+
+    def _dismiss(self, urls):
+        import asyncio
+
+        class _FakeRequest:
+            async def json(self):
+                return {"feed_urls": urls}
+
+        return asyncio.run(main.dismiss_feed_duplicate(_FakeRequest()))
+
+    def test_dismissed_same_folder_pair_is_excluded(self, env):
+        fid = _make_child_folder("Comics")
+        _add_feed_to_folder("https://example.test/feed", fid)
+        _add_feed_to_folder("https://example.test/feed/", fid)
+        before = self._duplicates()["same_folder"]
+        assert len(before) == 1
+        result = self._dismiss(["https://example.test/feed", "https://example.test/feed/"])
+        import json
+        assert json.loads(result.body)["ok"] is True
+        after = self._duplicates()["same_folder"]
+        assert after == []
+
+    def test_dismissed_title_group_is_excluded(self, env):
+        root = _root_folder_id()
+        _add_feed_to_folder("https://tumblr.test/comic", root)
+        _add_feed_to_folder("https://tapas.test/comic", root)
+        with main.get_reader() as reader:
+            reader.set_feed_user_title("https://tumblr.test/comic", "Cryptid Club")
+            reader.set_feed_user_title("https://tapas.test/comic", "Cryptid Club")
+        assert len(self._duplicates()["title_groups"]) == 1
+        self._dismiss(["https://tumblr.test/comic", "https://tapas.test/comic"])
+        assert self._duplicates()["title_groups"] == []
+
+    def test_dismissal_is_order_independent(self, env):
+        fid = _make_child_folder("Comics")
+        _add_feed_to_folder("https://example.test/feed", fid)
+        _add_feed_to_folder("https://example.test/feed/", fid)
+        self._dismiss(["https://example.test/feed/", "https://example.test/feed"])
+        assert self._duplicates()["same_folder"] == []
+
+    def test_unrelated_pair_is_not_affected(self, env):
+        fid = _make_child_folder("Comics")
+        _add_feed_to_folder("https://example.test/feed", fid)
+        _add_feed_to_folder("https://example.test/feed/", fid)
+        _add_feed_to_folder("https://other.test/feed", fid)
+        _add_feed_to_folder("https://other.test/feed/", fid)
+        self._dismiss(["https://example.test/feed", "https://example.test/feed/"])
+        after = self._duplicates()["same_folder"]
+        assert len(after) == 1
+        assert after[0]["remove"] == "https://other.test/feed/"
+
+    def test_dismiss_requires_at_least_two_urls(self, env):
+        result = self._dismiss(["https://example.test/feed"])
+        assert result.status_code == 400
+
+
+class TestCombineAutoDismisses:
+    """A completed /feeds/combine always records a dismissal for the exact
+    URL set involved, even when nothing was actually deleted. Reported
+    2026-08-10: picking the already-subscribed "current" URL as Upgrade-tier
+    survivor makes every "source" a never-subscribed candidate, so the purge
+    loop is a structural no-op -- current's format-selector URL is
+    untouched, and the next scan re-detects the identical group ("I combined
+    it and it came back")."""
+
+    def _dismissed_keys(self):
+        with main.get_meta_connection() as conn:
+            return {r[0] for r in conn.execute("SELECT dismiss_key FROM dedup_dismissed")}
+
+    def test_no_op_combine_still_dismisses_the_group(self, env):
+        """Survivor is the already-subscribed URL; sources were never
+        subscribed -- nothing to delete, but the group must stop recurring."""
+        _add_feed_to_folder("http://example.test/blog?feed=atom", _root_folder_id())
+        result = main.combine_feeds_route(
+            None,
+            survivor_url="http://example.test/blog?feed=atom",
+            source_url=["http://example.test/blog?feed=rss", "http://example.test/blog?feed=rss2"],
+            move_unread="",
+        )
+        import json
+        assert json.loads(result.body)["ok"] is True
+        key = main._dedup_dismiss_key([
+            "http://example.test/blog?feed=atom",
+            "http://example.test/blog?feed=rss",
+            "http://example.test/blog?feed=rss2",
+        ])
+        assert key in self._dismissed_keys()
+
+    def test_dismissed_upgrade_group_no_longer_scanned(self, env):
+        """Mirrors the real frontend flow: Compare/Combine act on the whole
+        group (current + stripped default + both alternates), not just the
+        two alternates."""
+        _add_feed_to_folder("http://example.test/blog?feed=atom", _root_folder_id())
+        main.combine_feeds_route(
+            None,
+            survivor_url="http://example.test/blog?feed=atom",
+            source_url=[
+                "http://example.test/blog",
+                "http://example.test/blog?feed=rss",
+                "http://example.test/blog?feed=rss2",
+            ],
+            move_unread="",
+        )
+        import json
+        data = json.loads(main.get_feed_duplicates().body)
+        currents = {d["current"] for d in data["upgradable"]}
+        assert "http://example.test/blog?feed=atom" not in currents
+
+    def test_real_merge_also_dismisses(self, env):
+        """A genuine merge (source really was subscribed) also records a
+        dismissal -- redundant with the source simply being gone, but
+        harmless and keeps the guarantee uniform across every combine."""
+        root = _root_folder_id()
+        _add_feed_to_folder(FEED, root)
+        _add_feed_to_folder(FEED2, root)
+        main.combine_feeds_route(None, survivor_url=FEED, source_url=[FEED2], move_unread="")
+        key = main._dedup_dismiss_key([FEED, FEED2])
+        assert key in self._dismissed_keys()
