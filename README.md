@@ -52,9 +52,9 @@ short version:
   bulk mark-as-read that updates in place, per-view remembered sort, and a
   layout that collapses to two panes on a tablet and one on a phone.
 - **Built for a phone, not just shrunk onto one.** One pane at a time, with Back
-  walking the view stack — article → feed → folder → folder drawer — before it
-  leaves the app. Pull down from the top of an article to toggle Reader view,
-  and pull again to come back.
+  walking the view stack — article → feed → folder — and then toggling the folder
+  drawer instead of closing the tab out from under you. Pull down from the top of
+  an article to toggle Reader view, and pull again to come back.
 - **Filter, then act on the whole result.** *Filter this view* narrows the post
   list as you type — by title, link or feed name — separately from search, which
   is a server query that changes what is fetched. **Move all shown to feed…**

@@ -968,8 +968,8 @@ whole-set action.
 ### Back on a phone walks the view stack
 
 In single-pane mode the article pane *is* the page, so Back has to step down the
-stack before it leaves: article → the feed list it was opened from → that feed's
-folder list → the folder drawer → leave.
+stack rather than leave: article → the feed list it was opened from → that feed's
+folder list → and there it stops, toggling the folder drawer open and closed.
 
 Most of that chain needs no code. Opening a feed from the drawer and opening an
 article each push a history entry, so the stack already holds the feed list under
@@ -981,15 +981,24 @@ cross-document navigation: the page unloads and `popstate` never fires, so
 nothing script can do would intercept it. Instead a **spare history entry** — a
 duplicate of the current URL, so pushing and popping it are both visually
 silent — is pushed ahead of time by `armDrawerBack()`, and popping it is what
-opens the drawer.
+toggles the drawer.
 
-The spare exists only while the drawer is *closed* on a folder-scoped list. An
-article and a feed-scoped list each already have a real parent underneath, so
-neither arms it. Once consumed it is not re-pushed, so the very next Back leaves
-the app for real — that property is what makes this a step in the chain rather
-than a back-trap, and it is why the arming condition is a guard rather than an
-optimization. Forward navigation clears the flag, since whatever was pushed now
-sits above the spare.
+**Back therefore never exits the app in single-pane mode. That is deliberate**,
+and was asked for after a stray press closed the tab mid-read: this is a
+self-hosted reader you live in, and losing the session costs more than being able
+to reverse out of it. Leaving is still an ordinary browser action — close the
+tab, switch apps — it is only Back that no longer does it. Desktop is untouched;
+the whole mechanism is gated on `isSingleMode()`.
+
+The spare is re-armed the instant it is consumed, so consuming one entry and
+pushing one back leaves the stack the same size: this can run indefinitely
+without growing history and without running out of presses (verified at ten
+consecutive presses, `history.length` flat). An article and a feed-scoped list
+each already have a real parent underneath, so neither arms it, and a scope
+param is required so the bare landing screen is excluded — there is no folder
+list to toggle there, and Back on the app's front door should do the ordinary
+thing. Forward navigation clears the flag, since whatever was pushed now sits
+above the spare.
 
 The handler lives in `index.html` rather than `app.js` because it is registered
 before `app.js` loads, so `stopImmediatePropagation()` also suppresses that

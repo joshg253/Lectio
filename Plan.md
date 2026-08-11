@@ -297,15 +297,14 @@ before leaving, and the Global Note no longer opens underneath the folder
 drawer. Rationale in ARCHITECTURE.md ("Back on a phone walks the view stack",
 "Pull down in an article for Reader view").
 
-- **One dead Back press in a deep path.** The drawer step is synthesized with a
-  spare history entry (the only way to intercept a Back that would otherwise
-  leave the document). Re-arming it after returning from a feed list leaves the
-  spare's parent carrying the same URL, so in the path
-  *folder → feed → back → back → back* the final press closes the drawer instead
-  of leaving. Harmless and not a trap — one more press always leaves — but it is
-  a press that appears to do nothing much. Fixing it properly needs the drawer to
-  have a URL of its own (a `#folders` fragment), which is a bigger change than
-  the edge deserves until it actually annoys someone.
+- **Back never exits the app on a phone, by request.** The first cut ended the
+  chain by letting the next press leave; in use that closed the tab mid-read.
+  Back now toggles the folder drawer open/closed at the end of the chain,
+  indefinitely. The trade is deliberate and worth restating before anyone
+  "fixes" it: on a phone you cannot reverse out of Lectio to the previous site,
+  and you cannot Back your way to an earlier folder or feed — the tree is how you
+  navigate. Closing the tab or switching apps still works normally, and desktop
+  is untouched (`isSingleMode()` gates all of it).
 - **The gesture's return trip is only as good as the button.** Pull-to-Reader
   dispatches a click on `#entry-readability-button`, so if activating Reader view
   fails (a dead source URL, say) the second pull tries to activate again rather

@@ -1182,31 +1182,43 @@
     // under the feed list.
     //
     // The last step has nothing beneath it to pop to, so Back left the app
-    // straight from the folder list. That one is synthesized here: undo the pop,
-    // reveal the drawer, and let the NEXT Back through. It is self-limiting by
-    // construction — the swallow only fires while the drawer is CLOSED, so one
-    // press always opens it and the one after always leaves. No back-trap.
+    // straight from the folder list — which on a phone closes the tab. Instead
+    // the folder list is the END of the chain: Back there toggles the drawer
+    // open and closed, indefinitely.
+    //
+    // ⚠ That means Back never exits the app in single-pane mode. It is a
+    // deliberate back-trap, asked for after a stray press closed the tab
+    // mid-read: this is a self-hosted reader you live in, and losing the session
+    // costs more than the ability to reverse out of it. Leaving is still an
+    // ordinary browser action (close the tab, switch apps); it is only Back that
+    // no longer does it. Desktop is untouched — the whole thing is gated on
+    // isSingleMode().
     //
     // Intercepting that press needs a spare same-document history entry to
     // consume. Back out of the entry the app was LOADED on is a cross-document
     // navigation — the page unloads and popstate never fires — so there is
     // nothing script can do at that point. The spare is pushed ahead of time: a
     // duplicate of the current URL, so pushing and popping it are both visually
-    // silent, and popping it is what opens the drawer.
+    // silent, and popping it is what toggles the drawer. It is re-armed the
+    // instant it is consumed, so there is always exactly one spare and the stack
+    // neither grows nor runs out.
     //
-    // The spare exists only while the drawer is closed on a folder-scoped list.
-    // Once consumed it is not re-pushed, so the very next Back leaves the app
-    // for real. That is what makes this a step in the chain and not a back-trap.
+    // A scope param is required so the bare landing screen is excluded: there is
+    // no folder list to toggle there, and Back on the app's front door should do
+    // the ordinary thing.
     let drawerBackSpare = false;
 
     function armDrawerBack() {
-      if (drawerBackSpare || !window.isSingleMode() || singlePaneLevel === 0) return;
+      if (drawerBackSpare || !window.isSingleMode()) return;
       let params;
       try { params = new URL(window.location.href).searchParams; }
       catch (e) { return; }
       // An article and a feed-scoped list each have a real parent view sitting
       // under them in history already; only the folder list has nothing.
       if (params.has('entry_id') || params.has('list_feed_url')) return;
+      const hasScope = params.has('folder_id') || params.has('tag')
+        || params.has('q') || params.has('star_only');
+      if (!hasScope) return;
       history.pushState({ lectioDrawerSpare: true, lectioPaneLevel: singlePaneLevel },
                         '', window.location.href);
       drawerBackSpare = true;
@@ -1219,12 +1231,15 @@
     // are still standing on.
     window.addEventListener('popstate', (event) => {
       if (window.isSingleMode() && drawerBackSpare) {
+        event.stopImmediatePropagation();
+        // The end of the chain: flip the drawer rather than leaving.
+        setSinglePaneLevel(singlePaneLevel === 0 ? 1 : 0);
+        // Re-arm in the same breath. Consuming one entry and pushing one back
+        // keeps the stack the same size, so this can run forever without
+        // growing history — and without ever running out of presses.
         drawerBackSpare = false;
-        if (singlePaneLevel !== 0) {
-          event.stopImmediatePropagation();
-          setSinglePaneLevel(0);
-          return;
-        }
+        armDrawerBack();
+        return;
       }
       drawerBackSpare = false;
       if (window.isSingleMode()) restoreSinglePaneLevel();
