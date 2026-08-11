@@ -21261,6 +21261,12 @@ def _home_inner(
         "tag_rows": tag_rows,
         "all_tag_names": get_all_manual_tag_names(),
         "selected_folder_id": selected_folder_id,
+        # Labels the phone's "up to the folder" control when the list is scoped
+        # to one feed, so the button says where it goes instead of "Folders".
+        "selected_folder_name": next(
+            (str(row["name"]) for row in folder_rows if int(row["id"]) == selected_folder_id),
+            "",
+        ),
         "selected_feed_url": selected_feed_url,
         "selected_tag": selected_tag,
         "selected_query": selected_query,

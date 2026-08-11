@@ -455,6 +455,16 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
 
       if (panel.classList.contains('action-modal')) {
         panel.removeAttribute('hidden');
+        // These triggers live in the menu inside the folder drawer, which on a
+        // phone IS the screen (pane level 0) and sits above the modal — so the
+        // modal opened underneath it and looked like nothing happened. Step back
+        // to the list so the drawer closes behind the dialog.
+        if (window.isSingleMode?.() && document.body.getAttribute('data-single-pane-level') === '0') {
+          window.setSinglePaneLevel?.(1);
+        }
+        // The menu popover is a <details>; leaving it open would cover the
+        // dialog on any layout.
+        trigger.closest('details[open]')?.removeAttribute('open');
         // The Global Note is shared state edited from any browser/tab. Pull the
         // latest on open so a change made elsewhere shows without a page reload,
         // but never clobber an in-progress unsaved edit (only overwrite when the
@@ -3770,6 +3780,9 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         if (pushHistory) {
           history.pushState({ lectioScopePane: true, lectioPaneLevel: (window.isSingleMode && window.isSingleMode()) ? 1 : 0 }, '', url);
         }
+        // Landing on a folder-scoped list re-arms the phone's "Back opens the
+        // folder drawer" step. Must follow the pushState above, which clears it.
+        window.armDrawerBack?.();
       } catch (_error) {
         window.location.href = url;
         throw _error;
@@ -14380,6 +14393,65 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       bindPostsFilter();
     };
     window.setupPostsFilter();
+
+    // Pull down from the top of an article to toggle Reader view, and pull again
+    // to come back. Phone only: on a phone the article pane IS the screen, and
+    // the Reader-view button sits in a toolbar that is easy to miss and awkward
+    // to reach one-handed — the gesture puts it under the thumb already holding
+    // the page.
+    //
+    // Note this is a gesture, not a revival of pull-to-refresh: that was removed
+    // deliberately and stays removed (window.bindSinglePanePullToRefresh is still
+    // a no-op). Different gesture, different surface, different action.
+    //
+    // Listeners are on `document` rather than the pane because a pane swap
+    // replaces .pane-entry wholesale, and they stay passive — the native
+    // overscroll is suppressed in CSS (overscroll-behavior-y) rather than by
+    // calling preventDefault, so ordinary scrolling is never intercepted.
+    (function bindArticlePullToRead() {
+      const PULL_THRESHOLD = 90;   // px; short enough to be easy, long enough not to fire on a flick
+      const DIRECTION_RATIO = 1.5; // must be clearly vertical, so it can't eat a horizontal swipe
+      let pane = null;
+      let startY = 0;
+      let startX = 0;
+      let tracking = false;
+
+      document.addEventListener('touchstart', (event) => {
+        tracking = false;
+        if (!window.isSingleMode?.() || event.touches.length !== 1) return;
+        const target = event.target instanceof Element ? event.target.closest('.pane-entry') : null;
+        if (!target) return;
+        // Only a pull that STARTS at the top counts; anywhere else this is an
+        // ordinary scroll and must stay one.
+        if (target.scrollTop > 0) return;
+        pane = target;
+        startY = event.touches[0].clientY;
+        startX = event.touches[0].clientX;
+        tracking = true;
+      }, { passive: true });
+
+      document.addEventListener('touchmove', (event) => {
+        if (!tracking || event.touches.length !== 1) return;
+        // Scrolling away from the top mid-gesture means the finger is scrolling,
+        // not pulling.
+        if (pane && pane.scrollTop > 0) tracking = false;
+      }, { passive: true });
+
+      document.addEventListener('touchend', (event) => {
+        if (!tracking) return;
+        tracking = false;
+        const touch = event.changedTouches && event.changedTouches[0];
+        if (!touch || !pane || pane.scrollTop > 0) return;
+        const dy = touch.clientY - startY;
+        const dx = Math.abs(touch.clientX - startX);
+        if (dy < PULL_THRESHOLD || dy < dx * DIRECTION_RATIO) return;
+        // The button owns both directions of the toggle, so a second pull comes
+        // back out of Reader view for free.
+        const readerButton = document.getElementById('entry-readability-button');
+        if (!readerButton) return;
+        readerButton.click();
+      }, { passive: true });
+    })();
 
     function centerActivePostInView() {
       refreshPostChunkRefs();

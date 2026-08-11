@@ -431,6 +431,11 @@ body[data-layout-mode="single"] .single-menu-btn {
 body[data-compact-article="1"] .pane-entry {
   overflow-y: auto;
   overflow-x: hidden;
+  /* Pulling down from the top of an article toggles Reader view. `contain` stops
+     the browser's own pull-to-refresh from claiming that same overscroll, which
+     lets the gesture's listeners stay passive instead of calling preventDefault
+     on every touchmove. */
+  overscroll-behavior-y: contain;
   /* One gutter for the article view, so the title, the byline, the feed/date
      line and the body all start on the same vertical. */
   --phone-gutter: 0.85rem;
@@ -706,6 +711,25 @@ body[data-compact-article="1"] .entry-meta-separator {
 
 body[data-layout-mode="single"] .single-back-btn {
   display: inline-flex;
+}
+
+/* "Up to the folder" when the list is scoped to one feed. It sits where the
+   hamburger otherwise sits, so it keeps that control's tightened left padding,
+   and the folder name truncates rather than pushing the sort/filter pills off
+   the row on a narrow phone. */
+body[data-layout-mode="single"] .single-up-btn {
+  padding-left: 0;
+  padding-right: 0.2rem;
+  min-width: 0;
+  text-decoration: none;
+  overflow: hidden;
+}
+
+.single-up-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 8rem;
 }
 
 /* Touch targets. 44px is the smallest reliably tappable size; the desktop tree

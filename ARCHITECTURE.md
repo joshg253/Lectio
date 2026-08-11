@@ -965,6 +965,62 @@ reader entry to move.
 `_RANGE_READ_LIMIT`; this is that lesson generalized from an anchor lookup to a
 whole-set action.
 
+### Back on a phone walks the view stack
+
+In single-pane mode the article pane *is* the page, so Back has to step down the
+stack before it leaves: article → the feed list it was opened from → that feed's
+folder list → the folder drawer → leave.
+
+Most of that chain needs no code. Opening a feed from the drawer and opening an
+article each push a history entry, so the stack already holds the feed list under
+the article and the folder list under the feed list, and a plain Back walks them.
+
+The last step is the exception, and the reason for the machinery in
+`templates/index.html`. Backing out of the entry the app was *loaded* on is a
+cross-document navigation: the page unloads and `popstate` never fires, so
+nothing script can do would intercept it. Instead a **spare history entry** — a
+duplicate of the current URL, so pushing and popping it are both visually
+silent — is pushed ahead of time by `armDrawerBack()`, and popping it is what
+opens the drawer.
+
+The spare exists only while the drawer is *closed* on a folder-scoped list. An
+article and a feed-scoped list each already have a real parent underneath, so
+neither arms it. Once consumed it is not re-pushed, so the very next Back leaves
+the app for real — that property is what makes this a step in the chain rather
+than a back-trap, and it is why the arming condition is a guard rather than an
+optimization. Forward navigation clears the flag, since whatever was pushed now
+sits above the spare.
+
+The handler lives in `index.html` rather than `app.js` because it is registered
+before `app.js` loads, so `stopImmediatePropagation()` also suppresses that
+file's `popstate` handler. That is deliberate: when the spare is consumed nothing
+actually navigated, and app.js's handler would refetch the list already on screen.
+
+The list toolbar's top-left control mirrors the same hierarchy. Scoped to one
+feed it is a back arrow labelled with the folder name (`selected_folder_name`,
+server-rendered) that goes up to the folder's list; at the folder list it is the
+hamburger that opens the drawer. Two controls rather than one that changes
+meaning, because a button reading "Folders" that does not open Folders is worse
+than either.
+
+### Pull down in an article for Reader view
+
+On a phone, pulling down from the top of the article pane toggles Reader view,
+and pulling again comes back — the Reader-view button sits in a toolbar that is
+easy to miss and awkward to reach one-handed.
+
+This is **not** a revival of pull-to-refresh, which was removed deliberately and
+stays removed (`window.bindSinglePanePullToRefresh` is still a no-op stub).
+Different gesture, different surface, different action.
+
+The gesture delegates to `#entry-readability-button` rather than reimplementing
+the toggle, so both directions come for free from the control that already owns
+them. Listeners are on `document` (a pane swap replaces `.pane-entry` wholesale)
+and stay **passive**: the browser's own pull-to-refresh is suppressed with
+`overscroll-behavior-y: contain` in CSS rather than by calling `preventDefault`
+on every touchmove. Three guards keep it from eating ordinary input — the pull
+must start at `scrollTop === 0`, travel at least 90px, and be clearly vertical.
+
 ### Global audio player
 
 The persistent audio player is a deliberate exception to the pane-swap lifecycle.

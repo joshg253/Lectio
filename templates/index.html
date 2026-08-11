@@ -488,13 +488,27 @@
         {% set sort_by_label = 'Pub' if selected_sort_by == 'post' else ('Star' if selected_sort_by == 'starred' else 'Rec') %}
         {% set sort_dir_label = 'new' if selected_sort_dir == 'desc' else 'old' %}
         <div class="toolbar-row-main">
-          {# Phone only: open the folder drawer over the list. CSS hides it at
-             desktop widths. A hamburger rather than a back arrow, because the
-             drawer slides over this list rather than replacing it. #}
+          {# Phone only; CSS hides both at desktop widths. Two different jobs, so
+             two different controls rather than one that changes meaning:
+
+             Scoped to a single feed, the step "up" is the folder's own list, not
+             the drawer — so the control is a back arrow naming where it goes.
+             Once at the folder list there is nothing above it but the drawer,
+             which slides OVER this list rather than replacing it, hence a
+             hamburger. This mirrors what the phone's own Back button does. #}
+          {% if selected_feed_url and selected_folder_name %}
+          <a class="single-back-btn single-up-btn"
+             href="/?folder_id={{ selected_folder_id }}{{ tb_sort }}{{ tb_rf }}"
+             aria-label="Back to {{ selected_folder_name }}" title="Back to {{ selected_folder_name }}">
+            <span class="material-symbols-rounded" aria-hidden="true">chevron_left</span
+            ><span class="single-up-label">{{ selected_folder_name }}</span>
+          </a>
+          {% else %}
           <button type="button" class="single-back-btn single-menu-btn" data-single-back="0"
                   aria-label="Show folders" title="Folders">
             <span class="material-symbols-rounded" aria-hidden="true">menu</span>
           </button>
+          {% endif %}
           <div class="sort-group">
             <details class="toolbar-dropdown filter-menu">
               <summary class="sort-pill toolbar-dropdown-summary {% if filter_is_active %}active{% endif %}" title="Filter: {{ filter_label }}">
@@ -1160,9 +1174,70 @@
     // Back steps down the pane stack before it leaves the page: on a phone the
     // article pane IS the page, so a plain Back that navigated away would lose
     // the list every time.
-    window.addEventListener('popstate', () => {
+    //
+    // The intended chain is  article → the feed list → the folder list → the
+    // folder drawer → leave.  Two of those steps need no help: opening a feed
+    // from the drawer and opening an article each push a history entry, so the
+    // stack already holds the feed list under the article and the folder list
+    // under the feed list.
+    //
+    // The last step has nothing beneath it to pop to, so Back left the app
+    // straight from the folder list. That one is synthesized here: undo the pop,
+    // reveal the drawer, and let the NEXT Back through. It is self-limiting by
+    // construction — the swallow only fires while the drawer is CLOSED, so one
+    // press always opens it and the one after always leaves. No back-trap.
+    //
+    // Intercepting that press needs a spare same-document history entry to
+    // consume. Back out of the entry the app was LOADED on is a cross-document
+    // navigation — the page unloads and popstate never fires — so there is
+    // nothing script can do at that point. The spare is pushed ahead of time: a
+    // duplicate of the current URL, so pushing and popping it are both visually
+    // silent, and popping it is what opens the drawer.
+    //
+    // The spare exists only while the drawer is closed on a folder-scoped list.
+    // Once consumed it is not re-pushed, so the very next Back leaves the app
+    // for real. That is what makes this a step in the chain and not a back-trap.
+    let drawerBackSpare = false;
+
+    function armDrawerBack() {
+      if (drawerBackSpare || !window.isSingleMode() || singlePaneLevel === 0) return;
+      let params;
+      try { params = new URL(window.location.href).searchParams; }
+      catch (e) { return; }
+      // An article and a feed-scoped list each have a real parent view sitting
+      // under them in history already; only the folder list has nothing.
+      if (params.has('entry_id') || params.has('list_feed_url')) return;
+      history.pushState({ lectioDrawerSpare: true, lectioPaneLevel: singlePaneLevel },
+                        '', window.location.href);
+      drawerBackSpare = true;
+    }
+    window.armDrawerBack = armDrawerBack;
+
+    // Registered before app.js loads, so stopImmediatePropagation() suppresses
+    // that file's popstate handler too — which is the point when the spare is
+    // consumed: nothing navigated, so its pane reload would refetch the list we
+    // are still standing on.
+    window.addEventListener('popstate', (event) => {
+      if (window.isSingleMode() && drawerBackSpare) {
+        drawerBackSpare = false;
+        if (singlePaneLevel !== 0) {
+          event.stopImmediatePropagation();
+          setSinglePaneLevel(0);
+          return;
+        }
+      }
+      drawerBackSpare = false;
       if (window.isSingleMode()) restoreSinglePaneLevel();
     });
+
+    // Navigating forward invalidates the spare: whatever was pushed now sits
+    // above it, so the next Back is a real step back through the app.
+    const _origPushState = history.pushState.bind(history);
+    history.pushState = function (...args) {
+      const result = _origPushState(...args);
+      if (!(args[0] && args[0].lectioDrawerSpare)) drawerBackSpare = false;
+      return result;
+    };
 
     // Delegated so it survives pane swaps, which replace the entry pane wholesale.
     document.addEventListener('click', (event) => {
@@ -1174,6 +1249,9 @@
 
     window.addEventListener('resize', () => updateSingleMode());
     updateSingleMode();
+    // The app is most often loaded straight onto a list, and that first entry is
+    // exactly the one Back cannot be intercepted on without a spare.
+    armDrawerBack();
 
     // Intercept internal app navigation links and perform SPA loads.
     // Do not intercept external links, modified clicks, or the brand/logo

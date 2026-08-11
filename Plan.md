@@ -289,6 +289,29 @@ feed rows (2.7MB), and by moving the ~580KB inline script to
   fetch (posts + tree + shells, ~200KB now); a render-splitting/fragment
   endpoint for `.pane-posts`/`.pane-entry` would cut server time further.
 
+### Phone polish — shipped 2026-08-11, one rough edge left
+
+From a phone testing pass: pull down in an article to toggle Reader view (and
+again to come back), Back now walks article → feed → folder → folder drawer
+before leaving, and the Global Note no longer opens underneath the folder
+drawer. Rationale in ARCHITECTURE.md ("Back on a phone walks the view stack",
+"Pull down in an article for Reader view").
+
+- **One dead Back press in a deep path.** The drawer step is synthesized with a
+  spare history entry (the only way to intercept a Back that would otherwise
+  leave the document). Re-arming it after returning from a feed list leaves the
+  spare's parent carrying the same URL, so in the path
+  *folder → feed → back → back → back* the final press closes the drawer instead
+  of leaving. Harmless and not a trap — one more press always leaves — but it is
+  a press that appears to do nothing much. Fixing it properly needs the drawer to
+  have a URL of its own (a `#folders` fragment), which is a bigger change than
+  the edge deserves until it actually annoys someone.
+- **The gesture's return trip is only as good as the button.** Pull-to-Reader
+  dispatches a click on `#entry-readability-button`, so if activating Reader view
+  fails (a dead source URL, say) the second pull tries to activate again rather
+  than coming back. That is the button's existing behavior, not the gesture's,
+  but it shows up more now that the gesture makes it easy to trigger.
+
 ### Parked, deliberately
 
 Genuinely nothing to do here until one of these recurs or a lead turns up —
