@@ -4,6 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="csrf-token" content="{{ csrf_token_for(request) }}" />
+  {# Installable to the home screen. Worth more than a convenience: installed
+     there is no browser tab, so Back at the root backgrounds the app instead of
+     closing the tab and losing the session — which is something the in-page
+     history guard cannot promise, because Chrome deliberately limits how far a
+     page may trap Back. #}
+  <link rel="manifest" href="/static/manifest.webmanifest?v={{ static_asset_version }}" />
+  <meta name="theme-color" content="#15191d" />
   <title>{{ page_title or 'Lectio' }}</title>
   <script>
     window.CURRENT_SORT_BY = "{{ selected_sort_by }}";
@@ -1282,6 +1289,29 @@
       drawerBackSpare = true;
     }
     window.armDrawerBack = armDrawerBack;
+
+    // ⚠ The limit of this whole mechanism, and why the manifest above matters
+    // more than the code below.
+    //
+    // Chrome ships a "history manipulation intervention": entries a page pushes
+    // WITHOUT user activation are marked skippable, and Back traverses straight
+    // past them. That is aimed squarely at pages trapping the back button, which
+    // is exactly what the spare does — so a spare pushed from inside a popstate
+    // handler (no gesture) can be skipped, and Back walks out of the app. On a
+    // Galaxy S21+ that showed up as two working drawer toggles followed by the
+    // tab closing, while an automated Chromium run of the same steps toggled
+    // indefinitely, because headless does not apply the intervention.
+    //
+    // Re-arming on a real gesture is the mitigation: an entry pushed while the
+    // user is touching carries activation and is not marked skippable. Reading
+    // means tapping constantly, so in practice the spare is usually gesture-made.
+    // It is NOT a guarantee — press Back repeatedly without touching anything in
+    // between and there is no gesture to arm from, and the app will eventually
+    // be left. Installing to the home screen is what actually removes the risk,
+    // because then there is no tab to lose.
+    for (const evt of ['pointerdown', 'touchstart', 'keydown']) {
+      window.addEventListener(evt, () => { armDrawerBack(); }, { capture: true, passive: true });
+    }
 
     // Registered before app.js loads, so stopImmediatePropagation() suppresses
     // that file's popstate handler too — which is the point when the spare is

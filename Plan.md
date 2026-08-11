@@ -297,6 +297,15 @@ before leaving, and the Global Note no longer opens underneath the folder
 drawer. Rationale in ARCHITECTURE.md ("Back on a phone walks the view stack",
 "Pull down in an article for Reader view").
 
+- **The Back guard is best-effort, by browser design.** Chrome's history
+  manipulation intervention skips entries pushed without user activation, so a
+  spare re-armed inside a `popstate` handler can be walked straight past — seen
+  on a Galaxy S21+ as two toggles then the tab closing, on code that toggled
+  indefinitely under headless Chromium (which does not apply the intervention).
+  Re-arming from real gestures narrows it; nothing closes it. **Installing to the
+  home screen is the actual fix** and the manifest now exists for that. If this
+  is still hit while installed, the next lead is whether standalone mode changes
+  the intervention's behaviour — do not just add more spares.
 - **Read Mode has no equivalent Back guard.** `/read` (the Supernote view) is a
   two-pane layout with the tree always visible, so there is no drawer for Back to
   toggle at the end of its chain — the trick used in the main app has nothing to

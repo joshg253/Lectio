@@ -999,6 +999,32 @@ in both directions, and only the state can say which way, or how far. (Once you
 Back all the way to the floor the re-pushed spare truncates forward history, so
 Forward stops there; mid-stack it is unaffected.)
 
+### ⚠ The guard cannot be made airtight, and the manifest is why
+
+Chrome ships a **history manipulation intervention**: history entries a page
+pushes *without user activation* are marked skippable, and Back traverses
+straight past them. It exists to stop pages trapping the back button — which is
+exactly what the spare does. A spare pushed from inside a `popstate` handler has
+no gesture behind it and can therefore be skipped, letting Back walk out.
+
+Observed on a Galaxy S21+ as two working drawer toggles followed by the tab
+closing, while an automated Chromium run of the identical steps toggled
+indefinitely — **headless does not apply the intervention, so no browser test
+here can prove the guard holds.** Treat green automation on this feature as
+"not obviously broken", never as proof.
+
+The mitigation is to re-arm from real gestures (`pointerdown`/`touchstart`/
+`keydown`), since an entry pushed while the user is touching carries activation.
+Reading means tapping constantly, so in practice the spare is usually
+gesture-made. It is not a guarantee: press Back repeatedly without touching
+anything in between and there is no gesture to arm from.
+
+**What actually removes the risk is not being a tab at all.** Lectio ships a web
+app manifest (`static/manifest.webmanifest`, `display: standalone`) so it installs
+to the home screen; installed, Back at the root backgrounds the app instead of
+closing a tab, and the session survives. The in-page guard is the fallback for
+browser-tab use, not the primary answer.
+
 **This applies to every layout whose tree is a drawer — single *and* medium
 (721–1100px).** Gating it on single-pane mode alone was a bug: a tablet sits in
 medium, so the guard never armed and Back closed the tab there exactly as it had

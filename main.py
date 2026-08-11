@@ -8,6 +8,7 @@ import html
 import io
 import json
 import logging
+import mimetypes
 import os
 import re
 import secrets
@@ -551,13 +552,17 @@ def _static_asset_version() -> str:
     worker, which caches /static by design — kept serving the previous file.
     Deploying a fix and watching the old copy run is a bad way to spend an hour.
 
+    `.webmanifest` is in the set for the same reason: it is served with the same
+    ?v= and the same immutable, year-long Cache-Control, so a manifest edit that
+    did not move the digest would be pinned in the browser indefinitely.
+
     Sorted so the digest is stable across filesystems.
     """
     try:
         _static = Path(__file__).parent / "static"
         paths = sorted(
             p for p in _static.rglob("*")
-            if p.is_file() and p.suffix in (".css", ".js")
+            if p.is_file() and p.suffix in (".css", ".js", ".webmanifest")
         )
         combined = b"".join(p.read_bytes() for p in paths)
         return hashlib.md5(combined).hexdigest()[:10]
@@ -2826,6 +2831,10 @@ class _CachedStaticFiles(StaticFiles):
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return response
 
+
+# Python's mimetypes table predates .webmanifest, so StaticFiles would serve the
+# PWA manifest as octet-stream and Chrome would refuse to install the app.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 app.mount("/static", _CachedStaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))

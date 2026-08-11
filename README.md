@@ -51,6 +51,9 @@ short version:
 - **Triage first.** Three-pane reader, keyboard nav everywhere, context menus,
   bulk mark-as-read that updates in place, per-view remembered sort, and a
   layout that collapses to two panes on a tablet and one on a phone.
+- **Installs to your home screen.** A web app manifest ships with the app, so
+  Android (and any browser that supports it) can install Lectio as a standalone
+  app — no browser tab to lose your reading session to.
 - **Built for a phone, not just shrunk onto one.** One pane at a time, with Back
   walking the view stack — article → feed → folder — and then toggling the folder
   drawer instead of closing the tab out from under you. Pull down from the top of
