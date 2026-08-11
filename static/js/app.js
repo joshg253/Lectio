@@ -670,7 +670,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     const UTILITY_RESULT_PANEL_IDS = [
       'dedup-inline-results', 'saved-dedup-results', 'purge-old-panel',
       'multi-folder-results', 'unstar-tagged-results', 'archive-old-results',
-      'saved-autofile-results',
+      'saved-autofile-results', 'lazy-titles-results',
     ];
     function hideOtherUtilityResults(exceptId) {
       for (const id of UTILITY_RESULT_PANEL_IDS) {
@@ -678,6 +678,47 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         const el = document.getElementById(id);
         if (el) el.hidden = true;
       }
+    }
+
+    // Renders one section's groups into the shared Compare+Combine format
+    // ("Same title, different feed"'s original UX, now reused by every tier
+    // per user request 2026-08-10: "compare feeds like the Name Match ones
+    // -- use that format for any match, keep the sections though"). A
+    // `suggested` feed gets a "suggested keep" arrow as a hint only.
+    //
+    // `selectable` gates whether a group needs an upfront checkbox before
+    // Compare. Every tier except same-title is a pool of candidate URLs for
+    // ONE feed -- there's no unrelated-sibling risk, so requiring boxes
+    // checked just to enable Compare was dead friction (reported
+    // 2026-08-10 for pairs specifically, then directly: "Just have the
+    // Compare button compare all instead of having to check them first...
+    // checkboxes are good where there may be non-matches, but for upgrades
+    // it's extra clicks"). Same-title clusters are the one tier that
+    // genuinely can hold a non-match (wsdot.wa.gov + Minecraft Forum
+    // alongside a real tosecdev.org pair, all literally titled "News"), so
+    // that tier alone keeps the pick-a-subset checkboxes.
+    function _renderDedupGroups(groups, selectable) {
+      return groups.map((g, gi) => {
+        const checkboxGate = selectable && g.feeds.length > 2;
+        const groupUrls = g.feeds.map(f => f.feed_url).join('\n');
+        return `<div class="dedup-title-group dedup-compare-group" data-group-index="${gi}" data-group-urls="${_mfEscape(groupUrls)}">` +
+          (g.label ? `<span class="dedup-title-group-title">${_mfEscape(g.label)}</span>` : '') +
+          g.feeds.map(f => {
+            const folderNames = (f.folders || []).map(fo => fo.name).join(', ') || 'Uncategorized';
+            const suggestedTag = f.suggested ? '<span class="dedup-suggested-arrow" title="Suggested keep">→</span>' : '';
+            const checkbox = checkboxGate ? `<input type="checkbox" class="dedup-title-feed-check" value="${_mfEscape(f.feed_url)}">` : '';
+            return `<div class="dedup-pair-row dedup-title-feed-row" data-feed-url="${_mfEscape(f.feed_url)}">` +
+              checkbox + suggestedTag +
+              `<a class="dedup-url" href="${_mfEscape(f.feed_url)}" target="_blank" rel="noopener noreferrer" data-feed-properties-url="${_mfEscape(f.feed_url)}" title="Click to open Feed Properties, middle-click to open the feed">${_mfEscape(f.feed_url)}</a>` +
+              ` <span class="saved-dedup-date">${_mfEscape(folderNames)}</span></div>`;
+          }).join('') +
+          `<div class="dedup-group-actions">` +
+          `<button type="button" class="settings-secondary-btn dedup-title-compare-btn"${checkboxGate ? ' disabled' : ''}>${checkboxGate ? 'Compare selected' : 'Compare'}</button>` +
+          `<button type="button" class="settings-secondary-btn dedup-not-dupe-btn" title="Stop suggesting this group">Not dupes</button>` +
+          `</div>` +
+          `<div class="dedup-title-compare-result" hidden></div>` +
+          `</div>`;
+      }).join('');
     }
 
     document.getElementById('dedup-feeds-btn')?.addEventListener('click', async () => {
@@ -691,165 +732,146 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const queryPairs = data.query_pairs || [];
       const results = document.getElementById('dedup-inline-results');
       const intro = results.querySelector('.dedup-modal-intro');
-      const list = results.querySelector('.dedup-modal-list');
+      const sameSection = results.querySelector('.dedup-same-section');
+      const sameList = document.getElementById('dedup-same-list');
       const crossSection = results.querySelector('.dedup-cross-section');
-      const crossList = results.querySelector('.dedup-cross-list');
+      const crossList = document.getElementById('dedup-cross-list');
       const upgradeSection = results.querySelector('.dedup-upgrade-section');
-      const upgradeList = results.querySelector('.dedup-upgrade-list');
+      const upgradeList = document.getElementById('dedup-upgrade-list');
       const querySection = results.querySelector('.dedup-query-section');
-      const queryList = results.querySelector('.dedup-query-list');
+      const queryList = document.getElementById('dedup-query-list');
       const titleSection = results.querySelector('.dedup-title-section');
-      const titleList = results.querySelector('.dedup-title-list');
-      const okBtn = document.getElementById('dedup-modal-ok');
+      const titleList = document.getElementById('dedup-title-list');
 
       results.hidden = false;
-      const hasAnything = sameFolder.length > 0 || crossFolder.length > 0 || upgradable.length > 0 || queryPairs.length > 0;
+      const hasAnything = sameFolder.length > 0 || crossFolder.length > 0 || upgradable.length > 0 || queryPairs.length > 0 || titleGroups.length > 0;
+      intro.textContent = hasAnything ? '' : 'No duplicate or upgradable feeds found.';
 
-      // Query-differing pairs: unlike every tier above, a query param CAN be
-      // real content (a category/tag feed), so nothing here is ever
-      // pre-checked -- each pair needs an explicit include before "Remove
-      // duplicates" touches it. Renders (and can be acted on) independently
-      // of whether the auto-included tiers found anything.
-      if (queryPairs.length > 0) {
-        querySection.hidden = false;
-        querySection.querySelector('.saved-dedup-section-count').textContent = `(${queryPairs.length})`;
-        queryList.innerHTML = queryPairs.map((d, i) => {
-          const checkboxes = d.all_folders.map(f =>
-            `<label class="dedup-folder-check"><input type="checkbox" name="query_${i}_folder" value="${_mfEscape(f.id)}" checked> ${_mfEscape(f.name)}</label>`
-          ).join('');
-          return `<div class="dedup-query-pair" data-index="${i}" data-keep="${_mfEscape(d.keep)}" data-remove="${_mfEscape(d.remove)}">` +
-            `<label class="dedup-pair-row dedup-query-include"><input type="checkbox" class="dedup-query-check"> Include this pair</label>` +
-            `<div class="dedup-pair">` +
-            `<div class="dedup-pair-row"><span class="dedup-tag keep-tag">keep</span><span class="dedup-url">${_mfEscape(d.keep)}</span></div>` +
-            `<div class="dedup-pair-row"><span class="dedup-tag remove-tag">remove</span><span class="dedup-url">${_mfEscape(d.remove)}</span></div>` +
-            `</div>` +
-            `<div class="dedup-folder-checks">${checkboxes}</div>` +
-            `</div>`;
-        }).join('');
+      // A "suggested keep" bias is only trustworthy when the two candidates
+      // are provably the same bytes (scheme/www-only difference). A format
+      // swap can be a genuine content difference -- reported 2026-08-10:
+      // freac.org's ?type=rss carries summaries only, ?type=atom carries
+      // full text, and the tie-break (shorter string wins) happened to
+      // "suggest" the worse one. `content_identical` from the backend gates
+      // the tag; query-differing and format-upgrade candidates never get one
+      // at all, since by definition their content isn't provably identical.
+      const groupLabel = (folderNames, contentIdentical) =>
+        contentIdentical ? folderNames : `${folderNames}${folderNames ? ' — ' : ''}different format, compare before choosing`;
+
+      // Same-folder: dedupe multiple folder rows for one keep/remove pair
+      // into a single group (a pair can share more than one folder).
+      if (sameFolder.length > 0) {
+        const byPair = new Map();
+        sameFolder.forEach(d => {
+          const key = d.keep + ' ' + d.remove;
+          if (!byPair.has(key)) byPair.set(key, { keep: d.keep, remove: d.remove, folders: [], contentIdentical: d.content_identical });
+          byPair.get(key).folders.push({ id: d.folder_id, name: d.folder_name });
+        });
+        const sameGroups = [...byPair.values()].map(d => ({
+          label: groupLabel(d.folders.map(f => f.name).join(', '), d.contentIdentical),
+          feeds: [
+            { feed_url: d.keep, folders: d.folders, suggested: d.contentIdentical },
+            { feed_url: d.remove, folders: d.folders, suggested: false },
+          ],
+        }));
+        sameSection.hidden = false;
+        sameSection.querySelector('.saved-dedup-section-count').textContent = `(${sameGroups.length})`;
+        sameList.innerHTML = _renderDedupGroups(sameGroups);
       } else {
-        querySection.hidden = true;
+        sameSection.hidden = true;
+        sameList.innerHTML = '';
       }
 
-      // Advisory, so it renders regardless of whether the action tiers found
+      // Cross-folder
+      if (crossFolder.length > 0) {
+        const crossGroups = crossFolder.map(d => ({
+          label: groupLabel('', d.content_identical),
+          feeds: [
+            { feed_url: d.keep, folders: d.keep_folders, suggested: d.content_identical },
+            { feed_url: d.remove, folders: d.remove_folders, suggested: false },
+          ],
+        }));
+        crossSection.hidden = false;
+        crossSection.querySelector('.saved-dedup-section-count').textContent = `(${crossGroups.length})`;
+        crossList.innerHTML = _renderDedupGroups(crossGroups);
+      } else {
+        crossSection.hidden = true;
+        crossList.innerHTML = '';
+      }
+
+      // Query-differing pairs: unlike same/cross-folder, a query param CAN be
+      // real content (a category/tag feed) -- Compare is how you tell the
+      // difference before Combine, same as every other tier now. No
+      // "suggested" bias here either -- this tier exists precisely because
+      // content identity isn't provable from the URL shape.
+      if (queryPairs.length > 0) {
+        const queryGroups = queryPairs.map(d => ({
+          label: '',
+          feeds: [
+            { feed_url: d.keep, folders: d.keep_folders, suggested: false },
+            { feed_url: d.remove, folders: d.remove_folders, suggested: false },
+          ],
+        }));
+        querySection.hidden = false;
+        querySection.querySelector('.saved-dedup-section-count').textContent = `(${queryGroups.length})`;
+        queryList.innerHTML = _renderDedupGroups(queryGroups);
+      } else {
+        querySection.hidden = true;
+        queryList.innerHTML = '';
+      }
+
+      // Advisory, so it renders regardless of whether the other tiers found
       // anything — a title match is neither a duplicate nor an upgrade.
       if (titleGroups.length > 0) {
         titleSection.hidden = false;
         titleSection.querySelector('.saved-dedup-section-count').textContent = `(${titleGroups.length})`;
-        titleList.innerHTML = titleGroups.map((g, gi) =>
-          `<div class="dedup-title-group" data-group-index="${gi}">` +
-          `<span class="dedup-title-group-title">${_mfEscape(g.title)}</span>` +
-          g.feeds.map(f => {
-            const folderNames = f.folders.map(fo => fo.name).join(', ') || 'Uncategorized';
-            return `<div class="dedup-pair-row dedup-title-feed-row">` +
-              `<input type="checkbox" class="dedup-title-feed-check" value="${_mfEscape(f.feed_url)}">` +
-              `<a class="dedup-url" href="#" data-feed-properties-url="${_mfEscape(f.feed_url)}" title="Open Feed Properties">${_mfEscape(f.feed_url)}</a>` +
-              ` <span class="saved-dedup-date">${_mfEscape(folderNames)}</span></div>`;
-          }).join('') +
-          `<button type="button" class="settings-secondary-btn dedup-title-compare-btn" disabled>Compare selected</button>` +
-          `<div class="dedup-title-compare-result" hidden></div>` +
-          `</div>`
-        ).join('');
+        titleList.innerHTML = _renderDedupGroups(titleGroups.map(g => ({ label: g.title, feeds: g.feeds })), true);
       } else {
         titleSection.hidden = true;
+        titleList.innerHTML = '';
       }
 
-      if (!hasAnything) {
-        intro.textContent = 'No duplicate or upgradable feeds found.';
-        list.innerHTML = '';
-        crossSection.hidden = true;
-        upgradeSection.hidden = true;
-        okBtn.hidden = true;
+      // Upgrade candidates: a format-selector URL (?alt=rss, ?type=atom, ...)
+      // isn't reliably worse than its stripped default -- some sites' RSS is
+      // the richer feed of the two, reported 2026-08-10 -- so this is no
+      // longer an auto-apply checklist. Same Compare/Combine group format as
+      // every other tier: current URL, the stripped default (when it isn't
+      // just a bare domain), plus same-family format-selector alternates
+      // (rss2 -> atom, say -- a near-guaranteed-to-exist option on sites
+      // like WordPress, not a guess).
+      if (upgradable.length > 0) {
+        const upgradeGroups = upgradable.map(d => {
+          const feeds = [{ feed_url: d.current, folders: d.folders, suggested: false }];
+          if (d.upgrade_to) feeds.push({ feed_url: d.upgrade_to, folders: d.folders, suggested: false });
+          (d.alternates || []).forEach(u => feeds.push({ feed_url: u, folders: d.folders, suggested: false }));
+          return { label: '', feeds };
+        });
+        upgradeSection.hidden = false;
+        upgradeSection.querySelector('.saved-dedup-section-count').textContent = `(${upgradeGroups.length})`;
+        upgradeList.innerHTML = _renderDedupGroups(upgradeGroups);
       } else {
-        okBtn.hidden = false;
-
-        // Same-folder section
-        if (sameFolder.length > 0) {
-          intro.textContent = `Found ${sameFolder.length} duplicate(s) in the same folder — the slash variant will be removed automatically:`;
-          const byFolder = {};
-          sameFolder.forEach(d => {
-            if (!byFolder[d.folder_id]) byFolder[d.folder_id] = { name: d.folder_name, items: [] };
-            byFolder[d.folder_id].items.push(d);
-          });
-          list.innerHTML = Object.values(byFolder).map(({ name, items }) =>
-            `<div class="dedup-folder-group"><span class="dedup-folder-label">${_mfEscape(name)}</span>` +
-            items.map(d =>
-              `<div class="dedup-pair">` +
-              `<div class="dedup-pair-row"><span class="dedup-tag keep-tag">keep</span><span class="dedup-url">${_mfEscape(d.keep)}</span></div>` +
-              `<div class="dedup-pair-row"><span class="dedup-tag remove-tag">remove</span><span class="dedup-url">${_mfEscape(d.remove)}</span></div>` +
-              `</div>`
-            ).join('') + `</div>`
-          ).join('');
-        } else {
-          intro.textContent = '';
-          list.innerHTML = '';
-        }
-
-        // Cross-folder section
-        if (crossFolder.length > 0) {
-          crossSection.hidden = false;
-          const crossIntro = crossSection.querySelector('.dedup-cross-intro');
-          crossIntro.textContent = sameFolder.length > 0
-            ? `Also found across different folders — choose which folder(s) to keep each feed in:`
-            : `Found ${crossFolder.length} duplicate feed(s) across different folders — choose which folder(s) to keep each feed in:`;
-          crossList.innerHTML = crossFolder.map((d, i) => {
-            const checkboxes = d.all_folders.map(f =>
-              `<label class="dedup-folder-check"><input type="checkbox" name="cross_${i}_folder" value="${_mfEscape(f.id)}" checked> ${_mfEscape(f.name)}</label>`
-            ).join('');
-            return `<div class="dedup-cross-pair" data-index="${i}" data-keep="${_mfEscape(d.keep)}" data-remove="${_mfEscape(d.remove)}">` +
-              `<div class="dedup-pair">` +
-              `<div class="dedup-pair-row"><span class="dedup-tag keep-tag">keep</span><span class="dedup-url">${_mfEscape(d.keep)}</span></div>` +
-              `<div class="dedup-pair-row"><span class="dedup-tag remove-tag">remove</span><span class="dedup-url">${_mfEscape(d.remove)}</span></div>` +
-              `</div>` +
-              `<div class="dedup-folder-checks">${checkboxes}</div>` +
-              `</div>`;
-          }).join('');
-        } else {
-          crossSection.hidden = true;
-        }
-
-        // Upgrade section
-        if (upgradable.length > 0) {
-          upgradeSection.hidden = false;
-          const upgradeIntro = upgradeSection.querySelector('.dedup-upgrade-intro');
-          upgradeIntro.textContent = `Found ${upgradable.length} feed(s) using an RSS format URL — check to upgrade to Atom:`;
-          upgradeList.innerHTML = upgradable.map((d, i) =>
-            `<label class="dedup-upgrade-item"><input type="checkbox" class="dedup-upgrade-check" data-current="${_mfEscape(d.current)}" data-upgrade-to="${_mfEscape(d.upgrade_to)}" checked>` +
-            `<div class="dedup-pair">` +
-            `<div class="dedup-pair-row"><span class="dedup-tag remove-tag">rss</span><span class="dedup-url">${_mfEscape(d.current)}</span></div>` +
-            `<div class="dedup-pair-row"><span class="dedup-tag keep-tag">atom</span><span class="dedup-url">${_mfEscape(d.upgrade_to)}</span></div>` +
-            `</div></label>`
-          ).join('');
-        } else {
-          upgradeSection.hidden = true;
-        }
-
-        // Update OK button label and rescue checkbox visibility
-        const hasDedup = sameFolder.length > 0 || crossFolder.length > 0;
-        const hasUpgrade = upgradable.length > 0;
-        okBtn.textContent = hasDedup && hasUpgrade ? 'Remove duplicates & upgrade' : hasUpgrade ? 'Upgrade feeds' : 'Remove duplicates';
-        const rescueLabel = document.getElementById('dedup-rescue-label');
-        if (rescueLabel) rescueLabel.hidden = !hasDedup;
+        upgradeSection.hidden = true;
+        upgradeList.innerHTML = '';
       }
     });
 
-    // Same-title duplicate groups: Compare inline (reuses /feeds/compare and
-    // the chip rendering the Folders tab's checkbox-compare already uses —
-    // buildCompareChips, defined below), then Combine inline (reuses
-    // /feeds/combine — same curation-migration engine the detected-duplicate
-    // tiers above use, just for a user-picked pair rather than an
-    // auto-detected one). Never auto-run: a same-title pair can legitimately
-    // be two different things, so comparing is a deliberate per-group click.
+    // Every dedup tier (same-folder, cross-folder, query-differing, same-title)
+    // now shares one Compare + Combine UX, originally built for the
+    // same-title tier alone: Compare inline (reuses /feeds/compare and
+    // buildCompareChips), then Combine inline (reuses /feeds/combine, the
+    // same curation-migration engine the auto-detected tiers used to call
+    // directly). A "suggested keep" arrow is advisory only, and nothing is
+    // ever removed without an explicit Compare-then-Combine.
     //
-    // A title match is a much weaker signal than the URL-scheme grouping
-    // above — a generic word like "News" can pull unrelated sites into the
-    // same group alongside a genuine pair (reported: wsdot.wa.gov + Minecraft
-    // Forum + two real tosecdev.org duplicates, all titled literally "News").
-    // Acting on the whole group as one cluster is wrong there, so each
-    // feed gets its own checkbox and Compare/Combine only ever touch the
-    // checked subset (min 2) — never the whole group.
-    document.getElementById('dedup-title-list')?.addEventListener('change', (e) => {
+    // Only same-title groups carry the pick-a-subset checkboxes (see
+    // _renderDedupGroups) -- a same-title cluster can hold a genuine
+    // duplicate sitting beside unrelated feeds that just share a generic
+    // title, so Compare/Combine there only ever touch the checked subset
+    // (min 2). Every other tier has no such non-match risk, so Compare just
+    // runs on the whole group.
+    document.getElementById('dedup-inline-results')?.addEventListener('change', (e) => {
       if (!e.target.classList.contains('dedup-title-feed-check')) return;
-      const group = e.target.closest('.dedup-title-group');
+      const group = e.target.closest('.dedup-compare-group');
       const checked = group.querySelectorAll('.dedup-title-feed-check:checked').length;
       const compareBtn = group.querySelector('.dedup-title-compare-btn');
       compareBtn.disabled = checked < 2;
@@ -860,11 +882,42 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       resultEl.innerHTML = '';
     });
 
-    document.getElementById('dedup-title-list')?.addEventListener('click', async (e) => {
+    document.getElementById('dedup-inline-results')?.addEventListener('click', async (e) => {
+      const notDupeBtn = e.target.closest('.dedup-not-dupe-btn');
+      if (notDupeBtn) {
+        const group = notDupeBtn.closest('.dedup-compare-group');
+        const section = group.closest('.saved-dedup-section');
+        const feedUrls = group.dataset.groupUrls.split('\n');
+        notDupeBtn.disabled = true;
+        try {
+          const r = await fetch('/feeds/duplicates/dismiss', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ feed_urls: feedUrls }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!data.ok) { alert(data.message || 'Could not dismiss.'); notDupeBtn.disabled = false; return; }
+          group.remove();
+          const countEl = section?.querySelector('.saved-dedup-section-count');
+          const remaining = section?.querySelectorAll('.dedup-compare-group').length ?? 0;
+          if (countEl) countEl.textContent = `(${remaining})`;
+          if (remaining === 0 && section) section.hidden = true;
+        } catch (err) {
+          alert('Could not dismiss: ' + err);
+          notDupeBtn.disabled = false;
+        }
+        return;
+      }
+
       const compareBtn = e.target.closest('.dedup-title-compare-btn');
       if (compareBtn) {
-        const group = compareBtn.closest('.dedup-title-group');
-        const urls = [...group.querySelectorAll('.dedup-title-feed-check:checked')].map(cb => cb.value);
+        const group = compareBtn.closest('.dedup-compare-group');
+        const section = group.closest('.saved-dedup-section');
+        const fixed = !group.querySelector('.dedup-title-feed-check');
+        const urls = fixed
+          ? [...group.querySelectorAll('.dedup-title-feed-row')].map(r => r.dataset.feedUrl)
+          : [...group.querySelectorAll('.dedup-title-feed-check:checked')].map(cb => cb.value);
         if (urls.length < 2) return;
         const resultEl = group.querySelector('.dedup-title-compare-result');
         compareBtn.disabled = true;
@@ -886,18 +939,39 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             resultEl.append(row);
           });
 
-          // Merge control: pick a survivor, optionally carry unread, combine.
-          const gi = group.dataset.groupIndex;
+          // A URL Compare couldn't even parse (dead link, wrong content --
+          // e.g. an Upgrade candidate that turned out to be the site's HTML
+          // homepage, reported 2026-08-10) must never be selectable as the
+          // Combine survivor: picking it would repoint the subscription at
+          // something that isn't a feed at all. It can still be a source
+          // (silently dropped, nothing to migrate from a URL nobody's
+          // subscribed to) -- just never the merge target.
+          const validIdx = results.map((res, i) => (res.error ? -1 : i)).filter(i => i >= 0);
+          if (validIdx.length === 0) {
+            const note = document.createElement('p');
+            note.className = 'action-modal-hint';
+            note.textContent = 'None of these returned valid feed data — nothing to combine.';
+            resultEl.append(note);
+            resultEl.hidden = false;
+            compareBtn.hidden = true;
+            return;
+          }
+
+          // Merge control: pick a survivor, optionally carry unread (per
+          // group, not global — each merge decides its own unread handling),
+          // combine.
+          const gi = section.className + '-' + group.dataset.groupIndex;
           const combineWrap = document.createElement('div');
           combineWrap.className = 'sfc-combine-panel dedup-title-combine';
           const list = document.createElement('div');
           list.className = 'sfc-combine-list';
-          urls.forEach((u, i) => {
+          validIdx.forEach((i, n) => {
+            const u = urls[i];
             const lbl = document.createElement('label');
             lbl.className = 'sfc-combine-item';
             const rb = document.createElement('input');
-            rb.type = 'radio'; rb.name = `dedup-title-survivor-${gi}`; rb.value = u;
-            if (i === 0) rb.checked = true;
+            rb.type = 'radio'; rb.name = `dedup-survivor-${gi}`; rb.value = u;
+            if (n === 0) rb.checked = true;
             const sp = document.createElement('span');
             sp.textContent = u; sp.title = u;
             lbl.append(rb, sp); list.append(lbl);
@@ -907,6 +981,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           opts.className = 'sfc-combine-item';
           const unreadCb = document.createElement('input');
           unreadCb.type = 'checkbox';
+          unreadCb.checked = true;
           opts.append(unreadCb, document.createTextNode(' Also carry over unread state'));
           combineWrap.append(opts);
           const actions = document.createElement('div');
@@ -938,18 +1013,14 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
               const data = await cr.json().catch(() => ({}));
               if (!data.ok) { alert(data.message || 'Combine failed.'); go.disabled = false; go.textContent = `Combine ${urls.length} feeds`; return; }
               // Only the merged subset leaves the group — an unchecked sibling
-              // (wsdot + Minecraft Forum, say, both just coincidentally titled
-              // "News" alongside a genuine tosecdev pair) has nothing to do
-              // with this merge and must stay listed.
+              // has nothing to do with this merge and must stay listed.
               const merged = new Set(urls);
               group.querySelectorAll('.dedup-title-feed-row').forEach(row => {
-                const cb = row.querySelector('.dedup-title-feed-check');
-                if (cb && merged.has(cb.value)) row.remove();
+                if (merged.has(row.dataset.feedUrl)) row.remove();
               });
               resultEl.hidden = true;
               resultEl.innerHTML = '';
               const remainingInGroup = group.querySelectorAll('.dedup-title-feed-row').length;
-              const titleSection = document.querySelector('.dedup-title-section');
               if (remainingInGroup < 2) {
                 // Fewer than 2 left means nothing here can be compared/combined
                 // further — drop the whole group rather than leave a single
@@ -959,10 +1030,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
                 compareBtn.disabled = true;
                 compareBtn.textContent = 'Compare selected';
               }
-              const countEl = titleSection?.querySelector('.saved-dedup-section-count');
-              const remaining = document.querySelectorAll('.dedup-title-group').length;
+              const countEl = section?.querySelector('.saved-dedup-section-count');
+              const remaining = section?.querySelectorAll('.dedup-compare-group').length ?? 0;
               if (countEl) countEl.textContent = `(${remaining})`;
-              if (remaining === 0 && titleSection) titleSection.hidden = true;
+              if (remaining === 0 && section) section.hidden = true;
               if (typeof showToastMessage === 'function') showToastMessage(data.message);
             } catch (err) {
               alert('Combine failed: ' + err);
@@ -981,50 +1052,70 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       }
     });
 
-    document.getElementById('dedup-modal-ok')?.addEventListener('click', async () => {
-      const results = document.getElementById('dedup-inline-results');
-      // Collect cross-folder choices
-      const crossChoices = [];
-      for (const pair of results.querySelectorAll('.dedup-cross-pair')) {
-        const keep = pair.dataset.keep;
-        const remove = pair.dataset.remove;
-        const folderIds = [...pair.querySelectorAll('input[type="checkbox"]:checked')].map(cb => parseInt(cb.value));
-        crossChoices.push({ keep, remove, folder_ids: folderIds });
-      }
-      // Query-differing pairs: unlike every other tier, these are never
-      // pre-checked (a query param can be real content, not a duplicate) --
-      // only the ones the user explicitly ticked go in, reusing the exact
-      // same cross_folder_choices shape the backend already handles.
-      for (const pair of results.querySelectorAll('.dedup-query-pair')) {
-        if (!pair.querySelector('.dedup-query-check')?.checked) continue;
-        const keep = pair.dataset.keep;
-        const remove = pair.dataset.remove;
-        const folderIds = [...pair.querySelectorAll('.dedup-folder-checks input[type="checkbox"]:checked')].map(cb => parseInt(cb.value));
-        crossChoices.push({ keep, remove, folder_ids: folderIds });
-      }
-      // Collect upgrade choices (only checked ones)
-      const upgradeChoices = [];
-      for (const cb of results.querySelectorAll('.dedup-upgrade-check:checked')) {
-        upgradeChoices.push({ current: cb.dataset.current, upgrade_to: cb.dataset.upgradeTo });
-      }
-      const rescueUnread = document.getElementById('dedup-rescue-unread')?.checked ?? false;
-      results.hidden = true;
-      const dedupeResp = await fetch('/feeds/deduplicate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cross_folder_choices: crossChoices, upgrade_choices: upgradeChoices, rescue_unread: rescueUnread }),
-      });
-      const dedupeData = await dedupeResp.json();
-      const parts = [];
-      if (dedupeData.count > 0) parts.push(`Removed ${dedupeData.count} duplicate feed(s)`);
-      if (dedupeData.rescued_count > 0) parts.push(`rescued ${dedupeData.rescued_count} unread post(s)`);
-      if (dedupeData.upgraded_count > 0) parts.push(`upgraded ${dedupeData.upgraded_count} feed(s) to Atom`);
-      alert(parts.length ? parts.join(', ') + '.' : 'Nothing to do.');
-      window.location.reload();
-    });
-
     const _mfEscape = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    // Lazy feed names — titled just "News", "Updates", etc, indistinguishable
+    // once several show up together. Suggested renames are domain-derived
+    // guesses, so nothing is pre-applied: each row is edited and applied
+    // individually via the existing /feeds/set-user-title route.
+    document.getElementById('lazy-titles-btn')?.addEventListener('click', async () => {
+      hideOtherUtilityResults('lazy-titles-results');
+      const resp = await fetch('/feeds/lazy-titles');
+      const data = await resp.json();
+      const items = data.lazy_titles || [];
+      const results = document.getElementById('lazy-titles-results');
+      const intro = results.querySelector('.lazy-titles-intro');
+      const list = document.getElementById('lazy-titles-list');
+      results.hidden = false;
+      if (items.length === 0) {
+        intro.textContent = 'No lazy feed names found.';
+        list.innerHTML = '';
+        return;
+      }
+      intro.textContent = `Found ${items.length} feed(s) titled just "News", "Updates", etc — review and edit the suggested name before renaming:`;
+      list.innerHTML = items.map((it, i) => {
+        const folderNames = (it.folders || []).map(f => f.name).join(', ') || 'Uncategorized';
+        return `<div class="dedup-pair-row lazy-title-row" data-index="${i}" data-feed-url="${_mfEscape(it.feed_url)}">` +
+          `<a class="dedup-url" href="#" data-feed-properties-url="${_mfEscape(it.feed_url)}" title="Open Feed Properties">${_mfEscape(it.feed_url)}</a>` +
+          ` <span class="saved-dedup-date">${_mfEscape(folderNames)}</span><br>` +
+          `<span class="dedup-tag remove-tag">${_mfEscape(it.title)}</span>` +
+          `<input type="text" class="feed-prop-title-input lazy-title-input" value="${_mfEscape(it.suggested_title)}">` +
+          `<button type="button" class="settings-secondary-btn lazy-title-rename-btn">Rename</button>` +
+          `</div>`;
+      }).join('');
+    });
+
+    document.getElementById('lazy-titles-list')?.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.lazy-title-rename-btn');
+      if (!btn) return;
+      const row = btn.closest('.lazy-title-row');
+      const input = row.querySelector('.lazy-title-input');
+      const newTitle = input.value.trim();
+      if (!newTitle) return;
+      btn.disabled = true;
+      btn.textContent = 'Renaming…';
+      try {
+        const body = new URLSearchParams();
+        body.set('feed_url', row.dataset.feedUrl);
+        body.set('user_title', newTitle);
+        const r = await fetch('/feeds/set-user-title', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          credentials: 'same-origin', body: body.toString(),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        row.remove();
+        const remaining = document.querySelectorAll('.lazy-title-row').length;
+        const intro = document.querySelector('.lazy-titles-intro');
+        if (remaining === 0 && intro) intro.textContent = 'No lazy feed names left.';
+        if (typeof showToastMessage === 'function') showToastMessage(`Renamed to "${newTitle}".`);
+      } catch (err) {
+        alert('Rename failed: ' + err);
+        btn.disabled = false;
+        btn.textContent = 'Rename';
+      }
+    });
 
     // ── Saved Articles duplicate scan ──────────────────────────────────────
     const SAVED_DEDUP_GROUP_CAP = 200;
@@ -12647,7 +12738,14 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       if (folderAutoBtn) { window.openHighlightsModal?.({ scope: 'folder', scope_id: folderAutoBtn.dataset.folderAutomationId }); return; }
 
       const feedPropsBtn = e.target.closest('[data-feed-properties-url]');
-      if (feedPropsBtn) { openFeedPropertiesModal(feedPropsBtn.dataset.feedPropertiesUrl); return; }
+      if (feedPropsBtn) {
+        // Dupes-list links now carry the real feed URL as href (middle-click
+        // opens the feed itself in a new tab, reported 2026-08-10) -- a plain
+        // left-click must still just open Properties, not also navigate.
+        e.preventDefault();
+        openFeedPropertiesModal(feedPropsBtn.dataset.feedPropertiesUrl);
+        return;
+      }
 
       const feedAutoBtn = e.target.closest('[data-feed-automation-url]');
       if (feedAutoBtn) { window.openHighlightsModal?.({ scope: 'feed', scope_id: feedAutoBtn.dataset.feedAutomationUrl, folder_id: feedAutoBtn.dataset.folderId }); return; }
@@ -13413,7 +13511,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         const opts = document.createElement('label');
         opts.className = 'sfc-combine-item';
         const unreadCb = document.createElement('input');
-        unreadCb.type = 'checkbox'; unreadCb.id = 'sfc-combine-unread';
+        unreadCb.type = 'checkbox'; unreadCb.id = 'sfc-combine-unread'; unreadCb.checked = true;
         opts.append(unreadCb, document.createTextNode(' Also carry over unread state'));
         panel.append(opts);
 

@@ -11,7 +11,7 @@ bottom follows the request path rather than the order things were written.
 [Layering](#layering) · [Reader-first philosophy](#reader-first-philosophy) · [Deployment path](#deployment-path) · [Extension strategy](#extension-strategy) · [Security direction](#security-direction)
 
 **Storage, tenancy and identity**  
-[Multi-user tenancy](#multi-user-tenancy) · [Feed URL normalization](#feed-url-normalization) · [Duplicate entry suppression](#duplicate-entry-suppression) · [Duplicate feeds: the scheme is folded in the comparison, not the URL](#duplicate-feeds-the-scheme-is-folded-in-the-comparison-not-the-url) · [Removing a feed: what goes, and what a surviving capture protects](#removing-a-feed-what-goes-and-what-a-surviving-capture-protects) · [Hard-deleting a single entry (tombstones)](#hard-deleting-a-single-entry-tombstones)
+[Multi-user tenancy](#multi-user-tenancy) · [Feed URL normalization](#feed-url-normalization) · [Duplicate entry suppression](#duplicate-entry-suppression) · [Duplicate feeds: the scheme (and www) is folded in the comparison, not the URL](#duplicate-feeds-the-scheme-and-www-is-folded-in-the-comparison-not-the-url) · [Removing a feed: what goes, and what a surviving capture protects](#removing-a-feed-what-goes-and-what-a-surviving-capture-protects) · [Hard-deleting a single entry (tombstones)](#hard-deleting-a-single-entry-tombstones)
 
 **Interface and view state**  
 [View state model](#view-state-model) · [Page weight: lazy HTML fragments](#page-weight-lazy-html-fragments) · [Adaptive layout model](#adaptive-layout-model) · [Folder tree & the Uncategorized folder](#folder-tree--the-uncategorized-folder) · [Folder Properties counts in SQL, not by hydrating entries](#folder-properties-counts-in-sql-not-by-hydrating-entries) · [Entry sort window (Pub Old / Pub New)](#entry-sort-window-pub-old--pub-new) · [Remembered sort: Feeds and Saved keep their own](#remembered-sort-feeds-and-saved-keep-their-own) · [Async bulk mark-read](#async-bulk-mark-read)
@@ -757,11 +757,11 @@ thumb generation (not needed for a handful of trusted users).
 `normalize_feed_url` (main.py) is applied at add-feed time and in the Duplicate scan (`GET /feeds/duplicates`). It handles:
 
 - Trailing-slash stripping from paths longer than `/`.
-- Format-selector query params (`alt=rss`, `alt=atom`, etc.) that select serialization without changing content — lets the Blogger Atom and RSS URLs of the same feed collapse to one.
+- Format-selector query params (`alt=rss`, `type=atom`, `feed=rss2`, etc. — `_FORMAT_SELECTOR_PARAMS`) whose *value* is also on the allowlist (`_FORMAT_SELECTOR_VALUES = {rss, rss2, atom}`, plus anything prefix-matching `json*` since JSON Feed versioning is a moving target) that select serialization without changing content — lets the Blogger Atom and RSS URLs of the same feed collapse to one. Param name **and** value both have to match — a hypothetical `?type=news` category selector is left alone.
 - ArtStation subdomain rewrites (`username.artstation.com/rss` → `www.artstation.com/username.rss`) to avoid TLS hostname issues with underscore usernames.
 - `_DOMAIN_ALIASES` map — known domain pairs that serve identical content, or renamed domains (`old.reddit.com` → `www.reddit.com`; `tapastic.com` → `tapas.io`). Add new pairs there; the normalization and duplicate-scan logic picks them up automatically.
 
-**Curation migration on consolidation.** When the Duplicate scanner (`POST /feeds/deduplicate`) removes a slash/format-variant feed, `purge_orphaned_feed` first calls `_migrate_curation` to move the removed feed's manual tags and stars onto the surviving feed — matching each curated source entry to a survivor entry by GUID, else normalized link, else synthesizing it into the survivor (`reader.add_entry`) so nothing is lost. This is unconditional (independent of the opt-in "rescue unread" toggle, which only re-flags read/unread state) and mirrors the offline `scripts/reconcile_duplicate_feeds.py --merge` path.
+**Curation migration on consolidation.** Every duplicate-scan tier and the format-Upgrade tier resolve through `POST /feeds/combine` (a user-picked survivor + one or more sources), which calls `purge_orphaned_feed` with `migrate_curation_to` set. That first calls `_migrate_curation` to move the removed feed's manual tags and stars onto the surviving feed — matching each curated source entry to a survivor entry by GUID, else normalized link, else synthesizing it into the survivor (`reader.add_entry`) so nothing is lost. This is unconditional (independent of the opt-in "rescue unread" toggle, which only re-flags read/unread state) and mirrors the offline `scripts/reconcile_duplicate_feeds.py --merge` path. The old bulk `POST /feeds/deduplicate` (auto-apply same-folder pairs, checkbox-picked cross-folder/upgrade choices) was retired 2026-08-10 once every tier moved to `/feeds/combine`'s per-group Compare-then-Combine flow — see below.
 
 **Import-time canonicalization.** `canonical_feed_url` (main.py) composes `normalize_youtube_feed_url` + `normalize_feed_url` and is the single choke point every bulk importer runs each incoming feed URL through *before* it subscribes or keys per-entry tag/star state. This makes a variant URL (old.reddit, `?alt=rss`, trailing slash) attach to an existing subscription instead of spawning a duplicate. It is wired into OPML import, the Inoreader local-file migrator, the shared migration applier `_apply_migration_items` (Miniflux/FreshRSS/Tiny Tiny RSS), the Inoreader JSON upload, and the Inoreader OAuth drip (subscriptions, label, and starred phases). Importers that key both subscription and tagging off `item["feed_url"]` call `_canonicalize_item_feed_urls(items)` once up front so both phases stay in sync. Google Takeout import is exempt: it only applies tags/stars to entries already present in the reader DB (never `add_feed`s), and those URLs are already canonical from the original subscription.
 
@@ -783,26 +783,104 @@ Two mechanisms prevent duplicate articles from accumulating in the reader DB:
 
 These run server-side and affect the underlying DB state, so third-party clients (Capy, etc.) see the clean state after the next sync.
 
-## Duplicate feeds: the scheme is folded in the comparison, not the URL
+## Duplicate feeds: the scheme (and www) is folded in the comparison, not the URL
 
 `get_feed_duplicates` groups subscriptions by `normalize_feed_url` **with the
-scheme stripped**. It has to be stripped somewhere, because `_DOMAIN_ALIASES`
-rewrites a host without touching the scheme: a legacy `http://tapastic.com/…`
+scheme and a leading `www.` stripped** (`_dupe_group_key`). Both have to be
+folded somewhere other than `normalize_feed_url` itself, because some hosts
+really are http-only or www-only and forcing either there would break them —
+the comparison has no such obligation, unlike the stored subscription URL.
+`_DOMAIN_ALIASES` rewrites a host without touching the scheme, which is what
+originally forced the scheme fold: a legacy `http://tapastic.com/…`
 subscription normalized to `http://tapas.io/…` while its live twin was
 `https://…`, so the two never grouped and a dead feed sat beside a working copy
-failing every refresh, unflagged. Two more such pairs were live on the same
-library, already diverged — the Behance one by 47 entries.
+failing every refresh, unflagged. The www fold followed the same shape:
+`deathbulge.com/rss.xml` and `www.deathbulge.com/rss.xml` are the same feed.
 
-It is folded **here rather than in `normalize_feed_url`** because that function
-decides the stored subscription URL, and some hosts really are http-only;
-forcing https there would break them. The comparison has no such obligation.
-
-The survivor is chosen from the variants that are actually subscribed —
+The survivor (`keep`) is chosen from the variants that are actually subscribed —
 preferring `https`, then the already-canonical spelling, then the shortest.
 `keep` used to be the canonical *string*, which is not necessarily one of the
 variants; when it was not, `url_folders.get(keep)` came back empty, so every
 variant looked cross-folder and was offered for removal against a URL nobody was
 subscribed to.
+
+### Five tiers, one Compare-then-Combine UX
+
+`GET /feeds/duplicates` returns five tiers, each rendered in Settings → Feeds
+→ Utilities as its own `<details>` section but sharing one frontend format
+(originally built for the title tier alone, generalized to the rest
+2026-08-10 — `_renderDedupGroups` in `app.js`): a group of candidate feed
+URLs, an inline **Compare** (`GET /feeds/compare`, live-fetches each URL and
+shows format/entry-count/full-text/dates/GUID-type/sample-title), then an
+inline **Combine** (survivor radio + optional "carry over unread state",
+`POST /feeds/combine`). Nothing auto-applies anywhere — every merge is an
+explicit, post-Compare user decision. The bulk `POST /feeds/deduplicate`
+(same-folder auto-apply, checkbox-picked cross-folder/upgrade choices) that
+this replaced is gone.
+
+- **`same_folder` / `cross_folder`** — a `_dupe_group_key` match: same feed,
+  different scheme/www/format-selector. Two feeds, no checkboxes needed
+  (there's only one possible comparison) — Compare is just always available.
+- **`query_pairs`** — same host+path, *different* query, deliberately never
+  auto-folded: a query param can be a real duplicate (a format selector the
+  allowlist doesn't recognize) or genuinely different content (a WordPress
+  category/tag feed). YouTube (`channel_id` differs by design — the Watch
+  folder sync is bidirectional, so two channel ids are never a duplicate) and
+  DeviantArt's `backend.deviantart.com/rss.xml?q=gallery:<user>` (one shared
+  endpoint for the whole site) are excluded entirely as noise sources.
+- **`title_groups`** — same feed *title* across two genuinely different
+  addresses (a Tumblr and a Tapas copy of the same webcomic) — the only tier
+  the URL-scheme grouping can't reach at all, since it needs two different
+  addresses, not variants of one. `GENERIC_TITLE_GROUP_MAX = 5` floors out
+  generic titles ("News" shared by unrelated sites is noise; every genuine
+  match measured at 2–3 feeds). The only tier where a group can legitimately
+  hold a non-match (an unrelated site sharing a generic title alongside a
+  real pair), so it's also the only one that keeps a pick-a-subset checkbox
+  gate before Compare — see `_renderDedupGroups`'s `selectable` flag.
+- **`upgradable`** — a subscribed URL still carrying a format-selector query
+  param. `upgrade_to` is the stripped default (skipped entirely when
+  stripping it would leave nothing but a bare domain — WordPress's
+  root-level `?feed=rss2` is the failure case: the query *is* the whole
+  address there, not decoration on a working default). `alternates` are
+  same-family format-selector swaps (`_format_alternate_urls`: a WordPress
+  `?feed=rss2` subscription also serves `?feed=atom` and `?feed=rss`
+  natively — a real, near-guaranteed-to-exist option, not a guess). Neither
+  candidate is ever assumed better: RSS isn't reliably worse than Atom on
+  every site (some sites' RSS is the richer feed), so nothing here gets a
+  "suggested keep" bias and Compare-then-Combine is mandatory before
+  switching.
+
+**`content_identical` gates the "suggested keep" hint.** `same_folder` and
+`cross_folder` pairs carry a `content_identical` flag (`_pair_is_content_identical`)
+— true only when the two URLs differ by scheme/www alone (provably the same
+bytes). A format-selector swap does *not* get the hint: reported 2026-08-10,
+freac.org's `?type=rss` carries summaries only while `?type=atom` carries full
+text, so the length-based tie-break (`keep`) happened to "suggest" the worse
+one. `query_pairs` and `upgradable` never get the hint at all, since content
+identity isn't provable from the URL shape for either.
+
+**A broken Compare result can't be picked as the Combine survivor.** If
+`/feeds/compare` returns an `error` for a candidate (dead link, unparseable —
+an Upgrade-tier guess turning out to be the site's HTML homepage, say), the
+frontend drops it from the survivor radio list before rendering the Combine
+panel, so a wrong candidate can't repoint a subscription at something that
+isn't a feed. It can still be a Combine *source* (a silent no-op — nothing to
+migrate from a URL nobody's subscribed to).
+
+**Dismissals.** `POST /feeds/duplicates/dismiss` (and the "Not dupes" button
+on every group) records the group's exact feed-URL set in `dedup_dismissed`
+(`_dedup_dismiss_key` — order-independent, sorted-and-joined); `get_feed_duplicates`
+filters every tier against it before returning. `POST /feeds/combine` also
+records a dismissal automatically on every completed call, survivor + all
+sources, regardless of whether anything was actually deleted — load-bearing
+for the Upgrade tier specifically, where picking the already-subscribed
+"current" URL as survivor makes every "source" a candidate nobody was ever
+subscribed to, so the purge loop is a structural no-op and, without the
+auto-dismiss, the next scan re-detects the identical group (reported
+2026-08-10: "I just combined them, then checked again and they are back").
+A dismissal naturally stops matching if the underlying feed set changes later
+(unsubscribed, URL changed) rather than silently hiding some other, unrelated
+group.
 
 ## Removing a feed: what goes, and what a surviving capture protects
 

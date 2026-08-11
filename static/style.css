@@ -3806,8 +3806,15 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
      already white, so this is invisible there, and an image that changed
      appearance when you toggled the theme would be worse than one that never
      does. The colour is a theme variable so it is one line to change or to set
-     back to `transparent`. */
-  background-color: var(--img-backdrop, #fff);
+     back to `transparent`.
+
+     !important because some feeds' markup carries its own inline background
+     (or a wrapping element's CMS style bleeds through) that would otherwise
+     win over this un-flagged rule -- reported 2026-08-10 on a WordPress tab
+     image (basstabs.org) that stayed unbacked despite this rule existing.
+     Mirrors .entry-readability-content img below, which needed the same for
+     the same reason. */
+  background-color: var(--img-backdrop, #fff) !important;
 }
 
 /* Several <img> sharing one container are a row in the source — images are
@@ -5867,7 +5874,9 @@ body[data-keyboard-open="1"] .action-modal-panel {
   font-weight: 600;
   margin-bottom: 0.1rem;
 }
-.dedup-title-compare-btn { margin-top: 0.3rem; align-self: flex-start; }
+.dedup-group-actions { display: flex; gap: 0.4rem; margin-top: 0.3rem; }
+.dedup-title-compare-btn { align-self: flex-start; }
+.dedup-not-dupe-btn { align-self: flex-start; }
 .dedup-title-compare-result { margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.3rem; }
 .dedup-title-compare-row { display: flex; flex-direction: column; gap: 0.1rem; }
 .dedup-title-combine { margin-top: 0.4rem; padding-top: 0.4rem; border-top: 1px dashed var(--line); }
@@ -5888,6 +5897,21 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 .keep-tag { color: var(--muted); }
 .remove-tag { color: var(--danger, #c0392b); }
+.dedup-suggested-arrow {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.lazy-title-row {
+  flex-wrap: wrap;
+  padding: 0.4rem 0;
+  border-bottom: 1px dashed var(--border, #ccc);
+}
+.lazy-title-input {
+  flex: 1;
+  min-width: 12rem;
+}
 .dedup-url {
   font-family: var(--mono, monospace);
   font-size: 0.78rem;

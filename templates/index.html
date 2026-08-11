@@ -2559,6 +2559,7 @@
             <button type="button" id="dedup-feeds-btn" class="settings-secondary-btn" title="Find feeds subscribed more than once under URL variants">Scan for duplicate feeds</button>
             <button type="button" id="saved-dedup-btn" class="settings-secondary-btn" title="Find the same article saved more than once under different URLs">Scan Saved for duplicates</button>
             <button type="button" id="fix-url-titles-btn" class="settings-secondary-btn" title="Find feeds whose title is still a raw URL and re-fetch their metadata">Fix URL titles</button>
+            <button type="button" id="lazy-titles-btn" class="settings-secondary-btn" title="Find feeds titled just &quot;News&quot;, &quot;Updates&quot;, etc. and suggest prefixing the site name">Find lazy feed names</button>
             <button type="button" id="saved-autofile-btn" class="settings-secondary-btn" title="File unfiled saved articles onto the subscribed feed they came from">File saved articles</button>
             <button type="button" id="unstar-tagged-btn" class="settings-secondary-btn" title="Find starred articles that also carry a tag — the tag already keeps them, so the star is redundant">Unstar tagged articles</button>
             <button type="button" id="archive-old-btn" class="settings-secondary-btn" title="Clear the Saved Inbox of stars you are plainly not getting to — archives them, keeping tags and the offline copy">Archive old stars</button>
@@ -2568,33 +2569,35 @@
           </div>
           <div id="dedup-inline-results" hidden>
             <p class="action-modal-label dedup-modal-intro"></p>
-            <div class="dedup-modal-list"></div>
-            <div class="dedup-cross-section" hidden>
-              <p class="action-modal-label dedup-cross-intro"></p>
-              <div class="dedup-cross-list"></div>
-            </div>
-            <div class="dedup-upgrade-section" hidden>
-              <p class="action-modal-label dedup-upgrade-intro"></p>
-              <p class="action-modal-hint dedup-upgrade-hint">Read history will reset for upgraded feeds — existing entries will reappear as unread after the next refresh.</p>
-              <div class="dedup-upgrade-list"></div>
-            </div>
+            <details class="saved-dedup-section dedup-same-section" open hidden>
+              <summary>Same folder <span class="saved-dedup-section-count"></span></summary>
+              <p class="action-modal-hint">Nothing is pre-selected — Compare before combining. Click a feed to open its Properties.</p>
+              <div id="dedup-same-list" class="dedup-title-list"></div>
+            </details>
+            <details class="saved-dedup-section dedup-cross-section" open hidden>
+              <summary>Different folders <span class="saved-dedup-section-count"></span></summary>
+              <p class="action-modal-hint">Nothing is pre-selected — Compare before combining. Click a feed to open its Properties.</p>
+              <div id="dedup-cross-list" class="dedup-title-list"></div>
+            </details>
+            <details class="saved-dedup-section dedup-upgrade-section" open hidden>
+              <summary>Format upgrade <span class="saved-dedup-section-count"></span></summary>
+              <p class="action-modal-hint">A format-selector URL (?alt=rss, ?type=atom, ...) isn't always worse than its default — compare before switching. Same-family alternates (e.g. atom for a WordPress ?feed=rss2 subscription) are included too.</p>
+              <div id="dedup-upgrade-list" class="dedup-title-list"></div>
+            </details>
             <details class="saved-dedup-section dedup-query-section" open hidden>
               <summary>Same address, different query <span class="saved-dedup-section-count"></span></summary>
-              <p class="action-modal-hint">A query param can be a real duplicate (format selector) or genuinely different content (a category/tag feed) — nothing here is pre-checked. Check the ones you want removed, then use "Remove duplicates" below.</p>
-              <div id="dedup-query-list" class="dedup-query-list"></div>
+              <p class="action-modal-hint">A query param can be a real duplicate (format selector) or genuinely different content (a category/tag feed) — nothing here is pre-selected. Compare before combining.</p>
+              <div id="dedup-query-list" class="dedup-title-list"></div>
             </details>
             <details class="saved-dedup-section dedup-title-section" open hidden>
               <summary>Same title, different feed <span class="saved-dedup-section-count"></span></summary>
               <p class="action-modal-hint">Review by hand — a same-title pair can legitimately be a site's blog and its own podcast, so nothing here is ever auto-applied. Click a feed to open its Properties.</p>
               <div id="dedup-title-list" class="dedup-title-list"></div>
             </details>
-            <div class="dedup-inline-actions">
-              <label id="dedup-rescue-label" class="dedup-rescue-label" hidden>
-                <input type="checkbox" id="dedup-rescue-unread" checked>
-                Rescue unread posts — mark entries in the surviving feed as unread if the removed feed had them unread
-              </label>
-              <button type="button" id="dedup-modal-ok" class="danger" hidden>Remove duplicates</button>
-            </div>
+          </div>
+          <div id="lazy-titles-results" hidden>
+            <p class="action-modal-label lazy-titles-intro"></p>
+            <div id="lazy-titles-list" class="lazy-titles-list"></div>
           </div>
           <div id="saved-dedup-results" hidden>
             <p class="action-modal-label saved-dedup-intro"></p>

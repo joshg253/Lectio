@@ -11,6 +11,16 @@ measurement/investigation jobs, then scheduled or genuinely low-urgency
 work, then the two standing watch-lists, then the one big multi-session
 project last.
 
+### "Not dupes" dismissal — no un-dismiss UI yet
+
+Shipped 2026-08-10: `POST /feeds/duplicates/dismiss` records a group's exact
+feed-URL set in `dedup_dismissed`, and every completed `/feeds/combine` also
+auto-dismisses (survivor + sources), so a group never silently reappears
+after a real decision. There is deliberately no surface to *view or undo* a
+dismissal — a settings row listing dismissed groups with an un-dismiss button
+would be the natural follow-up if a wrong dismissal ever needs clawing back.
+Not built since it wasn't asked for yet.
+
 ### CodeQL board — watch-note
 
 Board is at zero open alerts as of 2026-08-09 (PR #190 closed out the last 5:
@@ -23,44 +33,6 @@ modeling `html_sanitize.sanitize_html` / `sanitize_inline_title` as barriers wou
 end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, and
 excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 `py/full-ssrf` was.
-
-### Saved dedup workflow — repeat-session polish
-
-The correctness and safety work is done (2026-07-21) and **the scan currently
-returns nothing: 0 confirmed, 0 possible.** What is left is cosmetic except for
-one item:
-
-- **"Not duplicates"** — persistent per-pair suppression so a rejected group
-  stops reappearing. Needs a new meta-DB table, so it also needs the startup
-  per-user migration or existing tenants 500. **Demoted:** inline title editing
-  dissolves *title*-matched false positives outright (correcting the title
-  removes the only signal binding the group), so build this when a **body**-
-  matched false positive actually shows up — that is the case a title edit
-  cannot fix.
-- **Red 404 status**, **collapsible Confirmed/Possible sections**, **resizable
-  dialog** — cheap, all in the same dialog, do them in one pass.
-
-### Find duplicate feeds by title — 32 groups, 72 feeds
-
-The scheme-insensitive grouping shipped 2026-08-08 catches URL variants of one
-address. It cannot catch **the same publication subscribed under two different
-addresses**, which is the case that actually recurs: two Webtoons `title_no`
-values for one comic, a Tumblr and a Tapas copy of Cryptid Club. The entry-level
-scans cannot reach it either: the two Sarah's Scribbles Webtoons feeds shared
-**zero** titles and **zero** links, because the second only ever had one episode
-and it was not in the other's window. Measured across 2,886 feeds, feed **title**
-is the only signal that finds them:
-
-| signal | groups | feeds | verdict |
-|---|---:|---:|---|
-| same host + path, differing query | 10 | 740 | useless — nearly all YouTube `videos.xml?channel_id=…` |
-| **same feed title** | **32** | **72** | a real, reviewable list |
-
-Mostly genuine: `sarah's scribbles ×3`, `cryptid club ×2`, `fantasyanime ×3`,
-`nine inch nails ×3`, plus 15 same-host pairs. Needs a generic-title floor —
-`news ×7` is seven unrelated sites — and it stays advisory, because a same-title
-pair can legitimately be a site's blog and its podcast. Nothing pre-checked, per
-the usual rule. A third tier in the Dupes tab.
 
 ### "Filter this view" — ready to build (decision confirmed 2026-08-09)
 

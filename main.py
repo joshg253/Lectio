@@ -3337,6 +3337,20 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Duplicate-scan groups the user has explicitly said aren't dupes
+        # (reported 2026-08-10: "Need a way to mark as Not Dupes, don't
+        # suggest"). Keyed by the exact set of feed URLs shown in the group
+        # at dismiss time -- if any of those feeds later drops out of the
+        # scan (unsubscribed, url changed), the dismissal naturally stops
+        # matching rather than silently hiding some other, unrelated group.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dedup_dismissed (
+                dismiss_key TEXT PRIMARY KEY,
+                dismissed_at TEXT NOT NULL
+            )
+            """
+        )
         # The read-later "done" axis, deliberately its own table rather than a
         # column on saved_entries. A saved_entries row *is* the star, and the
         # star is the TODO axis: "I still have to decide what to do with this."
@@ -16162,6 +16176,66 @@ def _is_format_selector_value(value: str) -> bool:
     return value in _FORMAT_SELECTOR_VALUES or value.startswith("json")
 
 
+def _format_alternate_urls(url: str) -> list[str]:
+    """Same-family format-selector alternates -- a WordPress ?feed=rss2
+    subscription also serves ?feed=atom and ?feed=rss natively (core
+    WordPress behavior, not a guess: these are exactly the values
+    _FORMAT_SELECTOR_VALUES already treats as safe to fold). Reported
+    2026-08-10: this used to guess at a JSON Feed URL instead, which came
+    back wrong twice in a row live (404, then 500) -- a same-family swap
+    within the enumerated rss/rss2/atom set is a far stronger prior than
+    guessing at json support, which most sites don't have at all.
+
+    Only fires when the URL carries exactly one recognized format-selector
+    param -- two or more is ambiguous about which one to swap, so nothing is
+    offered rather than guessing wrong. Still just a Compare *candidate*:
+    'exists' isn't the same as 'better', so nothing here is auto-applied."""
+    parsed = urlparse(url)
+    if not parsed.query:
+        return []
+    pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    matches = [
+        i for i, (k, v) in enumerate(pairs)
+        if k in _FORMAT_SELECTOR_PARAMS and v.lower() in _FORMAT_SELECTOR_VALUES
+    ]
+    if len(matches) != 1:
+        return []
+    idx = matches[0]
+    key, cur_val = pairs[idx]
+    alternates = []
+    for val in sorted(_FORMAT_SELECTOR_VALUES):
+        if val == cur_val.lower():
+            continue
+        new_pairs = list(pairs)
+        new_pairs[idx] = (key, val)
+        alternates.append(parsed._replace(query=urlencode(new_pairs)).geturl())
+    return alternates
+
+
+def _pair_is_content_identical(keep: str, remove: str) -> bool:
+    """True when *keep* and *remove* differ only by scheme and/or a leading
+    www. -- genuinely the same bytes, safe to suggest a keeper for. False
+    when a recognized format-selector query value is the (or an) actual
+    difference -- reported 2026-08-10: freac.org's ?type=rss carries
+    summaries only while ?type=atom carries full text, so a format swap can
+    be a real content difference, and get_feed_duplicates' same_folder/
+    cross_folder tiers must never silently suggest one over the other there.
+    """
+    pk, pr = urlparse(keep), urlparse(remove)
+    hk = pk.netloc.lower()
+    hr = pr.netloc.lower()
+    hk = hk[4:] if hk.startswith("www.") else hk
+    hr = hr[4:] if hr.startswith("www.") else hr
+    return hk == hr and pk.path.rstrip("/") == pr.path.rstrip("/") and pk.query == pr.query
+
+
+def _dedup_dismiss_key(urls: list[str]) -> str:
+    """Canonical key for a duplicate-scan dismissal: the exact set of feed
+    URLs shown in the group, order-independent. \\x1f can't appear in a URL,
+    so it's a safe join separator."""
+    return "\x1f".join(sorted(set(urls)))
+
+
 _DOMAIN_ALIASES: dict[str, str] = {
     # old.reddit.com and www.reddit.com serve identical RSS content
     "old.reddit.com": "www.reddit.com",
@@ -21912,6 +21986,8 @@ def _compare_one_feed(url: str) -> dict:
                     except Exception:
                         latest = raw[:10]
             sample_title = next((i["title"] for i in items if i.get("title")), None)
+            if sample_title:
+                sample_title = html.unescape(sample_title)
             return {"url": url, "format": "JSON Feed", "title": data.get("title"),
                     "entry_count": len(items), "image_count": image_count,
                     "full_text": full_text_count > len(items) // 2 if items else False,
@@ -21972,7 +22048,16 @@ def _compare_one_feed(url: str) -> dict:
             except Exception:
                 pass
 
+    # Some feed generators double-encode entities in titles (WordPress's
+    # wptexturize output making "Ocean's Dream" -> "Ocean&#8217;s Dream", then
+    # the feed's own XML/HTML escaping turning that & into &amp; -- so the
+    # XML parser's one pass of entity decoding leaves the literal text
+    # "&#8217;s Dream" visible). Reported 2026-08-10 in the Compare picker.
+    # A second unescape pass fixes the common case and is a no-op on an
+    # already-clean title.
     sample_title = next((e.get("title") for e in entries if e.get("title")), None)
+    if sample_title:
+        sample_title = html.unescape(sample_title)
 
     return {"url": url, "format": fmt, "title": parsed.feed.get("title"),
             "entry_count": len(entries), "image_count": image_count,
@@ -22462,6 +22547,117 @@ def fix_url_titles():
             name="fix-url-titles",
         ).start()
     return JSONResponse({"queued": len(stale_urls)})
+
+
+# Generic, lazy feed titles -- "News", "Updates", etc -- that tell you
+# nothing about which site they came from once several show up side by side
+# in a folder or the unread list. Reported 2026-08-10. Deliberately a small,
+# exact-match denylist rather than a length heuristic: a short but
+# meaningful title ("Kotaku", "XKCD") must never get flagged.
+_LAZY_TITLE_WORDS = {
+    "news", "update", "updates", "blog", "feed", "feeds", "rss",
+    "article", "articles", "post", "posts", "latest", "home", "newsletter",
+}
+
+
+_FEEDBURNER_HOSTS = {"feedburner.com", "feeds.feedburner.com", "feeds2.feedburner.com"}
+
+
+def _site_name_from_feed_url(url: str) -> str:
+    """Guess a human display name for a feed's site from its URL.
+
+    Strips www. and the TLD (best-effort, including two-label ccTLDs like
+    .co.uk), then title-cases the remaining hyphen/underscore-separated
+    labels. Good enough for a rename *suggestion* a human reviews and can
+    edit -- not meant to be DNS-exact.
+
+    FeedBurner is a proxy: every burned feed shares its host regardless of
+    the actual site, so a domain-based guess is useless there ("Feedburner"
+    for everything, reported 2026-08-10). Falls back to the URL's last path
+    segment instead -- FeedBurner's feed slug is normally the site/show name
+    (feeds.feedburner.com/concept2 -> "Concept2").
+    """
+    parsed = urlparse(url)
+    host = parsed.netloc.split("@")[-1].split(":")[0].lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host in _FEEDBURNER_HOSTS:
+        path_parts = [p for p in parsed.path.split("/") if p]
+        if path_parts:
+            core = path_parts[-1]
+            words = re.split(r"[-_]+", core)
+            return " ".join(w.capitalize() for w in words if w) or host
+        return host
+    labels = [lbl for lbl in host.split(".") if lbl]
+    if len(labels) >= 3 and labels[-2] in {"co", "com", "org", "net", "gov", "ac"}:
+        core = labels[-3]
+    elif len(labels) >= 2:
+        core = labels[-2]
+    else:
+        core = labels[0] if labels else host
+    words = re.split(r"[-_]+", core)
+    return " ".join(w.capitalize() for w in words if w) or host
+
+
+_SUBTITLE_SEPARATORS = (" - ", " – ", " — ", ": ", " | ")
+
+
+def _site_name_from_subtitle(subtitle: str) -> str | None:
+    """A feed's own <subtitle> is a human-authored site description, so it
+    beats guessing from the URL when present -- reported 2026-08-10: TOSEC's
+    feed carries subtitle "TOSEC - The Old School Emulation Center" while its
+    domain (tosecdev.org) guesses nothing useful.
+
+    Most subtitles pair a short name with a tagline via a separator ("Name -
+    Tagline", "Name: Tagline") -- take just the name half. A subtitle with no
+    separator is used whole if short enough to plausibly be a name rather
+    than a full sentence; longer ones are too likely to be a description, so
+    the caller falls back to the URL-based guess instead.
+    """
+    subtitle = subtitle.strip()
+    if not subtitle:
+        return None
+    for sep in _SUBTITLE_SEPARATORS:
+        if sep in subtitle:
+            head = subtitle.split(sep, 1)[0].strip()
+            if head:
+                return head
+    return subtitle if len(subtitle) <= 40 else None
+
+
+@app.get("/feeds/lazy-titles")
+def get_lazy_titles():
+    """Find feeds whose title is a generic word (News, Updates, ...) and
+    suggest prefixing the site's name -- from the feed's own <subtitle> when
+    it has one, else guessed from the domain."""
+    with get_meta_connection() as conn:
+        rows = conn.execute(
+            "SELECT ff.folder_id, ff.feed_url, f.name AS folder_name"
+            " FROM folder_feeds ff JOIN folders f ON f.id = ff.folder_id"
+        ).fetchall()
+    url_folders: dict[str, list[dict]] = {}
+    for folder_id, feed_url, folder_name in rows:
+        url_folders.setdefault(feed_url, []).append({"id": folder_id, "name": folder_name})
+
+    results: list[dict] = []
+    with get_reader() as reader:
+        for f in reader.get_feeds():
+            title = str(f.user_title or f.resolved_title or f.title or "").strip()
+            if title.casefold() not in _LAZY_TITLE_WORDS:
+                continue
+            url = str(f.url)
+            site_name = (
+                (f.subtitle and _site_name_from_subtitle(str(f.subtitle)))
+                or _site_name_from_feed_url(url)
+            )
+            results.append({
+                "feed_url": url,
+                "title": title,
+                "suggested_title": f"{site_name} - {title}" if site_name else title,
+                "folders": url_folders.get(url, []),
+            })
+    results.sort(key=lambda r: r["title"].casefold())
+    return JSONResponse({"lazy_titles": results})
 
 
 @app.get("/folders/properties")
@@ -26992,6 +27188,32 @@ def combine_feeds_route(
     try:
         with get_reader() as reader:
             with get_meta_connection() as conn:
+                # The survivor is usually already a subscribed, foldered feed
+                # (every dedup tier picks a keep/remove pair from existing
+                # subscriptions) -- but a format-upgrade candidate (Compare's
+                # "suggested keep" for the Upgrade tier) is a brand-new URL
+                # nobody has subscribed to yet. Without this it would land
+                # subscribed-but-folderless (invisible in the tree) once its
+                # sources are purged below.
+                already_placed = conn.execute(
+                    "SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (survivor_url,)
+                ).fetchone()
+                if not already_placed:
+                    folder_ids: set[int] = set()
+                    for src in sources:
+                        folder_ids.update(
+                            int(r[0]) for r in conn.execute(
+                                "SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (src,)
+                            )
+                        )
+                    if folder_ids:
+                        reader.add_feed(survivor_url, exist_ok=True)
+                        for fid in folder_ids:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                                (fid, survivor_url),
+                            )
+                        conn.commit()
                 for src in sources:
                     conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (src,))
                     conn.commit()
@@ -27005,6 +27227,21 @@ def combine_feeds_route(
     except Exception as exc:  # noqa: BLE001
         LOGGER.exception("[combine] failed combining into %s", survivor_url)
         return JSONResponse({"ok": False, "message": "Combine failed — see server logs."}, status_code=500)
+
+    # A completed Combine is the user's explicit judgment on this exact set
+    # of URLs, so it must never be re-suggested -- even when nothing was
+    # actually deleted. Reported 2026-08-10: picking the already-subscribed
+    # "current" URL as survivor in the Upgrade tier (deciding it's fine as
+    # is) makes every "source" a candidate nobody was ever subscribed to, so
+    # the loop above is a structural no-op -- current's format-selector URL
+    # is untouched, and the next scan re-detects the identical group,
+    # looking exactly like "I combined it and it came back."
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO dedup_dismissed (dismiss_key, dismissed_at) VALUES (?, ?)",
+            (_dedup_dismiss_key([survivor_url] + sources), datetime.now().isoformat()),
+        )
+        conn.commit()
 
     return JSONResponse({
         "ok": True,
@@ -27077,6 +27314,8 @@ def get_feed_duplicates():
             shared = keep_folder_ids & remove_folder_ids
             only_in_remove = remove_folder_ids - keep_folder_ids
 
+            content_identical = _pair_is_content_identical(keep, remove)
+
             # Same-folder entries: both URLs exist in this folder → auto-fix.
             for fid, fname in url_folders.get(remove, []):
                 if fid in keep_folder_ids:
@@ -27085,6 +27324,7 @@ def get_feed_duplicates():
                         "folder_name": fname,
                         "keep": keep,
                         "remove": remove,
+                        "content_identical": content_identical,
                     })
 
             # Cross-folder entries: remove URL is in folders the keep URL is not → user picks.
@@ -27099,23 +27339,48 @@ def get_feed_duplicates():
                         [{"id": fid, "name": fname} for fid, fname in all_folders.items()],
                         key=lambda x: x["name"],
                     ),
+                    "content_identical": content_identical,
                 })
 
     # Upgradable: URL carries a format-selector query param (e.g. ?alt=rss)
-    # whose canonical form is not already subscribed anywhere.
+    # whose canonical form is not already subscribed anywhere. Deliberately
+    # advisory, not auto-applied: reported 2026-08-10, RSS-vs-Atom isn't
+    # universally decided in Atom's favor -- some sites' RSS output is the
+    # richer of the two. `alternates` are same-family format-selector swaps
+    # (rss2 -> atom, say) -- a real, near-guaranteed-to-exist option on sites
+    # like WordPress, not a guess. Still never verified at scan time (that's
+    # what Compare is for): a wrong candidate just shows an error chip and,
+    # since 2026-08-10, can no longer even be picked as the merge survivor.
     # Trailing-slash-only differences are intentionally excluded — those are
     # handled by the same/cross-folder dedup logic above.
     upgradable: list[dict] = []
     for url, folders in url_folders.items():
         canonical = normalize_feed_url(url)
-        if canonical == url or canonical in url_folders:
+        alternates = [u for u in _format_alternate_urls(url) if u not in url_folders]
+        if (canonical == url or canonical in url_folders) and not alternates:
             continue
-        # Skip if only the path changed (trailing slash stripped) — query is unchanged.
-        if urlparse(url).query == urlparse(canonical).query:
+        # Skip the stripped default if it changed nothing but the path
+        # (trailing slash) — that's the same/cross-folder tier's job. Still
+        # keep any real alternates found above.
+        offer_canonical = canonical != url and canonical not in url_folders and (
+            urlparse(url).query != urlparse(canonical).query
+        )
+        # A stripped format-selector has to leave something feed-shaped
+        # behind. WordPress's root-level ?feed=rss2 is the failure case
+        # (reported 2026-08-10, "seeing some that are bare domains"):
+        # stripping it leaves nothing but the bare domain, which serves the
+        # HTML homepage, not a feed -- the query was the whole address, not
+        # decoration on top of one, so there's no "default" to fall back to.
+        if offer_canonical:
+            canon_parsed = urlparse(canonical)
+            if not canon_parsed.query and canon_parsed.path in ("", "/"):
+                offer_canonical = False
+        if not offer_canonical and not alternates:
             continue
         upgradable.append({
             "current": url,
-            "upgrade_to": canonical,
+            "upgrade_to": canonical if offer_canonical else None,
+            "alternates": alternates,
             "folders": [{"id": fid, "name": fname} for fid, fname in folders],
         })
 
@@ -27221,11 +27486,51 @@ def get_feed_duplicates():
                 ),
             })
 
+    # Drop any group/pair the user has explicitly dismissed as "not a dupe"
+    # (reported 2026-08-10). Matched by the exact set of feed URLs shown at
+    # dismiss time -- see _dedup_dismiss_key and ensure_meta_schema's
+    # dedup_dismissed table.
+    with get_meta_connection() as conn:
+        dismissed = {r[0] for r in conn.execute("SELECT dismiss_key FROM dedup_dismissed")}
+    if dismissed:
+        same_folder = [d for d in same_folder if _dedup_dismiss_key([d["keep"], d["remove"]]) not in dismissed]
+        cross_folder = [d for d in cross_folder if _dedup_dismiss_key([d["keep"], d["remove"]]) not in dismissed]
+        query_pairs = [d for d in query_pairs if _dedup_dismiss_key([d["keep"], d["remove"]]) not in dismissed]
+        title_groups = [
+            g for g in title_groups
+            if _dedup_dismiss_key([f["feed_url"] for f in g["feeds"]]) not in dismissed
+        ]
+        upgradable = [
+            d for d in upgradable
+            if _dedup_dismiss_key(
+                [d["current"]] + ([d["upgrade_to"]] if d.get("upgrade_to") else []) + list(d.get("alternates") or [])
+            ) not in dismissed
+        ]
+
     return JSONResponse({
         "same_folder": same_folder, "cross_folder": cross_folder,
         "upgradable": upgradable, "title_groups": title_groups,
         "query_pairs": query_pairs,
     })
+
+
+@app.post("/feeds/duplicates/dismiss")
+async def dismiss_feed_duplicate(request: Request):
+    """Mark a duplicate-scan group as "not a dupe" so it stops being
+    suggested. Body (JSON): {"feed_urls": [...]} -- the exact set of feed
+    URLs shown in the group being dismissed."""
+    body = await request.json()
+    urls = [str(u).strip() for u in body.get("feed_urls", []) if str(u).strip()]
+    if len(urls) < 2:
+        return JSONResponse({"ok": False, "message": "Need at least 2 feed URLs."}, status_code=400)
+    key = _dedup_dismiss_key(urls)
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO dedup_dismissed (dismiss_key, dismissed_at) VALUES (?, ?)",
+            (key, datetime.now().isoformat()),
+        )
+        conn.commit()
+    return JSONResponse({"ok": True})
 
 
 def _rescue_unread_entries(reader, remove_url: str, keep_url: str) -> int:
@@ -27264,130 +27569,12 @@ def _rescue_unread_entries(reader, remove_url: str, keep_url: str) -> int:
     return rescued
 
 
-@app.post("/feeds/deduplicate")
-async def deduplicate_feeds(request: Request):
-    """Remove slash-duplicate feeds and optionally upgrade format-selector URLs.
-
-    Body (JSON):
-      cross_folder_choices: list of {keep, remove, folder_ids} — user-selected folder assignments.
-      upgrade_choices: list of {current, upgrade_to} — feeds to switch from RSS to Atom URL.
-      rescue_unread: bool — if true, mark read entries in surviving feed as unread
-                     when the removed feed had them unread (default false).
-    """
-    body = await request.json()
-    cross_choices: list[dict] = body.get("cross_folder_choices", [])
-    upgrade_choices: list[dict] = body.get("upgrade_choices", [])
-    rescue_unread: bool = bool(body.get("rescue_unread", False))
-
-    data = get_feed_duplicates()
-    import json as _json
-    dup_data = _json.loads(data.body)
-    same = dup_data["same_folder"]
-
-    removed: list[dict] = []
-    rescued_count = 0
-
-    # Same-folder: auto-remove slash variant from the shared folder.
-    for dup in same:
-        feed_url = dup["remove"]
-        keep_url = dup["keep"]
-        folder_id = dup["folder_id"]
-        with get_meta_connection() as conn:
-            conn.execute(
-                "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
-                (folder_id, feed_url),
-            )
-            still_used = conn.execute(
-                "SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (feed_url,)
-            ).fetchone()
-        if not still_used:
-            with get_reader() as reader:
-                with get_meta_connection() as conn:
-                    rescued_count += purge_orphaned_feed(
-                        reader, conn, feed_url,
-                        archive_pending=False,
-                        rescue_to=keep_url if rescue_unread else None,
-                        migrate_curation_to=keep_url,
-                    )
-        removed.append({"removed": feed_url, "kept": keep_url})
-        LOGGER.info("[deduplicate] same-folder: removed %s from folder %d", feed_url, folder_id)
-
-    # Cross-folder: apply user's folder choices.
-    for choice in cross_choices:
-        keep = choice["keep"]
-        remove = choice["remove"]
-        target_folder_ids: list[int] = choice.get("folder_ids", [])
-        # Remove the slash variant from all its folders.
-        with get_meta_connection() as conn:
-            conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (remove,))
-            still_used = conn.execute(
-                "SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (remove,)
-            ).fetchone()
-        if not still_used:
-            with get_reader() as reader:
-                with get_meta_connection() as conn:
-                    rescued_count += purge_orphaned_feed(
-                        reader, conn, remove,
-                        archive_pending=False,
-                        rescue_to=keep if rescue_unread else None,
-                        migrate_curation_to=keep,
-                    )
-        # Ensure the canonical URL is in exactly the selected folders. Clear any
-        # existing memberships first so the survivor doesn't linger in folders
-        # the user didn't choose (which caused feeds to drift across folders).
-        with get_reader() as reader:
-            reader.add_feed(keep, exist_ok=True)
-        with get_meta_connection() as conn:
-            conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (keep,))
-            for fid in target_folder_ids:
-                conn.execute(
-                    "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
-                    (fid, keep),
-                )
-        removed.append({"removed": remove, "kept": keep, "folders": target_folder_ids})
-        LOGGER.info("[deduplicate] cross-folder: removed %s, kept %s in folders %s", remove, keep, target_folder_ids)
-
-    # Format upgrades: replace the RSS-variant URL with its Atom canonical in-place.
-    upgraded: list[dict] = []
-    for choice in upgrade_choices:
-        current = choice["current"]
-        upgrade_to = choice["upgrade_to"]
-        with get_meta_connection() as conn:
-            folder_ids = [r[0] for r in conn.execute(
-                "SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (current,)
-            ).fetchall()]
-        # Replace the RSS variant with its Atom canonical in exactly the same
-        # folders. Clear any pre-existing memberships for the canonical first so
-        # it doesn't end up in folders beyond the ones it's replacing.
-        with get_reader() as reader:
-            reader.add_feed(upgrade_to, exist_ok=True)
-        with get_meta_connection() as conn:
-            conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (upgrade_to,))
-            for fid in folder_ids:
-                conn.execute(
-                    "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
-                    (fid, upgrade_to),
-                )
-        # Remove the RSS variant from all folders; delete if no longer referenced.
-        with get_meta_connection() as conn:
-            conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (current,))
-            still_used = conn.execute(
-                "SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (current,)
-            ).fetchone()
-        if not still_used:
-            with get_reader() as reader:
-                with get_meta_connection() as conn:
-                    purge_orphaned_feed(
-                        reader, conn, current,
-                        archive_pending=False,
-                        rescue_to=upgrade_to,
-                        migrate_curation_to=upgrade_to,
-                    )
-        upgraded.append({"from": current, "to": upgrade_to})
-        LOGGER.info("[deduplicate] upgraded %s → %s", current, upgrade_to)
-
-    invalidate_meta_structure_cache()
-    return JSONResponse({"removed": removed, "count": len(removed), "upgraded": upgraded, "upgraded_count": len(upgraded), "rescued_count": rescued_count})
+# /feeds/deduplicate (bulk same_folder/cross_folder/upgrade auto-apply) was
+# retired 2026-08-10: every duplicate-scan tier now runs through the same
+# per-group Compare-then-/feeds/combine flow (see dedup-inline-results in
+# app.js), so nothing calls this anymore. Its bulk apply auto-processed every
+# same_folder pair unconditionally regardless of what the UI showed selected
+# -- a landmine now that Compare-before-merge is the rule for every tier.
 
 
 # ── Saved Articles duplicate scan ─────────────────────────────────────────────
