@@ -1277,11 +1277,38 @@ class LeadImageService:
             cached = self._load_cached_url_from_db(feed_url, entry_id)
         if not cached:
             return None
+        # A site may want a *different crop* in the list than in the article: a
+        # webcomic's article image is the whole strip, which is unreadable at
+        # thumbnail size, while a single panel reads perfectly. Asked before the
+        # bypass check because a plugin offering a thumbnail variant has, by
+        # definition, an opinion about this URL — Penny Arcade bypasses panel
+        # URLs for the *lead image* and would otherwise leave the list with no
+        # thumbnail at all.
+        variant = self._plugin_thumbnail_variant(entry_link=entry_link, lead_url=cached)
+        if variant:
+            return variant
         if self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached):
             return None
         if not self._is_image_url_acceptable(cached, None, None, allow_extensionless=True, skip_logo_patterns=True):
             return None
         return self._promote_known_thumbnail(cached)
+
+    def _plugin_thumbnail_variant(self, *, entry_link: str, lead_url: str) -> str | None:
+        """A plugin-supplied thumbnail crop derived from the stored lead image.
+
+        Network-free by contract — it is called on the posts-list render path.
+        """
+        for plugin in self._plugins:
+            fn = getattr(plugin, "thumbnail_from_lead_image", None)
+            if fn is None:
+                continue
+            try:
+                url = fn(entry_link=entry_link, lead_url=lead_url)
+            except Exception:  # noqa: BLE001 — a plugin must not break the list
+                continue
+            if url:
+                return url
+        return None
 
     def _promote_known_thumbnail(self, url: str | None) -> str | None:
         """Return a small-thumbnail URL unchanged.
