@@ -52,3 +52,40 @@ def test_canonicalize_item_feed_urls_in_place():
     assert items[1]["feed_url"] == "https://example.com/feed"
     assert items[2]["feed_url"] == ""
     assert "feed_url" not in items[3]
+
+
+# ── A format selector is not always a format selector ────────────────────────
+# On WordPress `?feed=atom` at the site root IS the feed. Stripping it yields
+# the homepage, which is not a feed at all — and canonical_feed_url is not only
+# a dedupe key: importers rewrite each incoming feed_url to it and then
+# subscribe to the result, keying entry tags/stars off the same value. So a
+# collapsed URL is stored curation pointed at the wrong place.
+# Found 2026-08-11: 12 live subscriptions canonicalized to a bare homepage.
+
+
+@pytest.mark.parametrize("url,selector", [
+    ("http://loldwell.com/?feed=atom", "feed=atom"),
+    ("https://example.com/?feed=rss2", "feed=rss2"),
+    ("https://example.com?feed=rss", "feed=rss"),
+    ("https://example.com/?alt=rss", "alt=rss"),
+    ("https://example.com/?type=atom", "type=atom"),
+])
+def test_a_selector_that_would_leave_only_a_homepage_is_kept(url, selector):
+    out = main.canonical_feed_url(url)
+    assert selector in out, f"selector stripped, leaving the homepage: {out!r}"
+    # And the result is not just the site root.
+    assert out.rstrip("/") != url.split("?")[0].rstrip("/")
+
+
+def test_a_selector_is_still_stripped_when_a_real_feed_path_remains():
+    """The behaviour this guard must not break: on a path that is itself a feed
+    endpoint, the selector really is only choosing a serialization."""
+    assert main.canonical_feed_url("https://example.com/feed?alt=rss") == \
+        "https://example.com/feed"
+
+
+def test_a_selector_is_still_stripped_when_other_query_params_remain():
+    """tosecdev.org's ?format=feed&type=atom: dropping type= leaves ?format=feed,
+    which is still a feed URL, so the strip is safe."""
+    out = main.canonical_feed_url("https://www.tosecdev.org/?format=feed&type=atom")
+    assert out == "https://www.tosecdev.org/?format=feed"

@@ -16289,8 +16289,23 @@ def normalize_feed_url(feed_url: str) -> str:
             all_pairs = parse_qsl(parsed.query, keep_blank_values=True)
             kept = [(k, v) for k, v in all_pairs
                     if not (k in _FORMAT_SELECTOR_PARAMS and _is_format_selector_value(v.lower()))]
-            if len(kept) != len(all_pairs):
-                new_query = urlencode(kept)
+            new_query = urlencode(kept)
+            # Never strip a selector down to a bare homepage. On WordPress
+            # `?feed=atom` at "/" IS the feed, not a serialization choice
+            # applied to one — dropping it yields the site root, which is not a
+            # feed at all. That matters beyond dedupe: importers run every
+            # incoming URL through canonical_feed_url and then SUBSCRIBE to the
+            # result (_canonicalize_item_feed_urls), so a homepage would be
+            # stored as the feed and the entry tags/stars keyed to it.
+            #
+            # The upgrade/alternates path already refuses the same candidate for
+            # the same reason (see test_root_level_feed_param_still_offers_alternates);
+            # this is that guard applied where the canonical form is produced.
+            #
+            # Found 2026-08-11: 12 subscribed feeds canonicalized to a bare
+            # homepage this way.
+            collapses_to_homepage = path in ("", "/") and not new_query
+            if len(kept) != len(all_pairs) and not collapses_to_homepage:
                 feed_url = parsed._replace(path=path, query=new_query).geturl()
             elif path_changed:
                 feed_url = parsed._replace(path=path).geturl()

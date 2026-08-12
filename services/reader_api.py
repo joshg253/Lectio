@@ -8,7 +8,7 @@ from pathlib import Path
 from reader import make_reader
 from reader._storage import Storage as _ReaderStorage
 
-from services import reader_sanitize
+from services import bot_challenge, reader_sanitize
 
 # Honest default identity for feed fetches — names the app + links the repo.
 _HONEST_USER_AGENT = "Lectio/0.1 (+https://github.com/joshg253/Lectio)"
@@ -78,6 +78,19 @@ def _fix_feed_response(session, response, request, **kwargs):
     if not raw_bytes:
         response.raw = io.BytesIO(b"")
         return None
+
+    # An anti-bot challenge served in place of the feed is a *block*, not a
+    # malformed feed, and the two want opposite fixes. Raised here rather than
+    # left to fail as a parse error so the recorded failure says so — see
+    # services.bot_challenge for why the status code cannot be used to tell them
+    # apart (SiteGround serves its captcha as a 202).
+    _challenge = bot_challenge.detect_challenge(
+        response.headers.get("Content-Type"), raw_bytes
+    )
+    if _challenge:
+        response.raw = io.BytesIO(raw_bytes)
+        response._content = raw_bytes
+        raise bot_challenge.FeedBlockedError(_challenge, getattr(request, "url", "") or "")
 
     # Always replace the (now-exhausted) stream so reader can still read it.
     stripped = raw_bytes.lstrip()

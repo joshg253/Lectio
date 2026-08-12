@@ -86,16 +86,41 @@ articles"). What remains:
   before it was fixed. Indistinguishable from a genuine star-and-tag, so they
   cannot be surgically reverted; the unstar-tagged pass is what removes them.
 
-### Characterize the 259 failing feeds
+### Characterize the failing feeds — measured 2026-08-11
 
-9% of the library errors on every refresh cycle and nobody has looked at the
-shape of it. The useful split is dead (host gone, 404/410 forever) vs bot-walled
-(403 that a browser identity or a different route might get past) vs moved (a
-redirect or a discoverable replacement), because each wants a different action —
-unsubscribe, force-subscribe, or Change URL. Two of them turned out to be dead
-`tapastic.com` husks duplicating live feeds, which suggests the pile has other
-easy wins in it. Nothing here is urgent; it is a measurement job first, and the
-measurement is what decides whether any of it is worth automating.
+**950 feeds are failing, not 259.** Measured breakdown:
+
+| failure | count | what it wants |
+|---|---|---|
+| HTTP 404 | 745 | Change URL / discovery / unsubscribe — **the big recoverable pile** |
+| other | 114 | unclassified; contains blocked feeds (see below) |
+| HTTP 403 | 51 | of which **22 are `backend.deviantart.com`** (our own integration, not a wall) |
+| TLS/SSL | 12 | usually an accident the site owner would fix |
+| timeout / 5xx / conn | 26 | mostly transient |
+
+Two findings that change the shape of this:
+
+- **The real bot-wall set is ~29 feeds across 25 domains, and a browser identity
+  does not help.** All 29 are already flagged in `browser_ua_feeds` and still
+  403. Confirmed why: the block is keyed on the **client IP**, not the UA —
+  poorlydrawnlines.com returns a byte-identical SiteGround captcha
+  (`y=ipr:<our-ip>`) to the honest UA and to a full browser identity. Inoreader
+  reads these fine because its IPs are on Cloudflare's Verified Bots allowlist
+  and a datacenter VPS is not. **Nothing client-side fixes these**, and working
+  around an IP block is out of bounds (see the good-citizen rule). Email to the
+  site is the only lever; these are mostly one-person sites where it is a toggle.
+- **Blocked feeds were being filed as malformed.** `services/bot_challenge.py`
+  (shipped 2026-08-11) now detects challenge pages and records
+  `bot challenge: blocked by <vendor>` instead of a parse error. Poorly Drawn
+  Lines had been logged as *"could not be parsed as a valid RSS/Atom document"*
+  for months while returning a captcha as **HTTP 202** — which is also why no
+  count of blocked feeds could ever be right. **Re-run the breakdown after a full
+  refresh cycle**: the true blocked count is somewhere in that 114 "other", and
+  the 403 number understates it.
+
+Next, in value order: the **745 404s** (recoverable without anyone's
+cooperation), then the DeviantArt 22 (our own token/auth problem), then the ~29
+genuine walls (email only).
 
 ### Cross-feed duplicate scan — the dupes you can actually feel
 
@@ -392,12 +417,12 @@ not scheduled, just watched.
 - **makeuseof re-fetch returns white images.** Seen once during testing
   2026-08-06 and never investigated. Waiting on a second sighting rather than
   hunting it cold — Josh will flag it if it recurs.
-- **440 stored feed URLs are non-canonical.** Surfaced by the OPML round-trip
-  duplication fix (which canonicalizes both sides of the comparison now, so
-  re-importing your own export is a no-op). Why they are non-canonical was never
-  chased: they predate the canonicalization or arrive by another route. A
-  one-off normalization pass over `folder_feeds` would converge the spellings,
-  but nothing is broken by leaving them.
+- **~407 stored feed URLs differ from canonical only by a trailing slash.**
+  Harmless: re-measured 2026-08-11 across 2,868 feeds and there are **zero**
+  canonical collisions, so no duplicate subscriptions are hiding behind them. A
+  normalization pass would tidy the spellings and nothing else. (The *harmful*
+  part of this item — 12 feeds canonicalizing to a bare homepage because
+  `?feed=atom` was being stripped — was fixed the same day.)
 - **A re-fetch that returns a *different unique* article.** The sibling-text
   guard cannot see this shape — entry 26031 came back as a piece about
   sandbox-game rendering, unique text and all. The slug/title mismatch guard is
