@@ -389,10 +389,16 @@
             </div>
             {% for row in child_folder_rows %}
             {% if not (row.virtual and not row.get('has_display_feeds', True)) %}
+            {# folder_feeds is populated ONLY for the folders whose rows render in
+               this response (the selected one and the root). Every other folder
+               fills from /tree/folder-feeds/{id} on first expand, so use
+               folder_has_feeds — which is computed for all of them — to decide
+               whether there is anything to expand. Testing folder_feeds here
+               would hide the toggle on every unselected folder. #}
             {% set folder_feeds = feeds_by_folder.get(row.id, []) %}
             <div class="tree-folder-group" data-unread-count="{{ row.unread_count }}">
               <div class="tree-folder-row">
-                {% if folder_feeds %}
+                {% if folder_has_feeds.get(row.id) %}
                 <button
                   type="button"
                   class="tree-toggle"
@@ -416,7 +422,7 @@
                 </a>
               </div>
 
-              {% if folder_feeds %}
+              {% if folder_has_feeds.get(row.id) %}
               {% if row.id == selected_folder_id %}
               {# The selected folder ships its rows inline so the active-feed
                  highlight and auto-expand work on full page load. #}
