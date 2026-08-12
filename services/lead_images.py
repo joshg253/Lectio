@@ -372,9 +372,28 @@ class LeadImageService:
     # "collared_peccary_profile__enclosure__by_…-fullview.jpg" carry "profile" as a
     # title word (preceded by "_") and must not be mistaken for a headshot.
     _AVATAR_HINT_PATTERNS = re.compile(
-        r"(?:avatar|author(?:-image)?\b|byline|(?<![a-zA-Z0-9_])profile|headshot|user(?:-image|pic)?|gravatar|(?<![a-zA-Z0-9])round(?![a-zA-Z0-9]))",
+        r"(?:avatar|author(?:-image)?\b|byline|(?<![a-zA-Z0-9_])profile|headshot|user(?:-image|pic)?|gravatar)",
         re.IGNORECASE,
     )
+    # "round" is a *shape* hint for a cropped avatar (avatar-round.png,
+    # user_round.jpg) and is only meaningful in the FILENAME. It used to sit in
+    # the pattern above, which is matched against the whole path — so any post
+    # whose slug happened to end in the word round was rejected outright.
+    # Standard Ebooks' "The Third Round" lost its cover that way: the image at
+    # …/the-third-round/downloads/cover.jpg is a perfectly good 1400x2100 JPEG,
+    # and "round" was matching in a *directory* segment that is a book title.
+    # Same class of false positive the "profile" guard above already documents.
+    _ROUND_AVATAR_FILENAME_RE = re.compile(
+        r"(?<![a-zA-Z0-9])round(?![a-zA-Z0-9])", re.IGNORECASE)
+
+    @classmethod
+    def _looks_like_avatar_url(cls, url_or_path: str) -> bool:
+        """Avatar heuristics for a URL/path, with the round-shape hint confined
+        to the filename so a title slug cannot trip it."""
+        if cls._AVATAR_HINT_PATTERNS.search(url_or_path or ""):
+            return True
+        filename = (url_or_path or "").split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+        return bool(cls._ROUND_AVATAR_FILENAME_RE.search(filename))
     # Code-forge avatar URLs are a single user segment + .png on the forge host
     # (e.g. github.com/octocat.png, gitea.com/delvh.png) — profile pictures, not
     # article images. Repo/asset paths have more segments and don't match.
@@ -2156,7 +2175,7 @@ class LeadImageService:
                 continue
             if (
                 self._TRACKER_URL_PATTERNS.search(resolved)
-                or self._AVATAR_HINT_PATTERNS.search(resolved)
+                or self._looks_like_avatar_url(resolved)
                 or self.is_social_icon_url(resolved)
                 or self.is_ad_url(resolved)
                 or self._PLACEHOLDER_URL_PATTERNS.search(resolved)
@@ -2875,7 +2894,7 @@ class LeadImageService:
         # and load fine), so skipping the wrapper picks the real one.
         if self._BLOGGER_PROXY_RE.search(parsed.netloc + parsed.path):
             return False
-        if self._AVATAR_HINT_PATTERNS.search(parsed.path):
+        if self._looks_like_avatar_url(parsed.path):
             return False
         if parsed.netloc.lower() in self._FORGE_AVATAR_HOSTS and self._FORGE_AVATAR_PATH_RE.match(parsed.path or ""):
             return False
