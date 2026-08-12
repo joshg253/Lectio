@@ -123,8 +123,21 @@ class LeadImageService:
     # "imdblogo" stay content) but NOT digits: sites version their wordmark as
     # logo2.png / logo2026.png (questionablecontent's New-Year rename slipped
     # through the old [a-zA-Z0-9] lookahead and became a lead image).
+    # NOTE the separators are [-_\s], not [-_]: this pattern is matched against
+    # alt/title TEXT as well as URLs (see the alt_title check in the candidate
+    # filter), and prose separates words with spaces. blogs.windows.com ships its
+    # site icon with alt="Site Icon", which "site[-_]icon" could never match, so
+    # the icon sailed through and became the article image.
+    #
+    # The final alternative is likewise separator-optional: the same image is
+    # Windows11Icon.png — CamelCase, so "[-_]icon.png" missed it too. The
+    # lookbehind keeps it from firing on a letter-prefixed word (emoticon.png),
+    # while still catching a digit or path boundary (Windows11Icon.png, /icon.png).
     _LOGO_URL_PATTERNS = re.compile(
-        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo(?![a-zA-Z])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image|[-_]icon\.(?:png|jpe?g|gif|svg|webp))",
+        r"(?:favicon|site[-_\s]logo|wordmark|site[-_\s]icon|app[-_\s]icon|social[-_\s]icon"
+        r"|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo(?![a-zA-Z])|sponsor"
+        r"|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image"
+        r"|(?<![a-z])icon\.(?:png|jpe?g|gif|svg|webp))",
         re.IGNORECASE,
     )
     # Catches pixel/spacer images encoded with tiny dimensions in the filename
@@ -569,6 +582,12 @@ class LeadImageService:
 
     _LEAD_IMAGE_MIN_WIDTH = 200
     _LEAD_IMAGE_MIN_HEIGHT = 100
+    # An image whose NAME says placeholder is admitted only at hero scale — well
+    # clear of the floor above, because the canonical placeholder (WordPress's
+    # 200x200 blank.jpg) sits exactly on it. Full Circle Magazine's real podcast
+    # cover art, named covers/podcasts/fallback.webp, is declared 640x360.
+    _PLACEHOLDER_OVERRIDE_MIN_WIDTH = 400
+    _PLACEHOLDER_OVERRIDE_MIN_HEIGHT = 200
     _NEGATIVE_RETRY_SECONDS = 4 * 60 * 60
 
     # Per-feed injected-block stripping: maps a host substring to a tuple of
@@ -2988,7 +3007,27 @@ class LeadImageService:
             if not _lp_has_large_dims:
                 return False
         if self._PLACEHOLDER_URL_PATTERNS.search(image_url):
-            return False
+            # …unless the markup declares real dimensions for it. A spacer or a
+            # spinner is tiny and undeclared; an image the page sizes at 640x360
+            # is what the page means to show, whatever it is called. Full Circle
+            # Magazine names its genuine podcast cover art
+            # covers/podcasts/fallback.webp — "fallback" as in "the art we use
+            # when an episode has none of its own", not a placeholder graphic —
+            # and every podcast episode lost its image to this rule.
+            #
+            # Same escape hatch the logo/alt check above already uses, and for
+            # the same reason: declared dimensions are the page asserting intent.
+            # The bar is HERO SCALE, not merely "above the floor". WordPress's
+            # s0.wp.com/i/blank.jpg is a 200x200 white box that clears the bare
+            # minimums, so admitting anything at-or-above them would let the
+            # canonical placeholder back in — which is what the existing
+            # regression test for that image immediately caught.
+            _placeholder_has_real_dims = (
+                width is not None and width >= self._PLACEHOLDER_OVERRIDE_MIN_WIDTH
+                and height is not None and height >= self._PLACEHOLDER_OVERRIDE_MIN_HEIGHT
+            )
+            if not _placeholder_has_real_dims:
+                return False
         # Advertisement images (e.g. .../Cert-ad1.png) are never article content.
         # Checked against the path so query strings can't introduce false matches.
         # Directory always, filename only when it carries naming signal. The
