@@ -163,6 +163,57 @@ Standard Ebooks body the same day (the refetch had already overwritten reader's
 own entry content, and only a backup got it back). Per-entry keeps it reversible
 and lets one be checked before the rest.
 
+### Proxy article-body images through /api/img (main app)
+
+Asked for 2026-08-12, **not built — Josh wants to test this one thoroughly.**
+
+Read Mode already does it (`_proxy_reader_body_images`): every `<img src>` in the
+body is rewritten to `/api/img?u=…`, and `srcset`/`data-src` are dropped so the
+browser cannot pick a direct URL instead. The main app's article pane does not —
+it renders third-party image URLs raw.
+
+Three things that buys, in order of how much they matter:
+
+- **Content blockers stop breaking articles.** sonarsource.com images are served
+  from `assets-eu-01.kc-usercontent.com`; the HTML is correct and the image loads
+  fine in a clean browser (verified, 1473x331), but a blocker that filters that
+  CDN host leaves the article looking empty with nothing in the logs. Same-origin
+  URLs are immune.
+- **The image cache starts covering article bodies**, which today it does not.
+- **No silent `http://`-on-`https://` upgrade dependency**, which only works
+  because browsers quietly fix it and does not work offline.
+
+⚠ Not a drop-in: proxying every body image raises `/api/img` traffic and cache
+size sharply (bodies carry many more images than heroes do), so the cache budget
+and eviction want checking against the live library first — and `srcset` removal
+changes what high-DPI screens fetch. Ship behind a per-feed or global toggle so a
+regression is one setting away from being undone, and test with a big article
+before it goes near everything.
+
+### joanwestenberg: an avatar became the lead image, with a URL that cannot load
+
+Found 2026-08-12, **not fixed.** Two faults in one entry
+(`/p/nobody-wants-your-newsletter-you`):
+
+- **The chosen image is the author's avatar** — its stored alt is literally
+  "JA Westenberg's avatar". The avatar heuristics never saw it, so whichever path
+  resolved this one is not consulting alt text the way the inline scan does. This
+  is the same shape as the `Site Icon` miss fixed the same day: the signal was
+  right there in the alt attribute and nothing looked at it.
+- **The stored URL is mangled and 404s**:
+  `https://www.joanwestenberg.com/p/fl_progressive:steep/https%3A%2F%2Fsubstack-post-media…`
+  — a Substack CDN URL that was relative-joined onto the post path instead of
+  being used absolute. **That unloadable URL is the reported thumbnail flicker**:
+  the list renders it, the browser fails it, and the fallback swaps in.
+
+A lead image that cannot be fetched should not be storable — validating a
+candidate resolves (or at least refusing one whose host is the *site's own* page
+path with an embedded absolute URL) would catch the whole class, not just
+Substack.
+
+**Also unexplained on the same feed:** star and re-fetch do not pull content.
+Not yet diagnosed.
+
 ### Cross-feed duplicate scan — the dupes you can actually feel
 
 **RE-MEASURED 2026-07-22 — auto-filing collapsed almost all of this.** Before
