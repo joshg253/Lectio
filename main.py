@@ -14729,7 +14729,18 @@ def _inject_webcomic_panel_into_bodyless_entry(content_html, entry, feed_url: st
     if not link.startswith(("http://", "https://")):
         return content_html, lead_image_url
     try:
-        panel = lead_image_service._fetch_source_lead_image(link, is_webcomic=True)
+        if lead_image_service._plugin_should_skip_source_lookup(entry_link=link):
+            # A plugin owning this host has already said the page will mislead a
+            # scan, and the resolved lead image IS its answer. Penny Arcade is
+            # exactly that: the page's first <img> is panel 1, so scanning here
+            # put a single panel in the article and threw away the full strip the
+            # plugin had just resolved — reintroducing, on the render path, the
+            # bug the plugin exists to prevent.
+            panel = lead_image_url
+        else:
+            # mahonoir and friends: nothing usable was resolved (the feed's
+            # enclosure is a share card), so the page really is the only source.
+            panel = lead_image_service._fetch_source_lead_image(link, is_webcomic=True)
     except Exception:  # noqa: BLE001 — an article without its comic beats a 500
         LOGGER.warning("[webcomic] panel injection failed for %s", link, exc_info=True)
         return content_html, lead_image_url

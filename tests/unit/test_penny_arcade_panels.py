@@ -66,3 +66,51 @@ def test_a_url_that_is_not_a_comic_image_is_ignored(plugin):
     assert plugin.thumbnail_from_lead_image(
         entry_link=COMIC,
         lead_url="https://assets.penny-arcade.com/img/avatars/avatar-tycho.jpg") is None
+
+
+# ── The render path must not undo the resolution ─────────────────────────────
+# Fixing the storage layer was not enough. _inject_webcomic_panel_into_bodyless_entry
+# re-scanned the source page at render time for a bodyless webcomic entry and
+# injected whatever it found — panel 1 — discarding the full strip that had just
+# been resolved. Three places had to agree before the article was right.
+
+def test_a_plugin_owned_host_is_not_rescanned_at_render_time(monkeypatch):
+    import main
+
+    scanned = []
+
+    def _boom(link, is_webcomic=False):
+        scanned.append(link)
+        return "https://assets.penny-arcade.com/comics/panels/x-p1.jpg"
+
+    monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image", _boom)
+    monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
+    monkeypatch.setattr(
+        main.lead_image_service, "_plugin_should_skip_source_lookup",
+        lambda *, entry_link: True)
+
+    entry = type("E", (), {"link": COMIC})()
+    out, hero = main._inject_webcomic_panel_into_bodyless_entry("", entry, "f", FULL)
+
+    assert FULL in out, "the article should carry the resolved full strip"
+    assert not scanned, "a plugin-owned host must not be re-scanned on render"
+
+
+def test_a_host_with_no_plugin_opinion_still_scans(monkeypatch):
+    """mahonoir's case, which this injection was written for: the feed's own
+    image is a share card, so the page really is the only source."""
+    import main
+
+    monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
+    monkeypatch.setattr(
+        main.lead_image_service, "_plugin_should_skip_source_lookup",
+        lambda *, entry_link: False)
+    monkeypatch.setattr(
+        main.lead_image_service, "_fetch_source_lead_image",
+        lambda link, is_webcomic=False: "https://cdn.example.com/real-comic.png")
+
+    entry = type("E", (), {"link": "https://mahonoir.com/comic/1"})()
+    out, hero = main._inject_webcomic_panel_into_bodyless_entry("", entry, "f", "https://cdn.example.com/share-card.png")
+
+    assert "real-comic.png" in out
+    assert hero is None
