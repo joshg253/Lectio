@@ -127,6 +127,42 @@ broken, because it looks fixed. Two classes had to be rejected by hand:
 - **46 with no feed found at all** — host gone or RSS dropped. Unsubscribe
   candidates, but that needs the go-ahead bulk removal always needs.
 
+### basslessons.be (FakeFeedz scrape): real bodies, and video/tabs on keep
+
+Asked for 2026-08-12, investigated but **not built**. Everything below is
+verified against the live site, so this is a build job, not a research job.
+
+**Today:** the scraped feed (`file:///data/scraped-feeds/c9d2ca59-….xml`, 36
+entries) stores title + link only — `summary` and `content` are both empty. What
+renders as the "body" is the lead image (the first music page) with alt/title
+text under it.
+
+**Wanted:** (a) the article body should be the linked page's real content, and
+(b) on tag/star, capture the embedded YouTube video and all the tab images.
+
+**(a) The tab images are easy.** They sit in the raw HTML in
+`div.transImgBorders` — for `transcriptions.php?i=1211` that is
+`/partituren/1211-1.png` … `-6.png`, six sheet-music pages, plus the surrounding
+text. Ordinary readability/full-page extraction reaches them.
+
+**(b) The video needs one extra call.** It is NOT in the HTML — the page ships an
+empty `div.videoMask` ("Searching far and wide for the video") and fills it with
+JS. The resolver is reachable server-side, no auth, no JS:
+
+    POST https://basslessons.be/ajax/a_transcriptionVideo.php
+    trans_id=<the ?i= value from the entry link>
+    → {"status":"success","message":"<iframe … youtube-nocookie.com/embed/fxoeU3vzdEw …>"}
+
+So the adapter derives `trans_id` from the link, makes one POST, and injects the
+returned iframe. `youtube-nocookie.com` must be on the embed host allowlist for
+the sanitizer to keep it.
+
+⚠ **Do this as a per-entry re-fetch, not a bulk rewrite of the feed.** Replacing
+36 stored bodies in one pass is the same irreversible content change that lost a
+Standard Ebooks body the same day (the refetch had already overwritten reader's
+own entry content, and only a backup got it back). Per-entry keeps it reversible
+and lets one be checked before the rest.
+
 ### Cross-feed duplicate scan — the dupes you can actually feel
 
 **RE-MEASURED 2026-07-22 — auto-filing collapsed almost all of this.** Before
