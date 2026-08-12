@@ -86,41 +86,46 @@ articles"). What remains:
   before it was fixed. Indistinguishable from a genuine star-and-tag, so they
   cannot be surgically reverted; the unstar-tagged pass is what removes them.
 
-### Characterize the failing feeds — measured 2026-08-11
+### Failing feeds — re-measured 2026-08-12, with work applied
 
-**950 feeds are failing, not 259.** Measured breakdown:
+⚠ **The 950 figure from 2026-08-11 was inflated by stale rows.** `feed_failure_state`
+keeps a row after a feed is unsubscribed (see the `purge_orphaned_feed` bug in
+the DeviantArt section), so long-gone feeds still counted. Live truth: **238
+failing feeds**, of which:
 
-| failure | count | what it wants |
+| failure | count | state |
 |---|---|---|
-| HTTP 404 | 745 | Change URL / discovery / unsubscribe — **the big recoverable pile** |
-| other | 114 | unclassified; contains blocked feeds (see below) |
-| HTTP 403 | 51 | of which **22 are `backend.deviantart.com`** (our own integration, not a wall) |
-| TLS/SSL | 12 | usually an accident the site owner would fix |
-| timeout / 5xx / conn | 26 | mostly transient |
+| unparseable / other | 123 | not yet characterized — **next job** |
+| HTTP 404 | 69 → **60** | 9 fixed by Change URL 2026-08-12 |
+| HTTP 403 | 29 | genuine IP-level walls; email is the only lever |
+| 5xx / conn / TLS | ~14 | mostly transient |
+| bot challenge | 3 | the new detector working |
 
-Two findings that change the shape of this:
+**Done 2026-08-12.** All 69 live 404s probed (`scripts/probe_dead_feeds.py`,
+read-only by default, paced and honest-UA). 23 had a discoverable replacement;
+**only 13 were same-scope, and 9 of those applied cleanly** — all 9 verified
+fetching real entries afterwards.
 
-- **The real bot-wall set is ~29 feeds across 25 domains, and a browser identity
-  does not help.** All 29 are already flagged in `browser_ua_feeds` and still
-  403. Confirmed why: the block is keyed on the **client IP**, not the UA —
-  poorlydrawnlines.com returns a byte-identical SiteGround captcha
-  (`y=ipr:<our-ip>`) to the honest UA and to a full browser identity. Inoreader
-  reads these fine because its IPs are on Cloudflare's Verified Bots allowlist
-  and a datacenter VPS is not. **Nothing client-side fixes these**, and working
-  around an IP block is out of bounds (see the good-citizen rule). Email to the
-  site is the only lever; these are mostly one-person sites where it is a toggle.
-- **Blocked feeds were being filed as malformed.** `services/bot_challenge.py`
-  (shipped 2026-08-11) now detects challenge pages and records
-  `bot challenge: blocked by <vendor>` instead of a parse error. Poorly Drawn
-  Lines had been logged as *"could not be parsed as a valid RSS/Atom document"*
-  for months while returning a captcha as **HTTP 202** — which is also why no
-  count of blocked feeds could ever be right. **Re-run the breakdown after a full
-  refresh cycle**: the true blocked count is somewhere in that 114 "other", and
-  the 403 number understates it.
+**The probe's own lesson: a discovered feed is not a replacement.** A site that
+dropped its feed still serves a homepage, and autodiscovery there returns
+*something*. Swapping a broken feed for a wrong one is worse than leaving it
+broken, because it looks fixed. Two classes had to be rejected by hand:
 
-Next, in value order: the **745 404s** (recoverable without anyone's
-cooperation), then the DeviantArt 22 (our own token/auth problem), then the ~29
-genuine walls (email only).
+- **Widening** (8) — a section feed replaced by the site firehose.
+  `blog.google/products/docs/rss` → `blog.google/rss/` is Docs-only → all of
+  Google's blog. Same for `towardsdatascience.com/feed/tagged/python`.
+- **Collision** (2) — `sourcery.ai/blog` and `/changelog` both resolving to the
+  same site-wide feed, which would merge two distinct subscriptions.
+
+**Waiting on a decision (nothing applied):**
+
+- **4 dead feeds whose replacement you already subscribe to** — Change URL
+  refused them as duplicates, so these are just redundant dead rows to
+  unsubscribe: tartanllama, xubuntu, krshrimali, markjames.
+- **10 risky replacements** above — each is a judgement call about scope, not a
+  mechanical fix.
+- **46 with no feed found at all** — host gone or RSS dropped. Unsubscribe
+  candidates, but that needs the go-ahead bulk removal always needs.
 
 ### Cross-feed duplicate scan — the dupes you can actually feel
 
@@ -591,31 +596,32 @@ auto-file (puts it somewhere sensible), then reassess. Only revisit page-monitor
 if the "re-check the page for changes" half turns out to be the actual want — that
 part #4 does not cover.
 
-### DeviantArt: 543 individual gallery feeds may be redundant with the Watch feed — 2026-08-10
+### DeviantArt: the gallery feeds are NOT redundant — theory disproven 2026-08-12
 
-Surfaced while investigating why the new "same address, different query"
-duplicate scanner was flooding with DeviantArt hits (fixed separately —
-`backend.deviantart.com` is now excluded from that signal entirely, since
-it's one shared endpoint for every artist).
+The 2026-08-10 working theory was that the 543 individual artist feeds were made
+redundant by the single Watch feed. **Measured, and they are not.** Do not act on
+the old theory.
 
-Confirmed in code: when DeviantArt is connected, adding an artist only
-Watches them (`deviantart_service.watch_user`) — "their posts arrive via
-the single combined Watch feed, so we don't create a per-artist local feed"
-(`main.py` ~line 22132). That's the *current* behavior. But the library
-still carries **543 individual artist feeds** alongside the one Watch
-feed: 521 rendered locally (`deviantart_feeds` table, `source='gallery'`)
-plus 22 legacy direct `backend.deviantart.com/rss.xml?q=gallery:<user>`
-subscriptions that predate the local-render pipeline entirely.
+- Watch feed: fetched at `_MAX_ENTRIES_PER_FEED = 50` per call, holding **401
+  stored entries covering 34 distinct artists** — of 523 watched. It is a
+  *recent-activity timeline*, and a prolific artist crowds it out (one accounts
+  for 197 of the 401).
+- Gallery feeds: **21,807 entries** of per-artist history across 521 feeds.
 
-**Working theory:** these predate the Watch-only behavior and were never
-cleaned up after the switch, so most/all of their content is now redundant
-with the Watch feed. **Needs verification before any bulk action** — check
-whether each artist's username is actually in the account's current
-DeviantArt watch list (via the API), and/or whether their entries already
-appear in the Watch feed's own content. Only once that's confirmed would
-unsubscribing the individual feeds (migrating any stars/tags via the
-existing combine mechanism first) make sense — not something to bulk-guess
-at.
+Unsubscribing them would silently drop coverage of ~500 artists — the failure
+mode being invisible is what makes it dangerous. **Keep the gallery feeds.**
+
+**Done 2026-08-12:** the 22 legacy `backend.deviantart.com` subscriptions were
+unsubscribed (`scripts/drop_legacy_deviantart_feeds.py`). Verified first: all 22
+artists already Watched, all 22 also had a working API-backed gallery feed, the
+22 held 1 entry between them, and there are zero stars/tags across all 544 DA
+feeds. That endpoint is WAF-blocked, so they could never fetch again.
+
+**Bug found while doing it:** `purge_orphaned_feed` does not delete the feed's
+`feed_failure_state` row, so an unsubscribed feed keeps counting as a failing
+feed forever. 22 ghost rows were left behind by this cleanup alone, and stale
+rows are why the failing-feed count read 950 when the live number was 260. Worth
+a one-line fix plus a sweep.
 
 ### DeviantArt watchlist sync — remaining follow-up
 
