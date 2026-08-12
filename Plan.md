@@ -596,32 +596,34 @@ auto-file (puts it somewhere sensible), then reassess. Only revisit page-monitor
 if the "re-check the page for changes" half turns out to be the actual want — that
 part #4 does not cover.
 
-### DeviantArt: the gallery feeds are NOT redundant — theory disproven 2026-08-12
+### DeviantArt: 544 feeds → 1 — DONE 2026-08-12
 
-The 2026-08-10 working theory was that the 543 individual artist feeds were made
-redundant by the single Watch feed. **Measured, and they are not.** Do not act on
-the old theory.
+The 2026-08-10 question ("are the 543 individual artist feeds redundant with the
+Watch feed?") is **settled and executed**. They were redundant. DeviantArt is now
+a single Watch feed.
 
-- Watch feed: fetched at `_MAX_ENTRIES_PER_FEED = 50` per call, holding **401
-  stored entries covering 34 distinct artists** — of 523 watched. It is a
-  *recent-activity timeline*, and a prolific artist crowds it out (one accounts
-  for 197 of the 401).
-- Gallery feeds: **21,807 entries** of per-artist history across 521 feeds.
+- 22 legacy `backend.deviantart.com` subscriptions unsubscribed
+  (`scripts/drop_legacy_deviantart_feeds.py`) — WAF-blocked, all 22 artists
+  already Watched, all 22 also had a working gallery feed, 1 entry between them.
+- 521 per-artist gallery feeds **combined into the Watch feed**
+  (`scripts/combine_deviantart_galleries.py`), 0 failures. Combine moves every
+  entry and carries read state, so history was migrated rather than dropped.
 
-Unsubscribing them would silently drop coverage of ~500 artists — the failure
-mode being invisible is what makes it dangerous. **Keep the gallery feeds.**
+Result: **544 DA subscriptions → 1**, library **2,868 → 2,325 feeds**, survivor
+holding **21,857 entries across 493 artists**, 21,847 of them still marked read.
 
-**Done 2026-08-12:** the 22 legacy `backend.deviantart.com` subscriptions were
-unsubscribed (`scripts/drop_legacy_deviantart_feeds.py`). Verified first: all 22
-artists already Watched, all 22 also had a working API-backed gallery feed, the
-22 held 1 entry between them, and there are zero stars/tags across all 544 DA
-feeds. That endpoint is WAF-blocked, so they could never fetch again.
+⚠ **The reasoning that nearly blocked this, recorded because it was wrong.** The
+Watch feed holding "401 entries covering 34 of 543 artists" reads like a coverage
+cap. It is not — only ~23-34 of the watched artists post at all. What settled it:
+zero artists who posted since the Watch feed was created were missing from it;
+volume is ~5.6 deviations/day against a 50-per-refresh window; and the feed's
+intake rate matches the observed posting rate. **Check whether a number is a
+limit or just the size of the active set before concluding anything from it.**
 
-**Bug found while doing it:** `purge_orphaned_feed` does not delete the feed's
-`feed_failure_state` row, so an unsubscribed feed keeps counting as a failing
-feed forever. 22 ghost rows were left behind by this cleanup alone, and stale
-rows are why the failing-feed count read 950 when the live number was 260. Worth
-a one-line fix plus a sweep.
+**Still open — a real bug found doing this:** `purge_orphaned_feed` never deletes
+the feed's `feed_failure_state` row, so an unsubscribed feed counts as a failing
+feed forever. That is why the failing count read 950 when the live number was
+238. One-line fix plus a sweep of the existing ghosts.
 
 ### DeviantArt watchlist sync — remaining follow-up
 
