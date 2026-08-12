@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
@@ -67,6 +68,12 @@ _XML_SIGS = (b"<?xml", b"<rss", b"<feed", b"<rdf:RDF")
 _HTML_SIGS = (b"<!DOCTYPE html", b"<!doctype html", b"<html", b"<HTML")
 
 
+# XML 1.0 permits only #x9 (tab), #xA (LF), #xD (CR) from the C0 range; every
+# other control byte is forbidden and makes a document not well-formed. Matched
+# on bytes rather than text because the body is scrubbed before decoding.
+_XML_ILLEGAL_BYTES_RE = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
 def _fix_feed_response(session, response, request, **kwargs):
     try:
         response.raw.decode_content = True
@@ -78,6 +85,20 @@ def _fix_feed_response(session, response, request, **kwargs):
     if not raw_bytes:
         response.raw = io.BytesIO(b"")
         return None
+
+    # Strip control characters XML 1.0 forbids outright. reader's parser is a
+    # strict SAX parser, so ONE stray byte kills the whole document: a raw 0x0B
+    # sitting mid-sentence in a post ("…interesting talk.\x0bHi. I'm Al…") made
+    # inventwithpython.com's 2.7MB feed unparseable in its entirety, reported as
+    # "not well-formed (invalid token)" at line 19918. feedparser is lenient and
+    # reads the same feed happily, which is exactly why this is worth doing here
+    # rather than assuming a feed that "looks fine" will ingest.
+    #
+    # Only the characters that are ILLEGAL in XML are removed — tab, newline and
+    # carriage return are explicitly kept, so nothing legitimate is touched and a
+    # feed that was already valid comes through byte-identical.
+    if _XML_ILLEGAL_BYTES_RE.search(raw_bytes):
+        raw_bytes = _XML_ILLEGAL_BYTES_RE.sub(b"", raw_bytes)
 
     # An anti-bot challenge served in place of the feed is a *block*, not a
     # malformed feed, and the two want opposite fixes. Raised here rather than
