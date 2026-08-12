@@ -22,7 +22,7 @@ from urllib.parse import urljoin
 import httpx
 from bs4 import BeautifulSoup
 
-from services import assert_safe_feed_id, url_guard
+from services import assert_safe_feed_id, publish_date, url_guard
 
 LOGGER = logging.getLogger(__name__)
 
@@ -150,6 +150,43 @@ def _write_empty_feed_file(feed_id: str, feed_title: str, source_url: str) -> No
 # ---------------------------------------------------------------------------
 # Link extraction + selector suggestions (shared by scraping and preview)
 # ---------------------------------------------------------------------------
+
+def _article_published_at(entry_url: str) -> str | None:
+    """The article's own date, from its page, as an ISO string — or None.
+
+    A listing page is a wall of links: the titles are there, the dates usually
+    are not (chickensoft.games shows none at all on /blog, only on each post).
+    Stamping every scraped entry with the scrape time makes a fresh feed look
+    like everything was published the second it was added, and makes sorting by
+    date meaningless.
+
+    Cost is one fetch per NEW entry only — an entry already in scraped_entries is
+    never re-fetched, so a steady feed costs nothing per refresh and only the
+    first scrape pays for its backlog. Any failure returns None and the caller
+    falls back to "now", because a missing date must never cost the entry.
+
+    Tries the publisher's own metadata first (mine_publish_date: JSON-LD,
+    article:published_time, <time datetime=…>), then the date the page merely
+    prints for a human — the order matters, and is the same order the re-fetch
+    path uses.
+    """
+    try:
+        html = _fetch_html(entry_url)
+    except Exception:  # noqa: BLE001 — a date is a bonus, never a failure
+        LOGGER.debug("scrape: could not fetch %s for its date", entry_url, exc_info=True)
+        return None
+    try:
+        from main import mine_publish_date  # local import: main imports this module
+        dt = mine_publish_date(html)
+    except Exception:  # noqa: BLE001
+        dt = None
+    if dt is None:
+        try:
+            dt = publish_date.from_visible_text(html)
+        except Exception:  # noqa: BLE001
+            dt = None
+    return dt.isoformat() if dt else None
+
 
 def _resolve_link_anchors(soup: BeautifulSoup, selector: str) -> list:
     """Resolve a selector to the anchor elements it targets.
@@ -411,11 +448,12 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
         title = item["title"]
         entry_id = str(uuid.uuid4())
         hidden = 1 if initial else 0
+        published = _article_published_at(abs_url) or now
         conn.execute(
             "INSERT OR IGNORE INTO scraped_entries"
             " (id, scraped_feed_id, entry_url, title, content, published_at, hidden)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (entry_id, feed["id"], abs_url, title, "", now, hidden),
+            (entry_id, feed["id"], abs_url, title, "", published, hidden),
         )
         if not initial:
             new_visible += 1

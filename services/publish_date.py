@@ -70,6 +70,33 @@ _DATED_ELEMENT_RE = re.compile(
     re.I,
 )
 
+# The element's text must be a date and nothing else — "Updated April 26, 2026
+# by Chris" is a sentence that contains a date, not a byline date.
+_TEXT_IS_ONLY_A_DATE_RE = re.compile(
+    r"[\s,\u00b7\u2013\u2014-]*(?:"
+    + "|".join(_MONTHS)
+    + r")\s+\d{1,2},?\s+\d{4}[\s,\u00b7\u2013\u2014-]*"
+    r"|[\s]*\d{1,2}\s+(?:" + "|".join(_MONTHS) + r"),?\s+\d{4}[\s]*"
+    r"|[\s]*\d{4}-\d{2}-\d{2}[\s]*",
+    re.I,
+)
+
+# Fallback for sites with no semantic class names to match on. Utility-CSS
+# frameworks (Tailwind and friends) name elements for their appearance, so the
+# byline date on chickensoft.games lives in
+#   <p class="text-[var(--color-muted-foreground)] text-sm font-serif">April 26, 2026</p>
+# — nothing in the class says "date", and the labelled matcher above skips it.
+#
+# The signal here is different and just as strong: the element's ENTIRE text is a
+# date and nothing else (see _TEXT_IS_ONLY_A_DATE_RE). That keeps the
+# false-positive risk close to the labelled matcher's while covering pages that
+# label nothing. Deliberately tried only AFTER every labelled element is
+# considered, so a publisher that DOES label its date still wins.
+_BARE_DATE_ELEMENT_RE = re.compile(
+    r"<(?P<tag>span|div|p|time|small|h\d)\b[^>]*>\s*(?P<text>[^<]{6,40}?)\s*(?:<!--[^>]*-->\s*)?<",
+    re.I,
+)
+
 _TEXT_DATE_PATTERNS: tuple[tuple[str, str], ...] = (
     # "February 03, 2026" / "February 3 2026"
     (r"(" + "|".join(_MONTHS) + r")\s+(\d{1,2}),?\s+(\d{4})", "mdy"),
@@ -109,6 +136,21 @@ def from_visible_text(raw_html: str | None) -> datetime | None:
         return None
     for m in _DATED_ELEMENT_RE.finditer(raw_html):
         found = _in_range(_parse_text_date(m.group("text")))
+        if found is not None:
+            return found
+    # Nothing was labelled. Fall back to an element whose whole text is a date —
+    # see _BARE_DATE_ELEMENT_RE for why that is a safe second tier and why it
+    # only runs once the labelled pass has found nothing.
+    for m in _BARE_DATE_ELEMENT_RE.finditer(raw_html):
+        text = m.group("text").strip()
+        parsed = _parse_text_date(text)
+        if parsed is None:
+            continue
+        # The date must BE the text, not merely appear in it: reject anything
+        # with words around it ("Updated April 26, 2026 by Chris").
+        if not _TEXT_IS_ONLY_A_DATE_RE.fullmatch(text):
+            continue
+        found = _in_range(parsed)
         if found is not None:
             return found
     return None
