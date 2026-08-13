@@ -205,65 +205,27 @@ have still never opened"). Only 419 of 10,002 stars have a genuine
 Lectio-made `saved_at`; the rest are either real pre-migration dates
 (3,492) or the migration timestamp (6,091).
 
-### Phone polish — shipped 2026-08-11, one rough edge left
+### Phone polish — shipped 2026-08-11
 
-From a phone testing pass: pull down in an article to toggle Reader view (and
-again to come back), Back now walks article → feed → folder → folder drawer
-before leaving, and the Global Note no longer opens underneath the folder
-drawer. Rationale in ARCHITECTURE.md ("Back on a phone walks the view stack",
-"Pull down in an article for Reader view").
+Pull-down toggles Reader view, Back walks article → feed → folder → drawer, and
+the Global Note no longer opens under the drawer. Rationale in
+`docs/architecture/views.md`.
 
-- **Back leaving the app is now accepted, not fought.** Installing as a WebAPK
-  works (manifest + worker pass every installability check, confirmed via CDP:
-  zero errors) and it *still* exits, because Android exits any app at its root.
-  There is no configuration that changes that. Resume-on-open is the answer, and
-  the in-page guard is now a nicety rather than the mechanism. **Do not spend more
-  time trying to prevent the exit.** If resume ever misses a case, extend what is
-  saved rather than re-litigating the history stack.
-- **Read Mode has no resume.** `/read` keeps its own navigation and is untouched
-  by the position-saving above; the Supernote still reopens at the list. Worth
-  doing if it annoys, and cheap — the same localStorage key, a different restore
-  target.
-- **The Back guard is best-effort, by browser design.** Chrome's history
-  manipulation intervention skips entries pushed without user activation, so a
-  spare re-armed inside a `popstate` handler can be walked straight past — seen
-  on a Galaxy S21+ as two toggles then the tab closing, on code that toggled
-  indefinitely under headless Chromium (which does not apply the intervention).
-  Re-arming from real gestures narrows it; nothing closes it. **Installing to the
-  home screen is the actual fix** and the manifest now exists for that. If this
-  is still hit while installed, the next lead is whether standalone mode changes
-  the intervention's behaviour — do not just add more spares.
-- **Read Mode has no equivalent Back guard.** `/read` (the Supernote view) is a
-  two-pane layout with the tree always visible, so there is no drawer for Back to
-  toggle at the end of its chain — the trick used in the main app has nothing to
-  land on. Back out of the Read Mode list still leaves. Left alone rather than
-  invented: a Back that visibly does nothing is worse than one that exits. If it
-  bites, the fix is to give Read Mode a collapsible tree first.
-- **Back never exits the app on a phone or tablet, by request.** The first cut
-  ended the chain by letting the next press leave; in use that closed the tab
-  mid-read.
-  Back now toggles the folder drawer open/closed at the end of the chain,
-  indefinitely. The trade is deliberate and worth restating before anyone
-  "fixes" it: on a phone you cannot reverse out of Lectio to the previous site,
-  and you cannot Back your way to an earlier folder or feed — the tree is how you
-  navigate. Closing the tab or switching apps still works normally, and desktop
-  is untouched (`isSingleMode()` gates all of it).
-- **External links are marked in three places, and one of them is the real fix.**
-  The sanitizer marks them at ingest, so bodies stored *before* 2026-08-11 carry
-  no `target` and rely on the two client-side capture listeners (main app,
-  `reader.js`). A one-off pass re-sanitizing stored summaries would let the
-  listeners go, but they are ~10 lines each and also cover anything injected at
-  runtime, so there is no pressing reason to.
-- **The gesture's return trip is only as good as the button.** Pull-to-Reader
-  dispatches a click on `#entry-readability-button`, so if activating Reader view
-  fails (a dead source URL, say) the second pull tries to activate again rather
-  than coming back. That is the button's existing behavior, not the gesture's,
-  but it shows up more now that the gesture makes it easy to trigger.
+Standing decisions, so they are not re-litigated:
 
-## Findings (recorded so they are not re-diagnosed)
-
-Not work items. Each is something measured on the live library that
-explains a class of future report; check here before investigating one.
+- **Back leaving the app is accepted, not fought.** A WebAPK install passes every
+  installability check and *still* exits, because Android exits any app at its
+  root. Resume-on-open is the answer. **Do not spend more time preventing the
+  exit** — if resume misses a case, extend what is saved.
+- **The Back guard is best-effort by browser design.** Chrome's history
+  intervention skips entries pushed without user activation, and headless does
+  not apply it, so no browser test can prove the guard. If it is hit while
+  *installed*, the next lead is whether standalone mode changes the intervention
+  — do not just add more spares.
+- **Read Mode has no resume and no Back guard.** Resume is cheap (same
+  localStorage key, different restore target). The guard is not: `/read` has no
+  drawer for Back to land on, and a Back that visibly does nothing is worse than
+  one that exits — give Read Mode a collapsible tree first.
 
 ### One stored image per entry, but three feeds want two
 
@@ -770,37 +732,16 @@ part #4 does not cover.
 
 ### DeviantArt: 544 feeds → 1 — DONE 2026-08-12
 
-The 2026-08-10 question ("are the 543 individual artist feeds redundant with the
-Watch feed?") is **settled and executed**. They were redundant. DeviantArt is now
-a single Watch feed.
+22 legacy `backend.deviantart.com` subscriptions unsubscribed and 521 per-artist
+gallery feeds combined into the Watch feed, 0 failures. Library 2,868 → 2,325
+feeds; survivor holds 21,857 entries across 493 artists.
 
-- 22 legacy `backend.deviantart.com` subscriptions unsubscribed
-  (`scripts/drop_legacy_deviantart_feeds.py`) — WAF-blocked, all 22 artists
-  already Watched, all 22 also had a working gallery feed, 1 entry between them.
-- 521 per-artist gallery feeds **combined into the Watch feed**
-  (`scripts/combine_deviantart_galleries.py`), 0 failures. Combine moves every
-  entry and carries read state, so history was migrated rather than dropped.
-
-Result: **544 DA subscriptions → 1**, library **2,868 → 2,325 feeds**, survivor
-holding **21,857 entries across 493 artists**, 21,847 of them still marked read.
-
-⚠ **The reasoning that nearly blocked this, recorded because it was wrong.** The
-Watch feed holding "401 entries covering 34 of 543 artists" reads like a coverage
-cap. It is not — only ~23-34 of the watched artists post at all. What settled it:
-zero artists who posted since the Watch feed was created were missing from it;
-volume is ~5.6 deviations/day against a 50-per-refresh window; and the feed's
-intake rate matches the observed posting rate. **Check whether a number is a
-limit or just the size of the active set before concluding anything from it.**
-
-**Fixed 2026-08-13.** `purge_orphaned_feed` now deletes the feed's
-`feed_failure_state` row, and `scripts/clear_ghost_failure_state.py` cleared the
-562 ghosts it had already left. That is why the failing count read 950 when the
-live number was 238. Sibling tables still outlive their feeds and are documented
-in ARCHITECTURE rather than fixed — `feed_lead_image_strategy` (1,024 ghost
-feeds), `feed_fetch_history` (754), `feed_seen_window` (553), `feed_media_scan`
-(173), `fever_feed_map` (154), `browser_ua_feeds` (95), `websub_subscriptions`
-(74). Untidy rather than wrong, and the API id maps and fetch history are not
-obviously safe to drop.
+⚠ **Recorded because the reasoning that nearly blocked it was wrong.** "401
+entries covering 34 of 543 artists" reads like a coverage cap. It is not — only
+~23-34 of the watched artists post at all. What settled it: zero artists who
+posted since the Watch feed was created were missing from it, and its intake rate
+matches the observed posting rate. **Check whether a number is a limit or just
+the size of the active set before concluding anything from it.**
 
 ### DeviantArt watchlist sync — remaining follow-up
 
@@ -1013,118 +954,26 @@ Other:
   a bare HTML string.
 
 ### Multiuser
-- **Performance investigation** — systematic baseline. Per-request breakdown (DB time, enrich time, refresh contention) under realistic load.
-- **Shared-content tenancy mode** — one global feed/entry store + per-user overlays
-  (read/star/folders/subs). Only worth building at real scale; biggest caching/
-  refresh win (single refresh per feed, deduped storage). Umbrella for "a global
-  mechanism for all non-private feeds to reduce strain/storage." Pushes unread
-  counts to an incrementally-maintained per-user table instead of live scans.
-  reader 3.24 documented the canonical layout: `shared.sqlite` holds all feed/entry
-  content (updated once per feed regardless of N subscribers), per-user DBs hold
-  only personal state, a routing layer merges at query time. `update_feeds_iter()`
-  yields per-feed results which could fan out into user-specific tables.
-  Current Lectio layout fetches each feed once per user (N users = N fetches) — fine
-  for 1–3 trusted users, but the natural limit before shared-content mode becomes
-  worth building.
-- **Per-user resource fairness** — rate-limits/quotas on refresh, scraping, thumb
-  generation. Not needed for trusted users; hooks left in the seam.
-- **Write-abuse protection (read-state spam)** — an untrusted user flip-flopping
-  read/unread (or bulk mark) hammers the shared SQLite/process: every toggle writes
-  the reader DB + `entry_read_state` and bumps `_unread_counts_generation`, which
-  invalidates the unread-counts cache and forces a recompute. Defenses, cheapest →
-  strongest: (1) **coalesce/debounce** rapid toggles on the same entry (the toggle
-  is already async) so A→B→A→B collapses to last-write-wins; (2) **throttle the
-  unread-count recompute** (min interval per user) so spam can't trigger back-to-back
-  full scans; (3) the actual blocker — a **per-user token-bucket rate limit** on the
-  state-changing endpoints (mark-read/unread, mark-range, saved/star), returning
-  **429 + a short cooldown** when exceeded. **Tune thresholds so legitimate heavy use
-  never trips it** — fast keyboard triage marking dozens of items is normal; only
-  sustained pathological flip-flopping should hit the limit. **Role-based: admins
-  are exempt (do whatever); regular users are subject to the limits.** Single-user
-  mode is exempt entirely. Make the exemption a reusable role check so it also
-  governs the other quotas (refresh cadence, scraping, thumb generation).
-- **Authenticated/private feeds** — none supported today, so all feed/image content
-  is safe to global-cache. If added, exclude those feeds from the global caches.
 
-## Known limitations (not bugs)
-
-- **CodeQL: `_safe_next` login redirect will re-flag** — triage completed and
-  verified 2026-07-08; the code-scanning board is at **zero open alerts**. The fixes
-  merged in PR #114 auto-closed their alerts; the `_safe_next`-guarded login redirect
-  re-flagged once post-merge (alert 152) and was dismissed — the stock query can't
-  model a validate-and-return-same-string sanitizer. Any future edit near
-  `RedirectResponse(url=_safe_next(...))` may re-flag; dismiss with the same
-  rationale.
-
-- **Entries with no date anywhere sort by received time** — an entry with a
-  NULL `published`, no dated permalink and no date in its title has no
-  publication date to find, so it sorts by when the reader first saw it.
-  (Two bugs that used to inflate this bucket — truthy sentinel dates beating
-  real fallbacks, and dead URL/title date-inference code — were fixed
-  2026-08-04; `entry_publication_date`/`entry_effective_date`/
-  `real_published_date` in main.py are the relevant functions.) A one-time
-  backfill persisting the inferred date could still be added if the
-  ordering of these specific entries ever matters.
-
-- **Reddit OAuth app registration blocked (access request DENIED 2026-07-19)** —
-  Reddit killed free OAuth2 app registration as part of the 2023 API crackdown. The
-  Integrations → Reddit panel and all supporting code (`services/reddit.py`, routes,
-  scheduler hook, submit button) are fully implemented and will work once credentials
-  are available, but Reddit now requires either Devvit (their proprietary in-Reddit
-  app platform, not applicable) or a formal API access request — and that request was
-  **denied**. The old.reddit.com feed switch remains the practical mitigation for
-  429s. Treat native OAuth as closed unless Reddit reopens app registration or reverses
-  the denial; do not re-file speculatively.
-
-- **Hard JS bot-walls** (e.g. seattletimes — HTTP 202 + empty body) — some feeds sit
-  behind a challenge that returns success-with-no-body to *any* non-headless client,
-  so even the browser-identity escalation can't fetch them. Lectio escalates on
-  refusal (403/415/429/503/timeout) but won't run a headless browser; these feeds
-  stay unsubscribable. Surfaced as a "site is blocking automated access" message.
-- **Network/IP-level image blocks** (e.g. washingtonstatestandard.com — Cloudflare
-  403 on every server request, honest *and* browser UA, persistent over hours) — the
-  feed itself fetches, but server-side image ops (the `/thumb` list thumbnails and
-  source-page scrape) are blocked at the IP/ASN level. We don't evade IP blocks
-  (good-citizen policy). Article lead images render direct to the browser (user's own
-  IP), and **list thumbnails now fall back to a direct browser load when `/thumb`
-  fails** (`thumbImgFallback`), so they render too. Only the server-side source-page
-  *scrape* (e.g. caption sourcing) remains blocked for such hosts.
-- **Webcomic single-image feeds** (e.g. claycomix) — investigated: not multi-panel.
-  A single `wp-post-image` per entry; the source page's extra `<img>`s are DRM'd
-  early-access previews + support badges. The webcomic strategy already surfaces the
-  panel. A generic "scrape all panels" feature needs a real multi-panel exemplar to
-  design against; revisit if one turns up.
-
-- **Dead feed-redirector links — automation is exhausted** (investigated
-  2026-07-22; recorded so nobody re-investigates). 37 starred redirector links,
-  and every automatic recovery path returns zero: no archive rows, no live
-  redirect chain (feedproxy.google.com 404s), no Archive.org snapshots.
-  `scripts/backfill_canonical_links.py` reports `0/37 recoverable`. A host+slug
-  reconstruction tier was considered and rejected — ~13 entries, a verification
-  fetch each, on mostly dead 2013-era blogs. Resolved instead by **Edit URL**,
-  which covers the 22 opaque ids no heuristic could reach. The loss is only the
-  *link*: 36 of 37 still hold their content and read fine.
-- **Some pages have no server-side tags to pull** (2026-07-29; do not spend time
-  on these). behance.net ships zero `<category>` elements and renders its gallery
-  tags in JavaScript; Real Python's Atom feed carries no categories and its page
-  is bot-walled. Real Python's page tag block also mixes taxonomies (`ai` is a
-  topic, `intermediate` is a skill level) — a four-word stop-list would express
-  that where the coverage rule cannot.
-- **EEA geo-blocks are not a migration loss** (2026-07-30). Some US local-news
-  sites answer **451 Unavailable For Legal Reasons** to any EEA IP — a GDPR
-  position by the publisher, not a bot wall. Nothing to work around.
-## Backburner
-
-- **Deployment genericization** (after multi-user phases) — make base
-  `docker-compose.yml` proxy-agnostic (publish `:8000`, no Traefik labels), move
-  Traefik labels to an opt-in overlay; move security headers (HSTS/nosniff/
-  frameDeny/referrer) from Traefik into app middleware; make trusted-proxy IPs
-  configurable instead of `--forwarded-allow-ips=*`. Document Traefik + one
-  alternative now; expand later.
-- **Archive caps for starred entries** — only relevant after multi-user.
-- **Better tuning / live preview** — full entry preview pane, swappable strategy +
-  display settings without saving.
-- **Supernote integration** — no confirmed public API. Revisit if the Browse&Access
-  HTTP interface proves usable.
-- **YunoHost or other packaging.**
-- **PWA / offline-first features.**
+- **Performance investigation** — a systematic per-request baseline (DB time,
+  enrich time, refresh contention) under realistic load.
+- **Shared-content tenancy mode** — one global feed/entry store plus per-user
+  overlays (read/star/folders/subs). Only worth building at real scale, but it is
+  the biggest caching/refresh win: one refresh per feed regardless of subscriber
+  count, deduped storage, and unread counts moved to an incrementally-maintained
+  per-user table instead of live scans. reader 3.24 documents the canonical
+  layout — `shared.sqlite` for content, per-user DBs for personal state, a routing
+  layer merging at query time, with `update_feeds_iter()` fanning out per-feed
+  results. Lectio currently fetches each feed once per user; that is fine for 1–3
+  trusted users and is the natural limit before this becomes worth building.
+- **Per-user resource fairness** — rate limits on refresh, scraping and thumb
+  generation. Not needed for trusted users; hooks are in the seam.
+- **Write-abuse protection (read-state spam).** Every read toggle writes the
+  reader DB and `entry_read_state` and bumps `_unread_counts_generation`, which
+  invalidates the counts cache and forces a recompute — so flip-flopping hammers
+  the shared SQLite. Defenses cheapest → strongest: coalesce rapid toggles on one
+  entry (last-write-wins); throttle the counts recompute per user; and the actual
+  blocker, a per-user token bucket on the state-changing endpoints returning 429
+  with a cooldown. ⚠ **Tune so legitimate heavy use never trips it** — fast
+  keyboard triage marking dozens of items is normal; only sustained pathological
+  flip-flopping should hit the limit.

@@ -15,7 +15,9 @@ description: "Use when changing backend behavior or docs; enforce reader-first a
 
 ## Migration Safety Guidance
 - During refactors toward `reader` capabilities, preserve user-visible behavior unless explicitly changing requirements.
-- In this pre-production phase, schema/data reset is acceptable when it simplifies implementation.
+- Schema/data reset is **not** acceptable: the instance carries live data and
+  multiple users. A meta-DB table or column needs the startup per-user migration
+  or existing tenants 500 on their next request.
 
 ## Documentation Requirement
 - Reflect user-visible behavior changes in `README.md` in the same PR/change set.

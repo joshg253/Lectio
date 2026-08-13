@@ -7,275 +7,197 @@ The post list, folders, sorting, layout and page weight.
 
 ## View state model
 
-Keep three kinds of state separate:
-- remembered base preferences,
-- contextual temporary overrides,
-- transient navigation state.
+Three kinds of state, kept apart:
 
-Examples:
-- remembered: sort mode, default filters, pane sizing.
-- temporary: tag-click “show all,” search result scope.
-- transient: current entry, scroll position, focus.
+| kind | examples |
+|---|---|
+| remembered | sort mode, default filters, pane sizing |
+| temporary | tag-click "show all", search result scope |
+| transient | current entry, scroll position, focus |
 
-Temporary overrides must not silently overwrite remembered preferences. Leaving the override context should restore the base preference.
+A temporary override must never overwrite a remembered preference; leaving the
+override restores the base.
 
 ### Filtering a view is not searching it
 
-Search and filter are different tools and are kept apart deliberately. **Search**
-(`q`) is a server-side query that changes *what is fetched*; it spans title, feed
-name, link, authors and summary. **Filter this view** (`#posts-filter-input`)
-narrows *what is already in front of you*, instantly, so the result can be acted
-on as a set — it matches only title, link and feed name, and is transient
-navigation state: a pane swap re-renders the toolbar and the filter comes back
-empty by design.
-
-Two mechanics make this safe.
+**Search** (`q`) is a server query that changes *what is fetched* — title, feed
+name, link, authors, summary. **Filter this view** narrows *what is already in
+front of you*, instantly, matching only title/link/feed name, and is transient:
+a pane swap comes back empty by design.
 
 **The filter owns its own class.** `post-item-filtered`, never
-`post-item-hidden` — the latter belongs to the scroll-chunking reveal, and
-"move all shown" keys off it. One shared class would have turned a filtered bulk
-move into a whole-list bulk move: filter to one domain, click move, and the
-entire unfiltered list is silently re-filed. Keyboard navigation excludes both
-classes; while a filter is active the chunk window steps aside and reveals every
-match, because chunking exists to keep a 2,000-row list cheap to paint and the
-filter has already done that job.
+`post-item-hidden` — the latter belongs to the scroll-chunking reveal, and "move
+all shown" keys off it. One shared class turns a filtered bulk move into a
+whole-list bulk move: filter to one domain, click move, and the entire unfiltered
+list is silently re-filed. Keyboard nav excludes both. While a filter is active
+the chunk window steps aside and reveals every match — chunking exists to keep a
+2,000-row list cheap to paint, and the filter has already done that.
 
-**Whole-set actions resolve server-side, by predicate.** The list route serves
-250 posts on first load and chunks to a 2,000 cap thereafter, so the browser
-holds a *page* of the view, not the view. An action that posts the ids it can
-see therefore covers a fraction of a large filter and says nothing about it —
-which `Move visible to feed…` did. `POST /entries/move-visible-to-feed` takes the
-*predicate* instead (folder scope, tag, search, read/star filters, and the filter
-term) and re-resolves it here at an effectively unbounded limit, mirroring the
-home route's scope derivation. That is correct at any size, and since there is no
-id payload to bound, `_MOVE_BATCH_CAP` does not apply to it. A `dry_run=1` call
-returns just the count so the confirm dialog can state the real number rather
-than the number of rows in the DOM — the dialog names both when they differ
-("Move the 60 shown posts… 46 are loaded here; all 60 are moved").
+**Whole-set actions resolve server-side, by predicate.** The route serves 250
+posts and chunks to a 2,000 cap, so the browser holds a *page* of the view, not
+the view; an action posting the ids it can see covers a fraction of a large
+filter and says nothing about it — which `Move visible to feed…` did.
+`POST /entries/move-visible-to-feed` takes the *predicate* (scope, tag, search,
+read/star filters, filter term) and re-resolves it at an effectively unbounded
+limit. Correct at any size, and with no id payload to bound `_MOVE_BATCH_CAP`
+does not apply. `dry_run=1` returns the count so the dialog can state the real
+number rather than the rows in the DOM, naming both when they differ.
 
-"Shown" means everything matching the active filters regardless of scroll
-position: scroll-chunking is a rendering optimization, not user intent. Orphan
-archive rows (saves whose feed is gone) are excluded on both sides — there is no
-reader entry to move.
-
+"Shown" means everything matching the active filters regardless of scroll —
+chunking is a rendering optimization, not user intent. Orphan archive rows are
+excluded on both sides: there is no reader entry to move.
 `/entries/mark-range-read` solved the same page-vs-view problem earlier with
-`_RANGE_READ_LIMIT`; this is that lesson generalized from an anchor lookup to a
-whole-set action.
+`_RANGE_READ_LIMIT`; this generalizes it from an anchor lookup to a whole-set
+action.
 
 ### Back on a phone walks the view stack
 
-In single-pane mode the article pane *is* the page, so Back has to step down the
-stack rather than leave: article → the feed list it was opened from → that feed's
-folder list → and there it stops, toggling the folder drawer open and closed.
+In single-pane mode the article pane *is* the page, so Back steps down the stack
+rather than leaving: article → feed list → folder list → then it stops, toggling
+the folder drawer.
 
-Most of that chain needs no code. Opening a feed from the drawer and opening an
-article each push a history entry, so the stack already holds the feed list under
-the article and the folder list under the feed list, and a plain Back walks them.
+Most of that needs no code — opening a feed and opening an article each push a
+history entry, so a plain Back walks them. The last step is the exception.
+Backing out of the entry the app was *loaded* on is a cross-document navigation:
+the page unloads and `popstate` never fires. So `armDrawerBack()` pushes a
+**spare history entry** — a duplicate of the current URL, silent to push and pop —
+and popping it toggles the drawer.
 
-The last step is the exception, and the reason for the machinery in
-`templates/index.html`. Backing out of the entry the app was *loaded* on is a
-cross-document navigation: the page unloads and `popstate` never fires, so
-nothing script can do would intercept it. Instead a **spare history entry** — a
-duplicate of the current URL, so pushing and popping it are both visually
-silent — is pushed ahead of time by `armDrawerBack()`, and popping it is what
-toggles the drawer.
+**What is protected is the bottom of this document's history, not a URL shape.**
+The first version armed only on folder-scoped lists, since an article "always has
+a real parent underneath" — true only if you *navigated* there this session.
+Reopen the app, restore a tab, or follow a bookmark to an article and there is no
+parent, so Back went cross-document and closed the tab: the exact bug the guard
+existed to prevent, live on three of the four ways in. Position is now tracked
+directly — `pushState`/`replaceState` are wrapped to stamp a `lectioIdx`, the
+loaded entry is 0, and `popstate` traps on 0. An *index* rather than a decremented
+counter is what keeps Forward working: `popstate` fires in both directions and
+only the state says which way.
 
-**What gets protected is the bottom of this document's history, not a particular
-kind of URL.** The first version decided from the URL shape — arm only on a
-folder-scoped list, since an article or feed list "always has a real parent
-underneath". That holds only if you *navigated* there in this session. Reopen the
-app, restore a tab, or follow a bookmark straight to an article and there is no
-parent, so Back went cross-document and closed the tab — the exact bug the guard
-existed to prevent, still live on three of the four ways in.
+**⚠ The guard cannot be made airtight.** Chrome's history-manipulation
+intervention marks entries pushed *without user activation* as skippable, and a
+spare pushed from inside a `popstate` handler has no gesture behind it. Observed
+on a Galaxy S21+ as two working toggles then the tab closing, while headless
+Chromium toggled indefinitely — **headless does not apply the intervention, so no
+browser test here can prove the guard holds.** Treat green automation as "not
+obviously broken".
 
-Position is therefore tracked directly: `history.pushState`/`replaceState` are
-wrapped to stamp a `lectioIdx` into the state, the loaded entry is stamped 0, and
-`popstate` traps when it lands back on 0. An *index* rather than a counter
-decremented on each `popstate` is what keeps Forward working — `popstate` fires
-in both directions, and only the state can say which way, or how far. (Once you
-Back all the way to the floor the re-pushed spare truncates forward history, so
-Forward stops there; mid-stack it is unaffected.)
+The mitigation is re-arming from real gestures (`pointerdown`/`touchstart`/
+`keydown`), since an entry pushed while touching carries activation. Reading means
+tapping constantly, so in practice the spare is usually gesture-made — but press
+Back repeatedly without touching anything and there is nothing to arm from.
 
-### ⚠ The guard cannot be made airtight, and the manifest is why
-
-Chrome ships a **history manipulation intervention**: history entries a page
-pushes *without user activation* are marked skippable, and Back traverses
-straight past them. It exists to stop pages trapping the back button — which is
-exactly what the spare does. A spare pushed from inside a `popstate` handler has
-no gesture behind it and can therefore be skipped, letting Back walk out.
-
-Observed on a Galaxy S21+ as two working drawer toggles followed by the tab
-closing, while an automated Chromium run of the identical steps toggled
-indefinitely — **headless does not apply the intervention, so no browser test
-here can prove the guard holds.** Treat green automation on this feature as
-"not obviously broken", never as proof.
-
-The mitigation is to re-arm from real gestures (`pointerdown`/`touchstart`/
-`keydown`), since an entry pushed while the user is touching carries activation.
-Reading means tapping constantly, so in practice the spare is usually
-gesture-made. It is not a guarantee: press Back repeatedly without touching
-anything in between and there is no gesture to arm from.
-
-**What actually removes the risk is not being a tab at all.** Lectio ships a web
-app manifest (`static/manifest.webmanifest`, `display: standalone`) so it installs
-to the home screen; installed, Back at the root backgrounds the app instead of
-closing a tab, and the session survives. The in-page guard is the fallback for
-browser-tab use, not the primary answer.
-
-**Installability needs a service worker, not just a manifest** — and the main app
-did not register one. `offline-probe.js` registers `/sw.js`, but it is loaded only
-by Read Mode *and* early-returns without its own `rm-*` elements, so `/` had a
-manifest and no worker. The browser then declines to install and "Add to Home
-screen" degrades to a plain shortcut that opens in the browser — a tab, which
-dies with Back, which is the thing the manifest existed to prevent. `index.html`
-therefore registers `/sw.js` itself on load. That adds no caching of the main
-app: `_worthCaching` covers only `/read`, `/static/*` and `/api/img`, so its
-requests stay network-first and pass straight through.
-
-Note a true standalone install (an Android WebAPK) is minted by Chrome via Play
-Services. A Chromium derivative may still only offer a bookmark-style shortcut,
-in which case installing once from Chrome is what produces a real app icon.
+**What removes the risk is not being a tab.** The web app manifest
+(`display: standalone`) installs to the home screen, where Back at the root
+backgrounds the app. The in-page guard is the fallback for browser-tab use.
+**Installability needs a service worker, not just a manifest**, and the main app
+registered none — `offline-probe.js` is loaded only by Read Mode and early-returns
+without its `rm-*` elements. The browser then declines to install and "Add to Home
+screen" degrades to a shortcut that opens in a tab, which dies with Back: the
+thing the manifest existed to prevent. `index.html` now registers `/sw.js` itself.
+That adds no caching of the main app — `_worthCaching` covers only `/read`,
+`/static/*` and `/api/img`. (A true standalone install is an Android WebAPK minted
+by Chrome via Play Services; a Chromium derivative may still only offer a
+bookmark.)
 
 **This applies to every layout whose tree is a drawer — single *and* medium
-(721–1100px).** Gating it on single-pane mode alone was a bug: a tablet sits in
-medium, so the guard never armed and Back closed the tab there exactly as it had
-on the phone. Wide is deliberately excluded — the tree is a permanent column, so
-there is nothing to toggle, and a Back that visibly does nothing is a trap rather
-than a step. The guard also re-arms from `updateSingleMode()`, because rotating a
-tablet moves it between wide and medium after load.
+(721–1100px).** Gating on single-pane alone meant a tablet never armed it. Wide is
+excluded: the tree is a permanent column, so there is nothing to toggle and a Back
+that visibly does nothing is a trap. Re-arms from `updateSingleMode()`, since
+rotating a tablet moves it between wide and medium after load.
 
-**Back therefore never exits the app in single-pane mode. That is deliberate**,
-and was asked for after a stray press closed the tab mid-read: this is a
-self-hosted reader you live in, and losing the session costs more than being able
-to reverse out of it. Leaving is still an ordinary browser action — close the
-tab, switch apps — it is only Back that no longer does it. Desktop is untouched;
-the whole mechanism is gated on `isSingleMode()`.
+**Back therefore never exits the app in single-pane mode, deliberately** — asked
+for after a stray press closed the tab mid-read. Leaving is still an ordinary
+browser action; only Back no longer does it. Desktop is untouched.
 
-The spare is re-armed the instant it is consumed, so consuming one entry and
-pushing one back leaves the stack the same size: this can run indefinitely
-without growing history and without running out of presses (verified at ten
-consecutive presses, `history.length` flat). An article and a feed-scoped list
-each already have a real parent underneath, so neither arms it, and a scope
-param is required so the bare landing screen is excluded — there is no folder
-list to toggle there, and Back on the app's front door should do the ordinary
-thing. Forward navigation clears the flag, since whatever was pushed now sits
-above the spare.
+The spare is re-armed the instant it is consumed, so the stack stays the same size
+indefinitely (verified at ten presses, `history.length` flat). An article and a
+feed-scoped list have real parents, so neither arms it, and a scope param is
+required so the bare landing is excluded. Forward navigation clears the flag.
 
-The handler lives in `index.html` rather than `app.js` because it is registered
-before `app.js` loads, so `stopImmediatePropagation()` also suppresses that
-file's `popstate` handler. That is deliberate: when the spare is consumed nothing
-actually navigated, and app.js's handler would refetch the list already on screen.
+The handler lives in `index.html`, not `app.js`, because it registers first — so
+`stopImmediatePropagation()` also suppresses app.js's `popstate` handler, which
+would otherwise refetch the list already on screen.
 
-The list toolbar's top-left control mirrors the same hierarchy. Scoped to one
-feed it is a back arrow labelled with the folder name (`selected_folder_name`,
-server-rendered) that goes up to the folder's list; at the folder list it is the
-hamburger that opens the drawer. Two controls rather than one that changes
-meaning, because a button reading "Folders" that does not open Folders is worse
-than either.
+The toolbar's top-left control mirrors the hierarchy: scoped to a feed it is a
+back arrow labelled with the folder name; at the folder list it is the hamburger.
+Two controls rather than one that changes meaning — a button reading "Folders"
+that does not open Folders is worse than either.
 
 ### Off-site links never open in the reading tab
 
-Following a link in place replaces Lectio and loses your position in the list —
-and on a phone, where Back now toggles the folder drawer rather than leaving,
-there is no cheap way back to it.
+Following a link in place loses your position, and on a phone Back no longer
+leaves, so there is no cheap way back.
 
-Every off-site `http(s)` link therefore opens in a new tab. This is done by
-setting the anchor's **own `target`**, never `window.open`: a real tab is what
-the browser's normal activation produces, whereas a scripted open is what popup
-blockers stop and what a phone renders as an awkward floating window. `rel` is
-set to `noopener noreferrer` alongside it — without `noopener` the opened page
-gets a handle on `window.opener` and can rewrite the reading tab out from under
-you (reverse tabnabbing).
+Every off-site `http(s)` link opens in a new tab via the anchor's **own `target`**,
+never `window.open`: a real tab is what normal activation produces, whereas a
+scripted open is what popup blockers stop and what a phone renders as a floating
+window. `rel="noopener noreferrer"` goes with it — without `noopener` the opened
+page can rewrite the reading tab out from under you.
 
 Deliberately narrow: same-origin links are app navigation, in-page fragments are
-how footnotes and tables of contents work and must stay put, and `mailto:`/`tel:`
-would hand a blank tab to a handler that cannot close it.
+how footnotes work, and `mailto:`/`tel:` would hand a blank tab to a handler that
+cannot close it.
 
-It is enforced in three places because there is no single one that covers
-everything:
-
-- **`services/html_sanitize.py`** marks external links as it sanitizes. This is
-  the correct fix at the source, but sanitization runs at *ingest*, so it only
-  applies to content stored from that point on.
-- **`templates/index.html`** carries a capture-phase click listener for the main
-  app. This is what covers article bodies stored before the sanitizer change, and
-  anything injected into the shell later.
-- **`static/reader.js`** carries the same listener for Read Mode, which loads
-  none of `app.js` and serves HTML sanitized when it was stored.
-
-The sanitizer allows `target`/`rel` on `<a>` but never trusts them: it overwrites
-both on every external link and deletes them everywhere else, so a feed can
-neither choose its own target nor drop the `noopener`.
+Enforced in three places because none covers everything: **`html_sanitize.py`**
+marks external links at ingest (correct at the source, but only for content stored
+from then on); **`index.html`** carries a capture-phase click listener for older
+bodies and anything injected later; **`reader.js`** carries the same for Read
+Mode. The sanitizer allows `target`/`rel` but never trusts them — it overwrites
+both on every external link and deletes them elsewhere, so a feed can neither
+choose its target nor drop the `noopener`.
 
 ### Resume where you left off
 
-Every attempt to stop Back leaving the app failed, and each failed *on purpose*
-at a different level:
+Every attempt to stop Back leaving failed, each *on purpose* at a different level:
+Chrome marks script-pushed entries skippable to defeat back-traps, and Android
+exits any app at its root — a WebAPK install does not change that.
 
-- **Chrome** marks script-pushed history entries skippable to defeat back-traps,
-  so the spare entry can be walked straight past.
-- **Android** exits any app at its root. Installing Lectio as a WebAPK — which
-  does work, the manifest and worker meet every installability check — does not
-  change that. A standalone install still exits on Back.
+So the app stops trying to keep you in it and makes leaving cost nothing. The
+current position (URL, pane level, both scroll offsets) is written to
+`localStorage` — not `sessionStorage`, which dies with the tab, the exact event
+being defended against — on `pagehide`, on `visibilitychange` to hidden, and on
+every navigation. The restore runs inline in `<head>` before anything renders, as
+a `location.replace` — `replace`, not `assign`, so resuming leaves no history
+entry to bounce off.
 
-So the app stops trying to keep you in it and makes leaving cost nothing
-instead. The current position (URL, pane level, post-list and article scroll) is
-written to `localStorage` — not `sessionStorage`, which dies with the tab, which
-is the exact event being defended against — on `pagehide`, on
-`visibilitychange` to hidden, and on every navigation. Opening the app then
-lands you back where you were.
-
-The restore runs in an inline script in `<head>`, before anything renders, so it
-is a `location.replace` rather than a visible jump — and `replace`, not `assign`,
-so resuming leaves no history entry for Back to bounce off.
-
-Three rules keep it from becoming its own trap:
+Three rules stop it becoming its own trap:
 
 - **A URL with a query is an explicit destination** and is never overridden. Only
   a bare `/` counts as "just opened the app".
 - **The wordmark links to `/?home=1`**, so "take me to the top" still exists.
-  Without the parameter it would be a bare `/` and would resume, leaving no way
-  to reach the landing.
-- **Positions older than 7 days are ignored** — long enough to cover a weekend
-  away, past which dropping you into a half-read article is a surprise rather
-  than a convenience.
+- **Positions older than 7 days are ignored** — long enough for a weekend, past
+  which it is a surprise rather than a convenience.
 
-Scroll is re-applied after two animation frames plus a short delay, because the
-article pane's height depends on images and the chunked post list grows as it
-reveals; a `scrollTop` set too early lands against a shorter document and clamps.
+Scroll is re-applied after two animation frames plus a short delay: the article
+pane's height depends on images and the chunked list grows as it reveals, so a
+`scrollTop` set too early clamps against a shorter document.
 
-Read Mode does not participate — it has its own navigation model and no Back
-guard either (see Plan.md).
+Read Mode does not participate — its own navigation model, and no Back guard
+either (see Plan.md).
 
 ### Pull down in an article for Reader view
 
-On a phone, pulling down from the top of the article pane toggles Reader view,
-and pulling again comes back — the Reader-view button sits in a toolbar that is
-easy to miss and awkward to reach one-handed.
+Pulling down from the top of the article pane toggles Reader view, and pulling
+again returns — the Reader-view button is easy to miss and awkward one-handed.
 
-This is **not** a revival of pull-to-refresh, which was removed deliberately and
-stays removed (`window.bindSinglePanePullToRefresh` is still a no-op stub).
-Different gesture, different surface, different action.
-
-The gesture delegates to `#entry-readability-button` rather than reimplementing
-the toggle, so both directions come for free from the control that already owns
-them. Listeners are on `document` (a pane swap replaces `.pane-entry` wholesale)
-and stay **passive**: the browser's own pull-to-refresh is suppressed with
-`overscroll-behavior-y: contain` in CSS rather than by calling `preventDefault`
-on every touchmove. Three guards keep it from eating ordinary input — the pull
-must start at `scrollTop === 0`, travel at least 90px, and be clearly vertical.
+**Not** a revival of pull-to-refresh, which stays removed
+(`bindSinglePanePullToRefresh` is still a no-op stub). The gesture delegates to
+`#entry-readability-button` rather than reimplementing the toggle, so both
+directions come free. Listeners are on `document` (a pane swap replaces
+`.pane-entry` wholesale) and stay **passive** — the browser's own pull-to-refresh
+is suppressed with `overscroll-behavior-y: contain` rather than by
+`preventDefault` on every touchmove. Three guards keep it off ordinary input: the
+pull must start at `scrollTop === 0`, travel 90px, and be clearly vertical.
 
 ### Global audio player
 
-The persistent audio player is a deliberate exception to the pane-swap lifecycle.
-The entry view is loaded via `/entries/pane` swaps, so any `<audio>` inside it is
-destroyed on navigation. Instead a single `<audio>` + control bar lives in
-`templates/index.html` outside the swap target and is owned by
-`static/media-player.js`; podcast posts inject a `.podcast-player` Play trigger
-(`_apply_entry_media`) that hands the track URL/title to the global bar. Player
-state (current track, position, playback speed) is transient client-side state
-only — no server or DB involvement — with playback speed persisted to
-`localStorage`.
+A deliberate exception to the pane-swap lifecycle: the entry view is swapped via
+`/entries/pane`, so any `<audio>` inside it is destroyed on navigation. A single
+`<audio>` + control bar lives outside the swap target, owned by
+`static/media-player.js`; podcast posts inject a `.podcast-player` trigger that
+hands the track to it. Player state is transient client-side only, with playback
+speed persisted to `localStorage`.
 
 ## Page weight: lazy HTML fragments
 
