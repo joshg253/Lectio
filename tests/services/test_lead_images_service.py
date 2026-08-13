@@ -2235,3 +2235,33 @@ def test_meta_tags_survive_script_stripping(tmp_path: Path):
     page = '<head><meta property="og:image" content="/hero.jpg"></head><script>var x=1</script>'
     out = service._strip_script_blocks(page)
     assert 'content="/hero.jpg"' in out
+
+
+# --- a comic's prev/next arrows must not become its lead ---------------------
+#
+# dresdencodak's feed opens with <img alt="Previous" height="30"
+# src=".../prev_002.png">, so the 30px arrow won the first-image bonus and
+# became both the hero and the thumbnail. main.py already strips these from the
+# article body (_COMIC_NAV_ALT_RE / _COMIC_NAV_SRC_RE); nothing stopped one
+# being chosen as the lead.
+
+
+def test_comic_nav_arrows_are_rejected(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for url in ("https://dresdencodak.com/wp-content/uploads/2019/03/prev_002.png",
+                "https://dresdencodak.com/wp-content/uploads/2019/03/first_001.png",
+                "https://x.test/img/next.gif",
+                "https://x.test/img/previous-1.png",
+                "https://x.test/img/last.png"):
+        assert _acceptable(service, url) is False, url
+
+
+def test_comics_named_after_those_words_survive(tmp_path: Path):
+    """These are ordinary English, so the match is anchored to a bare basename."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for url in ("https://x.test/comics/first-contact.jpg",
+                "https://x.test/comics/next-door.png",
+                "https://x.test/comics/the-last-stand.jpg",
+                "https://x.test/comics/back-to-school.png",
+                "https://dresdencodak.com/wp-content/uploads/2026/08/dc_minis_27.jpg"):
+        assert _acceptable(service, url) is True, url

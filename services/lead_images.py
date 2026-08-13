@@ -200,7 +200,20 @@ class LeadImageService:
         # the URL nor declared on the tag, so nothing measures it without
         # fetching the bytes. Anchored to the whole basename so a real filename
         # that merely ends in those letters is unaffected.
-        r"|/[a-z0-9-]+_(?:on|off)\.(?:png|gif|jpe?g|webp)(?:$|[?#])",
+        r"|/[a-z0-9-]+_(?:on|off)\.(?:png|gif|jpe?g|webp)(?:$|[?#])"
+        # A comic's prev/next/first/last arrows. main.py already knows these as
+        # body chrome (_COMIC_NAV_ALT_RE / _COMIC_NAV_SRC_RE) and strips them
+        # from the article, but nothing stopped one becoming the LEAD: dresden
+        # codak's feed opens with <img alt="Previous" height="30"
+        # src=".../prev_002.png">, so the 30px arrow won the first-image bonus
+        # and became both hero and thumbnail.
+        #
+        # Anchored to a basename that is ONLY the nav word plus an optional
+        # number, because these words are ordinary English: "first-contact.jpg"
+        # and "next-door.png" are comics, "prev_002.png" and "next.gif" are
+        # buttons. main's looser src pattern can afford the ambiguity because it
+        # only fires alongside other nav signals; this one stands alone.
+        r"|/(?:prev(?:ious)?|next|first|last|back|forward|newer|older)[-_]?\d*\.(?:png|gif|jpe?g|svg|webp)(?:$|[?#])",
         re.IGNORECASE,
     )
     # Domains that serve only CMS admin/template assets (never user content images).

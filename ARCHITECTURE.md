@@ -2443,6 +2443,25 @@ separated by spaces. The file was `Windows11Icon.png`, CamelCase, so the
 `image_url = NULL` and stopped re-resolving, so fixing the rule is only half the
 job — the poisoned rows have to be cleared for the entries to recover.
 
+## A comic's prev/next arrows are not its lead image
+
+`main.py` has known these as body chrome for a long time (`_COMIC_NAV_ALT_RE`,
+`_COMIC_NAV_SRC_RE`) and strips them from the article. Nothing stopped one being
+chosen as the **lead**: dresdencodak's feed opens with
+
+```html
+<img alt="Previous" height="30" src=".../prev_002.png">
+```
+
+so the 30px arrow won the first-image bonus and became both the hero and the
+thumbnail.
+
+The match is anchored to a basename that is *only* the nav word plus an optional
+number, because these are ordinary English words: `first-contact.jpg` and
+`next-door.png` are comics, `prev_002.png` and `next.gif` are buttons. `main`'s
+looser `src` pattern can afford the ambiguity because it only fires alongside
+other nav signals; this one stands alone, so it cannot.
+
 ## An `<img>` inside a `<script>` is source code, not an image
 
 monstersoupcomic's bookmark widget does
