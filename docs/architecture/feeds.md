@@ -435,148 +435,73 @@ Startup migration copies legacy per-user `websub_subscriptions` rows idempotentl
 ## Removing a feed has to clear the record that it was failing
 
 `purge_orphaned_feed` cleaned `kept_feeds`, `feeds_needing_replacement` and
-`folder_feeds`, but never `feed_failure_state`. So a feed unsubscribed *because*
-it was dead stayed on the failure record permanently, and Failing Feeds plus the
-"dead — needs replacement" triage went on counting subscriptions that no longer
-existed — with nothing left to fix or remove. The 404 sweep on 2026-08-11/12
-made it obvious by creating 560 of them at once.
+`folder_feeds` but not `feed_failure_state`, so a feed unsubscribed *because* it
+was dead counted as failing forever (560 rows from one sweep). Safe to drop: it
+is derived state rebuilt on the next fetch, and a feed with no reader row has no
+next fetch.
 
-Safe to drop unconditionally: a failure record is derived state rebuilt on the
-next fetch, and a feed with no reader row has no next fetch. A feed that is later
-re-added starts clean, which is the right reading of a deliberate re-subscribe.
-`scripts/clear_ghost_failure_state.py` clears the pre-existing backlog (562 rows
-on the live library).
-
-**Ghost is defined against reader, not against folders.** Unsubscribe-with-keep
-deliberately leaves a feed with no `folder_feeds` row while it still exists and
-stays reachable through the Kept view, so keying the sweep on folder membership
-would delete the failure record of feeds that are still real.
-
-Other feed-keyed tables still outlive their feeds — `feed_lead_image_strategy`
-(1,024 ghost feeds), `feed_fetch_history` (754), `feed_seen_window` (553),
-`feed_media_scan` (173), `fever_feed_map` (154), `browser_ua_feeds` (95),
-`websub_subscriptions` (74). They are deliberately left alone for now: they are
-untidy rather than wrong, and some are not obviously safe to drop (the API id
-maps are handed out to sync clients, and fetch history is history). Failure state
-was the one with a visible, misleading consequence.
+**Ghost is defined against reader, not folders** — unsubscribe-with-keep
+deliberately leaves a real feed with no folder row.
+`scripts/clear_ghost_failure_state.py` cleared the backlog. Sibling tables still
+outlive their feeds (`feed_lead_image_strategy` 1,024 ghost feeds,
+`feed_fetch_history` 754, …); untidy rather than wrong, and the API id maps and
+fetch history are not obviously safe to drop.
 
 ## A tag has to survive an unsubscribe, because a star does
 
-Stars and tags are the same promise — "keep this" — but they are stored in
-completely different places. A star is a `saved_entries` row in the meta DB with
-no reader dependency, so it survives the feed's deletion untouched. A tag lives
-in **reader's own** `entry_tags`, attached to the entry resource, and is deleted
-*with the feed*.
+A star is a `saved_entries` row in the meta DB and survives the feed's deletion;
+a tag lives in reader's own `entry_tags` and is deleted *with the feed*. So a
+tagged-but-unstarred entry came out of an unsubscribe with its capture intact and
+its tags gone — which makes it read as carrying no keep signal, and therefore
+eligible for `purge_uncurated_orphan_archives.py`.
 
-So a tagged-but-unstarred entry used to come out of a plain unsubscribe with its
-offline capture intact and its tags gone. That is not untidy, it is destructive
-one step later: an orphan archive counts as kept only if it is starred **or**
-manually tagged (see "A surviving capture is not itself a keep signal"), so
-losing the tag makes the entry read as carrying no keep signal at all —
-unreachable in Saved, and eligible for deletion by
-`scripts/purge_uncurated_orphan_archives.py`. The dialog said so out loud
-("tags are lost"), which is how it was noticed.
-
-`_carry_tags_to_orphan_archive` copies the tags into `orphan_entry_tags` before
-the delete. That is not a new concept: it is the table the UI already writes when
-you tag an entry whose feed is gone, precisely because there is no reader
-resource to attach to. The tags simply move to where an orphan's tags are meant
-to live.
-
-Two gates:
-
-- **Only for entries whose capture survives** — the same test
-  `_purge_dead_entry_meta` uses, so both agree about what still exists
-  afterwards. With no archive row the entry is gone entirely and a tag row would
-  point at nothing.
-- **Not when `migrate_curation_to` is set** — there the tags follow the entries
-  onto the surviving feed instead, which is `_migrate_curation`'s job.
-
-`orphan_entry_tags` is deliberately absent from `_DEAD_ENTRY_META_TABLES`, so the
-meta sweep that runs immediately afterwards does not undo this.
+`_carry_tags_to_orphan_archive` copies them into `orphan_entry_tags` (the table
+the UI already writes when you tag an entry whose feed is gone) before the
+delete. Gated on a surviving capture — the same test `_purge_dead_entry_meta`
+uses — and skipped when `migrate_curation_to` is set, where tags follow the
+entries instead. `orphan_entry_tags` is absent from `_DEAD_ENTRY_META_TABLES` so
+the sweep afterwards does not undo it.
 
 ## Unsubscribing has to be able to actually remove things
 
-The keep model has a corollary that only shows up at removal time: a star or a
-tag **preserves the offline capture**, so once the previous section made tags
-survive an unsubscribe, *every* exit from the dialog left the posts behind in
-Saved as orphan archives. That is right when the feed was worth reading and
-wrong when the feed itself was the mistake — and the only way out was to untag
-and unstar every entry by hand first.
+Once tags survived, *every* exit from the dialog left the posts in Saved, because
+a star or tag preserves the capture. `drop_all_curation` is the fourth choice.
+Order is load-bearing:
 
-`drop_all_curation` is the fourth choice. Order is load-bearing:
+1. **tags first** — `apply_star_state(False)` consults `entry_has_keep_signal`
+   and would refuse to release the capture while a tag remains;
+2. then the star;
+3. then the archive **synchronously** — `enqueue_removal` only marks
+   `pending_removal` for a worker, and the feed is about to disappear.
+   `delete_archive` keeps assets another entry references.
 
-1. **Tags come off first.** `apply_star_state(False)` consults
-   `entry_has_keep_signal`, so unstarring while a tag remains would (correctly)
-   refuse to release the capture.
-2. **Then the star.**
-3. **Then the archive, synchronously.** `enqueue_removal` only marks the row
-   `pending_removal` for a background worker, and the feed is about to
-   disappear — so `delete_archive` runs the cascade immediately instead, keeping
-   assets another entry still references.
-
-`archived_entries` (the Archive *state*, not the capture) needs no handling:
-with every capture gone, `_purge_dead_entry_meta` treats the whole feed as
-uncaptured and drops all of its per-entry meta in one pass.
-
-Two guards in the UI, because this is the only irreversible choice in the dialog
-— it deletes the offline copies, so there is nothing left to undo it from. It
-carries a `confirm()` naming the number of posts, and the re-star checkbox is
-disabled and cleared while it is selected, since "bring these to the top of the
-Inbox" and "delete these" contradict each other.
+`archived_entries` needs no handling: with every capture gone,
+`_purge_dead_entry_meta` drops all per-entry meta in one pass. It is the dialog's
+only irreversible choice, so it carries a `confirm()` and disables the re-star
+checkbox.
 
 ## "Re-star" is two operations, not one
 
-Unsubscribing a feed can bring its curated posts back to the top of the Inbox.
-The Inbox orders by `saved_entries.saved_at`, so an item curated months ago sinks
-to wherever it was — which is the last place you look right after deciding to
-drop its feed.
+Unsubscribing can bring curated posts back to the top of the Inbox, which orders
+by `saved_entries.saved_at`. `restar_curated_entries` does two different things:
 
-The obvious implementation is "set saved_at to now", and it is wrong for half the
-items. `restar_curated_entries` does two different things:
+- **tagged but unstarred** — no row to update, so a date bump does nothing. It
+  must be genuinely starred, which is also what enqueues its capture.
+- **already starred** — `apply_star_state` is `INSERT OR IGNORE`, so it would
+  leave the old timestamp. That row is re-stamped directly.
 
-- **Tagged but unstarred** — there is no `saved_entries` row to update, so a date
-  bump touches nothing and the item still never appears. It has to be *genuinely
-  starred*, which is also what enqueues its offline capture. This is the common
-  case, and it follows from the keep model: a tag is a keep signal, but only a
-  star is archived.
-- **Already starred** — `apply_star_state` is `INSERT OR IGNORE`, so calling it
-  again silently leaves the old timestamp and nothing moves. That row is
-  re-stamped directly.
-
-Deliberately **not** unstar-then-star for the second case. Unstarring an entry
-with no other keep signal enqueues removal of its offline capture
-(`entry_has_keep_signal`), so a failure between the two calls would destroy
-exactly what the option exists to preserve. There is no "re-star" primitive —
-only star and unstar, and star is idempotent — which is why this is a named
-operation rather than two calls at the call site.
-
-It runs **before** the feed is removed: the entries must still be readable, and
-the capture it enqueues is flushed by the force-archive that both the keep and
-purge branches already perform. Off by default, and the checkbox is reset every
-time the dialog opens — the modal is reused, so a box ticked for the last feed
-would silently reorder the Inbox for the next one.
+Deliberately **not** unstar-then-star: unstarring an entry with no other keep
+signal enqueues removal of its capture. Runs before the feed is removed, off by
+default, and the checkbox resets on every open (the modal is reused).
 
 ## A kept post has to say its feed is gone
 
-Once curation outlives its feed, the feed name beside a saved post becomes a
-half-truth: it names something you can no longer read. Two different states get
-there and both look identical on screen — a **kept feed** still exists in reader
-but is hidden from the tree, and an **orphan archive**'s feed is gone from reader
-entirely. What they share is the only thing that matters at the point of use:
-there is no subscription behind the name, so clicking through will not show you
-more of it. `unsubscribed_feed_urls_among` treats them the same and the name
-renders `Feed Name (unsubscribed)`.
+A **kept feed** still exists in reader but is hidden from the tree; an **orphan
+archive**'s feed is gone entirely. Both mean there is no subscription behind the
+name, so both render `Feed Name (unsubscribed)`.
 
-The test is *not* "has no folder row". A feed in no folder is still subscribed —
-it lives under the virtual Uncategorized folder — and marking those would be
-wrong. The test is membership of `get_all_reader_feed_urls(include_kept=False)`,
-which excludes both states for exactly this reason.
-
-Scoped to the feeds actually on screen rather than computed library-wide, so the
-template context carries a handful of URLs instead of a set of thousands on every
-render.
-
-Rendered as a separate muted `<span>`, never concatenated into the title string:
-the feed name is data that appears in search, exports, feed properties and the
-tree, and baking a status word into it would leak everywhere the name goes.
+The test is membership of `get_all_reader_feed_urls(include_kept=False)`, *not*
+"has no folder row" — a feed in no folder is still subscribed via Uncategorized.
+Scoped to the feeds on screen, and rendered as a separate `<span>`: the feed name
+also appears in search, exports and the tree, and baking a status word into it
+would leak everywhere.

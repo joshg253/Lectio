@@ -178,68 +178,25 @@ Fill mode's `fill_zoom` multiplier (`feed_display_prefs.fill_zoom`, NULL = defau
 
 ## An embed URL wearing an anchor is still an embed
 
-Feeds that lose their oEmbed iframe usually ship the video as a `watch?v=`,
-`youtu.be/` or `/shorts/` link, and `_embed_standalone_youtube_links` rebuilds a
-player from any of those when the link is a paragraph's sole content.
-sonarsource.com ships a fourth shape: the **`/embed/` URL itself**, as a plain
-`<a href>` with descriptive text —
+sonarsource ships its video as `<a href="https://www.youtube.com/embed/<id>">`.
+`_embed_standalone_youtube_links` knew `watch?v=`, `youtu.be/` and `/shorts/`
+only, and `extract_video_id` could not parse `/embed/` either — so nothing
+recovered it. Both now accept `/embed/` and `youtube-nocookie.com`.
 
-```html
-<p><a href="https://www.youtube.com/embed/<id>?si=…">Escape from AppleScript</a></p>
-```
-
-That is an embed source that happens to be wearing an anchor. It read as "the
-video is on the web post but not in the article", which is precisely what this
-function exists to undo, and it missed in **two** places at once: the URL matcher
-(`_YT_WATCH_URL_RE`) listed only the three link shapes, and `extract_video_id`
-could not name a video from an `/embed/` URL either — so even code that reached
-past the matcher had nothing to build a player from. Both now accept `/embed/`,
-and `youtube-nocookie.com` alongside it, since it is the same URL shape from the
-privacy host.
-
-There was a vestigial `if "/embed/" in content_html: pass` at the top of the
-function, anticipating this case and doing nothing about it. Removed rather than
-left to imply a check that was not happening.
-
-The paragraph-sole rule is unchanged and still the whole scope guard: a link
-inside a sentence stays a link. The anchor's *text* was never required to be a
-bare URL — the test is whether the anchor is its container's only content — so a
-worded link like this one already qualified once the URL shape was recognized.
+The paragraph-sole rule is the scope guard and is unchanged: a link inside a
+sentence stays a link. The anchor's *text* was never required to be a bare URL.
 
 ## A body image that fails has to be able to try again
 
-The article's hero image has always carried an `onerror` that swaps its `src`
-for `/api/img?u=…` and only gives up if the proxy fails too. Body images carried
-nothing: a failed load left blank space, no second attempt, and no way to tell a
-blocked image from one the publisher never shipped.
+The hero has always had an `onerror` that retries via `/api/img?u=…`; body images
+had none, so a failed load was blank space. Invisible until a post's `og:image`
+*is* its body image — `_strip_lead_image_opener` then drops the hero as a
+duplicate and the only copy left is the one without a fallback (sonarsource.com).
 
-That asymmetry stays invisible for as long as a post has both a hero and body
-images, because the hero is the one people look at. It surfaces when a post's
-`og:image` **is** its body image. `_strip_lead_image_opener` then correctly drops
-the separate hero — showing the same picture twice above and inside the article
-is worse than showing it once — and the only copy left is the body copy, the one
-with no fallback. That is why sonarsource.com's blog read as "the posts before
-and after this one show their image and this one doesn't": the neighbours were
-rendering a hero, this post was rendering a body image.
-
-`add_img_proxy_fallback` closes it, running alongside `add_no_referrer_to_images`
-on the entry-pane path. Three properties matter:
-
-- **The direct URL stays the first attempt.** This is a retry, not a rewrite.
-  Preemptively routing every body image through the proxy is a different (and
-  much larger) change — `proxy_hotlink_images` already does that deliberately,
-  for the named hosts in `_HOTLINK_IMG_HOSTS`, where a direct load is *known* to
-  fail.
-- **It costs nothing on the happy path.** `onerror` never fires for an image
-  that loads.
-- **It only adds a handler where there is none.** The sanitizer strips
-  author-supplied event handlers, so in practice that is every image, but the
-  guard means running the pass twice is a no-op rather than a nest of handlers.
-
-Because the retry is same-origin and the server-side fetch carries no `Referer`,
-it recovers the same three failures the hero's copy always did: a host that
-refuses cross-origin image loads, a URL a client-side blocker drops, and a signed
-URL that expired between storage and reading.
+`add_img_proxy_fallback` adds the same handler. It is a **retry, not a rewrite**:
+the direct URL stays the first attempt. Preemptive proxying is
+`proxy_hotlink_images`, for hosts where a direct load is known to fail. Only tags
+without an `onerror` are touched, so the pass is idempotent.
 
 ## Choosing a lead image: what gets thrown away, and what sneaks through
 
@@ -280,147 +237,84 @@ job — the poisoned rows have to be cleared for the entries to recover.
 ## Several images in one container are a row — unless they are a comic page
 
 `.entry-content p:has(> img + img)` lays a container's images out as a wrapping
-flex row. It was written for paizo.com's three 250px cover variants, which are
-inline by default and sat side by side unstyled; the note said `max-width:100%`
-would keep a full-width image one-per-line.
-
-It does not, for two separate reasons, and `width: auto` is the bigger one. It
-**discards the `width` attribute**, so the used width becomes the intrinsic width
-of whichever `srcset` candidate the browser picked — and `sizes="auto"` inside a
-flex container resolves small, so it picked the 300w file. mahonoir.com stacks a
-comic page as four 800px panels in one `<p>`; they rendered 300x165, two to a
-line, genuinely low-res as well as small.
-
-The second reason is that **a flex item shrinks below its intrinsic width by
-default**, which is what the original note missed.
-
-Measured in Chromium rather than reasoned about, because the first attempt at
-this fix (adding `flex: 0 0 auto` alone) did not work and the report came back
-unchanged:
+flex row (written for paizo's three 250px covers). Two properties broke
+full-width images, measured in Chromium:
 
 | | comic panels | paizo covers |
 |---|---|---|
-| `width: auto` | 300x165, 2/line | 16x21 |
-| without it | 700x384, 1/line | 250x250, sharing a line |
+| with `width: auto` | 300x165, 2/line | 16x21 |
+| without | 700x384, 1/line | 250x250, sharing |
 
-The covers collapsing to 16px is the same bug from the other end: with no width
-attribute honoured and no loaded image, nothing is left to size them.
+`width: auto` **discards the `width` attribute**, so the used width comes from
+whichever `srcset` candidate is chosen — and `sizes="auto"` in a flex container
+picks a small one. `flex: 0 0 auto` is the other half: a flex item shrinks below
+its intrinsic width by default. `width: auto` now survives only for `.npf_row`,
+whose `width: 100%` would otherwise force one image per line.
 
-So `width: auto` is gone and `flex: 0 0 auto` stays. It survives only for
-`.npf_row`, which is what it was there for: Tumblr's row layout sets
-`width: 100%` on its figure images, which would force one per line, and a row is
-the entire point of an npf_row.
+A top-level `<img>` also gets `margin-bottom: 1em` — images inside a `<p>` take
+spacing from the paragraph, a bare one has none.
 
 ## dresdencodak draws its own list crop, for half its comics
 
-Same split as Penny Arcade — whole comic in the article, a legible crop in the
-list — with different naming and, unlike Penny Arcade, a convention the site only
-half keeps:
+`dc_minis_<n>.jpg` is the article image (#27 is 1500x4875, a sliver as a
+thumbnail); `dc_minis_<n>_thumbnail.jpg` is a 2500x1000 crop. Derived, not
+fetched — `thumbnail_from_lead_image` runs on the render path and is network-free
+by contract.
 
-```
-article : …/uploads/YYYY/MM/dc_minis_<n>.jpg          (#27 is 1500x4875)
-list    : …/uploads/YYYY/MM/dc_minis_<n>_thumbnail.jpg (2500x1000)
-```
-
-Every DC Minis strip checked has its `_thumbnail.jpg` (25, 26, 27); no Dark
-Science page has one (`ds_185`, `ds_186_silder`, `ds_187_silder` all 404). Since
-`thumbnail_from_lead_image` is network-free by contract — it runs on the
-posts-list render path — the plugin cannot check, so it derives only for
-`dc_minis_` and declines where it does not know.
-
-The reverse derivation is deliberately absent. Stripping `_thumbnail` to reach
-the article image works for #26 and #23 and 404s for #25 and #22: those posts
-publish only the `_thumbnail`-named file, which is therefore the comic rather
-than a crop of it. Instead `source_score_adjustment` demotes a `_thumbnail` URL
-while scoring the source page, so the full comic wins the lead on its own merits
-when the page offers both, and the crop still wins when it is all there is.
+Restricted to `dc_minis_`: every DC Minis strip has the crop, no Dark Science
+page does (`ds_185`, `ds_186_silder`, `ds_187_silder` all 404). The **reverse**
+derivation is absent on purpose — stripping `_thumbnail` 404s for #25 and #22,
+whose only published file is the `_thumbnail` one, so that *is* their comic.
+Demoting the crop while scoring the page was tried and is inert: those pages
+carry no other candidate.
 
 ## A comic's prev/next arrows are not its lead image
 
-`main.py` has known these as body chrome for a long time (`_COMIC_NAV_ALT_RE`,
-`_COMIC_NAV_SRC_RE`) and strips them from the article. Nothing stopped one being
-chosen as the **lead**: dresdencodak's feed opens with
+dresdencodak's feed opens with `<img alt="Previous" height="30" src=".../prev_002.png">`,
+so the arrow won the first-image bonus and became hero and thumbnail. `main.py`
+already stripped these from the *body* (`_COMIC_NAV_ALT_RE`); nothing stopped one
+being chosen as the lead.
 
-```html
-<img alt="Previous" height="30" src=".../prev_002.png">
-```
-
-so the 30px arrow won the first-image bonus and became both the hero and the
-thumbnail.
-
-The match is anchored to a basename that is *only* the nav word plus an optional
-number, because these are ordinary English words: `first-contact.jpg` and
-`next-door.png` are comics, `prev_002.png` and `next.gif` are buttons. `main`'s
-looser `src` pattern can afford the ambiguity because it only fires alongside
-other nav signals; this one stands alone, so it cannot.
+Matched on a basename that is only the nav word plus an optional number, because
+these are ordinary English: `first-contact.jpg` is a comic, `prev_002.png` is a
+button.
 
 ## An `<img>` inside a `<script>` is source code, not an image
 
-monstersoupcomic's bookmark widget does
-
-```js
-document.write('<a …><img src="'+imgTag+'" …>')
-```
-
-and the page scan dutifully produced the lead image
-`https://monstersoupcomic.com/'+imgTag+'` — a URL that cannot resolve to
-anything. `<script>` blocks are now stripped once in `_fetch_page_html`, rather
-than at each of the ten `_IMG_TAG_RE` scan sites, so no future scan can forget.
-Safe there because this class reads no JSON-LD (which also lives in `<script>`),
-and `og:`/`meta` tags are in `<head>` and untouched.
+monstersoupcomic's bookmark widget does `document.write('<img src="'+imgTag+'">')`,
+and the scan produced the lead `https://monstersoupcomic.com/'+imgTag+'`.
+`<script>` blocks are stripped once in `_fetch_page_html` rather than at each of
+the ten `_IMG_TAG_RE` scan sites. Safe there: this class reads no JSON-LD, and
+`og:`/`meta` live in `<head>`.
 
 ## An age gate is the one image that is definitely not the post
 
 An adult webcomic serves a content-warning interstitial *instead of* the strip,
-so a page scrape picks it up exactly where the comic should be — and on a
-webcomic feed whose body ships no image, `_inject_webcomic_panel_into_bodyless_entry`
-then puts it in the article. monstersoupcomic.com illustrated both halves at once:
-a post about paintbrushes rendered `maturecontentwarning.png`.
+so a scrape finds it where the comic should be — and on a feed whose body has no
+image, `_inject_webcomic_panel_into_bodyless_entry` puts it in the article
+(monstersoupcomic captioned a post about paintbrushes with it).
 
-Unlike most site chrome this is not a logo or a widget, so none of the existing
-rules saw it. It is now matched in `_SITE_CHROME_PATH_PATTERNS`, separator-optional
-because these files are named every way going (`maturecontentwarning`,
-`mature-content-warning`, `age_gate`, `nsfw-warning`).
+Matched separator-optional (`maturecontentwarning`, `age_gate`, `nsfw-warning`)
+but only in gate shapes: `the-warning-sign-chapter-4.jpg` still passes.
 
-The words themselves appear in real comic titles, so the patterns match the
-*gate* shapes only: `the-warning-sign-chapter-4.jpg` and
-`mature-audiences-episode.jpg` still pass, and a test pins that.
-
-Removing the gate exposed what it had been masking: the same feed's text posts
-then resolved to `/images/blog_on.png`, a 99x44 nav button. `<name>_on.png` /
-`<name>_off.png` is the rollover convention for a button's two states, and a
-site that still writes its menu that way carries no other markup saying so. The
-size floor cannot catch it either — the dimensions are neither in the URL nor
-declared on the tag, so nothing measures them without fetching the bytes. That
-shape is rejected too, anchored to the whole basename so `lights-on.jpg` and
-`switched_on_and_off_again.png` are untouched.
+Removing it exposed the next layer — `/images/blog_on.png`, a 99x44 nav button.
+`<name>_on.png` / `_off.png` is the rollover convention, and the size floor
+cannot catch it: the dimensions are neither in the URL nor on the tag.
 
 ## A caption that never changes is the site's, not the post's
 
-Webcomic caption extraction falls back to `og:description`, because that is
-where a lot of comics put the hover-text punchline. Plenty of sites put a fixed
-blurb there instead. `_extract_webcomic_alt_text` already rejects one that merely
-repeats `og:site_name` (pbfcomics ships `og:description="The Perry Bible
-Fellowship"` on every strip), but Penny Arcade defeats that twice over: it ships
-no `og:site_name` at all, and its description is a real sentence —
+Webcomic captions fall back to `og:description`, where many sites put a fixed
+blurb. The existing guard rejects one equal to `og:site_name`; Penny Arcade ships
+no `og:site_name` and a real sentence, so nothing in a single page marks it as
+boilerplate.
 
-> Videogaming-related online strip by Mike Krahulik and Jerry Holkins. Includes
-> news and commentary.
-
-Nothing *within* one page marks that as boilerplate. What marks it is that it
-does not vary: a punchline belongs to its strip, a tagline belongs to the site.
-So the test is across the feed rather than within the page — if another entry
-already carries this exact caption, neither of them is a caption.
-
-Self-healing rather than perfect. The first entry cannot know, so it stores the
-text; the second recognises the repeat, and `_clear_feed_boilerplate_title` drops
-it from every row of that feed at once (and from the in-memory title cache, which
-would otherwise keep serving it until a restart). Worst case is a missing caption
-on one post instead of a wrong one on every post.
-
-Scoped to a single feed on purpose: two different sites may legitimately share a
-sentence, and `image_alt` is never touched — only the title, which is the field
-that fell back to `og:description` in the first place.
+What marks it is that it does not vary. The test is **across the feed**: if
+another entry already carries this exact caption, neither is a caption. The first
+entry cannot know and stores it; the second recognises the repeat and
+`_clear_feed_boilerplate_title` drops it from every row and the in-memory cache.
+Scoped to one feed; `image_alt` is untouched. The live sweep cleared 530 rows
+across 139 captions — mostly taglines, plus stock-photo alt text reused across
+opensource.com articles.
 
 ## A webcomic wants a different image in the list than in the article
 
