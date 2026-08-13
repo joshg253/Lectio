@@ -2193,6 +2193,41 @@ Fill mode's `fill_zoom` multiplier (`feed_display_prefs.fill_zoom`, NULL = defau
 
 **Direct-load fallback:** `/thumb` fetches the source image *from the server*, so a host that IP-blocks datacenter traffic (e.g. Cloudflare 403, washingtonstatestandard.com) makes `/thumb` 502 and the list thumbnail break — even though the browser's own (residential) IP can fetch the image fine. The list `<img>` carries the raw image URL in `data-direct`; on a `/thumb` error its `onerror` (`window.thumbImgFallback`, defined pre-body so it exists before any load fails) retries once with that direct URL, letting the browser load the image itself. CSS `object-fit:cover` sizes the un-resized image to the tile. This recovers the thumbnail without evading the block server-side (it's the user's own client fetching, exactly as the article view already does). Only `http(s)` direct URLs are retried, and only once (a `data-triedDirect` guard prevents an error loop); if the direct load also fails, the tile collapses to `is-empty` as before. The same helper backs the JS-derived list thumbnail (it sets `data-direct` to the lead-image URL).
 
+## A body image that fails has to be able to try again
+
+The article's hero image has always carried an `onerror` that swaps its `src`
+for `/api/img?u=…` and only gives up if the proxy fails too. Body images carried
+nothing: a failed load left blank space, no second attempt, and no way to tell a
+blocked image from one the publisher never shipped.
+
+That asymmetry stays invisible for as long as a post has both a hero and body
+images, because the hero is the one people look at. It surfaces when a post's
+`og:image` **is** its body image. `_strip_lead_image_opener` then correctly drops
+the separate hero — showing the same picture twice above and inside the article
+is worse than showing it once — and the only copy left is the body copy, the one
+with no fallback. That is why sonarsource.com's blog read as "the posts before
+and after this one show their image and this one doesn't": the neighbours were
+rendering a hero, this post was rendering a body image.
+
+`add_img_proxy_fallback` closes it, running alongside `add_no_referrer_to_images`
+on the entry-pane path. Three properties matter:
+
+- **The direct URL stays the first attempt.** This is a retry, not a rewrite.
+  Preemptively routing every body image through the proxy is a different (and
+  much larger) change — `proxy_hotlink_images` already does that deliberately,
+  for the named hosts in `_HOTLINK_IMG_HOSTS`, where a direct load is *known* to
+  fail.
+- **It costs nothing on the happy path.** `onerror` never fires for an image
+  that loads.
+- **It only adds a handler where there is none.** The sanitizer strips
+  author-supplied event handlers, so in practice that is every image, but the
+  guard means running the pass twice is a no-op rather than a nest of handlers.
+
+Because the retry is same-origin and the server-side fetch carries no `Referer`,
+it recovers the same three failures the hero's copy always did: a host that
+refuses cross-origin image loads, a URL a client-side blocker drops, and a signed
+URL that expired between storage and reading.
+
 ## Choosing a lead image: what gets thrown away, and what sneaks through
 
 The selector is a pile of heuristics, and its failures come in two opposite

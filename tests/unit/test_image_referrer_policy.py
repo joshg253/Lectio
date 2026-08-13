@@ -9,6 +9,7 @@ from __future__ import annotations
 from main import (
     _is_hotlink_img_host,
     _lead_image_display_url,
+    add_img_proxy_fallback,
     add_no_referrer_to_images,
     proxy_hotlink_images,
 )
@@ -92,3 +93,45 @@ def test_proxy_leaves_other_hosts_untouched():
 def test_lead_image_display_url_proxies_hotlink_host():
     out = _lead_image_display_url("https://nanolx.org/wp-content/uploads/utilities-terminal.png")
     assert out is not None and out.startswith("/api/img?u=")
+
+
+# ── add_img_proxy_fallback ────────────────────────────────────────────────────
+#
+# The article's hero has always retried through /api/img when a direct load
+# fails; body images had no second attempt. That gap only shows when a post's
+# og:image IS its body image, because the separate hero is then dropped as a
+# duplicate and the body copy is the only one left (sonarsource.com/blog,
+# reported 2026-08-12).
+
+
+def test_body_img_gets_proxy_retry_on_error():
+    src = '<p>x</p><img src="https://assets.example.com:443/a/shot.png"/><p>y</p>'
+    out = add_img_proxy_fallback(src)
+    assert "onerror=" in out
+    assert "/api/img?u=" in out
+    # The direct URL stays the FIRST attempt — the proxy is the retry, not a
+    # preemptive rewrite (that is proxy_hotlink_images' job, for named hosts).
+    assert 'src="https://assets.example.com:443/a/shot.png"' in out
+
+
+def test_body_img_fallback_is_idempotent():
+    src = '<img src="https://example.com/a.png"/>'
+    once = add_img_proxy_fallback(src)
+    assert add_img_proxy_fallback(once) == once
+
+
+def test_body_img_fallback_leaves_existing_onerror_alone():
+    src = '<img src="https://example.com/a.png" onerror="mine()"/>'
+    assert add_img_proxy_fallback(src) == src
+
+
+def test_body_img_fallback_no_images_is_a_passthrough():
+    src = "<p>no pictures here</p>"
+    assert add_img_proxy_fallback(src) == src
+
+
+def test_body_img_fallback_composes_with_referrer_policy():
+    src = '<img src="https://example.com/a.png">'
+    out = add_img_proxy_fallback(add_no_referrer_to_images(src))
+    assert 'referrerpolicy="no-referrer"' in out
+    assert "onerror=" in out

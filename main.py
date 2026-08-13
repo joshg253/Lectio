@@ -11022,6 +11022,47 @@ def add_no_referrer_to_images(content: str) -> str:
     )
 
 
+# Mirrors the entry-lead-image handler in templates/_entry_pane.html. Kept as a
+# literal rather than shared with the template because the template's copy is
+# written inline in HTML and this one has to survive an attribute-level regex.
+_IMG_PROXY_FALLBACK_ONERROR = (
+    "var _s=this.getAttribute('src');"
+    "if(!_s||_s.startsWith('/api/img?')||_s.startsWith('data:')){this.style.display='none'}"
+    "else{this.setAttribute('src','/api/img?u='+encodeURIComponent(this.src))}"
+)
+
+
+def add_img_proxy_fallback(content: str) -> str:
+    """Give body images the retry-through-/api/img the lead image already has.
+
+    The article's hero has carried this since the proxy was added: if the direct
+    load fails, swap src for the same-origin proxy, and only give up if that
+    fails too. Body images had nothing — a failed load left a blank space with no
+    second attempt and no way to tell a blocked image from one the publisher
+    never shipped.
+
+    That asymmetry is invisible until an article's og:image IS its body image.
+    Then _strip_lead_image_opener correctly drops the separate hero (showing the
+    picture twice is worse) and the only copy left is the body one — the copy
+    with no fallback. sonarsource.com's blog does this on the posts that carry a
+    screenshot, which is why the neighbours "showed their image" and one post
+    did not: the neighbours were rendering a hero, not a body image.
+
+    Cheap on the happy path: onerror never fires for an image that loads, so this
+    costs nothing until something goes wrong. Only tags without an onerror are
+    touched, and the sanitizer strips author-supplied handlers, so in practice
+    that is all of them.
+    """
+    if "<img" not in content.lower():
+        return content
+    return re.sub(
+        r"<img\b(?![^>]*\bonerror\s*=)([^>]*?)(/?)>",
+        lambda m: f'<img{m.group(1)} onerror="{html.escape(_IMG_PROXY_FALLBACK_ONERROR, quote=True)}"{m.group(2)}>',
+        content,
+        flags=re.IGNORECASE,
+    )
+
+
 def proxy_hotlink_images(content: str) -> str:
     """Rewrite <img> src/srcset for hotlink-protected hosts to the /api/img proxy.
 
@@ -15905,6 +15946,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if isinstance(content_html, str) and content_html and not is_saved:
             content_html = proxy_hotlink_images(content_html)
             content_html = add_no_referrer_to_images(content_html)
+            content_html = add_img_proxy_fallback(content_html)
 
         if not _show_lead_in_article:
             lead_image_url = None
