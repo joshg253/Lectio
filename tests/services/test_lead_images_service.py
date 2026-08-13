@@ -2144,3 +2144,33 @@ def test_alt_text_is_untouched_by_the_guard(tmp_path: Path):
             "SELECT entry_id, image_alt FROM entry_lead_images ORDER BY entry_id"
         ).fetchall()
     assert [r["image_alt"] for r in rows] == ["alt one", "alt two"]
+
+
+# --- an age gate is the one image guaranteed not to be the post ---------------
+#
+# An adult webcomic serves a content-warning interstitial INSTEAD of the strip,
+# so a page scrape picks it up as though it were the comic. monstersoupcomic.com
+# captioned a post about paintbrushes with its maturecontentwarning.png.
+
+
+def test_age_gate_images_are_rejected(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for url in (
+        "https://monstersoupcomic.com/wp-content/uploads/2025/08/maturecontentwarning.png",
+        "https://x.test/img/mature-content-warning.png",
+        "https://x.test/img/age_gate.jpg",
+        "https://x.test/img/age-verification.png",
+        "https://x.test/img/nsfw-warning.png",
+    ):
+        assert _acceptable(service, url) is False, url
+
+
+def test_a_comic_whose_title_contains_those_words_survives(tmp_path: Path):
+    """Scope guard: the words appear in real titles, so only the gate shapes match."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for url in (
+        "https://x.test/comics/the-warning-sign-chapter-4.jpg",
+        "https://x.test/comics/mature-audiences-episode.jpg",
+        "https://x.test/comics/a-warning-from-space.png",
+    ):
+        assert _acceptable(service, url) is True, url

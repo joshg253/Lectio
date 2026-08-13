@@ -2443,6 +2443,23 @@ separated by spaces. The file was `Windows11Icon.png`, CamelCase, so the
 `image_url = NULL` and stopped re-resolving, so fixing the rule is only half the
 job — the poisoned rows have to be cleared for the entries to recover.
 
+## An age gate is the one image that is definitely not the post
+
+An adult webcomic serves a content-warning interstitial *instead of* the strip,
+so a page scrape picks it up exactly where the comic should be — and on a
+webcomic feed whose body ships no image, `_inject_webcomic_panel_into_bodyless_entry`
+then puts it in the article. monstersoupcomic.com illustrated both halves at once:
+a post about paintbrushes rendered `maturecontentwarning.png`.
+
+Unlike most site chrome this is not a logo or a widget, so none of the existing
+rules saw it. It is now matched in `_SITE_CHROME_PATH_PATTERNS`, separator-optional
+because these files are named every way going (`maturecontentwarning`,
+`mature-content-warning`, `age_gate`, `nsfw-warning`).
+
+The words themselves appear in real comic titles, so the patterns match the
+*gate* shapes only: `the-warning-sign-chapter-4.jpg` and
+`mature-audiences-episode.jpg` still pass, and a test pins that.
+
 ## A caption that never changes is the site's, not the post's
 
 Webcomic caption extraction falls back to `og:description`, because that is

@@ -183,7 +183,16 @@ class LeadImageService:
         r"|twitter[-_]?card"
         # "csharp-corner-new" — c-sharpcorner's brand wordmark at /images/, shipped
         # as og:image on posts that have no featured image of their own.
-        r"|csharp[-_]corner[-_]new",
+        r"|csharp[-_]corner[-_]new"
+        # An age-gate / content-warning graphic is the interstitial an adult
+        # webcomic shows INSTEAD of the comic, so scraping the page picks it up
+        # as though it were the strip — monstersoupcomic.com serves
+        # /wp-content/uploads/2025/08/maturecontentwarning.png that way, and it
+        # then became the article image for a post about paintbrushes. It is the
+        # one image on such a page guaranteed not to be the post's own.
+        # Separator-optional because these are written every way going
+        # ("maturecontentwarning", "mature-content-warning", "age_gate").
+        r"|mature[-_]?content|content[-_]?warning|age[-_]?(?:gate|verif|restrict)|nsfw[-_]?warning",
         re.IGNORECASE,
     )
     # Domains that serve only CMS admin/template assets (never user content images).
