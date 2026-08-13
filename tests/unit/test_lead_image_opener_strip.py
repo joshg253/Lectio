@@ -120,3 +120,36 @@ def test_content_without_breaks_is_returned_untouched():
 
 def test_all_spacer_content_collapses_to_none():
     assert main._collapse_block_spacers("<div><br/></div>") is None
+
+
+# --- a <br> next to an image is padding, not a line break -------------------
+#
+# <img> is inline in the HTML spec but not in Lectio: `.entry-content img` is
+# display:block without exception, so a <br> beside one can never be separating
+# text. mahonoir ships `<img><br/><br/><div>…` on its single-panel posts, which
+# rendered as a large gap between the comic and its commentary while its
+# multi-panel posts (no <br>) sat correctly.
+
+
+def test_brs_between_an_image_and_the_next_block_are_dropped():
+    out = main._collapse_block_spacers(
+        '<img src="a.jpg"/><br/><br/><div>commentary</div>')
+    assert "<br" not in out
+    assert '<img src="a.jpg"/>' in out and "commentary" in out
+
+
+def test_a_br_inside_prose_still_survives():
+    """The rule that keeps inline tags out of _REAL_BLOCK_TAGS still holds."""
+    html = "<p>line one<br/>line two</p>"
+    assert main._collapse_block_spacers(html) == html
+
+
+def test_a_br_between_an_image_and_following_text_survives():
+    """Only block boundaries count: text after the break is still text."""
+    html = '<p>before <img src="a.jpg"/><br/>after</p>'
+    assert main._collapse_block_spacers(html) == html
+
+
+def test_a_br_before_an_image_is_dropped_too():
+    out = main._collapse_block_spacers('<div>text</div><br/><img src="a.jpg"/>')
+    assert "<br" not in out

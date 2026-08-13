@@ -14827,6 +14827,14 @@ _BLOCK_SPACER_TAGS = frozenset({"div", "p", "span", "i", "b", "em", "strong", "f
 _REAL_BLOCK_TAGS = frozenset({
     "div", "p", "figure", "blockquote", "table", "ul", "ol", "li", "pre", "hr",
     "h1", "h2", "h3", "h4", "h5", "h6",
+    # <img> is inline in the HTML spec but not in Lectio: `.entry-content img`
+    # is `display: block` without exception, so a <br> next to one can never be
+    # separating text — it is always padding the author added to push the next
+    # block down. mahonoir ships `<img><br/><br/><div>…`, which rendered as a
+    # large gap between a single-panel comic and its commentary while its
+    # multi-panel posts (no <br>) sat correctly. The reasoning that keeps inline
+    # tags out of this set is exactly what puts <img> in it.
+    "img",
 })
 
 
