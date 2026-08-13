@@ -2328,3 +2328,23 @@ def test_penny_arcade_panel_derivation_is_unaffected(tmp_path: Path):
         entry_link="https://www.penny-arcade.com/comic/2026/07/27/x",
         lead_url="https://assets.penny-arcade.com/comics/2026-x.jpg",
     ) == "https://assets.penny-arcade.com/comics/panels/2026-x-p1.jpg"
+
+
+def test_script_end_tags_with_attributes_are_still_stripped(tmp_path: Path):
+    """An HTML end tag may carry attributes; parsers ignore them, a regex cannot.
+
+    With `</script\\s*>` the block did not match at all, so the script survived
+    and its document.write('<img …>') was scanned anyway (CodeQL py/bad-tag-filter).
+    """
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for page in ('<script>x<img src="/bad.png"></script foo>',
+                 '<script>x<img src="/bad.png"></script\t\n bar>',
+                 '<script>x<img src="/bad.png"></SCRIPT >'):
+        assert "/bad.png" not in service._strip_script_blocks(page), page
+
+
+def test_a_non_end_tag_is_not_eaten(tmp_path: Path):
+    """`</scriptfoo>` is not a script end tag, so the strip must not run to it."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    page = '<script>x</scriptfoo><img src="/real.png">'
+    assert "/real.png" in service._strip_script_blocks(page)

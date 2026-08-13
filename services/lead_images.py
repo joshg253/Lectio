@@ -3471,7 +3471,14 @@ class LeadImageService:
     # _IMG_TAG_RE scan sites, so nothing can forget. Safe here because this class
     # reads no JSON-LD (which also lives in <script>); og/meta tags are in <head>
     # and untouched.
-    _SCRIPT_BLOCK_RE = re.compile(r"<script\b[^>]*>.*?</script\s*>", re.IGNORECASE | re.DOTALL)
+    # The end tag needs `[^>]*` and not `\s*`: an HTML end tag may carry
+    # attributes, which parsers ignore but a regex must still consume
+    # (`</script foo>`, `</script\t\n bar>`). With `\s*` the block simply did not
+    # match, so the script survived and its `document.write('<img …>')` was
+    # scanned after all — the bug this strip exists to prevent. Raised by CodeQL
+    # (py/bad-tag-filter). `\b` keeps it from eating `</scriptfoo>`, which is not
+    # an end tag at all.
+    _SCRIPT_BLOCK_RE = re.compile(r"<script\b[^>]*>.*?</script\b[^>]*>", re.IGNORECASE | re.DOTALL)
 
     @classmethod
     def _strip_script_blocks(cls, html_text: str) -> str:
