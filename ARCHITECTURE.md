@@ -2193,6 +2193,34 @@ Fill mode's `fill_zoom` multiplier (`feed_display_prefs.fill_zoom`, NULL = defau
 
 **Direct-load fallback:** `/thumb` fetches the source image *from the server*, so a host that IP-blocks datacenter traffic (e.g. Cloudflare 403, washingtonstatestandard.com) makes `/thumb` 502 and the list thumbnail break — even though the browser's own (residential) IP can fetch the image fine. The list `<img>` carries the raw image URL in `data-direct`; on a `/thumb` error its `onerror` (`window.thumbImgFallback`, defined pre-body so it exists before any load fails) retries once with that direct URL, letting the browser load the image itself. CSS `object-fit:cover` sizes the un-resized image to the tile. This recovers the thumbnail without evading the block server-side (it's the user's own client fetching, exactly as the article view already does). Only `http(s)` direct URLs are retried, and only once (a `data-triedDirect` guard prevents an error loop); if the direct load also fails, the tile collapses to `is-empty` as before. The same helper backs the JS-derived list thumbnail (it sets `data-direct` to the lead-image URL).
 
+## Removing a feed has to clear the record that it was failing
+
+`purge_orphaned_feed` cleaned `kept_feeds`, `feeds_needing_replacement` and
+`folder_feeds`, but never `feed_failure_state`. So a feed unsubscribed *because*
+it was dead stayed on the failure record permanently, and Failing Feeds plus the
+"dead — needs replacement" triage went on counting subscriptions that no longer
+existed — with nothing left to fix or remove. The 404 sweep on 2026-08-11/12
+made it obvious by creating 560 of them at once.
+
+Safe to drop unconditionally: a failure record is derived state rebuilt on the
+next fetch, and a feed with no reader row has no next fetch. A feed that is later
+re-added starts clean, which is the right reading of a deliberate re-subscribe.
+`scripts/clear_ghost_failure_state.py` clears the pre-existing backlog (562 rows
+on the live library).
+
+**Ghost is defined against reader, not against folders.** Unsubscribe-with-keep
+deliberately leaves a feed with no `folder_feeds` row while it still exists and
+stays reachable through the Kept view, so keying the sweep on folder membership
+would delete the failure record of feeds that are still real.
+
+Other feed-keyed tables still outlive their feeds — `feed_lead_image_strategy`
+(1,024 ghost feeds), `feed_fetch_history` (754), `feed_seen_window` (553),
+`feed_media_scan` (173), `fever_feed_map` (154), `browser_ua_feeds` (95),
+`websub_subscriptions` (74). They are deliberately left alone for now: they are
+untidy rather than wrong, and some are not obviously safe to drop (the API id
+maps are handed out to sync clients, and fetch history is history). Failure state
+was the one with a visible, misleading consequence.
+
 ## An embed URL wearing an anchor is still an embed
 
 Feeds that lose their oEmbed iframe usually ship the video as a `watch?v=`,

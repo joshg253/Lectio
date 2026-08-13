@@ -17210,12 +17210,22 @@ def purge_orphaned_feed(
     # Safe unconditionally: an unsubscribe-with-keep is defined as leaving the
     # tree — its curated items stay reachable through the Kept view, which does
     # not read folder_feeds.
+    # feed_failure_state is here for the same reason, one layer down: it is the
+    # record of a feed's consecutive failures, and nothing ever cleared it on
+    # removal. A feed unsubscribed *because* it was dead therefore stayed in the
+    # failure tables forever, so the Failing Feeds counts and the "dead — needs
+    # replacement" triage kept reporting feeds that no longer exist — the 404
+    # sweep on 2026-08-11/12 left 560 such rows behind. It is pure derived state
+    # rebuilt on the next fetch, so dropping it cannot lose anything: a feed that
+    # is re-added starts from a clean slate, which is the correct reading of a
+    # deliberate re-subscribe.
     try:
         conn.execute("DELETE FROM kept_feeds WHERE feed_url = ?", (feed_url,))
         conn.execute("DELETE FROM feeds_needing_replacement WHERE feed_url = ?", (feed_url,))
         conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (feed_url,))
+        conn.execute("DELETE FROM feed_failure_state WHERE feed_url = ?", (feed_url,))
     except Exception:  # noqa: BLE001
-        LOGGER.warning("[purge] kept_feeds/needs_replacement/folder cleanup failed for %s", feed_url)
+        LOGGER.warning("[purge] kept_feeds/needs_replacement/folder/failure cleanup failed for %s", feed_url)
 
     _dead_meta = _purge_dead_entry_meta(conn, feed_url)
     if _dead_meta:

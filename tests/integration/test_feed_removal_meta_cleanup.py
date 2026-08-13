@@ -135,3 +135,48 @@ def test_purging_a_feed_runs_the_cleanup(env):
             main.purge_orphaned_feed(reader, conn, FEED, archive_pending=False)
             conn.commit()
     assert _counts(DEAD_ID)["entry_lead_images"] == 0
+
+
+def test_purging_a_feed_clears_its_failure_state(env):
+    """A feed unsubscribed BECAUSE it was dead must stop counting as failing.
+
+    feed_failure_state was never cleared on removal, so the 404 sweep on
+    2026-08-11/12 left 560 rows for feeds that no longer exist — and Failing
+    Feeds went on counting them, with no subscription left to fix or remove.
+    """
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO feed_failure_state (feed_url, consecutive_failures, last_error)"
+            " VALUES (?, ?, ?)", (FEED, 9, "404 Not Found"))
+        conn.commit()
+
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, exist_ok=True)
+        with main.get_meta_connection() as conn:
+            main.purge_orphaned_feed(reader, conn, FEED, archive_pending=False)
+            conn.commit()
+
+    with main.get_meta_connection() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM feed_failure_state WHERE feed_url = ?", (FEED,)
+        ).fetchone()[0] == 0
+
+
+def test_purging_leaves_another_feeds_failure_state_alone(env):
+    other = "https://live.test/feed"
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO feed_failure_state (feed_url, consecutive_failures, last_error)"
+            " VALUES (?, ?, ?)", (other, 3, "timeout"))
+        conn.commit()
+
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, exist_ok=True)
+        with main.get_meta_connection() as conn:
+            main.purge_orphaned_feed(reader, conn, FEED, archive_pending=False)
+            conn.commit()
+
+    with main.get_meta_connection() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM feed_failure_state WHERE feed_url = ?", (other,)
+        ).fetchone()[0] == 1
