@@ -214,6 +214,45 @@ Substack.
 **Also unexplained on the same feed:** star and re-fetch do not pull content.
 Not yet diagnosed.
 
+### Feed known-migrations into discovery, so a 404 is not the end
+
+Idea from the 2026-08-12 404 sweep, **not built.** Working through ~40 dead feeds
+by hand, the same handful of *host-level* migrations kept recurring — each one
+mechanical, and each one Lectio could have resolved itself instead of reporting
+"no feed found":
+
+| pattern | hits that day |
+|---|---|
+| `blogs.technet.com` / `blogs.technet.microsoft.com` → `devblogs.microsoft.com` | 3 |
+| `feeds.feedburner.com/<name>` → the origin site's own feed | 3 |
+| `powershell.com/cs/blogs/*` → `powershell.org` | 2 |
+
+Six of that day's twelve replacements were one of these. The rest (Blogger →
+custom domain, → Substack, → GitHub Pages) are per-site facts that cannot be
+derived and are only worth storing once discovered.
+
+**The machinery already exists — two pieces, doing different jobs:**
+
+- `_SITE_FEED_REWRITES` / `rewrite_known_site_url` in `services/feed_discovery.py`
+  — code-level rewriters applied at *Add Feed* time.
+- The `feed_url_rewrites` table (`feed_url`, `from_host`, `to_host`), which
+  already holds 16 rows including a feedburner→origin rule and a
+  beehiiv→custom-domain move.
+
+**What is missing is the connection**: when a subscribed feed starts 404ing,
+nothing consults either of them. The proposal is that the failure path check
+host-migration rules *before* the feed is declared dead — and, for FeedBurner
+specifically, follow the redirect and autodiscover on the destination, which is
+general rather than per-site.
+
+Worth doing because it compounds: the technet rule alone fixes every remaining
+technet feed at once, and FeedBurner is a graveyard that will keep producing
+these. ⚠ Whatever resolves a candidate must still **verify it parses with
+reader** before switching (see the fetch-failures notes in ARCHITECTURE.md —
+feedparser will happily bless a feed reader then refuses), and must not widen
+scope silently: a category feed replaced by the site firehose is a wrong answer
+that looks like a right one.
+
 ### Cross-feed duplicate scan — the dupes you can actually feel
 
 **RE-MEASURED 2026-07-22 — auto-filing collapsed almost all of this.** Before

@@ -81,9 +81,13 @@ short version:
   send-to-destination rules (Instapaper, Pinterest, Reddit, Quire, email,
   YouTube playlists, webhooks) at any scope, with dry-run and run history.
 - **Feed management that expects the real web.** Resilient auto-discovery,
-  Page Feeds for feedless sites, dev.to and DeviantArt adapters, conditional
-  GET, per-feed and per-domain backoff, GUID-churn suppression, feed compare,
-  duplicate scanning, and unsubscribe that keeps your curation.
+  Page Feeds for feedless sites — which read each post's own publish date rather
+  than stamping the whole backlog with the scrape time — dev.to and DeviantArt
+  adapters, conditional GET, per-feed and per-domain backoff, GUID-churn
+  suppression, feed compare, duplicate scanning, and unsubscribe that keeps your
+  curation. A feed *blocked* by an anti-bot challenge is reported as blocked
+  rather than misfiled as malformed, and one character that XML forbids no
+  longer costs you the whole feed.
 - **Fix a post in place.** Edit its date, title or URL; clean up its body with
   an Aardvark-style element remover; re-fetch its content — undoably, with an
   Internet Archive fallback — one post, or a whole feed or folder at a time.

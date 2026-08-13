@@ -1379,6 +1379,54 @@ When every advertised link is dead and nothing else answers, what happens next d
 
 **Two kinds of known-site rule.** `_SITE_FEED_REWRITES` are pure URL functions (Pinboard, ArtStation, Behance, freeCodeCamp, and the numeric Tapas form) — no network, applied before the fetch. `_SITE_BODY_FEED_EXTRACTORS` are the other shape: the feed address exists only in the page body, so they run *after* the fetch, against HTML discovery already has. Tapas is the case that needed it — it advertises no `<link rel="alternate">` at all (its only alternate is the mobile page) and its canonical link points at the latest *episode*, not the series, so `tapas.io/series/<slug>` is invisible to generic discovery. The series id lives in the markup as `seriesId:` / `data-series-id`, which is what the community userscripts scrape by hand. Extractors run only when nothing was advertised, and their result flows into the same liveness check as any advertised link, so a stale id is caught rather than offered. Both entry points call the same helper on the same slice of the same HTML — see the divergence warning above.
 
+## Fetching a feed: three ways it fails before it ever parses
+
+All three were found on the live library on 2026-08-12, and all three presented
+as "this feed is broken" while the site worked fine in a browser.
+
+**A challenge page is a block, not a malformed feed** (`services/bot_challenge.py`).
+An anti-bot interstitial served in place of a feed arrives as a 2xx whose body is
+HTML, then fails to parse — indistinguishable from a genuinely broken feed unless
+you look. poorlydrawnlines.com was logged as *"could not be parsed as a valid
+RSS/Atom document"* for months while returning a SiteGround captcha as **HTTP
+202**, which is also why no count of blocked feeds could ever be right: anything
+keyed on 403 never saw it. The fetch hook now sniffs for vendor markers
+(SiteGround, Cloudflare, Imperva, Sucuri, DDoS-Guard, AWS WAF) and raises a
+stable `bot challenge: blocked by <vendor>`. Status is deliberately not part of
+the test. The detector is narrow on purpose — a site serving its ordinary
+homepage at a dead feed URL is *moved/dropped*, a different failure with a
+different fix.
+
+⚠ These blocks are keyed on the **client IP**, not the user-agent: the same URL
+fetched with the honest UA and with a full browser identity returns a
+byte-identical challenge naming our own IP. All 29 of the library's genuine
+403s were already flagged for browser identity and still 403. Escalating the UA
+does nothing, so detection here exists to *label* the failure, not to get past
+it.
+
+**One illegal byte costs a whole feed.** reader parses with a strict SAX parser,
+so a single character XML 1.0 forbids makes the entire document not well-formed.
+inventwithpython.com shipped a raw `0x0B` mid-sentence and its 2.7MB, 100-entry
+feed failed outright at line 19918. The fetch hook strips exactly the C0 controls
+XML forbids and keeps the three it allows (tab, LF, CR), so a feed that was
+already valid comes through byte-identical.
+
+⚠ **feedparser reads that same feed happily.** Verifying a replacement URL with
+feedparser reported "200, 100 entries, looks great" and the feed then refused to
+ingest. When checking whether a feed will work, check with *reader*.
+
+**Announcing yourself as a crawler invites a fake 404.** Auto-discovery used to
+send `Lectio/1.0 (RSS auto-discovery; +…)`, and filters match on that phrase:
+chickensoft.games returns a fabricated 404 to any UA containing it while serving
+200 to `Lectio/1.0`. Discovery was the only part of Lectio sending it, so it was
+the only part that could not read the site. The damage went past a failed lookup
+— `probe_url` reported "server denied the request", `refusal_is_forceable()` read
+that as the site refusing us, and Add Feed offered **Subscribe anyway**, the
+husk-feed path the add-feed code explicitly warns against, while suppressing the
+page-feed offer that was correct. Discovery now sends the same honest identity as
+every other fetch. Still names the app and links the repo; only the description
+of the activity is gone.
+
 ## Feed auto-taggers
 
 Three functions run at startup to apply strategy and display defaults without user action:
@@ -1487,6 +1535,32 @@ adapters, where "every post in this feed is tagged VinylDeals" is worth keeping.
 - **The dry run explains an empty result.** `-mac, +pc` reads as "drop Apple, keep PC" and is the natural first spec to write — but Rock Paper Shotgun tags *platform availability*, so all 41 of its Mac-tagged posts are also tagged `PC` and the rescue cancels the entire rule. Zero matches then looks exactly like a rule that is working, which is the failure mode this whole feature has. `_run_tag_filter` counts entries a drop tag caught that a good/required tag let through, and returns `rescued` + the top `rescued_by` tags; the Test panel prints them under the count and, when nothing matched, names the rescue as the reason. This is a diagnostic, not a policy change — the rescue semantics are correct and deliberate (`+android, -iphone` must keep a post tagged both). The same applies to a **good-only** spec (`+wallpapers`), which cuts nothing by construction — good tags rescue from drops and whitelist nothing, so with no drops there is nothing for them to do — yet reads perfectly naturally as "keep these". `good_only` is returned whenever the spec has good tags and neither drops nor requires, and the panel names the two specs that do have teeth (`++tag` to keep only these, `-tag` to drop). Both notes exist because the three strengths are the one genuinely non-obvious thing about this rule type, and a bare zero teaches nothing.
 - **Source-page fallback.** Entries whose feed never delivered `<category>` data (aged out of the publisher's feed window before capture, or a tag-stripping publisher) are tagged from the article page itself on open: `extract_page_tags` harvests `article:tag` / `keywords` / `parsely-tags` metas from the lead-image service's source-HTML cache (zero extra requests when primed); on a cache miss the entry-detail handler queues `queue_source_html_fetch` and the tags appear on the next open — the same deferral pattern as image captions. Harvested tags are persisted to `entry_feed_tags` like feed tags; the fallback only runs when the entry has no rows, so feed-provided tags stay authoritative.
 - **Synthetic-feed gotcha (fixed):** dev.to/DeviantArt XML is regenerated from their per-user entry tables (`devto_entries`/`deviantart_entries`), not from the live API objects — tags must persist in those rows (comma-joined `tags` column) to come out as `<category>`. Re-seen articles backfill/refresh the stored tags while still in the API window.
+
+## FakeFeedz entries get the article's own date
+
+A listing page is a wall of links: titles and hrefs are there, dates usually are
+not (chickensoft.games shows none at all on `/blog`, only on each post). Stamping
+every scraped entry with the scrape time made a fresh feed look like its whole
+backlog was published the second it was added, and made sorting by date
+meaningless — ten entries all reading `2026-08-12 23:18:17`.
+
+`_article_published_at` fetches each **new** entry's page and asks it for a date,
+trying the publisher's own metadata first (`mine_publish_date`: JSON-LD,
+`article:published_time`, `<time datetime=…>`) and the date the page merely
+*prints* second — the same order the re-fetch path uses. Cost is one fetch per
+new entry: an entry already in `scraped_entries` is never re-fetched, so a steady
+feed pays nothing per refresh and only the first scrape pays for its backlog. Any
+failure falls back to "now", because a missing date must never cost the entry.
+
+`publish_date.from_visible_text` needed a second tier for this. Its matcher wants
+an element whose `class`/`id` says `date`/`posted`/`byline`, which utility-CSS
+frameworks never provide — the byline lives in
+`<p class="text-[var(--color-muted-foreground)] text-sm font-serif">April 26, 2026</p>`.
+The fallback accepts an element whose **entire text is a date and nothing else**,
+which is a comparably strong signal without matching the dates scattered through
+comment timestamps, related-post rails and copyright footers. `Updated April 26,
+2026 by Chris` does not qualify. It runs only after the labelled pass, so a
+publisher that marks its date up properly still wins.
 
 ## dev.to filtered feeds
 
@@ -2118,6 +2192,66 @@ SmartCrop's `min_scale` is a per-feed preference (`feed_display_prefs.smart_min_
 Fill mode's `fill_zoom` multiplier (`feed_display_prefs.fill_zoom`, NULL = default 1.0, range 0.5–2.0) scales the cover-crop resize step before the anchor-crop. Values below 1.0 produce a letterbox (image pasted on a black canvas); values above 1.0 crop more aggressively than the default tight fill. Passed to `/thumb` as the `fz` query param and included in the cache key for cover-family modes.
 
 **Direct-load fallback:** `/thumb` fetches the source image *from the server*, so a host that IP-blocks datacenter traffic (e.g. Cloudflare 403, washingtonstatestandard.com) makes `/thumb` 502 and the list thumbnail break — even though the browser's own (residential) IP can fetch the image fine. The list `<img>` carries the raw image URL in `data-direct`; on a `/thumb` error its `onerror` (`window.thumbImgFallback`, defined pre-body so it exists before any load fails) retries once with that direct URL, letting the browser load the image itself. CSS `object-fit:cover` sizes the un-resized image to the tile. This recovers the thumbnail without evading the block server-side (it's the user's own client fetching, exactly as the article view already does). Only `http(s)` direct URLs are retried, and only once (a `data-triedDirect` guard prevents an error loop); if the direct load also fails, the tile collapses to `is-empty` as before. The same helper backs the JS-derived list thumbnail (it sets `data-direct` to the lead-image URL).
+
+## Choosing a lead image: what gets thrown away, and what sneaks through
+
+The selector is a pile of heuristics, and its failures come in two opposite
+shapes. Both were live on 2026-08-12 and each one silently produced a *plausible
+wrong answer*, which is why they went unnoticed.
+
+**Site chrome that was being kept.** blogs.windows.com made its site icon the
+article image. Both available signals missed it: the alt text said `Site Icon`
+but `_LOGO_URL_PATTERNS` only allowed `-`/`_` between the words — and that
+pattern is matched against alt/title *text* as well as URLs, where words are
+separated by spaces. The file was `Windows11Icon.png`, CamelCase, so the
+`[-_]icon.png` rule needed a separator that never existed. Separators are now
+`[-_\s]`, and the icon-filename rule is separator-optional behind a lookbehind so
+`emoticon.png` and `lexicon.png` stay safe.
+
+**Real art that was being thrown away.** Two of these:
+
+- *A title that contains a hint word.* `round` is a shape hint for a cropped
+  avatar (`avatar-round.png`) and was matched against the whole path, so Standard
+  Ebooks' **"The Third Round"** lost its cover — a perfectly good 1400×2100 JPEG
+  — because the word appeared in a *directory segment that is a book title*. The
+  hint now applies to the filename only. Same class of false positive the
+  `profile` guard in that pattern already documents for DeviantArt.
+- *A file honestly named "fallback".* Full Circle Magazine's genuine podcast
+  cover art is `covers/podcasts/fallback.webp` — the art used when an episode has
+  none of its own — and the placeholder rule reads the name. Declared dimensions
+  now override it, since a page sizing an image at 640×360 is asserting intent.
+  ⚠ The bar is **hero scale (400×200), not the ordinary minimums (200×100)**:
+  WordPress's `blank.jpg` is a 200×200 white box sitting exactly on the floor, so
+  an at-or-above rule readmits the canonical placeholder. An existing regression
+  test caught that immediately.
+
+**A negative is cached, so a wrong rejection is sticky.** Each of these stored
+`image_url = NULL` and stopped re-resolving, so fixing the rule is only half the
+job — the poisoned rows have to be cleared for the entries to recover.
+
+## A webcomic wants a different image in the list than in the article
+
+Penny Arcade strips are ~1050×438 — three panels side by side, which is three
+unreadable smudges at thumbnail size, while panel 1 is legible. The two are
+derivable from each other (`…/comics/<hash>.jpg` ↔
+`…/comics/panels/<hash>-p1.jpg`), so the `thumbnail_from_lead_image` plugin hook
+returns a thumbnail crop from the already-resolved lead image with no extra
+fetch, safe on the render path.
+
+Getting that right needed **three** places to agree, and fixing the first two was
+not enough:
+
+1. `should_skip_source_lookup` — without it the page scan takes the first `<img>`
+   (panel 1) and stores it as the article image, beating the plugin's own
+   og:image fallback. The plugin's docstring described behaviour it never reached.
+2. `get_cached_entry_thumbnail` — the panel-bypass returned `None` rather than
+   falling back, so a cached panel produced *no thumbnail at all*.
+3. `_inject_webcomic_panel_into_bodyless_entry` — re-scanned the source page **at
+   render time** and injected panel 1, discarding the strip that had just been
+   resolved. It now honours the same `should_skip_source_lookup` answer the
+   storing path uses, so a plugin-owned host is never re-scanned; hosts with no
+   plugin opinion still scan, which is the case that injection was written for
+   (mahonoir's enclosure is a share card, so the page really is the only source).
 
 ## Image bytes: the dimension cap is not a size cap
 
