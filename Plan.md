@@ -88,10 +88,10 @@ articles"). What remains:
 
 ### Failing feeds — re-measured 2026-08-12, with work applied
 
-⚠ **The 950 figure from 2026-08-11 was inflated by stale rows.** `feed_failure_state`
-keeps a row after a feed is unsubscribed (see the `purge_orphaned_feed` bug in
-the DeviantArt section), so long-gone feeds still counted. Live truth: **238
-failing feeds**, of which:
+⚠ **The 950 figure from 2026-08-11 was inflated by stale rows** — since fixed
+(see the DeviantArt section): `feed_failure_state` kept a row after a feed was
+unsubscribed, so long-gone feeds still counted. Live truth: **238 failing
+feeds**, of which:
 
 | failure | count | state |
 |---|---|---|
@@ -165,7 +165,11 @@ and lets one be checked before the rest.
 
 ### Proxy article-body images through /api/img (main app)
 
-Asked for 2026-08-12, **not built — Josh wants to test this one thoroughly.**
+Asked for 2026-08-12. **The retry half shipped 2026-08-12**
+(`add_img_proxy_fallback`): a body image that fails to load now swaps its `src`
+for `/api/img?u=…` and only gives up if that fails too — the same `onerror` the
+hero has always carried. That closed the sonarsource case below. **Preemptive
+proxying is still not built, and Josh wants to test that one thoroughly.**
 
 Read Mode already does it (`_proxy_reader_body_images`): every `<img src>` in the
 body is rewritten to `/api/img?u=…`, and `srcset`/`data-src` are dropped so the
@@ -213,6 +217,40 @@ Substack.
 
 **Also unexplained on the same feed:** star and re-fetch do not pull content.
 Not yet diagnosed.
+
+### One stored image per entry, but three feeds want two
+
+Found 2026-08-13, **not built.** Three comic feeds want a different image in the
+list than in the article, and Lectio stores **one** URL per entry — the list crop
+is *derived* from it on the render path, network-free by contract. That works
+only when the crop's URL is derivable:
+
+| feed | article | list | derivable? |
+|---|---|---|---|
+| Penny Arcade | `/comics/x.jpg` | `/comics/panels/x-p1.jpg` | yes — plugin |
+| dresdencodak | `dc_minis_N.jpg` | `dc_minis_N_thumbnail.jpg` | yes, for DC Minis only |
+| mahonoir | `03-10.jpg` | og `0310thumb.png` | **no** (`03-12.jpg` → `12thumb.png`) |
+
+mahonoir needed no code in the end — the publisher ships a purpose-made preview
+card as a media thumbnail, so `media_rss` (manually locked) picks it up. But that
+was luck, and the Tuning panel shows a *better* og:image for those posts that
+nothing can select while another strategy supplies the lead.
+
+The general fix is a second stored URL plus a per-feed "thumbnail source"
+setting (auto / same as article / og:image / media). That is a meta-DB column, so
+it needs the startup per-user migration or existing tenants 500. Worth doing when
+a fourth feed wants it; not before.
+
+**Check what the feed already provides before writing a plugin** — two of three
+needed derivation, one needed only the right strategy.
+
+### og_scrape feeds with no og:image at all
+
+Found in the 2026-08-13 lead-image sweep, **no action taken.** Of 585
+auto-detected `og_scrape` feeds, **162 entries' source pages carry no `og:image`**
+— they fall back to a body image, which is correct for them. Not broken, but
+that bucket is where any future "odd body image was picked" report will come
+from, so it is worth knowing it exists before re-diagnosing from scratch.
 
 ### Feed known-migrations into discovery, so a 404 is not the end
 
@@ -746,10 +784,15 @@ volume is ~5.6 deviations/day against a 50-per-refresh window; and the feed's
 intake rate matches the observed posting rate. **Check whether a number is a
 limit or just the size of the active set before concluding anything from it.**
 
-**Still open — a real bug found doing this:** `purge_orphaned_feed` never deletes
-the feed's `feed_failure_state` row, so an unsubscribed feed counts as a failing
-feed forever. That is why the failing count read 950 when the live number was
-238. One-line fix plus a sweep of the existing ghosts.
+**Fixed 2026-08-13.** `purge_orphaned_feed` now deletes the feed's
+`feed_failure_state` row, and `scripts/clear_ghost_failure_state.py` cleared the
+562 ghosts it had already left. That is why the failing count read 950 when the
+live number was 238. Sibling tables still outlive their feeds and are documented
+in ARCHITECTURE rather than fixed — `feed_lead_image_strategy` (1,024 ghost
+feeds), `feed_fetch_history` (754), `feed_seen_window` (553), `feed_media_scan`
+(173), `fever_feed_map` (154), `browser_ua_feeds` (95), `websub_subscriptions`
+(74). Untidy rather than wrong, and the API id maps and fetch history are not
+obviously safe to drop.
 
 ### DeviantArt watchlist sync — remaining follow-up
 
