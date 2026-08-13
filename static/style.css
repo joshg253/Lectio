@@ -6717,6 +6717,18 @@ mark.highlight-mark {
 .unsub-migrate-select-all-row { font-size: 0.85rem; margin: 0.35rem 0 0; }
 /* Sits under the three choices and applies to all of them, so it gets a
    rule above it rather than reading as a fourth option. */
+/* "(unsubscribed)" beside a feed name in Saved/Kept. Muted and small: it is a
+   status note on a name, not a second name — the feed title stays the thing you
+   read. Inline-block so it never wraps away from the name it belongs to. */
+.feed-unsubscribed-tag {
+  display: inline-block;
+  margin-left: 0.35em;
+  font-size: 0.85em;
+  font-style: italic;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 /* The destructive choice, set apart from the three that keep something. */
 .unsub-migrate-drop-row { color: var(--danger, #c0392b); }
 .unsub-migrate-restar-row { font-size: 0.85rem; margin: 0.6rem 0 0;

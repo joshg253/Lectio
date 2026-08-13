@@ -56,7 +56,7 @@
           data-folder-id="{{ entry_feed_folder_id }}"
           href="/?folder_id={{ entry_feed_folder_id }}&list_feed_url={{ selected_entry.feed_url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
           >{{ selected_entry.feed_title }}</a
-        >
+        >{% if selected_entry.feed_url in unsubscribed_feed_urls %}<span class="feed-unsubscribed-tag" title="No longer subscribed — this is a kept copy">(unsubscribed)</span>{% endif %}
         {% if selected_entry.author %}
         <span class="entry-meta-separator" aria-hidden="true">·</span>
         <span class="entry-author-inline">by {{ selected_entry.author }}</span>

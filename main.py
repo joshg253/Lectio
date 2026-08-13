@@ -4969,6 +4969,29 @@ def get_feeds_needing_replacement(conn: sqlite3.Connection | None = None) -> set
         return {str(r["feed_url"]) for r in own.execute("SELECT feed_url FROM feeds_needing_replacement")}
 
 
+def unsubscribed_feed_urls_among(feed_urls: Iterable[str]) -> set[str]:
+    """Which of these feeds you are no longer subscribed to.
+
+    Two different states read as "unsubscribed" to a reader and both belong here:
+    a **kept feed** still exists in reader but is hidden from the tree, and an
+    **orphan archive**'s feed is gone from reader entirely. What they have in
+    common is the only thing that matters at the point of use — there is no
+    subscription behind the name, so clicking through to the feed will not show
+    you more of it.
+
+    Deliberately not "has no folder row": a feed in no folder is still
+    subscribed, it just lives under the virtual Uncategorized folder, and marking
+    those would be wrong.
+
+    Scoped to the feeds actually on screen so the template carries a handful of
+    URLs rather than the whole library.
+    """
+    wanted = {str(u) for u in feed_urls if u}
+    if not wanted:
+        return set()
+    return wanted - get_all_reader_feed_urls(include_kept=False)
+
+
 def get_all_reader_feed_urls(include_kept: bool = False) -> set[str]:
     """Return every feed URL the reader is subscribed to.
 
@@ -16219,6 +16242,9 @@ def entry_pane(
             "selected_resume_read_filter": normalized_resume_read_filter,
             "selected_entry": selected_entry,
             "feed_to_folder": feed_to_folder,
+            "unsubscribed_feed_urls": unsubscribed_feed_urls_among(
+                [selected_entry.get("feed_url")] if selected_entry else []
+            ),
             "email_configured": is_email_configured(),
             "email_to_default": _get_email_to_default(),
             "instapaper_configured": is_instapaper_configured(),
@@ -21550,6 +21576,10 @@ def _home_inner(
         "feeds_by_folder": feeds_by_folder,
         "folder_has_feeds": folder_has_feeds,
         "feed_to_folder": feed_to_folder,
+        "unsubscribed_feed_urls": unsubscribed_feed_urls_among(
+            [p.get("feed_url") for p in posts]
+            + ([selected_entry.get("feed_url")] if selected_entry else [])
+        ),
         "push_feed_urls": get_push_active_feed_urls(),
         "tag_rows": tag_rows,
         "all_tag_names": get_all_manual_tag_names(),

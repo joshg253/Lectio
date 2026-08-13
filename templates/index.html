@@ -857,7 +857,7 @@
                       data-feed-url="{{ post.feed_url }}"
                       data-folder-id="{{ post_feed_folder_id }}"
                       href="/?folder_id={{ post_feed_folder_id }}&list_feed_url={{ post.feed_url | urlencode }}{{ sort_query }}{{ read_filter_query }}"
-                    >{{ post.feed_title }}</a>
+                    >{{ post.feed_title }}</a>{% if post.feed_url in unsubscribed_feed_urls %}<span class="feed-unsubscribed-tag" title="No longer subscribed — this is a kept copy">(unsubscribed)</span>{% endif %}
                   </span>
                 </div>
               </div>

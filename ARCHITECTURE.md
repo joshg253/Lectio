@@ -2193,6 +2193,30 @@ Fill mode's `fill_zoom` multiplier (`feed_display_prefs.fill_zoom`, NULL = defau
 
 **Direct-load fallback:** `/thumb` fetches the source image *from the server*, so a host that IP-blocks datacenter traffic (e.g. Cloudflare 403, washingtonstatestandard.com) makes `/thumb` 502 and the list thumbnail break — even though the browser's own (residential) IP can fetch the image fine. The list `<img>` carries the raw image URL in `data-direct`; on a `/thumb` error its `onerror` (`window.thumbImgFallback`, defined pre-body so it exists before any load fails) retries once with that direct URL, letting the browser load the image itself. CSS `object-fit:cover` sizes the un-resized image to the tile. This recovers the thumbnail without evading the block server-side (it's the user's own client fetching, exactly as the article view already does). Only `http(s)` direct URLs are retried, and only once (a `data-triedDirect` guard prevents an error loop); if the direct load also fails, the tile collapses to `is-empty` as before. The same helper backs the JS-derived list thumbnail (it sets `data-direct` to the lead-image URL).
 
+## A kept post has to say its feed is gone
+
+Once curation outlives its feed, the feed name beside a saved post becomes a
+half-truth: it names something you can no longer read. Two different states get
+there and both look identical on screen — a **kept feed** still exists in reader
+but is hidden from the tree, and an **orphan archive**'s feed is gone from reader
+entirely. What they share is the only thing that matters at the point of use:
+there is no subscription behind the name, so clicking through will not show you
+more of it. `unsubscribed_feed_urls_among` treats them the same and the name
+renders `Feed Name (unsubscribed)`.
+
+The test is *not* "has no folder row". A feed in no folder is still subscribed —
+it lives under the virtual Uncategorized folder — and marking those would be
+wrong. The test is membership of `get_all_reader_feed_urls(include_kept=False)`,
+which excludes both states for exactly this reason.
+
+Scoped to the feeds actually on screen rather than computed library-wide, so the
+template context carries a handful of URLs instead of a set of thousands on every
+render.
+
+Rendered as a separate muted `<span>`, never concatenated into the title string:
+the feed name is data that appears in search, exports, feed properties and the
+tree, and baking a status word into it would leak everywhere the name goes.
+
 ## Unsubscribing has to be able to actually remove things
 
 The keep model has a corollary that only shows up at removal time: a star or a
