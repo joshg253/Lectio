@@ -213,6 +213,14 @@ class LeadImageService:
     # Keep old name as alias so callers outside this class still work.
     _SITE_CHROME_URL_PATTERNS = _SITE_CHROME_PATH_PATTERNS
     _URL_DIMENSION_RE = re.compile(r"(?:^|[/_.-])([0-9]{1,4})x([0-9]{1,4})(?:[/_.-]|$)")
+    # A whole path segment that IS a size, written with a leading "s" and often a
+    # crop suffix: Tumblr serves ".../s1280x1920/..." for a post's image and
+    # ".../s64x64u_c1/..." for the blog's avatar. _URL_DIMENSION_RE cannot see
+    # either, because it requires the digits to follow a separator and here they
+    # follow the "s" — so a 64x64 avatar passed the size floor untouched and was
+    # picked as a comic's lead image (theycantalk.com, 2026-08-13). Anchored to a
+    # full segment so it cannot fire inside an ordinary filename.
+    _PATH_SIZE_SEGMENT_RE = re.compile(r"/s([0-9]{1,4})x([0-9]{1,4})(?:[a-z][a-z0-9_]*)?/", re.IGNORECASE)
     # WordPress responsive-image width-only suffix, e.g. "photo-1000w.jpeg"
     _URL_WIDTH_HINT_RE = re.compile(r"(?:^|[-_.])([0-9]{2,4})w(?:[-_.]|$)", re.IGNORECASE)
     # Substack CDN and similar services encode dimensions as ,w_N,h_N, in the URL path.
@@ -3116,7 +3124,9 @@ class LeadImageService:
             ))
             _url_has_large_dim = False
             _url_has_small_dim = False
-            for m in self._URL_DIMENSION_RE.finditer(url_path_no_query):
+            _dim_matches = list(self._URL_DIMENSION_RE.finditer(url_path_no_query))
+            _dim_matches += list(self._PATH_SIZE_SEGMENT_RE.finditer(url_path_no_query))
+            for m in _dim_matches:
                 try:
                     w, h = int(m.group(1)), int(m.group(2))
                     if w >= self._LEAD_IMAGE_MIN_WIDTH and h >= self._LEAD_IMAGE_MIN_HEIGHT:

@@ -2011,3 +2011,55 @@ def test_the_on_open_fetch_is_skipped_for_a_plugin_owned_host(tmp_path: Path):
 
     assert scraped == []
     assert svc.get_cached_lead_image_url("https://f.test/feed", "e1") is None
+
+
+# --- Tumblr writes the size as a path segment, prefixed with "s" -------------
+#
+# ".../s1280x1920/..." is a post's image; ".../s64x64u_c1/..." is the BLOG's
+# avatar. _URL_DIMENSION_RE cannot see either, because it wants the digits to
+# follow a separator and here they follow the "s" — so a 64x64 avatar sailed
+# past the size floor and became a comic's lead image. Worse for a webcomic
+# feed whose body carries no image: the bodyless-entry injector then put the
+# avatar in the article (theycantalk.com, 2026-08-13).
+
+
+def _acceptable(service, url: str) -> bool:
+    return service._is_image_url_acceptable(url, None, None, allow_extensionless=True)
+
+
+_TUMBLR_AVATAR = (
+    "https://64.media.tumblr.com/b05eac3c2a9d8d3e276163870a65a091/"
+    "d133bf64a6916e97-a4/s64x64u_c1/7e1cf3f8bd2b36ef72cdbc2bb89d1a41d7140123.jpg"
+)
+_TUMBLR_POST_IMAGE = (
+    "https://64.media.tumblr.com/cb1f43c2950792577e0d14da334592f2/"
+    "26be0f55f0c59947-c9/s1280x1920/1924c9bc735644255a1020a493a9fbc5ea649a6f.jpg"
+)
+_TUMBLR_AVATAR_128 = (
+    "https://64.media.tumblr.com/aaaabbbbccccddddeeeeffff00001111/"
+    "2222333344445555-66/s128x128u_c1/7777888899990000aaaabbbbccccddddeeeeffff.jpg"
+)
+
+
+def test_tumblr_avatar_crop_is_rejected(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert _acceptable(service, _TUMBLR_AVATAR) is False
+
+
+def test_tumblr_128_avatar_crop_is_rejected(tmp_path: Path):
+    """norasuko-art's five, the same shape one size up."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert _acceptable(service, _TUMBLR_AVATAR_128) is False
+
+
+def test_a_real_tumblr_post_image_still_passes(tmp_path: Path):
+    """Scope guard: 486 legitimate leads on the live library use this shape."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert _acceptable(service, _TUMBLR_POST_IMAGE) is True
+
+
+def test_the_size_segment_must_be_a_whole_segment(tmp_path: Path):
+    """It cannot fire inside an ordinary filename."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._PATH_SIZE_SEGMENT_RE.search("/images/photo-s64x64.jpg") is None
+    assert service._PATH_SIZE_SEGMENT_RE.search("/a/s64x64u_c1/b.jpg") is not None
