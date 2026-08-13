@@ -3876,6 +3876,19 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   display: block;
 }
 
+/* A bare <img> at the top level of an article has no margin of its own, and
+   nothing else supplies one: images inside a <p> get their spacing from the
+   paragraph. mahonoir's single-panel posts are `<img><div>commentary</div>`,
+   and once the author's <br><br> padding was collapsed away (it is padding, see
+   _REAL_BLOCK_TAGS) the text sat almost against the comic, while its
+   multi-panel posts were correctly spaced — their images sit in a <p> and their
+   text in another, so two 1em margins collapse to one. 1em here matches that
+   exactly; the single-panel text is in bare <div>s, which have no margin of
+   their own, so without this the gap is zero. */
+.entry-content > img {
+  margin-bottom: 1em;
+}
+
 .entry-content img {
   display: block;
   max-width: 100%;
