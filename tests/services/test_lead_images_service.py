@@ -2063,3 +2063,84 @@ def test_the_size_segment_must_be_a_whole_segment(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
     assert service._PATH_SIZE_SEGMENT_RE.search("/images/photo-s64x64.jpg") is None
     assert service._PATH_SIZE_SEGMENT_RE.search("/a/s64x64u_c1/b.jpg") is not None
+
+
+# --- a caption repeated across a feed is a tagline, not a punchline ----------
+#
+# Webcomic caption extraction falls back to og:description so hover-text
+# punchlines survive. Penny Arcade puts a fixed site blurb there instead, on
+# every strip, and ships no og:site_name for the existing pbfcomics guard to
+# compare against. Nothing in a single page marks it as boilerplate — what marks
+# it is that it does not vary.
+
+_PA_TAGLINE = ("Videogaming-related online strip by Mike Krahulik and Jerry Holkins. "
+               "Includes news and commentary.")
+
+
+def _stored_title(db_path: Path, entry_id: str) -> str | None:
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT image_title FROM entry_lead_images WHERE entry_id = ?", (entry_id,)
+        ).fetchone()
+    return row["image_title"] if row else None
+
+
+def test_the_first_entry_keeps_the_caption(tmp_path: Path):
+    """It cannot know yet — one occurrence is indistinguishable from a punchline."""
+    db = tmp_path / "meta.sqlite"
+    service = _build_service(db, [])
+    service.store_entry_image_alt("f", "e1", None, title_text=_PA_TAGLINE)
+    assert _stored_title(db, "e1") == _PA_TAGLINE
+
+
+def test_a_repeat_clears_it_from_the_whole_feed(tmp_path: Path):
+    db = tmp_path / "meta.sqlite"
+    service = _build_service(db, [])
+    service.store_entry_image_alt("f", "e1", None, title_text=_PA_TAGLINE)
+    service.store_entry_image_alt("f", "e2", None, title_text=_PA_TAGLINE)
+
+    assert _stored_title(db, "e2") is None, "second entry stored the tagline"
+    assert _stored_title(db, "e1") is None, "first entry was not cleaned up"
+
+
+def test_the_in_memory_title_cache_is_cleared_too(tmp_path: Path):
+    db = tmp_path / "meta.sqlite"
+    service = _build_service(db, [])
+    service.store_entry_image_alt("f", "e1", None, title_text=_PA_TAGLINE)
+    service.store_entry_image_alt("f", "e2", None, title_text=_PA_TAGLINE)
+    assert service._title_cache[("f", "e1")] is None
+
+
+def test_a_genuine_per_post_caption_survives(tmp_path: Path):
+    """The whole point: xkcd-style hover text differs per strip and must stay."""
+    db = tmp_path / "meta.sqlite"
+    service = _build_service(db, [])
+    service.store_entry_image_alt("f", "e1", None, title_text="A punchline")
+    service.store_entry_image_alt("f", "e2", None, title_text="A different punchline")
+    assert _stored_title(db, "e1") == "A punchline"
+    assert _stored_title(db, "e2") == "A different punchline"
+
+
+def test_another_feeds_identical_caption_is_not_affected(tmp_path: Path):
+    """Scope is one feed — two sites may legitimately share a sentence."""
+    db = tmp_path / "meta.sqlite"
+    service = _build_service(db, [])
+    service.store_entry_image_alt("feed-a", "e1", None, title_text=_PA_TAGLINE)
+    service.store_entry_image_alt("feed-b", "e1", None, title_text=_PA_TAGLINE)
+    with _make_conn(db) as conn:
+        rows = conn.execute(
+            "SELECT feed_url, image_title FROM entry_lead_images ORDER BY feed_url"
+        ).fetchall()
+    assert [r["image_title"] for r in rows] == [_PA_TAGLINE, _PA_TAGLINE]
+
+
+def test_alt_text_is_untouched_by_the_guard(tmp_path: Path):
+    db = tmp_path / "meta.sqlite"
+    service = _build_service(db, [])
+    service.store_entry_image_alt("f", "e1", "alt one", title_text=_PA_TAGLINE)
+    service.store_entry_image_alt("f", "e2", "alt two", title_text=_PA_TAGLINE)
+    with _make_conn(db) as conn:
+        rows = conn.execute(
+            "SELECT entry_id, image_alt FROM entry_lead_images ORDER BY entry_id"
+        ).fetchall()
+    assert [r["image_alt"] for r in rows] == ["alt one", "alt two"]

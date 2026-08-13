@@ -2443,6 +2443,33 @@ separated by spaces. The file was `Windows11Icon.png`, CamelCase, so the
 `image_url = NULL` and stopped re-resolving, so fixing the rule is only half the
 job — the poisoned rows have to be cleared for the entries to recover.
 
+## A caption that never changes is the site's, not the post's
+
+Webcomic caption extraction falls back to `og:description`, because that is
+where a lot of comics put the hover-text punchline. Plenty of sites put a fixed
+blurb there instead. `_extract_webcomic_alt_text` already rejects one that merely
+repeats `og:site_name` (pbfcomics ships `og:description="The Perry Bible
+Fellowship"` on every strip), but Penny Arcade defeats that twice over: it ships
+no `og:site_name` at all, and its description is a real sentence —
+
+> Videogaming-related online strip by Mike Krahulik and Jerry Holkins. Includes
+> news and commentary.
+
+Nothing *within* one page marks that as boilerplate. What marks it is that it
+does not vary: a punchline belongs to its strip, a tagline belongs to the site.
+So the test is across the feed rather than within the page — if another entry
+already carries this exact caption, neither of them is a caption.
+
+Self-healing rather than perfect. The first entry cannot know, so it stores the
+text; the second recognises the repeat, and `_clear_feed_boilerplate_title` drops
+it from every row of that feed at once (and from the in-memory title cache, which
+would otherwise keep serving it until a restart). Worst case is a missing caption
+on one post instead of a wrong one on every post.
+
+Scoped to a single feed on purpose: two different sites may legitimately share a
+sentence, and `image_alt` is never touched — only the title, which is the field
+that fell back to `og:description` in the first place.
+
 ## A webcomic wants a different image in the list than in the article
 
 Penny Arcade strips are ~1050×438 — three panels side by side, which is three

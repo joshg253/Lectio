@@ -1034,6 +1034,55 @@ class LeadImageService:
         except Exception:
             pass
 
+    def _title_is_feed_boilerplate(self, feed_url: str, entry_id: str, title_text: str) -> bool:
+        """Is this caption the site's tagline rather than this post's own text?
+
+        Webcomic caption extraction falls back to ``og:description`` so hover-text
+        punchlines still surface. Plenty of sites put a fixed blurb there instead.
+        `_extract_webcomic_alt_text` already rejects one that merely repeats
+        ``og:site_name`` — pbfcomics — but Penny Arcade ships no ``og:site_name``
+        at all and the same sentence on every strip:
+
+            "Videogaming-related online strip by Mike Krahulik and Jerry Holkins.
+             Includes news and commentary."
+
+        There is nothing in one page that marks that as boilerplate. What marks
+        it is that it does not vary: a punchline belongs to its strip, a tagline
+        belongs to the site. So the test is across the feed, not within the page —
+        if another entry already carries this exact caption, neither of them is a
+        caption.
+
+        Self-healing on purpose. The first entry cannot know, so it stores the
+        text; the second one recognises the repeat and the caller clears the whole
+        feed. Worst case is a missing caption on one post rather than a wrong one
+        on every post.
+        """
+        try:
+            with self._get_meta_connection() as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM entry_lead_images"
+                    " WHERE feed_url = ? AND entry_id != ? AND image_title = ? LIMIT 1",
+                    (feed_url, entry_id, title_text),
+                ).fetchone()
+            return row is not None
+        except Exception:
+            return False
+
+    def _clear_feed_boilerplate_title(self, feed_url: str, title_text: str) -> None:
+        """Drop a caption from every entry of a feed once it is known boilerplate."""
+        try:
+            with self._get_meta_connection() as conn:
+                conn.execute(
+                    "UPDATE entry_lead_images SET image_title = NULL"
+                    " WHERE feed_url = ? AND image_title = ?",
+                    (feed_url, title_text),
+                )
+        except Exception:
+            return
+        for key in list(self._title_cache):
+            if key[0] == feed_url and self._title_cache.get(key) == title_text:
+                self._title_cache[key] = None
+
     def store_entry_image_alt(
         self,
         feed_url: str,
@@ -1042,6 +1091,9 @@ class LeadImageService:
         title_text: str | None = None,
     ) -> None:
         """Persist alt and title text for an entry's lead image to DB and in-memory cache."""
+        if title_text and self._title_is_feed_boilerplate(feed_url, entry_id, title_text):
+            self._clear_feed_boilerplate_title(feed_url, title_text)
+            title_text = None
         key = (feed_url, entry_id)
         self._alt_cache[key] = alt_text
         self._title_cache[key] = title_text
