@@ -123,8 +123,21 @@ class LeadImageService:
     # "imdblogo" stay content) but NOT digits: sites version their wordmark as
     # logo2.png / logo2026.png (questionablecontent's New-Year rename slipped
     # through the old [a-zA-Z0-9] lookahead and became a lead image).
+    # NOTE the separators are [-_\s], not [-_]: this pattern is matched against
+    # alt/title TEXT as well as URLs (see the alt_title check in the candidate
+    # filter), and prose separates words with spaces. blogs.windows.com ships its
+    # site icon with alt="Site Icon", which "site[-_]icon" could never match, so
+    # the icon sailed through and became the article image.
+    #
+    # The final alternative is likewise separator-optional: the same image is
+    # Windows11Icon.png — CamelCase, so "[-_]icon.png" missed it too. The
+    # lookbehind keeps it from firing on a letter-prefixed word (emoticon.png),
+    # while still catching a digit or path boundary (Windows11Icon.png, /icon.png).
     _LOGO_URL_PATTERNS = re.compile(
-        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo(?![a-zA-Z])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image|[-_]icon\.(?:png|jpe?g|gif|svg|webp))",
+        r"(?:favicon|site[-_\s]logo|wordmark|site[-_\s]icon|app[-_\s]icon|social[-_\s]icon"
+        r"|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo(?![a-zA-Z])|sponsor"
+        r"|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image"
+        r"|(?<![a-z])icon\.(?:png|jpe?g|gif|svg|webp))",
         re.IGNORECASE,
     )
     # Catches pixel/spacer images encoded with tiny dimensions in the filename
@@ -372,9 +385,28 @@ class LeadImageService:
     # "collared_peccary_profile__enclosure__by_…-fullview.jpg" carry "profile" as a
     # title word (preceded by "_") and must not be mistaken for a headshot.
     _AVATAR_HINT_PATTERNS = re.compile(
-        r"(?:avatar|author(?:-image)?\b|byline|(?<![a-zA-Z0-9_])profile|headshot|user(?:-image|pic)?|gravatar|(?<![a-zA-Z0-9])round(?![a-zA-Z0-9]))",
+        r"(?:avatar|author(?:-image)?\b|byline|(?<![a-zA-Z0-9_])profile|headshot|user(?:-image|pic)?|gravatar)",
         re.IGNORECASE,
     )
+    # "round" is a *shape* hint for a cropped avatar (avatar-round.png,
+    # user_round.jpg) and is only meaningful in the FILENAME. It used to sit in
+    # the pattern above, which is matched against the whole path — so any post
+    # whose slug happened to end in the word round was rejected outright.
+    # Standard Ebooks' "The Third Round" lost its cover that way: the image at
+    # …/the-third-round/downloads/cover.jpg is a perfectly good 1400x2100 JPEG,
+    # and "round" was matching in a *directory* segment that is a book title.
+    # Same class of false positive the "profile" guard above already documents.
+    _ROUND_AVATAR_FILENAME_RE = re.compile(
+        r"(?<![a-zA-Z0-9])round(?![a-zA-Z0-9])", re.IGNORECASE)
+
+    @classmethod
+    def _looks_like_avatar_url(cls, url_or_path: str) -> bool:
+        """Avatar heuristics for a URL/path, with the round-shape hint confined
+        to the filename so a title slug cannot trip it."""
+        if cls._AVATAR_HINT_PATTERNS.search(url_or_path or ""):
+            return True
+        filename = (url_or_path or "").split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+        return bool(cls._ROUND_AVATAR_FILENAME_RE.search(filename))
     # Code-forge avatar URLs are a single user segment + .png on the forge host
     # (e.g. github.com/octocat.png, gitea.com/delvh.png) — profile pictures, not
     # article images. Repo/asset paths have more segments and don't match.
@@ -550,6 +582,12 @@ class LeadImageService:
 
     _LEAD_IMAGE_MIN_WIDTH = 200
     _LEAD_IMAGE_MIN_HEIGHT = 100
+    # An image whose NAME says placeholder is admitted only at hero scale — well
+    # clear of the floor above, because the canonical placeholder (WordPress's
+    # 200x200 blank.jpg) sits exactly on it. Full Circle Magazine's real podcast
+    # cover art, named covers/podcasts/fallback.webp, is declared 640x360.
+    _PLACEHOLDER_OVERRIDE_MIN_WIDTH = 400
+    _PLACEHOLDER_OVERRIDE_MIN_HEIGHT = 200
     _NEGATIVE_RETRY_SECONDS = 4 * 60 * 60
 
     # Per-feed injected-block stripping: maps a host substring to a tuple of
@@ -1258,11 +1296,38 @@ class LeadImageService:
             cached = self._load_cached_url_from_db(feed_url, entry_id)
         if not cached:
             return None
+        # A site may want a *different crop* in the list than in the article: a
+        # webcomic's article image is the whole strip, which is unreadable at
+        # thumbnail size, while a single panel reads perfectly. Asked before the
+        # bypass check because a plugin offering a thumbnail variant has, by
+        # definition, an opinion about this URL — Penny Arcade bypasses panel
+        # URLs for the *lead image* and would otherwise leave the list with no
+        # thumbnail at all.
+        variant = self._plugin_thumbnail_variant(entry_link=entry_link, lead_url=cached)
+        if variant:
+            return variant
         if self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached):
             return None
         if not self._is_image_url_acceptable(cached, None, None, allow_extensionless=True, skip_logo_patterns=True):
             return None
         return self._promote_known_thumbnail(cached)
+
+    def _plugin_thumbnail_variant(self, *, entry_link: str, lead_url: str) -> str | None:
+        """A plugin-supplied thumbnail crop derived from the stored lead image.
+
+        Network-free by contract — it is called on the posts-list render path.
+        """
+        for plugin in self._plugins:
+            fn = getattr(plugin, "thumbnail_from_lead_image", None)
+            if fn is None:
+                continue
+            try:
+                url = fn(entry_link=entry_link, lead_url=lead_url)
+            except Exception:  # noqa: BLE001 — a plugin must not break the list
+                continue
+            if url:
+                return url
+        return None
 
     def _promote_known_thumbnail(self, url: str | None) -> str | None:
         """Return a small-thumbnail URL unchanged.
@@ -2156,7 +2221,7 @@ class LeadImageService:
                 continue
             if (
                 self._TRACKER_URL_PATTERNS.search(resolved)
-                or self._AVATAR_HINT_PATTERNS.search(resolved)
+                or self._looks_like_avatar_url(resolved)
                 or self.is_social_icon_url(resolved)
                 or self.is_ad_url(resolved)
                 or self._PLACEHOLDER_URL_PATTERNS.search(resolved)
@@ -2875,7 +2940,7 @@ class LeadImageService:
         # and load fine), so skipping the wrapper picks the real one.
         if self._BLOGGER_PROXY_RE.search(parsed.netloc + parsed.path):
             return False
-        if self._AVATAR_HINT_PATTERNS.search(parsed.path):
+        if self._looks_like_avatar_url(parsed.path):
             return False
         if parsed.netloc.lower() in self._FORGE_AVATAR_HOSTS and self._FORGE_AVATAR_PATH_RE.match(parsed.path or ""):
             return False
@@ -2942,7 +3007,27 @@ class LeadImageService:
             if not _lp_has_large_dims:
                 return False
         if self._PLACEHOLDER_URL_PATTERNS.search(image_url):
-            return False
+            # …unless the markup declares real dimensions for it. A spacer or a
+            # spinner is tiny and undeclared; an image the page sizes at 640x360
+            # is what the page means to show, whatever it is called. Full Circle
+            # Magazine names its genuine podcast cover art
+            # covers/podcasts/fallback.webp — "fallback" as in "the art we use
+            # when an episode has none of its own", not a placeholder graphic —
+            # and every podcast episode lost its image to this rule.
+            #
+            # Same escape hatch the logo/alt check above already uses, and for
+            # the same reason: declared dimensions are the page asserting intent.
+            # The bar is HERO SCALE, not merely "above the floor". WordPress's
+            # s0.wp.com/i/blank.jpg is a 200x200 white box that clears the bare
+            # minimums, so admitting anything at-or-above them would let the
+            # canonical placeholder back in — which is what the existing
+            # regression test for that image immediately caught.
+            _placeholder_has_real_dims = (
+                width is not None and width >= self._PLACEHOLDER_OVERRIDE_MIN_WIDTH
+                and height is not None and height >= self._PLACEHOLDER_OVERRIDE_MIN_HEIGHT
+            )
+            if not _placeholder_has_real_dims:
+                return False
         # Advertisement images (e.g. .../Cert-ad1.png) are never article content.
         # Checked against the path so query strings can't introduce false matches.
         # Directory always, filename only when it carries naming signal. The

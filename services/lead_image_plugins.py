@@ -78,6 +78,12 @@ class LeadImagePlugin(Protocol):
     # that need to fetch a page must NOT implement this (leave it to fallback_lead_image_url).
     def cheap_preferred_thumbnail_url(self, *, entry_link: str) -> str | None: ...
 
+    # Optional: a different crop for the LIST than for the article, derived from
+    # the already-resolved lead image without a fetch (called on the render
+    # path). Penny Arcade uses it to thumbnail one comic panel while the article
+    # keeps the full strip, which is illegible at thumbnail size.
+    def thumbnail_from_lead_image(self, *, entry_link: str, lead_url: str) -> str | None: ...
+
 
 @dataclass(frozen=True)
 class FutureSiteLeadImagePlugin:
@@ -293,6 +299,43 @@ class PennyArcadePlugin:
         if not self._is_comic_entry(entry_link):
             return False
         return "/panels/" in cached_url
+
+    def should_skip_source_lookup(self, *, entry_link: str) -> bool:
+        """The page scan reads the first <img>, which is panel 1 — so it wins the
+        race and stores a single panel as the article image. Skipping it lets
+        fallback_lead_image_url below take the og:image (the whole strip), which
+        is the point of this plugin. Without this the class docstring described
+        behaviour the plugin never actually reached."""
+        return self._is_comic_entry(entry_link)
+
+    def thumbnail_from_lead_image(self, *, entry_link: str, lead_url: str) -> str | None:
+        """Thumbnail the FIRST PANEL, while the article keeps the whole strip.
+
+        A Penny Arcade strip is ~1050x438 — three panels side by side. Scaled to
+        a list thumbnail that is three unreadable smudges, whereas panel 1 is a
+        legible square-ish image. The two live at derivable paths:
+
+            article : …/comics/<hash>.jpg
+            panel 1 : …/comics/panels/<hash>-p1.jpg
+
+        so no fetch is needed to get from one to the other. Returning None for a
+        URL that is already a panel leaves the existing behaviour alone.
+        """
+        if not self._is_comic_entry(entry_link) or not lead_url:
+            return None
+        if "/panels/" in lead_url:
+            # Already a panel (an older cached value): fine as a thumbnail as-is.
+            return lead_url
+        m = self._COMIC_IMAGE_RE.match(lead_url)
+        if not m:
+            return None
+        return f"{m.group('base')}/panels/{m.group('slug')}-p1{m.group('ext')}"
+
+    _COMIC_IMAGE_RE = re.compile(
+        r"^(?P<base>https?://[^/]*penny-arcade\.com(?:/[^/]+)*?/comics)"
+        r"/(?P<slug>[^/]+?)(?P<ext>\.(?:jpg|jpeg|png|webp))$",
+        re.IGNORECASE,
+    )
 
     def extra_candidate_attrs(self, *, source_url: str) -> tuple[str, ...]:
         return ()

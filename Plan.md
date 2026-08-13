@@ -86,16 +86,133 @@ articles"). What remains:
   before it was fixed. Indistinguishable from a genuine star-and-tag, so they
   cannot be surgically reverted; the unstar-tagged pass is what removes them.
 
-### Characterize the 259 failing feeds
+### Failing feeds — re-measured 2026-08-12, with work applied
 
-9% of the library errors on every refresh cycle and nobody has looked at the
-shape of it. The useful split is dead (host gone, 404/410 forever) vs bot-walled
-(403 that a browser identity or a different route might get past) vs moved (a
-redirect or a discoverable replacement), because each wants a different action —
-unsubscribe, force-subscribe, or Change URL. Two of them turned out to be dead
-`tapastic.com` husks duplicating live feeds, which suggests the pile has other
-easy wins in it. Nothing here is urgent; it is a measurement job first, and the
-measurement is what decides whether any of it is worth automating.
+⚠ **The 950 figure from 2026-08-11 was inflated by stale rows.** `feed_failure_state`
+keeps a row after a feed is unsubscribed (see the `purge_orphaned_feed` bug in
+the DeviantArt section), so long-gone feeds still counted. Live truth: **238
+failing feeds**, of which:
+
+| failure | count | state |
+|---|---|---|
+| unparseable / other | 123 | not yet characterized — **next job** |
+| HTTP 404 | 69 → **60** | 9 fixed by Change URL 2026-08-12 |
+| HTTP 403 | 29 | genuine IP-level walls; email is the only lever |
+| 5xx / conn / TLS | ~14 | mostly transient |
+| bot challenge | 3 | the new detector working |
+
+**Done 2026-08-12.** All 69 live 404s probed (`scripts/probe_dead_feeds.py`,
+read-only by default, paced and honest-UA). 23 had a discoverable replacement;
+**only 13 were same-scope, and 9 of those applied cleanly** — all 9 verified
+fetching real entries afterwards.
+
+**The probe's own lesson: a discovered feed is not a replacement.** A site that
+dropped its feed still serves a homepage, and autodiscovery there returns
+*something*. Swapping a broken feed for a wrong one is worse than leaving it
+broken, because it looks fixed. Two classes had to be rejected by hand:
+
+- **Widening** (8) — a section feed replaced by the site firehose.
+  `blog.google/products/docs/rss` → `blog.google/rss/` is Docs-only → all of
+  Google's blog. Same for `towardsdatascience.com/feed/tagged/python`.
+- **Collision** (2) — `sourcery.ai/blog` and `/changelog` both resolving to the
+  same site-wide feed, which would merge two distinct subscriptions.
+
+**Waiting on a decision (nothing applied):**
+
+- **4 dead feeds whose replacement you already subscribe to** — Change URL
+  refused them as duplicates, so these are just redundant dead rows to
+  unsubscribe: tartanllama, xubuntu, krshrimali, markjames.
+- **10 risky replacements** above — each is a judgement call about scope, not a
+  mechanical fix.
+- **46 with no feed found at all** — host gone or RSS dropped. Unsubscribe
+  candidates, but that needs the go-ahead bulk removal always needs.
+
+### basslessons.be (FakeFeedz scrape): real bodies, and video/tabs on keep
+
+Asked for 2026-08-12, investigated but **not built**. Everything below is
+verified against the live site, so this is a build job, not a research job.
+
+**Today:** the scraped feed (`file:///data/scraped-feeds/c9d2ca59-….xml`, 36
+entries) stores title + link only — `summary` and `content` are both empty. What
+renders as the "body" is the lead image (the first music page) with alt/title
+text under it.
+
+**Wanted:** (a) the article body should be the linked page's real content, and
+(b) on tag/star, capture the embedded YouTube video and all the tab images.
+
+**(a) The tab images are easy.** They sit in the raw HTML in
+`div.transImgBorders` — for `transcriptions.php?i=1211` that is
+`/partituren/1211-1.png` … `-6.png`, six sheet-music pages, plus the surrounding
+text. Ordinary readability/full-page extraction reaches them.
+
+**(b) The video needs one extra call.** It is NOT in the HTML — the page ships an
+empty `div.videoMask` ("Searching far and wide for the video") and fills it with
+JS. The resolver is reachable server-side, no auth, no JS:
+
+    POST https://basslessons.be/ajax/a_transcriptionVideo.php
+    trans_id=<the ?i= value from the entry link>
+    → {"status":"success","message":"<iframe … youtube-nocookie.com/embed/fxoeU3vzdEw …>"}
+
+So the adapter derives `trans_id` from the link, makes one POST, and injects the
+returned iframe. `youtube-nocookie.com` must be on the embed host allowlist for
+the sanitizer to keep it.
+
+⚠ **Do this as a per-entry re-fetch, not a bulk rewrite of the feed.** Replacing
+36 stored bodies in one pass is the same irreversible content change that lost a
+Standard Ebooks body the same day (the refetch had already overwritten reader's
+own entry content, and only a backup got it back). Per-entry keeps it reversible
+and lets one be checked before the rest.
+
+### Proxy article-body images through /api/img (main app)
+
+Asked for 2026-08-12, **not built — Josh wants to test this one thoroughly.**
+
+Read Mode already does it (`_proxy_reader_body_images`): every `<img src>` in the
+body is rewritten to `/api/img?u=…`, and `srcset`/`data-src` are dropped so the
+browser cannot pick a direct URL instead. The main app's article pane does not —
+it renders third-party image URLs raw.
+
+Three things that buys, in order of how much they matter:
+
+- **Content blockers stop breaking articles.** sonarsource.com images are served
+  from `assets-eu-01.kc-usercontent.com`; the HTML is correct and the image loads
+  fine in a clean browser (verified, 1473x331), but a blocker that filters that
+  CDN host leaves the article looking empty with nothing in the logs. Same-origin
+  URLs are immune.
+- **The image cache starts covering article bodies**, which today it does not.
+- **No silent `http://`-on-`https://` upgrade dependency**, which only works
+  because browsers quietly fix it and does not work offline.
+
+⚠ Not a drop-in: proxying every body image raises `/api/img` traffic and cache
+size sharply (bodies carry many more images than heroes do), so the cache budget
+and eviction want checking against the live library first — and `srcset` removal
+changes what high-DPI screens fetch. Ship behind a per-feed or global toggle so a
+regression is one setting away from being undone, and test with a big article
+before it goes near everything.
+
+### joanwestenberg: an avatar became the lead image, with a URL that cannot load
+
+Found 2026-08-12, **not fixed.** Two faults in one entry
+(`/p/nobody-wants-your-newsletter-you`):
+
+- **The chosen image is the author's avatar** — its stored alt is literally
+  "JA Westenberg's avatar". The avatar heuristics never saw it, so whichever path
+  resolved this one is not consulting alt text the way the inline scan does. This
+  is the same shape as the `Site Icon` miss fixed the same day: the signal was
+  right there in the alt attribute and nothing looked at it.
+- **The stored URL is mangled and 404s**:
+  `https://www.joanwestenberg.com/p/fl_progressive:steep/https%3A%2F%2Fsubstack-post-media…`
+  — a Substack CDN URL that was relative-joined onto the post path instead of
+  being used absolute. **That unloadable URL is the reported thumbnail flicker**:
+  the list renders it, the browser fails it, and the fallback swaps in.
+
+A lead image that cannot be fetched should not be storable — validating a
+candidate resolves (or at least refusing one whose host is the *site's own* page
+path with an embedded absolute URL) would catch the whole class, not just
+Substack.
+
+**Also unexplained on the same feed:** star and re-fetch do not pull content.
+Not yet diagnosed.
 
 ### Cross-feed duplicate scan — the dupes you can actually feel
 
@@ -392,12 +509,12 @@ not scheduled, just watched.
 - **makeuseof re-fetch returns white images.** Seen once during testing
   2026-08-06 and never investigated. Waiting on a second sighting rather than
   hunting it cold — Josh will flag it if it recurs.
-- **440 stored feed URLs are non-canonical.** Surfaced by the OPML round-trip
-  duplication fix (which canonicalizes both sides of the comparison now, so
-  re-importing your own export is a no-op). Why they are non-canonical was never
-  chased: they predate the canonicalization or arrive by another route. A
-  one-off normalization pass over `folder_feeds` would converge the spellings,
-  but nothing is broken by leaving them.
+- **~407 stored feed URLs differ from canonical only by a trailing slash.**
+  Harmless: re-measured 2026-08-11 across 2,868 feeds and there are **zero**
+  canonical collisions, so no duplicate subscriptions are hiding behind them. A
+  normalization pass would tidy the spellings and nothing else. (The *harmful*
+  part of this item — 12 feeds canonicalizing to a bare homepage because
+  `?feed=atom` was being stripped — was fixed the same day.)
 - **A re-fetch that returns a *different unique* article.** The sibling-text
   guard cannot see this shape — entry 26031 came back as a piece about
   sandbox-game rendering, unique text and all. The slug/title mismatch guard is
@@ -566,31 +683,34 @@ auto-file (puts it somewhere sensible), then reassess. Only revisit page-monitor
 if the "re-check the page for changes" half turns out to be the actual want — that
 part #4 does not cover.
 
-### DeviantArt: 543 individual gallery feeds may be redundant with the Watch feed — 2026-08-10
+### DeviantArt: 544 feeds → 1 — DONE 2026-08-12
 
-Surfaced while investigating why the new "same address, different query"
-duplicate scanner was flooding with DeviantArt hits (fixed separately —
-`backend.deviantart.com` is now excluded from that signal entirely, since
-it's one shared endpoint for every artist).
+The 2026-08-10 question ("are the 543 individual artist feeds redundant with the
+Watch feed?") is **settled and executed**. They were redundant. DeviantArt is now
+a single Watch feed.
 
-Confirmed in code: when DeviantArt is connected, adding an artist only
-Watches them (`deviantart_service.watch_user`) — "their posts arrive via
-the single combined Watch feed, so we don't create a per-artist local feed"
-(`main.py` ~line 22132). That's the *current* behavior. But the library
-still carries **543 individual artist feeds** alongside the one Watch
-feed: 521 rendered locally (`deviantart_feeds` table, `source='gallery'`)
-plus 22 legacy direct `backend.deviantart.com/rss.xml?q=gallery:<user>`
-subscriptions that predate the local-render pipeline entirely.
+- 22 legacy `backend.deviantart.com` subscriptions unsubscribed
+  (`scripts/drop_legacy_deviantart_feeds.py`) — WAF-blocked, all 22 artists
+  already Watched, all 22 also had a working gallery feed, 1 entry between them.
+- 521 per-artist gallery feeds **combined into the Watch feed**
+  (`scripts/combine_deviantart_galleries.py`), 0 failures. Combine moves every
+  entry and carries read state, so history was migrated rather than dropped.
 
-**Working theory:** these predate the Watch-only behavior and were never
-cleaned up after the switch, so most/all of their content is now redundant
-with the Watch feed. **Needs verification before any bulk action** — check
-whether each artist's username is actually in the account's current
-DeviantArt watch list (via the API), and/or whether their entries already
-appear in the Watch feed's own content. Only once that's confirmed would
-unsubscribing the individual feeds (migrating any stars/tags via the
-existing combine mechanism first) make sense — not something to bulk-guess
-at.
+Result: **544 DA subscriptions → 1**, library **2,868 → 2,325 feeds**, survivor
+holding **21,857 entries across 493 artists**, 21,847 of them still marked read.
+
+⚠ **The reasoning that nearly blocked this, recorded because it was wrong.** The
+Watch feed holding "401 entries covering 34 of 543 artists" reads like a coverage
+cap. It is not — only ~23-34 of the watched artists post at all. What settled it:
+zero artists who posted since the Watch feed was created were missing from it;
+volume is ~5.6 deviations/day against a 50-per-refresh window; and the feed's
+intake rate matches the observed posting rate. **Check whether a number is a
+limit or just the size of the active set before concluding anything from it.**
+
+**Still open — a real bug found doing this:** `purge_orphaned_feed` never deletes
+the feed's `feed_failure_state` row, so an unsubscribed feed counts as a failing
+feed forever. That is why the failing count read 950 when the live number was
+238. One-line fix plus a sweep of the existing ghosts.
 
 ### DeviantArt watchlist sync — remaining follow-up
 

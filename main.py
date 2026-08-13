@@ -14729,7 +14729,18 @@ def _inject_webcomic_panel_into_bodyless_entry(content_html, entry, feed_url: st
     if not link.startswith(("http://", "https://")):
         return content_html, lead_image_url
     try:
-        panel = lead_image_service._fetch_source_lead_image(link, is_webcomic=True)
+        if lead_image_service._plugin_should_skip_source_lookup(entry_link=link):
+            # A plugin owning this host has already said the page will mislead a
+            # scan, and the resolved lead image IS its answer. Penny Arcade is
+            # exactly that: the page's first <img> is panel 1, so scanning here
+            # put a single panel in the article and threw away the full strip the
+            # plugin had just resolved — reintroducing, on the render path, the
+            # bug the plugin exists to prevent.
+            panel = lead_image_url
+        else:
+            # mahonoir and friends: nothing usable was resolved (the feed's
+            # enclosure is a share card), so the page really is the only source.
+            panel = lead_image_service._fetch_source_lead_image(link, is_webcomic=True)
     except Exception:  # noqa: BLE001 — an article without its comic beats a 500
         LOGGER.warning("[webcomic] panel injection failed for %s", link, exc_info=True)
         return content_html, lead_image_url
@@ -16289,8 +16300,23 @@ def normalize_feed_url(feed_url: str) -> str:
             all_pairs = parse_qsl(parsed.query, keep_blank_values=True)
             kept = [(k, v) for k, v in all_pairs
                     if not (k in _FORMAT_SELECTOR_PARAMS and _is_format_selector_value(v.lower()))]
-            if len(kept) != len(all_pairs):
-                new_query = urlencode(kept)
+            new_query = urlencode(kept)
+            # Never strip a selector down to a bare homepage. On WordPress
+            # `?feed=atom` at "/" IS the feed, not a serialization choice
+            # applied to one — dropping it yields the site root, which is not a
+            # feed at all. That matters beyond dedupe: importers run every
+            # incoming URL through canonical_feed_url and then SUBSCRIBE to the
+            # result (_canonicalize_item_feed_urls), so a homepage would be
+            # stored as the feed and the entry tags/stars keyed to it.
+            #
+            # The upgrade/alternates path already refuses the same candidate for
+            # the same reason (see test_root_level_feed_param_still_offers_alternates);
+            # this is that guard applied where the canonical form is produced.
+            #
+            # Found 2026-08-11: 12 subscribed feeds canonicalized to a bare
+            # homepage this way.
+            collapses_to_homepage = path in ("", "/") and not new_query
+            if len(kept) != len(all_pairs) and not collapses_to_homepage:
                 feed_url = parsed._replace(path=path, query=new_query).geturl()
             elif path_changed:
                 feed_url = parsed._replace(path=path).geturl()

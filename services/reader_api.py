@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
@@ -8,7 +9,7 @@ from pathlib import Path
 from reader import make_reader
 from reader._storage import Storage as _ReaderStorage
 
-from services import reader_sanitize
+from services import bot_challenge, reader_sanitize
 
 # Honest default identity for feed fetches — names the app + links the repo.
 _HONEST_USER_AGENT = "Lectio/0.1 (+https://github.com/joshg253/Lectio)"
@@ -67,6 +68,12 @@ _XML_SIGS = (b"<?xml", b"<rss", b"<feed", b"<rdf:RDF")
 _HTML_SIGS = (b"<!DOCTYPE html", b"<!doctype html", b"<html", b"<HTML")
 
 
+# XML 1.0 permits only #x9 (tab), #xA (LF), #xD (CR) from the C0 range; every
+# other control byte is forbidden and makes a document not well-formed. Matched
+# on bytes rather than text because the body is scrubbed before decoding.
+_XML_ILLEGAL_BYTES_RE = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
 def _fix_feed_response(session, response, request, **kwargs):
     try:
         response.raw.decode_content = True
@@ -78,6 +85,33 @@ def _fix_feed_response(session, response, request, **kwargs):
     if not raw_bytes:
         response.raw = io.BytesIO(b"")
         return None
+
+    # Strip control characters XML 1.0 forbids outright. reader's parser is a
+    # strict SAX parser, so ONE stray byte kills the whole document: a raw 0x0B
+    # sitting mid-sentence in a post ("…interesting talk.\x0bHi. I'm Al…") made
+    # inventwithpython.com's 2.7MB feed unparseable in its entirety, reported as
+    # "not well-formed (invalid token)" at line 19918. feedparser is lenient and
+    # reads the same feed happily, which is exactly why this is worth doing here
+    # rather than assuming a feed that "looks fine" will ingest.
+    #
+    # Only the characters that are ILLEGAL in XML are removed — tab, newline and
+    # carriage return are explicitly kept, so nothing legitimate is touched and a
+    # feed that was already valid comes through byte-identical.
+    if _XML_ILLEGAL_BYTES_RE.search(raw_bytes):
+        raw_bytes = _XML_ILLEGAL_BYTES_RE.sub(b"", raw_bytes)
+
+    # An anti-bot challenge served in place of the feed is a *block*, not a
+    # malformed feed, and the two want opposite fixes. Raised here rather than
+    # left to fail as a parse error so the recorded failure says so — see
+    # services.bot_challenge for why the status code cannot be used to tell them
+    # apart (SiteGround serves its captcha as a 202).
+    _challenge = bot_challenge.detect_challenge(
+        response.headers.get("Content-Type"), raw_bytes
+    )
+    if _challenge:
+        response.raw = io.BytesIO(raw_bytes)
+        response._content = raw_bytes
+        raise bot_challenge.FeedBlockedError(_challenge, getattr(request, "url", "") or "")
 
     # Always replace the (now-exhausted) stream so reader can still read it.
     stripped = raw_bytes.lstrip()

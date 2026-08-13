@@ -110,7 +110,22 @@ _COMMON_FEED_PATHS = [
 # WordPress-style query-param variants probed against the page URL itself.
 _FEED_QUERY_PARAMS = ["feed=rss2", "feed=rss", "feed=atom", "feed=json"]
 
-_HEADERS = {"User-Agent": "Lectio/1.0 (RSS auto-discovery; +https://github.com/joshg253/Lectio)"}
+# The SAME honest identity the rest of the app fetches with — deliberately
+# without a parenthetical describing the activity.
+#
+# This used to read "Lectio/1.0 (RSS auto-discovery; +…)", and bot filters match
+# on that phrase: chickensoft.games returns a fabricated 404 to any UA containing
+# "RSS auto-discovery" while serving 200 to "Lectio/1.0" and to the honest UA.
+# Discovery was therefore the ONE part of Lectio that could not read the site,
+# and the damage was not just a failed lookup — probe_url reported "HTTP 404 —
+# server denied the request", refusal_is_forceable() read that as the site
+# refusing us, and Add Feed offered "Subscribe anyway". That is the husk-feed
+# path the add-feed code explicitly warns against, offered because of our own
+# user agent.
+#
+# Still honest: it names the app and links the repo. Only the description of
+# what the request is for is gone, and that description was never load-bearing.
+_HEADERS = {"User-Agent": "Lectio/1.0 (+https://github.com/joshg253/Lectio)"}
 
 
 # --- Site-specific URL → feed rewrites -------------------------------------
