@@ -344,6 +344,46 @@ drawer. Rationale in ARCHITECTURE.md ("Back on a phone walks the view stack",
   than coming back. That is the button's existing behavior, not the gesture's,
   but it shows up more now that the gesture makes it easy to trigger.
 
+### Home-route latency under refresh — measured, partly fixed
+
+Reported 2026-08-11 as "serious delay browsing". Home requests logged a median of
+700ms but **9% over 3s, peaking at 7.2s**, always while a refresh pass was
+running. Shipped that day: the route no longer builds a `FeedInFolder` for all
+2,867 feeds on every load (only the two folders whose rows actually render), which
+removes most of the pure-Python work that was being contended over.
+
+Two dead ends, both measured, so nobody re-runs them:
+
+- **Free-threaded Python is blocked by lxml.** The whole dependency stack
+  (pillow, lxml, uvloop, pydantic-core) installs fine on free-threaded 3.14.6,
+  but importing the app flips `sys._is_gil_enabled()` back to `True`:
+  *"the GIL has been enabled to load module 'lxml.etree', which has not declared
+  that it can run safely without the GIL"*. lxml 6.1.1 is current, so there is
+  nothing to upgrade to. `PYTHON_GIL=0` would force it, but lxml arrives via
+  `readability-lxml` and runs in the **refresh thread** — forcing unprotected C
+  code in the one concurrent path is the worst possible place to take that risk.
+  Recheck when lxml declares free-threading support; nothing else blocks it.
+- **`sys.setswitchinterval()` does not help.** Benchmarked against the app's own
+  sanitizer in a background thread with home-route-shaped work in the foreground:
+  default 5ms gave p50 22.2ms / p95 30.3ms; 1ms, 0.5ms and 0.1ms were all *worse*
+  on latency (25-26ms p50) **and** on refresh throughput. Pure context-switch
+  overhead. Do not ship it.
+
+**The open lead.** That benchmark showed a competing CPU thread roughly *doubles*
+foreground latency (11ms → 22ms). Production went 0.5s → 7s, which is ~14×. So
+GIL contention alone does not explain the spikes and something else is
+contributing — candidates, in order of suspicion: the `_home_request_semaphore`
+serialising concurrent home renders (it 503s rather than queues, so a phone
+retrying compounds it), meta-DB lock contention with refresh's writes, and
+refresh's own DB work blocking readers. **Instrument the region between the
+`tag_block` and `posts_block` ticks before theorising further** — the whole reason
+this took a while to find is that the expensive part sat in a gap with no timing
+of its own.
+
+Also corrected while chasing this: refresh is **not** a thread pool. It calls
+`reader.update_feed()` sequentially in one background thread, so the contention
+is one CPU-hungry thread, not many.
+
 ### Parked, deliberately
 
 Genuinely nothing to do here until one of these recurs or a lead turns up —

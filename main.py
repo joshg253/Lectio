@@ -21018,12 +21018,39 @@ def _home_inner(
         if not pf.get("acknowledged_at")
     }
     feeds_by_folder: dict[int, list[FeedInFolder]] = {}
+    # folder_id → does it hold any ACTIVE feed. The tree needs this for every
+    # folder to decide whether to draw an expand toggle, but only needs the rows
+    # themselves for the two folders it renders inline (see the loop below).
+    folder_has_feeds: dict[int, bool] = {}
     # feed_url → containing_folder_id, so feed-name links in posts/entry can
     # navigate to the feed's own folder rather than the currently-viewed one.
     feed_to_folder: dict[str, int] = {}
+    # Only two folders ever render their feed rows in this response: the selected
+    # one (inline, so the active-feed highlight and auto-expand survive a full
+    # page load) and the root. Every other folder ships an empty <ul> that fills
+    # from /tree/folder-feeds/{id} on first expand, and needs nothing here but
+    # "does it have any feeds" to decide whether to draw the expand toggle.
+    #
+    # Building all of them anyway cost a FeedInFolder per feed — 2,867 of them on
+    # the live library — plus a urlparse/quote_plus for each icon URL and a sort
+    # per folder, on every single page load. That is ~0.5s of pure Python in the
+    # request path at rest, and several seconds when a refresh pass is running and
+    # its worker threads are competing for the GIL. The lazy-rendering pass that
+    # made the ROWS lazy left the BUILDING eager; this closes that gap.
+    feeds_rendered_for = {selected_folder_id, root_id}
     for row in folder_rows:
         folder_row_id = int(row["id"])
         urls = direct_feed_urls_by_folder.get(folder_row_id, [])
+        # Needed for every folder regardless: the post list maps each post's feed
+        # back to its folder through this.
+        for url in urls:
+            feed_to_folder[url] = folder_row_id
+        # The tree hides disabled feeds, so "has feeds" means "has active feeds"
+        # — otherwise a folder holding only disabled feeds would draw a toggle
+        # that expands to nothing.
+        folder_has_feeds[folder_row_id] = any(url not in disabled_feed_urls for url in urls)
+        if folder_row_id not in feeds_rendered_for:
+            continue
         all_folder_feeds = [
             FeedInFolder(
                 url=url,
@@ -21038,8 +21065,6 @@ def _home_inner(
         # Active feeds first (alphabetical), disabled greyed at the bottom.
         all_folder_feeds.sort(key=lambda f: (f.disabled, f.title.casefold()))
         feeds_by_folder[folder_row_id] = [f for f in all_folder_feeds if not f.disabled]
-        for url in urls:
-            feed_to_folder[url] = folder_row_id
 
     root_folder_row = next((row for row in folder_rows if int(row["depth"]) == 0), None)
     child_folder_rows = [row for row in folder_rows if int(row["depth"]) == 1]
@@ -21265,6 +21290,7 @@ def _home_inner(
         "child_folder_rows": child_folder_rows,
         "folder_options": folder_options,
         "feeds_by_folder": feeds_by_folder,
+        "folder_has_feeds": folder_has_feeds,
         "feed_to_folder": feed_to_folder,
         "push_feed_urls": get_push_active_feed_urls(),
         "tag_rows": tag_rows,
