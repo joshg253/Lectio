@@ -17149,6 +17149,46 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
     return result
 
 
+def _carry_tags_to_orphan_archive(reader, conn: sqlite3.Connection, feed_url: str) -> int:
+    """Copy a feed's manual tags into ``orphan_entry_tags`` before it is deleted.
+
+    Only for entries whose offline capture will outlive the feed — that is the
+    same test ``_purge_dead_entry_meta`` uses to decide which per-entry meta
+    survives, so the two agree about what still exists afterwards.
+
+    Returns the number of entries whose tags were carried.
+    """
+    try:
+        with archive_conn() as _ac:
+            captured = {
+                str(r[0]) for r in _ac.execute(
+                    "SELECT entry_id FROM archived_entry WHERE feed_url = ?", (feed_url,)
+                )
+            }
+    except sqlite3.Error:
+        # Cannot prove what survives, so carry nothing rather than fabricate
+        # tag rows for entries that are about to disappear entirely.
+        LOGGER.warning("[purge] archive unreadable; not carrying tags for %s", feed_url)
+        return 0
+    if not captured:
+        return 0
+
+    carried = 0
+    for entry in reader.get_entries(feed=feed_url):
+        entry_id = str(entry.id)
+        if entry_id not in captured:
+            continue
+        tags = get_manual_tags_for_resource(reader, entry.resource_id)
+        if not tags:
+            continue
+        conn.executemany(
+            "INSERT OR IGNORE INTO orphan_entry_tags (feed_url, entry_id, tag) VALUES (?, ?, ?)",
+            [(feed_url, entry_id, t) for t in tags],
+        )
+        carried += 1
+    return carried
+
+
 def purge_orphaned_feed(
     reader,
     conn: sqlite3.Connection,
@@ -17226,6 +17266,35 @@ def purge_orphaned_feed(
                 feed_url, migrate_curation_to,
                 migrated["tags"], migrated["stars"], migrated["synth"], migrated["archives"],
             )
+
+    # Step 2c — carry manual tags across to the orphan-archive side.
+    #
+    # A tag is a keep signal exactly like a star, but the two are stored in very
+    # different places: a star lives in `saved_entries` (meta DB, no reader
+    # dependency) and survives the feed's deletion untouched, while a tag lives
+    # in reader's own entry_tags and is deleted WITH the feed. So a tagged-but-
+    # unstarred entry used to come out of an unsubscribe with its capture intact
+    # and its tags gone.
+    #
+    # That is worse than untidy. An orphan archive counts as kept only if it is
+    # starred OR manually tagged (see "A surviving capture is not itself a keep
+    # signal"), so losing the tag makes the entry read as carrying no keep signal
+    # at all — unreachable in Saved, and eligible for deletion by
+    # scripts/purge_uncurated_orphan_archives.py. Tagging something is supposed
+    # to keep it forever; this is what makes that true across an unsubscribe.
+    #
+    # orphan_entry_tags is the same table the UI already writes when you tag an
+    # entry whose feed is gone, so nothing new is invented here — the tags simply
+    # move to where an orphan's tags are meant to live.
+    #
+    # Gated on a surviving capture, matching _purge_dead_entry_meta's rule: with
+    # no archive row the entry is entirely gone, and a tag pointing at nothing
+    # would be a ghost. Skipped when migrate_curation_to is set, because there
+    # the tags follow the entries onto the surviving feed instead.
+    if not migrate_curation_to:
+        _carried = _carry_tags_to_orphan_archive(reader, conn, feed_url)
+        if _carried:
+            LOGGER.info("[purge] carried tags for %d orphan capture(s) on %s", _carried, feed_url)
 
     # Step 3 — dispatch the delete via the appropriate path.
     da_id = deviantart_service.deviantart_feed_id_from_url(feed_url)

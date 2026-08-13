@@ -2193,6 +2193,41 @@ Fill mode's `fill_zoom` multiplier (`feed_display_prefs.fill_zoom`, NULL = defau
 
 **Direct-load fallback:** `/thumb` fetches the source image *from the server*, so a host that IP-blocks datacenter traffic (e.g. Cloudflare 403, washingtonstatestandard.com) makes `/thumb` 502 and the list thumbnail break — even though the browser's own (residential) IP can fetch the image fine. The list `<img>` carries the raw image URL in `data-direct`; on a `/thumb` error its `onerror` (`window.thumbImgFallback`, defined pre-body so it exists before any load fails) retries once with that direct URL, letting the browser load the image itself. CSS `object-fit:cover` sizes the un-resized image to the tile. This recovers the thumbnail without evading the block server-side (it's the user's own client fetching, exactly as the article view already does). Only `http(s)` direct URLs are retried, and only once (a `data-triedDirect` guard prevents an error loop); if the direct load also fails, the tile collapses to `is-empty` as before. The same helper backs the JS-derived list thumbnail (it sets `data-direct` to the lead-image URL).
 
+## A tag has to survive an unsubscribe, because a star does
+
+Stars and tags are the same promise — "keep this" — but they are stored in
+completely different places. A star is a `saved_entries` row in the meta DB with
+no reader dependency, so it survives the feed's deletion untouched. A tag lives
+in **reader's own** `entry_tags`, attached to the entry resource, and is deleted
+*with the feed*.
+
+So a tagged-but-unstarred entry used to come out of a plain unsubscribe with its
+offline capture intact and its tags gone. That is not untidy, it is destructive
+one step later: an orphan archive counts as kept only if it is starred **or**
+manually tagged (see "A surviving capture is not itself a keep signal"), so
+losing the tag makes the entry read as carrying no keep signal at all —
+unreachable in Saved, and eligible for deletion by
+`scripts/purge_uncurated_orphan_archives.py`. The dialog said so out loud
+("tags are lost"), which is how it was noticed.
+
+`_carry_tags_to_orphan_archive` copies the tags into `orphan_entry_tags` before
+the delete. That is not a new concept: it is the table the UI already writes when
+you tag an entry whose feed is gone, precisely because there is no reader
+resource to attach to. The tags simply move to where an orphan's tags are meant
+to live.
+
+Two gates:
+
+- **Only for entries whose capture survives** — the same test
+  `_purge_dead_entry_meta` uses, so both agree about what still exists
+  afterwards. With no archive row the entry is gone entirely and a tag row would
+  point at nothing.
+- **Not when `migrate_curation_to` is set** — there the tags follow the entries
+  onto the surviving feed instead, which is `_migrate_curation`'s job.
+
+`orphan_entry_tags` is deliberately absent from `_DEAD_ENTRY_META_TABLES`, so the
+meta sweep that runs immediately afterwards does not undo this.
+
 ## "Re-star" is two operations, not one
 
 Unsubscribing a feed can bring its curated posts back to the top of the Inbox.

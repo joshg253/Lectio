@@ -180,3 +180,74 @@ def test_purging_leaves_another_feeds_failure_state_alone(env):
         assert conn.execute(
             "SELECT COUNT(*) FROM feed_failure_state WHERE feed_url = ?", (other,)
         ).fetchone()[0] == 1
+
+
+
+# --- tags must survive an unsubscribe, the way stars already do ---------------
+#
+# A tag is a keep signal exactly like a star, but they live in different places:
+# a star is a meta-DB row that survives the feed's deletion untouched, while a
+# tag lives in reader's own entry_tags and is deleted WITH the feed. So a
+# tagged-but-unstarred entry used to come out of an unsubscribe with its capture
+# intact and its tags gone — which made it read as carrying no keep signal at
+# all, and therefore eligible for deletion by purge_uncurated_orphan_archives.
+
+TAGGED_ID = "https://gone.test/tagged-and-captured"
+
+
+def _tag(entry_id: str, tag: str) -> None:
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        reader.add_entry({"feed_url": FEED, "id": entry_id, "title": "t", "link": entry_id})
+        entry = reader.get_entry((FEED, entry_id))
+        reader.set_tag(entry.resource_id, f"lectio.manual_tag.{tag}", "")
+
+
+def _purge() -> None:
+    with main.get_reader() as reader:
+        with main.get_meta_connection() as conn:
+            main.purge_orphaned_feed(reader, conn, FEED, archive_pending=False)
+            conn.commit()
+
+
+def test_a_captured_entrys_tags_survive_the_unsubscribe(env):
+    _tag(TAGGED_ID, "gamedev")
+    _capture(TAGGED_ID)
+    assert main.get_manual_tags_for_entry(FEED, TAGGED_ID) == ["gamedev"]
+
+    _purge()
+
+    assert main.get_manual_tags_for_entry(FEED, TAGGED_ID) == ["gamedev"], \
+        "tag lost on unsubscribe — the orphan now reads as uncurated"
+
+
+def test_the_carried_tag_still_counts_as_a_keep_signal(env):
+    """What the loss actually cost: eligibility for the uncurated-orphan purge."""
+    _tag(TAGGED_ID, "gamedev")
+    _capture(TAGGED_ID)
+    _purge()
+
+    assert main.entry_has_keep_signal(FEED, TAGGED_ID, starred=False) is True
+
+
+def test_an_uncaptured_entrys_tags_are_not_carried(env):
+    """No capture means the entry is entirely gone; a tag row would be a ghost."""
+    _tag(DEAD_ID, "gamedev")
+    _purge()
+
+    with main.get_meta_connection() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ?",
+            (FEED, DEAD_ID),
+        ).fetchone()[0] == 0
+
+
+def test_multiple_tags_all_carry(env):
+    _tag(TAGGED_ID, "gamedev")
+    with main.get_reader() as reader:
+        entry = reader.get_entry((FEED, TAGGED_ID))
+        reader.set_tag(entry.resource_id, "lectio.manual_tag.c-sharp", "")
+    _capture(TAGGED_ID)
+    _purge()
+
+    assert sorted(main.get_manual_tags_for_entry(FEED, TAGGED_ID)) == ["c-sharp", "gamedev"]
