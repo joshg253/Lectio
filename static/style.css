@@ -431,6 +431,11 @@ body[data-layout-mode="single"] .single-menu-btn {
 body[data-compact-article="1"] .pane-entry {
   overflow-y: auto;
   overflow-x: hidden;
+  /* Pulling down from the top of an article toggles Reader view. `contain` stops
+     the browser's own pull-to-refresh from claiming that same overscroll, which
+     lets the gesture's listeners stay passive instead of calling preventDefault
+     on every touchmove. */
+  overscroll-behavior-y: contain;
   /* One gutter for the article view, so the title, the byline, the feed/date
      line and the body all start on the same vertical. */
   --phone-gutter: 0.85rem;
@@ -706,6 +711,25 @@ body[data-compact-article="1"] .entry-meta-separator {
 
 body[data-layout-mode="single"] .single-back-btn {
   display: inline-flex;
+}
+
+/* "Up to the folder" when the list is scoped to one feed. It sits where the
+   hamburger otherwise sits, so it keeps that control's tightened left padding,
+   and the folder name truncates rather than pushing the sort/filter pills off
+   the row on a narrow phone. */
+body[data-layout-mode="single"] .single-up-btn {
+  padding-left: 0;
+  padding-right: 0.2rem;
+  min-width: 0;
+  text-decoration: none;
+  overflow: hidden;
+}
+
+.single-up-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 8rem;
 }
 
 /* Touch targets. 44px is the smallest reliably tappable size; the desktop tree
@@ -1848,6 +1872,13 @@ button:hover, .button-link:hover {
   display: none;
 }
 
+/* Kept strictly separate from .post-item-hidden, which the scroll-chunking
+   reveal owns. Sharing one class would make "move the N shown" — which selects
+   on the chunk class — silently target the whole unfiltered list. */
+.post-item-filtered {
+  display: none;
+}
+
 .posts-chunk-sentinel {
   height: 1px;
 }
@@ -1900,6 +1931,58 @@ button:hover, .button-link:hover {
 .topbar-search-go:hover { color: var(--fg, inherit); }
 .topbar-search-go .material-symbols-rounded { font-size: 1.1rem; }
 .topbar-search-clear[hidden] { display: none; }
+
+.posts-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.25rem;
+}
+
+.posts-filter-icon {
+  font-size: 1rem;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.posts-filter-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.15rem 0.35rem;
+}
+
+.posts-filter-input::placeholder { color: var(--muted); }
+
+.posts-filter-count {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.posts-filter-count[hidden] { display: none; }
+
+.posts-filter-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0.15rem 0.3rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.posts-filter-clear:hover { color: var(--fg, inherit); }
+.posts-filter-clear .material-symbols-rounded { font-size: 1rem; }
+.posts-filter-clear[hidden] { display: none; }
 
 .toolbar-search-hidden {
   display: none;

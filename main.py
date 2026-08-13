@@ -8,6 +8,7 @@ import html
 import io
 import json
 import logging
+import mimetypes
 import os
 import re
 import secrets
@@ -551,13 +552,17 @@ def _static_asset_version() -> str:
     worker, which caches /static by design — kept serving the previous file.
     Deploying a fix and watching the old copy run is a bad way to spend an hour.
 
+    `.webmanifest` is in the set for the same reason: it is served with the same
+    ?v= and the same immutable, year-long Cache-Control, so a manifest edit that
+    did not move the digest would be pinned in the browser indefinitely.
+
     Sorted so the digest is stable across filesystems.
     """
     try:
         _static = Path(__file__).parent / "static"
         paths = sorted(
             p for p in _static.rglob("*")
-            if p.is_file() and p.suffix in (".css", ".js")
+            if p.is_file() and p.suffix in (".css", ".js", ".webmanifest")
         )
         combined = b"".join(p.read_bytes() for p in paths)
         return hashlib.md5(combined).hexdigest()[:10]
@@ -2826,6 +2831,10 @@ class _CachedStaticFiles(StaticFiles):
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return response
 
+
+# Python's mimetypes table predates .webmanifest, so StaticFiles would serve the
+# PWA manifest as octet-stream and Chrome would refuse to install the app.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 app.mount("/static", _CachedStaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -21261,6 +21270,12 @@ def _home_inner(
         "tag_rows": tag_rows,
         "all_tag_names": get_all_manual_tag_names(),
         "selected_folder_id": selected_folder_id,
+        # Labels the phone's "up to the folder" control when the list is scoped
+        # to one feed, so the button says where it goes instead of "Folders".
+        "selected_folder_name": next(
+            (str(row["name"]) for row in folder_rows if int(row["id"]) == selected_folder_id),
+            "",
+        ),
         "selected_feed_url": selected_feed_url,
         "selected_tag": selected_tag,
         "selected_query": selected_query,
@@ -27135,6 +27150,188 @@ def move_entries_to_feed_batch_route(
     except Exception:  # noqa: BLE001 — details stay in the log, not the response
         LOGGER.exception("[move-entry] batch move to %s failed", target)
         return JSONResponse({"ok": False, "error": "Move failed — see server logs."}, status_code=502)
+    bits = []
+    if stars:
+        bits.append(f"{stars} star{'s' if stars != 1 else ''}")
+    if tags:
+        bits.append(f"{tags} tag{'s' if tags != 1 else ''}")
+    carried = f" (carried {' + '.join(bits)})" if bits else ""
+    msg = f"Moved {moved} entr{'ies' if moved != 1 else 'y'}{carried}."
+    if skipped:
+        msg += f" {skipped} already in that feed."
+    if failed:
+        msg += f" {failed} failed — see server logs."
+    return JSONResponse({"ok": True, "moved": moved, "skipped": skipped,
+                         "failed": failed, "message": msg})
+
+
+# Effectively unbounded, for the same reason _RANGE_READ_LIMIT is: a whole-set
+# action has to see the whole current view, not the page the browser happens to
+# hold. The list route clips to 250 on first load and 2,000 thereafter, so an
+# id-list move silently covered a fraction of a large filter.
+_MOVE_VISIBLE_LIMIT = 1_000_000
+
+
+def _view_filter_predicate(term: str | None):
+    """The posts list's "Filter this view" box, resolved server-side.
+
+    Matches the same three fields the browser-side filter matches — post title,
+    link URL, and source feed title — so "move the N shown" resolves to exactly
+    the set the filter is showing. The client filters locally for instant feel;
+    this is what the move itself is settled against.
+
+    Deliberately narrower than ``search_query``, which also spans summary and
+    authors: a filter narrows what is already in front of you, a search changes
+    what is fetched.
+    """
+    needle = (term or "").strip().lower()
+    if not needle:
+        return lambda post: True
+
+    def _matches(post: dict) -> bool:
+        return any(
+            needle in str(post.get(key) or "").lower()
+            for key in ("title", "link", "feed_title")
+        )
+
+    return _matches
+
+
+def _resolve_view_posts(
+    *,
+    folder_id: int,
+    list_feed_url: str | None,
+    tag: str | None,
+    sort_by: str | None,
+    sort_dir: str | None,
+    read_filter: str | None,
+    star_only: str | None,
+    search_query: str | None,
+    inbox_view: bool,
+) -> list[dict]:
+    """Re-resolve the post list a browser view is showing, unclipped.
+
+    Mirrors the home route's scope derivation (disabled-feed exclusion, the
+    kept-feed and Saved Articles widening under the star filter, and the
+    search-forces-``all`` rule) so a whole-set action lands on the same entries
+    the user is looking at.
+
+    Orphan archive entries are NOT merged in the way the home route merges them:
+    those are saves whose feed is gone, so they have no reader row to act on.
+    """
+    normalized_tag = normalize_tag_value(tag)
+    normalized_query = normalize_search_query(search_query)
+    normalized_star_only = normalize_star_only(star_only)
+    normalized_read_filter = normalize_read_filter(read_filter)
+    # Search always spans All, exactly as the home route widens it — otherwise
+    # the set resolved here would be narrower than the list on screen.
+    if normalized_query and normalized_read_filter in {"all", "unread"}:
+        normalized_read_filter = "all"
+
+    with get_meta_connection() as conn:
+        feed_urls = get_folder_feed_urls(conn, folder_id)
+        disabled_feed_urls = get_disabled_feed_urls(conn)
+        root_id = get_root_folder_id(conn)
+
+    entry_feed_urls = filter_feed_urls(feed_urls, list_feed_url)
+    # Stars are deliberate curation and stay visible on a disabled feed, so the
+    # star view must not subtract them here either.
+    if not (list_feed_url or normalized_star_only):
+        entry_feed_urls = entry_feed_urls - disabled_feed_urls
+    if normalized_star_only:
+        entry_feed_urls = entry_feed_urls | get_kept_feed_urls()
+        if folder_id == root_id and not list_feed_url:
+            entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
+
+    return list_entries_for_feeds(
+        entry_feed_urls,
+        limit=_MOVE_VISIBLE_LIMIT,
+        sort_by=normalize_sort_by(sort_by, allow_starred=True),
+        sort_dir=normalize_sort_dir(sort_dir),
+        read_filter=normalized_read_filter,
+        star_only=normalized_star_only,
+        selected_tag=normalized_tag,
+        search_query=normalized_query,
+        kept_scope=("starred" if inbox_view else "kept"),
+    )
+
+
+@app.post("/entries/move-visible-to-feed")
+def move_visible_entries_to_feed_route(
+    target_url: str = Form(default=""),
+    folder_id: int = Form(...),
+    list_feed_url: str | None = Form(default=None),
+    tag: str | None = Form(default=None),
+    sort_by: str | None = Form(default=None),
+    sort_dir: str | None = Form(default=None),
+    read_filter: str | None = Form(default=None),
+    star_only: str | None = Form(default=None),
+    q: str | None = Form(default=None),
+    kept: str | None = Form(default=None),
+    filter_term: str = Form(default=""),
+    dry_run: str = Form(default=""),
+):
+    """Move every entry matching the current view + filter, resolved server-side.
+
+    The id-list sibling (``/entries/move-to-feed-batch``) can only move what the
+    browser holds, which is a page of the view rather than the view — so a
+    filter matching more than the loaded chunk moved a silent fraction of it.
+    This route takes the *predicate* instead (scope, filters, filter term) and
+    re-resolves it here, which is correct at any size. That also means there is
+    no id payload to bound, so ``_MOVE_BATCH_CAP`` does not apply.
+
+    ``dry_run`` returns just the count, so the confirm dialog can state the real
+    number instead of the number of rows in the DOM.
+    """
+    target = target_url.strip()
+    is_dry_run = dry_run in ("1", "true", "on", "yes")
+    if not is_dry_run and not target:
+        return JSONResponse({"ok": False, "error": "Pick a target feed."}, status_code=400)
+
+    try:
+        posts = _resolve_view_posts(
+            folder_id=folder_id,
+            list_feed_url=list_feed_url,
+            tag=tag,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            read_filter=read_filter,
+            star_only=star_only,
+            search_query=q,
+            inbox_view=(kept or "").strip().lower() == "starred",
+        )
+    except Exception:  # noqa: BLE001 — details stay in the log, not the response
+        LOGGER.exception("[move-entry] could not resolve the view for a move to %s", target)
+        return JSONResponse({"ok": False, "error": "Could not read the current view."}, status_code=502)
+
+    matches_filter = _view_filter_predicate(filter_term)
+    matches = [p for p in posts if matches_filter(p)]
+
+    if is_dry_run:
+        return JSONResponse({"ok": True, "count": len(matches)})
+
+    moved = skipped = failed = stars = tags = 0
+    try:
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                for post in matches:
+                    feed_url, entry_id = str(post["feed_url"]), str(post["id"])
+                    if feed_url == target:
+                        skipped += 1
+                        continue
+                    result = _move_entry_to_feed(reader, conn, feed_url, entry_id, target)
+                    if result["ok"]:
+                        moved += 1
+                        stars += 1 if result["star"] else 0
+                        tags += result["tags"]
+                    else:
+                        failed += 1
+                        LOGGER.warning("[move-entry] visible-move item failed %s in %s: %s",
+                                       entry_id, feed_url, result["error"])
+    except Exception:  # noqa: BLE001 — details stay in the log, not the response
+        LOGGER.exception("[move-entry] visible move to %s failed", target)
+        return JSONResponse({"ok": False, "error": "Move failed — see server logs."}, status_code=502)
+
     bits = []
     if stars:
         bits.append(f"{stars} star{'s' if stars != 1 else ''}")

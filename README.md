@@ -51,6 +51,20 @@ short version:
 - **Triage first.** Three-pane reader, keyboard nav everywhere, context menus,
   bulk mark-as-read that updates in place, per-view remembered sort, and a
   layout that collapses to two panes on a tablet and one on a phone.
+- **Picks up where you left off.** Close the tab, press Back once too often, or
+  swipe the app away — reopening Lectio returns you to the same article, scrolled
+  to the same place. It also installs to your home screen as a standalone app via
+  the bundled web app manifest.
+- **Built for a phone, not just shrunk onto one.** One pane at a time, with Back
+  walking the view stack — article → feed → folder — and then toggling the folder
+  drawer instead of closing the tab out from under you. Pull down from the top of
+  an article to toggle Reader view, and pull again to come back. Links out to the
+  web open in a new tab, so following one never costs you your place in the list.
+- **Filter, then act on the whole result.** *Filter this view* narrows the post
+  list as you type — by title, link or feed name — separately from search, which
+  is a server query that changes what is fetched. **Move all shown to feed…**
+  then files everything the filter matched, resolved server-side, so it covers
+  the whole view rather than the page your browser happens to have scrolled in.
 - **Tagging a post keeps it forever.** A tag triggers a full offline capture —
   page, readability text, every image, and any files the post links to — so a
   kept article survives the site going down. Stars are the to-do pile; tags are
@@ -175,7 +189,9 @@ code is held to the rules while the backlog shrinks file by file. `git commit
 --no-verify` bypasses it.
 
 
-- **Tests** — pytest suite (unit, services, integration, scripts) under `tests/`. Run with `uv run pytest`.
+- **Tests** — pytest suite (unit, services, integration, scripts) under `tests/`. Run with `make test` (or `uv run pytest`).
+- **Rebuilding the container** — `make rebuild` prunes the BuildKit cache to a ceiling (`BUILD_CACHE_MAX`, 2GB), builds, and restarts. The image bakes the source in, so a rebuild is what makes a commit live. Rebuilding after every commit had grown the cache to 7.9GB across 57 entries; capping it evicts only the old tail, so recent layers still make builds fast. The target refuses to run while a `docker compose exec` is in flight — recreating the container kills a session mid-write.
+- **Scratch cleanup** — `make test` runs `make clear-scratch` first, and the local-verification workflow does the same before launching a dev server. On a host where `/tmp` is a small RAM-backed tmpfs, each full suite run leaves its per-test SQLite scratch behind; once `/tmp` fills, pytest reports *mass failures that look like real regressions* rather than an out-of-space error. `scripts/clear_dev_scratch.py` clears only known-disposable paths — never a bare `/tmp/*` sweep — and skips both the running session and anything under two days old, so a concurrent session is safe. `--dry-run` shows what would go.
 - **CI** — GitHub Actions runs the suite on Python 3.14 for every pull request and push to `main` ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Dependencies install from the locked `uv.lock` (`uv sync --frozen`), and the run treats any `DeprecationWarning` as an error so they surface immediately rather than accumulating.
 - **Dependency audit** — `uv audit` (OSV-backed) scans the locked dependencies for known vulnerabilities and deprecated packages. Run it locally with `make audit`; CI runs the same scan. It's a uv preview feature, so it's kept separate from `make test` locally and the CI step is informational (non-blocking) for now.
 

@@ -243,3 +243,49 @@ def test_center_tag_survives():
     lost the author's centering."""
     out = H.sanitize_html("<center>c</center>")
     assert "<center>" in out and "c" in out
+
+
+# ── Off-site links leave the tab ──────────────────────────────────────────────
+# Following an article link in place replaces Lectio and loses your position in
+# the list. Enforced here rather than in the browser because this is the one
+# choke point every rendered body passes through — Read Mode loads none of
+# app.js, and offline captures are rendered from stored HTML.
+
+def test_external_link_opens_in_a_new_tab_with_noopener():
+    out = H.sanitize_html('<a href="https://example.com/post">x</a>')
+    assert 'target="_blank"' in out
+    # Without noopener the opened page can rewrite this tab out from under the
+    # reader (reverse tabnabbing).
+    assert 'rel="noopener noreferrer"' in out
+
+
+def test_in_page_fragment_link_stays_in_the_tab():
+    """Footnotes and tables of contents are same-page anchors — sending them to a
+    new tab would break them outright."""
+    out = H.sanitize_html('<a href="#footnote-3">3</a>')
+    assert "target=" not in out
+
+
+@pytest.mark.parametrize("href", ["mailto:someone@example.com", "tel:+15551234"])
+def test_handler_schemes_stay_in_the_tab(href):
+    """A mail or dialer handler would otherwise be handed a blank tab it has no
+    way to close."""
+    out = H.sanitize_html(f'<a href="{href}">x</a>')
+    assert "target=" not in out
+
+
+def test_a_feed_cannot_choose_its_own_target_or_drop_noopener():
+    """target/rel are in the allowlist only so the second sanitizing pass keeps
+    what the first pass set — the values are always ours."""
+    out = H.sanitize_html(
+        '<a href="https://example.com/x" target="_self" rel="opener">x</a>'
+    )
+    assert 'target="_blank"' in out
+    assert 'rel="noopener noreferrer"' in out
+    assert 'target="_self"' not in out
+
+
+def test_a_feed_cannot_smuggle_a_target_onto_a_fragment_link():
+    out = H.sanitize_html('<a href="#x" target="_blank" rel="opener">x</a>')
+    assert "target=" not in out
+    assert "rel=" not in out

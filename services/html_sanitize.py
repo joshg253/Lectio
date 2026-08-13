@@ -42,7 +42,12 @@ _DROP_TAGS = frozenset({
     "button", "input", "select", "textarea", "option",
 })
 _ALLOWED_ATTRS = {
-    "a": frozenset({"href", "title"}),
+    # target/rel are allowed but never trusted: _force_external_link_target below
+    # overwrites both on every off-site link and deletes them everywhere else, so
+    # a feed cannot choose its own target (or drop the noopener that makes
+    # target="_blank" safe). They are in the allowlist only so the second
+    # sanitizing pass does not strip what the first pass just set.
+    "a": frozenset({"href", "title", "target", "rel"}),
     # width/height feed the lead-image scorer (rank + size-filter); sizes/decoding
     # are harmless responsive hints. data-src/data-srcset/data-lazy-src/data-original/
     # data-image are lazyload sources the lead-image extractor (and lazy-media
@@ -293,6 +298,36 @@ def _filter_element_attrs(el, tag_name: str) -> None:
             continue
         if la in _URL_ATTRS and not _is_safe_attr_url(la, str(el.attrs.get(attr_name, ""))):
             del el.attrs[attr_name]
+    if tag_name == "a":
+        _force_external_link_target(el)
+
+
+def _force_external_link_target(el) -> None:
+    """Send off-site article links to a new tab, and only those.
+
+    Following a link in the same tab replaces Lectio — on a phone that means
+    losing your place in the list, and (since Back there toggles the folder
+    drawer rather than leaving) no cheap way back to it. A new tab is a tab, not
+    a popup: it is the anchor's own target, so nothing is blocked and nothing is
+    scripted.
+
+    Applied here rather than in the browser because this is the one choke point
+    every rendered article body passes through — the main app, Read Mode (which
+    loads none of app.js), and offline captures alike.
+
+    Deliberately narrow: only absolute http(s) links leave. In-page fragments are
+    how footnotes and tables of contents work and MUST stay in the tab, and
+    mailto:/tel: would hand a blank tab to a mail client.
+    """
+    href = str(el.attrs.get("href", "") or "").strip()
+    if href[:7].lower() in ("http://",) or href[:8].lower() in ("https://",):
+        el.attrs["target"] = "_blank"
+        # Without noopener the opened page gets a handle on window.opener and can
+        # rewrite this tab out from under the reader (reverse tabnabbing).
+        el.attrs["rel"] = "noopener noreferrer"
+        return
+    el.attrs.pop("target", None)
+    el.attrs.pop("rel", None)
 
 
 def _is_safe_attr_url(attr: str, value: str) -> bool:

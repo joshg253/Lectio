@@ -37,10 +37,11 @@ def _versioned_assets() -> set[str]:
 def test_every_versioned_asset_is_covered_by_the_hash():
     """The property that actually matters: if a template cache-busts a file, the
     buster has to notice that file changing."""
+    # Must track main._static_asset_version's own suffix set.
     covered = {
         str(p.relative_to(ROOT))
         for p in STATIC.rglob("*")
-        if p.is_file() and p.suffix in (".css", ".js")
+        if p.is_file() and p.suffix in (".css", ".js", ".webmanifest")
     }
 
     missing = _versioned_assets() - covered
