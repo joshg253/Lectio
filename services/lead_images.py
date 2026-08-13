@@ -183,7 +183,37 @@ class LeadImageService:
         r"|twitter[-_]?card"
         # "csharp-corner-new" — c-sharpcorner's brand wordmark at /images/, shipped
         # as og:image on posts that have no featured image of their own.
-        r"|csharp[-_]corner[-_]new",
+        r"|csharp[-_]corner[-_]new"
+        # An age-gate / content-warning graphic is the interstitial an adult
+        # webcomic shows INSTEAD of the comic, so scraping the page picks it up
+        # as though it were the strip — monstersoupcomic.com serves
+        # /wp-content/uploads/2025/08/maturecontentwarning.png that way, and it
+        # then became the article image for a post about paintbrushes. It is the
+        # one image on such a page guaranteed not to be the post's own.
+        # Separator-optional because these are written every way going
+        # ("maturecontentwarning", "mature-content-warning", "age_gate").
+        r"|mature[-_]?content|content[-_]?warning|age[-_]?(?:gate|verif|restrict)|nsfw[-_]?warning"
+        # "<name>_on.png" / "<name>_off.png" is the rollover convention for a nav
+        # button's two states, and a site that still writes its menu that way
+        # (monstersoupcomic.com/images/blog_on.png, 99x44) has no other markup
+        # saying so. The size floor cannot help: the dimensions are neither in
+        # the URL nor declared on the tag, so nothing measures it without
+        # fetching the bytes. Anchored to the whole basename so a real filename
+        # that merely ends in those letters is unaffected.
+        r"|/[a-z0-9-]+_(?:on|off)\.(?:png|gif|jpe?g|webp)(?:$|[?#])"
+        # A comic's prev/next/first/last arrows. main.py already knows these as
+        # body chrome (_COMIC_NAV_ALT_RE / _COMIC_NAV_SRC_RE) and strips them
+        # from the article, but nothing stopped one becoming the LEAD: dresden
+        # codak's feed opens with <img alt="Previous" height="30"
+        # src=".../prev_002.png">, so the 30px arrow won the first-image bonus
+        # and became both hero and thumbnail.
+        #
+        # Anchored to a basename that is ONLY the nav word plus an optional
+        # number, because these words are ordinary English: "first-contact.jpg"
+        # and "next-door.png" are comics, "prev_002.png" and "next.gif" are
+        # buttons. main's looser src pattern can afford the ambiguity because it
+        # only fires alongside other nav signals; this one stands alone.
+        r"|/(?:prev(?:ious)?|next|first|last|back|forward|newer|older)[-_]?\d*\.(?:png|gif|jpe?g|svg|webp)(?:$|[?#])",
         re.IGNORECASE,
     )
     # Domains that serve only CMS admin/template assets (never user content images).
@@ -213,6 +243,14 @@ class LeadImageService:
     # Keep old name as alias so callers outside this class still work.
     _SITE_CHROME_URL_PATTERNS = _SITE_CHROME_PATH_PATTERNS
     _URL_DIMENSION_RE = re.compile(r"(?:^|[/_.-])([0-9]{1,4})x([0-9]{1,4})(?:[/_.-]|$)")
+    # A whole path segment that IS a size, written with a leading "s" and often a
+    # crop suffix: Tumblr serves ".../s1280x1920/..." for a post's image and
+    # ".../s64x64u_c1/..." for the blog's avatar. _URL_DIMENSION_RE cannot see
+    # either, because it requires the digits to follow a separator and here they
+    # follow the "s" — so a 64x64 avatar passed the size floor untouched and was
+    # picked as a comic's lead image (theycantalk.com, 2026-08-13). Anchored to a
+    # full segment so it cannot fire inside an ordinary filename.
+    _PATH_SIZE_SEGMENT_RE = re.compile(r"/s([0-9]{1,4})x([0-9]{1,4})(?:[a-z][a-z0-9_]*)?/", re.IGNORECASE)
     # WordPress responsive-image width-only suffix, e.g. "photo-1000w.jpeg"
     _URL_WIDTH_HINT_RE = re.compile(r"(?:^|[-_.])([0-9]{2,4})w(?:[-_.]|$)", re.IGNORECASE)
     # Substack CDN and similar services encode dimensions as ,w_N,h_N, in the URL path.
@@ -1026,6 +1064,55 @@ class LeadImageService:
         except Exception:
             pass
 
+    def _title_is_feed_boilerplate(self, feed_url: str, entry_id: str, title_text: str) -> bool:
+        """Is this caption the site's tagline rather than this post's own text?
+
+        Webcomic caption extraction falls back to ``og:description`` so hover-text
+        punchlines still surface. Plenty of sites put a fixed blurb there instead.
+        `_extract_webcomic_alt_text` already rejects one that merely repeats
+        ``og:site_name`` — pbfcomics — but Penny Arcade ships no ``og:site_name``
+        at all and the same sentence on every strip:
+
+            "Videogaming-related online strip by Mike Krahulik and Jerry Holkins.
+             Includes news and commentary."
+
+        There is nothing in one page that marks that as boilerplate. What marks
+        it is that it does not vary: a punchline belongs to its strip, a tagline
+        belongs to the site. So the test is across the feed, not within the page —
+        if another entry already carries this exact caption, neither of them is a
+        caption.
+
+        Self-healing on purpose. The first entry cannot know, so it stores the
+        text; the second one recognises the repeat and the caller clears the whole
+        feed. Worst case is a missing caption on one post rather than a wrong one
+        on every post.
+        """
+        try:
+            with self._get_meta_connection() as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM entry_lead_images"
+                    " WHERE feed_url = ? AND entry_id != ? AND image_title = ? LIMIT 1",
+                    (feed_url, entry_id, title_text),
+                ).fetchone()
+            return row is not None
+        except Exception:
+            return False
+
+    def _clear_feed_boilerplate_title(self, feed_url: str, title_text: str) -> None:
+        """Drop a caption from every entry of a feed once it is known boilerplate."""
+        try:
+            with self._get_meta_connection() as conn:
+                conn.execute(
+                    "UPDATE entry_lead_images SET image_title = NULL"
+                    " WHERE feed_url = ? AND image_title = ?",
+                    (feed_url, title_text),
+                )
+        except Exception:
+            return
+        for key in list(self._title_cache):
+            if key[0] == feed_url and self._title_cache.get(key) == title_text:
+                self._title_cache[key] = None
+
     def store_entry_image_alt(
         self,
         feed_url: str,
@@ -1034,6 +1121,9 @@ class LeadImageService:
         title_text: str | None = None,
     ) -> None:
         """Persist alt and title text for an entry's lead image to DB and in-memory cache."""
+        if title_text and self._title_is_feed_boilerplate(feed_url, entry_id, title_text):
+            self._clear_feed_boilerplate_title(feed_url, title_text)
+            title_text = None
         key = (feed_url, entry_id)
         self._alt_cache[key] = alt_text
         self._title_cache[key] = title_text
@@ -1936,13 +2026,37 @@ class LeadImageService:
                 # Always persist the inline image so fast_only=True lookups at
                 # render time find it in the cache without re-parsing the entry.
                 self.store_entry_lead_image(feed_url_str, entry_id_str, inline)
-                # For feeds manually locked to og_scrape, the source page is the
-                # authoritative image source — fall through even when an inline
-                # image exists (e.g. album cover) so we can find the real hero image.
+                # On an og_scrape feed the source page is the authoritative image
+                # source — fall through even when an inline image exists (e.g. an
+                # album cover) so we can find the real hero image.
+                #
+                # This deliberately does NOT require `manual`. A DETECTED
+                # og_scrape means source scraping is what has actually been
+                # producing this feed's images, and taking the inline shortcut
+                # anyway breaks exactly the posts that differ from the rest.
+                # sonarsource.com/blog is the case in hand: most of its posts
+                # carry no body image at all, so they scrape their og:image
+                # correctly and the feed detects as og_scrape — but the two or
+                # three posts that DO embed a mid-article screenshot short-
+                # circuited here and got that screenshot as their hero and
+                # thumbnail, while "the ones surrounding them are fine". A
+                # screenshot the author dropped mid-paragraph is not the post's
+                # lead image; the og:image the publisher nominated is.
+                #
+                # The chunk backfill (_do_backfill_entry_list) already scrapes the
+                # source for any og_scrape feed regardless of `manual`, so this
+                # also stops the two paths from disagreeing about the same entry.
+                #
                 # Webcomic feeds behave the same way: the inline enclosure is only a
                 # small thumbnail (e.g. /comicsthumbs/) with no hover text, while the
                 # source page carries the full-resolution comic panel and its alt/title.
-                if not ((strategy == "og_scrape" and manual) or strategy == "webcomic"):
+                #
+                # Falling through cannot lose the inline image: it is already
+                # stored above, and the `elif not inline` below refuses to
+                # overwrite it with None when the source fetch comes up empty.
+                # Nor can it demote the feed — redetection checks
+                # _found_og_scrape before _found_inline.
+                if not (strategy == "og_scrape" or strategy == "webcomic"):
                     continue
 
             entry_link = str(getattr(entry, "link", "") or "")
@@ -3092,7 +3206,9 @@ class LeadImageService:
             ))
             _url_has_large_dim = False
             _url_has_small_dim = False
-            for m in self._URL_DIMENSION_RE.finditer(url_path_no_query):
+            _dim_matches = list(self._URL_DIMENSION_RE.finditer(url_path_no_query))
+            _dim_matches += list(self._PATH_SIZE_SEGMENT_RE.finditer(url_path_no_query))
+            for m in _dim_matches:
                 try:
                     w, h = int(m.group(1)), int(m.group(2))
                     if w >= self._LEAD_IMAGE_MIN_WIDTH and h >= self._LEAD_IMAGE_MIN_HEIGHT:
@@ -3339,12 +3455,36 @@ class LeadImageService:
                     _final = _resp.url
                     _corp = _resp.headers.get("cross-origin-resource-policy", "").lower()
                     _corp_restricted = _corp in ("same-site", "same-origin")
-                return _html, _final, _corp_restricted
+                return self._strip_script_blocks(_html), _final, _corp_restricted
             except Exception:
                 return None
 
         assert response is not None
-        return response.text, str(response.url), _corp_restricted
+        return self._strip_script_blocks(response.text), str(response.url), _corp_restricted
+
+    # <img> tags written by JavaScript are not images on the page — they are
+    # source code. monstersoupcomic's bookmark widget does
+    #   document.write('<a …><img src="'+imgTag+'" …>')
+    # and the scan dutifully produced the lead image
+    # "https://monstersoupcomic.com/'+imgTag+'", a URL that cannot resolve to
+    # anything. Stripped once at fetch time rather than at each of the ten
+    # _IMG_TAG_RE scan sites, so nothing can forget. Safe here because this class
+    # reads no JSON-LD (which also lives in <script>); og/meta tags are in <head>
+    # and untouched.
+    # The end tag needs `[^>]*` and not `\s*`: an HTML end tag may carry
+    # attributes, which parsers ignore but a regex must still consume
+    # (`</script foo>`, `</script\t\n bar>`). With `\s*` the block simply did not
+    # match, so the script survived and its `document.write('<img …>')` was
+    # scanned after all — the bug this strip exists to prevent. Raised by CodeQL
+    # (py/bad-tag-filter). `\b` keeps it from eating `</scriptfoo>`, which is not
+    # an end tag at all.
+    _SCRIPT_BLOCK_RE = re.compile(r"<script\b[^>]*>.*?</script\b[^>]*>", re.IGNORECASE | re.DOTALL)
+
+    @classmethod
+    def _strip_script_blocks(cls, html_text: str) -> str:
+        if "<script" not in html_text.lower():
+            return html_text
+        return cls._SCRIPT_BLOCK_RE.sub(" ", html_text)
 
     def _is_image_url_fetchable(
         self, image_url: str, domain_cache: dict[str, bool] | None = None

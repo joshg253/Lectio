@@ -857,7 +857,7 @@
                       data-feed-url="{{ post.feed_url }}"
                       data-folder-id="{{ post_feed_folder_id }}"
                       href="/?folder_id={{ post_feed_folder_id }}&list_feed_url={{ post.feed_url | urlencode }}{{ sort_query }}{{ read_filter_query }}"
-                    >{{ post.feed_title }}</a>
+                    >{{ post.feed_title }}</a>{% if post.feed_url in unsubscribed_feed_urls %}<span class="feed-unsubscribed-tag" title="No longer subscribed — this is a kept copy">(unsubscribed)</span>{% endif %}
                   </span>
                 </div>
               </div>
@@ -1883,7 +1883,7 @@
       <div id="unsub-migrate-curation" hidden>
         <p id="unsub-migrate-curation-note" class="afd-msg afd-msg--warn"></p>
         <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-keep" value="keep" checked /> Keep curated posts (hide the feed but keep its starred/tagged items — browse them in Saved)</label>
-        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-skip" value="skip" />Just unsubscribe (unmoved stars are archived; tags are lost)</label>
+        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-skip" value="skip" />Just unsubscribe (starred and tagged posts stay in Saved as offline copies)</label>
         <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-move" value="move" /> Move items to another feed:</label>
         <div id="unsub-migrate-move-panel" hidden>
           <input id="unsub-migrate-target" class="action-modal-input" list="unsub-migrate-candidates" placeholder="Type to search feeds…" autocomplete="off" />
@@ -1891,6 +1891,16 @@
           <label class="action-modal-label unsub-migrate-select-all-row"><input type="checkbox" id="unsub-migrate-select-all" checked /> Select all</label>
           <div id="unsub-migrate-items" class="unsub-migrate-items"></div>
         </div>
+        {# The way out when the feed itself was the mistake. Without it the only
+           options preserve the curation, and a star or tag holds the offline
+           capture — so "just unsubscribe" still leaves the posts in Saved. #}
+        <label class="action-modal-label unsub-migrate-drop-row"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-drop" value="drop" /> Unsubscribe and drop everything (untag, unstar and delete the offline copies)</label>
+        {# Applies to the three keeping choices — the curated items survive in
+           each, they just survive somewhere different. Meaningless under "drop
+           everything", which the JS enforces by disabling it there. Unchecked by
+           default: it reorders the Inbox, which is not what a plain unsubscribe
+           should do unasked. #}
+        <label class="action-modal-label unsub-migrate-restar-row"><input type="checkbox" id="unsub-migrate-restar" /> Star them and set the date to now, so they show at the top of the Inbox</label>
       </div>
       <div class="action-modal-actions">
         <button type="button" class="action-modal-cancel" data-close-modal="unsub-migrate-modal">Cancel</button>

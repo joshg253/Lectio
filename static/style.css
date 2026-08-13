@@ -3876,6 +3876,19 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   display: block;
 }
 
+/* A bare <img> at the top level of an article has no margin of its own, and
+   nothing else supplies one: images inside a <p> get their spacing from the
+   paragraph. mahonoir's single-panel posts are `<img><div>commentary</div>`,
+   and once the author's <br><br> padding was collapsed away (it is padding, see
+   _REAL_BLOCK_TAGS) the text sat almost against the comic, while its
+   multi-panel posts were correctly spaced — their images sit in a <p> and their
+   text in another, so two 1em margins collapse to one. 1em here matches that
+   exactly; the single-panel text is in bare <div>s, which have no margin of
+   their own, so without this the gap is zero. */
+.entry-content > img {
+  margin-bottom: 1em;
+}
+
 .entry-content img {
   display: block;
   max-width: 100%;
@@ -3920,6 +3933,29 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
 .entry-content figure:has(> img + img) > img,
 .entry-content p:has(> img + img) > img,
 .entry-content div:has(> img + img) > img {
+  /* Two things kept full-width images from wrapping here, and `width: auto`
+     was the bigger one. It DISCARDS the width attribute, so the used width
+     becomes the intrinsic width of whichever srcset candidate the browser
+     picked — and `sizes="auto"` inside a flex container resolves small, so it
+     picked the 300w file. mahonoir.com stacks a comic page as four 800px
+     panels in one <p>; they rendered 300x165, two to a line, genuinely
+     low-res as well as small. Measured in Chromium: with `width: auto` the
+     panels are 300px and paizo's 250px covers collapse to 16px (no attribute,
+     no loaded image, nothing left to size them); without it the panels are
+     700px one-per-line and the covers are 250px sharing a line.
+
+     `flex: 0 0 auto` is the other half. A flex item shrinks below its
+     intrinsic width by default, which is what the original note missed when
+     it reasoned that max-width:100% alone would keep a big image
+     one-per-line. With no shrink the flex base size stays the image's own
+     width, so an 800px panel cannot fit beside a sibling and wraps. */
+  flex: 0 0 auto;
+}
+/* npf_row is the exception that `width: auto` was there for: Tumblr's row
+   layout sets `width: 100%` on its figure images (above), which would force one
+   per line — and a row is the entire point of an npf_row. Scoped to it rather
+   than applied to every multi-image container. */
+.entry-content .npf_row figure:has(> img + img) > img {
   width: auto;
 }
 /* The caption belongs under the row, not beside it. */
@@ -6715,6 +6751,24 @@ mark.highlight-mark {
 #feed-prop-alias-add-wrap { display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
 #feed-prop-alias-status { color: var(--muted, #888); }
 .unsub-migrate-select-all-row { font-size: 0.85rem; margin: 0.35rem 0 0; }
+/* Sits under the three choices and applies to all of them, so it gets a
+   rule above it rather than reading as a fourth option. */
+/* "(unsubscribed)" beside a feed name in Saved/Kept. Muted and small: it is a
+   status note on a name, not a second name — the feed title stays the thing you
+   read. Inline-block so it never wraps away from the name it belongs to. */
+.feed-unsubscribed-tag {
+  display: inline-block;
+  margin-left: 0.35em;
+  font-size: 0.85em;
+  font-style: italic;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* The destructive choice, set apart from the three that keep something. */
+.unsub-migrate-drop-row { color: var(--danger, #c0392b); }
+.unsub-migrate-restar-row { font-size: 0.85rem; margin: 0.6rem 0 0;
+  padding-top: 0.55rem; border-top: 1px solid var(--line); }
 .unsub-migrate-items { margin: 0.35rem 0 0.6rem; max-height: 11rem; overflow-y: auto; font-size: 0.85rem; }
 .unsub-migrate-item-list { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.2rem; }
 .unsub-migrate-item-tags { color: var(--accent, #2b8a3e); font-size: 0.78rem; }

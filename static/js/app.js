@@ -5985,6 +5985,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const body = new URLSearchParams({ folder_id: folderId, feed_url: feedUrl });
       if (opts.migrateCurationTo) body.set('migrate_curation_to', opts.migrateCurationTo);
       if (opts.keepEntries) body.set('keep_entries', '1');
+      if (opts.restarCurated) body.set('restar_curated', '1');
+      if (opts.dropCuration) body.set('drop_curation', '1');
       const resp = await fetch('/feeds/unsubscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-unsubscribe' },
@@ -6068,6 +6070,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const moveRadio = document.getElementById('unsub-migrate-move');
       const movePanel = document.getElementById('unsub-migrate-move-panel');
       const itemsEl = document.getElementById('unsub-migrate-items');
+      const restarCb = document.getElementById('unsub-migrate-restar');
+      const dropRadio = document.getElementById('unsub-migrate-drop');
       if (!modal) { // fallback: plain confirm
         if (!window.confirm(`Unsubscribe from "${title}"?`)) return false;
         try { await unsubscribeFeedRequest(feedUrl, folderId, opts); return true; }
@@ -6082,6 +6086,9 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
 
       bodyEl.textContent = `Unsubscribe from "${title}"? This removes the feed and its articles from Lectio.`;
       const hasCuration = (counts.tagged || 0) + (counts.stars || 0) > 0;
+      // The modal is reused, so a box ticked for the last feed would carry over
+      // and silently reorder the Inbox for this one. Reset every open.
+      if (restarCb) restarCb.checked = false;
       const candidates = counts.candidates || [];
       if (hasCuration) {
         const parts = [];
@@ -6149,9 +6156,18 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         const moveOnlyBtn = document.getElementById('unsub-migrate-move-only');
         function syncConfirmState() {
           const moving = hasCuration && currentChoice() === 'move';
+          const dropping = hasCuration && currentChoice() === 'drop';
           if (movePanel) movePanel.hidden = !moving;
           if (moveOnlyBtn) moveOnlyBtn.hidden = !moving;
-          confirmBtn.textContent = moving ? 'Move & Unsubscribe' : 'Unsubscribe';
+          // Re-starring curated posts and deleting them are contradictory, so
+          // the option is disabled (and cleared) rather than silently ignored.
+          if (restarCb) {
+            restarCb.disabled = dropping;
+            if (dropping) restarCb.checked = false;
+          }
+          confirmBtn.textContent = moving
+            ? 'Move & Unsubscribe'
+            : (dropping ? 'Delete & Unsubscribe' : 'Unsubscribe');
           if (!moving) { confirmBtn.disabled = false; return; }
           const targetOk = Boolean(targetSel._labelToUrl && targetSel._labelToUrl.get(targetSel.value));
           // Enabled once at least one item is checked and a target is picked;
@@ -6278,6 +6294,19 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           let migrateTo = null;
           let moveSubset = null;
           const keepEntries = hasCuration && currentChoice() === 'keep';
+          const dropCuration = hasCuration && currentChoice() === 'drop';
+          // Applies to the keeping choices only. Read before cleanup() hides
+          // the modal.
+          const restarCurated = hasCuration && !dropCuration && !!restarCb?.checked;
+          // The one irreversible choice here: it deletes the offline copies, so
+          // there is nothing to undo it from. Everything else is recoverable.
+          if (dropCuration) {
+            const n = (counts.stars || 0) + (counts.tagged || 0);
+            if (!window.confirm(
+              `Permanently delete this feed's ${n} curated post${n === 1 ? '' : 's'}?\n\n` +
+              'Their tags, stars and offline copies are removed. This cannot be undone.'
+            )) return;
+          }
           if (hasCuration && currentChoice() === 'move') {
             migrateTo = (targetSel._labelToUrl && targetSel._labelToUrl.get(targetSel.value)) || null;
             if (!migrateTo) { window.alert('Pick a feed to move the items to, or choose "Just unsubscribe".'); return; }
@@ -6309,7 +6338,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             }
           }
           cleanup();
-          try { await unsubscribeFeedRequest(feedUrl, folderId, { ...opts, migrateCurationTo: migrateTo, keepEntries }); resolve(true); }
+          try { await unsubscribeFeedRequest(feedUrl, folderId, { ...opts, migrateCurationTo: migrateTo, keepEntries, restarCurated, dropCuration }); resolve(true); }
           catch (err) { window.alert(`Unsubscribe failed: ${err}`); resolve(false); }
         }
         function onCancel() { cleanup(); resolve(false); }

@@ -285,6 +285,91 @@ class GunnerkriggPlugin:
 
 
 @dataclass(frozen=True)
+class DresdenCodakPlugin:
+    """Keep the whole comic in the article and the site's own crop in the list.
+
+    dresdencodak publishes two files for its "DC Minis" strips:
+
+        article : …/wp-content/uploads/YYYY/MM/dc_minis_<n>.jpg
+        list    : …/wp-content/uploads/YYYY/MM/dc_minis_<n>_thumbnail.jpg
+
+    The comic is a tall column — #27 is 1500x4875 — which at thumbnail size is a
+    sliver, while the site's own thumbnail is a 2500x1000 landscape crop drawn
+    for exactly this. Same split as Penny Arcade's strip/panel, different naming.
+
+    **Restricted to `dc_minis_` on purpose.** The convention is only half kept:
+    every DC Minis strip checked has its `_thumbnail.jpg` (25, 26, 27), and no
+    Dark Science page has one (`ds_185`, `ds_186_silder`, `ds_187_silder` all
+    404). Deriving blind across the feed would 404 every Dark Science thumbnail,
+    and `thumbnail_from_lead_image` is network-free by contract, so the plugin
+    cannot check — it can only decline where it does not know.
+
+    The reverse derivation is deliberately NOT done. Stripping `_thumbnail` to
+    reach the article image works for #26 and #23 and 404s for #25 and #22:
+    those posts publish only the `_thumbnail`-named file, which is therefore the
+    comic rather than a crop of it. Instead `source_score_adjustment` demotes a
+    `_thumbnail` URL while scoring the source page, so when the page offers both,
+    the full comic wins the lead on its own merits — and when it offers only the
+    `_thumbnail` file, that still wins for want of anything else.
+    """
+
+    host: str = "dresdencodak.com"
+
+    _MINIS_IMAGE_RE = re.compile(
+        r"^(?P<base>https?://[^/]*dresdencodak\.com/.*?/dc_minis_[0-9]+[a-z0-9_-]*)"
+        r"(?P<ext>\.(?:jpg|jpeg|png|webp))$",
+        re.IGNORECASE,
+    )
+
+    def _is_ours(self, url: str) -> bool:
+        try:
+            return self.host in urlparse(url).netloc.lower()
+        except ValueError:
+            return False
+
+    def should_bypass_cached_url(self, *, entry_link: str, cached_url: str) -> bool:
+        return False
+
+    def extra_candidate_attrs(self, *, source_url: str) -> tuple[str, ...]:
+        return ()
+
+    def source_score_adjustment(self, *, source_url: str, attrs: dict[str, str], resolved_url: str) -> int:
+        """No adjustment, because demoting the crop here changes nothing.
+
+        The idea was that penalising `_thumbnail` would let the full comic win
+        the lead on a page offering both. Measured against the live site with
+        the penalty patched back in: DC Minis #26 resolves to
+        `dc_minis_26_thumbnail.jpg` either way. The crop is the only image those
+        pages carry — the full comic exists on the server and appears in the
+        FEED body, but not on the page the scraper reads — so there is nothing
+        for a score nudge to reorder.
+
+        Left as an explicit no-op rather than deleted: the seam is part of the
+        protocol, and this records that the obvious use of it here is inert, so
+        the next person does not add it back. Deriving the thumbnail (below) is
+        the actual fix and needs none of it.
+        """
+        return 0
+
+    def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None:
+        return None
+
+    def cheap_preferred_thumbnail_url(self, *, entry_link: str) -> str | None:
+        return None
+
+    def thumbnail_from_lead_image(self, *, entry_link: str, lead_url: str) -> str | None:
+        if not lead_url or not self._is_ours(lead_url):
+            return None
+        if "_thumbnail" in lead_url.lower():
+            # Already the crop — a fine thumbnail exactly as it is.
+            return lead_url
+        m = self._MINIS_IMAGE_RE.match(lead_url)
+        if not m:
+            return None
+        return f"{m.group('base')}_thumbnail{m.group('ext')}"
+
+
+@dataclass(frozen=True)
 class PennyArcadePlugin:
     """For comic entries, use og:image (full comic) instead of the first-panel
     image that body-scanning picks up from the source page."""
@@ -1231,6 +1316,7 @@ DEFAULT_LEAD_IMAGE_PLUGINS: tuple[LeadImagePlugin, ...] = (
     FutureSiteLeadImagePlugin(),
     WordPressComicPlugin(),
     GunnerkriggPlugin(),
+    DresdenCodakPlugin(),
     PennyArcadePlugin(),
     SMBCPlugin(),
     MisfilePlugin(),

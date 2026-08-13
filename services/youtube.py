@@ -12,7 +12,13 @@ import httpx
 class YouTubeDurationService:
     """Encapsulates YouTube-specific duration parsing, caching, and persistence."""
 
-    _YT_VID_PATTERN = re.compile(r"[?&]v=([\w-]{11})|youtu\.be/([\w-]{11})|/shorts/([\w-]{11})")
+    # /embed/ is here because feeds ship it as a plain LINK, not only as an
+    # iframe src: sonarsource.com/blog puts the post's video in the body as
+    # <a href="https://www.youtube.com/embed/<id>?si=…">Escape from AppleScript</a>,
+    # which is a watchable video the reader could not name.
+    _YT_VID_PATTERN = re.compile(
+        r"[?&]v=([\w-]{11})|youtu\.be/([\w-]{11})|/shorts/([\w-]{11})|/embed/([\w-]{11})"
+    )
 
     # A "no duration" result (API error/quota, or a live/upcoming stream with no
     # length yet) must NOT be cached forever — otherwise a transient failure
@@ -58,7 +64,7 @@ class YouTubeDurationService:
         match = self._YT_VID_PATTERN.search(link)
         if not match:
             return None
-        return match.group(1) or match.group(2) or match.group(3)
+        return match.group(1) or match.group(2) or match.group(3) or match.group(4)
 
     def get_cached_duration(self, video_id: str) -> tuple[int | None, str | None]:
         cached = self._cache.get(video_id)

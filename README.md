@@ -68,7 +68,10 @@ short version:
 - **Tagging a post keeps it forever.** A tag triggers a full offline capture —
   page, readability text, every image, and any files the post links to — so a
   kept article survives the site going down. Stars are the to-do pile; tags are
-  the keep pile.
+  the keep pile. Dropping a feed offers to bring its kept posts back to the top
+  of the Inbox, so what you saved from it is the first thing you see rather than
+  something filed months deep — or, when the feed itself was the mistake, to drop
+  the lot: untag, unstar and delete the offline copies in one go.
 - **Read-it-later built in.** Save any page (menu, bookmarklet, `/api/save`, or
   the browser extension) with no feed needed, then read it in **Read Mode**, an
   e-ink-friendly reading app at `/read` that works offline — including
@@ -81,9 +84,13 @@ short version:
   send-to-destination rules (Instapaper, Pinterest, Reddit, Quire, email,
   YouTube playlists, webhooks) at any scope, with dry-run and run history.
 - **Feed management that expects the real web.** Resilient auto-discovery,
-  Page Feeds for feedless sites, dev.to and DeviantArt adapters, conditional
-  GET, per-feed and per-domain backoff, GUID-churn suppression, feed compare,
-  duplicate scanning, and unsubscribe that keeps your curation.
+  Page Feeds for feedless sites — which read each post's own publish date rather
+  than stamping the whole backlog with the scrape time — dev.to and DeviantArt
+  adapters, conditional GET, per-feed and per-domain backoff, GUID-churn
+  suppression, feed compare, duplicate scanning, and unsubscribe that keeps your
+  curation. A feed *blocked* by an anti-bot challenge is reported as blocked
+  rather than misfiled as malformed, and one character that XML forbids no
+  longer costs you the whole feed.
 - **Fix a post in place.** Edit its date, title or URL; clean up its body with
   an Aardvark-style element remover; re-fetch its content — undoably, with an
   Internet Archive fallback — one post, or a whole feed or folder at a time.

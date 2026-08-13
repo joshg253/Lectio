@@ -4969,6 +4969,29 @@ def get_feeds_needing_replacement(conn: sqlite3.Connection | None = None) -> set
         return {str(r["feed_url"]) for r in own.execute("SELECT feed_url FROM feeds_needing_replacement")}
 
 
+def unsubscribed_feed_urls_among(feed_urls: Iterable[str]) -> set[str]:
+    """Which of these feeds you are no longer subscribed to.
+
+    Two different states read as "unsubscribed" to a reader and both belong here:
+    a **kept feed** still exists in reader but is hidden from the tree, and an
+    **orphan archive**'s feed is gone from reader entirely. What they have in
+    common is the only thing that matters at the point of use — there is no
+    subscription behind the name, so clicking through to the feed will not show
+    you more of it.
+
+    Deliberately not "has no folder row": a feed in no folder is still
+    subscribed, it just lives under the virtual Uncategorized folder, and marking
+    those would be wrong.
+
+    Scoped to the feeds actually on screen so the template carries a handful of
+    URLs rather than the whole library.
+    """
+    wanted = {str(u) for u in feed_urls if u}
+    if not wanted:
+        return set()
+    return wanted - get_all_reader_feed_urls(include_kept=False)
+
+
 def get_all_reader_feed_urls(include_kept: bool = False) -> set[str]:
     """Return every feed URL the reader is subscribed to.
 
@@ -5399,6 +5422,26 @@ def real_published_date(value: datetime | None) -> datetime | None:
         return None if ref < _SENTINEL_DATE_BEFORE else value
     except (AttributeError, TypeError, ValueError, OverflowError):
         return None
+
+
+# SQL mirror of entry_publication_date's FEED-supplied sources, for the list
+# fast paths that order thousands of entries without hydrating them.
+#
+# `updated` is the load-bearing term and was missing. A feed may ship <updated>
+# and no <published> — 2,696 entries across 84 feeds here — and
+# entry_publication_date reads both, so the SQL ordering disagreed with the
+# ordering everything else uses. The prefetch takes the oldest (or newest) N
+# rows by ITS key, so a disagreement does not merely misplace an entry, it
+# DROPS it: hentai-foundry's "Black Cat by erotibot" is dated 2026-07-21 by
+# <updated> and 2026-08-12 by first_updated, so it fell outside a window
+# spanning 2026-07-20 to 2026-08-01 and vanished from All Feeds while showing
+# correctly in its folder (which has few enough feeds to use reader's own
+# per-feed query, and reader reads <updated>).
+#
+# The URL/title inference tiers of entry_publication_date are deliberately not
+# reproduced here: they cannot be expressed in SQL, and they only ever apply to
+# entries this expression already treats as undated.
+_ENTRY_SORT_SQL = "coalesce(published, updated, first_updated)"
 
 
 def entry_publication_date(entry) -> datetime | None:
@@ -11022,6 +11065,47 @@ def add_no_referrer_to_images(content: str) -> str:
     )
 
 
+# Mirrors the entry-lead-image handler in templates/_entry_pane.html. Kept as a
+# literal rather than shared with the template because the template's copy is
+# written inline in HTML and this one has to survive an attribute-level regex.
+_IMG_PROXY_FALLBACK_ONERROR = (
+    "var _s=this.getAttribute('src');"
+    "if(!_s||_s.startsWith('/api/img?')||_s.startsWith('data:')){this.style.display='none'}"
+    "else{this.setAttribute('src','/api/img?u='+encodeURIComponent(this.src))}"
+)
+
+
+def add_img_proxy_fallback(content: str) -> str:
+    """Give body images the retry-through-/api/img the lead image already has.
+
+    The article's hero has carried this since the proxy was added: if the direct
+    load fails, swap src for the same-origin proxy, and only give up if that
+    fails too. Body images had nothing — a failed load left a blank space with no
+    second attempt and no way to tell a blocked image from one the publisher
+    never shipped.
+
+    That asymmetry is invisible until an article's og:image IS its body image.
+    Then _strip_lead_image_opener correctly drops the separate hero (showing the
+    picture twice is worse) and the only copy left is the body one — the copy
+    with no fallback. sonarsource.com's blog does this on the posts that carry a
+    screenshot, which is why the neighbours "showed their image" and one post
+    did not: the neighbours were rendering a hero, not a body image.
+
+    Cheap on the happy path: onerror never fires for an image that loads, so this
+    costs nothing until something goes wrong. Only tags without an onerror are
+    touched, and the sanitizer strips author-supplied handlers, so in practice
+    that is all of them.
+    """
+    if "<img" not in content.lower():
+        return content
+    return re.sub(
+        r"<img\b(?![^>]*\bonerror\s*=)([^>]*?)(/?)>",
+        lambda m: f'<img{m.group(1)} onerror="{html.escape(_IMG_PROXY_FALLBACK_ONERROR, quote=True)}"{m.group(2)}>',
+        content,
+        flags=re.IGNORECASE,
+    )
+
+
 def proxy_hotlink_images(content: str) -> str:
     """Rewrite <img> src/srcset for hotlink-protected hosts to the /api/img proxy.
 
@@ -12755,7 +12839,7 @@ def list_entries_for_feeds(
                         _placeholders = ",".join("?" for _ in _feed_list)
                         rows = _rconn.execute(
                             f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
-                            f" ORDER BY coalesce(published, first_updated) ASC LIMIT ?",
+                            f" ORDER BY {_ENTRY_SORT_SQL} ASC LIMIT ?",
                             _feed_list + [fetch_limit],
                         ).fetchall()
                     else:
@@ -12769,9 +12853,9 @@ def list_entries_for_feeds(
                             _chunk = _feed_list[_i:_i + 999]
                             _ph = ",".join("?" for _ in _chunk)
                             chunk_rows = _rconn.execute(
-                                f"SELECT feed, id, coalesce(published, first_updated) AS sort_val FROM entries"
+                                f"SELECT feed, id, {_ENTRY_SORT_SQL} AS sort_val FROM entries"
                                 f" WHERE feed IN ({_ph}){read_clause}"
-                                f" ORDER BY coalesce(published, first_updated) ASC LIMIT ?",
+                                f" ORDER BY {_ENTRY_SORT_SQL} ASC LIMIT ?",
                                 _chunk + [fetch_limit],
                             ).fetchall()
                             batch_rows.extend(chunk_rows)
@@ -12800,7 +12884,7 @@ def list_entries_for_feeds(
             # reader first observed the entry (recent_sort).
             read_sql = {None: "", True: " AND read IS NOT NULL", False: " AND (read IS NULL OR read != 1)"}
             read_clause = read_sql.get(reader_read_filter, "")
-            sort_col = "recent_sort" if normalized_sort_by == "received" else "coalesce(published, first_updated)"
+            sort_col = "recent_sort" if normalized_sort_by == "received" else _ENTRY_SORT_SQL
             try:
                 _rconn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
                 _rconn.row_factory = sqlite3.Row
@@ -13258,6 +13342,114 @@ def apply_star_state(feed_url: str, entry_id: str, saved: bool) -> None:
                 invalidate_unread_counts_cache()
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("starred archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
+
+
+def restar_curated_entries(feed_url: str) -> int:
+    """Star every curated entry in a feed and stamp the star time to now.
+
+    Backs the "show them at the top of the Inbox" option on unsubscribe. The
+    Inbox orders by ``saved_entries.saved_at``, so an item curated months ago
+    sinks to wherever it was — which is the last place you look right after
+    deciding to drop its feed.
+
+    Two different operations, because "re-star" is not one thing:
+
+    - **Tagged but unstarred** — there is no ``saved_entries`` row at all, so a
+      date bump would touch nothing and the item would still never appear. It
+      has to be genuinely starred, which is also what enqueues its offline
+      capture. This is the common case: a tag is a keep signal, but only a star
+      is archived.
+    - **Already starred** — ``apply_star_state`` is INSERT OR IGNORE, so calling
+      it again silently leaves the old timestamp in place and nothing moves. The
+      row is re-stamped directly instead.
+
+    Deliberately NOT unstar-then-star for the second case: unstarring an entry
+    with no other keep signal enqueues removal of its offline capture, so a
+    failure between the two calls would destroy the very thing being preserved.
+
+    Callers must run this BEFORE removing the feed — it reads the feed's entries
+    and relies on the capture flush that unsubscribe already performs afterwards.
+
+    Returns the number of entries affected.
+    """
+    curated: list[str] = []
+    with get_reader() as reader:
+        for entry in reader.get_entries(feed=feed_url):
+            entry_id = str(entry.id)
+            if entry_has_keep_signal(
+                feed_url, entry_id, starred=_entry_is_starred(feed_url, entry_id)
+            ):
+                curated.append(entry_id)
+
+    for entry_id in curated:
+        if not _entry_is_starred(feed_url, entry_id):
+            apply_star_state(feed_url, entry_id, True)
+
+    if curated:
+        with get_meta_connection() as conn:
+            conn.executemany(
+                "UPDATE saved_entries SET saved_at = CURRENT_TIMESTAMP"
+                " WHERE feed_url = ? AND entry_id = ?",
+                [(feed_url, e) for e in curated],
+            )
+            conn.commit()
+    return len(curated)
+
+
+def drop_all_curation(feed_url: str) -> dict[str, int]:
+    """Strip every keep signal from a feed so unsubscribing really removes it.
+
+    The counterpart to keeping: sometimes a feed was a mistake, and its stars and
+    tags are part of the mistake. Without this the only ways out were to keep the
+    curation, or to untag and unstar every entry by hand first — because a tag or
+    a star preserves the offline capture, so a plain unsubscribe would leave the
+    posts behind in Saved as orphan archives.
+
+    Order is load-bearing. Tags come off first: ``apply_star_state(False)``
+    consults ``entry_has_keep_signal``, so unstarring while a tag remains would
+    (correctly) refuse to release the capture. Archives are then deleted
+    explicitly rather than left to ``enqueue_removal``, which only marks the row
+    ``pending_removal`` for a background worker — the feed is about to disappear,
+    so the cascade has to be synchronous and provable. ``delete_archive`` keeps
+    assets that another entry still references.
+
+    ``archived_entries`` (the Archive *state*, not the capture) needs no handling:
+    with every capture gone, ``_purge_dead_entry_meta`` treats the whole feed as
+    uncaptured and drops all its per-entry meta.
+
+    Returns counts of what was removed.
+    """
+    counts = {"untagged": 0, "unstarred": 0, "archives": 0}
+
+    entries: list[tuple[str, object]] = []
+    with get_reader() as reader:
+        for entry in reader.get_entries(feed=feed_url):
+            entries.append((str(entry.id), entry.resource_id))
+
+    for entry_id, resource_id in entries:
+        with get_reader() as reader:
+            has_tags = bool(get_manual_tags_for_resource(reader, resource_id))
+        if has_tags:
+            set_manual_tags_for_entry(feed_url, entry_id, "")
+            counts["untagged"] += 1
+
+        if _entry_is_starred(feed_url, entry_id):
+            apply_star_state(feed_url, entry_id, False)
+            counts["unstarred"] += 1
+
+        try:
+            if starred_archive_service.delete_archive(feed_url, entry_id):
+                counts["archives"] += 1
+        except Exception:  # noqa: BLE001
+            LOGGER.warning("[drop] archive delete failed for %s/%s", feed_url, entry_id, exc_info=True)
+
+    # Tags an orphan capture picked up while its feed was already gone, plus
+    # anything a previous partial removal left; harmless when empty.
+    with get_meta_connection() as conn:
+        conn.execute("DELETE FROM orphan_entry_tags WHERE feed_url = ?", (feed_url,))
+        conn.commit()
+
+    return counts
 
 
 def mark_entry_read_everywhere(feed_url: str, entry_id: str) -> None:
@@ -13918,9 +14110,15 @@ def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) ->
     return str(soup)
 
 
+# /embed/ is included because publishers link it as well as iframe it. Sonarsource
+# ships its post's video as <a href="https://www.youtube.com/embed/<id>?si=…">, a
+# paragraph on its own — an embed URL wearing an anchor. Following it works, but
+# the video sat on the site and not in the article, which is exactly what this
+# function exists to undo. youtube-nocookie is the same URL shape from the
+# privacy host and would otherwise be missed for no reason.
 _YT_WATCH_URL_RE = re.compile(
     r'^(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/watch\?[^\s]*\bv=|youtu\.be/|'
-    r'youtube\.com/shorts/)[\w-]+',
+    r'youtube\.com/shorts/|(?:youtube|youtube-nocookie)\.com/embed/)[\w-]+',
     re.IGNORECASE,
 )
 
@@ -13940,9 +14138,6 @@ def _embed_standalone_youtube_links(content_html: str) -> str:
     we only convert when the link is the element's sole meaningful content."""
     if not isinstance(content_html, str) or "youtu" not in content_html.lower():
         return content_html
-    if "/embed/" in content_html and "youtube" in content_html.lower():
-        # An embed already exists; still scan, but each match is gated below.
-        pass
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(content_html, "html.parser")
@@ -14632,6 +14827,14 @@ _BLOCK_SPACER_TAGS = frozenset({"div", "p", "span", "i", "b", "em", "strong", "f
 _REAL_BLOCK_TAGS = frozenset({
     "div", "p", "figure", "blockquote", "table", "ul", "ol", "li", "pre", "hr",
     "h1", "h2", "h3", "h4", "h5", "h6",
+    # <img> is inline in the HTML spec but not in Lectio: `.entry-content img`
+    # is `display: block` without exception, so a <br> next to one can never be
+    # separating text — it is always padding the author added to push the next
+    # block down. mahonoir ships `<img><br/><br/><div>…`, which rendered as a
+    # large gap between a single-panel comic and its commentary while its
+    # multi-panel posts (no <br>) sat correctly. The reasoning that keeps inline
+    # tags out of this set is exactly what puts <img> in it.
+    "img",
 })
 
 
@@ -15905,6 +16108,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if isinstance(content_html, str) and content_html and not is_saved:
             content_html = proxy_hotlink_images(content_html)
             content_html = add_no_referrer_to_images(content_html)
+            content_html = add_img_proxy_fallback(content_html)
 
         if not _show_lead_in_article:
             lead_image_url = None
@@ -16066,6 +16270,9 @@ def entry_pane(
             "selected_resume_read_filter": normalized_resume_read_filter,
             "selected_entry": selected_entry,
             "feed_to_folder": feed_to_folder,
+            "unsubscribed_feed_urls": unsubscribed_feed_urls_among(
+                [selected_entry.get("feed_url")] if selected_entry else []
+            ),
             "email_configured": is_email_configured(),
             "email_to_default": _get_email_to_default(),
             "instapaper_configured": is_instapaper_configured(),
@@ -17052,6 +17259,46 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
     return result
 
 
+def _carry_tags_to_orphan_archive(reader, conn: sqlite3.Connection, feed_url: str) -> int:
+    """Copy a feed's manual tags into ``orphan_entry_tags`` before it is deleted.
+
+    Only for entries whose offline capture will outlive the feed — that is the
+    same test ``_purge_dead_entry_meta`` uses to decide which per-entry meta
+    survives, so the two agree about what still exists afterwards.
+
+    Returns the number of entries whose tags were carried.
+    """
+    try:
+        with archive_conn() as _ac:
+            captured = {
+                str(r[0]) for r in _ac.execute(
+                    "SELECT entry_id FROM archived_entry WHERE feed_url = ?", (feed_url,)
+                )
+            }
+    except sqlite3.Error:
+        # Cannot prove what survives, so carry nothing rather than fabricate
+        # tag rows for entries that are about to disappear entirely.
+        LOGGER.warning("[purge] archive unreadable; not carrying tags for %s", feed_url)
+        return 0
+    if not captured:
+        return 0
+
+    carried = 0
+    for entry in reader.get_entries(feed=feed_url):
+        entry_id = str(entry.id)
+        if entry_id not in captured:
+            continue
+        tags = get_manual_tags_for_resource(reader, entry.resource_id)
+        if not tags:
+            continue
+        conn.executemany(
+            "INSERT OR IGNORE INTO orphan_entry_tags (feed_url, entry_id, tag) VALUES (?, ?, ?)",
+            [(feed_url, entry_id, t) for t in tags],
+        )
+        carried += 1
+    return carried
+
+
 def purge_orphaned_feed(
     reader,
     conn: sqlite3.Connection,
@@ -17130,6 +17377,35 @@ def purge_orphaned_feed(
                 migrated["tags"], migrated["stars"], migrated["synth"], migrated["archives"],
             )
 
+    # Step 2c — carry manual tags across to the orphan-archive side.
+    #
+    # A tag is a keep signal exactly like a star, but the two are stored in very
+    # different places: a star lives in `saved_entries` (meta DB, no reader
+    # dependency) and survives the feed's deletion untouched, while a tag lives
+    # in reader's own entry_tags and is deleted WITH the feed. So a tagged-but-
+    # unstarred entry used to come out of an unsubscribe with its capture intact
+    # and its tags gone.
+    #
+    # That is worse than untidy. An orphan archive counts as kept only if it is
+    # starred OR manually tagged (see "A surviving capture is not itself a keep
+    # signal"), so losing the tag makes the entry read as carrying no keep signal
+    # at all — unreachable in Saved, and eligible for deletion by
+    # scripts/purge_uncurated_orphan_archives.py. Tagging something is supposed
+    # to keep it forever; this is what makes that true across an unsubscribe.
+    #
+    # orphan_entry_tags is the same table the UI already writes when you tag an
+    # entry whose feed is gone, so nothing new is invented here — the tags simply
+    # move to where an orphan's tags are meant to live.
+    #
+    # Gated on a surviving capture, matching _purge_dead_entry_meta's rule: with
+    # no archive row the entry is entirely gone, and a tag pointing at nothing
+    # would be a ghost. Skipped when migrate_curation_to is set, because there
+    # the tags follow the entries onto the surviving feed instead.
+    if not migrate_curation_to:
+        _carried = _carry_tags_to_orphan_archive(reader, conn, feed_url)
+        if _carried:
+            LOGGER.info("[purge] carried tags for %d orphan capture(s) on %s", _carried, feed_url)
+
     # Step 3 — dispatch the delete via the appropriate path.
     da_id = deviantart_service.deviantart_feed_id_from_url(feed_url)
     devto_id = None if da_id else devto_service.devto_feed_id_from_url(feed_url)
@@ -17165,12 +17441,22 @@ def purge_orphaned_feed(
     # Safe unconditionally: an unsubscribe-with-keep is defined as leaving the
     # tree — its curated items stay reachable through the Kept view, which does
     # not read folder_feeds.
+    # feed_failure_state is here for the same reason, one layer down: it is the
+    # record of a feed's consecutive failures, and nothing ever cleared it on
+    # removal. A feed unsubscribed *because* it was dead therefore stayed in the
+    # failure tables forever, so the Failing Feeds counts and the "dead — needs
+    # replacement" triage kept reporting feeds that no longer exist — the 404
+    # sweep on 2026-08-11/12 left 560 such rows behind. It is pure derived state
+    # rebuilt on the next fetch, so dropping it cannot lose anything: a feed that
+    # is re-added starts from a clean slate, which is the correct reading of a
+    # deliberate re-subscribe.
     try:
         conn.execute("DELETE FROM kept_feeds WHERE feed_url = ?", (feed_url,))
         conn.execute("DELETE FROM feeds_needing_replacement WHERE feed_url = ?", (feed_url,))
         conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (feed_url,))
+        conn.execute("DELETE FROM feed_failure_state WHERE feed_url = ?", (feed_url,))
     except Exception:  # noqa: BLE001
-        LOGGER.warning("[purge] kept_feeds/needs_replacement/folder cleanup failed for %s", feed_url)
+        LOGGER.warning("[purge] kept_feeds/needs_replacement/folder/failure cleanup failed for %s", feed_url)
 
     _dead_meta = _purge_dead_entry_meta(conn, feed_url)
     if _dead_meta:
@@ -21318,6 +21604,10 @@ def _home_inner(
         "feeds_by_folder": feeds_by_folder,
         "folder_has_feeds": folder_has_feeds,
         "feed_to_folder": feed_to_folder,
+        "unsubscribed_feed_urls": unsubscribed_feed_urls_among(
+            [p.get("feed_url") for p in posts]
+            + ([selected_entry.get("feed_url")] if selected_entry else [])
+        ),
         "push_feed_urls": get_push_active_feed_urls(),
         "tag_rows": tag_rows,
         "all_tag_names": get_all_manual_tag_names(),
@@ -26192,6 +26482,8 @@ def unsubscribe_feed(
     resume_read_filter: str | None = Form(default=None),
     migrate_curation_to: str | None = Form(default=None),
     keep_entries: str = Form(default=""),
+    restar_curated: str = Form(default=""),
+    drop_curation: str = Form(default=""),
 ):
     normalized_read_filter = normalize_read_filter(read_filter)
     sort_query_s = build_sort_query(sort_by, sort_dir)
@@ -26203,6 +26495,19 @@ def unsubscribe_feed(
     ok = True
     message = "Feed unsubscribed."
     try:
+        # Before anything is removed: the option to bring this feed's curated
+        # items back to the top of the Inbox. Runs first so the entries are
+        # still readable and so the capture it enqueues is flushed by the
+        # force-archive both branches below already perform.
+        restarred = restar_curated_entries(feed_url) if normalize_star_only(restar_curated) else 0
+
+        # "Unsubscribe and drop everything": strip the keep signals BEFORE the
+        # removal, so the purge below finds nothing worth preserving and the
+        # posts do not survive in Saved as orphan archives.
+        dropped: dict[str, int] | None = (
+            drop_all_curation(feed_url) if normalize_star_only(drop_curation) else None
+        )
+
         with get_meta_connection() as conn:
             conn.execute(
                 "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
@@ -26245,6 +26550,17 @@ def unsubscribe_feed(
                             archive_pending=_migrate_to is None,
                             migrate_curation_to=_migrate_to,
                         )
+        if dropped:
+            message = (
+                "Feed unsubscribed; "
+                f"{dropped['untagged']} untagged, {dropped['unstarred']} unstarred, "
+                f"{dropped['archives']} offline cop{'y' if dropped['archives'] == 1 else 'ies'} deleted."
+            )
+        if restarred:
+            message += (
+                f" {restarred} curated post{'' if restarred == 1 else 's'}"
+                " moved to the top of the Inbox."
+            )
         invalidate_meta_structure_cache()
     except Exception as exc:
         ok = False

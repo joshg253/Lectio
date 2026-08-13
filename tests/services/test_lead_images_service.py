@@ -1386,6 +1386,102 @@ def test_og_scrape_manual_keeps_inline_when_source_misses(tmp_path: Path, monkey
     assert row["image_url"] == inline_img, "transient source miss clobbered the inline image"
 
 
+def test_detected_og_scrape_prefers_source_over_a_mid_body_image(tmp_path: Path, monkeypatch):
+    """A DETECTED og_scrape feed must scrape the source too, not just a manual one.
+
+    sonarsource.com/blog: most posts carry no body image, so they scrape their
+    og:image and the feed detects as og_scrape. The two or three posts that DO
+    embed a mid-article screenshot used to short-circuit on that inline image and
+    take the screenshot as their hero and thumbnail, while every post around them
+    was fine. The publisher's og:image is the lead; a screenshot dropped
+    mid-paragraph is not.
+    """
+    db_path = tmp_path / "meta.sqlite"
+    feed = "https://www.sonarsource.com/rss/blog.xml"
+    body_img = "https://assets.example.com/a/openinterminal-issue.png"
+    og_img = "https://assets.example.com/b/openinterminal-blog-landscape.webp"
+    entry = _FakeEntry(
+        feed_url=feed,
+        entry_id="p-sonar",
+        link="https://www.sonarsource.com/blog/escape-from-applescript/",
+        content_html=f'<p>we are presented with a finding:</p><img src="{body_img}"/><p>more</p>',
+    )
+    service = _build_service(db_path, [entry])
+    # Detected, NOT manually locked — the whole point of the regression.
+    service.store_feed_strategy(feed, "og_scrape", manual=False)
+    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda *a, **k: og_img)
+
+    service.fetch_and_store_lead_images_for_feed(feed, force_retry_negative=True)
+
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-sonar",)
+        ).fetchone()
+    assert row is not None
+    assert row["image_url"] == og_img, "mid-body screenshot won over the publisher's og:image"
+
+
+def test_detected_og_scrape_keeps_inline_when_source_misses(tmp_path: Path, monkeypatch):
+    """Falling through must not cost the inline image when the source yields nothing.
+
+    Same protection the manual case already had — a fresh post whose og:image is
+    not generated yet keeps its body image rather than losing its thumbnail.
+    """
+    db_path = tmp_path / "meta.sqlite"
+    feed = "https://www.sonarsource.com/rss/blog.xml"
+    body_img = "https://assets.example.com/a/screenshot.png"
+    entry = _FakeEntry(
+        feed_url=feed,
+        entry_id="p-fresh",
+        link="https://www.sonarsource.com/blog/fresh/",
+        content_html=f'<p>x</p><img src="{body_img}"/>',
+    )
+    service = _build_service(db_path, [entry])
+    service.store_feed_strategy(feed, "og_scrape", manual=False)
+    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda *a, **k: None)
+
+    service.fetch_and_store_lead_images_for_feed(feed, force_retry_negative=True)
+
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-fresh",)
+        ).fetchone()
+    assert row is not None
+    assert row["image_url"] == body_img
+
+
+def test_detected_inline_feed_still_short_circuits(tmp_path: Path, monkeypatch):
+    """The shortcut still holds for feeds whose images really are inline.
+
+    Guards the scope of the fix: only og_scrape (and webcomic) fall through, so
+    an inline feed does not start fetching a source page per entry.
+    """
+    db_path = tmp_path / "meta.sqlite"
+    feed = "https://inline.example/feed"
+    body_img = "https://inline.example/img/cover.jpg"
+    entry = _FakeEntry(
+        feed_url=feed,
+        entry_id="p-inline",
+        link="https://inline.example/post/",
+        content_html=f'<img src="{body_img}"/>',
+    )
+    service = _build_service(db_path, [entry])
+    service.store_feed_strategy(feed, "inline", manual=False)
+
+    def _boom(*a, **k):
+        raise AssertionError("inline feed must not fetch the source page")
+
+    monkeypatch.setattr(service, "_fetch_source_lead_image", _boom)
+
+    service.fetch_and_store_lead_images_for_feed(feed, force_retry_negative=True)
+
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-inline",)
+        ).fetchone()
+    assert row is not None and row["image_url"] == body_img
+
+
 # --- inline <svg> thumbnails (PR5) -----------------------------------------
 
 _INLINE_SVG = (
@@ -1915,3 +2011,340 @@ def test_the_on_open_fetch_is_skipped_for_a_plugin_owned_host(tmp_path: Path):
 
     assert scraped == []
     assert svc.get_cached_lead_image_url("https://f.test/feed", "e1") is None
+
+
+# --- Tumblr writes the size as a path segment, prefixed with "s" -------------
+#
+# ".../s1280x1920/..." is a post's image; ".../s64x64u_c1/..." is the BLOG's
+# avatar. _URL_DIMENSION_RE cannot see either, because it wants the digits to
+# follow a separator and here they follow the "s" — so a 64x64 avatar sailed
+# past the size floor and became a comic's lead image. Worse for a webcomic
+# feed whose body carries no image: the bodyless-entry injector then put the
+# avatar in the article (theycantalk.com, 2026-08-13).
+
+
+def _acceptable(service, url: str) -> bool:
+    return service._is_image_url_acceptable(url, None, None, allow_extensionless=True)
+
+
+_TUMBLR_AVATAR = (
+    "https://64.media.tumblr.com/b05eac3c2a9d8d3e276163870a65a091/"
+    "d133bf64a6916e97-a4/s64x64u_c1/7e1cf3f8bd2b36ef72cdbc2bb89d1a41d7140123.jpg"
+)
+_TUMBLR_POST_IMAGE = (
+    "https://64.media.tumblr.com/cb1f43c2950792577e0d14da334592f2/"
+    "26be0f55f0c59947-c9/s1280x1920/1924c9bc735644255a1020a493a9fbc5ea649a6f.jpg"
+)
+_TUMBLR_AVATAR_128 = (
+    "https://64.media.tumblr.com/aaaabbbbccccddddeeeeffff00001111/"
+    "2222333344445555-66/s128x128u_c1/7777888899990000aaaabbbbccccddddeeeeffff.jpg"
+)
+
+
+def test_tumblr_avatar_crop_is_rejected(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert _acceptable(service, _TUMBLR_AVATAR) is False
+
+
+def test_tumblr_128_avatar_crop_is_rejected(tmp_path: Path):
+    """norasuko-art's five, the same shape one size up."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert _acceptable(service, _TUMBLR_AVATAR_128) is False
+
+
+def test_a_real_tumblr_post_image_still_passes(tmp_path: Path):
+    """Scope guard: 486 legitimate leads on the live library use this shape."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert _acceptable(service, _TUMBLR_POST_IMAGE) is True
+
+
+def test_the_size_segment_must_be_a_whole_segment(tmp_path: Path):
+    """It cannot fire inside an ordinary filename."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._PATH_SIZE_SEGMENT_RE.search("/images/photo-s64x64.jpg") is None
+    assert service._PATH_SIZE_SEGMENT_RE.search("/a/s64x64u_c1/b.jpg") is not None
+
+
+# --- a caption repeated across a feed is a tagline, not a punchline ----------
+#
+# Webcomic caption extraction falls back to og:description so hover-text
+# punchlines survive. Penny Arcade puts a fixed site blurb there instead, on
+# every strip, and ships no og:site_name for the existing pbfcomics guard to
+# compare against. Nothing in a single page marks it as boilerplate — what marks
+# it is that it does not vary.
+
+_PA_TAGLINE = ("Videogaming-related online strip by Mike Krahulik and Jerry Holkins. "
+               "Includes news and commentary.")
+
+
+def _stored_title(db_path: Path, entry_id: str) -> str | None:
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT image_title FROM entry_lead_images WHERE entry_id = ?", (entry_id,)
+        ).fetchone()
+    return row["image_title"] if row else None
+
+
+def test_the_first_entry_keeps_the_caption(tmp_path: Path):
+    """It cannot know yet — one occurrence is indistinguishable from a punchline."""
+    db = tmp_path / "meta.sqlite"
+    service = _build_service(db, [])
+    service.store_entry_image_alt("f", "e1", None, title_text=_PA_TAGLINE)
+    assert _stored_title(db, "e1") == _PA_TAGLINE
+
+
+def test_a_repeat_clears_it_from_the_whole_feed(tmp_path: Path):
+    db = tmp_path / "meta.sqlite"
+    service = _build_service(db, [])
+    service.store_entry_image_alt("f", "e1", None, title_text=_PA_TAGLINE)
+    service.store_entry_image_alt("f", "e2", None, title_text=_PA_TAGLINE)
+
+    assert _stored_title(db, "e2") is None, "second entry stored the tagline"
+    assert _stored_title(db, "e1") is None, "first entry was not cleaned up"
+
+
+def test_the_in_memory_title_cache_is_cleared_too(tmp_path: Path):
+    db = tmp_path / "meta.sqlite"
+    service = _build_service(db, [])
+    service.store_entry_image_alt("f", "e1", None, title_text=_PA_TAGLINE)
+    service.store_entry_image_alt("f", "e2", None, title_text=_PA_TAGLINE)
+    assert service._title_cache[("f", "e1")] is None
+
+
+def test_a_genuine_per_post_caption_survives(tmp_path: Path):
+    """The whole point: xkcd-style hover text differs per strip and must stay."""
+    db = tmp_path / "meta.sqlite"
+    service = _build_service(db, [])
+    service.store_entry_image_alt("f", "e1", None, title_text="A punchline")
+    service.store_entry_image_alt("f", "e2", None, title_text="A different punchline")
+    assert _stored_title(db, "e1") == "A punchline"
+    assert _stored_title(db, "e2") == "A different punchline"
+
+
+def test_another_feeds_identical_caption_is_not_affected(tmp_path: Path):
+    """Scope is one feed — two sites may legitimately share a sentence."""
+    db = tmp_path / "meta.sqlite"
+    service = _build_service(db, [])
+    service.store_entry_image_alt("feed-a", "e1", None, title_text=_PA_TAGLINE)
+    service.store_entry_image_alt("feed-b", "e1", None, title_text=_PA_TAGLINE)
+    with _make_conn(db) as conn:
+        rows = conn.execute(
+            "SELECT feed_url, image_title FROM entry_lead_images ORDER BY feed_url"
+        ).fetchall()
+    assert [r["image_title"] for r in rows] == [_PA_TAGLINE, _PA_TAGLINE]
+
+
+def test_alt_text_is_untouched_by_the_guard(tmp_path: Path):
+    db = tmp_path / "meta.sqlite"
+    service = _build_service(db, [])
+    service.store_entry_image_alt("f", "e1", "alt one", title_text=_PA_TAGLINE)
+    service.store_entry_image_alt("f", "e2", "alt two", title_text=_PA_TAGLINE)
+    with _make_conn(db) as conn:
+        rows = conn.execute(
+            "SELECT entry_id, image_alt FROM entry_lead_images ORDER BY entry_id"
+        ).fetchall()
+    assert [r["image_alt"] for r in rows] == ["alt one", "alt two"]
+
+
+# --- an age gate is the one image guaranteed not to be the post ---------------
+#
+# An adult webcomic serves a content-warning interstitial INSTEAD of the strip,
+# so a page scrape picks it up as though it were the comic. monstersoupcomic.com
+# captioned a post about paintbrushes with its maturecontentwarning.png.
+
+
+def test_age_gate_images_are_rejected(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for url in (
+        "https://monstersoupcomic.com/wp-content/uploads/2025/08/maturecontentwarning.png",
+        "https://x.test/img/mature-content-warning.png",
+        "https://x.test/img/age_gate.jpg",
+        "https://x.test/img/age-verification.png",
+        "https://x.test/img/nsfw-warning.png",
+    ):
+        assert _acceptable(service, url) is False, url
+
+
+def test_a_comic_whose_title_contains_those_words_survives(tmp_path: Path):
+    """Scope guard: the words appear in real titles, so only the gate shapes match."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for url in (
+        "https://x.test/comics/the-warning-sign-chapter-4.jpg",
+        "https://x.test/comics/mature-audiences-episode.jpg",
+        "https://x.test/comics/a-warning-from-space.png",
+    ):
+        assert _acceptable(service, url) is True, url
+
+
+# --- "<name>_on.png" / "_off.png" is a nav button's two states ---------------
+#
+# monstersoupcomic.com/images/blog_on.png (99x44) became the lead on its text
+# posts once the age-gate graphic stopped winning. The size floor cannot help:
+# the dimensions are neither in the URL nor declared on the tag, so nothing
+# measures it without fetching the bytes.
+
+
+def test_rollover_nav_sprites_are_rejected(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for url in ("http://monstersoupcomic.com/images/blog_on.png",
+                "http://x.test/images/home_off.gif",
+                "http://x.test/nav/about_on.jpg"):
+        assert _acceptable(service, url) is False, url
+
+
+def test_a_filename_merely_ending_in_those_letters_survives(tmp_path: Path):
+    """Anchored to the whole basename, so real titles are unaffected."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for url in ("http://x.test/comics/lights-on.jpg",
+                "http://x.test/comics/the_one.png",
+                "http://x.test/comics/switched_on_and_off_again.png",
+                "http://x.test/comics/2026-08-13-showdown.jpg"):
+        assert _acceptable(service, url) is True, url
+
+
+# --- <img> written by JavaScript is source code, not an image ---------------
+#
+# monstersoupcomic's bookmark widget does
+#   document.write('<a …><img src="'+imgTag+'" …>')
+# and the page scan produced the lead image
+# "https://monstersoupcomic.com/'+imgTag+'" — a URL that cannot resolve to
+# anything. Stripped once at fetch time rather than at each of the ten
+# _IMG_TAG_RE scan sites, so no future scan can forget.
+
+
+def test_script_written_img_tags_are_not_candidates(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    page = (
+        '<p><img src="/real.jpg"></p>'
+        "<script>document.write('<img src=\"'+imgTag+'\">')</script>"
+        '<img src="/also-real.png">'
+    )
+    out = service._strip_script_blocks(page)
+    assert "imgTag" not in out
+    assert "/real.jpg" in out and "/also-real.png" in out
+
+
+def test_stripping_scripts_is_a_passthrough_without_any(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._strip_script_blocks("<p>hi</p>") == "<p>hi</p>"
+
+
+def test_meta_tags_survive_script_stripping(tmp_path: Path):
+    """og:image lives in <head> and must be untouched."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    page = '<head><meta property="og:image" content="/hero.jpg"></head><script>var x=1</script>'
+    out = service._strip_script_blocks(page)
+    assert 'content="/hero.jpg"' in out
+
+
+# --- a comic's prev/next arrows must not become its lead ---------------------
+#
+# dresdencodak's feed opens with <img alt="Previous" height="30"
+# src=".../prev_002.png">, so the 30px arrow won the first-image bonus and
+# became both the hero and the thumbnail. main.py already strips these from the
+# article body (_COMIC_NAV_ALT_RE / _COMIC_NAV_SRC_RE); nothing stopped one
+# being chosen as the lead.
+
+
+def test_comic_nav_arrows_are_rejected(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for url in ("https://dresdencodak.com/wp-content/uploads/2019/03/prev_002.png",
+                "https://dresdencodak.com/wp-content/uploads/2019/03/first_001.png",
+                "https://x.test/img/next.gif",
+                "https://x.test/img/previous-1.png",
+                "https://x.test/img/last.png"):
+        assert _acceptable(service, url) is False, url
+
+
+def test_comics_named_after_those_words_survive(tmp_path: Path):
+    """These are ordinary English, so the match is anchored to a bare basename."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for url in ("https://x.test/comics/first-contact.jpg",
+                "https://x.test/comics/next-door.png",
+                "https://x.test/comics/the-last-stand.jpg",
+                "https://x.test/comics/back-to-school.png",
+                "https://dresdencodak.com/wp-content/uploads/2026/08/dc_minis_27.jpg"):
+        assert _acceptable(service, url) is True, url
+
+
+# --- dresdencodak: the site draws its own list crop --------------------------
+#
+# The comic is a tall column (#27 is 1500x4875), a sliver at thumbnail size,
+# while ".../dc_minis_27_thumbnail.jpg" is a 2500x1000 landscape crop drawn for
+# exactly this. Same split as Penny Arcade's strip/panel, different naming — and
+# only half kept by the site, which is what bounds the rule.
+
+_DC_FULL = "https://dresdencodak.com/wp-content/uploads/2026/08/dc_minis_27.jpg"
+_DC_THUMB = "https://dresdencodak.com/wp-content/uploads/2026/08/dc_minis_27_thumbnail.jpg"
+_DC_LINK = "https://dresdencodak.com/2026/08/09/dc-minis-27-birthday-blues/"
+
+
+def test_dc_minis_thumbnail_is_derived(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._plugin_thumbnail_variant(entry_link=_DC_LINK, lead_url=_DC_FULL) == _DC_THUMB
+
+
+def test_a_lead_that_is_already_the_crop_is_kept(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._plugin_thumbnail_variant(entry_link=_DC_LINK, lead_url=_DC_THUMB) == _DC_THUMB
+
+
+def test_dark_science_derives_nothing(tmp_path: Path):
+    """ds_185/186/187 have no _thumbnail.jpg — deriving blind would 404 them all.
+
+    thumbnail_from_lead_image is network-free by contract, so the plugin cannot
+    check; it declines where it does not know.
+    """
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for lead in ("https://dresdencodak.com/wp-content/uploads/2026/06/ds_187_silder.jpg",
+                 "https://dresdencodak.com/wp-content/uploads/2026/06/ds_185.jpg"):
+        assert service._plugin_thumbnail_variant(entry_link=_DC_LINK, lead_url=lead) is None
+
+
+def test_another_hosts_dc_minis_name_is_not_claimed(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._plugin_thumbnail_variant(
+        entry_link="https://example.test/x/", lead_url="https://example.test/img/dc_minis_9.jpg"
+    ) is None
+
+
+def test_the_site_crop_is_not_demoted_while_scoring(tmp_path: Path):
+    """Demoting it is inert, so it is not done.
+
+    Measured against the live site with the penalty patched in: DC Minis #26
+    resolves to dc_minis_26_thumbnail.jpg either way, because the crop is the
+    only image that page carries. Pinned so the nudge is not added back.
+    """
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    src = "https://dresdencodak.com/2026/08/09/dc-minis-27-birthday-blues/"
+    assert service._plugin_source_score_adjustment(
+        source_url=src, attrs={}, resolved_url=_DC_THUMB) == 0
+
+
+def test_penny_arcade_panel_derivation_is_unaffected(tmp_path: Path):
+    """Two plugins now answer thumbnail_from_lead_image; neither may shadow the other."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._plugin_thumbnail_variant(
+        entry_link="https://www.penny-arcade.com/comic/2026/07/27/x",
+        lead_url="https://assets.penny-arcade.com/comics/2026-x.jpg",
+    ) == "https://assets.penny-arcade.com/comics/panels/2026-x-p1.jpg"
+
+
+def test_script_end_tags_with_attributes_are_still_stripped(tmp_path: Path):
+    """An HTML end tag may carry attributes; parsers ignore them, a regex cannot.
+
+    With `</script\\s*>` the block did not match at all, so the script survived
+    and its document.write('<img …>') was scanned anyway (CodeQL py/bad-tag-filter).
+    """
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for page in ('<script>x<img src="/bad.png"></script foo>',
+                 '<script>x<img src="/bad.png"></script\t\n bar>',
+                 '<script>x<img src="/bad.png"></SCRIPT >'):
+        assert "/bad.png" not in service._strip_script_blocks(page), page
+
+
+def test_a_non_end_tag_is_not_eaten(tmp_path: Path):
+    """`</scriptfoo>` is not a script end tag, so the strip must not run to it."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    page = '<script>x</scriptfoo><img src="/real.png">'
+    assert "/real.png" in service._strip_script_blocks(page)

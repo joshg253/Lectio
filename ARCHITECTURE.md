@@ -1379,6 +1379,54 @@ When every advertised link is dead and nothing else answers, what happens next d
 
 **Two kinds of known-site rule.** `_SITE_FEED_REWRITES` are pure URL functions (Pinboard, ArtStation, Behance, freeCodeCamp, and the numeric Tapas form) — no network, applied before the fetch. `_SITE_BODY_FEED_EXTRACTORS` are the other shape: the feed address exists only in the page body, so they run *after* the fetch, against HTML discovery already has. Tapas is the case that needed it — it advertises no `<link rel="alternate">` at all (its only alternate is the mobile page) and its canonical link points at the latest *episode*, not the series, so `tapas.io/series/<slug>` is invisible to generic discovery. The series id lives in the markup as `seriesId:` / `data-series-id`, which is what the community userscripts scrape by hand. Extractors run only when nothing was advertised, and their result flows into the same liveness check as any advertised link, so a stale id is caught rather than offered. Both entry points call the same helper on the same slice of the same HTML — see the divergence warning above.
 
+## Fetching a feed: three ways it fails before it ever parses
+
+All three were found on the live library on 2026-08-12, and all three presented
+as "this feed is broken" while the site worked fine in a browser.
+
+**A challenge page is a block, not a malformed feed** (`services/bot_challenge.py`).
+An anti-bot interstitial served in place of a feed arrives as a 2xx whose body is
+HTML, then fails to parse — indistinguishable from a genuinely broken feed unless
+you look. poorlydrawnlines.com was logged as *"could not be parsed as a valid
+RSS/Atom document"* for months while returning a SiteGround captcha as **HTTP
+202**, which is also why no count of blocked feeds could ever be right: anything
+keyed on 403 never saw it. The fetch hook now sniffs for vendor markers
+(SiteGround, Cloudflare, Imperva, Sucuri, DDoS-Guard, AWS WAF) and raises a
+stable `bot challenge: blocked by <vendor>`. Status is deliberately not part of
+the test. The detector is narrow on purpose — a site serving its ordinary
+homepage at a dead feed URL is *moved/dropped*, a different failure with a
+different fix.
+
+⚠ These blocks are keyed on the **client IP**, not the user-agent: the same URL
+fetched with the honest UA and with a full browser identity returns a
+byte-identical challenge naming our own IP. All 29 of the library's genuine
+403s were already flagged for browser identity and still 403. Escalating the UA
+does nothing, so detection here exists to *label* the failure, not to get past
+it.
+
+**One illegal byte costs a whole feed.** reader parses with a strict SAX parser,
+so a single character XML 1.0 forbids makes the entire document not well-formed.
+inventwithpython.com shipped a raw `0x0B` mid-sentence and its 2.7MB, 100-entry
+feed failed outright at line 19918. The fetch hook strips exactly the C0 controls
+XML forbids and keeps the three it allows (tab, LF, CR), so a feed that was
+already valid comes through byte-identical.
+
+⚠ **feedparser reads that same feed happily.** Verifying a replacement URL with
+feedparser reported "200, 100 entries, looks great" and the feed then refused to
+ingest. When checking whether a feed will work, check with *reader*.
+
+**Announcing yourself as a crawler invites a fake 404.** Auto-discovery used to
+send `Lectio/1.0 (RSS auto-discovery; +…)`, and filters match on that phrase:
+chickensoft.games returns a fabricated 404 to any UA containing it while serving
+200 to `Lectio/1.0`. Discovery was the only part of Lectio sending it, so it was
+the only part that could not read the site. The damage went past a failed lookup
+— `probe_url` reported "server denied the request", `refusal_is_forceable()` read
+that as the site refusing us, and Add Feed offered **Subscribe anyway**, the
+husk-feed path the add-feed code explicitly warns against, while suppressing the
+page-feed offer that was correct. Discovery now sends the same honest identity as
+every other fetch. Still names the app and links the repo; only the description
+of the activity is gone.
+
 ## Feed auto-taggers
 
 Three functions run at startup to apply strategy and display defaults without user action:
@@ -1487,6 +1535,32 @@ adapters, where "every post in this feed is tagged VinylDeals" is worth keeping.
 - **The dry run explains an empty result.** `-mac, +pc` reads as "drop Apple, keep PC" and is the natural first spec to write — but Rock Paper Shotgun tags *platform availability*, so all 41 of its Mac-tagged posts are also tagged `PC` and the rescue cancels the entire rule. Zero matches then looks exactly like a rule that is working, which is the failure mode this whole feature has. `_run_tag_filter` counts entries a drop tag caught that a good/required tag let through, and returns `rescued` + the top `rescued_by` tags; the Test panel prints them under the count and, when nothing matched, names the rescue as the reason. This is a diagnostic, not a policy change — the rescue semantics are correct and deliberate (`+android, -iphone` must keep a post tagged both). The same applies to a **good-only** spec (`+wallpapers`), which cuts nothing by construction — good tags rescue from drops and whitelist nothing, so with no drops there is nothing for them to do — yet reads perfectly naturally as "keep these". `good_only` is returned whenever the spec has good tags and neither drops nor requires, and the panel names the two specs that do have teeth (`++tag` to keep only these, `-tag` to drop). Both notes exist because the three strengths are the one genuinely non-obvious thing about this rule type, and a bare zero teaches nothing.
 - **Source-page fallback.** Entries whose feed never delivered `<category>` data (aged out of the publisher's feed window before capture, or a tag-stripping publisher) are tagged from the article page itself on open: `extract_page_tags` harvests `article:tag` / `keywords` / `parsely-tags` metas from the lead-image service's source-HTML cache (zero extra requests when primed); on a cache miss the entry-detail handler queues `queue_source_html_fetch` and the tags appear on the next open — the same deferral pattern as image captions. Harvested tags are persisted to `entry_feed_tags` like feed tags; the fallback only runs when the entry has no rows, so feed-provided tags stay authoritative.
 - **Synthetic-feed gotcha (fixed):** dev.to/DeviantArt XML is regenerated from their per-user entry tables (`devto_entries`/`deviantart_entries`), not from the live API objects — tags must persist in those rows (comma-joined `tags` column) to come out as `<category>`. Re-seen articles backfill/refresh the stored tags while still in the API window.
+
+## FakeFeedz entries get the article's own date
+
+A listing page is a wall of links: titles and hrefs are there, dates usually are
+not (chickensoft.games shows none at all on `/blog`, only on each post). Stamping
+every scraped entry with the scrape time made a fresh feed look like its whole
+backlog was published the second it was added, and made sorting by date
+meaningless — ten entries all reading `2026-08-12 23:18:17`.
+
+`_article_published_at` fetches each **new** entry's page and asks it for a date,
+trying the publisher's own metadata first (`mine_publish_date`: JSON-LD,
+`article:published_time`, `<time datetime=…>`) and the date the page merely
+*prints* second — the same order the re-fetch path uses. Cost is one fetch per
+new entry: an entry already in `scraped_entries` is never re-fetched, so a steady
+feed pays nothing per refresh and only the first scrape pays for its backlog. Any
+failure falls back to "now", because a missing date must never cost the entry.
+
+`publish_date.from_visible_text` needed a second tier for this. Its matcher wants
+an element whose `class`/`id` says `date`/`posted`/`byline`, which utility-CSS
+frameworks never provide — the byline lives in
+`<p class="text-[var(--color-muted-foreground)] text-sm font-serif">April 26, 2026</p>`.
+The fallback accepts an element whose **entire text is a date and nothing else**,
+which is a comparably strong signal without matching the dates scattered through
+comment timestamps, related-post rails and copyright footers. `Updated April 26,
+2026 by Chris` does not qualify. It runs only after the labelled pass, so a
+publisher that marks its date up properly still wins.
 
 ## dev.to filtered feeds
 
@@ -2118,6 +2192,452 @@ SmartCrop's `min_scale` is a per-feed preference (`feed_display_prefs.smart_min_
 Fill mode's `fill_zoom` multiplier (`feed_display_prefs.fill_zoom`, NULL = default 1.0, range 0.5–2.0) scales the cover-crop resize step before the anchor-crop. Values below 1.0 produce a letterbox (image pasted on a black canvas); values above 1.0 crop more aggressively than the default tight fill. Passed to `/thumb` as the `fz` query param and included in the cache key for cover-family modes.
 
 **Direct-load fallback:** `/thumb` fetches the source image *from the server*, so a host that IP-blocks datacenter traffic (e.g. Cloudflare 403, washingtonstatestandard.com) makes `/thumb` 502 and the list thumbnail break — even though the browser's own (residential) IP can fetch the image fine. The list `<img>` carries the raw image URL in `data-direct`; on a `/thumb` error its `onerror` (`window.thumbImgFallback`, defined pre-body so it exists before any load fails) retries once with that direct URL, letting the browser load the image itself. CSS `object-fit:cover` sizes the un-resized image to the tile. This recovers the thumbnail without evading the block server-side (it's the user's own client fetching, exactly as the article view already does). Only `http(s)` direct URLs are retried, and only once (a `data-triedDirect` guard prevents an error loop); if the direct load also fails, the tile collapses to `is-empty` as before. The same helper backs the JS-derived list thumbnail (it sets `data-direct` to the lead-image URL).
+
+## A kept post has to say its feed is gone
+
+Once curation outlives its feed, the feed name beside a saved post becomes a
+half-truth: it names something you can no longer read. Two different states get
+there and both look identical on screen — a **kept feed** still exists in reader
+but is hidden from the tree, and an **orphan archive**'s feed is gone from reader
+entirely. What they share is the only thing that matters at the point of use:
+there is no subscription behind the name, so clicking through will not show you
+more of it. `unsubscribed_feed_urls_among` treats them the same and the name
+renders `Feed Name (unsubscribed)`.
+
+The test is *not* "has no folder row". A feed in no folder is still subscribed —
+it lives under the virtual Uncategorized folder — and marking those would be
+wrong. The test is membership of `get_all_reader_feed_urls(include_kept=False)`,
+which excludes both states for exactly this reason.
+
+Scoped to the feeds actually on screen rather than computed library-wide, so the
+template context carries a handful of URLs instead of a set of thousands on every
+render.
+
+Rendered as a separate muted `<span>`, never concatenated into the title string:
+the feed name is data that appears in search, exports, feed properties and the
+tree, and baking a status word into it would leak everywhere the name goes.
+
+## Unsubscribing has to be able to actually remove things
+
+The keep model has a corollary that only shows up at removal time: a star or a
+tag **preserves the offline capture**, so once the previous section made tags
+survive an unsubscribe, *every* exit from the dialog left the posts behind in
+Saved as orphan archives. That is right when the feed was worth reading and
+wrong when the feed itself was the mistake — and the only way out was to untag
+and unstar every entry by hand first.
+
+`drop_all_curation` is the fourth choice. Order is load-bearing:
+
+1. **Tags come off first.** `apply_star_state(False)` consults
+   `entry_has_keep_signal`, so unstarring while a tag remains would (correctly)
+   refuse to release the capture.
+2. **Then the star.**
+3. **Then the archive, synchronously.** `enqueue_removal` only marks the row
+   `pending_removal` for a background worker, and the feed is about to
+   disappear — so `delete_archive` runs the cascade immediately instead, keeping
+   assets another entry still references.
+
+`archived_entries` (the Archive *state*, not the capture) needs no handling:
+with every capture gone, `_purge_dead_entry_meta` treats the whole feed as
+uncaptured and drops all of its per-entry meta in one pass.
+
+Two guards in the UI, because this is the only irreversible choice in the dialog
+— it deletes the offline copies, so there is nothing left to undo it from. It
+carries a `confirm()` naming the number of posts, and the re-star checkbox is
+disabled and cleared while it is selected, since "bring these to the top of the
+Inbox" and "delete these" contradict each other.
+
+## A tag has to survive an unsubscribe, because a star does
+
+Stars and tags are the same promise — "keep this" — but they are stored in
+completely different places. A star is a `saved_entries` row in the meta DB with
+no reader dependency, so it survives the feed's deletion untouched. A tag lives
+in **reader's own** `entry_tags`, attached to the entry resource, and is deleted
+*with the feed*.
+
+So a tagged-but-unstarred entry used to come out of a plain unsubscribe with its
+offline capture intact and its tags gone. That is not untidy, it is destructive
+one step later: an orphan archive counts as kept only if it is starred **or**
+manually tagged (see "A surviving capture is not itself a keep signal"), so
+losing the tag makes the entry read as carrying no keep signal at all —
+unreachable in Saved, and eligible for deletion by
+`scripts/purge_uncurated_orphan_archives.py`. The dialog said so out loud
+("tags are lost"), which is how it was noticed.
+
+`_carry_tags_to_orphan_archive` copies the tags into `orphan_entry_tags` before
+the delete. That is not a new concept: it is the table the UI already writes when
+you tag an entry whose feed is gone, precisely because there is no reader
+resource to attach to. The tags simply move to where an orphan's tags are meant
+to live.
+
+Two gates:
+
+- **Only for entries whose capture survives** — the same test
+  `_purge_dead_entry_meta` uses, so both agree about what still exists
+  afterwards. With no archive row the entry is gone entirely and a tag row would
+  point at nothing.
+- **Not when `migrate_curation_to` is set** — there the tags follow the entries
+  onto the surviving feed instead, which is `_migrate_curation`'s job.
+
+`orphan_entry_tags` is deliberately absent from `_DEAD_ENTRY_META_TABLES`, so the
+meta sweep that runs immediately afterwards does not undo this.
+
+## "Re-star" is two operations, not one
+
+Unsubscribing a feed can bring its curated posts back to the top of the Inbox.
+The Inbox orders by `saved_entries.saved_at`, so an item curated months ago sinks
+to wherever it was — which is the last place you look right after deciding to
+drop its feed.
+
+The obvious implementation is "set saved_at to now", and it is wrong for half the
+items. `restar_curated_entries` does two different things:
+
+- **Tagged but unstarred** — there is no `saved_entries` row to update, so a date
+  bump touches nothing and the item still never appears. It has to be *genuinely
+  starred*, which is also what enqueues its offline capture. This is the common
+  case, and it follows from the keep model: a tag is a keep signal, but only a
+  star is archived.
+- **Already starred** — `apply_star_state` is `INSERT OR IGNORE`, so calling it
+  again silently leaves the old timestamp and nothing moves. That row is
+  re-stamped directly.
+
+Deliberately **not** unstar-then-star for the second case. Unstarring an entry
+with no other keep signal enqueues removal of its offline capture
+(`entry_has_keep_signal`), so a failure between the two calls would destroy
+exactly what the option exists to preserve. There is no "re-star" primitive —
+only star and unstar, and star is idempotent — which is why this is a named
+operation rather than two calls at the call site.
+
+It runs **before** the feed is removed: the entries must still be readable, and
+the capture it enqueues is flushed by the force-archive that both the keep and
+purge branches already perform. Off by default, and the checkbox is reset every
+time the dialog opens — the modal is reused, so a box ticked for the last feed
+would silently reorder the Inbox for the next one.
+
+## Removing a feed has to clear the record that it was failing
+
+`purge_orphaned_feed` cleaned `kept_feeds`, `feeds_needing_replacement` and
+`folder_feeds`, but never `feed_failure_state`. So a feed unsubscribed *because*
+it was dead stayed on the failure record permanently, and Failing Feeds plus the
+"dead — needs replacement" triage went on counting subscriptions that no longer
+existed — with nothing left to fix or remove. The 404 sweep on 2026-08-11/12
+made it obvious by creating 560 of them at once.
+
+Safe to drop unconditionally: a failure record is derived state rebuilt on the
+next fetch, and a feed with no reader row has no next fetch. A feed that is later
+re-added starts clean, which is the right reading of a deliberate re-subscribe.
+`scripts/clear_ghost_failure_state.py` clears the pre-existing backlog (562 rows
+on the live library).
+
+**Ghost is defined against reader, not against folders.** Unsubscribe-with-keep
+deliberately leaves a feed with no `folder_feeds` row while it still exists and
+stays reachable through the Kept view, so keying the sweep on folder membership
+would delete the failure record of feeds that are still real.
+
+Other feed-keyed tables still outlive their feeds — `feed_lead_image_strategy`
+(1,024 ghost feeds), `feed_fetch_history` (754), `feed_seen_window` (553),
+`feed_media_scan` (173), `fever_feed_map` (154), `browser_ua_feeds` (95),
+`websub_subscriptions` (74). They are deliberately left alone for now: they are
+untidy rather than wrong, and some are not obviously safe to drop (the API id
+maps are handed out to sync clients, and fetch history is history). Failure state
+was the one with a visible, misleading consequence.
+
+## An embed URL wearing an anchor is still an embed
+
+Feeds that lose their oEmbed iframe usually ship the video as a `watch?v=`,
+`youtu.be/` or `/shorts/` link, and `_embed_standalone_youtube_links` rebuilds a
+player from any of those when the link is a paragraph's sole content.
+sonarsource.com ships a fourth shape: the **`/embed/` URL itself**, as a plain
+`<a href>` with descriptive text —
+
+```html
+<p><a href="https://www.youtube.com/embed/<id>?si=…">Escape from AppleScript</a></p>
+```
+
+That is an embed source that happens to be wearing an anchor. It read as "the
+video is on the web post but not in the article", which is precisely what this
+function exists to undo, and it missed in **two** places at once: the URL matcher
+(`_YT_WATCH_URL_RE`) listed only the three link shapes, and `extract_video_id`
+could not name a video from an `/embed/` URL either — so even code that reached
+past the matcher had nothing to build a player from. Both now accept `/embed/`,
+and `youtube-nocookie.com` alongside it, since it is the same URL shape from the
+privacy host.
+
+There was a vestigial `if "/embed/" in content_html: pass` at the top of the
+function, anticipating this case and doing nothing about it. Removed rather than
+left to imply a check that was not happening.
+
+The paragraph-sole rule is unchanged and still the whole scope guard: a link
+inside a sentence stays a link. The anchor's *text* was never required to be a
+bare URL — the test is whether the anchor is its container's only content — so a
+worded link like this one already qualified once the URL shape was recognized.
+
+## A body image that fails has to be able to try again
+
+The article's hero image has always carried an `onerror` that swaps its `src`
+for `/api/img?u=…` and only gives up if the proxy fails too. Body images carried
+nothing: a failed load left blank space, no second attempt, and no way to tell a
+blocked image from one the publisher never shipped.
+
+That asymmetry stays invisible for as long as a post has both a hero and body
+images, because the hero is the one people look at. It surfaces when a post's
+`og:image` **is** its body image. `_strip_lead_image_opener` then correctly drops
+the separate hero — showing the same picture twice above and inside the article
+is worse than showing it once — and the only copy left is the body copy, the one
+with no fallback. That is why sonarsource.com's blog read as "the posts before
+and after this one show their image and this one doesn't": the neighbours were
+rendering a hero, this post was rendering a body image.
+
+`add_img_proxy_fallback` closes it, running alongside `add_no_referrer_to_images`
+on the entry-pane path. Three properties matter:
+
+- **The direct URL stays the first attempt.** This is a retry, not a rewrite.
+  Preemptively routing every body image through the proxy is a different (and
+  much larger) change — `proxy_hotlink_images` already does that deliberately,
+  for the named hosts in `_HOTLINK_IMG_HOSTS`, where a direct load is *known* to
+  fail.
+- **It costs nothing on the happy path.** `onerror` never fires for an image
+  that loads.
+- **It only adds a handler where there is none.** The sanitizer strips
+  author-supplied event handlers, so in practice that is every image, but the
+  guard means running the pass twice is a no-op rather than a nest of handlers.
+
+Because the retry is same-origin and the server-side fetch carries no `Referer`,
+it recovers the same three failures the hero's copy always did: a host that
+refuses cross-origin image loads, a URL a client-side blocker drops, and a signed
+URL that expired between storage and reading.
+
+## Choosing a lead image: what gets thrown away, and what sneaks through
+
+The selector is a pile of heuristics, and its failures come in two opposite
+shapes. Both were live on 2026-08-12 and each one silently produced a *plausible
+wrong answer*, which is why they went unnoticed.
+
+**Site chrome that was being kept.** blogs.windows.com made its site icon the
+article image. Both available signals missed it: the alt text said `Site Icon`
+but `_LOGO_URL_PATTERNS` only allowed `-`/`_` between the words — and that
+pattern is matched against alt/title *text* as well as URLs, where words are
+separated by spaces. The file was `Windows11Icon.png`, CamelCase, so the
+`[-_]icon.png` rule needed a separator that never existed. Separators are now
+`[-_\s]`, and the icon-filename rule is separator-optional behind a lookbehind so
+`emoticon.png` and `lexicon.png` stay safe.
+
+**Real art that was being thrown away.** Two of these:
+
+- *A title that contains a hint word.* `round` is a shape hint for a cropped
+  avatar (`avatar-round.png`) and was matched against the whole path, so Standard
+  Ebooks' **"The Third Round"** lost its cover — a perfectly good 1400×2100 JPEG
+  — because the word appeared in a *directory segment that is a book title*. The
+  hint now applies to the filename only. Same class of false positive the
+  `profile` guard in that pattern already documents for DeviantArt.
+- *A file honestly named "fallback".* Full Circle Magazine's genuine podcast
+  cover art is `covers/podcasts/fallback.webp` — the art used when an episode has
+  none of its own — and the placeholder rule reads the name. Declared dimensions
+  now override it, since a page sizing an image at 640×360 is asserting intent.
+  ⚠ The bar is **hero scale (400×200), not the ordinary minimums (200×100)**:
+  WordPress's `blank.jpg` is a 200×200 white box sitting exactly on the floor, so
+  an at-or-above rule readmits the canonical placeholder. An existing regression
+  test caught that immediately.
+
+**A negative is cached, so a wrong rejection is sticky.** Each of these stored
+`image_url = NULL` and stopped re-resolving, so fixing the rule is only half the
+job — the poisoned rows have to be cleared for the entries to recover.
+
+## The list's SQL ordering has to agree with the app's date, or entries vanish
+
+`list_entries_for_feeds` cannot hydrate thousands of Entry objects to sort them,
+so past `PER_FEED_QUERY_THRESHOLD` (32 feeds) it prefetches an ordered window
+straight from the reader DB and hydrates only that. The window is the whole
+point — and it is also the trap: the prefetch takes the oldest (or newest) N rows
+**by its own SQL key**, so if that key disagrees with `entry_publication_date`,
+an entry is not merely misplaced, it is **dropped before Python ever sees it**.
+
+The key was `coalesce(published, first_updated)` and omitted `updated`, which
+`entry_publication_date` reads second. A feed may ship `<updated>` and no
+`<published>` — 2,696 entries across 84 feeds on the live library.
+hentai-foundry's "Black Cat by erotibot" is 2026-07-21 by `<updated>` and
+2026-08-12 by `first_updated`, so an oldest-N prefetch ranked it as one of the
+newest entries in the library and discarded it, and it disappeared from a window
+spanning 2026-07-20 to 2026-08-01.
+
+It still showed correctly in its own folder, because 646 feeds is below the
+threshold at which the fast path engages, so that view used reader's own per-feed
+query — and reader reads `<updated>`. "It's in the folder but not in All" is the
+signature of the two paths disagreeing, and is worth recognising as such.
+
+`_ENTRY_SORT_SQL` is now the single expression, defined next to
+`entry_publication_date` so the two stay in step. The URL- and title-inference
+tiers are deliberately not reproduced in SQL: they cannot be, and they only ever
+apply to entries this expression already treats as undated.
+
+## Several images in one container are a row — unless they are a comic page
+
+`.entry-content p:has(> img + img)` lays a container's images out as a wrapping
+flex row. It was written for paizo.com's three 250px cover variants, which are
+inline by default and sat side by side unstyled; the note said `max-width:100%`
+would keep a full-width image one-per-line.
+
+It does not, for two separate reasons, and `width: auto` is the bigger one. It
+**discards the `width` attribute**, so the used width becomes the intrinsic width
+of whichever `srcset` candidate the browser picked — and `sizes="auto"` inside a
+flex container resolves small, so it picked the 300w file. mahonoir.com stacks a
+comic page as four 800px panels in one `<p>`; they rendered 300x165, two to a
+line, genuinely low-res as well as small.
+
+The second reason is that **a flex item shrinks below its intrinsic width by
+default**, which is what the original note missed.
+
+Measured in Chromium rather than reasoned about, because the first attempt at
+this fix (adding `flex: 0 0 auto` alone) did not work and the report came back
+unchanged:
+
+| | comic panels | paizo covers |
+|---|---|---|
+| `width: auto` | 300x165, 2/line | 16x21 |
+| without it | 700x384, 1/line | 250x250, sharing a line |
+
+The covers collapsing to 16px is the same bug from the other end: with no width
+attribute honoured and no loaded image, nothing is left to size them.
+
+So `width: auto` is gone and `flex: 0 0 auto` stays. It survives only for
+`.npf_row`, which is what it was there for: Tumblr's row layout sets
+`width: 100%` on its figure images, which would force one per line, and a row is
+the entire point of an npf_row.
+
+## dresdencodak draws its own list crop, for half its comics
+
+Same split as Penny Arcade — whole comic in the article, a legible crop in the
+list — with different naming and, unlike Penny Arcade, a convention the site only
+half keeps:
+
+```
+article : …/uploads/YYYY/MM/dc_minis_<n>.jpg          (#27 is 1500x4875)
+list    : …/uploads/YYYY/MM/dc_minis_<n>_thumbnail.jpg (2500x1000)
+```
+
+Every DC Minis strip checked has its `_thumbnail.jpg` (25, 26, 27); no Dark
+Science page has one (`ds_185`, `ds_186_silder`, `ds_187_silder` all 404). Since
+`thumbnail_from_lead_image` is network-free by contract — it runs on the
+posts-list render path — the plugin cannot check, so it derives only for
+`dc_minis_` and declines where it does not know.
+
+The reverse derivation is deliberately absent. Stripping `_thumbnail` to reach
+the article image works for #26 and #23 and 404s for #25 and #22: those posts
+publish only the `_thumbnail`-named file, which is therefore the comic rather
+than a crop of it. Instead `source_score_adjustment` demotes a `_thumbnail` URL
+while scoring the source page, so the full comic wins the lead on its own merits
+when the page offers both, and the crop still wins when it is all there is.
+
+## A comic's prev/next arrows are not its lead image
+
+`main.py` has known these as body chrome for a long time (`_COMIC_NAV_ALT_RE`,
+`_COMIC_NAV_SRC_RE`) and strips them from the article. Nothing stopped one being
+chosen as the **lead**: dresdencodak's feed opens with
+
+```html
+<img alt="Previous" height="30" src=".../prev_002.png">
+```
+
+so the 30px arrow won the first-image bonus and became both the hero and the
+thumbnail.
+
+The match is anchored to a basename that is *only* the nav word plus an optional
+number, because these are ordinary English words: `first-contact.jpg` and
+`next-door.png` are comics, `prev_002.png` and `next.gif` are buttons. `main`'s
+looser `src` pattern can afford the ambiguity because it only fires alongside
+other nav signals; this one stands alone, so it cannot.
+
+## An `<img>` inside a `<script>` is source code, not an image
+
+monstersoupcomic's bookmark widget does
+
+```js
+document.write('<a …><img src="'+imgTag+'" …>')
+```
+
+and the page scan dutifully produced the lead image
+`https://monstersoupcomic.com/'+imgTag+'` — a URL that cannot resolve to
+anything. `<script>` blocks are now stripped once in `_fetch_page_html`, rather
+than at each of the ten `_IMG_TAG_RE` scan sites, so no future scan can forget.
+Safe there because this class reads no JSON-LD (which also lives in `<script>`),
+and `og:`/`meta` tags are in `<head>` and untouched.
+
+## An age gate is the one image that is definitely not the post
+
+An adult webcomic serves a content-warning interstitial *instead of* the strip,
+so a page scrape picks it up exactly where the comic should be — and on a
+webcomic feed whose body ships no image, `_inject_webcomic_panel_into_bodyless_entry`
+then puts it in the article. monstersoupcomic.com illustrated both halves at once:
+a post about paintbrushes rendered `maturecontentwarning.png`.
+
+Unlike most site chrome this is not a logo or a widget, so none of the existing
+rules saw it. It is now matched in `_SITE_CHROME_PATH_PATTERNS`, separator-optional
+because these files are named every way going (`maturecontentwarning`,
+`mature-content-warning`, `age_gate`, `nsfw-warning`).
+
+The words themselves appear in real comic titles, so the patterns match the
+*gate* shapes only: `the-warning-sign-chapter-4.jpg` and
+`mature-audiences-episode.jpg` still pass, and a test pins that.
+
+Removing the gate exposed what it had been masking: the same feed's text posts
+then resolved to `/images/blog_on.png`, a 99x44 nav button. `<name>_on.png` /
+`<name>_off.png` is the rollover convention for a button's two states, and a
+site that still writes its menu that way carries no other markup saying so. The
+size floor cannot catch it either — the dimensions are neither in the URL nor
+declared on the tag, so nothing measures them without fetching the bytes. That
+shape is rejected too, anchored to the whole basename so `lights-on.jpg` and
+`switched_on_and_off_again.png` are untouched.
+
+## A caption that never changes is the site's, not the post's
+
+Webcomic caption extraction falls back to `og:description`, because that is
+where a lot of comics put the hover-text punchline. Plenty of sites put a fixed
+blurb there instead. `_extract_webcomic_alt_text` already rejects one that merely
+repeats `og:site_name` (pbfcomics ships `og:description="The Perry Bible
+Fellowship"` on every strip), but Penny Arcade defeats that twice over: it ships
+no `og:site_name` at all, and its description is a real sentence —
+
+> Videogaming-related online strip by Mike Krahulik and Jerry Holkins. Includes
+> news and commentary.
+
+Nothing *within* one page marks that as boilerplate. What marks it is that it
+does not vary: a punchline belongs to its strip, a tagline belongs to the site.
+So the test is across the feed rather than within the page — if another entry
+already carries this exact caption, neither of them is a caption.
+
+Self-healing rather than perfect. The first entry cannot know, so it stores the
+text; the second recognises the repeat, and `_clear_feed_boilerplate_title` drops
+it from every row of that feed at once (and from the in-memory title cache, which
+would otherwise keep serving it until a restart). Worst case is a missing caption
+on one post instead of a wrong one on every post.
+
+Scoped to a single feed on purpose: two different sites may legitimately share a
+sentence, and `image_alt` is never touched — only the title, which is the field
+that fell back to `og:description` in the first place.
+
+## A webcomic wants a different image in the list than in the article
+
+Penny Arcade strips are ~1050×438 — three panels side by side, which is three
+unreadable smudges at thumbnail size, while panel 1 is legible. The two are
+derivable from each other (`…/comics/<hash>.jpg` ↔
+`…/comics/panels/<hash>-p1.jpg`), so the `thumbnail_from_lead_image` plugin hook
+returns a thumbnail crop from the already-resolved lead image with no extra
+fetch, safe on the render path.
+
+Getting that right needed **three** places to agree, and fixing the first two was
+not enough:
+
+1. `should_skip_source_lookup` — without it the page scan takes the first `<img>`
+   (panel 1) and stores it as the article image, beating the plugin's own
+   og:image fallback. The plugin's docstring described behaviour it never reached.
+2. `get_cached_entry_thumbnail` — the panel-bypass returned `None` rather than
+   falling back, so a cached panel produced *no thumbnail at all*.
+3. `_inject_webcomic_panel_into_bodyless_entry` — re-scanned the source page **at
+   render time** and injected panel 1, discarding the strip that had just been
+   resolved. It now honours the same `should_skip_source_lookup` answer the
+   storing path uses, so a plugin-owned host is never re-scanned; hosts with no
+   plugin opinion still scan, which is the case that injection was written for
+   (mahonoir's enclosure is a share card, so the page really is the only source).
 
 ## Image bytes: the dimension cap is not a size cap
 

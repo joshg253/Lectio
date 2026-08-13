@@ -541,7 +541,7 @@ def create_deviantart_feed(
 
 
 def create_watch_feed(conn: sqlite3.Connection, reader, access_token: str,
-                      feed_title: str = "DeviantArt — Watching") -> tuple[str, str]:
+                      feed_title: str = "DeviantArt Watching") -> tuple[str, str]:
     """Create the single combined 'deviations from everyone you Watch' feed."""
     if not access_token:
         raise ValueError("DeviantArt account not connected")
