@@ -2460,6 +2460,15 @@ The words themselves appear in real comic titles, so the patterns match the
 *gate* shapes only: `the-warning-sign-chapter-4.jpg` and
 `mature-audiences-episode.jpg` still pass, and a test pins that.
 
+Removing the gate exposed what it had been masking: the same feed's text posts
+then resolved to `/images/blog_on.png`, a 99x44 nav button. `<name>_on.png` /
+`<name>_off.png` is the rollover convention for a button's two states, and a
+site that still writes its menu that way carries no other markup saying so. The
+size floor cannot catch it either — the dimensions are neither in the URL nor
+declared on the tag, so nothing measures them without fetching the bytes. That
+shape is rejected too, anchored to the whole basename so `lights-on.jpg` and
+`switched_on_and_off_again.png` are untouched.
+
 ## A caption that never changes is the site's, not the post's
 
 Webcomic caption extraction falls back to `og:description`, because that is

@@ -192,7 +192,15 @@ class LeadImageService:
         # one image on such a page guaranteed not to be the post's own.
         # Separator-optional because these are written every way going
         # ("maturecontentwarning", "mature-content-warning", "age_gate").
-        r"|mature[-_]?content|content[-_]?warning|age[-_]?(?:gate|verif|restrict)|nsfw[-_]?warning",
+        r"|mature[-_]?content|content[-_]?warning|age[-_]?(?:gate|verif|restrict)|nsfw[-_]?warning"
+        # "<name>_on.png" / "<name>_off.png" is the rollover convention for a nav
+        # button's two states, and a site that still writes its menu that way
+        # (monstersoupcomic.com/images/blog_on.png, 99x44) has no other markup
+        # saying so. The size floor cannot help: the dimensions are neither in
+        # the URL nor declared on the tag, so nothing measures it without
+        # fetching the bytes. Anchored to the whole basename so a real filename
+        # that merely ends in those letters is unaffected.
+        r"|/[a-z0-9-]+_(?:on|off)\.(?:png|gif|jpe?g|webp)(?:$|[?#])",
         re.IGNORECASE,
     )
     # Domains that serve only CMS admin/template assets (never user content images).

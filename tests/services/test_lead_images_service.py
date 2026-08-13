@@ -2174,3 +2174,29 @@ def test_a_comic_whose_title_contains_those_words_survives(tmp_path: Path):
         "https://x.test/comics/a-warning-from-space.png",
     ):
         assert _acceptable(service, url) is True, url
+
+
+# --- "<name>_on.png" / "_off.png" is a nav button's two states ---------------
+#
+# monstersoupcomic.com/images/blog_on.png (99x44) became the lead on its text
+# posts once the age-gate graphic stopped winning. The size floor cannot help:
+# the dimensions are neither in the URL nor declared on the tag, so nothing
+# measures it without fetching the bytes.
+
+
+def test_rollover_nav_sprites_are_rejected(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for url in ("http://monstersoupcomic.com/images/blog_on.png",
+                "http://x.test/images/home_off.gif",
+                "http://x.test/nav/about_on.jpg"):
+        assert _acceptable(service, url) is False, url
+
+
+def test_a_filename_merely_ending_in_those_letters_survives(tmp_path: Path):
+    """Anchored to the whole basename, so real titles are unaffected."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for url in ("http://x.test/comics/lights-on.jpg",
+                "http://x.test/comics/the_one.png",
+                "http://x.test/comics/switched_on_and_off_again.png",
+                "http://x.test/comics/2026-08-13-showdown.jpg"):
+        assert _acceptable(service, url) is True, url
