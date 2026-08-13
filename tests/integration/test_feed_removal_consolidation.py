@@ -1382,3 +1382,117 @@ class TestRestarCuratedEntries:
             "folder_id": _root_folder_id(), "feed_url": FEED, "restar_curated": "1",
         })
         assert seen["feed_exists"] is True
+
+
+# ---------------------------------------------------------------------------
+# drop_all_curation — "unsubscribe and drop everything"
+# ---------------------------------------------------------------------------
+
+class TestDropAllCuration:
+    """The way out when the feed itself was the mistake.
+
+    A star or a tag preserves the offline capture, so a plain unsubscribe leaves
+    the posts behind in Saved as orphan archives. Dropping the keep signals
+    first is what makes the removal actually remove.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _archive_schema(self, env):
+        # This module's env fixture builds the meta DB only; the capture store
+        # is a separate database and these tests are about what happens to it.
+        main.ensure_starred_archive_schema()
+
+    def _seed(self, *, tagged: bool, starred: bool, entry_id: str = "e1") -> str:
+        with main.get_reader() as reader:
+            reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+            reader.add_entry({"feed_url": FEED, "id": entry_id, "title": "t", "link": entry_id})
+            if tagged:
+                entry = reader.get_entry((FEED, entry_id))
+                reader.set_tag(entry.resource_id, "lectio.manual_tag.gamedev", "")
+        if starred:
+            with main.get_meta_connection() as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                    (FEED, entry_id))
+                conn.commit()
+        with main.archive_conn() as ac:
+            ac.execute("INSERT OR REPLACE INTO archived_entry (feed_url, entry_id, status, starred_at)"
+                       " VALUES (?, ?, 'complete', 1.0)", (FEED, entry_id))
+        return entry_id
+
+    def _archive_rows(self) -> int:
+        with main.archive_conn() as ac:
+            return ac.execute(
+                "SELECT COUNT(*) FROM archived_entry WHERE feed_url = ?", (FEED,)).fetchone()[0]
+
+    def test_a_tagged_and_starred_entry_loses_everything(self, env):
+        eid = self._seed(tagged=True, starred=True)
+        counts = main.drop_all_curation(FEED)
+
+        assert counts == {"untagged": 1, "unstarred": 1, "archives": 1}
+        assert main.get_manual_tags_for_entry(FEED, eid) == []
+        assert main._entry_is_starred(FEED, eid) is False
+        assert self._archive_rows() == 0
+
+    def test_a_tag_only_entry_loses_its_capture_too(self, env):
+        """The case that motivated it: no star, so nothing else would release it."""
+        eid = self._seed(tagged=True, starred=False)
+        main.drop_all_curation(FEED)
+
+        assert main.entry_has_keep_signal(FEED, eid, starred=False) is False
+        assert self._archive_rows() == 0
+
+    def test_nothing_survives_the_subsequent_purge(self, env, monkeypatch):
+        """End to end: drop, then purge, and the orphan archive is not there."""
+        monkeypatch.setattr(main, "websub_service", MagicMock())
+        eid = self._seed(tagged=True, starred=True)
+        main.drop_all_curation(FEED)
+        with main.get_reader() as reader:
+            with main.get_meta_connection() as conn:
+                main.purge_orphaned_feed(reader, conn, FEED, archive_pending=False)
+                conn.commit()
+
+        assert self._archive_rows() == 0
+        with main.get_meta_connection() as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM orphan_entry_tags WHERE feed_url = ?", (FEED,)
+            ).fetchone()[0] == 0
+        assert main.entry_has_keep_signal(FEED, eid, starred=False) is False
+
+    def test_another_feeds_curation_is_untouched(self, env):
+        self._seed(tagged=True, starred=True)
+        with main.get_reader() as reader:
+            reader.add_feed(FEED2, allow_invalid_url=True, exist_ok=True)
+            reader.add_entry({"feed_url": FEED2, "id": "keep-me", "title": "t", "link": "keep-me"})
+            entry = reader.get_entry((FEED2, "keep-me"))
+            reader.set_tag(entry.resource_id, "lectio.manual_tag.gamedev", "")
+
+        main.drop_all_curation(FEED)
+        assert main.get_manual_tags_for_entry(FEED2, "keep-me") == ["gamedev"]
+
+    def test_an_uncurated_feed_is_a_noop(self, env):
+        self._seed(tagged=False, starred=False, entry_id="plain")
+        counts = main.drop_all_curation(FEED)
+        assert counts["untagged"] == 0
+        assert counts["unstarred"] == 0
+
+    def test_route_runs_it_only_when_asked(self, env, monkeypatch):
+        calls = []
+        monkeypatch.setattr(main, "drop_all_curation",
+                            lambda u: calls.append(u) or {"untagged": 0, "unstarred": 0, "archives": 0})
+        monkeypatch.setattr(main, "websub_service", MagicMock())
+        monkeypatch.setattr(main, "AUTH_ENABLED", False)
+
+        _add_feed_to_folder(FEED, _root_folder_id())
+        client, token = _csrf_client()
+        client.post("/feeds/unsubscribe", data={
+            "_csrf": token, "folder_id": _root_folder_id(), "feed_url": FEED,
+        })
+        assert calls == []
+
+        _add_feed_to_folder(FEED, _root_folder_id())
+        client.post("/feeds/unsubscribe", data={
+            "_csrf": token, "folder_id": _root_folder_id(), "feed_url": FEED,
+            "drop_curation": "1",
+        })
+        assert calls == [FEED]

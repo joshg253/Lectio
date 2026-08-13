@@ -2193,6 +2193,36 @@ Fill mode's `fill_zoom` multiplier (`feed_display_prefs.fill_zoom`, NULL = defau
 
 **Direct-load fallback:** `/thumb` fetches the source image *from the server*, so a host that IP-blocks datacenter traffic (e.g. Cloudflare 403, washingtonstatestandard.com) makes `/thumb` 502 and the list thumbnail break — even though the browser's own (residential) IP can fetch the image fine. The list `<img>` carries the raw image URL in `data-direct`; on a `/thumb` error its `onerror` (`window.thumbImgFallback`, defined pre-body so it exists before any load fails) retries once with that direct URL, letting the browser load the image itself. CSS `object-fit:cover` sizes the un-resized image to the tile. This recovers the thumbnail without evading the block server-side (it's the user's own client fetching, exactly as the article view already does). Only `http(s)` direct URLs are retried, and only once (a `data-triedDirect` guard prevents an error loop); if the direct load also fails, the tile collapses to `is-empty` as before. The same helper backs the JS-derived list thumbnail (it sets `data-direct` to the lead-image URL).
 
+## Unsubscribing has to be able to actually remove things
+
+The keep model has a corollary that only shows up at removal time: a star or a
+tag **preserves the offline capture**, so once the previous section made tags
+survive an unsubscribe, *every* exit from the dialog left the posts behind in
+Saved as orphan archives. That is right when the feed was worth reading and
+wrong when the feed itself was the mistake — and the only way out was to untag
+and unstar every entry by hand first.
+
+`drop_all_curation` is the fourth choice. Order is load-bearing:
+
+1. **Tags come off first.** `apply_star_state(False)` consults
+   `entry_has_keep_signal`, so unstarring while a tag remains would (correctly)
+   refuse to release the capture.
+2. **Then the star.**
+3. **Then the archive, synchronously.** `enqueue_removal` only marks the row
+   `pending_removal` for a background worker, and the feed is about to
+   disappear — so `delete_archive` runs the cascade immediately instead, keeping
+   assets another entry still references.
+
+`archived_entries` (the Archive *state*, not the capture) needs no handling:
+with every capture gone, `_purge_dead_entry_meta` treats the whole feed as
+uncaptured and drops all of its per-entry meta in one pass.
+
+Two guards in the UI, because this is the only irreversible choice in the dialog
+— it deletes the offline copies, so there is nothing left to undo it from. It
+carries a `confirm()` naming the number of posts, and the re-star checkbox is
+disabled and cleared while it is selected, since "bring these to the top of the
+Inbox" and "delete these" contradict each other.
+
 ## A tag has to survive an unsubscribe, because a star does
 
 Stars and tags are the same promise — "keep this" — but they are stored in

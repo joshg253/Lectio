@@ -13353,6 +13353,62 @@ def restar_curated_entries(feed_url: str) -> int:
     return len(curated)
 
 
+def drop_all_curation(feed_url: str) -> dict[str, int]:
+    """Strip every keep signal from a feed so unsubscribing really removes it.
+
+    The counterpart to keeping: sometimes a feed was a mistake, and its stars and
+    tags are part of the mistake. Without this the only ways out were to keep the
+    curation, or to untag and unstar every entry by hand first — because a tag or
+    a star preserves the offline capture, so a plain unsubscribe would leave the
+    posts behind in Saved as orphan archives.
+
+    Order is load-bearing. Tags come off first: ``apply_star_state(False)``
+    consults ``entry_has_keep_signal``, so unstarring while a tag remains would
+    (correctly) refuse to release the capture. Archives are then deleted
+    explicitly rather than left to ``enqueue_removal``, which only marks the row
+    ``pending_removal`` for a background worker — the feed is about to disappear,
+    so the cascade has to be synchronous and provable. ``delete_archive`` keeps
+    assets that another entry still references.
+
+    ``archived_entries`` (the Archive *state*, not the capture) needs no handling:
+    with every capture gone, ``_purge_dead_entry_meta`` treats the whole feed as
+    uncaptured and drops all its per-entry meta.
+
+    Returns counts of what was removed.
+    """
+    counts = {"untagged": 0, "unstarred": 0, "archives": 0}
+
+    entries: list[tuple[str, object]] = []
+    with get_reader() as reader:
+        for entry in reader.get_entries(feed=feed_url):
+            entries.append((str(entry.id), entry.resource_id))
+
+    for entry_id, resource_id in entries:
+        with get_reader() as reader:
+            has_tags = bool(get_manual_tags_for_resource(reader, resource_id))
+        if has_tags:
+            set_manual_tags_for_entry(feed_url, entry_id, "")
+            counts["untagged"] += 1
+
+        if _entry_is_starred(feed_url, entry_id):
+            apply_star_state(feed_url, entry_id, False)
+            counts["unstarred"] += 1
+
+        try:
+            if starred_archive_service.delete_archive(feed_url, entry_id):
+                counts["archives"] += 1
+        except Exception:  # noqa: BLE001
+            LOGGER.warning("[drop] archive delete failed for %s/%s", feed_url, entry_id, exc_info=True)
+
+    # Tags an orphan capture picked up while its feed was already gone, plus
+    # anything a previous partial removal left; harmless when empty.
+    with get_meta_connection() as conn:
+        conn.execute("DELETE FROM orphan_entry_tags WHERE feed_url = ?", (feed_url,))
+        conn.commit()
+
+    return counts
+
+
 def mark_entry_read_everywhere(feed_url: str, entry_id: str) -> None:
     """Mark an entry read at both levels, the way a triage action means it.
 
@@ -26369,6 +26425,7 @@ def unsubscribe_feed(
     migrate_curation_to: str | None = Form(default=None),
     keep_entries: str = Form(default=""),
     restar_curated: str = Form(default=""),
+    drop_curation: str = Form(default=""),
 ):
     normalized_read_filter = normalize_read_filter(read_filter)
     sort_query_s = build_sort_query(sort_by, sort_dir)
@@ -26385,6 +26442,13 @@ def unsubscribe_feed(
         # still readable and so the capture it enqueues is flushed by the
         # force-archive both branches below already perform.
         restarred = restar_curated_entries(feed_url) if normalize_star_only(restar_curated) else 0
+
+        # "Unsubscribe and drop everything": strip the keep signals BEFORE the
+        # removal, so the purge below finds nothing worth preserving and the
+        # posts do not survive in Saved as orphan archives.
+        dropped: dict[str, int] | None = (
+            drop_all_curation(feed_url) if normalize_star_only(drop_curation) else None
+        )
 
         with get_meta_connection() as conn:
             conn.execute(
@@ -26428,6 +26492,12 @@ def unsubscribe_feed(
                             archive_pending=_migrate_to is None,
                             migrate_curation_to=_migrate_to,
                         )
+        if dropped:
+            message = (
+                "Feed unsubscribed; "
+                f"{dropped['untagged']} untagged, {dropped['unstarred']} unstarred, "
+                f"{dropped['archives']} offline cop{'y' if dropped['archives'] == 1 else 'ies'} deleted."
+            )
         if restarred:
             message += (
                 f" {restarred} curated post{'' if restarred == 1 else 's'}"

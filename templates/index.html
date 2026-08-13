@@ -1891,10 +1891,15 @@
           <label class="action-modal-label unsub-migrate-select-all-row"><input type="checkbox" id="unsub-migrate-select-all" checked /> Select all</label>
           <div id="unsub-migrate-items" class="unsub-migrate-items"></div>
         </div>
-        {# Applies to all three choices above — the curated items survive in each
-           case, they just survive somewhere different. Unchecked by default:
-           it reorders the Inbox, which is not what a plain unsubscribe should
-           do unasked. #}
+        {# The way out when the feed itself was the mistake. Without it the only
+           options preserve the curation, and a star or tag holds the offline
+           capture — so "just unsubscribe" still leaves the posts in Saved. #}
+        <label class="action-modal-label unsub-migrate-drop-row"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-drop" value="drop" /> Unsubscribe and drop everything (untag, unstar and delete the offline copies)</label>
+        {# Applies to the three keeping choices — the curated items survive in
+           each, they just survive somewhere different. Meaningless under "drop
+           everything", which the JS enforces by disabling it there. Unchecked by
+           default: it reorders the Inbox, which is not what a plain unsubscribe
+           should do unasked. #}
         <label class="action-modal-label unsub-migrate-restar-row"><input type="checkbox" id="unsub-migrate-restar" /> Star them and set the date to now, so they show at the top of the Inbox</label>
       </div>
       <div class="action-modal-actions">

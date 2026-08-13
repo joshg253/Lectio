@@ -6717,6 +6717,8 @@ mark.highlight-mark {
 .unsub-migrate-select-all-row { font-size: 0.85rem; margin: 0.35rem 0 0; }
 /* Sits under the three choices and applies to all of them, so it gets a
    rule above it rather than reading as a fourth option. */
+/* The destructive choice, set apart from the three that keep something. */
+.unsub-migrate-drop-row { color: var(--danger, #c0392b); }
 .unsub-migrate-restar-row { font-size: 0.85rem; margin: 0.6rem 0 0;
   padding-top: 0.55rem; border-top: 1px solid var(--line); }
 .unsub-migrate-items { margin: 0.35rem 0 0.6rem; max-height: 11rem; overflow-y: auto; font-size: 0.85rem; }
