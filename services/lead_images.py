@@ -1936,13 +1936,37 @@ class LeadImageService:
                 # Always persist the inline image so fast_only=True lookups at
                 # render time find it in the cache without re-parsing the entry.
                 self.store_entry_lead_image(feed_url_str, entry_id_str, inline)
-                # For feeds manually locked to og_scrape, the source page is the
-                # authoritative image source — fall through even when an inline
-                # image exists (e.g. album cover) so we can find the real hero image.
+                # On an og_scrape feed the source page is the authoritative image
+                # source — fall through even when an inline image exists (e.g. an
+                # album cover) so we can find the real hero image.
+                #
+                # This deliberately does NOT require `manual`. A DETECTED
+                # og_scrape means source scraping is what has actually been
+                # producing this feed's images, and taking the inline shortcut
+                # anyway breaks exactly the posts that differ from the rest.
+                # sonarsource.com/blog is the case in hand: most of its posts
+                # carry no body image at all, so they scrape their og:image
+                # correctly and the feed detects as og_scrape — but the two or
+                # three posts that DO embed a mid-article screenshot short-
+                # circuited here and got that screenshot as their hero and
+                # thumbnail, while "the ones surrounding them are fine". A
+                # screenshot the author dropped mid-paragraph is not the post's
+                # lead image; the og:image the publisher nominated is.
+                #
+                # The chunk backfill (_do_backfill_entry_list) already scrapes the
+                # source for any og_scrape feed regardless of `manual`, so this
+                # also stops the two paths from disagreeing about the same entry.
+                #
                 # Webcomic feeds behave the same way: the inline enclosure is only a
                 # small thumbnail (e.g. /comicsthumbs/) with no hover text, while the
                 # source page carries the full-resolution comic panel and its alt/title.
-                if not ((strategy == "og_scrape" and manual) or strategy == "webcomic"):
+                #
+                # Falling through cannot lose the inline image: it is already
+                # stored above, and the `elif not inline` below refuses to
+                # overwrite it with None when the source fetch comes up empty.
+                # Nor can it demote the feed — redetection checks
+                # _found_og_scrape before _found_inline.
+                if not (strategy == "og_scrape" or strategy == "webcomic"):
                     continue
 
             entry_link = str(getattr(entry, "link", "") or "")

@@ -1386,6 +1386,102 @@ def test_og_scrape_manual_keeps_inline_when_source_misses(tmp_path: Path, monkey
     assert row["image_url"] == inline_img, "transient source miss clobbered the inline image"
 
 
+def test_detected_og_scrape_prefers_source_over_a_mid_body_image(tmp_path: Path, monkeypatch):
+    """A DETECTED og_scrape feed must scrape the source too, not just a manual one.
+
+    sonarsource.com/blog: most posts carry no body image, so they scrape their
+    og:image and the feed detects as og_scrape. The two or three posts that DO
+    embed a mid-article screenshot used to short-circuit on that inline image and
+    take the screenshot as their hero and thumbnail, while every post around them
+    was fine. The publisher's og:image is the lead; a screenshot dropped
+    mid-paragraph is not.
+    """
+    db_path = tmp_path / "meta.sqlite"
+    feed = "https://www.sonarsource.com/rss/blog.xml"
+    body_img = "https://assets.example.com/a/openinterminal-issue.png"
+    og_img = "https://assets.example.com/b/openinterminal-blog-landscape.webp"
+    entry = _FakeEntry(
+        feed_url=feed,
+        entry_id="p-sonar",
+        link="https://www.sonarsource.com/blog/escape-from-applescript/",
+        content_html=f'<p>we are presented with a finding:</p><img src="{body_img}"/><p>more</p>',
+    )
+    service = _build_service(db_path, [entry])
+    # Detected, NOT manually locked — the whole point of the regression.
+    service.store_feed_strategy(feed, "og_scrape", manual=False)
+    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda *a, **k: og_img)
+
+    service.fetch_and_store_lead_images_for_feed(feed, force_retry_negative=True)
+
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-sonar",)
+        ).fetchone()
+    assert row is not None
+    assert row["image_url"] == og_img, "mid-body screenshot won over the publisher's og:image"
+
+
+def test_detected_og_scrape_keeps_inline_when_source_misses(tmp_path: Path, monkeypatch):
+    """Falling through must not cost the inline image when the source yields nothing.
+
+    Same protection the manual case already had — a fresh post whose og:image is
+    not generated yet keeps its body image rather than losing its thumbnail.
+    """
+    db_path = tmp_path / "meta.sqlite"
+    feed = "https://www.sonarsource.com/rss/blog.xml"
+    body_img = "https://assets.example.com/a/screenshot.png"
+    entry = _FakeEntry(
+        feed_url=feed,
+        entry_id="p-fresh",
+        link="https://www.sonarsource.com/blog/fresh/",
+        content_html=f'<p>x</p><img src="{body_img}"/>',
+    )
+    service = _build_service(db_path, [entry])
+    service.store_feed_strategy(feed, "og_scrape", manual=False)
+    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda *a, **k: None)
+
+    service.fetch_and_store_lead_images_for_feed(feed, force_retry_negative=True)
+
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-fresh",)
+        ).fetchone()
+    assert row is not None
+    assert row["image_url"] == body_img
+
+
+def test_detected_inline_feed_still_short_circuits(tmp_path: Path, monkeypatch):
+    """The shortcut still holds for feeds whose images really are inline.
+
+    Guards the scope of the fix: only og_scrape (and webcomic) fall through, so
+    an inline feed does not start fetching a source page per entry.
+    """
+    db_path = tmp_path / "meta.sqlite"
+    feed = "https://inline.example/feed"
+    body_img = "https://inline.example/img/cover.jpg"
+    entry = _FakeEntry(
+        feed_url=feed,
+        entry_id="p-inline",
+        link="https://inline.example/post/",
+        content_html=f'<img src="{body_img}"/>',
+    )
+    service = _build_service(db_path, [entry])
+    service.store_feed_strategy(feed, "inline", manual=False)
+
+    def _boom(*a, **k):
+        raise AssertionError("inline feed must not fetch the source page")
+
+    monkeypatch.setattr(service, "_fetch_source_lead_image", _boom)
+
+    service.fetch_and_store_lead_images_for_feed(feed, force_retry_negative=True)
+
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-inline",)
+        ).fetchone()
+    assert row is not None and row["image_url"] == body_img
+
+
 # --- inline <svg> thumbnails (PR5) -----------------------------------------
 
 _INLINE_SVG = (
