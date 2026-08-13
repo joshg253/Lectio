@@ -30,6 +30,9 @@ Self-hosted feed reader, triage, and workflow app with optional multi-user suppo
 
 ## Docs
 - Update `README.md` for user-visible behavior changes or feature changes.
-- Update `ARCHITECTURE.md` for design rationale, layering, tenancy, or state-model changes.
+- Update the architecture docs for design rationale, layering, tenancy, or state-model
+  changes: `ARCHITECTURE.md` is the index and holds only the cross-cutting notes;
+  the rationale itself lives in `docs/architecture/` (tenancy, feeds, views, images,
+  reading, saved, apis). Add to the file for the area you changed.
 - Update `Plan.md` for future work, deferred work, or intentional follow-ups.
 - When changing `.env`, mirror the same keys, comments, and safe defaults in `.env.example`.

@@ -11,122 +11,6 @@ measurement/investigation jobs, then scheduled or genuinely low-urgency
 work, then the two standing watch-lists, then the one big multi-session
 project last.
 
-### "Not dupes" dismissal — no un-dismiss UI yet
-
-Shipped 2026-08-10: `POST /feeds/duplicates/dismiss` records a group's exact
-feed-URL set in `dedup_dismissed`, and every completed `/feeds/combine` also
-auto-dismisses (survivor + sources), so a group never silently reappears
-after a real decision. There is deliberately no surface to *view or undo* a
-dismissal — a settings row listing dismissed groups with an un-dismiss button
-would be the natural follow-up if a wrong dismissal ever needs clawing back.
-Not built since it wasn't asked for yet.
-
-### CodeQL board — watch-note
-
-Board is at zero open alerts as of 2026-08-09 (PR #190 closed out the last 5:
-4× `py/polynomial-redos`, 1× `py/stack-trace-exposure` — detail in that PR's
-history). **If the reflective-XSS class keeps recurring**, the repo already has the pattern
-for it: `.github/codeql/queries/` holds guard-aware copies of the SSRF and
-path-injection queries that model our audited guards as sanitizer barriers, with
-the stock versions excluded in `codeql-config.yml`. A `LectioReflectiveXss.ql`
-modeling `html_sanitize.sanitize_html` / `sanitize_inline_title` as barriers would
-end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, and
-excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
-`py/full-ssrf` was.
-
-### "Filter this view" — shipped 2026-08-11, two follow-ups
-
-Built as decided: **(a)** a local instant-feedback filter over the posts list
-(`#posts-filter-input`, matching title / link / feed name) plus **(c)** a
-server-side *predicate* move, `POST /entries/move-visible-to-feed`, which
-re-resolves the view's scope and filters unclipped instead of posting the ids the
-browser holds. Rationale in ARCHITECTURE.md ("Filtering a view is not
-searching it"). The pre-existing truncation bug in `Move visible to feed…` is
-fixed by the same route — the menu item is now **Move all shown to feed…** and
-the dialog names both numbers when they differ ("Move the 60 shown posts… 46 are
-loaded here; all 60 are moved"). The `post-item-hidden` footgun was avoided as
-planned: the filter owns `post-item-filtered`, and the move/keyboard-nav
-selectors exclude both.
-
-What was deliberately left:
-
-- **`list_entries_for_feeds` enriches every record it returns**, so both
-  whole-view routes (`/entries/move-visible-to-feed` and the older
-  `/entries/mark-range-read`) pay full display work — thumbnails, favicons,
-  formatted dates — for entries nobody will render. A `light_only=True` that
-  returns the pre-enrichment records would serve both; the move endpoint needs
-  only `feed_url`/`id`/`title`/`link`/`feed_title`, and mark-range-read needs
-  only `feed_url`/`id`. Not done because it touches a hot, heavily-shared
-  function and the existing unbounded caller has been fine in production;
-  measure before building.
-- **`/entries/mark-range-read` ignores the active search.** It passes scope,
-  tag, sort and read/star filters to `list_entries_for_feeds` but never `q`, so
-  "mark everything above this" inside a search resolves the anchor against the
-  unsearched list. Noticed while modeling the move route on it; not fixed here
-  because it is a separate behavior change with its own test surface.
-
-### Auto-file saved articles — the tail
-
-Built and run 2026-07-21: `lectio:saved` went **4,334 → 424**, and the four big
-no-feed hosts are gone from the list. Rationale is in ARCHITECTURE.md ("Saved
-articles"). What remains:
-
-- **guitarplayer.com's 303 articles** — the site's own subscription is a
-  scraped one-article stub (barred as a target), and probing showed many
-  article URLs soft-404. **Decision confirmed 2026-08-09: look for/build a
-  real guitarplayer feed** rather than leaving them as one-off saves or
-  deleting — worth the investigation despite the soft-404s.
-- **The orphaned-star sweep — GO-AHEAD CONFIRMED 2026-08-09.** Delete
-  `saved_entries` rows whose entry is gone (4,508 total, 4,264 on
-  `lectio:saved`). The cause was found and fixed
-  (`backfill_saved_entries_from_archive` re-created them at every startup, and a
-  second bug in the same function was starring *tagged* entries), so a sweep now
-  stays swept. Cleared to run — bulk delete against live data, but confirmed.
-- **166 already-converted stars** — tagged entries starred by that backfill
-  before it was fixed. Indistinguishable from a genuine star-and-tag, so they
-  cannot be surgically reverted; the unstar-tagged pass is what removes them.
-
-### Failing feeds — re-measured 2026-08-12, with work applied
-
-⚠ **The 950 figure from 2026-08-11 was inflated by stale rows** — since fixed
-(see the DeviantArt section): `feed_failure_state` kept a row after a feed was
-unsubscribed, so long-gone feeds still counted. Live truth: **238 failing
-feeds**, of which:
-
-| failure | count | state |
-|---|---|---|
-| unparseable / other | 123 | not yet characterized — **next job** |
-| HTTP 404 | 69 → **60** | 9 fixed by Change URL 2026-08-12 |
-| HTTP 403 | 29 | genuine IP-level walls; email is the only lever |
-| 5xx / conn / TLS | ~14 | mostly transient |
-| bot challenge | 3 | the new detector working |
-
-**Done 2026-08-12.** All 69 live 404s probed (`scripts/probe_dead_feeds.py`,
-read-only by default, paced and honest-UA). 23 had a discoverable replacement;
-**only 13 were same-scope, and 9 of those applied cleanly** — all 9 verified
-fetching real entries afterwards.
-
-**The probe's own lesson: a discovered feed is not a replacement.** A site that
-dropped its feed still serves a homepage, and autodiscovery there returns
-*something*. Swapping a broken feed for a wrong one is worse than leaving it
-broken, because it looks fixed. Two classes had to be rejected by hand:
-
-- **Widening** (8) — a section feed replaced by the site firehose.
-  `blog.google/products/docs/rss` → `blog.google/rss/` is Docs-only → all of
-  Google's blog. Same for `towardsdatascience.com/feed/tagged/python`.
-- **Collision** (2) — `sourcery.ai/blog` and `/changelog` both resolving to the
-  same site-wide feed, which would merge two distinct subscriptions.
-
-**Waiting on a decision (nothing applied):**
-
-- **4 dead feeds whose replacement you already subscribe to** — Change URL
-  refused them as duplicates, so these are just redundant dead rows to
-  unsubscribe: tartanllama, xubuntu, krshrimali, markjames.
-- **10 risky replacements** above — each is a judgement call about scope, not a
-  mechanical fix.
-- **46 with no feed found at all** — host gone or RSS dropped. Unsubscribe
-  candidates, but that needs the go-ahead bulk removal always needs.
-
 ### basslessons.be (FakeFeedz scrape): real bodies, and video/tabs on keep
 
 Asked for 2026-08-12, investigated but **not built**. Everything below is
@@ -218,40 +102,6 @@ Substack.
 **Also unexplained on the same feed:** star and re-fetch do not pull content.
 Not yet diagnosed.
 
-### One stored image per entry, but three feeds want two
-
-Found 2026-08-13, **not built.** Three comic feeds want a different image in the
-list than in the article, and Lectio stores **one** URL per entry — the list crop
-is *derived* from it on the render path, network-free by contract. That works
-only when the crop's URL is derivable:
-
-| feed | article | list | derivable? |
-|---|---|---|---|
-| Penny Arcade | `/comics/x.jpg` | `/comics/panels/x-p1.jpg` | yes — plugin |
-| dresdencodak | `dc_minis_N.jpg` | `dc_minis_N_thumbnail.jpg` | yes, for DC Minis only |
-| mahonoir | `03-10.jpg` | og `0310thumb.png` | **no** (`03-12.jpg` → `12thumb.png`) |
-
-mahonoir needed no code in the end — the publisher ships a purpose-made preview
-card as a media thumbnail, so `media_rss` (manually locked) picks it up. But that
-was luck, and the Tuning panel shows a *better* og:image for those posts that
-nothing can select while another strategy supplies the lead.
-
-The general fix is a second stored URL plus a per-feed "thumbnail source"
-setting (auto / same as article / og:image / media). That is a meta-DB column, so
-it needs the startup per-user migration or existing tenants 500. Worth doing when
-a fourth feed wants it; not before.
-
-**Check what the feed already provides before writing a plugin** — two of three
-needed derivation, one needed only the right strategy.
-
-### og_scrape feeds with no og:image at all
-
-Found in the 2026-08-13 lead-image sweep, **no action taken.** Of 585
-auto-detected `og_scrape` feeds, **162 entries' source pages carry no `og:image`**
-— they fall back to a body image, which is correct for them. Not broken, but
-that bucket is where any future "odd body image was picked" report will come
-from, so it is worth knowing it exists before re-diagnosing from scratch.
-
 ### Feed known-migrations into discovery, so a 404 is not the end
 
 Idea from the 2026-08-12 404 sweep, **not built.** Working through ~40 dead feeds
@@ -291,6 +141,243 @@ feedparser will happily bless a feed reader then refuses), and must not widen
 scope silently: a category feed replaced by the site firehose is a wrong answer
 that looks like a right one.
 
+### Failing feeds — re-measured 2026-08-12, with work applied
+
+⚠ **The 950 figure from 2026-08-11 was inflated by stale rows** — since fixed
+(see the DeviantArt section): `feed_failure_state` kept a row after a feed was
+unsubscribed, so long-gone feeds still counted. Live truth: **238 failing
+feeds**, of which:
+
+| failure | count | state |
+|---|---|---|
+| unparseable / other | 123 | not yet characterized — **next job** |
+| HTTP 404 | 69 → **60** | 9 fixed by Change URL 2026-08-12 |
+| HTTP 403 | 29 | genuine IP-level walls; email is the only lever |
+| 5xx / conn / TLS | ~14 | mostly transient |
+| bot challenge | 3 | the new detector working |
+
+**Done 2026-08-12.** All 69 live 404s probed (`scripts/probe_dead_feeds.py`,
+read-only by default, paced and honest-UA). 23 had a discoverable replacement;
+**only 13 were same-scope, and 9 of those applied cleanly** — all 9 verified
+fetching real entries afterwards.
+
+**The probe's own lesson: a discovered feed is not a replacement.** A site that
+dropped its feed still serves a homepage, and autodiscovery there returns
+*something*. Swapping a broken feed for a wrong one is worse than leaving it
+broken, because it looks fixed. Two classes had to be rejected by hand:
+
+- **Widening** (8) — a section feed replaced by the site firehose.
+  `blog.google/products/docs/rss` → `blog.google/rss/` is Docs-only → all of
+  Google's blog. Same for `towardsdatascience.com/feed/tagged/python`.
+- **Collision** (2) — `sourcery.ai/blog` and `/changelog` both resolving to the
+  same site-wide feed, which would merge two distinct subscriptions.
+
+**Waiting on a decision (nothing applied):**
+
+- **4 dead feeds whose replacement you already subscribe to** — Change URL
+  refused them as duplicates, so these are just redundant dead rows to
+  unsubscribe: tartanllama, xubuntu, krshrimali, markjames.
+- **10 risky replacements** above — each is a judgement call about scope, not a
+  mechanical fix.
+- **46 with no feed found at all** — host gone or RSS dropped. Unsubscribe
+  candidates, but that needs the go-ahead bulk removal always needs.
+
+### Finish the Instapaper clone (Read Mode follow-ups)
+
+The read-later app (Save any article, Saved sidebar view, Read Mode at
+`GET /read`) and its deferred finishing touches (archived-aware counts,
+mark-read-after-last-page, image prefetch, dates/sort/Archive-button
+readability, Delete/Archive working on tag-kept items, and the Archive vs.
+Delete model — Archive keeps tags/offline capture, Delete releases both) all
+shipped 2026-07-28/29. Full rationale in ARCHITECTURE.md. One piece from
+that work is not yet safe to use:
+
+**⚠ Settings → Feeds → Utilities → Archive old stars — DO NOT RUN YET.**
+The cutoff (7d/30d/90d/6mo/1yr) sorts on `saved_at`, but `saved_at` is not a
+real star date for most rows: 6,091 of 10,002 stars carry a `saved_at` in
+2026-06, which is when multi-user went live and the migration stamped its
+own run date instead of preserving the original — mostly years-old
+Inoreader stars wearing a seven-week-old timestamp. A 30-day cutoff would
+sweep those 6,091 in and a 90-day cutoff would protect them, neither for
+any real reason. **Fix before use: offer the date basis, default to
+publish date** (asks the better question anyway — "articles from 2019 I
+have still never opened"). Only 419 of 10,002 stars have a genuine
+Lectio-made `saved_at`; the rest are either real pre-migration dates
+(3,492) or the migration timestamp (6,091).
+
+### Phone polish — shipped 2026-08-11, one rough edge left
+
+From a phone testing pass: pull down in an article to toggle Reader view (and
+again to come back), Back now walks article → feed → folder → folder drawer
+before leaving, and the Global Note no longer opens underneath the folder
+drawer. Rationale in ARCHITECTURE.md ("Back on a phone walks the view stack",
+"Pull down in an article for Reader view").
+
+- **Back leaving the app is now accepted, not fought.** Installing as a WebAPK
+  works (manifest + worker pass every installability check, confirmed via CDP:
+  zero errors) and it *still* exits, because Android exits any app at its root.
+  There is no configuration that changes that. Resume-on-open is the answer, and
+  the in-page guard is now a nicety rather than the mechanism. **Do not spend more
+  time trying to prevent the exit.** If resume ever misses a case, extend what is
+  saved rather than re-litigating the history stack.
+- **Read Mode has no resume.** `/read` keeps its own navigation and is untouched
+  by the position-saving above; the Supernote still reopens at the list. Worth
+  doing if it annoys, and cheap — the same localStorage key, a different restore
+  target.
+- **The Back guard is best-effort, by browser design.** Chrome's history
+  manipulation intervention skips entries pushed without user activation, so a
+  spare re-armed inside a `popstate` handler can be walked straight past — seen
+  on a Galaxy S21+ as two toggles then the tab closing, on code that toggled
+  indefinitely under headless Chromium (which does not apply the intervention).
+  Re-arming from real gestures narrows it; nothing closes it. **Installing to the
+  home screen is the actual fix** and the manifest now exists for that. If this
+  is still hit while installed, the next lead is whether standalone mode changes
+  the intervention's behaviour — do not just add more spares.
+- **Read Mode has no equivalent Back guard.** `/read` (the Supernote view) is a
+  two-pane layout with the tree always visible, so there is no drawer for Back to
+  toggle at the end of its chain — the trick used in the main app has nothing to
+  land on. Back out of the Read Mode list still leaves. Left alone rather than
+  invented: a Back that visibly does nothing is worse than one that exits. If it
+  bites, the fix is to give Read Mode a collapsible tree first.
+- **Back never exits the app on a phone or tablet, by request.** The first cut
+  ended the chain by letting the next press leave; in use that closed the tab
+  mid-read.
+  Back now toggles the folder drawer open/closed at the end of the chain,
+  indefinitely. The trade is deliberate and worth restating before anyone
+  "fixes" it: on a phone you cannot reverse out of Lectio to the previous site,
+  and you cannot Back your way to an earlier folder or feed — the tree is how you
+  navigate. Closing the tab or switching apps still works normally, and desktop
+  is untouched (`isSingleMode()` gates all of it).
+- **External links are marked in three places, and one of them is the real fix.**
+  The sanitizer marks them at ingest, so bodies stored *before* 2026-08-11 carry
+  no `target` and rely on the two client-side capture listeners (main app,
+  `reader.js`). A one-off pass re-sanitizing stored summaries would let the
+  listeners go, but they are ~10 lines each and also cover anything injected at
+  runtime, so there is no pressing reason to.
+- **The gesture's return trip is only as good as the button.** Pull-to-Reader
+  dispatches a click on `#entry-readability-button`, so if activating Reader view
+  fails (a dead source URL, say) the second pull tries to activate again rather
+  than coming back. That is the button's existing behavior, not the gesture's,
+  but it shows up more now that the gesture makes it easy to trigger.
+
+## Findings (recorded so they are not re-diagnosed)
+
+Not work items. Each is something measured on the live library that
+explains a class of future report; check here before investigating one.
+
+### One stored image per entry, but three feeds want two
+
+Found 2026-08-13, **not built.** Three comic feeds want a different image in the
+list than in the article, and Lectio stores **one** URL per entry — the list crop
+is *derived* from it on the render path, network-free by contract. That works
+only when the crop's URL is derivable:
+
+| feed | article | list | derivable? |
+|---|---|---|---|
+| Penny Arcade | `/comics/x.jpg` | `/comics/panels/x-p1.jpg` | yes — plugin |
+| dresdencodak | `dc_minis_N.jpg` | `dc_minis_N_thumbnail.jpg` | yes, for DC Minis only |
+| mahonoir | `03-10.jpg` | og `0310thumb.png` | **no** (`03-12.jpg` → `12thumb.png`) |
+
+mahonoir needed no code in the end — the publisher ships a purpose-made preview
+card as a media thumbnail, so `media_rss` (manually locked) picks it up. But that
+was luck, and the Tuning panel shows a *better* og:image for those posts that
+nothing can select while another strategy supplies the lead.
+
+The general fix is a second stored URL plus a per-feed "thumbnail source"
+setting (auto / same as article / og:image / media). That is a meta-DB column, so
+it needs the startup per-user migration or existing tenants 500. Worth doing when
+a fourth feed wants it; not before.
+
+**Check what the feed already provides before writing a plugin** — two of three
+needed derivation, one needed only the right strategy.
+
+### og_scrape feeds with no og:image at all
+
+Found in the 2026-08-13 lead-image sweep, **no action taken.** Of 585
+auto-detected `og_scrape` feeds, **162 entries' source pages carry no `og:image`**
+— they fall back to a body image, which is correct for them. Not broken, but
+that bucket is where any future "odd body image was picked" report will come
+from, so it is worth knowing it exists before re-diagnosing from scratch.
+
+### "Not dupes" dismissal — no un-dismiss UI yet
+
+Shipped 2026-08-10: `POST /feeds/duplicates/dismiss` records a group's exact
+feed-URL set in `dedup_dismissed`, and every completed `/feeds/combine` also
+auto-dismisses (survivor + sources), so a group never silently reappears
+after a real decision. There is deliberately no surface to *view or undo* a
+dismissal — a settings row listing dismissed groups with an un-dismiss button
+would be the natural follow-up if a wrong dismissal ever needs clawing back.
+Not built since it wasn't asked for yet.
+
+### CodeQL board — watch-note
+
+Board is at zero open alerts as of 2026-08-09 (PR #190 closed out the last 5:
+4× `py/polynomial-redos`, 1× `py/stack-trace-exposure` — detail in that PR's
+history). **If the reflective-XSS class keeps recurring**, the repo already has the pattern
+for it: `.github/codeql/queries/` holds guard-aware copies of the SSRF and
+path-injection queries that model our audited guards as sanitizer barriers, with
+the stock versions excluded in `codeql-config.yml`. A `LectioReflectiveXss.ql`
+modeling `html_sanitize.sanitize_html` / `sanitize_inline_title` as barriers would
+end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, and
+excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
+`py/full-ssrf` was.
+
+## Later
+
+*Moved down from Now on 2026-08-13: real, but not what is next.*
+
+### "Filter this view" — shipped 2026-08-11, two follow-ups
+
+Built as decided: **(a)** a local instant-feedback filter over the posts list
+(`#posts-filter-input`, matching title / link / feed name) plus **(c)** a
+server-side *predicate* move, `POST /entries/move-visible-to-feed`, which
+re-resolves the view's scope and filters unclipped instead of posting the ids the
+browser holds. Rationale in ARCHITECTURE.md ("Filtering a view is not
+searching it"). The pre-existing truncation bug in `Move visible to feed…` is
+fixed by the same route — the menu item is now **Move all shown to feed…** and
+the dialog names both numbers when they differ ("Move the 60 shown posts… 46 are
+loaded here; all 60 are moved"). The `post-item-hidden` footgun was avoided as
+planned: the filter owns `post-item-filtered`, and the move/keyboard-nav
+selectors exclude both.
+
+What was deliberately left:
+
+- **`list_entries_for_feeds` enriches every record it returns**, so both
+  whole-view routes (`/entries/move-visible-to-feed` and the older
+  `/entries/mark-range-read`) pay full display work — thumbnails, favicons,
+  formatted dates — for entries nobody will render. A `light_only=True` that
+  returns the pre-enrichment records would serve both; the move endpoint needs
+  only `feed_url`/`id`/`title`/`link`/`feed_title`, and mark-range-read needs
+  only `feed_url`/`id`. Not done because it touches a hot, heavily-shared
+  function and the existing unbounded caller has been fine in production;
+  measure before building.
+- **`/entries/mark-range-read` ignores the active search.** It passes scope,
+  tag, sort and read/star filters to `list_entries_for_feeds` but never `q`, so
+  "mark everything above this" inside a search resolves the anchor against the
+  unsearched list. Noticed while modeling the move route on it; not fixed here
+  because it is a separate behavior change with its own test surface.
+
+### Auto-file saved articles — the tail
+
+Built and run 2026-07-21: `lectio:saved` went **4,334 → 424**, and the four big
+no-feed hosts are gone from the list. Rationale is in ARCHITECTURE.md ("Saved
+articles"). What remains:
+
+- **guitarplayer.com's 303 articles** — the site's own subscription is a
+  scraped one-article stub (barred as a target), and probing showed many
+  article URLs soft-404. **Decision confirmed 2026-08-09: look for/build a
+  real guitarplayer feed** rather than leaving them as one-off saves or
+  deleting — worth the investigation despite the soft-404s.
+- **The orphaned-star sweep — GO-AHEAD CONFIRMED 2026-08-09.** Delete
+  `saved_entries` rows whose entry is gone (4,508 total, 4,264 on
+  `lectio:saved`). The cause was found and fixed
+  (`backfill_saved_entries_from_archive` re-created them at every startup, and a
+  second bug in the same function was starring *tagged* entries), so a sweep now
+  stays swept. Cleared to run — bulk delete against live data, but confirmed.
+- **166 already-converted stars** — tagged entries starred by that backfill
+  before it was fixed. Indistinguishable from a genuine star-and-tag, so they
+  cannot be surgically reverted; the unstar-tagged pass is what removes them.
+
 ### Cross-feed duplicate scan — the dupes you can actually feel
 
 **RE-MEASURED 2026-07-22 — auto-filing collapsed almost all of this.** Before
@@ -321,29 +408,6 @@ pre-armed-delete lesson elsewhere in this doc).
 **Also found: 354 orphan star rows** — `saved_entries` holds 4,669 rows for
 `lectio:saved` but reader has only 4,334 matching entries. Harmless but
 inflates counts; worth a sweep if the orphan-star cleanup above ever runs.
-
-### Finish the Instapaper clone (Read Mode follow-ups)
-
-The read-later app (Save any article, Saved sidebar view, Read Mode at
-`GET /read`) and its deferred finishing touches (archived-aware counts,
-mark-read-after-last-page, image prefetch, dates/sort/Archive-button
-readability, Delete/Archive working on tag-kept items, and the Archive vs.
-Delete model — Archive keeps tags/offline capture, Delete releases both) all
-shipped 2026-07-28/29. Full rationale in ARCHITECTURE.md. One piece from
-that work is not yet safe to use:
-
-**⚠ Settings → Feeds → Utilities → Archive old stars — DO NOT RUN YET.**
-The cutoff (7d/30d/90d/6mo/1yr) sorts on `saved_at`, but `saved_at` is not a
-real star date for most rows: 6,091 of 10,002 stars carry a `saved_at` in
-2026-06, which is when multi-user went live and the migration stamped its
-own run date instead of preserving the original — mostly years-old
-Inoreader stars wearing a seven-week-old timestamp. A 30-day cutoff would
-sweep those 6,091 in and a 90-day cutoff would protect them, neither for
-any real reason. **Fix before use: offer the date basis, default to
-publish date** (asks the better question anyway — "articles from 2019 I
-have still never opened"). Only 419 of 10,002 stars have a genuine
-Lectio-made `saved_at`; the rest are either real pre-migration dates
-(3,492) or the migration timestamp (6,091).
 
 ### Page tag extraction grabs the sentence, not the anchors (2026-07-29)
 
@@ -483,61 +547,6 @@ feed rows (2.7MB), and by moving the ~580KB inline script to
   fetch (posts + tree + shells, ~200KB now); a render-splitting/fragment
   endpoint for `.pane-posts`/`.pane-entry` would cut server time further.
 
-### Phone polish — shipped 2026-08-11, one rough edge left
-
-From a phone testing pass: pull down in an article to toggle Reader view (and
-again to come back), Back now walks article → feed → folder → folder drawer
-before leaving, and the Global Note no longer opens underneath the folder
-drawer. Rationale in ARCHITECTURE.md ("Back on a phone walks the view stack",
-"Pull down in an article for Reader view").
-
-- **Back leaving the app is now accepted, not fought.** Installing as a WebAPK
-  works (manifest + worker pass every installability check, confirmed via CDP:
-  zero errors) and it *still* exits, because Android exits any app at its root.
-  There is no configuration that changes that. Resume-on-open is the answer, and
-  the in-page guard is now a nicety rather than the mechanism. **Do not spend more
-  time trying to prevent the exit.** If resume ever misses a case, extend what is
-  saved rather than re-litigating the history stack.
-- **Read Mode has no resume.** `/read` keeps its own navigation and is untouched
-  by the position-saving above; the Supernote still reopens at the list. Worth
-  doing if it annoys, and cheap — the same localStorage key, a different restore
-  target.
-- **The Back guard is best-effort, by browser design.** Chrome's history
-  manipulation intervention skips entries pushed without user activation, so a
-  spare re-armed inside a `popstate` handler can be walked straight past — seen
-  on a Galaxy S21+ as two toggles then the tab closing, on code that toggled
-  indefinitely under headless Chromium (which does not apply the intervention).
-  Re-arming from real gestures narrows it; nothing closes it. **Installing to the
-  home screen is the actual fix** and the manifest now exists for that. If this
-  is still hit while installed, the next lead is whether standalone mode changes
-  the intervention's behaviour — do not just add more spares.
-- **Read Mode has no equivalent Back guard.** `/read` (the Supernote view) is a
-  two-pane layout with the tree always visible, so there is no drawer for Back to
-  toggle at the end of its chain — the trick used in the main app has nothing to
-  land on. Back out of the Read Mode list still leaves. Left alone rather than
-  invented: a Back that visibly does nothing is worse than one that exits. If it
-  bites, the fix is to give Read Mode a collapsible tree first.
-- **Back never exits the app on a phone or tablet, by request.** The first cut
-  ended the chain by letting the next press leave; in use that closed the tab
-  mid-read.
-  Back now toggles the folder drawer open/closed at the end of the chain,
-  indefinitely. The trade is deliberate and worth restating before anyone
-  "fixes" it: on a phone you cannot reverse out of Lectio to the previous site,
-  and you cannot Back your way to an earlier folder or feed — the tree is how you
-  navigate. Closing the tab or switching apps still works normally, and desktop
-  is untouched (`isSingleMode()` gates all of it).
-- **External links are marked in three places, and one of them is the real fix.**
-  The sanitizer marks them at ingest, so bodies stored *before* 2026-08-11 carry
-  no `target` and rely on the two client-side capture listeners (main app,
-  `reader.js`). A one-off pass re-sanitizing stored summaries would let the
-  listeners go, but they are ~10 lines each and also cover anything injected at
-  runtime, so there is no pressing reason to.
-- **The gesture's return trip is only as good as the button.** Pull-to-Reader
-  dispatches a click on `#entry-readability-button`, so if activating Reader view
-  fails (a dead source URL, say) the second pull tries to activate again rather
-  than coming back. That is the button's existing behavior, not the gesture's,
-  but it shows up more now that the gesture makes it easy to trigger.
-
 ### Home-route latency under refresh — measured, partly fixed
 
 Reported 2026-08-11 as "serious delay browsing". Home requests logged a median of
@@ -672,7 +681,6 @@ mechanical file split.
 7. The shared rendering core — do not attempt as part of a mechanical
    split; treat as its own carefully-tested project.
 
-## Later
 
 ### Inoreader replacement — the migration (start ~Dec 2026)
 
