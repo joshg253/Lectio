@@ -13959,9 +13959,15 @@ def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) ->
     return str(soup)
 
 
+# /embed/ is included because publishers link it as well as iframe it. Sonarsource
+# ships its post's video as <a href="https://www.youtube.com/embed/<id>?si=…">, a
+# paragraph on its own — an embed URL wearing an anchor. Following it works, but
+# the video sat on the site and not in the article, which is exactly what this
+# function exists to undo. youtube-nocookie is the same URL shape from the
+# privacy host and would otherwise be missed for no reason.
 _YT_WATCH_URL_RE = re.compile(
     r'^(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/watch\?[^\s]*\bv=|youtu\.be/|'
-    r'youtube\.com/shorts/)[\w-]+',
+    r'youtube\.com/shorts/|(?:youtube|youtube-nocookie)\.com/embed/)[\w-]+',
     re.IGNORECASE,
 )
 
@@ -13981,9 +13987,6 @@ def _embed_standalone_youtube_links(content_html: str) -> str:
     we only convert when the link is the element's sole meaningful content."""
     if not isinstance(content_html, str) or "youtu" not in content_html.lower():
         return content_html
-    if "/embed/" in content_html and "youtube" in content_html.lower():
-        # An embed already exists; still scan, but each match is gated below.
-        pass
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(content_html, "html.parser")

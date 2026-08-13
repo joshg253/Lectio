@@ -2193,6 +2193,36 @@ Fill mode's `fill_zoom` multiplier (`feed_display_prefs.fill_zoom`, NULL = defau
 
 **Direct-load fallback:** `/thumb` fetches the source image *from the server*, so a host that IP-blocks datacenter traffic (e.g. Cloudflare 403, washingtonstatestandard.com) makes `/thumb` 502 and the list thumbnail break — even though the browser's own (residential) IP can fetch the image fine. The list `<img>` carries the raw image URL in `data-direct`; on a `/thumb` error its `onerror` (`window.thumbImgFallback`, defined pre-body so it exists before any load fails) retries once with that direct URL, letting the browser load the image itself. CSS `object-fit:cover` sizes the un-resized image to the tile. This recovers the thumbnail without evading the block server-side (it's the user's own client fetching, exactly as the article view already does). Only `http(s)` direct URLs are retried, and only once (a `data-triedDirect` guard prevents an error loop); if the direct load also fails, the tile collapses to `is-empty` as before. The same helper backs the JS-derived list thumbnail (it sets `data-direct` to the lead-image URL).
 
+## An embed URL wearing an anchor is still an embed
+
+Feeds that lose their oEmbed iframe usually ship the video as a `watch?v=`,
+`youtu.be/` or `/shorts/` link, and `_embed_standalone_youtube_links` rebuilds a
+player from any of those when the link is a paragraph's sole content.
+sonarsource.com ships a fourth shape: the **`/embed/` URL itself**, as a plain
+`<a href>` with descriptive text —
+
+```html
+<p><a href="https://www.youtube.com/embed/<id>?si=…">Escape from AppleScript</a></p>
+```
+
+That is an embed source that happens to be wearing an anchor. It read as "the
+video is on the web post but not in the article", which is precisely what this
+function exists to undo, and it missed in **two** places at once: the URL matcher
+(`_YT_WATCH_URL_RE`) listed only the three link shapes, and `extract_video_id`
+could not name a video from an `/embed/` URL either — so even code that reached
+past the matcher had nothing to build a player from. Both now accept `/embed/`,
+and `youtube-nocookie.com` alongside it, since it is the same URL shape from the
+privacy host.
+
+There was a vestigial `if "/embed/" in content_html: pass` at the top of the
+function, anticipating this case and doing nothing about it. Removed rather than
+left to imply a check that was not happening.
+
+The paragraph-sole rule is unchanged and still the whole scope guard: a link
+inside a sentence stays a link. The anchor's *text* was never required to be a
+bare URL — the test is whether the anchor is its container's only content — so a
+worded link like this one already qualified once the URL shape was recognized.
+
 ## A body image that fails has to be able to try again
 
 The article's hero image has always carried an `onerror` that swaps its `src`
