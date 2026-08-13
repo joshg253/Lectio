@@ -2450,16 +2450,32 @@ flex row. It was written for paizo.com's three 250px cover variants, which are
 inline by default and sat side by side unstyled; the note said `max-width:100%`
 would keep a full-width image one-per-line.
 
-It does not. **A flex item shrinks below its intrinsic width by default**, so
-four 800px comic panels sharing one `<p>` — mahonoir.com stacks a page that way —
-were squeezed onto a single line at roughly 175px each, and `srcset` then
-resolved to the 300w file, so they were genuinely low-res as well as small.
+It does not, for two separate reasons, and `width: auto` is the bigger one. It
+**discards the `width` attribute**, so the used width becomes the intrinsic width
+of whichever `srcset` candidate the browser picked — and `sizes="auto"` inside a
+flex container resolves small, so it picked the 300w file. mahonoir.com stacks a
+comic page as four 800px panels in one `<p>`; they rendered 300x165, two to a
+line, genuinely low-res as well as small.
 
-`flex: 0 0 auto` is the fix and the missing piece of the original reasoning. With
-no shrink the flex base size stays the image's own width, so an 800px panel
-cannot fit beside its siblings, wraps to its own line, and `max-width:100%` caps
-it to the column — the stacked layout the author drew. Three 250px covers still
-share a line, which is what the rule was for.
+The second reason is that **a flex item shrinks below its intrinsic width by
+default**, which is what the original note missed.
+
+Measured in Chromium rather than reasoned about, because the first attempt at
+this fix (adding `flex: 0 0 auto` alone) did not work and the report came back
+unchanged:
+
+| | comic panels | paizo covers |
+|---|---|---|
+| `width: auto` | 300x165, 2/line | 16x21 |
+| without it | 700x384, 1/line | 250x250, sharing a line |
+
+The covers collapsing to 16px is the same bug from the other end: with no width
+attribute honoured and no loaded image, nothing is left to size them.
+
+So `width: auto` is gone and `flex: 0 0 auto` stays. It survives only for
+`.npf_row`, which is what it was there for: Tumblr's row layout sets
+`width: 100%` on its figure images, which would force one per line, and a row is
+the entire point of an npf_row.
 
 ## dresdencodak draws its own list crop, for half its comics
 
