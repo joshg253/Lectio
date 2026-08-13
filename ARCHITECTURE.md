@@ -2443,6 +2443,48 @@ separated by spaces. The file was `Windows11Icon.png`, CamelCase, so the
 `image_url = NULL` and stopped re-resolving, so fixing the rule is only half the
 job — the poisoned rows have to be cleared for the entries to recover.
 
+## Several images in one container are a row — unless they are a comic page
+
+`.entry-content p:has(> img + img)` lays a container's images out as a wrapping
+flex row. It was written for paizo.com's three 250px cover variants, which are
+inline by default and sat side by side unstyled; the note said `max-width:100%`
+would keep a full-width image one-per-line.
+
+It does not. **A flex item shrinks below its intrinsic width by default**, so
+four 800px comic panels sharing one `<p>` — mahonoir.com stacks a page that way —
+were squeezed onto a single line at roughly 175px each, and `srcset` then
+resolved to the 300w file, so they were genuinely low-res as well as small.
+
+`flex: 0 0 auto` is the fix and the missing piece of the original reasoning. With
+no shrink the flex base size stays the image's own width, so an 800px panel
+cannot fit beside its siblings, wraps to its own line, and `max-width:100%` caps
+it to the column — the stacked layout the author drew. Three 250px covers still
+share a line, which is what the rule was for.
+
+## dresdencodak draws its own list crop, for half its comics
+
+Same split as Penny Arcade — whole comic in the article, a legible crop in the
+list — with different naming and, unlike Penny Arcade, a convention the site only
+half keeps:
+
+```
+article : …/uploads/YYYY/MM/dc_minis_<n>.jpg          (#27 is 1500x4875)
+list    : …/uploads/YYYY/MM/dc_minis_<n>_thumbnail.jpg (2500x1000)
+```
+
+Every DC Minis strip checked has its `_thumbnail.jpg` (25, 26, 27); no Dark
+Science page has one (`ds_185`, `ds_186_silder`, `ds_187_silder` all 404). Since
+`thumbnail_from_lead_image` is network-free by contract — it runs on the
+posts-list render path — the plugin cannot check, so it derives only for
+`dc_minis_` and declines where it does not know.
+
+The reverse derivation is deliberately absent. Stripping `_thumbnail` to reach
+the article image works for #26 and #23 and 404s for #25 and #22: those posts
+publish only the `_thumbnail`-named file, which is therefore the comic rather
+than a crop of it. Instead `source_score_adjustment` demotes a `_thumbnail` URL
+while scoring the source page, so the full comic wins the lead on its own merits
+when the page offers both, and the crop still wins when it is all there is.
+
 ## A comic's prev/next arrows are not its lead image
 
 `main.py` has known these as body chrome for a long time (`_COMIC_NAV_ALT_RE`,

@@ -3921,6 +3921,21 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
 .entry-content p:has(> img + img) > img,
 .entry-content div:has(> img + img) > img {
   width: auto;
+  /* flex-shrink:0 is what makes this safe for full-width images, and its
+     absence is what broke them. The rule above was written for paizo's three
+     250px covers, on the reasoning that max-width:100% would keep a big image
+     one-per-line — but a flex item shrinks BELOW its intrinsic width by
+     default, so four 800px comic panels sharing one <p> (mahonoir.com stacks
+     its page that way) were squeezed onto a single line at ~175px each: "a
+     small image for each pane". Worse, srcset then resolved to the 300w
+     variant, so they were genuinely low-res as well as small.
+
+     With no shrink, the flex base size stays the image's own width: 800px
+     cannot fit beside its siblings, so it wraps to its own line and
+     max-width:100% caps it to the column — the stacked layout the author
+     drew. Three 250px covers still share a line, which is what the rule was
+     for. */
+  flex: 0 0 auto;
 }
 /* The caption belongs under the row, not beside it. */
 .entry-content figure:has(> img + img) > figcaption {

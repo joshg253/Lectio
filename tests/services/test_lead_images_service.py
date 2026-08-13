@@ -2265,3 +2265,63 @@ def test_comics_named_after_those_words_survive(tmp_path: Path):
                 "https://x.test/comics/back-to-school.png",
                 "https://dresdencodak.com/wp-content/uploads/2026/08/dc_minis_27.jpg"):
         assert _acceptable(service, url) is True, url
+
+
+# --- dresdencodak: the site draws its own list crop --------------------------
+#
+# The comic is a tall column (#27 is 1500x4875), a sliver at thumbnail size,
+# while ".../dc_minis_27_thumbnail.jpg" is a 2500x1000 landscape crop drawn for
+# exactly this. Same split as Penny Arcade's strip/panel, different naming — and
+# only half kept by the site, which is what bounds the rule.
+
+_DC_FULL = "https://dresdencodak.com/wp-content/uploads/2026/08/dc_minis_27.jpg"
+_DC_THUMB = "https://dresdencodak.com/wp-content/uploads/2026/08/dc_minis_27_thumbnail.jpg"
+_DC_LINK = "https://dresdencodak.com/2026/08/09/dc-minis-27-birthday-blues/"
+
+
+def test_dc_minis_thumbnail_is_derived(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._plugin_thumbnail_variant(entry_link=_DC_LINK, lead_url=_DC_FULL) == _DC_THUMB
+
+
+def test_a_lead_that_is_already_the_crop_is_kept(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._plugin_thumbnail_variant(entry_link=_DC_LINK, lead_url=_DC_THUMB) == _DC_THUMB
+
+
+def test_dark_science_derives_nothing(tmp_path: Path):
+    """ds_185/186/187 have no _thumbnail.jpg — deriving blind would 404 them all.
+
+    thumbnail_from_lead_image is network-free by contract, so the plugin cannot
+    check; it declines where it does not know.
+    """
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for lead in ("https://dresdencodak.com/wp-content/uploads/2026/06/ds_187_silder.jpg",
+                 "https://dresdencodak.com/wp-content/uploads/2026/06/ds_185.jpg"):
+        assert service._plugin_thumbnail_variant(entry_link=_DC_LINK, lead_url=lead) is None
+
+
+def test_another_hosts_dc_minis_name_is_not_claimed(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._plugin_thumbnail_variant(
+        entry_link="https://example.test/x/", lead_url="https://example.test/img/dc_minis_9.jpg"
+    ) is None
+
+
+def test_the_site_crop_is_demoted_while_scoring_the_page(tmp_path: Path):
+    """So the full comic wins the LEAD when the page offers both."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    src = "https://dresdencodak.com/2026/08/09/dc-minis-27-birthday-blues/"
+    assert service._plugin_source_score_adjustment(
+        source_url=src, attrs={}, resolved_url=_DC_THUMB) < 0
+    assert service._plugin_source_score_adjustment(
+        source_url=src, attrs={}, resolved_url=_DC_FULL) == 0
+
+
+def test_penny_arcade_panel_derivation_is_unaffected(tmp_path: Path):
+    """Two plugins now answer thumbnail_from_lead_image; neither may shadow the other."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._plugin_thumbnail_variant(
+        entry_link="https://www.penny-arcade.com/comic/2026/07/27/x",
+        lead_url="https://assets.penny-arcade.com/comics/2026-x.jpg",
+    ) == "https://assets.penny-arcade.com/comics/panels/2026-x-p1.jpg"
