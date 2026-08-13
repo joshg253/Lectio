@@ -505,3 +505,31 @@ The test is membership of `get_all_reader_feed_urls(include_kept=False)`, *not*
 Scoped to the feeds on screen, and rendered as a separate `<span>`: the feed name
 also appears in search, exports and the tree, and baking a status word into it
 would leak everywhere.
+
+## Moved here from saved.md
+
+**A URL can carry a month without carrying a day.** `url_inferred_pubdate` reads
+the `/YYYY/MM/DD/` permalink; `url_inferred_pubmonth` reads `/YYYY/MM/` and
+resolves it to the first of the month. The day is a placeholder, the month is not
+— WordPress generates the permalink from the publish date. It is the last tier in
+`recover_publish_dates.py` for that reason, but on blog.guitar-pro.com (67 of the
+68 entries it recovered) it is also the *only honest* signal: those pages publish
+`dateModified` and nothing else, so mining the page would have dated a 2021 post
+to October 2024. A real month beats a precise-looking lie.
+
+## Refresh pacing
+
+- **Refresh backoff & high-fanout pacing** (`FeedRefreshService.update_feeds`) —
+  failing feeds get exponential *per-feed* backoff. A coarse *per-domain* backoff
+  also exists for hosts that go down, but it is **exempt for high-fanout hosts**
+  (>= `_HIGH_FANOUT_DOMAIN_FEEDS` feeds in the batch, e.g. ~700 youtube.com subs):
+  reader doesn't reliably expose an HTTP status on its exceptions (real YouTube
+  404s arrive with status `None`), so a few dead channels would otherwise look
+  like transport failures and lock the whole domain — which starved every
+  subscription for days. Per-feed backoff handles the dead ones; the domain guard
+  is kept only for small hosts, and there it activates only after several
+  consecutive failures, caps at 1h, and clamps stale locks at read so they
+  self-heal. Requests to a high-fanout host are also **paced**
+  (`_HIGH_FANOUT_PACE_SECONDS`) so a big serial burst isn't throttled into
+  spurious 404s (YouTube 404s a ~700-request burst though each feed is fine
+  singly) — a polite-client measure, feeds to other hosts interleave at full speed.

@@ -457,3 +457,96 @@ Nothing scheduled can fix that: a nightly re-sign yields images dead a quarter o
 What keeps it cheap is the proxy's byte cache, which was already most of the answer: `wixmp.com` is in `_HOTLINK_IMG_HOSTS`, so these images render through `/api/img`, and `_img_cache_key_url` strips `token`/`sig`/`exp` (`_IMG_CACHE_VOLATILE_PARAMS`) from the cache key. Once the bytes are cached under *any* valid token they answer for every later one. So the re-sign fires only when a token has already expired **and** the cache has no copy — one API call per image over its lifetime, not one per view — and a permanently-signed image (21,564 of 21,568 on the live library) never reaches the API at all. The fresh URL is persisted back onto the entry so the list thumbnail starts from it too.
 
 `scripts/refresh_expired_deviantart_images.py` remains as a manual catch-up over the same routine. Note it must use `get_deviantart_user_token()` rather than reading `deviantart_access_token` directly: DA access tokens last an hour, so any batch reading the stored value 401s on almost every run.
+
+## Rendering an entry's markup
+
+> Moved from `tenancy.md`'s security list on 2026-08-13.
+
+- **Presentational formatting is preserved, by enumerated allowlist.** Bold and
+  italic always survived (`b`/`strong`/`i`/`em` are allowed tags), but *centering*
+  did not: `style` was stripped wholesale, `align` was granted only to `img`/`td`/
+  `th`/`tr`, and `<center>` fell through the unknown-tag unwrap. Since feed CSS is
+  never loaded, nothing could restore the author's intent afterwards. Now
+  `<center>` is allowed, `align` extends to block elements (`p`/`div`/`figure`/
+  `figcaption`/`h1`–`h6`/`table` — the same "value-constrained, no scripting
+  surface" reasoning already applied to table cells, which had simply never been
+  extended), and `_sanitize_style_attr` keeps a **fixed table of property →
+  literal values** (`text-align`, `font-style`, `font-weight`,
+  `text-decoration`, `text-transform`, `font-variant`).
+  **Nothing free-form is ever kept**, so there is no place for `url(…)`,
+  `expression(…)`, `-moz-binding`, or an escaped payload to survive — an unlisted
+  property *or* an unlisted value is dropped rather than cleaned-and-kept, and the
+  declarations are re-emitted from the table so the output string is ours.
+  Layout and positioning (`position`, `z-index`, `width`, `display`, `opacity`)
+  are deliberately excluded: without any scripting they still let feed content
+  escape the pane or overlay the app's own UI. The normalized output spacing
+  (`text-align: center`) is load-bearing — `style.css` keys its centering rules
+  off that exact string.
+- **JS-dependent chrome is stripped at render** (`_strip_js_dependent_chrome`).
+  Share widgets and lazy "related posts" carousels only become anything once the
+  source page's own JavaScript runs; we don't run it, so they arrive as rows of
+  dead icons and empty bullets (paizo.com ends every post with a
+  `div.sharing_widget` of href-less anchors plus four
+  `<li class="blog-item loading">` holding a dice spinner). The safety rule is
+  narrow and load-bearing: **only elements with no text *and* no `<img>` are
+  removed**, so a real related-posts block (which has headlines) and a real
+  gallery (which has images) can never match on class name alone.
+- **Sphinx/dvisvgm math sizing** — blogs like eli.thegreenplace.net emit formulas
+  as `<object type="image/svg+xml">` / `<img>` whose *true* rendered height rides on
+  an inline `style="height: Npx"` (the SVGs' intrinsic dimensions are in `pt`, which
+  renders tiny) plus a `valign-mN` baseline class. Since the allowlist strips inline
+  `style`, `_promote_math_height` lifts that px height onto a real `height` attribute
+  (already allowlisted) before the strip; CSS then honors the per-glyph height and
+  `valign-*` baseline instead of flattening every formula to one size. `_MATH_SCALE`
+  (default 1.0) is the single knob to enlarge all math (requires re-ingest to apply).
+- **Reader-view embed re-injection** — `python-readability`'s `.summary()` strips
+  *every* `<iframe>` during extraction (and sometimes keeps the lead image twice),
+  so allowlisted players would vanish from Reader view. `build_readability_response`
+  pulls the allowlisted embeds out of the raw page (`_reinject_readability_embeds`,
+  reusing `_embed_host_allowed`) and appends any the extracted article is missing
+  *before* the sanitizer runs — so the re-injected iframes still get sandboxed by
+  `_sanitize_iframe`. `_dedupe_readability_images` then drops repeated `<img>` tags
+  sharing an `src`. Responsive CSS sizes the iframes (16/9, Spotify fixed-height).
+  Because Reader view is served from Lectio's own origin, relative `src`/`href`
+  URLs would resolve against Lectio and 404: `Document(url=source_url)` lets
+  readability absolutize the summary, and `_absolutize_article_urls` then runs a
+  final `make_links_absolute` pass over the article (covering the BS4 content
+  fallback, which returns its element verbatim) — fixes pages that use
+  page-relative image paths with no `<base>` tag (e.g. fabiensanglard.net).
+- **Feed-side YouTube recovery** — the embed `<iframe>` is stripped at ingest but
+  the raw feed still carries it, so the media scan (`extract_youtube_embeds`,
+  re-parsing the raw feed with sanitize off) caches the video ids and
+  `_inject_recovered_youtube_embeds` refills the empty placeholder it left behind:
+  WordPress' `<figure class="...is-provider-youtube">` **or** ArtStation's
+  `<div class="video-wrapper media-asset...">` (matched by `_YT_EMBED_PLACEHOLDER_RE`).
+  The id scan recognizes both the standard and privacy host (`youtube-nocookie.com`).
+- **Source-page embed recovery (feed pane)** — entries ingested *before*
+  `services.reader_sanitize` stopped stripping `<iframe>` at feed-parse time lost
+  their players, and (unlike the placeholders above) leave *nothing* to refill —
+  no `figure`, no `video-wrapper` — and the raw feed item has often scrolled out
+  of the window, so the feed-side scan can't help. `_inject_recovered_source_embeds` (called from `get_entry_detail`
+  after the cleanups, skipped for native YouTube feeds) handles this: when the
+  stored body has no `<iframe>` and the entry has a source link, it reads the
+  lead-image **source-HTML cache** (shared with the lead-image scraper, so it's
+  often already warm; on a miss it queues `queue_source_html_fetch` and leaves the
+  body unchanged — never blocking the render on a network GET — so the embed fills
+  in on a later open), then `_extract_source_embed_iframes` pulls the allowlisted
+  players (`_embed_host_allowed`) — YouTube rebuilt via `_youtube_embed_html`
+  (honors the host preference), the rest sanitized in place (Bandcamp/SoundCloud
+  esig/track signatures preserved verbatim). `_place_recovered_embeds` then puts
+  each one **in context** rather than dumping them at the bottom: (1) replace a
+  bare body link that points at the same media (so the player takes the place of
+  the link the feed showed instead — matched by video id for YouTube, by the
+  embed's fallback `<a href>` for Bandcamp/SoundCloud), (2) fill empty `<p></p>`
+  placeholders that follow a heading (the stripped embed slots, e.g. theobelisk's
+  `<h3>title</h3><p></p>`) in document order, (3) append leftovers. Mirrors the
+  Reader-view recovery but for the normal entry pane.
+- **Bandcamp single-track embeds** — Bandcamp's `.../tracks=<ids>/esig=<sig>/`
+  player form is domain-locked: Bandcamp validates the Referer against the
+  publisher's site and serves "Sorry, this track or album is not available."
+  anywhere else (confirmed by headless test — the same iframe plays from the
+  publisher domain but not from Lectio). `_strip_bandcamp_track_signature` drops
+  the `tracks`/`esig` path segments so the embed falls back to the plain
+  `album=<id>` player, which embeds on any site and streams the same pre-order/
+  premiere album. Applied to feed-native and source-recovered embeds in
+  `get_entry_detail`, and to both reader-view render paths.

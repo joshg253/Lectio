@@ -14,6 +14,7 @@ shape is defending against.
 - **[images.md](docs/architecture/images.md)** — Choosing, rejecting, sizing and serving the image for a post.
 - **[reading.md](docs/architecture/reading.md)** — Read Mode, offline reading, and offline actions.
 - **[saved.md](docs/architecture/saved.md)** — Read-it-later capture, keeping, and editing a post in place.
+- **[integrations.md](docs/architecture/integrations.md)** — Per-user OAuth destinations, quotas, and the automation that drives them.
 - **[apis.md](docs/architecture/apis.md)** — The sync APIs Lectio speaks to third-party clients.
 
 ## Layering

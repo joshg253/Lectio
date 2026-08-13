@@ -479,3 +479,36 @@ signature of those two paths disagreeing.**
 `_ENTRY_SORT_SQL` is now one expression, defined beside `entry_publication_date`.
 The URL/title inference tiers are not reproducible in SQL and only apply to
 entries this expression already treats as undated.
+
+## Moved here from saved.md
+
+**One layout owner, three modes.** The inline shell in `index.html` resolves
+`wide` / `medium` / `single` from a single `updateSingleMode()`, at 1100px and
+720px. Single-pane mode was removed in `9dab5a8` and revived rather than replaced
+with a phone-specific renderer, and that is the whole design argument: a second
+renderer means every feed-appearance feature — lead images, per-feed thumbnail
+crop and zoom, embeds, the full-image webcomic view — has to be ported to it, and
+every future one silently misses it. The phone runs the same markup, so it
+inherits all of them and everything added later.
+
+**The tree is not re-rendered by pane-swap navigation, so anything the server
+stamped into it goes stale.** `updateScopeActiveState` already re-derives active
+rows and mode blocks for that reason; sidebar tag links now get the same
+treatment, because their server-rendered `folder_id` otherwise survives every SPA
+navigation for the life of the page — open a folder, click Feeds, click a tag,
+and you are back in the folder you left. The stamp reads the URL's *own*
+`folder_id`/`list_feed_url`, captured before the fallbacks in that function
+reassign them from whichever row is still lit: those fallbacks exist to stop
+active-state flicker on bare URLs, and reusing their result here would reproduce
+the staleness rather than fix it. `resume_read_filter` is refreshed alongside,
+since a tag view forces `read_filter=all` and carries the filter to come back to.
+
+**Toolbar listeners must be delegated.** `loadScopePanesWithoutFullRefresh`
+(every sidebar/folder/scope click, and the search form itself) re-renders the
+toolbar, replacing its DOM nodes. Any listener attached directly to a
+`#toolbar-*` node at init dies with the node it was bound to — silently, with no
+console error. That is exactly how the search button came to do nothing at all
+after the first in-page navigation, while still working on a direct URL load
+(which is why it survived testing). The search button, its clear control, the
+query input, and the search form's `submit` handler are therefore all delegated
+from `document`. Wire anything new on this toolbar the same way.

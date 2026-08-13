@@ -1,0 +1,137 @@
+# Integrations
+
+Per-user OAuth destinations, quotas and the automation that drives them.
+
+> Split out of `tenancy.md`'s security list on 2026-08-13 — these are
+> integration concerns, not security posture.
+
+## Per-user integrations
+
+- **YouTube quota meter (per-user)** — the Data API exposes no remaining-quota read,
+  so Lectio estimates spend itself: each billed call reports its documented unit cost
+  through a sink (`playlists.list`/`videos.list`/sub-sync = 1, `playlistItems.insert`/
+  `playlists.insert` = 50). `services/youtube_oauth.py` and `services/youtube_sync.py`
+  expose `set_quota_sink`; `YouTubeDurationService` takes a `quota_sink`; all three are
+  wired to `record_yt_quota_spend`, which tallies units into the per-user `yt_quota_spend`
+  table keyed by the **Pacific calendar date** (`_pacific_today()`, Google's reset). The
+  Integrations panel shows spent/cap/remaining via `get_yt_quota_status()` (cap =
+  `yt_quota_cap` setting, default 10k) with low (<500 left) and exhausted states; an
+  actual `quotaExceeded` response snaps the tally to the cap (`mark_yt_quota_exhausted`).
+  Tests null the sink (conftest autouse) so a billed call can't pollute another test.
+- **Quire destination (per-user)** — another per-user OAuth outbound destination
+  (`services/quire.py`, same shape as DeviantArt: `/quire/connect` → `/quire/callback`
+  store tokens; `get_quire_user_token` refreshes on expiry). A user picks one default
+  project (`quire_project_oid`); the `Add to Quire` entry button (`/entries/quire`),
+  On-Star, and the `quire` automation rule (`_run_quire_rules_after_refresh`) all create
+  a task in it. Unlike YouTube's **daily** quota, Quire rate-limits **per organization by
+  minute and hour** with no remaining-quota read, so the meter is a **sliding window**:
+  each billed call logs a row into `quire_call_log` (pruned to the last hour) via the
+  `set_usage_sink` → `record_quire_call` sink; `get_quire_usage_status()` reports
+  minute/hour usage vs the `quire_rate_cap_min`/`_hour` caps with low (≥80%) and blocked
+  (≥cap) states. The caps are **auto-detected from the destination project's organization
+  plan** (`detect_quire_plan_and_caps` → `GET /project/{oid}` returns `subscription.plan`;
+  `PLAN_RATE_CAPS` maps Free 50/200, Professional 300/1250, Premium 1000/5000; Enterprise
+  scales with members so it keeps the default), run on a background thread whenever the
+  chosen project changes; the detected plan name is shown in the meter. Automation runs check the meter before each add,
+  honor a per-run cap (`_QUIRE_AUTO_PER_RUN_CAP`), and back off on a 429 (`Retry-After`).
+  The far-right entry-header **share-dropdown consolidation** of all destinations is a
+  deferred follow-up (see Plan.md); for now Quire is a standalone glyph beside the others.
+- **Hide Shorts (global, per-user)** — Shorts are auto-marked read at refresh by the
+  hide-shorts pass in `_run_automation_after_refresh`. Per-feed it reads the
+  `feed_display_prefs.hide_shorts` pref; the `yt_hide_shorts_global` setting
+  (`youtube_hide_shorts_global()`, Integrations toggle, off by default) additionally
+  targets **every** refreshed YouTube feed (URL contains `youtube.com/feeds/videos.xml`)
+  regardless of the per-feed pref — one source of truth, no drift as feeds come/go via
+  sync. A Short is detected by `/shorts/` in the entry link (`_is_youtube_short`).
+- **YouTube embed host (per-user)** — both `youtube.com` and `youtube-nocookie.com`
+  are allowlisted; which one a YouTube *embed* uses is the viewer's choice, applied
+  at **render** (not ingest, since sanitization bakes content into each user's
+  reader DB). `youtube_embed_host()` reads the per-user `yt_embed_account_features`
+  setting (default off → privacy-enhanced `youtube-nocookie.com`). The recovered/
+  injected player (`_youtube_embed_html`) builds with that host directly;
+  feed-native embeds are rewritten by `_apply_youtube_embed_host` in the entry-detail
+  pipeline (iframe `/embed/` URLs only — plain watch links are untouched). Opting in
+  (Integrations → YouTube) switches to the standard host so the player exposes Share /
+  Watch Later, which need the viewer's signed-in YouTube cookies that `-nocookie`
+  blocks. Render-time application makes the toggle instant and retroactive.
+- **YouTube Add-to-Playlist (per-user OAuth)** — the embed player only exposes
+  Watch Later, so a real playlist picker needs the **YouTube Data API v3** with a
+  write scope (`auth/youtube`), separate from the read-only `YOUTUBE_API_KEY`
+  (durations, sub-sync). `services/youtube_oauth.py` speaks HTTP to Google
+  (authorize / token exchange / refresh, `playlists.list`, `playlistItems.insert`,
+  `playlists.insert`); main.py owns the flow (`/integrations/youtube/oauth/{connect,
+  callback,disconnect}`) and stores the **refresh token per-user** in app-settings
+  (`get_youtube_oauth_token()` refreshes on demand, returns "" → reconnect prompt on
+  failure). The OAuth *client* creds are app-level (one registered Google app, read
+  from env in both single and multi mode) — only the resulting tokens are per-user,
+  so accounts are never shared. The redirect URI is fixed at
+  `/integrations/youtube/oauth/callback` to match the Google client registration.
+  Client-side, `enhanceYoutubeEmbeds()` injects an "Add to playlist" control beneath
+  each YT iframe (video id parsed from the `/embed/` src); it lazily fetches
+  `/api/youtube/playlists` (cached per page session). The playlist menu is positioned
+  `fixed` at open so it escapes the article pane's `overflow:auto` clipping, flipping
+  upward near the viewport bottom. `quotaExceeded` surfaces as a
+  distinct 429 so the UI can tell the user to fall back to manual add on youtube.com
+  (default 10k units/day ≈ 200 inserts; resets midnight Pacific). The OAuth app stays
+  in **Testing** mode (refresh tokens expire ~7 days → occasional reconnect).
+- **Auto add-to-playlist automation** (`youtube_playlist` rule type) — builds on the
+  OAuth integration above to add new entries' videos to a playlist at refresh time.
+  It's a **general** automation rule (any feed/folder scope, via the shared
+  `highlight_keywords` table + after-refresh pass), not YT-folder-bound, because a
+  YouTube video can be embedded in any feed's article and an entry can carry several.
+  `_run_youtube_playlist_rules_after_refresh` runs last in `_run_automation_after_refresh`
+  (after mark_as_read so its own "mark read after add" doesn't fight an earlier rule):
+  for each new (within the 15-min cutoff) matching entry it extracts **all** video ids
+  from the entry link + content (`youtube_embeds.video_ids_in_text`, which also matches
+  `/shorts/`), inserts each via `playlistItems.insert`, and optionally marks the post
+  read. The rule's keyword is an **optional filter** — empty = every new video in
+  scope. Per-rule columns on `highlight_keywords`: `yt_playlist_id`,
+  `yt_playlist_title`, `yt_include_shorts` (default off — Shorts detected by the
+  `/shorts/` link), `yt_mark_read` (default on), and `yt_min_minutes`/`yt_max_minutes`
+  (0 = no limit). The **duration filter** reuses the cached video length (the same
+  store behind the `[duration]` title prefix), so it needs the `YOUTUBE_API_KEY`; a
+  video whose duration isn't cached yet is skipped that run and retried once it is.
+  Durations are fetched in **batches of 50 ids per `videos.list` call** — that endpoint
+  bills **1 quota unit per call, not per video**, so a large subscription set (10k+
+  videos) costs ~200 units instead of ~10k. (Per-video fetching previously blew the
+  10k/day quota, leaving a rotating ~13% of videos perpetually duration-less; ids the
+  API returns no item for stay NULL and are retried per the negative-retry window.)
+  Because `playlistItems.insert` is
+  **not idempotent**, a `youtube_playlist_added (scope, scope_id, keyword, entry_id,
+  video_id)` table is the dedup guard: each (rule, entry, video) row is claimed with
+  `INSERT OR IGNORE` *before* the API call (rowcount 0 → already added → skip), and
+  released on failure/quota so it retries next run. A per-run cap
+  (`_YT_PLAYLIST_AUTO_PER_RUN_CAP = 25`, ≈1250 units) keeps a burst of new uploads
+  from exhausting the daily quota; `quotaExceeded` stops the run. The rule-type option
+  is gated on `yt_oauth_connected` (server-side in `/highlights/add`; hidden in the
+  rule-builder until connected) so it can't be created without a token. Runs in the
+  per-user background context like the other after-refresh rules.
+- **Save to Pinterest (per-user OAuth)** — an outbound-only integration: a per-entry
+  **Pin** button saves an article to one of the user's boards. Pinterest has no
+  write-without-OAuth path, so `services/pinterest_oauth.py` speaks the **API v5**
+  OAuth flow (authorize / token / refresh — the token endpoint authenticates the
+  *client* with HTTP **Basic** auth, body form-encoded, unlike Google's JSON) plus
+  `boards.list` (scope `boards:read`) and `pins.create` (scope `pins:write`). main.py
+  owns the routes (`/integrations/pinterest/oauth/{connect,callback,disconnect}`,
+  `/api/pinterest/boards`, `/api/pinterest/pin`) and stores the **refresh token
+  per-user** (`get_pinterest_oauth_token()` refreshes on demand; "" → reconnect). The
+  OAuth *client* creds are app-level (`PINTEREST_OAUTH_CLIENT_ID/SECRET` from env,
+  both modes); only the tokens are per-user. The pin route derives the entry's lead
+  image via `_derive_article_lead_image` (the **source** URL, not the `/api/img`
+  proxy, since Pinterest must fetch it) and links the pin back to the entry; an entry
+  with no image returns 422 (Pinterest requires an image). The Pin button is rendered
+  only when connected (`pinterest_connected` context flag); the board picker is a
+  lightweight client-side menu fed by `/api/pinterest/boards`.
+- **Rule scope (incl. multi-feed)** — automation rules scope to `global` (all feeds),
+  `folder`, `feed` (one URL), or `feeds` (an explicit set; `scope_id` is the feed URLs
+  joined by newline — newline, not comma, since URLs can contain commas). Scope
+  resolution is centralized so every runner agrees: `resolve_rule_feed_urls(conn,
+  scope, scope_id)` returns the feed set (or `None` for global) for the bulk/dry-run
+  paths, and `feed_in_rule_scope(scope, scope_id, feed_url, folder_feed_urls)` is the
+  per-feed test the after-refresh runners use against each freshly-refreshed feed
+  (folder scopes pass a prefetched feed set for speed; `feeds`/`feed`/`global` don't
+  need it). Deduplicate accepts `global`/`folder`/`feeds` (the latter dedupes across a
+  selected set, resolved via `_resolve_dedup_feed_urls`) but rejects a single `feed`
+  — one feed can't cross-dedupe. The rule builder derives the scope from a
+  multi-select feed listbox: 0 selected = folder (or global if no folder), 1 =
+  `feed`, 2+ = `feeds`.
