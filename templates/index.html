@@ -1891,6 +1891,11 @@
           <label class="action-modal-label unsub-migrate-select-all-row"><input type="checkbox" id="unsub-migrate-select-all" checked /> Select all</label>
           <div id="unsub-migrate-items" class="unsub-migrate-items"></div>
         </div>
+        {# Applies to all three choices above — the curated items survive in each
+           case, they just survive somewhere different. Unchecked by default:
+           it reorders the Inbox, which is not what a plain unsubscribe should
+           do unasked. #}
+        <label class="action-modal-label unsub-migrate-restar-row"><input type="checkbox" id="unsub-migrate-restar" /> Star them and set the date to now, so they show at the top of the Inbox</label>
       </div>
       <div class="action-modal-actions">
         <button type="button" class="action-modal-cancel" data-close-modal="unsub-migrate-modal">Cancel</button>

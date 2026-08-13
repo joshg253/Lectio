@@ -2193,6 +2193,38 @@ Fill mode's `fill_zoom` multiplier (`feed_display_prefs.fill_zoom`, NULL = defau
 
 **Direct-load fallback:** `/thumb` fetches the source image *from the server*, so a host that IP-blocks datacenter traffic (e.g. Cloudflare 403, washingtonstatestandard.com) makes `/thumb` 502 and the list thumbnail break — even though the browser's own (residential) IP can fetch the image fine. The list `<img>` carries the raw image URL in `data-direct`; on a `/thumb` error its `onerror` (`window.thumbImgFallback`, defined pre-body so it exists before any load fails) retries once with that direct URL, letting the browser load the image itself. CSS `object-fit:cover` sizes the un-resized image to the tile. This recovers the thumbnail without evading the block server-side (it's the user's own client fetching, exactly as the article view already does). Only `http(s)` direct URLs are retried, and only once (a `data-triedDirect` guard prevents an error loop); if the direct load also fails, the tile collapses to `is-empty` as before. The same helper backs the JS-derived list thumbnail (it sets `data-direct` to the lead-image URL).
 
+## "Re-star" is two operations, not one
+
+Unsubscribing a feed can bring its curated posts back to the top of the Inbox.
+The Inbox orders by `saved_entries.saved_at`, so an item curated months ago sinks
+to wherever it was — which is the last place you look right after deciding to
+drop its feed.
+
+The obvious implementation is "set saved_at to now", and it is wrong for half the
+items. `restar_curated_entries` does two different things:
+
+- **Tagged but unstarred** — there is no `saved_entries` row to update, so a date
+  bump touches nothing and the item still never appears. It has to be *genuinely
+  starred*, which is also what enqueues its offline capture. This is the common
+  case, and it follows from the keep model: a tag is a keep signal, but only a
+  star is archived.
+- **Already starred** — `apply_star_state` is `INSERT OR IGNORE`, so calling it
+  again silently leaves the old timestamp and nothing moves. That row is
+  re-stamped directly.
+
+Deliberately **not** unstar-then-star for the second case. Unstarring an entry
+with no other keep signal enqueues removal of its offline capture
+(`entry_has_keep_signal`), so a failure between the two calls would destroy
+exactly what the option exists to preserve. There is no "re-star" primitive —
+only star and unstar, and star is idempotent — which is why this is a named
+operation rather than two calls at the call site.
+
+It runs **before** the feed is removed: the entries must still be readable, and
+the capture it enqueues is flushed by the force-archive that both the keep and
+purge branches already perform. Off by default, and the checkbox is reset every
+time the dialog opens — the modal is reused, so a box ticked for the last feed
+would silently reorder the Inbox for the next one.
+
 ## Removing a feed has to clear the record that it was failing
 
 `purge_orphaned_feed` cleaned `kept_feeds`, `feeds_needing_replacement` and

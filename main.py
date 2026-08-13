@@ -13301,6 +13301,58 @@ def apply_star_state(feed_url: str, entry_id: str, saved: bool) -> None:
         LOGGER.warning("starred archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
 
 
+def restar_curated_entries(feed_url: str) -> int:
+    """Star every curated entry in a feed and stamp the star time to now.
+
+    Backs the "show them at the top of the Inbox" option on unsubscribe. The
+    Inbox orders by ``saved_entries.saved_at``, so an item curated months ago
+    sinks to wherever it was — which is the last place you look right after
+    deciding to drop its feed.
+
+    Two different operations, because "re-star" is not one thing:
+
+    - **Tagged but unstarred** — there is no ``saved_entries`` row at all, so a
+      date bump would touch nothing and the item would still never appear. It
+      has to be genuinely starred, which is also what enqueues its offline
+      capture. This is the common case: a tag is a keep signal, but only a star
+      is archived.
+    - **Already starred** — ``apply_star_state`` is INSERT OR IGNORE, so calling
+      it again silently leaves the old timestamp in place and nothing moves. The
+      row is re-stamped directly instead.
+
+    Deliberately NOT unstar-then-star for the second case: unstarring an entry
+    with no other keep signal enqueues removal of its offline capture, so a
+    failure between the two calls would destroy the very thing being preserved.
+
+    Callers must run this BEFORE removing the feed — it reads the feed's entries
+    and relies on the capture flush that unsubscribe already performs afterwards.
+
+    Returns the number of entries affected.
+    """
+    curated: list[str] = []
+    with get_reader() as reader:
+        for entry in reader.get_entries(feed=feed_url):
+            entry_id = str(entry.id)
+            if entry_has_keep_signal(
+                feed_url, entry_id, starred=_entry_is_starred(feed_url, entry_id)
+            ):
+                curated.append(entry_id)
+
+    for entry_id in curated:
+        if not _entry_is_starred(feed_url, entry_id):
+            apply_star_state(feed_url, entry_id, True)
+
+    if curated:
+        with get_meta_connection() as conn:
+            conn.executemany(
+                "UPDATE saved_entries SET saved_at = CURRENT_TIMESTAMP"
+                " WHERE feed_url = ? AND entry_id = ?",
+                [(feed_url, e) for e in curated],
+            )
+            conn.commit()
+    return len(curated)
+
+
 def mark_entry_read_everywhere(feed_url: str, entry_id: str) -> None:
     """Mark an entry read at both levels, the way a triage action means it.
 
@@ -26247,6 +26299,7 @@ def unsubscribe_feed(
     resume_read_filter: str | None = Form(default=None),
     migrate_curation_to: str | None = Form(default=None),
     keep_entries: str = Form(default=""),
+    restar_curated: str = Form(default=""),
 ):
     normalized_read_filter = normalize_read_filter(read_filter)
     sort_query_s = build_sort_query(sort_by, sort_dir)
@@ -26258,6 +26311,12 @@ def unsubscribe_feed(
     ok = True
     message = "Feed unsubscribed."
     try:
+        # Before anything is removed: the option to bring this feed's curated
+        # items back to the top of the Inbox. Runs first so the entries are
+        # still readable and so the capture it enqueues is flushed by the
+        # force-archive both branches below already perform.
+        restarred = restar_curated_entries(feed_url) if normalize_star_only(restar_curated) else 0
+
         with get_meta_connection() as conn:
             conn.execute(
                 "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
@@ -26300,6 +26359,11 @@ def unsubscribe_feed(
                             archive_pending=_migrate_to is None,
                             migrate_curation_to=_migrate_to,
                         )
+        if restarred:
+            message += (
+                f" {restarred} curated post{'' if restarred == 1 else 's'}"
+                " moved to the top of the Inbox."
+            )
         invalidate_meta_structure_cache()
     except Exception as exc:
         ok = False

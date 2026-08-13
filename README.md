@@ -68,7 +68,9 @@ short version:
 - **Tagging a post keeps it forever.** A tag triggers a full offline capture —
   page, readability text, every image, and any files the post links to — so a
   kept article survives the site going down. Stars are the to-do pile; tags are
-  the keep pile.
+  the keep pile. Dropping a feed offers to bring its kept posts back to the top
+  of the Inbox, so what you saved from it is the first thing you see rather than
+  something filed months deep.
 - **Read-it-later built in.** Save any page (menu, bookmarklet, `/api/save`, or
   the browser extension) with no feed needed, then read it in **Read Mode**, an
   e-ink-friendly reading app at `/read` that works offline — including

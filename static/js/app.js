@@ -5985,6 +5985,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const body = new URLSearchParams({ folder_id: folderId, feed_url: feedUrl });
       if (opts.migrateCurationTo) body.set('migrate_curation_to', opts.migrateCurationTo);
       if (opts.keepEntries) body.set('keep_entries', '1');
+      if (opts.restarCurated) body.set('restar_curated', '1');
       const resp = await fetch('/feeds/unsubscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-unsubscribe' },
@@ -6068,6 +6069,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const moveRadio = document.getElementById('unsub-migrate-move');
       const movePanel = document.getElementById('unsub-migrate-move-panel');
       const itemsEl = document.getElementById('unsub-migrate-items');
+      const restarCb = document.getElementById('unsub-migrate-restar');
       if (!modal) { // fallback: plain confirm
         if (!window.confirm(`Unsubscribe from "${title}"?`)) return false;
         try { await unsubscribeFeedRequest(feedUrl, folderId, opts); return true; }
@@ -6082,6 +6084,9 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
 
       bodyEl.textContent = `Unsubscribe from "${title}"? This removes the feed and its articles from Lectio.`;
       const hasCuration = (counts.tagged || 0) + (counts.stars || 0) > 0;
+      // The modal is reused, so a box ticked for the last feed would carry over
+      // and silently reorder the Inbox for this one. Reset every open.
+      if (restarCb) restarCb.checked = false;
       const candidates = counts.candidates || [];
       if (hasCuration) {
         const parts = [];
@@ -6278,6 +6283,9 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           let migrateTo = null;
           let moveSubset = null;
           const keepEntries = hasCuration && currentChoice() === 'keep';
+          // Applies to every choice — the curated items survive in all three,
+          // just somewhere different. Read before cleanup() hides the modal.
+          const restarCurated = hasCuration && !!restarCb?.checked;
           if (hasCuration && currentChoice() === 'move') {
             migrateTo = (targetSel._labelToUrl && targetSel._labelToUrl.get(targetSel.value)) || null;
             if (!migrateTo) { window.alert('Pick a feed to move the items to, or choose "Just unsubscribe".'); return; }
@@ -6309,7 +6317,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             }
           }
           cleanup();
-          try { await unsubscribeFeedRequest(feedUrl, folderId, { ...opts, migrateCurationTo: migrateTo, keepEntries }); resolve(true); }
+          try { await unsubscribeFeedRequest(feedUrl, folderId, { ...opts, migrateCurationTo: migrateTo, keepEntries, restarCurated }); resolve(true); }
           catch (err) { window.alert(`Unsubscribe failed: ${err}`); resolve(false); }
         }
         function onCancel() { cleanup(); resolve(false); }

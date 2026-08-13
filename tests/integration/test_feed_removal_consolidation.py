@@ -20,6 +20,7 @@ import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi.testclient import TestClient
 
 import main
 from services import tenancy
@@ -82,6 +83,21 @@ def _make_child_folder(name: str) -> int:
             (name, root),
         )
         return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def _csrf_client() -> tuple[TestClient, str]:
+    """A TestClient with a session, plus its CSRF token for form posts."""
+    import base64
+    import json
+
+    from itsdangerous import TimestampSigner
+
+    client = TestClient(main.app)
+    client.get("/healthz")  # establishes the session + token
+    cookie = client.cookies.get("session")
+    signer = TimestampSigner(main.SESSION_SECRET_KEY)
+    session_data = json.loads(base64.b64decode(signer.unsign(cookie, max_age=main.SESSION_MAX_AGE_SECONDS)))
+    return client, session_data["csrf_token"]
 
 
 # ---------------------------------------------------------------------------
@@ -1247,3 +1263,122 @@ class TestCombineAutoDismisses:
         main.combine_feeds_route(None, survivor_url=FEED, source_url=[FEED2], move_unread="")
         key = main._dedup_dismiss_key([FEED, FEED2])
         assert key in self._dismissed_keys()
+
+
+# ---------------------------------------------------------------------------
+# restar_curated_entries — the "show them at the top of the Inbox" option
+# ---------------------------------------------------------------------------
+
+class TestRestarCuratedEntries:
+    """Unsubscribing a feed can bring its curated items back to the top.
+
+    The Inbox orders by saved_entries.saved_at, so an item curated months ago
+    sinks to wherever it was — the last place you look right after deciding to
+    drop its feed. LXer prompted this: 1 starred (July 6) and 1 tagged-only.
+    """
+
+    def _entry(self, feed_url: str, entry_id: str, *, title: str = "t"):
+        with main.get_reader() as reader:
+            reader.add_feed(feed_url, allow_invalid_url=True, exist_ok=True)
+            reader.add_entry({
+                "feed_url": feed_url, "id": entry_id,
+                "title": title, "link": entry_id,
+            })
+
+    def _saved_at(self, feed_url: str, entry_id: str):
+        with main.get_meta_connection() as conn:
+            row = conn.execute(
+                "SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchone()
+        return row["saved_at"] if row else None
+
+    def test_a_tagged_but_unstarred_entry_gets_starred(self, env):
+        """The case a plain date-bump cannot serve: there is no row to bump."""
+        self._entry(FEED, "e-tagged")
+        with main.get_reader() as reader:
+            entry = reader.get_entry((FEED, "e-tagged"))
+            reader.set_tag(entry.resource_id, "lectio.manual_tag.linux-stuff", "")
+
+        assert main._entry_is_starred(FEED, "e-tagged") is False
+        assert main.restar_curated_entries(FEED) == 1
+        assert main._entry_is_starred(FEED, "e-tagged") is True
+        assert self._saved_at(FEED, "e-tagged") is not None
+
+    def test_an_already_starred_entry_is_restamped(self, env):
+        """apply_star_state is INSERT OR IGNORE, so the old date would survive."""
+        self._entry(FEED, "e-star")
+        with main.get_meta_connection() as conn:
+            conn.execute(
+                "INSERT INTO saved_entries (feed_url, entry_id, saved_at)"
+                " VALUES (?, ?, '2020-01-01 00:00:00')", (FEED, "e-star"))
+            conn.commit()
+
+        assert main.restar_curated_entries(FEED) == 1
+        assert self._saved_at(FEED, "e-star") != "2020-01-01 00:00:00"
+
+    def test_an_uncurated_entry_is_left_alone(self, env):
+        """Scope guard: this stars what was already kept, it does not keep more."""
+        self._entry(FEED, "e-plain")
+        assert main.restar_curated_entries(FEED) == 0
+        assert main._entry_is_starred(FEED, "e-plain") is False
+
+    def test_another_feeds_stars_are_not_restamped(self, env):
+        self._entry(FEED, "e-star")
+        self._entry(FEED2, "other")
+        with main.get_meta_connection() as conn:
+            conn.execute(
+                "INSERT INTO saved_entries (feed_url, entry_id, saved_at)"
+                " VALUES (?, ?, '2020-01-01 00:00:00')", (FEED, "e-star"))
+            conn.execute(
+                "INSERT INTO saved_entries (feed_url, entry_id, saved_at)"
+                " VALUES (?, ?, '2020-01-01 00:00:00')", (FEED2, "other"))
+            conn.commit()
+
+        main.restar_curated_entries(FEED)
+        assert self._saved_at(FEED2, "other") == "2020-01-01 00:00:00"
+
+    def test_unsubscribe_route_runs_it_only_when_asked(self, env, monkeypatch):
+        """Off by default — unsubscribing must not reorder the Inbox unasked."""
+        calls = []
+        monkeypatch.setattr(main, "restar_curated_entries", lambda u: calls.append(u) or 0)
+        monkeypatch.setattr(main, "websub_service", MagicMock())
+
+        monkeypatch.setattr(main, "AUTH_ENABLED", False)
+        _add_feed_to_folder(FEED, _root_folder_id())
+        client, token = _csrf_client()
+        r = client.post("/feeds/unsubscribe", data={
+            "_csrf": token,
+            "folder_id": _root_folder_id(), "feed_url": FEED, "keep_entries": "1",
+        })
+        assert r.status_code != 403
+        assert calls == []
+
+        _add_feed_to_folder(FEED, _root_folder_id())
+        client.post("/feeds/unsubscribe", data={
+            "_csrf": token,
+            "folder_id": _root_folder_id(), "feed_url": FEED,
+            "keep_entries": "1", "restar_curated": "1",
+        })
+        assert calls == [FEED]
+
+    def test_route_restars_before_the_feed_is_removed(self, env, monkeypatch):
+        """Order matters: the entries must still be readable when it runs."""
+        seen = {}
+
+        def _spy(feed_url):
+            with main.get_reader() as reader:
+                seen["feed_exists"] = reader.get_feed(feed_url, None) is not None
+            return 0
+
+        monkeypatch.setattr(main, "restar_curated_entries", _spy)
+        monkeypatch.setattr(main, "websub_service", MagicMock())
+        monkeypatch.setattr(main, "AUTH_ENABLED", False)
+        _add_feed_to_folder(FEED, _root_folder_id())
+
+        client, token = _csrf_client()
+        client.post("/feeds/unsubscribe", data={
+            "_csrf": token,
+            "folder_id": _root_folder_id(), "feed_url": FEED, "restar_curated": "1",
+        })
+        assert seen["feed_exists"] is True

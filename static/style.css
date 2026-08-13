@@ -6715,6 +6715,10 @@ mark.highlight-mark {
 #feed-prop-alias-add-wrap { display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
 #feed-prop-alias-status { color: var(--muted, #888); }
 .unsub-migrate-select-all-row { font-size: 0.85rem; margin: 0.35rem 0 0; }
+/* Sits under the three choices and applies to all of them, so it gets a
+   rule above it rather than reading as a fourth option. */
+.unsub-migrate-restar-row { font-size: 0.85rem; margin: 0.6rem 0 0;
+  padding-top: 0.55rem; border-top: 1px solid var(--line); }
 .unsub-migrate-items { margin: 0.35rem 0 0.6rem; max-height: 11rem; overflow-y: auto; font-size: 0.85rem; }
 .unsub-migrate-item-list { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.2rem; }
 .unsub-migrate-item-tags { color: var(--accent, #2b8a3e); font-size: 0.78rem; }
