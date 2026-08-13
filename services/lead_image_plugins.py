@@ -334,14 +334,22 @@ class DresdenCodakPlugin:
         return ()
 
     def source_score_adjustment(self, *, source_url: str, attrs: dict[str, str], resolved_url: str) -> int:
-        """Demote the site's own thumbnail crop while scoring the source page.
+        """No adjustment, because demoting the crop here changes nothing.
 
-        Only a nudge, not a veto: on a page that offers nothing else, the
-        `_thumbnail` file is still the comic and must remain selectable.
+        The idea was that penalising `_thumbnail` would let the full comic win
+        the lead on a page offering both. Measured against the live site with
+        the penalty patched back in: DC Minis #26 resolves to
+        `dc_minis_26_thumbnail.jpg` either way. The crop is the only image those
+        pages carry — the full comic exists on the server and appears in the
+        FEED body, but not on the page the scraper reads — so there is nothing
+        for a score nudge to reorder.
+
+        Left as an explicit no-op rather than deleted: the seam is part of the
+        protocol, and this records that the obvious use of it here is inert, so
+        the next person does not add it back. Deriving the thumbnail (below) is
+        the actual fix and needs none of it.
         """
-        if not self._is_ours(source_url) or not resolved_url:
-            return 0
-        return -30 if "_thumbnail" in resolved_url.lower() else 0
+        return 0
 
     def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None:
         return None

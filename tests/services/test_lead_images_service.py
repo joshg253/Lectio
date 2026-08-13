@@ -2308,14 +2308,17 @@ def test_another_hosts_dc_minis_name_is_not_claimed(tmp_path: Path):
     ) is None
 
 
-def test_the_site_crop_is_demoted_while_scoring_the_page(tmp_path: Path):
-    """So the full comic wins the LEAD when the page offers both."""
+def test_the_site_crop_is_not_demoted_while_scoring(tmp_path: Path):
+    """Demoting it is inert, so it is not done.
+
+    Measured against the live site with the penalty patched in: DC Minis #26
+    resolves to dc_minis_26_thumbnail.jpg either way, because the crop is the
+    only image that page carries. Pinned so the nudge is not added back.
+    """
     service = _build_service(tmp_path / "meta.sqlite", [])
     src = "https://dresdencodak.com/2026/08/09/dc-minis-27-birthday-blues/"
     assert service._plugin_source_score_adjustment(
-        source_url=src, attrs={}, resolved_url=_DC_THUMB) < 0
-    assert service._plugin_source_score_adjustment(
-        source_url=src, attrs={}, resolved_url=_DC_FULL) == 0
+        source_url=src, attrs={}, resolved_url=_DC_THUMB) == 0
 
 
 def test_penny_arcade_panel_derivation_is_unaffected(tmp_path: Path):
