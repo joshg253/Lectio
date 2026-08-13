@@ -1,0 +1,571 @@
+# Feeds
+
+Subscribing, fetching, deduplicating, combining and removing feeds.
+
+> Split out of `ARCHITECTURE.md` on 2026-08-13. See
+> [ARCHITECTURE.md](../../ARCHITECTURE.md) for the index.
+
+## Feed URL normalization
+
+`normalize_feed_url` (main.py) is applied at add-feed time and in the Duplicate scan (`GET /feeds/duplicates`). It handles:
+
+- Trailing-slash stripping from paths longer than `/`.
+- Format-selector query params (`alt=rss`, `type=atom`, `feed=rss2`, etc. — `_FORMAT_SELECTOR_PARAMS`) whose *value* is also on the allowlist (`_FORMAT_SELECTOR_VALUES = {rss, rss2, atom}`, plus anything prefix-matching `json*` since JSON Feed versioning is a moving target) that select serialization without changing content — lets the Blogger Atom and RSS URLs of the same feed collapse to one. Param name **and** value both have to match — a hypothetical `?type=news` category selector is left alone.
+- ArtStation subdomain rewrites (`username.artstation.com/rss` → `www.artstation.com/username.rss`) to avoid TLS hostname issues with underscore usernames.
+- `_DOMAIN_ALIASES` map — known domain pairs that serve identical content, or renamed domains (`old.reddit.com` → `www.reddit.com`; `tapastic.com` → `tapas.io`). Add new pairs there; the normalization and duplicate-scan logic picks them up automatically.
+
+**Curation migration on consolidation.** Every duplicate-scan tier and the format-Upgrade tier resolve through `POST /feeds/combine` (a user-picked survivor + one or more sources), which calls `purge_orphaned_feed` with `migrate_curation_to` set. That first calls `_migrate_curation` to move the removed feed's manual tags and stars onto the surviving feed — matching each curated source entry to a survivor entry by GUID, else normalized link, else synthesizing it into the survivor (`reader.add_entry`) so nothing is lost. This is unconditional (independent of the opt-in "rescue unread" toggle, which only re-flags read/unread state) and mirrors the offline `scripts/reconcile_duplicate_feeds.py --merge` path. The old bulk `POST /feeds/deduplicate` (auto-apply same-folder pairs, checkbox-picked cross-folder/upgrade choices) was retired 2026-08-10 once every tier moved to `/feeds/combine`'s per-group Compare-then-Combine flow — see below.
+
+**Import-time canonicalization.** `canonical_feed_url` (main.py) composes `normalize_youtube_feed_url` + `normalize_feed_url` and is the single choke point every bulk importer runs each incoming feed URL through *before* it subscribes or keys per-entry tag/star state. This makes a variant URL (old.reddit, `?alt=rss`, trailing slash) attach to an existing subscription instead of spawning a duplicate. It is wired into OPML import, the Inoreader local-file migrator, the shared migration applier `_apply_migration_items` (Miniflux/FreshRSS/Tiny Tiny RSS), the Inoreader JSON upload, and the Inoreader OAuth drip (subscriptions, label, and starred phases). Importers that key both subscription and tagging off `item["feed_url"]` call `_canonicalize_item_feed_urls(items)` once up front so both phases stay in sync. Google Takeout import is exempt: it only applies tags/stars to entries already present in the reader DB (never `add_feed`s), and those URLs are already canonical from the original subscription.
+
+**Canonicalizing the incoming URL is only half of it — the set you compare against has to be canonical too.** `import_opml` canonicalized each `xmlUrl` and then tested it against the *raw* `folder_feeds` URLs. Any subscription whose stored URL was not already canonical therefore never matched, looked new, and was subscribed a second time under the canonical spelling. A trailing slash was enough: re-importing Lectio's own OPML export duplicated **440 of 2,909** foldered feeds — the restore-from-backup path, which is exactly when a user can least afford it. The dedupe set is now built through `canonical_feed_url` as well. Worth noting for any future importer: these duplicates are invisible to a `GROUP BY feed_url` check, because the two rows hold different strings (`…/feed/` and `…/feed`), so verify idempotency by comparing subscription *counts* across a round trip.
+
+## Duplicate entry suppression
+
+Two mechanisms prevent duplicate articles from accumulating in the reader DB:
+
+**GUID-churn suppression** (`_suppress_guid_churn`, runs after each refresh): detects entries that reappear with a new GUID but the same URL slug, or the same title + publication date (within 7 days). Checks both read history AND existing unread entries so that multiple copies arriving before any are opened are also caught.
+
+**Intra-feed and cross-feed cleanup** (`_cleanup_intra_feed_slug_dupes`, runs at startup and after each refresh cycle): two-pass retroactive cleanup for duplicates that slipped through before suppression was in place or before Deduplicate rules ran.
+- Pass 1: within each feed, keep the oldest entry per slug and per title+date; mark newer copies read.
+- Pass 2: across all feeds, group entries by `normalize_entry_link_for_dedupe`; keep the oldest copy globally and mark the rest read. This handles syndicated posts that appear in multiple subscribed feeds (e.g. a blog post cross-posted to two feeds from the same author).
+
+`normalize_entry_link_for_dedupe` is the single canonical link key, shared by this pass, the render-time list collapse (`build_entry_dedupe_key`), the curation migration on feed removal, and the Saved duplicate scan's "confirmed" tier. It drops the fragment and trailing slash, then **folds the scheme and a leading `www.`**, lowercasing only the host — paths stay case-sensitive. The fold matters because the Saved scan's other confirmed-tier key, the URL slug, is deliberately discarded when it is generic (`/index.html`, blocklisted, or hyphen-free and short); before the fold, an http/https or www/non-www twin with such a URL had no confirmed-tier key at all and fell through to the weaker "possible" tier, where it needed a hand judgment. The result is a comparison key, not a URL — it has no scheme and is never fetched or displayed.
+
+**The saved scan's slug key is host-scoped** (`_saved_dup_host_slug`), unlike the shared `_safe_dedup_entry_slug` it wraps. That helper returns the last path segment and nothing more, which is right for its other callers — per-feed GUID-churn history, and the multi-signal dedup where a lone `slug` is never one of `_SAFE_DEDUP_COMBOS` — but in `/saved/duplicates` a bare slug match *confirms* a duplicate on its own. Host-blind, that made unrelated publishers collide: guitarworld.com and guitarmasterclass.net each have a `pinch-harmonics` article, and the scan offered to delete one of them. A descriptive slug clears every length/hyphen guard precisely *because* it names a topic. Scoping the key to the folded host keeps the tier's real job (one article under a changed path on one site, including across a scheme/www change) and leaves genuine cross-host syndication to the title/body tier, which is far stronger evidence.
+
+These run server-side and affect the underlying DB state, so third-party clients (Capy, etc.) see the clean state after the next sync.
+
+## Duplicate feeds: the scheme (and www) is folded in the comparison, not the URL
+
+`get_feed_duplicates` groups subscriptions by `normalize_feed_url` **with the
+scheme and a leading `www.` stripped** (`_dupe_group_key`). Both have to be
+folded somewhere other than `normalize_feed_url` itself, because some hosts
+really are http-only or www-only and forcing either there would break them —
+the comparison has no such obligation, unlike the stored subscription URL.
+`_DOMAIN_ALIASES` rewrites a host without touching the scheme, which is what
+originally forced the scheme fold: a legacy `http://tapastic.com/…`
+subscription normalized to `http://tapas.io/…` while its live twin was
+`https://…`, so the two never grouped and a dead feed sat beside a working copy
+failing every refresh, unflagged. The www fold followed the same shape:
+`deathbulge.com/rss.xml` and `www.deathbulge.com/rss.xml` are the same feed.
+
+The survivor (`keep`) is chosen from the variants that are actually subscribed —
+preferring `https`, then the already-canonical spelling, then the shortest.
+`keep` used to be the canonical *string*, which is not necessarily one of the
+variants; when it was not, `url_folders.get(keep)` came back empty, so every
+variant looked cross-folder and was offered for removal against a URL nobody was
+subscribed to.
+
+### Five tiers, one Compare-then-Combine UX
+
+`GET /feeds/duplicates` returns five tiers, each rendered in Settings → Feeds
+→ Utilities as its own `<details>` section but sharing one frontend format
+(originally built for the title tier alone, generalized to the rest
+2026-08-10 — `_renderDedupGroups` in `app.js`): a group of candidate feed
+URLs, an inline **Compare** (`GET /feeds/compare`, live-fetches each URL and
+shows format/entry-count/full-text/dates/GUID-type/sample-title), then an
+inline **Combine** (survivor radio + optional "carry over unread state",
+`POST /feeds/combine`). Nothing auto-applies anywhere — every merge is an
+explicit, post-Compare user decision. The bulk `POST /feeds/deduplicate`
+(same-folder auto-apply, checkbox-picked cross-folder/upgrade choices) that
+this replaced is gone.
+
+- **`same_folder` / `cross_folder`** — a `_dupe_group_key` match: same feed,
+  different scheme/www/format-selector. Two feeds, no checkboxes needed
+  (there's only one possible comparison) — Compare is just always available.
+- **`query_pairs`** — same host+path, *different* query, deliberately never
+  auto-folded: a query param can be a real duplicate (a format selector the
+  allowlist doesn't recognize) or genuinely different content (a WordPress
+  category/tag feed). YouTube (`channel_id` differs by design — the Watch
+  folder sync is bidirectional, so two channel ids are never a duplicate) and
+  DeviantArt's `backend.deviantart.com/rss.xml?q=gallery:<user>` (one shared
+  endpoint for the whole site) are excluded entirely as noise sources.
+- **`title_groups`** — same feed *title* across two genuinely different
+  addresses (a Tumblr and a Tapas copy of the same webcomic) — the only tier
+  the URL-scheme grouping can't reach at all, since it needs two different
+  addresses, not variants of one. `GENERIC_TITLE_GROUP_MAX = 5` floors out
+  generic titles ("News" shared by unrelated sites is noise; every genuine
+  match measured at 2–3 feeds). The only tier where a group can legitimately
+  hold a non-match (an unrelated site sharing a generic title alongside a
+  real pair), so it's also the only one that keeps a pick-a-subset checkbox
+  gate before Compare — see `_renderDedupGroups`'s `selectable` flag.
+- **`upgradable`** — a subscribed URL still carrying a format-selector query
+  param. `upgrade_to` is the stripped default (skipped entirely when
+  stripping it would leave nothing but a bare domain — WordPress's
+  root-level `?feed=rss2` is the failure case: the query *is* the whole
+  address there, not decoration on a working default). `alternates` are
+  same-family format-selector swaps (`_format_alternate_urls`: a WordPress
+  `?feed=rss2` subscription also serves `?feed=atom` and `?feed=rss`
+  natively — a real, near-guaranteed-to-exist option, not a guess). Neither
+  candidate is ever assumed better: RSS isn't reliably worse than Atom on
+  every site (some sites' RSS is the richer feed), so nothing here gets a
+  "suggested keep" bias and Compare-then-Combine is mandatory before
+  switching.
+
+**`content_identical` gates the "suggested keep" hint.** `same_folder` and
+`cross_folder` pairs carry a `content_identical` flag (`_pair_is_content_identical`)
+— true only when the two URLs differ by scheme/www alone (provably the same
+bytes). A format-selector swap does *not* get the hint: reported 2026-08-10,
+freac.org's `?type=rss` carries summaries only while `?type=atom` carries full
+text, so the length-based tie-break (`keep`) happened to "suggest" the worse
+one. `query_pairs` and `upgradable` never get the hint at all, since content
+identity isn't provable from the URL shape for either.
+
+**A broken Compare result can't be picked as the Combine survivor.** If
+`/feeds/compare` returns an `error` for a candidate (dead link, unparseable —
+an Upgrade-tier guess turning out to be the site's HTML homepage, say), the
+frontend drops it from the survivor radio list before rendering the Combine
+panel, so a wrong candidate can't repoint a subscription at something that
+isn't a feed. It can still be a Combine *source* (a silent no-op — nothing to
+migrate from a URL nobody's subscribed to).
+
+**Dismissals.** `POST /feeds/duplicates/dismiss` (and the "Not dupes" button
+on every group) records the group's exact feed-URL set in `dedup_dismissed`
+(`_dedup_dismiss_key` — order-independent, sorted-and-joined); `get_feed_duplicates`
+filters every tier against it before returning. `POST /feeds/combine` also
+records a dismissal automatically on every completed call, survivor + all
+sources, regardless of whether anything was actually deleted — load-bearing
+for the Upgrade tier specifically, where picking the already-subscribed
+"current" URL as survivor makes every "source" a candidate nobody was ever
+subscribed to, so the purge loop is a structural no-op and, without the
+auto-dismiss, the next scan re-detects the identical group (reported
+2026-08-10: "I just combined them, then checked again and they are back").
+A dismissal naturally stops matching if the underlying feed set changes later
+(unsubscribed, URL changed) rather than silently hiding some other, unrelated
+group.
+
+## Removing a feed: what goes, and what a surviving capture protects
+
+Feed removal used to clean two marker tables and leave everything keyed on
+`(feed_url, entry_id)` behind. Measured on the live library before the fix:
+**51,672 dead rows across 551 removed feeds**, almost all of it two derived
+caches (24,443 `entry_lead_images`, 27,049 `entry_read_state`).
+
+**It is a per-entry question, not `DELETE ... WHERE feed_url = ?`, because a
+capture can outlive its feed.** The Saved view renders those archive orphans and
+reads their thumbnail and hand-made corrections from these very tables — 2,547
+rows were still being displayed that way. `_purge_dead_entry_meta` therefore
+stages the feed's surviving `archived_entry` ids in a temp table and deletes
+only what is not among them. A temp table rather than a bound `NOT IN` list: a
+feed can hold thousands of captures, past SQLite's variable limit, and chunking
+a `NOT IN` is actively wrong — each chunk would delete the ids named in every
+other chunk. If the archive cannot be read the function deletes **nothing**,
+because leaking rows is recoverable and blanking an orphan's thumbnail is not.
+
+Two tables are deliberately excluded. `read_history` is a log of what you read,
+not state owned by a subscription, so unsubscribing must not rewrite it.
+`saved_entries` belongs to the star/keep paths.
+
+## Hard-deleting a single entry (tombstones)
+
+The entry context menu's **Delete post…** (`POST /entries/delete`) hard-removes one garbage entry (spam, corrupted post). reader's public `delete_entry` only covers user-added entries, so feed-provided ones go through the storage-level delete — the same API reader's own `entry_dedupe` plugin uses. A tombstone row in the meta DB (`deleted_entries`, keyed feed_url + entry_id) records the deletion, and the refresh service purges any tombstoned entry a refresh re-ingested (`purge_tombstoned_entries`, runs after every update batch, before enhancement) — otherwise the entry would resurrect on every fetch while still inside the publisher's feed window. Tombstones are kept forever (tiny rows; the guid could reappear any time the publisher republishes).
+
+## Feed discovery: which feed a page actually means
+
+Two entry points share one set of rules, and must: `probe_url` previews what the Add dialog shows, while the Add route itself re-discovers through `discover_feed_urls_ex`. Any divergence means the dialog promises one feed and the button subscribes to another — which is exactly what happened when the page-path fix below landed in only one of them.
+
+**Page path before site root.** Multisite WordPress puts a whole blog under a path (`devblogs.microsoft.com/oldnewthing/`) while the domain root serves a firehose of every blog on it. Probing the root first meant subscribing to "The Old New Thing" silently handed back "Microsoft for Developers". The more specific feed is the one the user asked for; a path with no feed of its own still falls through to the root.
+
+**Gone vs refused.** A stale `<link rel="alternate">` is discarded only when positively confirmed dead — 4xx/5xx under the current identity *and* a browser-identity retry, with 405/501 and network errors left alone. Redirects are now followed one guarded hop at a time (re-running the SSRF check per hop, so no probe is ever bounced blind to an internal address): a stale tag is often an `http://` URL whose 301 hid the 404 behind it.
+
+When every advertised link is dead and nothing else answers, what happens next depends on *why*:
+
+- **Gone (404/410)** — report "no feed found", naming the dead address and pointing at Page Feed. Handing the link back produced the worst outcome available: the dialog says it found a feed, the add route then refuses it, and nothing appears in the feed list. The failure toast already offers a "Create page feed" button, so this lands the user where they need to be.
+- **Refused (403, 429, 5xx)** — still offered. The server declined to answer a HEAD; that is not proof the feed is absent, and reader's real GET may get through. This is the bot-walled case the last resort exists for.
+
+**Two kinds of known-site rule.** `_SITE_FEED_REWRITES` are pure URL functions (Pinboard, ArtStation, Behance, freeCodeCamp, and the numeric Tapas form) — no network, applied before the fetch. `_SITE_BODY_FEED_EXTRACTORS` are the other shape: the feed address exists only in the page body, so they run *after* the fetch, against HTML discovery already has. Tapas is the case that needed it — it advertises no `<link rel="alternate">` at all (its only alternate is the mobile page) and its canonical link points at the latest *episode*, not the series, so `tapas.io/series/<slug>` is invisible to generic discovery. The series id lives in the markup as `seriesId:` / `data-series-id`, which is what the community userscripts scrape by hand. Extractors run only when nothing was advertised, and their result flows into the same liveness check as any advertised link, so a stale id is caught rather than offered. Both entry points call the same helper on the same slice of the same HTML — see the divergence warning above.
+
+## Fetching a feed: three ways it fails before it ever parses
+
+All three were found on the live library on 2026-08-12, and all three presented
+as "this feed is broken" while the site worked fine in a browser.
+
+**A challenge page is a block, not a malformed feed** (`services/bot_challenge.py`).
+An anti-bot interstitial served in place of a feed arrives as a 2xx whose body is
+HTML, then fails to parse — indistinguishable from a genuinely broken feed unless
+you look. poorlydrawnlines.com was logged as *"could not be parsed as a valid
+RSS/Atom document"* for months while returning a SiteGround captcha as **HTTP
+202**, which is also why no count of blocked feeds could ever be right: anything
+keyed on 403 never saw it. The fetch hook now sniffs for vendor markers
+(SiteGround, Cloudflare, Imperva, Sucuri, DDoS-Guard, AWS WAF) and raises a
+stable `bot challenge: blocked by <vendor>`. Status is deliberately not part of
+the test. The detector is narrow on purpose — a site serving its ordinary
+homepage at a dead feed URL is *moved/dropped*, a different failure with a
+different fix.
+
+⚠ These blocks are keyed on the **client IP**, not the user-agent: the same URL
+fetched with the honest UA and with a full browser identity returns a
+byte-identical challenge naming our own IP. All 29 of the library's genuine
+403s were already flagged for browser identity and still 403. Escalating the UA
+does nothing, so detection here exists to *label* the failure, not to get past
+it.
+
+**One illegal byte costs a whole feed.** reader parses with a strict SAX parser,
+so a single character XML 1.0 forbids makes the entire document not well-formed.
+inventwithpython.com shipped a raw `0x0B` mid-sentence and its 2.7MB, 100-entry
+feed failed outright at line 19918. The fetch hook strips exactly the C0 controls
+XML forbids and keeps the three it allows (tab, LF, CR), so a feed that was
+already valid comes through byte-identical.
+
+⚠ **feedparser reads that same feed happily.** Verifying a replacement URL with
+feedparser reported "200, 100 entries, looks great" and the feed then refused to
+ingest. When checking whether a feed will work, check with *reader*.
+
+**Announcing yourself as a crawler invites a fake 404.** Auto-discovery used to
+send `Lectio/1.0 (RSS auto-discovery; +…)`, and filters match on that phrase:
+chickensoft.games returns a fabricated 404 to any UA containing it while serving
+200 to `Lectio/1.0`. Discovery was the only part of Lectio sending it, so it was
+the only part that could not read the site. The damage went past a failed lookup
+— `probe_url` reported "server denied the request", `refusal_is_forceable()` read
+that as the site refusing us, and Add Feed offered **Subscribe anyway**, the
+husk-feed path the add-feed code explicitly warns against, while suppressing the
+page-feed offer that was correct. Discovery now sends the same honest identity as
+every other fetch. Still names the app and links the repo; only the description
+of the activity is gone.
+
+## Feed auto-taggers
+
+Three functions run at startup to apply strategy and display defaults without user action:
+
+- `_auto_tag_artwork_feeds()` — matches `artstation.com` and `deviantart.com` feed URLs → `strategy=artwork`.
+- `_auto_tag_webcomic_feeds()` — matches feeds in folders whose name contains "comic" → `strategy=webcomic`. Artwork wins if both conditions apply.
+- `_auto_tag_github_release_feeds()` — matches `github.com/*/releases.atom` URLs → `strategy=og_scrape` + `show_lead_image_as_thumb=0`. GitHub generates a unique social-preview card per release; thumbnails are suppressed because the card is contextual rather than a post image.
+
+All three skip feeds where `feed_lead_image_strategy.manual=1` (user has explicitly chosen a strategy in Feed Properties). To add a new tagger, follow the same pattern and register it in `lifespan()`.
+
+## Feed-provided tag suggestions (`entry_feed_tags`)
+
+`reader` discards entry categories at ingest — its `Entry` type has no tags
+attribute — so Lectio captures them at the only point the raw feedparser result
+exists: `SanitizingFeedparserParser.__call__` hands `(entry_id, tags)` pairs to an
+**injected sink** (`set_entry_tag_sink` → `FeedTagService.record_entry_tags`),
+keeping services free of main/DB imports.
+
+- **Tenancy for free.** Parsing runs synchronously inside `reader.update_feed(s)`,
+  always in a user context, so the sink's `get_meta_connection()` resolves the
+  right per-user DB at call time. The service itself is tenancy-unaware.
+- **Id mapping re-derives, never zips.** `_process_feed` skips unparsable
+  entries, so positions do not line up. A sink failure is logged and swallowed —
+  tag capture must never fail a feed parse.
+- **Storage.** `entry_feed_tags(feed_url, entry_id, tag, first_seen_at)`, tags
+  stored **raw** and normalized only at display, because the raw text is the
+  foundation for tag-filtered feed adapters. Replace-per-entry semantics, so
+  publisher edits propagate; entries outside the fetch window keep theirs.
+- **Synthetic feeds** (dev.to, DeviantArt) emit `<category>` in their generated
+  RSS and flow through the same capture — one code path. ⚠ That XML is
+  regenerated from their per-user entry tables, so tags must persist in those rows
+  or they never reach `<category>`. DA's browse/gallery API omits deviation tags.
+
+### What gets dropped at capture
+
+**Numbers-only tags**, from feed categories and page scraping alike — they are
+comment counts, post ids, pagination and bare years. Anything with a non-digit
+survives (`80s`, `2020 election`, `Windows 11`). A stray `84` reached lemire.me
+this way; 580 stored rows were bare numbers.
+
+**An archive year-list, as a run.** nwcpp.org carries 2000–2026 down every page
+and all sixteen landed on one post. Five or more distinct 4-digit years on a page
+is a sidebar, not a tag set, so the whole run goes rather than judging any year
+alone.
+
+**Subscriber-only stubs are detectable without a marker.** Substack publishes
+none, but ships a body containing only a "Read more" link back to the post.
+`is_paywall_stub` requires both a body under ~120 characters *and* that its only
+link points at the entry's own URL — which keeps it off a genuinely short post,
+since a link roundup points elsewhere. On abortretry.fail, 17 of 20 items were
+9-character stubs against three real posts of 19k–38k. `hide_paywalled` marks them
+read at fetch, mirroring `hide_shorts`: non-destructive, findable under All, and
+opt-in because a *partial* feed is all stubs by design.
+
+### Suggestions are never auto-filtered, and that is a decision
+
+Two heuristics were built and both reverted (`1381cbc`, 2026-07-29):
+
+1. **Coverage** — suppress a tag carried by ~every entry. Caught the motivating
+   cases exactly (`Popular Deals` on 2,525 slickdeals posts, `VinylDeals` on 576)
+   and then hid `Lessons` on a guitarplayer tag feed, where it is precisely the
+   right tag. These chips are for **filing**, not for telling entries apart, so
+   uniformity is not disqualifying.
+2. **Feed-name echo** — uniform, and the tag's tokens are a subset of the feed
+   title. Failed identically: a tag feed puts its tag in its own name ("Latest
+   from Guitar Player in Lessons"). Matching the URL fails too — `/r/VinylDeals/`
+   and `/feeds/tag/lessons` have the same shape.
+
+`VinylDeals` is a place, `Lessons` is a kind of content, and nothing in feed
+metadata carries that distinction. ⚠ The asymmetry picks the default: **an
+unwanted chip is cheap, because it is ignored; a wanted chip that is hidden is
+invisible.** Resist a third heuristic — the first two each looked convincing
+against the data that motivated them.
+
+The × records the decision in `suppressed_feed_tags`, compared through
+`normalize_tag_value` on **both** sides. Chips render normalized, so the × sends
+`popular-deals` while the stored tag is `Popular Deals`; a plain lowercase compare
+yields `popular deals` and misses — every **multi-word** tag reappeared after
+dismissal while single-word ones stuck, because those normalize to themselves.
+Per feed, not global (`Forum` is noise on Slickdeals, a topic elsewhere). It hides
+a chip, never a fact: the rows stay and keep feeding the adapters. Undo lives in
+Feed Properties → **Hidden tags**, because a mis-clicked × needs a way back.
+
+### The chip row, and the tag-filter rule
+
+Chips render as **[ + tag ▲ ▼ ]**. **+** applies the tag manually. **▲/▼** edit
+the **feed-scoped** `tag_filter` rule in place: same sign removes, opposite flips.
+The rule is created **disabled** — chips are a tuning surface, the user arms it in
+Automation — and deleted when the spec empties. Folder/global rules are never
+touched. Only an already-enabled rule applies a chip edit to unread entries
+immediately.
+
+**Every captured tag reaches the row; only the first eight show.**
+`MAX_FEED_TAG_SUGGESTIONS` was a *fetch* cap of 8, so anything past the eighth did
+not exist client-side. Rock Paper Shotgun ships **28 tags per post** and puts `PC`
+tenth — so the row offered every platform to drop and no way to name the one to
+keep, which is exactly the `+pc` rescue the drop needs. The cap is now 40 and
+`FEED_TAG_CHIPS_COLLAPSED` (8) governs display, with `+N more`. Hidden rather than
+omitted, for the same reason there is no auto-suppression.
+
+**The `tag_filter` spec** lives in `keyword` as one comma-separated field with
+three strengths: `-tag` **drops**; `+tag` (or bare) is **good** — it rescues from a
+drop but its absence never cuts; `++tag` **requires** — tagged entries lacking
+every required tag are cut. Commas separate, so multi-word tags are typed as-is
+(`+windows 11, -rust`). Evaluation is requires → drops, and **untagged entries are
+always kept**: a feed that stops tagging must not have its firehose suppressed.
+The author rides along as a pseudo-tag (`by-steven-parker`), so author tokens work
+in every position. Runs after `update_feed`, since the sink fires during parse.
+
+**Writing a spec needs autocomplete, because the failure is silent.** A spec can
+only match what ingest captured, stored lowercase-hyphenated, so typing against an
+unseen vocabulary (HackerNoon: 140 distinct tags in 20 items) is guesswork — and a
+rule matching nothing looks exactly like one that works.
+`GET /rules/tag-vocabulary` resolves the draft's scope through the same
+`resolve_rule_feed_urls` the rule will use and returns the vocabulary **normalized
+through `normalize_tag_value`**, so a completed suggestion matches by
+construction, plus per-tag entry counts — the actual decision (a tag on 9 of 10
+posts is a filter; on one it is noise). Counts merge across casing variants.
+Loaded lazily on focus, keyed by scope.
+
+The same `attachTagAutocomplete` powers the per-entry input; the rule form differs
+only where the grammar genuinely differs — comma separation, and the `-`/`+`/`++`
+sign, which is part of the *spec* and survives completion untouched (unlike the
+per-entry `#`, which is decoration and is overwritten). It consumes keys with
+`stopImmediatePropagation`, not `preventDefault`: the rule form binds Enter-to-save
+on the same element, and a listener can only stop one registered after it — so the
+autocomplete must be attached first, and is.
+
+**The dry run explains an empty result**, because a bare zero teaches nothing.
+`-mac, +pc` reads as "drop Apple, keep PC" and is the natural first spec — but RPS
+tags *platform availability*, so all 41 Mac-tagged posts are also tagged `PC` and
+the rescue cancels the rule. `_run_tag_filter` counts entries a drop caught that a
+good/required tag let through and returns `rescued` + the top `rescued_by` tags. A
+**good-only** spec (`+wallpapers`) cuts nothing by construction — good tags rescue
+and whitelist nothing — yet reads naturally as "keep these", so `good_only` is
+returned and the panel names the two specs with teeth. Diagnostics, not a policy
+change: `+android, -iphone` must keep a post tagged both.
+
+**Source-page fallback.** Entries whose feed never delivered `<category>` (aged
+out before capture, or a tag-stripping publisher) are tagged from the article page
+on open: `extract_page_tags` harvests `article:tag` / `keywords` / `parsely-tags`
+from the lead-image service's source-HTML cache — zero extra requests when primed,
+and on a miss the tags appear next open, the same deferral as image captions. Only
+runs when the entry has no rows, so feed tags stay authoritative.
+
+## FakeFeedz entries get the article's own date
+
+A listing page is a wall of links: titles and hrefs are there, dates usually are
+not (chickensoft.games shows none at all on `/blog`, only on each post). Stamping
+every scraped entry with the scrape time made a fresh feed look like its whole
+backlog was published the second it was added, and made sorting by date
+meaningless — ten entries all reading `2026-08-12 23:18:17`.
+
+`_article_published_at` fetches each **new** entry's page and asks it for a date,
+trying the publisher's own metadata first (`mine_publish_date`: JSON-LD,
+`article:published_time`, `<time datetime=…>`) and the date the page merely
+*prints* second — the same order the re-fetch path uses. Cost is one fetch per
+new entry: an entry already in `scraped_entries` is never re-fetched, so a steady
+feed pays nothing per refresh and only the first scrape pays for its backlog. Any
+failure falls back to "now", because a missing date must never cost the entry.
+
+`publish_date.from_visible_text` needed a second tier for this. Its matcher wants
+an element whose `class`/`id` says `date`/`posted`/`byline`, which utility-CSS
+frameworks never provide — the byline lives in
+`<p class="text-[var(--color-muted-foreground)] text-sm font-serif">April 26, 2026</p>`.
+The fallback accepts an element whose **entire text is a date and nothing else**,
+which is a comparably strong signal without matching the dates scattered through
+comment timestamps, related-post rails and copyright footers. `Updated April 26,
+2026 by Chris` does not qualify. It runs only after the labelled pass, so a
+publisher that marks its date up properly still wins.
+
+## dev.to filtered feeds
+
+Dev.to's RSS (front page and per-tag) is an unfiltered firehose that mixes languages, while its public unauthenticated JSON API (`GET https://dev.to/api/articles`) exposes a per-article `language` label, reaction counts, and a `top=N` ranking window. `services/devto.py` follows the DeviantArt/FakeFeedz synthetic-feed pattern: one polite API request per refresh, client-side filtering (the API ignores `?language=`; we filter on dev.to's *own* `language` field, deliberately not our own detection), then render to `file://` RSS under `DATA_DIR/devto-feeds/` for `reader` to ingest. Per-feed config (tag, top-window days, English-only, min reactions, tags_exclude) lives in the per-user meta table `devto_feeds`; the Add Feed dialog detects dev.to front-page/tag URLs client-side (mirroring `parse_devto_url` — user/org pages are left to their normal small RSS) and reveals the filter fields, and the config is editable later via feed Properties → Tuning (`POST /devto-feeds/{id}/config`). Cover images seed the lead-image cache via the same sink mechanism as DeviantArt; deletion is dispatched in `purge_orphaned_feed` alongside the other rendered-feed types. Filter changes shape what arrives from then on — already-ingested entries are kept.
+
+## DeviantArt integration
+
+DeviantArt's legacy `backend.deviantart.com/rss.xml` is behind a CloudFront WAF that 403s datacenter traffic, so Lectio uses the DeviantArt API and renders results to `file://` RSS files like FakeFeedz (services/deviantart.py). Per-user creds live in app-settings.
+
+**Bluesky image recovery** (`services/bluesky.py`): per-profile bsky.app RSS (`/profile/<did>/rss`) is text-only, and content-labeled posts (e.g. adult) also expose no og:image on the web page. The images live in the post record and are served from the public `cdn.bsky.app` CDN, so Lectio fetches them from the public AT Protocol API (`app.bsky.feed.getPosts`) keyed by the post's `at://` URI — which the RSS feed stores as the entry id. `extract_entry_thumbnail_url` uses the first image for the list thumbnail; `get_entry_detail` appends all images to the article body. No auth and no label check at this layer — subscribing to the account is the user's opt-in. Cached in-memory (1h TTL) so list rendering doesn't re-hit the API.
+
+- **Auth** — OAuth2. Public galleries use the *client-credentials* grant; the *authorization_code* grant (PKCE — DeviantArt requires `code_challenge`) connects the user's account for watch-list access. Tokens are stored per-user and auto-refreshed; the token request tries with-secret then without, tolerating both confidential and public clients.
+- **Watch feed** (preferred) — one combined feed from `/browse/deviantsyouwatch` (everyone you Watch), instead of one feed per artist. A few paginated calls per refresh keep it under DeviantArt's strict per-user rate limit (`DeviantArtRateLimited` aborts bulk work cleanly; the scheduled refresh is round-robin capped).
+- **Add = Watch** — while connected, adding a `deviantart.com/<user>` URL Watches that artist on DeviantArt (it then appears in the Watch feed) rather than creating a per-artist feed.
+- **Tags** — browse/gallery responses don't include deviation tags; those need `/deviation/metadata` (up to 50 ids per call). Each feed refresh makes at most one metadata call for never-checked entries (`fetch_and_store_missing_tags`; `tags_fetched_at` is set even on zero-tag results so untagged deviations aren't re-queried forever), stores them on `deviantart_entries.tags`, and the regenerated RSS emits them as `<category>` — from there the standard `entry_feed_tags` capture renders the suggestion chips. The bulk watchlist sync's create path deliberately skips the lookup (adding N artists stays N calls); tags fill in on the first scheduled refresh. A rate-limited lookup is skipped, not fatal — entries land untagged and are retried next cycle.
+- **Watch-list sync auto-resume** — `sync_deviantart_watchlist` is add-only and stops cleanly at the rate cap; instead of waiting for a re-click it schedules a background continuation (a daemon `threading.Timer` routed through `_run_in_user_context`) honoring the 429's `Retry-After` (conservative 15-min fallback), capped at 12 rounds per triggering run. A per-user in-process guard keeps the Settings button, the daily maintenance run, and a pending auto-resume from syncing concurrently. Timers don't survive a restart — the daily maintenance sync is the catch-up. The sync also reconciles: subscribed artists no longer on the watch list are reported, never auto-unsubscribed (a curated feed may deliberately outlive a Watch). The reconcile excludes the synthetic combined Watch feed (`source='watch'`, username `deviantsyouwatch`) so it isn't perpetually flagged as unwatched. Failed adds and unwatched artists are persisted structurally in `deviantart_sync_detail` (JSON alongside the `deviantart_sync_status` string) so the Settings → DeviantArt subtab lists them as links to `deviantart.com/<user>` — the user never has to read server logs.
+- **Deactivated accounts** — a watched artist who deactivated their DeviantArt account returns `HTTP 400 "Account is inactive."` on gallery fetch (distinct from 404 = deleted/renamed). Such artists can never be added, so the sync would otherwise re-probe and re-fail them on every run. They're parked in the `deviantart_deactivated` table (`_is_da_deactivated_error` detects them), excluded from the sync's `to_add`, and shown as their own "Watched but deactivated" list in the subtab. Daily maintenance (`_deviantart_recheck_deactivated`, capped per run, oldest-checked first) re-probes them: a successful fetch means reactivation → subscribe and un-park; still inactive → bump `last_checked_at`; rate-limited → stop and resume next run.
+- **Images** — deviations carry stable (non-expiring) signed `wixmp.com` image URLs. DA feeds are pinned to the `inline` strategy so the article lead image and list thumbnail derive statelessly from the embedded content image (no source-page scrape, nothing to clobber). `wixmp.com` is trusted in `_is_image_url_acceptable` (its long auto-generated filenames/UUIDs otherwise trip the avatar/ad heuristics) and routed through `/api/img`.
+- The lead-image cache reads through to its DB table on a miss, so stored images survive restarts (the in-memory cache is seeded once under the default tenancy and otherwise warms lazily).
+- The interactive on-open `queue_source_fetch` persists **only a positive result**. A `None` is ambiguous — a transient page-fetch failure is indistinguishable from a genuine "no image" — and this path runs once per opened entry with no retry, so storing `None` would cement a momentary miss as a permanent negative and blank a thumbnail the feed actually has (e.g. a Standard Ebooks cover, which lives in `media:thumbnail` and resolves via the page's `og:image`). Negative-recording is left to the background backfill, which retries on its own schedule.
+
+## Combining feeds moves the entries, not just the curation
+
+`_migrate_curation` used to walk `set(src_tags) | set(src_stars)` — curation,
+not entries. A post with no tag, no star and no capture was never visited, so it
+was neither matched onto a survivor twin nor synthesized, and it vanished when
+`reader.delete_feed` ran. Combining two subscriptions to the same Webtoons comic
+silently lost an unread post that way. Dropping uncurated entries is correct for
+an *unsubscribe*; for a combine — the user asserting these two feeds are the same
+feed — it is not, so the loop now walks every source entry.
+
+Two things make that safe at scale. **Read state is carried, not reset**, or
+combining an old feed would dump its entire history into the survivor's unread
+count; a survivor twin that is already read is never resurrected as unread by an
+unread source copy. And **per-entry meta follows the entry**
+(`_rekey_entry_meta`: lead image, captured feed tags, content/title/date/link
+overrides, media, read state, history), because a post that arrives with no
+thumbnail and its hand-made title correction reverted is a worse outcome than
+one that did not move. The re-key omits INTEGER PRIMARY KEY columns — copying
+`read_history.id` verbatim collides with the row being copied from, so
+`INSERT OR IGNORE` drops the copy and the follow-up `DELETE` loses the row.
+
+## Combining feeds carries the offline captures
+
+`_migrate_curation` moves a removed feed's manual tags and stars onto the survivor, and now its **starred-archive rows** too (`rekey_archive`, which carries the asset links and refuses to clobber a capture the survivor already has). Without that the captures stayed keyed to a feed that was about to be deleted: the articles were fine, but their offline copies became unreachable and the Saved view rendered them as archive-only *orphans* — from the archive row's own stale `link`, which is how it surfaced, as a combined feed's articles still showing their old dead URLs. Measured on the live library 2026-07-25, past combines had stranded **85** of them; `scripts/repair_orphaned_archives.py` re-attached them (64 re-keyed, 3 where the stranded row was the *better* capture and replaced a thinner twin, 18 redundant drops, 14 links refreshed).
+
+Two subtleties the fix has to respect. The migration loop walks *curation*, not entries, so a capture on an entry carrying neither star nor tag is never visited — a sweep after the loop re-keys those, but only when the article exists on the survivor; synthesizing an entry purely to host a capture would put an uncurated row in the survivor, and the orphan view is already that capture's home. And the archived id set is read **once** up front, because the per-entry alternative opens an archive connection for every entry just to learn that most have nothing to move.
+
+## WebSub (PubSubHubbub)
+
+`WebSubService` (`services/websub.py`) implements the WebSub subscriber protocol:
+
+1. **Hub discovery** — on feed add and periodically during refresh, `_discover_hub_url` fetches the feed URL and looks for `rel="hub"` in the HTTP `Link` header or in `<atom:link>` / `<link>` XML elements. A "no hub found" attempt is recorded in `websub_subscriptions.hub_tried_at` so the check is not repeated for 7 days.
+2. **Subscription** — `subscribe(feed_url, hub_url)` posts `hub.mode=subscribe` with a random HMAC secret and a 7-day lease request. The row is written as `verified=0` until the hub confirms.
+3. **Verification callback** (`GET /websub/callback`) — hub sends `hub.challenge`; `handle_verification` confirms the topic matches, marks the row `verified=1`, and echoes the challenge. FastAPI query-alias params (`hub.mode`, `hub.topic`, `hub.challenge`, `hub.lease_seconds`) map the dot-notation params cleanly.
+4. **Push callback** (`POST /websub/callback`) — hub delivers content; `verify_push_signature` checks HMAC-SHA256 (or SHA1 fallback) against the stored secret. On success, for each subscriber `feed_refresh_service.update_feeds([feed_url])` fetches the new entries, then `_run_automation_after_refresh({feed_url})` runs the rules (mark-read, tag-filter, dedup, guid-churn suppression) on them — the same post-refresh step every scheduled/manual refresh performs. Omitting it (the state before this was fixed) meant WebSub-delivered entries bypassed all automation, so rules on prolific push publishers (e.g. realpython.com, which delivers almost entirely via push) effectively never fired.
+5. **Lease renewal** — `renew_expiring_subscriptions()` re-subscribes any verified row whose `expires_at` is within 24 hours. Called each refresh cycle.
+
+**Multi-user fan-out:** the callback URL carries only the topic (no user). `websub_subscribers` lists every user subscribed to a feed; both callbacks fan out across those rows rather than acting on a single tenant. `_websub_verify_fanout` confirms the handshake for whichever user(s) have a matching pending subscription; `_process_websub_push` collects every user with a verified subscription for the topic, confirms the push is authentic against *any* of their secrets (a forged push matches none), then refreshes each subscriber under its own tenancy context in a daemon thread. Because the shared callback means the hub only retains the most recent subscriber's secret, validating against any one secret and fanning the refresh out to all subscribers is what lets several users share a single hub subscription.
+
+The service is initialized only when `LECTIO_PUBLIC_URL` is set; all integration points in `main.py` guard on `if websub_service`. On feed removal, `purge_orphaned_feed` sends an active unsubscription request to the hub (best-effort HTTP POST; hubs expire leases anyway if the request is lost).
+
+**Feed removal lifecycle:** `purge_orphaned_feed(reader, conn, feed_url, *, archive_pending, rescue_to)` is the single canonical sequence run whenever a feed leaves the system (confirmed orphaned — no remaining `folder_feeds` rows). Steps in order: (1) force-archive pending saved/starred entries; (2) rescue unread entries into a kept/canonical feed; (3) dispatch the delete via the appropriate path (DeviantArt rendered feed → `deviantart_service.delete_deviantart_feed`; dev.to rendered feed → `devto_service.delete_devto_feed`; scraped/FakeFeedz feed → `scraper_service.delete_scraped_feed`; plain feed → `reader.delete_feed`); (4) WebSub unsubscribe. Callers set `archive_pending=False` when entries survive under a kept URL (dedup, format-upgrade), and pass `rescue_to` to migrate unread state. The helper takes an already-open `reader` and `conn` so callers control the `with` scope and context-manager nesting is never doubled.
+
+**Folder deletion:** `delete_folder(folder_id, feed_action, move_to_folder_id)` deletes a folder and its descendants. When the folder holds feeds the UI prompts for their fate: `feed_action="unsub"` (default) purges feeds that end up orphaned via `purge_orphaned_feed`; `feed_action="move"` reassigns every affected feed to `move_to_folder_id` without unsubscribing. A target of `UNCATEGORIZED_FOLDER_ID` (or the root folder) leaves feeds folderless (Uncategorized). Returns `(deleted_folder_count, unsubscribed_count, moved_count)`. The empty-folder case skips the prompt (simple confirm).
+
+**Push indicator:** `get_push_active_feed_urls()` queries `websub_subscriptions` for `verified=1 AND hub_url IS NOT NULL` in one pass and returns a `set[str]`; the index route threads this into the template context so both the sidebar feed tree and Settings → Feeds can render the ⚡ glyph without per-feed queries.
+
+Storage: **shared** `lectio_websub.sqlite` (not per-user), two tables:
+- `websub_subscriptions (feed_url TEXT PK, hub_url, secret, lease_seconds, subscribed_at, expires_at, verified, hub_tried_at)` — one row per feed, one active hub subscription regardless of how many users subscribe to that feed.
+- `websub_subscribers (feed_url, user_id, PRIMARY KEY (feed_url, user_id))` — the N-user fan-out list; push and verification callbacks iterate this table.
+
+Startup migration copies legacy per-user `websub_subscriptions` rows idempotently into the shared DB.
+
+## Removing a feed has to clear the record that it was failing
+
+`purge_orphaned_feed` cleaned `kept_feeds`, `feeds_needing_replacement` and
+`folder_feeds` but not `feed_failure_state`, so a feed unsubscribed *because* it
+was dead counted as failing forever (560 rows from one sweep). Safe to drop: it
+is derived state rebuilt on the next fetch, and a feed with no reader row has no
+next fetch.
+
+**Ghost is defined against reader, not folders** — unsubscribe-with-keep
+deliberately leaves a real feed with no folder row.
+`scripts/clear_ghost_failure_state.py` cleared the backlog. Sibling tables still
+outlive their feeds (`feed_lead_image_strategy` 1,024 ghost feeds,
+`feed_fetch_history` 754, …); untidy rather than wrong, and the API id maps and
+fetch history are not obviously safe to drop.
+
+## A tag has to survive an unsubscribe, because a star does
+
+A star is a `saved_entries` row in the meta DB and survives the feed's deletion;
+a tag lives in reader's own `entry_tags` and is deleted *with the feed*. So a
+tagged-but-unstarred entry came out of an unsubscribe with its capture intact and
+its tags gone — which makes it read as carrying no keep signal, and therefore
+eligible for `purge_uncurated_orphan_archives.py`.
+
+`_carry_tags_to_orphan_archive` copies them into `orphan_entry_tags` (the table
+the UI already writes when you tag an entry whose feed is gone) before the
+delete. Gated on a surviving capture — the same test `_purge_dead_entry_meta`
+uses — and skipped when `migrate_curation_to` is set, where tags follow the
+entries instead. `orphan_entry_tags` is absent from `_DEAD_ENTRY_META_TABLES` so
+the sweep afterwards does not undo it.
+
+## Unsubscribing has to be able to actually remove things
+
+Once tags survived, *every* exit from the dialog left the posts in Saved, because
+a star or tag preserves the capture. `drop_all_curation` is the fourth choice.
+Order is load-bearing:
+
+1. **tags first** — `apply_star_state(False)` consults `entry_has_keep_signal`
+   and would refuse to release the capture while a tag remains;
+2. then the star;
+3. then the archive **synchronously** — `enqueue_removal` only marks
+   `pending_removal` for a worker, and the feed is about to disappear.
+   `delete_archive` keeps assets another entry references.
+
+`archived_entries` needs no handling: with every capture gone,
+`_purge_dead_entry_meta` drops all per-entry meta in one pass. It is the dialog's
+only irreversible choice, so it carries a `confirm()` and disables the re-star
+checkbox.
+
+## "Re-star" is two operations, not one
+
+Unsubscribing can bring curated posts back to the top of the Inbox, which orders
+by `saved_entries.saved_at`. `restar_curated_entries` does two different things:
+
+- **tagged but unstarred** — no row to update, so a date bump does nothing. It
+  must be genuinely starred, which is also what enqueues its capture.
+- **already starred** — `apply_star_state` is `INSERT OR IGNORE`, so it would
+  leave the old timestamp. That row is re-stamped directly.
+
+Deliberately **not** unstar-then-star: unstarring an entry with no other keep
+signal enqueues removal of its capture. Runs before the feed is removed, off by
+default, and the checkbox resets on every open (the modal is reused).
+
+## A kept post has to say its feed is gone
+
+A **kept feed** still exists in reader but is hidden from the tree; an **orphan
+archive**'s feed is gone entirely. Both mean there is no subscription behind the
+name, so both render `Feed Name (unsubscribed)`.
+
+The test is membership of `get_all_reader_feed_urls(include_kept=False)`, *not*
+"has no folder row" — a feed in no folder is still subscribed via Uncategorized.
+Scoped to the feeds on screen, and rendered as a separate `<span>`: the feed name
+also appears in search, exports and the tree, and baking a status word into it
+would leak everywhere.
+
+## Moved here from saved.md
+
+**A URL can carry a month without carrying a day.** `url_inferred_pubdate` reads
+the `/YYYY/MM/DD/` permalink; `url_inferred_pubmonth` reads `/YYYY/MM/` and
+resolves it to the first of the month. The day is a placeholder, the month is not
+— WordPress generates the permalink from the publish date. It is the last tier in
+`recover_publish_dates.py` for that reason, but on blog.guitar-pro.com (67 of the
+68 entries it recovered) it is also the *only honest* signal: those pages publish
+`dateModified` and nothing else, so mining the page would have dated a 2021 post
+to October 2024. A real month beats a precise-looking lie.
+
+## Refresh pacing
+
+- **Refresh backoff & high-fanout pacing** (`FeedRefreshService.update_feeds`) —
+  failing feeds get exponential *per-feed* backoff. A coarse *per-domain* backoff
+  also exists for hosts that go down, but it is **exempt for high-fanout hosts**
+  (>= `_HIGH_FANOUT_DOMAIN_FEEDS` feeds in the batch, e.g. ~700 youtube.com subs):
+  reader doesn't reliably expose an HTTP status on its exceptions (real YouTube
+  404s arrive with status `None`), so a few dead channels would otherwise look
+  like transport failures and lock the whole domain — which starved every
+  subscription for days. Per-feed backoff handles the dead ones; the domain guard
+  is kept only for small hosts, and there it activates only after several
+  consecutive failures, caps at 1h, and clamps stale locks at read so they
+  self-heal. Requests to a high-fanout host are also **paced**
+  (`_HIGH_FANOUT_PACE_SECONDS`) so a big serial burst isn't throttled into
+  spurious 404s (YouTube 404s a ~700-request burst though each feed is fine
+  singly) — a polite-client measure, feeds to other hosts interleave at full speed.
