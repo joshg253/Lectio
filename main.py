@@ -5424,6 +5424,26 @@ def real_published_date(value: datetime | None) -> datetime | None:
         return None
 
 
+# SQL mirror of entry_publication_date's FEED-supplied sources, for the list
+# fast paths that order thousands of entries without hydrating them.
+#
+# `updated` is the load-bearing term and was missing. A feed may ship <updated>
+# and no <published> — 2,696 entries across 84 feeds here — and
+# entry_publication_date reads both, so the SQL ordering disagreed with the
+# ordering everything else uses. The prefetch takes the oldest (or newest) N
+# rows by ITS key, so a disagreement does not merely misplace an entry, it
+# DROPS it: hentai-foundry's "Black Cat by erotibot" is dated 2026-07-21 by
+# <updated> and 2026-08-12 by first_updated, so it fell outside a window
+# spanning 2026-07-20 to 2026-08-01 and vanished from All Feeds while showing
+# correctly in its folder (which has few enough feeds to use reader's own
+# per-feed query, and reader reads <updated>).
+#
+# The URL/title inference tiers of entry_publication_date are deliberately not
+# reproduced here: they cannot be expressed in SQL, and they only ever apply to
+# entries this expression already treats as undated.
+_ENTRY_SORT_SQL = "coalesce(published, updated, first_updated)"
+
+
 def entry_publication_date(entry) -> datetime | None:
     """When the entry was actually published, or None when nothing says.
 
@@ -12819,7 +12839,7 @@ def list_entries_for_feeds(
                         _placeholders = ",".join("?" for _ in _feed_list)
                         rows = _rconn.execute(
                             f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
-                            f" ORDER BY coalesce(published, first_updated) ASC LIMIT ?",
+                            f" ORDER BY {_ENTRY_SORT_SQL} ASC LIMIT ?",
                             _feed_list + [fetch_limit],
                         ).fetchall()
                     else:
@@ -12833,9 +12853,9 @@ def list_entries_for_feeds(
                             _chunk = _feed_list[_i:_i + 999]
                             _ph = ",".join("?" for _ in _chunk)
                             chunk_rows = _rconn.execute(
-                                f"SELECT feed, id, coalesce(published, first_updated) AS sort_val FROM entries"
+                                f"SELECT feed, id, {_ENTRY_SORT_SQL} AS sort_val FROM entries"
                                 f" WHERE feed IN ({_ph}){read_clause}"
-                                f" ORDER BY coalesce(published, first_updated) ASC LIMIT ?",
+                                f" ORDER BY {_ENTRY_SORT_SQL} ASC LIMIT ?",
                                 _chunk + [fetch_limit],
                             ).fetchall()
                             batch_rows.extend(chunk_rows)
@@ -12864,7 +12884,7 @@ def list_entries_for_feeds(
             # reader first observed the entry (recent_sort).
             read_sql = {None: "", True: " AND read IS NOT NULL", False: " AND (read IS NULL OR read != 1)"}
             read_clause = read_sql.get(reader_read_filter, "")
-            sort_col = "recent_sort" if normalized_sort_by == "received" else "coalesce(published, first_updated)"
+            sort_col = "recent_sort" if normalized_sort_by == "received" else _ENTRY_SORT_SQL
             try:
                 _rconn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
                 _rconn.row_factory = sqlite3.Row

@@ -2443,6 +2443,33 @@ separated by spaces. The file was `Windows11Icon.png`, CamelCase, so the
 `image_url = NULL` and stopped re-resolving, so fixing the rule is only half the
 job — the poisoned rows have to be cleared for the entries to recover.
 
+## The list's SQL ordering has to agree with the app's date, or entries vanish
+
+`list_entries_for_feeds` cannot hydrate thousands of Entry objects to sort them,
+so past `PER_FEED_QUERY_THRESHOLD` (32 feeds) it prefetches an ordered window
+straight from the reader DB and hydrates only that. The window is the whole
+point — and it is also the trap: the prefetch takes the oldest (or newest) N rows
+**by its own SQL key**, so if that key disagrees with `entry_publication_date`,
+an entry is not merely misplaced, it is **dropped before Python ever sees it**.
+
+The key was `coalesce(published, first_updated)` and omitted `updated`, which
+`entry_publication_date` reads second. A feed may ship `<updated>` and no
+`<published>` — 2,696 entries across 84 feeds on the live library.
+hentai-foundry's "Black Cat by erotibot" is 2026-07-21 by `<updated>` and
+2026-08-12 by `first_updated`, so an oldest-N prefetch ranked it as one of the
+newest entries in the library and discarded it, and it disappeared from a window
+spanning 2026-07-20 to 2026-08-01.
+
+It still showed correctly in its own folder, because 646 feeds is below the
+threshold at which the fast path engages, so that view used reader's own per-feed
+query — and reader reads `<updated>`. "It's in the folder but not in All" is the
+signature of the two paths disagreeing, and is worth recognising as such.
+
+`_ENTRY_SORT_SQL` is now the single expression, defined next to
+`entry_publication_date` so the two stay in step. The URL- and title-inference
+tiers are deliberately not reproduced in SQL: they cannot be, and they only ever
+apply to entries this expression already treats as undated.
+
 ## Several images in one container are a row — unless they are a comic page
 
 `.entry-content p:has(> img + img)` lays a container's images out as a wrapping
