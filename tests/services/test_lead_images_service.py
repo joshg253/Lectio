@@ -2200,3 +2200,38 @@ def test_a_filename_merely_ending_in_those_letters_survives(tmp_path: Path):
                 "http://x.test/comics/switched_on_and_off_again.png",
                 "http://x.test/comics/2026-08-13-showdown.jpg"):
         assert _acceptable(service, url) is True, url
+
+
+# --- <img> written by JavaScript is source code, not an image ---------------
+#
+# monstersoupcomic's bookmark widget does
+#   document.write('<a …><img src="'+imgTag+'" …>')
+# and the page scan produced the lead image
+# "https://monstersoupcomic.com/'+imgTag+'" — a URL that cannot resolve to
+# anything. Stripped once at fetch time rather than at each of the ten
+# _IMG_TAG_RE scan sites, so no future scan can forget.
+
+
+def test_script_written_img_tags_are_not_candidates(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    page = (
+        '<p><img src="/real.jpg"></p>'
+        "<script>document.write('<img src=\"'+imgTag+'\">')</script>"
+        '<img src="/also-real.png">'
+    )
+    out = service._strip_script_blocks(page)
+    assert "imgTag" not in out
+    assert "/real.jpg" in out and "/also-real.png" in out
+
+
+def test_stripping_scripts_is_a_passthrough_without_any(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._strip_script_blocks("<p>hi</p>") == "<p>hi</p>"
+
+
+def test_meta_tags_survive_script_stripping(tmp_path: Path):
+    """og:image lives in <head> and must be untouched."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    page = '<head><meta property="og:image" content="/hero.jpg"></head><script>var x=1</script>'
+    out = service._strip_script_blocks(page)
+    assert 'content="/hero.jpg"' in out

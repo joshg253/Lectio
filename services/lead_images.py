@@ -3442,12 +3442,29 @@ class LeadImageService:
                     _final = _resp.url
                     _corp = _resp.headers.get("cross-origin-resource-policy", "").lower()
                     _corp_restricted = _corp in ("same-site", "same-origin")
-                return _html, _final, _corp_restricted
+                return self._strip_script_blocks(_html), _final, _corp_restricted
             except Exception:
                 return None
 
         assert response is not None
-        return response.text, str(response.url), _corp_restricted
+        return self._strip_script_blocks(response.text), str(response.url), _corp_restricted
+
+    # <img> tags written by JavaScript are not images on the page — they are
+    # source code. monstersoupcomic's bookmark widget does
+    #   document.write('<a …><img src="'+imgTag+'" …>')
+    # and the scan dutifully produced the lead image
+    # "https://monstersoupcomic.com/'+imgTag+'", a URL that cannot resolve to
+    # anything. Stripped once at fetch time rather than at each of the ten
+    # _IMG_TAG_RE scan sites, so nothing can forget. Safe here because this class
+    # reads no JSON-LD (which also lives in <script>); og/meta tags are in <head>
+    # and untouched.
+    _SCRIPT_BLOCK_RE = re.compile(r"<script\b[^>]*>.*?</script\s*>", re.IGNORECASE | re.DOTALL)
+
+    @classmethod
+    def _strip_script_blocks(cls, html_text: str) -> str:
+        if "<script" not in html_text.lower():
+            return html_text
+        return cls._SCRIPT_BLOCK_RE.sub(" ", html_text)
 
     def _is_image_url_fetchable(
         self, image_url: str, domain_cache: dict[str, bool] | None = None

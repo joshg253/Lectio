@@ -2443,6 +2443,21 @@ separated by spaces. The file was `Windows11Icon.png`, CamelCase, so the
 `image_url = NULL` and stopped re-resolving, so fixing the rule is only half the
 job — the poisoned rows have to be cleared for the entries to recover.
 
+## An `<img>` inside a `<script>` is source code, not an image
+
+monstersoupcomic's bookmark widget does
+
+```js
+document.write('<a …><img src="'+imgTag+'" …>')
+```
+
+and the page scan dutifully produced the lead image
+`https://monstersoupcomic.com/'+imgTag+'` — a URL that cannot resolve to
+anything. `<script>` blocks are now stripped once in `_fetch_page_html`, rather
+than at each of the ten `_IMG_TAG_RE` scan sites, so no future scan can forget.
+Safe there because this class reads no JSON-LD (which also lives in `<script>`),
+and `og:`/`meta` tags are in `<head>` and untouched.
+
 ## An age gate is the one image that is definitely not the post
 
 An adult webcomic serves a content-warning interstitial *instead of* the strip,
