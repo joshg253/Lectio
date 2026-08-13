@@ -7,270 +7,163 @@ Read Mode, offline reading, and offline actions.
 
 ## Read Mode — e-ink reading app (`GET /read`)
 
-A standalone, distraction-free reading *app* for the saved/starred backlog, built
-e-ink-first (the driver is reading the backlog on a Supernote Manta browser,
-where Instapaper renders badly). The **Saved Articles** sidebar row is hijacked to
-open it — a full navigation, since `_layout_shell.js` now bails on any link whose
-path isn't `/`. It is deliberately **not** the app shell: its own light-themed
-`static/reader.css` + `static/reader.js`, pure black-on-white, large adjustable
-type, no shadows/gradients, and (critically) `transition:none/animation:none`,
-which ghost on e-ink. Being standalone also sidesteps the app's localStorage-only
-theming (a server-rendered page can't read it) and satisfies "auto light theme".
+A standalone reading app for the starred backlog, built e-ink-first (a Supernote
+Manta browser, where Instapaper renders badly). Own `reader.css`/`reader.js`,
+black-on-white, large adjustable type, and `transition:none/animation:none` —
+transitions ghost on e-ink. Standalone also sidesteps the app's localStorage-only
+theming, which a server-rendered page cannot read.
 
-**Two states, one route.** With no `entry_id`, `reader_view` renders the **2-pane
-browse** (`templates/read_mode.html`): a simplified saved tree (folders + manual-tag
-buckets + an **Archive** node pinned at the bottom, each a plain full-navigation
-`<a>`) on the left, and the item list for the selected node on the right. With an
-`entry_id`, it renders the **paginated reader** (`build_reader_page`). Read Mode
-ignores read/unread — it always lists starred items (`star_only=True,
-read_filter='all'`); the browse node scope is `folder_id` / `tag` / `archived` / `q`.
-A bare bookmarked `/read` lands on the browse **All (inbox)**. All tree counts are
-**non-archived** totals (`_read_mode_saved_index`); tag buckets are restricted to
-tags on inbox items with inbox counts (`_inbox_tag_counts`) and collapsed in a
-`<details>` (heavy taggers have dozens). Archiving an item drops it from these
-counts/lists but never strips its tags. Saved-article captures show their source
-domain as the list subtitle (`_read_mode_subtitle`); feed-starred items show the
-feed title.
+**Two states, one route.** No `entry_id` → the 2-pane browse (saved tree +
+item list); with one → the paginated reader. Read Mode ignores read/unread
+(`star_only=True, read_filter='all'`); node scope is `folder_id` / `tag` /
+`archived` / `q`. Tree counts are non-archived; tag buckets are restricted to
+tags on inbox items. Archiving drops an item from those counts but never strips
+its tags.
 
-**Paginated, not scrolled.** `reader.js` lays the article out in screen-width CSS
-columns (`column-width:100vw`, stride = column-width + column-gap = 100vw) inside
-an `overflow:hidden` viewport and turns "pages" by translating the column
-container horizontally. Tap zones (left third = back, right two-thirds = forward),
-**horizontal swipe**, and arrow/page/space keys turn pages; past the first/last
-page it navigates to the prev/next article (`data-prev`/`data-next`, full loads).
-`A−`/`A+` adjusts `--reader-fs` and re-paginates, persisting size in `localStorage`.
-Prev/next follow the **selected node's** list.
+**Paginated, not scrolled.** `reader.js` lays the article out in `100vw` CSS
+columns inside an `overflow:hidden` viewport and translates horizontally. Tap
+zones (left third back, right two-thirds forward), swipe and keys turn pages;
+past either end it loads the prev/next article from the *selected node's* list.
+`A−`/`A+` adjusts `--reader-fs` and re-paginates, persisted.
 
-**Archive vs Delete (the "done" axis).** Saved items need a *second* layer of
-read/unread. Josh's framing (2026-07-29): a feed post only needs read/unread, but
-**a star is a TODO** — "I still have to decide what to do with this" — and you can
-read something and still not be done with it. So done is its own axis.
+### Archive and Delete are the "done" axis
 
-The two axes are deliberately independent, and all four combinations are
-reachable: *read but not archived* is the TODO that survives reading; *archived
-but unread* is deciding you don't need to read it at all. The model is triaging
-an email inbox — you can tell from the list whether you want to read something,
-keep it, or drop it, without opening it.
+A feed post needs only read/unread, but **a star is a TODO** — you can read
+something and still not be done with it. So done is its own axis, and all four
+combinations are reachable: *read but not archived* is the TODO that survives
+reading; *archived but unread* is deciding you never need to read it.
 
-**`archived_entries` is its own table, not a column on `saved_entries`.** A
-`saved_entries` row *is* the star, and Archive **removes** the star — so state
-stored on that row could not outlive the act that sets it. The table also lets a
-tagged-but-unstarred entry be archived, which the column could never represent.
-Migrated by lifting the legacy `saved_entries.archived_at` column **once**, then
-clearing the column in the same transaction. **Idempotent is not enough here.**
-The first version used `INSERT OR IGNORE` and left the column populated, so every
-boot re-lifted it: un-archiving deleted the `archived_entries` row, the old column
-survived, and the next restart resurrected the item. It surfaced as "I've
-unarchived them 3 times now and they keep coming back", and it is invisible until
-something restarts the app — the same shape as the starred-archive backfill that
-re-created orphan star rows at every boot. Clearing the source is also what
-removes the second source of truth; a marker flag would leave a populated column
-that still reads as authoritative. This also deleted the unstar-tagged panel's
-`archived_at_lost` warning outright — unstarring can no longer discard archived
-state, so there is nothing to warn about.
+- **Delete** = leave Kept entirely: clears tags **then** unstars. The unstar
+  route releases the offline capture only when no tags remain, so the reverse
+  order strands the capture with nothing keeping it. The confirm names the tags —
+  tag loss is unrecoverable; a plain unstar stays unconfirmed.
+- **Archive** = out of the inbox, filing intact. It **removes the star** (the
+  TODO is discharged) while tags, the capture and pruning-exemption survive.
+- **Both mark the entry read**, at both levels, and append to `read_history` —
+  acting on something *is* dealing with it, and leaving it unread puts it back in
+  the queue it was just cleared from.
+- **Archive is a third keep signal** (`entry_has_keep_signal`, and `_prune_entries`
+  honors the same three). Archiving is *implemented* as an unstar, and the unstar
+  path releases the capture and hard-deletes a `lectio:saved` husk once nothing
+  keeps the entry — miss this and the gesture that promises to keep the contents
+  destroys them.
+- **Ordering is server-side.** `/entries/archive` writes the archived row before
+  unstarring; `/entries/discard` clears tags *and* the archived row before
+  unstarring. Delete forgetting the archived row failed quietly twice: the entry
+  stayed in Archive forever, and the surviving keep signal skipped the capture
+  release, so Delete kept what it exists to drop. It is one route now because the
+  constraint belongs to the storage layer, not the caller.
 
-Archiving drops the item from the inbox (`resolve_reader_backlog(archived=…)` filters against
-`get_archived_saved_keys()`; `None` = no filter, used for Search which spans
-everything). The reader header's **Archive** button POSTs `/entries/archive`
-(`set_entry_archived`); **Delete** simply un-saves via the existing
-`POST /entries/saved` (`saved=0`); both are `fetch` calls carrying the page's
-CSRF token, then advance to `data-next`. This **Archive** is *not* the offline
-**starred archive** (`archived_entry` capture DB) — same word, different concept.
+**`archived_entries` is its own table, not a column on `saved_entries`.** That row
+*is* the star, and Archive removes it — state stored there could not outlive the
+act that sets it — and a table also lets a tagged-but-unstarred entry be
+archived. Migrated by lifting the legacy column **once** and clearing it in the
+same transaction. **Idempotent was not enough:** an `INSERT OR IGNORE` that left
+the column populated re-lifted it every boot, so un-archiving worked until the
+next restart ("I've unarchived them 3 times now"). Clearing the source is what
+removes the second source of truth.
+
+This Archive is *not* the offline starred archive (`archived_entry`) — same word,
+different concept.
 
 **Content resolution** (`resolve_reader_article_html`): archived readability copy
-first (`_resolve_archived_readability_html`, shared with `/entries/readability` —
-offline HTML with `/starred-asset/` URLs, survives dead sources), then a live
-readability extraction, then the stored feed content — all already sanitized, so
-no new sanitization surface.
+first (offline, `/starred-asset/` URLs, survives dead sources), then a live
+extraction, then stored feed content. All already sanitized.
 
-**Mark-read is earned by reaching the last page, not by opening the article.**
-Serving the reader page marks nothing. In an e-ink browse loop opening an item
-is how you decide whether you want it, so marking on render turned every peek
-into a read — the whole saved backlog could be cleared by scrolling through it.
-`static/reader.js` posts to `/entries/read` once the last page is reached, which
-is the first moment the whole article has been on screen; a one-page article
-qualifies immediately, because there it is true. The post reuses the route's
-existing async branch (`X-Requested-With: lectio-entry-read-toggle`) rather than
-adding an endpoint — that branch already writes read state, `entry_read_state`
-and read history from a tenancy-rebinding daemon thread, which is exactly what
-the old on-render `_mark_entry_read_background` call did.
+### Mark-read is earned by reaching the last page
 
-The client holds the mark until pagination has **settled**, and settling is a
-readiness check rather than a delay. On a cold load a 12-page article measures as
-**one page** until its stylesheet and images arrive — which satisfies "last page
-reached" and marks an article read the instant it is opened. That was observed in
-testing, not theorised, and a fixed timeout cannot fix it because the wait is a
-race against however long those resources take. So `trySettle` re-measures every
-`SETTLE_POLL_MS` and only trusts the count once `document.readyState` is
-`complete` *and* every `<img>` reports `.complete` (which covers errored images —
-they are settled, they just contribute no height). `SETTLE_MAX_TRIES` caps the
-wait at ~5s so an image that never resolves can't block mark-read forever.
+Serving the page marks nothing. In a browse loop, opening an item is how you
+decide whether you want it, so marking on render turned every peek into a read.
+`reader.js` posts to `/entries/read` once the last page is reached, reusing the
+route's existing async branch rather than adding an endpoint.
 
-Only the **one-page** case actually needs this guard: a multi-page article can't
-be marked without the reader genuinely paging to the end, whenever that happens.
-The guard exists because a wrong measurement makes every article look one-page.
+The mark waits for pagination to **settle**, and settling is a readiness check,
+not a delay: on a cold load a 12-page article measures as **one page** until its
+stylesheet and images arrive, which satisfies "last page reached" immediately. A
+fixed timeout cannot fix a race against arbitrary resource timing, so `trySettle`
+re-measures until `document.readyState === 'complete'` *and* every `<img>` reports
+`.complete` (errored images are settled — they just add no height), capped at
+`SETTLE_MAX_TRIES` ≈ 5s. Only the one-page case needs the guard; a multi-page
+article cannot be marked without genuinely paging to the end. Both scopes follow
+the same rule, since the scope is invisible from inside the reader.
 
-Both scopes follow this rule: the peek problem is identical in each, and the
-scope isn't visible from inside the reader, so splitting the rule would make
-"did that count as read?" unpredictable.
+### Tagging is a tap-list, not a text field
 
-**Tagging from Read Mode is a tap-list, not a text field.** Filing on e-ink has
-no hover, a slow repaint, and a keyboard that costs several. So the whole tag
-vocabulary (`get_all_manual_tag_names`) ships with the page as inline JSON
-(`__READER_TAGS__`, same no-reading-from-the-DOM style as `__READER_NAV__`) and
-renders as large toggle buttons — applied tags first and inverted, the rest
-alphabetical. A keyboard is needed only for the "+ New" field, which stays hidden
-until asked for.
+E-ink has no hover, a slow repaint, and an expensive keyboard. The whole tag
+vocabulary ships inline as `__READER_TAGS__` and renders as large toggles —
+applied first and inverted. A keyboard is needed only for "+ New".
 
-Each tap **applies immediately** and sends the *whole desired set* with
-`append_mode=0`, so adding and removing are one request shape and closing the
-panel half way still saved what was tapped. The server normalizes and caps
-(`MAX_MANUAL_TAGS`), and its reply is treated as the truth — the panel re-renders
-from it, so a tag typed as "Brand New Tag" coming back as three tags is visible
-rather than silently assumed. The panel overlays the article instead of reflowing
-it: re-paginating the body to make room would be a full-screen e-ink flash. The
-header's `#n` count and Delete's `data-tags` are both re-synced after every
-change, the latter so Delete's confirm keeps naming the right tags.
+Each tap applies immediately and sends the *whole desired set* with
+`append_mode=0`, so add and remove are one request shape and closing half way
+still saves what was tapped. The server's reply is the truth and the panel
+re-renders from it, so "Brand New Tag" coming back as three tags is visible
+rather than assumed. The panel overlays the article — re-paginating to make room
+would be a full-screen e-ink flash. The header count and Delete's `data-tags`
+re-sync after every change, so Delete's confirm keeps naming the right tags.
 
-**Delete and Archive mean different things, and both had to change for the kept
-model.** Josh's rule: *Delete removes star **and** tags; Archive just takes it out
-of the inbox.*
+### The Inbox is STARRED minus Archived
 
-- **Delete** = leave Kept entirely. Unstarring alone was a no-op on anything
-  tagged — a tag keeps an entry on its own, so the row stayed in the list while
-  the reader advanced as though it had gone. The client clears tags **first**,
-  then unstars: the unstar route only enqueues removal of the offline archive
-  when no manual tags remain, so the reverse order would strand the captured
-  copy with nothing keeping it. Tag loss is unrecoverable, so the confirm names
-  the tags; a plain unstar (no tags) stays unconfirmed because it is cheap to undo.
-- **Archive** = out of the inbox, filing intact. The 2026-07-29 refinement (the
-  `archived_entries` table above) is that Archive **removes the star** — the TODO
-  is discharged — while tags, the offline capture, and pruning-exemption all
-  survive, because "keep its contents" is the whole point. It works on tag-kept
-  items too; the old "hide the button when only a tag keeps it" branch is gone.
-- **Both Archive and Delete mark the entry read, at both levels.** Acting on
-  something from the list *is* dealing with it, so leaving it unread would put it
-  straight back in the queue it was just cleared from. Both also append to
-  `read_history`, which is what makes a triaged item findable again.
-- **Archive is a third keep signal**, next to starred and tagged —
-  `entry_has_keep_signal`. This is not bookkeeping: archiving is *implemented* as
-  an unstar, and the unstar path releases the offline capture and hard-deletes a
-  `lectio:saved` husk once nothing keeps the entry. Miss the archived signal and
-  the gesture that promises to keep the contents is the gesture that destroys
-  them. `_prune_entries` honors the same three signals, or retention would delete
-  archived posts nightly — they are read and unstarred, exactly its target shape.
-- **Ordering is server-side.** `POST /entries/archive` writes the archived row
-  *before* unstarring, and `POST /entries/discard` clears tags **and the archived
-  row** *before* unstarring, both for the same reason: the capture is released
-  only when the last keep signal goes. Delete forgetting the archived row failed
-  quietly twice — the entry stayed listed in Archive forever, and the unstar saw
-  a surviving keep signal and skipped releasing the capture, so Delete kept the
-  contents it exists to drop. Deleting an archived item is not a contradiction:
-  Archive means "done, keep it", Delete means "done, don't", so Delete wins. Delete used to be a client-side chain of two POSTs with
-  that ordering encoded in a comment in `reader.js`; it is one route now, because
-  the constraint is a property of the storage layer, not of the caller.
+Briefly it counted *kept* (star OR tag) minus archived, which made it 24,672
+items: the whole library wearing an inbox label. A star is a TODO; a tag is
+filing, and filing something is not a to-do — so tagged-but-unstarred entries
+live in the tag tree. `list_entries_for_feeds(kept_scope=…)` carries this:
+`"kept"` for the main app's Saved view, `"starred"` for the Inbox.
+`_read_mode_saved_index` still returns *filed* counts alongside, or the tag tree
+would empty.
 
-The **superseded** rule, kept because the reasoning still explains the code:
-Archive used to keep the star and set `archived_at` on the star row, and was
-hidden entirely for tag-kept items — a control that silently did nothing.
+**The Archive filter must be applied before every clip, and there are three:**
+`_sorted_star_key_window` (SQL over raw keys), `list_entries_for_feeds` (light
+records), and `merge_orphan_saved_entries` (after appending orphans). The filter
+originally sat downstream of all three, so it chose archived rows out of a window
+computed against the *unfiltered* backlog. Live symptom: one archived post among
+24,672 kept — newest-first found it, oldest-first and Recently-starred returned
+nothing, while the node's own count said 1. **A count and a list computed at
+different layers is the recurring bug in this area.**
 
-**The Inbox is STARRED minus Archived — not everything saved.** Read Mode's root
-saved node was briefly labelled "All" and counted *kept* (starred OR tagged) minus
-archived, which made it 24,672 items: the whole library wearing an inbox label.
+`kept_entries_set` folds in the archived keys too: archiving removes the star, so
+an archived untagged entry is kept by no other axis and would be unreachable in
+the one view built to show it.
 
-The narrowing follows from what the two signals mean. A **star is a TODO** ("I
-still have to decide what to do with this"); a **tag is filing** — already sorted,
-and filing something is not a to-do. So tagged-but-unstarred entries live in the
-tag tree, which is where you would look for them, instead of padding a queue.
-`list_entries_for_feeds(kept_scope=…)` carries this: `"kept"` (star OR tag, the
-main app's Saved view) or `"starred"` (the Inbox). `_read_mode_saved_index` returns
-*filed* (tagged minus archived) alongside the inbox, because the tag counts must
-still be counted over filed items — counting them over a starred-only inbox would
-empty most of the tree.
+**"All Saved" is a separate node**, not a mode of the Inbox — everything kept
+minus archived. It carries `kept=all` through every hop, being otherwise
+indistinguishable from the Inbox and would silently inherit its starred-only
+scope.
 
-**The Archive filter is applied before every clip, and there are three.**
-`_sorted_star_key_window` sorts and clips *in SQL over the raw kept keys*,
-`list_entries_for_feeds` clips its light records, and `merge_orphan_saved_entries`
-re-sorts and re-clips after appending archive-only orphans. The done-axis filter
-originally sat downstream of all three, in `resolve_reader_backlog`, so it chose
-archived rows out of a window computed against the *unfiltered* backlog.
+**The Inbox opens most-recently-starred** (`sort=starred` → `saved_entries.saved_at`,
+a fourth sort key). A to-do pile is ordered by when you added to it. `saved_at`
+exists in two shapes (SQLite `CURRENT_TIMESTAMP` and ISO-8601 from imports) so it
+is parsed, not string-sorted — `' '` sorts before `'T'`. **That order must not
+follow you out:** `resume_sort` stows the order you entered with and restores it,
+same shape as `resume_read_filter`.
 
-Live symptom (2026-07-29): one archived post among 24,672 kept. Newest-first
-found it, because a recent post sorts high; oldest-first and Recently-starred
-returned nothing, because it sorted to the far end and fell outside the first
-150. The Archive node rendered "Nothing here" while its own count — read straight
-from `archived_entries` — said 1. **A count and a list computed at different
-layers is the recurring bug in this area**; it is the same shape as the
-9,979-vs-24,695 tree mismatch.
+### Prefetch warms the next article's images, not its page
 
-`kept_entries_set` also folds in the archived keys, because archiving removes the
-star: an archived, untagged entry is kept by no other axis and would be
-unreachable in the one view built to show it.
+The e-ink flash on advance is mostly image decode, and the reader page is
+`no-store`, so `<link rel="prefetch">` would fetch and immediately discard it.
+`prefetchNextImages` fetches the next article's HTML, parses it in a **detached
+`DOMParser` document** (no scripts, no resource loads — it only reads `src`), and
+warms up to `PREFETCH_MAX_IMAGES` via `new Image()`.
 
-**"All Saved" is a separate node**, not a mode of the Inbox: everything kept
-minus archived, i.e. what the main app's Saved view shows. The Inbox has to stay
-narrow to be a queue, but the two modes disagreeing about what *exists* is the
-mismatch Read Mode is meant not to have — the tagged-but-unstarred items are all
-reachable under Tags, and this is the flat view of them. It carries `kept=all`
-through every hop, because it is otherwise indistinguishable from the Inbox
-(same root folder, no tag, no archive, no search) and would silently inherit the
-Inbox's starred-only scope and star-date default.
+`isWarmableImagePath` restricts warming to the two endpoints article images are
+rewritten to: `/api/img` (24h) and `/starred-asset/` (a year, immutable).
+Same-origin alone is too loose — a feed's broken *relative* `src` resolves against
+our origin and would be prefetched into a 404 — and these are the only paths with
+a real `max-age`, which is why prefetching images works where prefetching the page
+does not. Hung off the **settle** plus `PREFETCH_DELAY_MS` so it never competes
+with rendering the article being read. Failures are swallowed.
 
-Two consequences worth stating, both from live reports:
+**Only safe because rendering no longer marks read** — otherwise fetching the next
+article's HTML would mark it read unseen. The two changes are ordered, not
+independent.
 
-- **The Inbox opens most-recently-starred** (`sort=starred` → `saved_entries.
-  saved_at`, a fourth sort key beside post/received/history). A to-do pile is
-  ordered by when you added to it; an old article starred today belongs at the
-  top, which is exactly what publish-date order gets wrong. `saved_at` is stored
-  in two shapes (SQLite `CURRENT_TIMESTAMP` and ISO-8601 from imports), so it is
-  parsed rather than string-sorted — `' '` sorts before `'T'`, which would
-  scramble a single day's stars.
-- **That order must not follow you out.** `resume_sort` stows the order you were
-  using when you entered the Inbox and hands it back on the way out, so leaving
-  neither drags most-recently-starred into a folder where nothing is starred nor
-  resets a folder you had set to Oldest. Same shape as the main app's
-  `resume_read_filter`, which restores your filter when you close History.
+### Two scopes
 
-The Read Mode **Tags** section now renders open. It was a collapsed `<details>`,
-which was fine while tags were a side-bucket of a kept-everything inbox; now that
-filed items are reachable *only* there, collapsing them made them look absent.
-
-**Prefetching the next article warms its images, not its page.** The e-ink flash
-on advance is mostly image decode, and the reader page itself is `no-store`, so a
-`<link rel="prefetch">` would fetch the next article and immediately discard it —
-cost with no benefit. Instead `prefetchNextImages` fetches the next article's
-HTML, parses it in a **detached `DOMParser` document** (runs no scripts, loads no
-resources — it only reads `src` attributes), and warms up to
-`PREFETCH_MAX_IMAGES` images via `new Image()`.
-
-Warming is restricted by `isWarmableImagePath` to the two endpoints article
-images are actually rewritten to: `/api/img` (`public, max-age=86400`) and
-`/starred-asset/` (a year, immutable). Same-origin alone is too loose — a feed's
-broken *relative* `src` resolves against our own origin and would be prefetched
-into a 404, and other same-origin assets (a `/static/` placeholder) are already
-cached or not worth a request. These two are also the only paths with a real
-`max-age`, which is the entire reason prefetching works here when prefetching the
-page does not. The cap exists because a lesson-length article can carry 50+
-images. The prefetch is hung off
-the **settle** (plus `PREFETCH_DELAY_MS`) rather than a fixed delay from load, so
-warming the next article never competes with rendering the one being read — on a
-slow load settling can itself take seconds, and a fixed timer would fire straight
-into it. Failures are swallowed: a prefetch must never disturb reading.
-
-**This is only safe because rendering no longer marks read.** Fetching the next
-article's HTML to discover its images would otherwise have marked it read without
-it ever being seen — the two changes are ordered, not independent.
-
-**Two scopes** (`?scope=`). `saved` (default, above) reads the starred backlog
-with the Archive axis. `feeds` is ordinary **unread feed reading**:
-`_build_feeds_mode_context` renders a simplified feeds tree (All Feeds + folders
-with unread counts) → `list_entries_for_feeds(star_only=False, read_filter=
-'unread')` → the same paginated reader, minus the Archive/Delete controls (marked
-read on open). Entry points are additive (the feeds three-pane app is unchanged):
-an app-menu **Read Mode (e-ink)** link, and a **Supernote auto-detect** — a
-tablet whose UA contains `supernote` hitting `/` is redirected to
-`/read?scope=feeds`; the Read Mode exit link (`/?full=1`) opts back into the full
-app and sets a `lectio_full_app` cookie so in-app navigation isn't re-redirected.
+`?scope=saved` (default) is the starred backlog with the Archive axis. `feeds` is
+ordinary unread feed reading — simplified feeds tree, `star_only=False,
+read_filter='unread'`, same reader, no Archive/Delete (marked read on open).
+Entry points are additive: an app-menu link, and a **Supernote auto-detect** (a UA
+containing `supernote` hitting `/` is redirected to `/read?scope=feeds`). The exit
+link sets a `lectio_full_app` cookie so in-app navigation is not re-redirected.
 
 ## Offline reading and offline acting (`static/sw.js`, `static/outbox.js`)
 

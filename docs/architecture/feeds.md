@@ -236,102 +236,138 @@ All three skip feeds where `feed_lead_image_strategy.manual=1` (user has explici
 
 ## Feed-provided tag suggestions (`entry_feed_tags`)
 
-**Numbers-only tags are dropped at capture, from feed categories and page scraping
-alike.** They are comment counts, post ids, pagination and bare years — Josh's test
-was "trying to think where a numbers-only tag would be useful … definitely mixed are
-useful", so anything carrying a non-digit survives: `80s`, `3d`, `2.5 Admins`,
-`2020 election`, `Windows 11`. A stray `84` reached lemire.me's suggestions this way
-and 580 stored rows were bare numbers.
+`reader` discards entry categories at ingest — its `Entry` type has no tags
+attribute — so Lectio captures them at the only point the raw feedparser result
+exists: `SanitizingFeedparserParser.__call__` hands `(entry_id, tags)` pairs to an
+**injected sink** (`set_entry_tag_sink` → `FeedTagService.record_entry_tags`),
+keeping services free of main/DB imports.
 
-Separately, **an archive year-list is dropped as a run**: nwcpp.org carries
-2000–2026 down the side of every page and all sixteen landed on one post. Five or
-more distinct 4-digit years on a single page is a sidebar, not a tag set, so the
-whole run goes rather than any single year being judged on its own.
+- **Tenancy for free.** Parsing runs synchronously inside `reader.update_feed(s)`,
+  always in a user context, so the sink's `get_meta_connection()` resolves the
+  right per-user DB at call time. The service itself is tenancy-unaware.
+- **Id mapping re-derives, never zips.** `_process_feed` skips unparsable
+  entries, so positions do not line up. A sink failure is logged and swallowed —
+  tag capture must never fail a feed parse.
+- **Storage.** `entry_feed_tags(feed_url, entry_id, tag, first_seen_at)`, tags
+  stored **raw** and normalized only at display, because the raw text is the
+  foundation for tag-filtered feed adapters. Replace-per-entry semantics, so
+  publisher edits propagate; entries outside the fetch window keep theirs.
+- **Synthetic feeds** (dev.to, DeviantArt) emit `<category>` in their generated
+  RSS and flow through the same capture — one code path. ⚠ That XML is
+  regenerated from their per-user entry tables, so tags must persist in those rows
+  or they never reach `<category>`. DA's browse/gallery API omits deviation tags.
 
-**Subscriber-only posts are detectable without any marker.** Substack publishes
-none — no category, no audience field — but ships a body containing only a "Read
-more" link back to the post. `is_paywall_stub` requires both a body under ~120
-characters of text *and* that its only link points at the entry's own URL, which is
-what keeps it off a genuinely short post (a link roundup points elsewhere). Measured
-on abortretry.fail: 17 of 20 items were 9-character stubs against three real posts of
-19k–38k. The per-feed `hide_paywalled` pref marks them read at fetch time, mirroring
-`hide_shorts` — non-destructive, still findable under All, and opt-in because a
-*partial* feed is all stubs by design and enabling it there would empty the feed.
+### What gets dropped at capture
 
-**Feed-tag suggestions are NOT filtered automatically, and that is a considered
-position.** Two heuristics were tried on live data and both hid tags the user
-wanted:
+**Numbers-only tags**, from feed categories and page scraping alike — they are
+comment counts, post ids, pagination and bare years. Anything with a non-digit
+survives (`80s`, `2020 election`, `Windows 11`). A stray `84` reached lemire.me
+this way; 580 stored rows were bare numbers.
 
-1. **Coverage** — suppress a tag carried by ~every entry of a feed, on the theory
-   that it says nothing about any one entry. It correctly caught `Popular Deals`
-   (2,525 slickdeals posts) and `VinylDeals` (576). It was then killed by a
-   guitarplayer.com tag feed: `Lessons` is on every post *and* is exactly the tag
-   you want when filing a guitar lesson. These chips are for **filing**, not for
-   telling entries apart, so uniformity is not disqualifying at all.
-2. **Feed-name echo** — suppress a uniform tag that restates the feed's title
-   (splitting camelCase, so `VinylDeals` matches "Deals on Vinyl Records"). Killed
-   by the *actual* title, "Latest from Guitar Player in Lessons": a tag feed puts
-   its tag in its own name. Matching the feed URL fails identically —
-   `/r/VinylDeals/` and `/feeds/tag/lessons` have the same shape.
+**An archive year-list, as a run.** nwcpp.org carries 2000–2026 down every page
+and all sixteen landed on one post. Five or more distinct 4-digit years on a page
+is a sidebar, not a tag set, so the whole run goes rather than judging any year
+alone.
 
-The difference between `VinylDeals` (a place, useless) and `Lessons` (a kind of
-content, wanted) is **semantic**, and nothing in the feed metadata expresses it.
+**Subscriber-only stubs are detectable without a marker.** Substack publishes
+none, but ships a body containing only a "Read more" link back to the post.
+`is_paywall_stub` requires both a body under ~120 characters *and* that its only
+link points at the entry's own URL — which keeps it off a genuinely short post,
+since a link roundup points elsewhere. On abortretry.fail, 17 of 20 items were
+9-character stubs against three real posts of 19k–38k. `hide_paywalled` marks them
+read at fetch, mirroring `hide_shorts`: non-destructive, findable under All, and
+opt-in because a *partial* feed is all stubs by design.
 
-⚠ The asymmetry is what decides the default: **a useless chip is cheap, because it
-is ignored. A hidden wanted one is invisible.** So everything is shown and the
-suppression belongs to the user. Resist a third heuristic; the first two each
-looked convincing against the data that motivated them.
+### Suggestions are never auto-filtered, and that is a decision
 
-The × on a chip records that decision in `suppressed_feed_tags (feed_url, tag)`,
-compared through `normalize_tag_value` on **both** sides. That matters: the chips are
-rendered normalized (lowercased, spaces to hyphens), so the × sends `popular-deals`
-while the stored feed tag is `Popular Deals`. A plain lowercase compare yields
-`popular deals` and misses — so every **multi-word** tag reappeared after being
-dismissed while single-word ones like `python` stuck, because those normalize to
-themselves. The asymmetry ("other tags I've removed elsewhere seem to stay gone") is
-what identified it. **Per feed, not global** — `Forum` is noise on Slickdeals and may
-be a real topic elsewhere. It hides a chip; it does not forget a fact, so the
-`entry_feed_tags` rows stay and keep feeding the tag-filtered feed adapters. Undo
-lives in Feed Properties → **Hidden tags**, because a mis-clicked × must have a way
-back and that list is the only place the decision is visible.
+Two heuristics were built and both reverted (`1381cbc`, 2026-07-29):
 
-**Boilerplate feed tags are hidden by the user, per (feed, tag) — nothing is
-filtered automatically, and that is a decision, not an omission.** Two automatic
-heuristics were built and both reverted on 2026-07-29 (`1381cbc`).
-
-*Coverage* — suppress a tag carried by ~every entry of a feed — caught the
-motivating cases exactly: `Popular Deals` on slickdeals, `VinylDeals`,
-talkpython's eight-tag block. It also hid `Lessons` on a guitarplayer tag feed,
-where `Lessons` is precisely the right tag. These chips exist for **filing**, not
-for telling entries apart, so uniformity is not disqualifying. *Feed-name echo*
-— uniform, and the tag's tokens are a subset of the feed's title — failed the
-same way, because a tag feed puts its tag in its own name ("Latest from Guitar
-Player in Lessons").
+1. **Coverage** — suppress a tag carried by ~every entry. Caught the motivating
+   cases exactly (`Popular Deals` on 2,525 slickdeals posts, `VinylDeals` on 576)
+   and then hid `Lessons` on a guitarplayer tag feed, where it is precisely the
+   right tag. These chips are for **filing**, not for telling entries apart, so
+   uniformity is not disqualifying.
+2. **Feed-name echo** — uniform, and the tag's tokens are a subset of the feed
+   title. Failed identically: a tag feed puts its tag in its own name ("Latest
+   from Guitar Player in Lessons"). Matching the URL fails too — `/r/VinylDeals/`
+   and `/feeds/tag/lessons` have the same shape.
 
 `VinylDeals` is a place, `Lessons` is a kind of content, and nothing in feed
-metadata carries that distinction. The asymmetry picks the default: an unwanted
-chip is cheap because it is ignored, a wanted chip that is hidden is invisible.
-So the suppression list is the user's — `suppressed_tags` /
-`set_tag_suppressed`, edited from the chip's × and reviewable under Feed
-Properties → Hidden tags.
+metadata carries that distinction. ⚠ The asymmetry picks the default: **an
+unwanted chip is cheap, because it is ignored; a wanted chip that is hidden is
+invisible.** Resist a third heuristic — the first two each looked convincing
+against the data that motivated them.
 
-Suppression hides a **chip**; it never forgets a fact. The stored rows are
-untouched, since the table is also the data foundation for tag-filtered feed
-adapters, where "every post in this feed is tagged VinylDeals" is worth keeping.
+The × records the decision in `suppressed_feed_tags`, compared through
+`normalize_tag_value` on **both** sides. Chips render normalized, so the × sends
+`popular-deals` while the stored tag is `Popular Deals`; a plain lowercase compare
+yields `popular deals` and misses — every **multi-word** tag reappeared after
+dismissal while single-word ones stuck, because those normalize to themselves.
+Per feed, not global (`Forum` is noise on Slickdeals, a topic elsewhere). It hides
+a chip, never a fact: the rows stay and keep feeding the adapters. Undo lives in
+Feed Properties → **Hidden tags**, because a mis-clicked × needs a way back.
 
-`reader` discards entry categories (RSS/Atom `<category>`) at ingest — its `Entry` type has no tags attribute — so Lectio captures them itself at the only point the raw feedparser result exists: `SanitizingFeedparserParser.__call__` (`services/reader_sanitize.py`). After `_process_feed`, the parser hands `(entry_id, tags)` pairs to an **injected sink** (`set_entry_tag_sink`, wired in `main` to `FeedTagService.record_entry_tags`), keeping services free of main/DB imports. Design notes:
+### The chip row, and the tag-filter rule
 
-- **Tenancy for free.** Parsing runs synchronously inside `reader.update_feed(s)`, always in a user context (request thread or `_run_in_user_context` background threads), so the sink's `get_meta_connection()` resolves the correct per-user meta DB at call time — the same guarantee `get_reader()` relies on. The service itself is tenancy-unaware (LeadImageService pattern).
-- **Id mapping re-derives, never zips.** `_process_feed` skips unparsable entries, so positions don't line up; the capture re-derives each raw entry's reader id (`id`, falling back to `link` for RSS-family feeds) and keeps only ids present in the processed set. A sink failure is logged and swallowed — tag capture must never fail a feed parse.
-- **Storage** (`services/feed_tags.py`): per-user table `entry_feed_tags(feed_url, entry_id, tag, first_seen_at, PK(feed_url, entry_id, tag))`. Tags are stored **raw** (case-preserving) and normalized to Lectio tag format (`normalize_tag_value`) only at display — the raw text is the data foundation for future tag-filtered feed adapters. Replace-per-entry semantics: re-seeing an entry replaces its rows (publisher edits propagate); entries absent from the current fetch window keep theirs. Rows are pruned on feed removal and follow feed-URL migrations (`_feed_url_tables`); no other retention.
-- **UI.** The entry pane shows the captured tags as **[ + tag ▲ ▼ ]** chips in the tags row. The leading **+** applies the tag as a manual tag through the existing `/entries/tags` append pipeline (hidden when already applied). **▲/▼** POST `/rules/tag-filter/toggle` (`toggle_feed_tag_filter`), which edits the **feed-scoped** `tag_filter` rule in place: same sign → remove, opposite → flip; the rule is created **disabled** on first use — chips are a tuning surface, and the user arms the rule in Automation — and deleted when the spec empties; folder/global rules are never touched; chip edits never change the enabled flag. Only when the rule is already enabled does a chip edit apply the new spec to unread entries immediately (logged to automation history as a manual trigger). Active signs render lit via `feed_tag_filter_signs`. This replaced an earlier ephemeral implementation that re-fetched the live feed in a background thread and fuzzy-matched entries against an in-memory cache — the DB lookup is exact-key and instant.
-- **Synthetic feeds** (dev.to, DeviantArt) don't write the table directly: they emit `<category>` elements in their generated RSS, which flows through the same parser capture — one code path. DeviantArt's browse/gallery API omits deviation tags (they need `/deviation/metadata` calls), so DA categories appear only when the tags field is present; the scraper has no tag source.
-- **Tag-filter rule.** The `tag_filter` rule type in the rules engine (`highlight_keywords`) consumes this table to tame firehose feeds. The whole spec lives in `keyword` as one comma-separated field with three strengths: `-tag` **drops**; `+tag` (or bare) is a **good** tag — it rescues an entry from drops but its absence never cuts anything; `++tag` **requires** — tagged entries lacking every required tag are cut (opt-in whitelist). Commas — not spaces — separate, so multi-word tags are typed as-is (`+windows 11, -rust`) and `normalize_tag_value` hyphenates both sides before comparing. `_run_tag_filter` runs in `_run_automation_after_refresh` per refreshed feed in scope (and via dry-run/run-now) and auto-marks matching unread entries read (same suppression as `mark_as_read`, logged to automation history). The entry's author rides along as a pseudo-tag (`author_filter_token`: 'Steven Parker' → `by-steven-parker`), so author tokens work in every position and ▲/▼ controls render next to the author name in the entry header; an authored-but-untagged entry is filterable. Evaluation: requires first (tagged entry lacking all required tags → cut), then drops (a good or required tag rescues; `+android, -iphone` keeps a post tagged with both, and Samsung posts still flow since good tags don't whitelist); **untagged entries are always kept** — a feed that stops tagging must not have its whole firehose suppressed. It runs *after* `update_feed` (the tag sink fires during parse, so the table is populated by then).
-- **Writing the spec: one autocomplete control, two token grammars.** A `tag_filter` spec can only ever match what ingest captured, stored lowercase-hyphenated — so typing one against an unseen vocabulary (HackerNoon: 140 distinct tags in 20 items) is guesswork, and the failure is silent: a rule that matches nothing looks exactly like a rule that is working. `GET /rules/tag-vocabulary?scope=&scope_id=` resolves the draft's scope through the same `resolve_rule_feed_urls` the rule itself will use and returns `FeedTagService.tag_vocabulary` **normalized through `normalize_tag_value`**, so completing a suggestion produces a token that matches by construction, plus the entry count per tag — which is the actual decision (a tag on 9 of 10 posts is a filter; a tag on one is noise). Counts are merged across casing variants, since a publisher switching `AI` to `ai` must not halve the number the user is deciding on. Loaded lazily on focus and keyed by scope, because global scope is the whole table and most rules are not tag_filter. The **same** `attachTagAutocomplete` powers the per-entry tag input; the rule form differs only in the two things that are genuinely different about the grammar — comma separation (so multi-word tags are typed naturally, matching `parse_tag_filter_spec`) and the `-`/`+`/`++` sign, which is part of the *spec* and so survives completion untouched, unlike the per-entry `#`, which is decoration on the tag and is overwritten. It consumes its keys with `stopImmediatePropagation`, not just `preventDefault`: the rule form binds Enter-to-save on the same element, and a listener can only stop one registered after it — so the autocomplete must be attached first, and is.
-- **Every captured tag reaches the chip row; only the first eight are on screen.** `MAX_FEED_TAG_SUGGESTIONS` was 8, which was a *fetch* cap, so anything past the eighth tag simply did not exist client-side. Rock Paper Shotgun ships **28 tags per post** and puts `PC` tenth — so the row offered every platform to drop (`Apple`, `iOS`, `Mac`) and no way to name the one to keep, which is precisely the `+pc` rescue the drop needs. The hard cap is now 40 and `FEED_TAG_CHIPS_COLLAPSED` (8) governs *display*: the overflow chips render with `hidden` + `is-extra-feed-tag` and a `+N more` button reveals them. Hidden rather than omitted, for the same reason the suggestion list has no auto-suppression heuristic — a chip you ignore costs nothing, a chip that is not there cannot be filtered on. The late-injection path in `maybeInjectFeedTagChips` applies the same collapse, or backlog entries (whose chips arrive from `/entries/feed-tags` after render) would dump all 28.
-- **The dry run explains an empty result.** `-mac, +pc` reads as "drop Apple, keep PC" and is the natural first spec to write — but Rock Paper Shotgun tags *platform availability*, so all 41 of its Mac-tagged posts are also tagged `PC` and the rescue cancels the entire rule. Zero matches then looks exactly like a rule that is working, which is the failure mode this whole feature has. `_run_tag_filter` counts entries a drop tag caught that a good/required tag let through, and returns `rescued` + the top `rescued_by` tags; the Test panel prints them under the count and, when nothing matched, names the rescue as the reason. This is a diagnostic, not a policy change — the rescue semantics are correct and deliberate (`+android, -iphone` must keep a post tagged both). The same applies to a **good-only** spec (`+wallpapers`), which cuts nothing by construction — good tags rescue from drops and whitelist nothing, so with no drops there is nothing for them to do — yet reads perfectly naturally as "keep these". `good_only` is returned whenever the spec has good tags and neither drops nor requires, and the panel names the two specs that do have teeth (`++tag` to keep only these, `-tag` to drop). Both notes exist because the three strengths are the one genuinely non-obvious thing about this rule type, and a bare zero teaches nothing.
-- **Source-page fallback.** Entries whose feed never delivered `<category>` data (aged out of the publisher's feed window before capture, or a tag-stripping publisher) are tagged from the article page itself on open: `extract_page_tags` harvests `article:tag` / `keywords` / `parsely-tags` metas from the lead-image service's source-HTML cache (zero extra requests when primed); on a cache miss the entry-detail handler queues `queue_source_html_fetch` and the tags appear on the next open — the same deferral pattern as image captions. Harvested tags are persisted to `entry_feed_tags` like feed tags; the fallback only runs when the entry has no rows, so feed-provided tags stay authoritative.
-- **Synthetic-feed gotcha (fixed):** dev.to/DeviantArt XML is regenerated from their per-user entry tables (`devto_entries`/`deviantart_entries`), not from the live API objects — tags must persist in those rows (comma-joined `tags` column) to come out as `<category>`. Re-seen articles backfill/refresh the stored tags while still in the API window.
+Chips render as **[ + tag ▲ ▼ ]**. **+** applies the tag manually. **▲/▼** edit
+the **feed-scoped** `tag_filter` rule in place: same sign removes, opposite flips.
+The rule is created **disabled** — chips are a tuning surface, the user arms it in
+Automation — and deleted when the spec empties. Folder/global rules are never
+touched. Only an already-enabled rule applies a chip edit to unread entries
+immediately.
+
+**Every captured tag reaches the row; only the first eight show.**
+`MAX_FEED_TAG_SUGGESTIONS` was a *fetch* cap of 8, so anything past the eighth did
+not exist client-side. Rock Paper Shotgun ships **28 tags per post** and puts `PC`
+tenth — so the row offered every platform to drop and no way to name the one to
+keep, which is exactly the `+pc` rescue the drop needs. The cap is now 40 and
+`FEED_TAG_CHIPS_COLLAPSED` (8) governs display, with `+N more`. Hidden rather than
+omitted, for the same reason there is no auto-suppression.
+
+**The `tag_filter` spec** lives in `keyword` as one comma-separated field with
+three strengths: `-tag` **drops**; `+tag` (or bare) is **good** — it rescues from a
+drop but its absence never cuts; `++tag` **requires** — tagged entries lacking
+every required tag are cut. Commas separate, so multi-word tags are typed as-is
+(`+windows 11, -rust`). Evaluation is requires → drops, and **untagged entries are
+always kept**: a feed that stops tagging must not have its firehose suppressed.
+The author rides along as a pseudo-tag (`by-steven-parker`), so author tokens work
+in every position. Runs after `update_feed`, since the sink fires during parse.
+
+**Writing a spec needs autocomplete, because the failure is silent.** A spec can
+only match what ingest captured, stored lowercase-hyphenated, so typing against an
+unseen vocabulary (HackerNoon: 140 distinct tags in 20 items) is guesswork — and a
+rule matching nothing looks exactly like one that works.
+`GET /rules/tag-vocabulary` resolves the draft's scope through the same
+`resolve_rule_feed_urls` the rule will use and returns the vocabulary **normalized
+through `normalize_tag_value`**, so a completed suggestion matches by
+construction, plus per-tag entry counts — the actual decision (a tag on 9 of 10
+posts is a filter; on one it is noise). Counts merge across casing variants.
+Loaded lazily on focus, keyed by scope.
+
+The same `attachTagAutocomplete` powers the per-entry input; the rule form differs
+only where the grammar genuinely differs — comma separation, and the `-`/`+`/`++`
+sign, which is part of the *spec* and survives completion untouched (unlike the
+per-entry `#`, which is decoration and is overwritten). It consumes keys with
+`stopImmediatePropagation`, not `preventDefault`: the rule form binds Enter-to-save
+on the same element, and a listener can only stop one registered after it — so the
+autocomplete must be attached first, and is.
+
+**The dry run explains an empty result**, because a bare zero teaches nothing.
+`-mac, +pc` reads as "drop Apple, keep PC" and is the natural first spec — but RPS
+tags *platform availability*, so all 41 Mac-tagged posts are also tagged `PC` and
+the rescue cancels the rule. `_run_tag_filter` counts entries a drop caught that a
+good/required tag let through and returns `rescued` + the top `rescued_by` tags. A
+**good-only** spec (`+wallpapers`) cuts nothing by construction — good tags rescue
+and whitelist nothing — yet reads naturally as "keep these", so `good_only` is
+returned and the panel names the two specs with teeth. Diagnostics, not a policy
+change: `+android, -iphone` must keep a post tagged both.
+
+**Source-page fallback.** Entries whose feed never delivered `<category>` (aged
+out before capture, or a tag-stripping publisher) are tagged from the article page
+on open: `extract_page_tags` harvests `article:tag` / `keywords` / `parsely-tags`
+from the lead-image service's source-HTML cache — zero extra requests when primed,
+and on a miss the tags appear next open, the same deferral as image captions. Only
+runs when the entry has no rows, so feed tags stay authoritative.
 
 ## FakeFeedz entries get the article's own date
 
