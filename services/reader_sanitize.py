@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
 # Use the EXACT feedparser module reader uses (it may be the vendored copy,
@@ -147,9 +148,38 @@ def _rewrite_raw_urls(url, result) -> None:
                     link["href"] = new
 
 
+# A feed date at or before this is not a publication date, it is a parse
+# failure or a placeholder the publisher never filled in. 1990 is the bound
+# services/publish_date.py already uses for dates mined from a page; feed-
+# supplied dates were simply never held to it.
+_MIN_PUBLISH_YEAR = 1990
+
+
+def _drop_placeholder_date(value):
+    """None out an epoch/placeholder timestamp so it is treated as "no date"."""
+    if not isinstance(value, datetime):
+        return value
+    dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return None if dt.year <= _MIN_PUBLISH_YEAR else value
+
+
 def _sanitize_entry(entry):
-    """Return ``entry`` with its content/summary run through html_sanitize."""
+    """Return ``entry`` with its content/summary run through html_sanitize, and
+    any placeholder publish date dropped.
+
+    blog.gitea.com ships ``Thu, 01 Jan 1970 00:00:00 GMT`` as the pubDate on 25
+    of its posts. Stored as a real timestamp, those sort above every genuine
+    entry under Pub-oldest and take over the whole view — with the list showing
+    "8h ago" from the received date, so nothing on screen explains why. NULL is
+    already handled everywhere as "no date"; epoch is the same fact wearing a
+    number, so it becomes NULL here rather than at each of the places that sort.
+    """
     changed = {}
+    for field in ("published", "updated"):
+        raw = getattr(entry, field, None)
+        cleaned = _drop_placeholder_date(raw)
+        if cleaned is not raw:
+            changed[field] = cleaned
     summary = getattr(entry, "summary", None)
     if isinstance(summary, str) and summary:
         changed["summary"] = html_sanitize.sanitize_html(summary)
