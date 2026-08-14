@@ -5789,6 +5789,10 @@ body[data-keyboard-open="1"] .action-modal-panel {
   white-space: nowrap;
   max-width: 28ch;
 }
+.feed-prop-caption-check-label input:indeterminate {
+  /* "auto" — decided per post, not a stored yes/no. */
+  opacity: 0.65;
+}
 .feed-prop-caption-auto-btn.active {
   background: var(--accent);
   border-color: var(--accent);
