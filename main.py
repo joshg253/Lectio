@@ -15801,9 +15801,18 @@ def _strip_trailing_recirculation_rail(content_html: str) -> str:
             return content_html
         changed = False
         for block in blocks:
-            # Last element of its parent, ignoring whitespace-only siblings.
-            tail = [sib for sib in block.next_siblings
-                    if getattr(sib, "name", None) or str(sib).strip()]
+            # Last element of its parent. "Last" ignores whitespace AND empty
+            # containers: pcgamer closes the article with a bare <div></div>
+            # after the rail, which counted as a following element and left the
+            # rail on four posts out of five.
+            tail = []
+            for sib in block.next_siblings:
+                if getattr(sib, "name", None) is None:
+                    if str(sib).strip():
+                        tail.append(sib)
+                    continue
+                if sib.get_text(strip=True) or sib.find("img"):
+                    tail.append(sib)
             if tail:
                 continue
             rail_links = [a for a in block.find_all("a") if a.find("strong")]

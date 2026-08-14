@@ -154,3 +154,46 @@ def test_readers_pick_wins_when_it_is_already_the_fullest():
 def test_escaped_markup_counts_as_markup_not_words():
     assert main._visible_word_count(ESCAPED_EMPTY) == 0
     assert main._visible_word_count("<p>two words</p>") == 2
+
+
+# --- Future plc recirculation rail -----------------------------------------
+
+RAIL = (
+    '<div class="product"><a><figure class="van-image-figure">'
+    '<img src="https://cdn.mos.cms.futurecdn.net/x.jpg" height="654" width="661"></figure></a>'
+    '<p><a href="/a"><strong>2026 games</strong></a>: All the upcoming games<br>'
+    '<a href="/b"><strong>Best PC games</strong></a>: Our all-time favorites<br>'
+    '<a href="/c"><strong>Free PC games</strong></a>: Freebie fest</p></div>'
+)
+
+
+def test_trailing_rail_is_dropped():
+    out = main._strip_trailing_recirculation_rail("<p>Article body.</p>" + RAIL)
+    assert "van-image-figure" not in out
+    assert "Best PC games" not in out
+    assert "Article body." in out
+
+
+def test_rail_is_dropped_past_an_empty_trailing_div():
+    """pcgamer closes the article with a bare <div></div> after the rail; an
+    'is it last?' check that counts empty elements left the rail in place."""
+    out = main._strip_trailing_recirculation_rail("<p>Body.</p>" + RAIL + "<div></div>")
+    assert "Best PC games" not in out
+    assert "Body." in out
+
+
+def test_rail_is_kept_when_real_content_follows():
+    out = main._strip_trailing_recirculation_rail(RAIL + "<div>Genuine closing paragraph</div>")
+    assert "Best PC games" in out
+
+
+def test_mid_article_product_div_is_kept():
+    """'product' is a generic class — mid-article it is likely the thing being
+    reviewed."""
+    html = '<div class="product"><img src="review.jpg"><p>Under review</p></div><p>More text</p>'
+    assert "review.jpg" in main._strip_trailing_recirculation_rail(html)
+
+
+def test_trailing_product_without_the_rail_shape_is_kept():
+    html = '<p>Body</p><div class="product"><p>a closing note</p></div>'
+    assert "a closing note" in main._strip_trailing_recirculation_rail(html)
