@@ -228,3 +228,39 @@ def test_an_existing_download_attribute_is_left_alone():
     out = _rewrite(f'<a href="{tab}" download="Their Name.gp">t</a>', {tab: "H"})
     assert out.count("download=") == 1
     assert "Their Name.gp" in out
+
+
+# --- a page is not a download ----------------------------------------------
+
+SINGLE_PAGE = "https://standardebooks.org/ebooks/x/text/single-page"
+
+
+def test_xhtml_enclosure_is_not_an_attachment(monkeypatch):
+    """Standard Ebooks attaches its "read online" edition as an enclosure typed
+    application/xhtml+xml. It listed a webpage among the epubs, with a size, and
+    a label taken from a URL with no extension to give it a better one."""
+    monkeypatch.setattr(main.starred_archive_service, "get_entry_file_assets", lambda *a: {})
+    out = main._render_entry_attachments(
+        _Entry([_Enc(EPUB, "application/epub+zip", 610947),
+                _Enc(SINGLE_PAGE, "application/xhtml+xml", 389890)]),
+        None, asset_map={})
+    assert "book.epub" in out
+    assert "single-page" not in out
+
+
+def test_untyped_html_enclosure_is_not_an_attachment(monkeypatch):
+    monkeypatch.setattr(main.starred_archive_service, "get_entry_file_assets", lambda *a: {})
+    out = main._render_entry_attachments(
+        _Entry([_Enc("https://x.test/read.html", "", 4242)]), None, asset_map={})
+    assert out == ""
+
+
+def test_real_files_are_unaffected(monkeypatch):
+    monkeypatch.setattr(main.starred_archive_service, "get_entry_file_assets", lambda *a: {})
+    out = main._render_entry_attachments(
+        _Entry([_Enc(EPUB, "application/epub+zip", 1),
+                _Enc("https://x.test/doc.pdf", "application/pdf", 2),
+                _Enc("https://x.test/tab.gp5", "", 3)]),
+        None, asset_map={})
+    for keep in ("book.epub", "doc.pdf", "tab.gp5"):
+        assert keep in out, keep
