@@ -10,7 +10,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 
 import feedparser
 import httpx
@@ -39,6 +39,38 @@ _BROWSER_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
+
+
+
+def upgrade_image_size_param(url: str, rule: str | None) -> str:
+    """Raise a size-parameterized thumbnail URL to a larger size.
+
+    Plenty of image hosts serve one asset at any width through a query
+    parameter, and a feed links the small one because that is what its list
+    view uses. The feed is then permanently stuck at thumbnail resolution even
+    though the full-size render is one number away and costs no extra request.
+
+    *rule* is ``"<param>=<value>"`` (e.g. ``"w=1600"``), stored per feed rather
+    than hardcoded: which parameter, and how large it may go before the host
+    ignores it, is a fact about one host and belongs with that feed's settings.
+    A URL without the named parameter is returned unchanged, so a rule set on
+    the wrong feed is inert rather than destructive.
+    """
+    if not url or not rule or "=" not in rule:
+        return url
+    param, _, value = rule.partition("=")
+    param, value = param.strip(), value.strip()
+    if not param or not value.isdigit():
+        return url
+    try:
+        parts = urlsplit(url)
+        query = parse_qsl(parts.query, keep_blank_values=True)
+    except ValueError:
+        return url
+    if not any(k == param for k, _ in query):
+        return url
+    query = [(k, value if k == param else v) for k, v in query]
+    return urlunsplit(parts._replace(query=urlencode(query)))
 
 
 class LeadImageService:

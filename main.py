@@ -94,7 +94,7 @@ from services.users import UserExistsError, UserStore
 from services.email import send_article_email, send_digest_email
 from services.feed_discovery import discover_feed_urls, discover_feed_urls_ex
 from services.feed_refresh import FeedRefreshService
-from services.lead_images import LeadImageService
+from services.lead_images import LeadImageService, upgrade_image_size_param
 from services.reader_api import ReaderApi
 from services.starred_archive import StarredArchiveService
 from services.youtube import YouTubeDurationService
@@ -3671,6 +3671,11 @@ def ensure_meta_schema() -> None:
             pass
         try:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN caption_source TEXT")
+        except Exception:
+            pass
+        # "<param>=<value>", e.g. "w=1600". See upgrade_image_size_param.
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN image_size_rule TEXT")
         except Exception:
             pass
         conn.execute(
@@ -13838,8 +13843,12 @@ def _rebase_proxy_entry_link(entry_link: str | None, feed_url: str, channel_link
     return entry_link
 
 
-def _lead_image_display_url(image_url: str | None) -> str | None:
+def _lead_image_display_url(image_url: str | None, size_rule: str | None = None) -> str | None:
     """Return the URL to use in the browser for a lead image.
+
+    *size_rule* is the feed's optional ``"<param>=<value>"`` image-size upgrade
+    (see ``upgrade_image_size_param``), applied before proxying so the proxy
+    caches the size actually shown rather than the thumbnail it replaced.
 
     Some sites set Cross-Origin-Resource-Policy: same-site on their images,
     which modern browsers enforce for cross-origin <img> loads — the image
@@ -13852,6 +13861,7 @@ def _lead_image_display_url(image_url: str | None) -> str | None:
     """
     if not image_url:
         return None
+    image_url = upgrade_image_size_param(image_url, size_rule)
     domain = urlparse(image_url).netloc
     # Hotlink-protected hosts: proxy unconditionally (the placeholder is served
     # with HTTP 200, so there's nothing to detect — the host is known-bad).
@@ -16198,7 +16208,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "link": _display_link,
             "summary": _summary,
             "content_html": content_html,
-            "lead_image_url": _lead_image_display_url(lead_image_url),
+            "lead_image_url": _lead_image_display_url(lead_image_url, _disp.get("image_size_rule")),
             "show_lead_in_article": _show_lead_in_article,
             "show_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)) and not _disp.get("feed_thumbnail_url"),
             # Webcomic feeds show the FULL strip in the article but keep the
@@ -18731,7 +18741,15 @@ def entry_lead_image_status(feed_url: str, entry_id: str):
     cached = lead_image_service._cache.get(key, "ABSENT")
     in_progress = key in lead_image_service._source_fetch_in_progress
     if cached != "ABSENT" and cached is not None:
-        display_url = _lead_image_display_url(cached)
+        # The rule can only ever rewrite a query parameter, so a URL without a
+        # query cannot be affected and does not need the lookup. This branch is
+        # the terminal one — polling stops once it returns "ready" — so the read
+        # is at most one per entry, not one per poll.
+        _rule = None
+        if "?" in cached:
+            with get_meta_connection() as _conn:
+                _rule = get_feed_display_prefs(_conn, feed_url).get("image_size_rule")
+        display_url = _lead_image_display_url(cached, _rule)
         return JSONResponse({"status": "ready", "url": display_url})
     if in_progress:
         return JSONResponse({"status": "pending", "url": None})
