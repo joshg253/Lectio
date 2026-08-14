@@ -121,7 +121,7 @@ gating on the feed stripped the escape hatch from every filed article.
 
 ### Per-site capture adapters (`services/site_content_plugins.py`)
 
-Three things a site can override, all defaulting to "no opinion" so an unlisted
+Five things a site can override, all defaulting to "no opinion" so an unlisted
 site behaves exactly as before:
 
 - **`prefers_full_page`** forces `mode="full"` for pages whose content IS their
@@ -141,6 +141,12 @@ site behaves exactly as before:
   ships its consent banner as `display: none` first in the DOM, so the first
   capture opened with ~700 characters of cookie policy ahead of the music. Scoped
   to the site, so full-page's "keeps everything" contract is unchanged elsewhere.
+
+- **`embed_at_top`** places that embed after the article's first heading rather
+  than at the end, and **`strips_first_image_alt`** drops alt/title from the
+  first image. Both exist because of what the render path does next: the first
+  body image is hoisted to a hero and its alt becomes the caption under it, so a
+  scan whose alt restates the headline captioned the article with its own title.
 
 The append runs *after* extraction, so `_append_site_embeds` sanitizes its own
 block — otherwise the iframe would join already-sanitized output and never meet

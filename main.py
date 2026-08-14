@@ -10942,17 +10942,27 @@ def _strip_site_chrome(raw_html: str, source_url: str) -> str:
     capture opened with ~700 characters of cookie policy.
     """
     selectors = site_content_plugins.strip_selectors(source_url)
-    if not selectors:
+    drop_alt = site_content_plugins.strips_first_image_alt(source_url)
+    if not selectors and not drop_alt:
         return raw_html
     try:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(raw_html, "html.parser")
-        removed = False
+        changed = False
         for sel in selectors:
             for el in soup.select(sel):
                 el.decompose()
-                removed = True
-        return str(soup) if removed else raw_html
+                changed = True
+        if drop_alt:
+            # After the strip, so "first" means first in the ARTICLE — the
+            # chrome above it carries images of its own (logo, icons).
+            first = soup.find("img")
+            if first is not None:
+                for attr in ("alt", "title"):
+                    if first.has_attr(attr):
+                        del first[attr]
+                        changed = True
+        return str(soup) if changed else raw_html
     except Exception:  # noqa: BLE001 — never fail an extraction over cosmetics
         LOGGER.debug("site chrome strip failed for %s", source_url, exc_info=True)
         return raw_html
@@ -10979,7 +10989,21 @@ def _append_site_embeds(article_html: str, source_url: str, raw_html: str) -> st
     clean = sanitize_readability_html(f'<p class="lectio-embed">{embed}</p>').strip()
     if not clean or "<iframe" not in clean.lower():
         return article_html          # the sanitizer rejected it — say nothing
-    return f"{article_html}{clean}"
+    if not site_content_plugins.embed_at_top(source_url):
+        return f"{article_html}{clean}"
+    # At the top means after the article's own heading, if it has one — above it
+    # the video reads as a banner rather than as part of the piece.
+    return _insert_after_first_heading(article_html, clean)
+
+
+_FIRST_HEADING_RE = re.compile(r"</h[1-3]\s*>", re.IGNORECASE)
+
+
+def _insert_after_first_heading(article_html: str, block: str) -> str:
+    match = _FIRST_HEADING_RE.search(article_html)
+    if match is None:
+        return f"{block}{article_html}"
+    return f"{article_html[:match.end()]}{block}{article_html[match.end():]}"
 
 
 _READABILITY_IMG_TAG_RE = re.compile(r'<img\b[^>]*>', re.IGNORECASE)

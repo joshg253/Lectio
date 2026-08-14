@@ -40,10 +40,18 @@ class SiteContentPlugin(Protocol):
     # asks for full-page usually has to name that chrome itself.
     def strip_selectors(self, *, source_url: str) -> tuple[str, ...]: ...
 
-    # Extra HTML to append to the captured body — an embed the page itself only
-    # produces via JS. Returns None when there is nothing to add. May make ONE
-    # network request; must never raise.
+    # Extra HTML for the captured body — an embed the page itself only produces
+    # via JS. Returns None when there is nothing to add. May make ONE network
+    # request; must never raise.
     def extra_embed_html(self, *, source_url: str, raw_html: str) -> str | None: ...
+
+    # True to place that embed at the top of the body rather than the end.
+    def embed_at_top(self, *, source_url: str) -> bool: ...
+
+    # True to drop alt/title from the FIRST image. The first body image is
+    # hoisted to a hero and its alt is rendered under it as a caption, which is
+    # noise when the alt merely names the file ("… Bass Transcription").
+    def strips_first_image_alt(self, *, source_url: str) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -113,6 +121,7 @@ class BasslessonsPlugin:
             ".header-top", ".header",        # log-in strip and the desktop nav
             ".nav-mobile-header", ".nav-mobile-footer", ".nav-mobile-social",
             ".innerNav", ".transSupport",    # breadcrumb and the donation pitch
+            ".transNav",                     # the Previous/Next pager
             ".modal",                        # a hidden "latest updates" dialog
             # The empty player and its "Searching far and wide for the video"
             # placeholder: extra_embed_html appends the real iframe, so leaving
@@ -120,6 +129,17 @@ class BasslessonsPlugin:
             # there. The comment form is a form — it cannot work from a capture.
             ".video-container", ".commentSection",
         )
+
+    def embed_at_top(self, *, source_url: str) -> bool:
+        # The video is what you came for; the scans are the reference you scroll
+        # through afterwards.
+        return True
+
+    def strips_first_image_alt(self, *, source_url: str) -> bool:
+        # Every scan's alt is a restatement of the title ("Don Henley Searching
+        # For A Heart Jorge Calderón Bass Transcription"), so the hero caption
+        # just repeated the headline.
+        return True
 
     def extra_embed_html(self, *, source_url: str, raw_html: str) -> str | None:
         trans_id = self._transcription_id(source_url) if self._host_matches(source_url) else None
@@ -183,6 +203,28 @@ def strip_selectors(
         return tuple(plugin.strip_selectors(source_url=source_url))
     except Exception:  # noqa: BLE001
         return ()
+
+
+def _flag(source_url: str, name: str, plugins: tuple[SiteContentPlugin, ...]) -> bool:
+    plugin = plugin_for(source_url, plugins)
+    if plugin is None:
+        return False
+    try:
+        return bool(getattr(plugin, name)(source_url=source_url))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def embed_at_top(
+    source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS
+) -> bool:
+    return _flag(source_url, "embed_at_top", plugins)
+
+
+def strips_first_image_alt(
+    source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS
+) -> bool:
+    return _flag(source_url, "strips_first_image_alt", plugins)
 
 
 def extra_embed_html(

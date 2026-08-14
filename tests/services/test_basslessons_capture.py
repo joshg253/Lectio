@@ -8,6 +8,7 @@ real page reproduces.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -65,7 +66,9 @@ def test_capture_appends_the_resolved_video(page, monkeypatch):
     )
     article = main._append_site_embeds("<p>body</p>", TRANS_URL, page)
     assert "youtube-nocookie.com/embed/fxoeU3vzdEw" in article
-    assert article.startswith("<p>body</p>")
+    # This site places the video first; with no heading to sit under, that means
+    # the very top.
+    assert article.endswith("<p>body</p>")
 
 
 def test_sanitizer_keeps_the_embed_host(page, monkeypatch):
@@ -163,3 +166,49 @@ def test_capture_is_the_article_and_nothing_else(page):
 def test_chrome_strip_is_scoped_to_the_site(page):
     _title, article = main.extract_full_page_article(page, "https://example.com/post")
     assert "cookie-info-banner" in article
+
+
+# --- placement and captions ------------------------------------------------
+
+def test_previous_next_pager_is_stripped(page):
+    _title, article = main.extract_full_page_article(page, TRANS_URL)
+    assert "Previous" not in article
+    assert "transNav" not in article
+
+
+def test_first_image_loses_its_caption_text(page):
+    """The hero caption is the first image's alt, and every alt here just
+    restates the headline."""
+    _title, article = main.extract_full_page_article(page, TRANS_URL)
+    first = re.search(r"<img[^>]*>", article)
+    assert first is not None
+    assert "alt=" not in first.group(0)
+    assert "title=" not in first.group(0)
+    # Later scans keep theirs — alt is still worth having for accessibility.
+    assert article.count("alt=") >= 1
+
+
+def test_video_lands_above_the_scans(page, monkeypatch):
+    monkeypatch.setattr(
+        plugins, "extra_embed_html", lambda source_url, raw_html, *a, **kw: IFRAME
+    )
+    _title, article = main.extract_full_page_article(page, TRANS_URL)
+    article = main._append_site_embeds(article, TRANS_URL, page)
+    assert article.lower().index("<iframe") < article.index("<img")
+
+
+def test_video_sits_below_the_heading(page, monkeypatch):
+    monkeypatch.setattr(
+        plugins, "extra_embed_html", lambda source_url, raw_html, *a, **kw: IFRAME
+    )
+    _title, article = main.extract_full_page_article(page, TRANS_URL)
+    article = main._append_site_embeds(article, TRANS_URL, page)
+    heading = re.search(r"</h[1-3]\s*>", article, re.IGNORECASE)
+    assert heading is not None
+    assert heading.end() <= article.lower().index("<iframe")
+
+
+def test_embed_still_appends_for_sites_with_no_opinion():
+    assert plugins.embed_at_top("https://example.com/post") is False
+    assert main._insert_after_first_heading("<p>a</p>", "<X>") == "<X><p>a</p>"
+    assert main._insert_after_first_heading("<h2>T</h2><p>a</p>", "<X>") == "<h2>T</h2><X><p>a</p>"
