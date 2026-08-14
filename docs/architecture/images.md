@@ -417,6 +417,13 @@ of 7 images in a pile.
 refresh — the reason re-fetch refuses feed-provided entries at all — so
 substituting on render is the only version of this that survives.
 
+**The fetch is synchronous**, unlike the gallery's prime-and-retry. Deferring to
+a later open shows a body still missing its pictures, which is the case
+`fetch_source_html_now` exists for. The async path was tried and failed in
+practice: a paizo page is ~1MB against a 0.8s wait, and the cache is per-process,
+so the first open after any deploy produced *no images at all* — the gallery
+fallback reads the same cache. Only the first open of an entry pays.
+
 Two guards make it decline, falling back to the gallery: an extraction with no
 `<img>`, and one under 50 words. Both describe a page readability could not make
 sense of, and the feed's own text is better than a thin substitute. It is also

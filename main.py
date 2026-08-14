@@ -14629,14 +14629,17 @@ def _source_article_body(entry) -> str | None:
     the next refresh — which is why re-fetch refuses feed-provided entries — so
     substituting here is the only form of this that survives.
     """
-    cached = lead_image_service._source_html_cache.get(entry.link)
-    if not cached:
-        # Same "prime and retry" the gallery uses: fill on first open for a fast
-        # site, on a later open otherwise. Never a blocking fetch on the render
-        # path for something that only enriches an entry.
-        lead_image_service.queue_source_html_fetch(entry.link)
-        lead_image_service.wait_for_source_html_fetch(entry.link, timeout=0.8)
-        cached = lead_image_service._source_html_cache.get(entry.link)
+    # Synchronous, unlike the gallery's prime-and-retry. This is the narrow case
+    # fetch_source_html_now documents: the page is the only place the article's
+    # pictures exist, so deferring to a later open shows a body that is missing
+    # them now — the same reason _inject_tapas_episode_panels fetches inline.
+    #
+    # The async path was tried first and does not work here. A paizo blog page is
+    # ~1MB, far more than the 0.8s wait allows, and the cache is per-process so
+    # every restart empties it: the first open after a deploy got no images at
+    # all, because the gallery fallback needs that same cache. Only the first
+    # open of an entry pays the fetch; the cache serves the rest.
+    cached = lead_image_service.fetch_source_html_now(entry.link)
     if not cached:
         return None
     _base, raw_html = cached
