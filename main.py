@@ -3411,6 +3411,22 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Tag aliases: one spelling of a tag folded into another. Publishers
+        # disagree about the same subject — the live library carries cpp (204)
+        # beside c++ (181), csharp (149) beside c# (1), dotnet (108) beside
+        # .net (3) — so filtering on one silently misses the other half.
+        # Applied in normalize_tag_value, which every tag path already goes
+        # through, so one row covers manual tags, captured feed tags, filter
+        # rules and imports alike.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tag_aliases (
+                alias TEXT PRIMARY KEY,
+                canonical TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )
+            """
+        )
         # Duplicate-scan groups the user has explicitly said aren't dupes
         # (reported 2026-08-10: "Need a way to mark as Not Dupes, don't
         # suggest"). Keyed by the exact set of feed URLs shown in the group
@@ -8395,6 +8411,18 @@ starred_archive_service = StarredArchiveService(
 
 
 def normalize_tag_value(value: str | None) -> str | None:
+    """Normalize a tag, then fold it through any alias the user has defined."""
+    normalized = normalize_tag_value_raw(value)
+    return _apply_tag_alias(normalized) if normalized else normalized
+
+
+def normalize_tag_value_raw(value: str | None) -> str | None:
+    """Normalization only, with no alias applied.
+
+    The alias editor needs this: normalizing "cpp" through the aliased path
+    would return "c++" the moment the alias exists, so an alias could never be
+    listed, edited or removed by the name it was created under.
+    """
     if value is None:
         return None
 
@@ -8414,6 +8442,54 @@ def normalize_tag_value(value: str | None) -> str | None:
     if not TAG_VALUE_PATTERN.fullmatch(normalized):
         return None
     return normalized
+
+
+# Per-user alias map, loaded once and dropped whenever an alias changes.
+# normalize_tag_value is on every tag path there is (51 call sites, several of
+# them per-entry during a refresh), so a meta-DB read per call is not an option.
+_tag_alias_cache: dict[str, dict[str, str]] = {}
+_tag_alias_lock = threading.Lock()
+
+
+def get_tag_aliases() -> dict[str, str]:
+    """``{alias: canonical}`` for the current user, cached."""
+    try:
+        uid = tenancy.current_user_id()
+    except Exception:  # noqa: BLE001 — no tenancy (import time, a bare thread)
+        return {}
+    with _tag_alias_lock:
+        cached = _tag_alias_cache.get(uid)
+    if cached is not None:
+        return cached
+    try:
+        with get_meta_connection() as conn:
+            rows = conn.execute("SELECT alias, canonical FROM tag_aliases").fetchall()
+        loaded = {str(r["alias"]): str(r["canonical"]) for r in rows}
+    except Exception:  # noqa: BLE001 — a tagging path must not die over this
+        LOGGER.debug("tag alias load failed", exc_info=True)
+        return {}
+    with _tag_alias_lock:
+        _tag_alias_cache[uid] = loaded
+    return loaded
+
+
+def invalidate_tag_alias_cache(uid: str | None = None) -> None:
+    with _tag_alias_lock:
+        if uid is None:
+            _tag_alias_cache.clear()
+        else:
+            _tag_alias_cache.pop(uid, None)
+
+
+def _apply_tag_alias(normalized: str) -> str:
+    """Fold an aliased spelling into its canonical tag.
+
+    Exact match only. `c` (47 entries) sits right beside `cpp` and `c++` in the
+    live vocabulary, so anything prefix- or fuzzy-matching would quietly file C
+    posts under C++. One hop only, so a chain (or a cycle) cannot loop: an alias
+    whose canonical is itself an alias resolves one step and stops.
+    """
+    return get_tag_aliases().get(normalized, normalized)
 
 
 def normalize_search_query(value: str | None) -> str | None:
@@ -8760,6 +8836,95 @@ def clear_folder_curation_route(
         return JSONResponse({"ok": False, "error": "Nothing selected to remove."}, status_code=400)
     result = clear_folder_curation(folder_id, rs, rt, only_tag=(tag.strip() or None))
     return JSONResponse({"ok": True, **result})
+
+
+def tag_alias_preview(alias: str, canonical: str) -> dict:
+    """What creating this alias would move, counted before anything is written.
+
+    Both halves are reported because they live in different stores: manual tags
+    are reader entry tags, captured publisher tags are rows in entry_feed_tags.
+    An alias that only rewrote one of them would leave the split it exists to
+    close.
+    """
+    alias_n = normalize_tag_value_raw(alias)
+    canon_n = normalize_tag_value_raw(canonical)
+    out = {"alias": alias_n, "canonical": canon_n, "manual": 0, "feed": 0, "error": None}
+    if not alias_n or not canon_n:
+        out["error"] = "Both a tag and its replacement are required."
+        return out
+    if alias_n == canon_n:
+        out["error"] = "A tag cannot be an alias of itself."
+        return out
+    with get_reader() as reader:
+        out["manual"] = reader.get_entry_counts(
+            tags=[f"{MANUAL_TAG_KEY_PREFIX}{alias_n}"]).total
+    with get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM entry_feed_tags WHERE tag = ?", (alias_n,)).fetchone()
+        out["feed"] = int(row["n"]) if row else 0
+        # A canonical that is itself aliased would make the new alias a two-hop
+        # chain, and _apply_tag_alias deliberately only resolves one.
+        chained = conn.execute(
+            "SELECT canonical FROM tag_aliases WHERE alias = ?", (canon_n,)).fetchone()
+        if chained:
+            out["error"] = (
+                f"#{canon_n} is itself an alias of #{chained['canonical']} — "
+                f"alias #{alias_n} to that instead.")
+    return out
+
+
+def create_tag_alias(alias: str, canonical: str, *, rewrite: bool = True) -> dict:
+    """Store an alias and (by default) fold the existing tags into it."""
+    preview = tag_alias_preview(alias, canonical)
+    if preview["error"]:
+        return preview
+    alias_n, canon_n = preview["alias"], preview["canonical"]
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO tag_aliases (alias, canonical, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(alias) DO UPDATE SET canonical = excluded.canonical",
+            (alias_n, canon_n, time.time()),
+        )
+    invalidate_tag_alias_cache(tenancy.current_user_id())
+    if rewrite:
+        # Manual tags go through the existing rename, which already merges into
+        # an existing tag rather than colliding with it.
+        moved, _merged = rename_manual_tag_everywhere(alias_n, canon_n)
+        preview["manual_moved"] = moved
+        with get_meta_connection() as conn:
+            # entry_feed_tags is (feed_url, entry_id, tag) — an entry that
+            # already carries the canonical would collide, so drop those first.
+            conn.execute(
+                "DELETE FROM entry_feed_tags WHERE tag = ? AND EXISTS ("
+                "  SELECT 1 FROM entry_feed_tags c WHERE c.tag = ?"
+                "    AND c.feed_url = entry_feed_tags.feed_url"
+                "    AND c.entry_id = entry_feed_tags.entry_id)",
+                (alias_n, canon_n),
+            )
+            cur = conn.execute(
+                "UPDATE entry_feed_tags SET tag = ? WHERE tag = ?", (canon_n, alias_n))
+            preview["feed_moved"] = cur.rowcount
+    LOGGER.info("[tags] alias #%s -> #%s (manual=%s feed=%s)", alias_n, canon_n,
+                preview.get("manual_moved"), preview.get("feed_moved"))
+    return preview
+
+
+def delete_tag_alias(alias: str) -> bool:
+    """Drop an alias. Tags already folded stay folded — the rewrite happened."""
+    alias_n = normalize_tag_value_raw(alias)
+    if not alias_n:
+        return False
+    with get_meta_connection() as conn:
+        cur = conn.execute("DELETE FROM tag_aliases WHERE alias = ?", (alias_n,))
+    invalidate_tag_alias_cache(tenancy.current_user_id())
+    return cur.rowcount > 0
+
+
+def list_tag_aliases() -> list[dict]:
+    with get_meta_connection() as conn:
+        rows = conn.execute(
+            "SELECT alias, canonical, created_at FROM tag_aliases ORDER BY alias").fetchall()
+    return [dict(r) for r in rows]
 
 
 def rename_manual_tag_everywhere(old_tag: str | None, new_tag: str | None) -> tuple[int, bool]:
