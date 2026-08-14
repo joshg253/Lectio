@@ -15643,6 +15643,41 @@ def _apply_entry_media(content_html, entry, feed_url: str, entry_id: str):
     return content_html, audio_feed_suggestion
 
 
+def _visible_word_count(value: str | None) -> int:
+    """Words a reader would actually SEE, with escaped markup counted as markup.
+
+    ``&lt;p&gt;&lt;br&gt;&lt;/p&gt;`` is a paragraph and a line break spelled as
+    text; unescaping before stripping tags scores it 0, which is what it looks
+    like on screen.
+    """
+    if not value:
+        return 0
+    return len(re.sub(r"<[^>]+>", " ", html.unescape(value)).split())
+
+
+def _richest_content(entry, chosen):
+    """Prefer a content element with visible text over an empty one.
+
+    reader's ``get_content`` returns the FIRST html element, and a feed may put
+    an empty one first: pcgamer ships ``&lt;p&gt;&lt;br&gt;&lt;/p&gt;`` (29
+    characters, zero words) ahead of the 5,364-character article, so the entry
+    rendered as a stray open and close tag and nothing else.
+
+    Only steps in when the chosen element has NO visible text and another does,
+    so a feed whose first element is real keeps reader's pick — multiple content
+    elements can be alternate representations, not a ranking, and this must not
+    start choosing between two genuine bodies.
+    """
+    if chosen is not None and _visible_word_count(getattr(chosen, "value", None)):
+        return chosen
+    best, best_words = chosen, 0
+    for candidate in (getattr(entry, "content", None) or []):
+        words = _visible_word_count(getattr(candidate, "value", None))
+        if words > best_words:
+            best, best_words = candidate, words
+    return best
+
+
 def _resolve_entry_content_html(entry):
     """Resolve an entry's display HTML from its content/summary.
 
@@ -15650,7 +15685,7 @@ def _resolve_entry_content_html(entry):
     conversion (Nexus Mods), promotes bare-text/escaped-plaintext summaries
     (tracker.example) to real HTML, and repairs URL-encoded ``http%3A/`` schemes
     the reader library mangles into relative paths. Returns the HTML or None."""
-    content = entry.get_content(prefer_summary=False)
+    content = _richest_content(entry, entry.get_content(prefer_summary=False))
     content_html = None
     if content and content.value and content.is_html:
         content_html = content.value
