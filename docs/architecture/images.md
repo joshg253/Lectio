@@ -393,8 +393,9 @@ number away and costs no extra request.
 and `upgrade_image_size_param` applies it in `_lead_image_display_url`, before
 proxying, so `/api/img` caches the size actually shown.
 
-Per feed, not hardcoded, for two reasons. Which parameter carries the width is a
-fact about one host. And so is the ceiling: a host that has one commonly ignores
+The rule is stored per feed rather than hardcoded, for two reasons. Which
+parameter carries the width is a fact about one host, and so is the ceiling: a
+host that has one commonly ignores
 an over-large value and returns its **default thumbnail** instead of an error or
 a clamp, so a rule set too high makes images smaller, not larger — the value has
 to be probed per host and remembered next to that feed. A URL without the named

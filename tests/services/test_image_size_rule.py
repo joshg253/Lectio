@@ -15,6 +15,13 @@ def test_named_param_is_raised():
     )
 
 
+def test_whitespace_around_the_rule_is_tolerated():
+    """`partition` + `strip` accept a hand-typed rule; pin that it is deliberate."""
+    assert upgrade(THUMB, "   size   =   1600   ") == (
+        "https://img.example.com/thumb.php?pid=99&shadow=0&size=1600"
+    )
+
+
 def test_other_params_and_order_survive():
     out = upgrade("https://img.example.com/i?a=1&w=200&b=2", "w=900")
     assert out == "https://img.example.com/i?a=1&w=900&b=2"

@@ -18741,8 +18741,14 @@ def entry_lead_image_status(feed_url: str, entry_id: str):
     cached = lead_image_service._cache.get(key, "ABSENT")
     in_progress = key in lead_image_service._source_fetch_in_progress
     if cached != "ABSENT" and cached is not None:
-        with get_meta_connection() as _conn:
-            _rule = get_feed_display_prefs(_conn, feed_url).get("image_size_rule")
+        # The rule can only ever rewrite a query parameter, so a URL without a
+        # query cannot be affected and does not need the lookup. This branch is
+        # the terminal one — polling stops once it returns "ready" — so the read
+        # is at most one per entry, not one per poll.
+        _rule = None
+        if "?" in cached:
+            with get_meta_connection() as _conn:
+                _rule = get_feed_display_prefs(_conn, feed_url).get("image_size_rule")
         display_url = _lead_image_display_url(cached, _rule)
         return JSONResponse({"status": "ready", "url": display_url})
     if in_progress:
