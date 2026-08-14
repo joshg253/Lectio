@@ -308,3 +308,51 @@ def test_caption_is_not_rendered_twice(env):
     inline = (d.get("content_html") or "").count("entry-image-title-text")
     assert inline <= 1
     assert not (inline and d.get("image_title_text"))
+
+
+# --- inject_source_images: prefer the source ARTICLE over a bolted-on gallery --
+# A feed that ships text with no pictures is missing their PLACEMENT too, which a
+# gallery appended to the end cannot reproduce.
+
+_ARTICLE_PAGE = (
+    "<html><body><article>"
+    "<p>" + ("word " * 40) + "</p>"
+    '<img src="https://ex.test/one.png">'
+    "<p>" + ("word " * 40) + "</p>"
+    '<img src="https://ex.test/two.png">'
+    "<p>" + ("word " * 40) + "</p>"
+    "</article></body></html>"
+)
+
+
+def _prime_source(link, html):
+    main.lead_image_service._source_html_cache[link] = (link, html)
+
+
+def test_source_article_body_puts_images_in_place(env):
+    _prime_source("https://ex.test/p1", _ARTICLE_PAGE)
+    entry = type("E", (), {"link": "https://ex.test/p1"})()
+    out = main._source_article_body(entry)
+    assert out is not None
+    assert out.count("<img") == 2
+    # Images sit BETWEEN the paragraphs, not all at the end.
+    assert out.index("one.png") < out.rindex("<p")
+
+
+def test_image_only_page_declines_so_the_gallery_still_runs(env):
+    _prime_source("https://ex.test/p2", '<html><body><img src="a.png"></body></html>')
+    entry = type("E", (), {"link": "https://ex.test/p2"})()
+    assert main._source_article_body(entry) is None
+
+
+def test_text_only_page_declines(env):
+    """No pictures to recover — the feed's own prose is not worth replacing."""
+    _prime_source("https://ex.test/p3", "<html><body><article><p>" + ("word " * 80) + "</p></article></body></html>")
+    entry = type("E", (), {"link": "https://ex.test/p3"})()
+    assert main._source_article_body(entry) is None
+
+
+def test_thin_extraction_declines(env):
+    _prime_source("https://ex.test/p4", '<html><body><article><p>Tiny</p><img src="a.png"></article></body></html>')
+    entry = type("E", (), {"link": "https://ex.test/p4"})()
+    assert main._source_article_body(entry) is None

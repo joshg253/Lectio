@@ -401,6 +401,28 @@ a clamp, so a rule set too high makes images smaller, not larger — the value h
 to be probed per host and remembered next to that feed. A URL without the named
 parameter is returned unchanged, so a rule on the wrong feed is inert.
 
+## An image-less feed body is missing placement, not just pictures
+
+A feed that ships complete prose and no `<img>` (paizo's blog) hides two things:
+the images, and where they went. `inject_source_images` originally appended every
+source image as one gallery at the end, which recovers the first and discards the
+second.
+
+`_source_article_body` prefers the source article itself, readability-extracted
+from the same cached page the gallery already fetched: on a paizo post that is 7
+images interleaved through 1,329 words, at the author's own break points, instead
+of 7 images in a pile.
+
+**Render-time, never stored.** A feed entry's body is overwritten by the next
+refresh — the reason re-fetch refuses feed-provided entries at all — so
+substituting on render is the only version of this that survives.
+
+Two guards make it decline, falling back to the gallery: an extraction with no
+`<img>`, and one under 50 words. Both describe a page readability could not make
+sense of, and the feed's own text is better than a thin substitute. It is also
+what keeps a webcomic feed — whose page is one image and no prose — on the
+gallery path it already relies on.
+
 ## Image bytes: the dimension cap is not a size cap
 
 `/api/img` downscales a cached image to `LECTIO_IMG_CACHE_MAX_DIM` (3840) on the

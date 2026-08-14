@@ -14616,8 +14616,47 @@ def _inject_recovered_source_embeds(content_html, entry):
     return _place_recovered_embeds(_strip_play_button_glyphs(body), items)
 
 
+def _source_article_body(entry) -> str | None:
+    """The source page's article, readability-extracted, or None.
+
+    For a feed that ships text with no pictures, the images are not merely
+    missing — their *placement* is missing too. Reading the source article back
+    recovers both: on a paizo blog post the feed body has 0 images while
+    readability over the page yields 7, interleaved through the text where the
+    author put them, which a gallery bolted onto the end cannot reproduce.
+
+    Render-time on purpose, never stored. A feed entry's body is overwritten by
+    the next refresh — which is why re-fetch refuses feed-provided entries — so
+    substituting here is the only form of this that survives.
+    """
+    cached = lead_image_service._source_html_cache.get(entry.link)
+    if not cached:
+        # Same "prime and retry" the gallery uses: fill on first open for a fast
+        # site, on a later open otherwise. Never a blocking fetch on the render
+        # path for something that only enriches an entry.
+        lead_image_service.queue_source_html_fetch(entry.link)
+        lead_image_service.wait_for_source_html_fetch(entry.link, timeout=0.8)
+        cached = lead_image_service._source_html_cache.get(entry.link)
+    if not cached:
+        return None
+    _base, raw_html = cached
+    try:
+        _title, article_html = extract_readability_article(raw_html, entry.link)
+    except Exception:  # noqa: BLE001 — fall back to the gallery, never fail the render
+        LOGGER.debug("source-article extraction failed for %s", entry.link, exc_info=True)
+        return None
+    # Only worth substituting if it actually carries the pictures AND reads like
+    # the article: a thin or image-less extraction is worse than the feed's own
+    # text, which is complete prose in exactly this case.
+    if "<img" not in article_html.lower():
+        return None
+    if len(re.sub(r"<[^>]+>", " ", article_html).split()) < 50:
+        return None
+    return article_html
+
+
 def _inject_source_gallery(content_html, entry, lead_image_url):
-    """Append the source article's images to an image-less feed body (paizo blog).
+    """Append the source article's images to an image-less feed body.
 
     Extracted from get_entry_detail; the caller gates this on the per-feed
     inject_source_images pref + a present entry.link. Collects the source page's
@@ -16221,7 +16260,15 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # Source-page image gallery (opt-in per feed) — runs before the hotlink/
         # no-referrer pass below so injected images are proxied/referrer-stripped too.
         if _disp.get("inject_source_images") and entry.link:
-            content_html = _inject_source_gallery(content_html, entry, lead_image_url)
+            # Prefer the source article itself: it carries the images IN PLACE.
+            # The gallery append remains the fallback for pages readability
+            # cannot make sense of, so a feed already relying on it (a webcomic
+            # whose page is one image and no prose) does not regress.
+            _sourced = _source_article_body(entry)
+            if _sourced:
+                content_html = _sourced
+            else:
+                content_html = _inject_source_gallery(content_html, entry, lead_image_url)
 
         # Suppress the Referer on inline body images so hotlink-protected hosts
         # serve the real image instead of a placeholder, and route known
