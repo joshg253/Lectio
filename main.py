@@ -15775,6 +15775,49 @@ def _promote_comicsthumbs_in_content(content_html: str, full_lead_url: str | Non
     return _COMICSTHUMBS_IMG_SRC_RE.sub(_sub, content_html)
 
 
+def _strip_trailing_recirculation_rail(content_html: str) -> str:
+    """Drop a Future plc "more from us" block from the end of a feed body.
+
+    pcgamer (and its sister sites) close content:encoded with a
+    ``<div class="product">`` holding a full-width promo image and a rail of
+    house links — "2026 games: All the upcoming games", "Best PC games: Our
+    all-time favorites"… It is the site's recirculation widget, not the article,
+    and the image is large enough to read as the post's own.
+
+    Matched by SHAPE rather than by class alone: "product" is a generic name, and
+    a div called that in the middle of a review is likely to be the thing being
+    reviewed. Required: it is the LAST element, and it carries the vanilla image
+    figure or at least three bolded house links.
+    """
+    if not content_html or "product" not in content_html:
+        return content_html
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(content_html, "html.parser")
+        root = soup.body or soup
+        blocks = [n for n in root.find_all("div")
+                  if "product" in (n.get("class") or [])]
+        if not blocks:
+            return content_html
+        changed = False
+        for block in blocks:
+            # Last element of its parent, ignoring whitespace-only siblings.
+            tail = [sib for sib in block.next_siblings
+                    if getattr(sib, "name", None) or str(sib).strip()]
+            if tail:
+                continue
+            rail_links = [a for a in block.find_all("a") if a.find("strong")]
+            if block.select_one("figure.van-image-figure") or len(rail_links) >= 3:
+                block.decompose()
+                changed = True
+        if not changed:
+            return content_html
+        return (root.decode_contents() if root is not soup else str(soup)).strip()
+    except Exception:  # noqa: BLE001 — a cleanup must never lose the article
+        LOGGER.debug("recirculation-rail strip failed", exc_info=True)
+        return content_html
+
+
 def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     """Apply the per-site / generic feed-content cleanups to an entry's HTML.
 
@@ -15783,6 +15826,8 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     NASA leading-nav strip, mynorthwest "RELATED STORIES" block, Ghost kg-audio
     cards, the WordPress "appeared first on" footer, qwantz nav tables, sanitized
     embed-container iframes, and recovery of stripped YouTube embeds."""
+    content_html = _strip_trailing_recirculation_rail(content_html) if isinstance(content_html, str) else content_html
+
     # NASA Science RSS (earthobservatory.nasa.gov) injects the full site secondary-navigation
     # into content:encoded before the article body. Strip any leading wp-block-nasa-blocks-*
     # divs by tracking div nesting depth so the article starts at actual content.
