@@ -119,6 +119,49 @@ strips. The modal checkbox resets on every open: it describes one page's shape,
 not a preference. The UI gates on a per-entry `captured` flag, not feed identity;
 gating on the feed stripped the escape hatch from every filed article.
 
+### Per-site capture adapters (`services/site_content_plugins.py`)
+
+Four things a site can override, all defaulting to "no opinion" so an unlisted
+site behaves exactly as before:
+
+- **`prefers_full_page`** forces `mode="full"` for pages whose content IS their
+  images. Readability scores by paragraph density, so on a basslessons.be
+  transcription (six sheet-music scans in `div.transImgBorders`) it keeps the one
+  scan it ranks highest, drops the other five, and promotes the cookie banner
+  above them. An explicit `mode="archive"` still wins — the user asked for the
+  snapshot.
+- **`extra_embed_html`** supplies an embed the page never ships. This is the case
+  `_reinject_readability_embeds` cannot reach: that recovers iframes present in
+  the fetched HTML, but basslessons ships an empty `div.videoMask` and fills it
+  from `POST /ajax/a_transcriptionVideo.php` (`trans_id` = the link's `?i=`).
+  One guarded POST, JSON out, and only the `<iframe>` is taken from the payload.
+
+- **`strip_selectors`** names chrome to remove before extraction. Full-page
+  keeps every node by design, including nodes the page never shows: basslessons
+  ships its consent banner as `display: none` first in the DOM, so the first
+  capture opened with ~700 characters of cookie policy ahead of the music. Scoped
+  to the site, so full-page's "keeps everything" contract is unchanged elsewhere.
+
+- **`embed_at_top`** places that embed after the article's first heading rather
+  than at the end: the scans are a reference you scroll, the video is the point.
+
+The caption drawn under the hero is deliberately NOT a plugin concern. It comes
+from `entry_lead_images.image_alt`, filled by the lead-image strategy scraping
+the source page, and it is already user-controlled per feed by `caption_source`
+(Feed Properties → Caption). Stripping the alt attribute at capture would have
+suppressed the caption by taking away what a screen reader announces, to
+duplicate a setting that already exists.
+
+The append runs *after* extraction, so `_append_site_embeds` sanitizes its own
+block — otherwise the iframe would join already-sanitized output and never meet
+`_sanitize_iframe`. A rejected embed is dropped silently rather than failing the
+capture. `youtube-nocookie.com` was already on the embed host allowlist.
+
+Both hooks fire per entry — on Re-fetch and on the star/tag auto-fetch — never as
+a bulk pass. Rewriting a whole feed's stored bodies in one go is irreversible;
+that is how a Standard Ebooks body was lost on 2026-08-12, recovered only from a
+backup.
+
 ### Entry points
 
 The **+ Save Article** modal, a bookmarklet (`GET /articles/save?url=…` — a

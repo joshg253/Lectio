@@ -18,3 +18,13 @@ query-filters:
       id: py/full-ssrf
   - exclude:
       id: py/path-injection
+
+# Captured third-party pages committed as test fixtures are DATA, not our code —
+# the point of them is to be byte-for-byte what the site served, so a real page's
+# markup lands in the repo intact. Analyzing them reports the REMOTE site's
+# choices as ours: basslessons.be loads jQuery from a CDN with no SRI, which
+# CodeQL flagged as js/functionality-from-untrusted-source against our fixture
+# (alert 198). Stripping the tag would make the fixture stop reproducing the
+# extraction behavior it exists to pin.
+paths-ignore:
+  - tests/fixtures

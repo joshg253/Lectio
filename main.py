@@ -61,6 +61,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from services import bluesky
+from services import site_content_plugins
 from services import publish_date as publish_date_service
 from services import deviantart as deviantart_service
 from services import devto as devto_service
@@ -10936,6 +10937,70 @@ def _reinject_readability_embeds(summary_html: str, raw_html: str) -> str:
     return summary_html + block
 
 
+def _strip_site_chrome(raw_html: str, source_url: str) -> str:
+    """Remove chrome a per-site plugin named, before extraction.
+
+    ``_strip_article_chrome`` above is the generic list and runs on the
+    readability path only — full-page capture keeps every node by design. That
+    design has a cost a site can be specific about: basslessons ships its cookie
+    banner as ``display: none`` (JS reveals it), first in the DOM, so a full-page
+    capture opened with ~700 characters of cookie policy.
+    """
+    selectors = site_content_plugins.strip_selectors(source_url)
+    if not selectors:
+        return raw_html
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        removed = False
+        for sel in selectors:
+            for el in soup.select(sel):
+                el.decompose()
+                removed = True
+        return str(soup) if removed else raw_html
+    except Exception:  # noqa: BLE001 — never fail an extraction over cosmetics
+        LOGGER.debug("site chrome strip failed for %s", source_url, exc_info=True)
+        return raw_html
+
+
+def _append_site_embeds(article_html: str, source_url: str, raw_html: str) -> str:
+    """Append a per-site embed the page only produces via JS.
+
+    ``_reinject_readability_embeds`` above recovers embeds that were in the
+    fetched HTML. This is the case it cannot reach: the element does not exist
+    until the page calls its own resolver, so a plugin has to go and get it.
+
+    Sanitized here rather than by the caller — this runs *after* extraction, so
+    the block would otherwise be appended to already-sanitized output and never
+    meet ``_sanitize_iframe``.
+    """
+    try:
+        embed = site_content_plugins.extra_embed_html(source_url, raw_html)
+    except Exception:  # noqa: BLE001 — an embed is a bonus, never a failure
+        LOGGER.debug("site embed lookup failed for %s", source_url, exc_info=True)
+        return article_html
+    if not embed:
+        return article_html
+    clean = sanitize_readability_html(f'<p class="lectio-embed">{embed}</p>').strip()
+    if not clean or "<iframe" not in clean.lower():
+        return article_html          # the sanitizer rejected it — say nothing
+    if not site_content_plugins.embed_at_top(source_url):
+        return f"{article_html}{clean}"
+    # At the top means after the article's own heading, if it has one — above it
+    # the video reads as a banner rather than as part of the piece.
+    return _insert_after_first_heading(article_html, clean)
+
+
+_FIRST_HEADING_RE = re.compile(r"</h[1-3]\s*>", re.IGNORECASE)
+
+
+def _insert_after_first_heading(article_html: str, block: str) -> str:
+    match = _FIRST_HEADING_RE.search(article_html)
+    if match is None:
+        return f"{block}{article_html}"
+    return f"{article_html[:match.end()]}{block}{article_html[match.end():]}"
+
+
 _READABILITY_IMG_TAG_RE = re.compile(r'<img\b[^>]*>', re.IGNORECASE)
 _READABILITY_IMG_SRC_RE = re.compile(r'\bsrc\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
 
@@ -12023,7 +12088,8 @@ def fetch_readability_article(source_url: str, *, capture: dict | None = None) -
         return markdown_to_article_html(response.text, source_url)
     if capture is not None:
         capture["raw_html"] = response.text
-    return extract_readability_article(response.text, source_url)
+    title, article_html = extract_readability_article(response.text, source_url)
+    return title, _append_site_embeds(article_html, source_url, response.text)
 
 
 # Below this much extracted article text, readability is treated as having
@@ -12041,6 +12107,7 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     # entirely, so style-only-sized images (NewsBlur's 18px glyph icons) blow
     # up to column width. Lift style px sizes onto attributes, capture every
     # image's size from the raw page, and reapply after extraction.
+    raw_html = _strip_site_chrome(raw_html, source_url)
     raw_html = html_sanitize.lift_img_style_sizes(raw_html)
     # Strip comment threads first — otherwise readability scores a big comments
     # section above the post and no image-count fallback can recover the body.
@@ -12170,6 +12237,7 @@ def extract_full_page_article(raw_html: str, source_url: str) -> tuple[str, str]
     absent and the prose is the body. Only ``<script>``/``<style>``/``<nav>``/
     ``<header>``/``<footer>`` are removed, as obvious non-content that is never
     the article even on a document page."""
+    raw_html = _strip_site_chrome(raw_html, source_url)
     raw_html = html_sanitize.lift_img_style_sizes(raw_html)
     img_sizes = html_sanitize.collect_img_sizes(raw_html, base_url=source_url)
     title = _page_title_from_html(raw_html, source_url)
@@ -12217,7 +12285,8 @@ def fetch_full_page_article(source_url: str, *, capture: dict | None = None) -> 
         capture["raw_html"] = response.text
     if _is_markdown_response(response.headers.get("content-type", ""), source_url):
         return markdown_to_article_html(response.text, source_url)
-    return extract_full_page_article(response.text, source_url)
+    title, article_html = extract_full_page_article(response.text, source_url)
+    return title, _append_site_embeds(article_html, source_url, response.text)
 
 
 def build_readability_response(source_url: str) -> HTMLResponse:
@@ -30018,6 +30087,14 @@ def _refresh_captured_article_for_current_user(
         from_archive = wayback_snapshot_url(_entry_source_url(feed_url, entry_id) or entry_id)
         if not from_archive:
             return {"ok": False, "error": "The Internet Archive has no snapshot of this page."}
+    # A site whose content IS its images (basslessons.be sheet-music scans) opts
+    # into full-page: readability keeps the one image it scores highest and drops
+    # the rest, which for a 6-page transcription loses 5 of them. An explicit
+    # archive re-fetch still wins — the user asked for the snapshot.
+    if mode != CAPTURE_MODE_ARCHIVE and site_content_plugins.prefers_full_page(
+        _entry_source_url(feed_url, entry_id) or ""
+    ):
+        mode = CAPTURE_MODE_FULL
     _base = fetch_full_page_article if mode == CAPTURE_MODE_FULL else fetch_readability_article
     # Keep the page we already fetched, so a date can be mined from it without a
     # second request. readability strips head metadata, which is where the date is.
