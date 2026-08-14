@@ -356,3 +356,21 @@ def test_thin_extraction_declines(env):
     _prime_source("https://ex.test/p4", '<html><body><article><p>Tiny</p><img src="a.png"></article></body></html>')
     entry = type("E", (), {"link": "https://ex.test/p4"})()
     assert main._source_article_body(entry) is None
+
+
+def test_no_orphan_caption_when_the_lead_image_is_hidden(env):
+    """With 'show image at top' off there is no image, so its alt text must not
+    be rendered alone at the foot of the article."""
+    _add(content="<p>" + ("word " * 80) + "</p>")
+    main.lead_image_service.store_entry_image_alt(FEED, "e1", "A logo on an orange background")
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO feed_display_prefs (feed_url) VALUES (?) ON CONFLICT(feed_url) DO NOTHING",
+            (FEED,),
+        )
+        conn.execute("UPDATE feed_display_prefs SET show_lead_image_in_article=0 WHERE feed_url=?", (FEED,))
+        conn.commit()
+    d = _detail()
+    assert d["lead_image_url"] is None
+    assert d["image_title_text"] is None
+    assert "entry-image-title-text" not in (d.get("content_html") or "")

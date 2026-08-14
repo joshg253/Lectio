@@ -169,13 +169,33 @@ def test_content_selector_keeps_the_body_and_drops_the_furniture():
         assert gone not in sliced, gone
 
 
-def test_forum_call_to_action_is_stripped():
-    """The one piece of furniture that lives INSIDE a content wrapper."""
+def test_forum_call_to_action_is_kept():
+    """It was stripped for one build, via the text container that holds it —
+    and on a post whose whole body is a single such container that deleted the
+    article. Kept deliberately; Josh does not mind the link."""
     import main
     sliced = main._slice_to_content(PAIZO_PAGE, plugins.content_selectors(PAIZO_URL))
     cleaned = main._strip_site_chrome(sliced, PAIZO_URL)
-    assert "Join the conversation" not in cleaned
+    assert "Join the conversation" in cleaned
     assert "Real prose here." in cleaned
+
+
+def test_a_single_text_container_body_survives():
+    """The regression itself: one div.blog__paragraph__text holding the whole
+    body, ending with the forum link."""
+    import re
+
+    import main
+    page = (
+        '<html><body><div class="blog__article">'
+        '<div class="blog__article--component_wrapper"><div class="blog__paragraph">'
+        '<div class="blog__paragraph__text"><p>' + ("word " * 200) + '</p>'
+        '<h3><a href="https://paizo.com/threads/x">Join the conversation</a></h3>'
+        "</div></div></div></div></body></html>"
+    )
+    sliced = main._slice_to_content(page, plugins.content_selectors(PAIZO_URL))
+    cleaned = main._strip_site_chrome(sliced, PAIZO_URL)
+    assert len(re.sub(r"<[^>]+>", " ", cleaned).split()) >= 200
 
 
 def test_unmatched_selectors_fall_back_to_whole_page():

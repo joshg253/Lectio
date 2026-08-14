@@ -16328,6 +16328,11 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         if not _show_lead_in_article:
             lead_image_url = None
+            # The caption describes the lead image. With the image deliberately
+            # not shown, the template's no-lead branch rendered it alone at the
+            # very BOTTOM of the article — alt text for a picture that is not on
+            # screen, hundreds of words from anything it could refer to.
+            image_title_text = None
 
         # (caption_source is applied above, before the inline injection. Applying
         # it a second time here would re-read alt/title from storage and render

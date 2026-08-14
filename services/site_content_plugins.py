@@ -195,15 +195,16 @@ class PaizoBlogPlugin:
         return False          # the content selector already narrows this
 
     def strip_selectors(self, *, source_url: str) -> tuple[str, ...]:
-        # "Excited for X? Join the conversation in the Paizo Forums!" — a
-        # call-to-action that closes most posts, and the one piece of furniture
-        # that lives INSIDE a content wrapper rather than beside it, so the
-        # content selector cannot exclude it. Matched by the thread link it
-        # wraps, since the block carries no class of its own.
-        return (
-            'div.blog__paragraph__text:has(> h3 > a[href*="/threads/"])',
-            'h3:has(> a[href*="/threads/"])',
-        )
+        # Nothing. The closing "Join the conversation in the Paizo Forums!"
+        # call-to-action was stripped here for one build and must not be again:
+        # the block carries no class of its own, so it was matched through the
+        # text container that holds it — and on a post whose whole body sits in
+        # a SINGLE div.blog__paragraph__text, that removed the entire article.
+        # 554 words became 0, leaving one logo, which the caller's minimum-length
+        # guard then rejected, so the post silently fell back to the image-less
+        # feed body. A selector that can delete the article to remove a footer is
+        # not worth having for a link Josh said he does not mind.
+        return ()
 
     def content_selectors(self, *, source_url: str) -> tuple[str, ...]:
         return ("div.blog__article--component_wrapper",)
