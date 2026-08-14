@@ -10528,6 +10528,24 @@ def _attachment_list_item(source_url: str, label: str, meta: str,
             f'download="{dl}">{label}</a>{meta}{badge}</li>')
 
 
+# Enclosure content types that describe a PAGE rather than a file. Deliberately
+# short: text/plain and application/xml can each be a genuine attachment, and a
+# type this list gets wrong disappears a real download.
+_PAGE_ENCLOSURE_TYPES = frozenset({
+    "text/html", "application/xhtml+xml",
+})
+
+
+def _url_ext(url: str) -> str:
+    """Lowercased extension of a URL's PATH, or "" — query strings never count."""
+    try:
+        path = urlparse(url).path.lower()
+    except ValueError:
+        return ""
+    dot = path.rfind(".")
+    return path[dot + 1:] if dot >= 0 else ""
+
+
 def _render_entry_attachments(entry, audio_url: str | None,
                               asset_map: dict[str, str] | None = None) -> str:
     """Render a footer "Attachments" section for non-audio enclosures.
@@ -10569,6 +10587,17 @@ def _render_entry_attachments(entry, audio_url: str | None,
         # here also poisoned the lead-image dedup (the URL appearing in the
         # attachments markup made the lead look "already in content", nulling it).
         if enc_type.startswith("image/") or _url_has_image_ext(enc_url):
+            continue
+        # A page is not a download. Standard Ebooks attaches its "read online"
+        # single-page edition as an enclosure typed application/xhtml+xml, which
+        # listed a webpage among the epubs — with a size, as though it were a
+        # file, and a label ("single-page") taken from a URL that has no
+        # extension to give it a better one. _NEVER_ATTACHMENT_EXTS already
+        # refuses these by extension for body links; this is the same rule for
+        # an enclosure that states its type outright.
+        if enc_type in _PAGE_ENCLOSURE_TYPES:
+            continue
+        if not enc_type and _url_ext(enc_url) in _NEVER_ATTACHMENT_EXTS:
             continue
         if audio_url and enc_url == audio_url:
             continue
