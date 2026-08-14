@@ -26,9 +26,14 @@ which is what `prefers_full_page` is for. Guarded by a real-page fixture
 (`tests/fixtures/basslessons_transcription.html`), because synthetic markup does
 not reproduce readability's scoring.
 
-**Still to do:** nothing in code — but no live entry has been re-fetched yet, so
-the adapter is unproven against a stored entry. Re-fetch ONE and check it before
-the rest.
+**DONE 2026-08-13**, confirmed by Josh. All 12 unread entries re-fetched
+(`scripts/refetch_scope.py --feed … --unread --apply`); each holds the credits,
+every sheet scan and the video. Reading the real captures found two things the
+spec missed: full-page keeps nodes the page never shows (the consent banner is
+`display: none` and led every article), and this site builds all its chrome from
+plain divs, so the `<nav>`/`<header>` removal never saw the login strip, pager,
+donation pitch or comment form. Hence `strip_selectors`. The ~24 already-read
+entries were left alone.
 
 The original investigation, kept because it documents the site:
 
@@ -320,6 +325,35 @@ excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 ## Later
 
 *Moved down from Now on 2026-08-13: real, but not what is next.*
+
+### Backfill older posts from a URL pattern
+
+Idea 2026-08-13, **not scoped.** A feed shows the publisher's recent window; the
+back catalogue is usually still on the site behind predictable URLs (paginated
+archives, or per-item ids the feed already exposes). Where the pattern is
+derivable, Lectio could walk backwards and import what the feed no longer lists,
+instead of the library starting the day you subscribed.
+
+The fetching is the easy half. These are the decisions to make first:
+
+- **Dates.** A synthesized entry with no real published date lands at "now" and
+  floods the top of the Inbox — the exact corruption `restore_bumped_publish_dates`
+  had to repair. Mine the date from the page, and if there is none, the entry is
+  not importable rather than importable-with-today.
+- **Identity, before the first fetch.** Backfill must dedupe against what is
+  already there *and* against what was deliberately deleted, or an import
+  resurrects everything the user threw away. `dedup_dismissed` and the
+  retention sweep both have a claim here.
+- **Where it stops.** Walking until 404 is how one subscription becomes 4,000
+  entries. Needs a bound the user sets (N pages, or back to a date) and a dry
+  run that reports the count before writing.
+- **Rate.** This is the largest burst of outbound requests the app could make.
+  It must go through `refetch_batch.run_paced`, not a new loop
+  ([[good-web-citizen]] applies at import too).
+
+Fits the existing adapter shape: a per-feed pattern (stored, not hardcoded —
+see `image_size_rule` for the precedent) plus a paced walker. Worth a real plan
+before any code.
 
 ### "Filter this view" — shipped 2026-08-11, two follow-ups
 
