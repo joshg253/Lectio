@@ -14673,11 +14673,32 @@ def _apply_caption_source_pref(image_title_text, disp, entry, content_html):
     return image_title_text
 
 
+def _skip_lead_comments(html: str) -> int:
+    """Offset past leading whitespace and HTML comments (e.g. Ghost kg-card-begin).
+
+    Scanning in Python rather than in _LEAD_IMG_OPENER_RE: as a regex this was
+    `(?:<!--.*?-->\\s*)*`, which backtracks exponentially on feed HTML shaped
+    like "<!--" + "--><!--" * N whose closing "-->" never arrives (~1s at N=22,
+    doubling per repetition). Feed bodies are attacker-influenced. A str.find
+    loop is linear and needs no regex trickery to stay that way.
+
+    An unterminated comment stops the scan, matching the old regex, which
+    matched zero comments when it could not find the closer.
+    """
+    i, n = 0, len(html)
+    while True:
+        while i < n and html[i].isspace():
+            i += 1
+        if not html.startswith("<!--", i):
+            return i
+        end = html.find("-->", i + 4)
+        if end < 0:
+            return i
+        i = end + 3
+
+
+# Matched with an explicit pos from _skip_lead_comments, so no leading "^".
 _LEAD_IMG_OPENER_RE = re.compile(
-    # Skip leading HTML comments (e.g. Ghost kg-card-begin). The body is an
-    # unrolled loop, not `.*?`: with `.*?` a run of "--><!--" backtracks
-    # exponentially when the closing "-->" never arrives.
-    r"^\s*(?:<!--[^-]*(?:-(?!->)[^-]*)*-->\s*)*"
     # skip blank paragraphs (e.g. Blogger <p>&nbsp;</p>). No leading \s* here:
     # it would overlap with (?:&nbsp;|\s)* on plain whitespace, and the two
     # adjacent whitespace-matching quantifiers are ambiguous enough on a run of
@@ -15196,13 +15217,13 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
         # Only the *opener* is stripped, and only when it is the lead image
         # itself. An occurrence further down is the author placing it in the
         # flow, which is content rather than a header.
-        if _LEAD_IMG_OPENER_RE.match(content_html):
+        if _LEAD_IMG_OPENER_RE.match(content_html, _skip_lead_comments(content_html)):
             _stripped = _bs4_strip_opener(content_html, lead_image_url)
             if _stripped is not None:
                 content_html = _stripped or None
         return content_html, lead_image_url
 
-    _m = _LEAD_IMG_OPENER_RE.match(content_html)
+    _m = _LEAD_IMG_OPENER_RE.match(content_html, _skip_lead_comments(content_html))
     if _m and _FLOAT_STYLE_RE.search(_m.group(0)):
         # The author FLOATED this image, so the text is written to wrap around
         # it. Hoisting it to a full-width hero above the article destroys exactly
