@@ -3891,6 +3891,38 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   margin-inline-end: 0;
 }
 
+/* Source-page gallery (inject_source_images): the panels of a comic strip, or
+   the pictures of an image-less post. Tiled rather than stacked — a 4-panel
+   strip at full column width is four screens of scrolling for one joke.
+   The post's own lead image is NOT in here (it renders above the body), so it
+   stays full width and only the gallery tiles. */
+.entry-content .source-gallery {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin: 0.75em 0;
+  clear: both;
+}
+.entry-content .source-gallery figure {
+  margin: 0;
+}
+.entry-content .source-gallery img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+/* One column where two would leave each panel unreadably narrow. Matches the
+   float breakpoint above, for the same reason: below this, side-by-side costs
+   more than the scrolling it saves. */
+@media (max-width: 620px) {
+  .entry-content .source-gallery {
+    grid-template-columns: 1fr;
+  }
+}
+body[data-compact-article="1"] .entry-content .source-gallery {
+  grid-template-columns: 1fr;
+}
+
 /* Tumblr NPF gallery rows — render side-by-side images correctly without Tumblr's CSS */
 .entry-content .npf_row {
   display: flex;
