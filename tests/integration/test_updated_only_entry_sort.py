@@ -1,6 +1,6 @@
 """An entry dated by <updated> alone must not fall out of a large view.
 
-hentai-foundry ships <updated> and no <published>. entry_publication_date reads
+Some feeds ship <updated> and no <published>. entry_publication_date reads
 both, but the list's SQL fast paths — the ones that order thousands of entries
 without hydrating them — ordered by `coalesce(published, first_updated)` and
 never looked at `updated`.

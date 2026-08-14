@@ -940,15 +940,15 @@ no build step) into a Lectio-branded extension. Motivations, in value order:
    exactly what saves" true — uBlock/Aardvark/anything-based cleanups all
    just work, and a whole class of server-side widget whack-a-mole
    disappears.
-2. **Tags from bot-walled pages.** ArtStation and hentai-foundry both show
+2. **Tags from bot-walled pages.** ArtStation and one art site both show
    per-post tags on the page and ship **none** in the feed (0 `<category>` in
    either). The server cannot reach the pages: ArtStation 403s behind
-   Cloudflare, HF 401s behind a JS proof-of-work ("Making sure you're not a
-   bot!"). Both survive a browser-identity retry, because both are JS
+   Cloudflare, the other 401s behind a JS proof-of-work ("Making sure you're
+   not a bot!"). Both survive a browser-identity retry, because both are JS
    challenges — see `services/bot_challenge.py`, which already says detecting
    one is not a prelude to working around it. **The extractor is done**:
    `extract_page_tags` handles ArtStation (link-text tier, added 2026-08-14)
-   and HF (`rel="tag"`, already worked). Only delivery is missing — POST the
+   and the other (`rel="tag"`, already worked). Only delivery is missing — POST the
    open page's DOM to a route and store the result in `entry_feed_tags`. 86
    ArtStation feeds have never stored a tag. Trigger on KEEP, not per entry: a
    page fetch per post is the traffic the good-citizen rule guards.
@@ -958,7 +958,7 @@ no build step) into a Lectio-branded extension. Motivations, in value order:
    ⚠ **Cookie harvesting was considered and rejected 2026-08-14.** Cloudflare's
    `cf_clearance` is bound to IP **and** UA, so a cookie from Josh's browser is
    rejected at the VPS outright — ArtStation, the bigger prize, cannot work this
-   way at all. HF's token is `HttpOnly` (a bookmarklet cannot read it) and
+   way at all. The other site's token is `HttpOnly` (a bookmarklet cannot read it) and
    expires in hours, making it "re-paste most days, per site". And anything able
    to harvest the cookie can already send the tags directly: the cookie route is
    a harder version of the same mechanism that succeeds in fewer cases.

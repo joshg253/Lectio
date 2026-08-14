@@ -5457,7 +5457,7 @@ def real_published_date(value: datetime | None) -> datetime | None:
 # entry_publication_date reads both, so the SQL ordering disagreed with the
 # ordering everything else uses. The prefetch takes the oldest (or newest) N
 # rows by ITS key, so a disagreement does not merely misplace an entry, it
-# DROPS it: hentai-foundry's "Black Cat by erotibot" is dated 2026-07-21 by
+# DROPS it: one art feed's entry is dated 2026-07-21 by
 # <updated> and 2026-08-12 by first_updated, so it fell outside a window
 # spanning 2026-07-20 to 2026-08-01 and vanished from All Feeds while showing
 # correctly in its folder (which has few enough feeds to use reader's own
