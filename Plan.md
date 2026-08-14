@@ -313,6 +313,11 @@ ignores lookaheads, so `(?:-(?!->)[^-]*)*` — measurably linear — was re-flag
 as ambiguous on the first push of #200. Either write the loop lookahead-free or,
 as that PR did, move the scan out of the regex into Python.
 
+**Committed page fixtures are excluded** (`paths-ignore: tests/fixtures`, added
+2026-08-13 for alert 198). A captured page is byte-for-byte what a site served,
+so analyzing it reports the remote site's choices as ours — jQuery from a CDN
+with no SRI, in that case.
+
 **If the reflective-XSS class keeps recurring**, the repo already has the pattern
 for it: `.github/codeql/queries/` holds guard-aware copies of the SSRF and
 path-injection queries that model our audited guards as sanitizer barriers, with
