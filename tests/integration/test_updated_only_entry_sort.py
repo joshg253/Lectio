@@ -6,7 +6,7 @@ without hydrating them — ordered by `coalesce(published, first_updated)` and
 never looked at `updated`.
 
 That does not merely misplace such an entry. The prefetch takes the oldest (or
-newest) N rows by ITS key, so a disagreement DROPS it: "Black Cat by erotibot"
+newest) N rows by ITS key, so a disagreement DROPS it: "Nocturne by an artist"
 is 2026-07-21 by <updated> and 2026-08-12 by first_updated, so it fell outside a
 window spanning 2026-07-20 to 2026-08-01 and vanished from All Feeds — while
 showing correctly in its own folder, which has few enough feeds to use reader's
@@ -62,7 +62,7 @@ def seeded(tmp_path):
         reader.add_entry({
             "feed_url": TARGET_FEED,
             "id": TARGET_ID,
-            "title": "Black Cat by erotibot",
+            "title": "Nocturne by an artist",
             "link": "https://updated-only.test/black-cat",
             "updated": BASE + timedelta(days=5),
         })
@@ -91,7 +91,7 @@ def test_the_app_dates_it_from_updated(seeded):
 def test_oldest_first_puts_it_first(seeded):
     """Its <updated> is older than every filler, so ascending it leads."""
     titles = _titles(limit=20, sort_by="post", sort_dir="asc", read_filter="all")
-    assert titles[0] == "Black Cat by erotibot", titles[:4]
+    assert titles[0] == "Nocturne by an artist", titles[:4]
 
 
 def test_it_survives_a_window_that_clips_the_list(seeded):
@@ -102,12 +102,12 @@ def test_it_survives_a_window_that_clips_the_list(seeded):
     sort.
     """
     titles = _titles(limit=5, sort_by="post", sort_dir="asc", read_filter="all")
-    assert "Black Cat by erotibot" in titles, titles
+    assert "Nocturne by an artist" in titles, titles
 
 
 def test_newest_first_still_places_it_by_updated(seeded):
     titles = _titles(limit=200, sort_by="post", sort_dir="desc", read_filter="all")
-    assert "Black Cat by erotibot" == titles[-1], titles[-3:]
+    assert "Nocturne by an artist" == titles[-1], titles[-3:]
 
 
 def test_a_small_feed_set_agrees_with_a_large_one(seeded):
@@ -115,6 +115,6 @@ def test_a_small_feed_set_agrees_with_a_large_one(seeded):
     'present in the folder, missing from All'."""
     few = main.list_entries_for_feeds(
         {TARGET_FEED}, limit=20, sort_by="post", sort_dir="asc", read_filter="all")
-    assert [str(p.get("title")) for p in few] == ["Black Cat by erotibot"]
+    assert [str(p.get("title")) for p in few] == ["Nocturne by an artist"]
     many = _titles(limit=200, sort_by="post", sort_dir="asc", read_filter="all")
-    assert "Black Cat by erotibot" in many
+    assert "Nocturne by an artist" in many
