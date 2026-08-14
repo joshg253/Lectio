@@ -15656,26 +15656,28 @@ def _visible_word_count(value: str | None) -> int:
 
 
 def _richest_content(entry, chosen):
-    """Prefer a content element with visible text over an empty one.
+    """Pick the content element with the most visible text.
 
     reader's ``get_content`` returns the FIRST html element, and a feed may put
-    an empty one first: pcgamer ships ``&lt;p&gt;&lt;br&gt;&lt;/p&gt;`` (29
-    characters, zero words) ahead of the 5,364-character article, so the entry
-    rendered as a stray open and close tag and nothing else.
+    a lesser one first. pcgamer does both: on some entries an escaped
+    ``&lt;p&gt;&lt;br&gt;&lt;/p&gt;`` (29 characters, zero words) precedes the
+    5,364-character article, so the entry rendered as a stray open and close tag;
+    on others a 77-word author blurb precedes the 464-word piece, so the entry
+    rendered as the bio alone.
 
-    Only steps in when the chosen element has NO visible text and another does,
-    so a feed whose first element is real keeps reader's pick — multiple content
-    elements can be alternate representations, not a ranking, and this must not
-    start choosing between two genuine bodies.
+    "Skip it only when it is empty" was tried first and is not enough — the blurb
+    is not empty, it is just not the article. Among several representations of
+    one entry the fullest is the one a reader wants, so the choice is by visible
+    word count, html preferred, with reader's own pick as the tie-break.
     """
-    if chosen is not None and _visible_word_count(getattr(chosen, "value", None)):
-        return chosen
-    best, best_words = chosen, 0
-    for candidate in (getattr(entry, "content", None) or []):
-        words = _visible_word_count(getattr(candidate, "value", None))
-        if words > best_words:
-            best, best_words = candidate, words
-    return best
+    candidates = [c for c in (getattr(entry, "content", None) or [])
+                  if _visible_word_count(getattr(c, "value", None))]
+    if not candidates:
+        return chosen          # nothing has text; leave reader's choice alone
+    html_ones = [c for c in candidates if getattr(c, "is_html", False)]
+    best = max(html_ones or candidates, key=lambda c: _visible_word_count(c.value))
+    chosen_words = _visible_word_count(getattr(chosen, "value", None)) if chosen is not None else 0
+    return chosen if chosen_words >= _visible_word_count(best.value) else best
 
 
 def _resolve_entry_content_html(entry):

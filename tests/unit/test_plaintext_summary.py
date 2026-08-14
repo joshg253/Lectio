@@ -102,3 +102,55 @@ def test_looks_like_escaped_plaintext_rejects_real_html():
 @pytest.mark.parametrize("value", [None, "", "just text, no breaks"])
 def test_looks_like_escaped_plaintext_negative(value):
     assert main._looks_like_escaped_plaintext(value) is False
+
+
+# --- several content elements: take the fullest -----------------------------
+# reader's get_content returns the FIRST html element, and a feed may put a
+# lesser one first.
+
+class _C:
+    def __init__(self, value, is_html=True):
+        self.value = value
+        self.type = "text/html"
+        self.is_html = is_html
+
+
+class _E:
+    def __init__(self, contents):
+        self.content = contents
+        self.summary = None
+
+    def get_content(self, prefer_summary=False):
+        return self.content[0] if self.content else None
+
+
+ARTICLE = "<article><p>" + ("word " * 400) + "</p></article>"
+ESCAPED_EMPTY = "&lt;p&gt;&lt;br&gt;&lt;/p&gt;"
+BLURB = "<p>" + ("bio " * 70) + "</p>"
+
+
+def test_escaped_empty_first_element_is_skipped():
+    e = _E([_C(ESCAPED_EMPTY), _C(ARTICLE)])
+    assert main._richest_content(e, e.content[0]).value == ARTICLE
+
+
+def test_short_author_blurb_first_is_skipped():
+    """Not empty — just not the article. The earlier 'skip only if empty' rule
+    left this one rendering as the bio alone."""
+    e = _E([_C(BLURB), _C(ARTICLE)])
+    assert main._richest_content(e, e.content[0]).value == ARTICLE
+
+
+def test_a_single_element_is_returned_untouched():
+    e = _E([_C(ESCAPED_EMPTY)])
+    assert main._richest_content(e, e.content[0]).value == ESCAPED_EMPTY
+
+
+def test_readers_pick_wins_when_it_is_already_the_fullest():
+    e = _E([_C(ARTICLE), _C(BLURB)])
+    assert main._richest_content(e, e.content[0]).value == ARTICLE
+
+
+def test_escaped_markup_counts_as_markup_not_words():
+    assert main._visible_word_count(ESCAPED_EMPTY) == 0
+    assert main._visible_word_count("<p>two words</p>") == 2
