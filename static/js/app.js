@@ -773,7 +773,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       if (sameFolder.length > 0) {
         const byPair = new Map();
         sameFolder.forEach(d => {
-          const key = d.keep + ' ' + d.remove;
+          const key = d.keep + '\x00' + d.remove;
           if (!byPair.has(key)) byPair.set(key, { keep: d.keep, remove: d.remove, folders: [], contentIdentical: d.content_identical });
           byPair.get(key).folders.push({ id: d.folder_id, name: d.folder_name });
         });
@@ -5176,6 +5176,12 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             const src = data.caption_source || 'auto';
             feedPropCaptionTitle.checked = src === 'title' || src === 'both';
             feedPropCaptionAlt.checked   = src === 'alt'   || src === 'both';
+            // Auto is a fifth state two checkboxes cannot express: it decides per
+            // post and often shows nothing. Drawn as indeterminate rather than
+            // unchecked, because unchecked already means "never show one" — the
+            // two looked identical, so the default read as "captions are off".
+            feedPropCaptionTitle.indeterminate = src === 'auto';
+            feedPropCaptionAlt.indeterminate   = src === 'auto';
             feedPropCaptionAutoBtn.classList.toggle('active', src === 'auto');
             feedPropCaptionTitle.dataset.feedUrl = feedUrl;
             feedPropCaptionAlt.dataset.feedUrl   = feedUrl;
@@ -6711,6 +6717,9 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const titleOn = feedPropCaptionTitle?.checked;
       const altOn   = feedPropCaptionAlt?.checked;
       const source  = titleOn && altOn ? 'both' : titleOn ? 'title' : altOn ? 'alt' : 'none';
+      // Touching either box is an explicit choice, so neither stays indeterminate.
+      if (feedPropCaptionTitle) feedPropCaptionTitle.indeterminate = false;
+      if (feedPropCaptionAlt)   feedPropCaptionAlt.indeterminate   = false;
       feedPropCaptionAutoBtn?.classList.remove('active');
       await fetch('/feeds/caption-source', {
         method: 'POST',
@@ -6723,8 +6732,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     feedPropCaptionAutoBtn?.addEventListener('click', async () => {
       const feedUrl = feedPropCaptionAutoBtn.dataset.feedUrl;
       if (!feedUrl) return;
-      if (feedPropCaptionTitle) feedPropCaptionTitle.checked = false;
-      if (feedPropCaptionAlt)   feedPropCaptionAlt.checked   = false;
+      if (feedPropCaptionTitle) { feedPropCaptionTitle.checked = false; feedPropCaptionTitle.indeterminate = true; }
+      if (feedPropCaptionAlt)   { feedPropCaptionAlt.checked   = false; feedPropCaptionAlt.indeterminate   = true; }
       feedPropCaptionAutoBtn.classList.add('active');
       await fetch('/feeds/caption-source', {
         method: 'POST',
@@ -11470,7 +11479,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         function loadTagVocab() {
           if (typeSel.value !== 'tag_filter') return;
           const s = draftScope();
-          const key = s.scope + ' ' + s.scope_id;
+          const key = s.scope + '\x00' + s.scope_id;
           if (tagVocab.key === key || tagVocabInFlight === key) return;
           tagVocabInFlight = key;
           const qs = new URLSearchParams({ scope: s.scope, scope_id: s.scope_id });
