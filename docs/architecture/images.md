@@ -382,6 +382,24 @@ not enough:
    plugin opinion still scan, which is the case that injection was written for
    (mahonoir's enclosure is a share card, so the page really is the only source).
 
+## A thumbnail URL is often the full-size one with a smaller number in it
+
+Some hosts render a single asset at any width from a query parameter, and a feed
+links the small one because that is what its own list view uses — leaving the
+subscription permanently at thumbnail resolution when the large render is one
+number away and costs no extra request.
+
+`feed_display_prefs.image_size_rule` holds `"<param>=<value>"` (e.g. `"w=1600"`)
+and `upgrade_image_size_param` applies it in `_lead_image_display_url`, before
+proxying, so `/api/img` caches the size actually shown.
+
+Per feed, not hardcoded, for two reasons. Which parameter carries the width is a
+fact about one host. And so is the ceiling: a host that has one commonly ignores
+an over-large value and returns its **default thumbnail** instead of an error or
+a clamp, so a rule set too high makes images smaller, not larger — the value has
+to be probed per host and remembered next to that feed. A URL without the named
+parameter is returned unchanged, so a rule on the wrong feed is inert.
+
 ## Image bytes: the dimension cap is not a size cap
 
 `/api/img` downscales a cached image to `LECTIO_IMG_CACHE_MAX_DIM` (3840) on the
