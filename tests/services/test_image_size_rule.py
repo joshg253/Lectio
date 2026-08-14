@@ -60,3 +60,35 @@ def test_path_and_fragment_are_untouched():
     assert out.startswith("https://img.example.com/a/b.php?")
     assert out.endswith("#frag")
     assert "size=42" in out
+
+
+# --- class-based floats become the inline style the renderer acts on --------
+
+from services.html_sanitize import lift_float_classes  # noqa: E402
+
+
+def test_wordpress_align_classes_float():
+    assert 'style="float: left"' in lift_float_classes('<img class="alignleft x" src="a">')
+    assert 'style="float: right"' in lift_float_classes('<img class="x alignright" src="a">')
+
+
+def test_bare_left_counts_only_on_a_figure():
+    assert "float" in lift_float_classes('<figure class="left"><img src="a"></figure>')
+    assert "float" not in lift_float_classes('<img class="left" src="a">')
+    assert "float" not in lift_float_classes('<div class="left">text</div>')
+
+
+def test_existing_inline_float_wins():
+    out = lift_float_classes('<figure class="left" style="float: right"><img src="a"></figure>')
+    assert out.count("float") == 1
+    assert "float: right" in out
+
+
+def test_existing_style_is_preserved():
+    out = lift_float_classes('<figure class="left" style="margin:0"><img src="a"></figure>')
+    assert "margin:0" in out and "float: left" in out
+
+
+def test_untagged_markup_is_untouched():
+    html = "<p>no classes here</p>"
+    assert lift_float_classes(html) == html

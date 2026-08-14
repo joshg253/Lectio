@@ -12156,6 +12156,7 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     # up to column width. Lift style px sizes onto attributes, capture every
     # image's size from the raw page, and reapply after extraction.
     raw_html = _strip_site_chrome(raw_html, source_url)
+    raw_html = html_sanitize.lift_float_classes(raw_html)
     raw_html = html_sanitize.lift_img_style_sizes(raw_html)
     # Strip comment threads first — otherwise readability scores a big comments
     # section above the post and no image-count fallback can recover the body.
@@ -12286,6 +12287,7 @@ def extract_full_page_article(raw_html: str, source_url: str) -> tuple[str, str]
     ``<header>``/``<footer>`` are removed, as obvious non-content that is never
     the article even on a document page."""
     raw_html = _strip_site_chrome(raw_html, source_url)
+    raw_html = html_sanitize.lift_float_classes(raw_html)
     raw_html = html_sanitize.lift_img_style_sizes(raw_html)
     img_sizes = html_sanitize.collect_img_sizes(raw_html, base_url=source_url)
     title = _page_title_from_html(raw_html, source_url)

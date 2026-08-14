@@ -432,6 +432,69 @@ def _lift_img_style_sizes_on_tag(img) -> bool:
     return changed
 
 
+# Class names that mean "float this" on a figure or an image. WordPress emits
+# alignleft/alignright on millions of sites; Bootstrap-derived themes use
+# float-*/pull-*; a bare left/right is only unambiguous on a <figure>, which is
+# why it is listed separately below.
+_FLOAT_CLASS_LEFT = frozenset({"alignleft", "align-left", "float-left", "pull-left"})
+_FLOAT_CLASS_RIGHT = frozenset({"alignright", "align-right", "float-right", "pull-right"})
+_BARE_FLOAT_LEFT = "left"
+_BARE_FLOAT_RIGHT = "right"
+
+_FLOATABLE_TAG_RE = re.compile(r"<(figure|img)\b([^>]*)>", re.IGNORECASE)
+_CLASS_ATTR_RE = re.compile(r'\bclass\s*=\s*"([^"]*)"|\bclass\s*=\s*\'([^\']*)\'', re.IGNORECASE)
+_STYLE_ATTR_RE = re.compile(r'\bstyle\s*=\s*"([^"]*)"|\bstyle\s*=\s*\'([^\']*)\'', re.IGNORECASE)
+
+
+def lift_float_classes(html: str) -> str:
+    """Turn a class-based float into the inline style the renderer acts on.
+
+    A site floats an image with its own stylesheet, which a feed reader never
+    ships — so the class survives sanitization and does nothing, and the picture
+    lands full-width with the text that was written to wrap around it pushed
+    below. The article CSS already has a complete float treatment (sizing to
+    45%, clearfix, unfloating on a narrow pane) but it is keyed on the INLINE
+    style, because that is the form the sanitizer preserves. Rewriting the class
+    into that form makes one system serve both.
+
+    Bare ``left``/``right`` count only on a <figure>, where they cannot plausibly
+    mean anything else. An existing inline float always wins.
+    """
+    if "class=" not in html.lower():
+        return html
+
+    def _rewrite(m: re.Match) -> str:
+        tag, attrs = m.group(1), m.group(2)
+        cm = _CLASS_ATTR_RE.search(attrs)
+        if not cm:
+            return m.group(0)
+        classes = {c.lower() for c in (cm.group(1) or cm.group(2) or "").split()}
+        side = None
+        if classes & _FLOAT_CLASS_LEFT:
+            side = "left"
+        elif classes & _FLOAT_CLASS_RIGHT:
+            side = "right"
+        elif tag.lower() == "figure" and _BARE_FLOAT_LEFT in classes:
+            side = "left"
+        elif tag.lower() == "figure" and _BARE_FLOAT_RIGHT in classes:
+            side = "right"
+        if side is None:
+            return m.group(0)
+        sm = _STYLE_ATTR_RE.search(attrs)
+        existing = (sm.group(1) or sm.group(2) or "") if sm else ""
+        if "float" in existing.lower():
+            return m.group(0)          # the page already said; do not argue
+        decl = f"float: {side}"
+        if sm:
+            merged = f"{existing.rstrip().rstrip(';')}; {decl}" if existing.strip() else decl
+            attrs = attrs[:sm.start()] + f'style="{merged}"' + attrs[sm.end():]
+        else:
+            attrs = f'{attrs} style="{decl}"'
+        return f"<{tag}{attrs}>"
+
+    return _FLOATABLE_TAG_RE.sub(_rewrite, html)
+
+
 def lift_img_style_sizes(html: str) -> str:
     """Standalone pre-pass for pipelines whose downstream cleaner strips inline
     styles before sanitize_html runs — python-readability's .summary() drops
