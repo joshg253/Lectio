@@ -258,3 +258,53 @@ def test_missing_entry_returns_orphan_or_none(env):
     d = main.get_entry_detail(FEED, "does-not-exist")
     # Either None or an orphan-detail dict, but never raises.
     assert d is None or isinstance(d, dict)
+
+
+# --- caption_source applies to the INLINE caption too ----------------------
+# Regression: the per-feed caption preference was applied ~100 lines AFTER the
+# inline injection, so on an entry with no separate hero the caption was written
+# into content_html and image_title_text cleared before the preference was ever
+# consulted. caption_source="none" left the caption on screen.
+
+def _captioned_entry(alt="Some Song Bass Transcription"):
+    _add(content='<p><img src="https://ex.test/a.png"></p><p>body</p>')
+    main.lead_image_service.store_entry_image_alt(FEED, "e1", alt)
+
+
+def _caption_of(detail) -> str | None:
+    import re
+    m = re.search(r'<p class="entry-image-title-text">([^<]*)</p>', detail.get("content_html") or "")
+    return m.group(1) if m else detail.get("image_title_text")
+
+
+def _set_caption_source(value):
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO feed_display_prefs (feed_url) VALUES (?) ON CONFLICT(feed_url) DO NOTHING",
+            (FEED,),
+        )
+        conn.execute("UPDATE feed_display_prefs SET caption_source=? WHERE feed_url=?", (value, FEED))
+        conn.commit()
+
+
+def test_caption_source_none_suppresses_the_inline_caption(env):
+    _captioned_entry()
+    _set_caption_source("none")
+    assert _caption_of(_detail()) is None
+
+
+def test_caption_source_alt_still_shows_it(env):
+    _captioned_entry("Some Song Bass Transcription")
+    _set_caption_source("alt")
+    assert _caption_of(_detail()) == "Some Song Bass Transcription"
+
+
+def test_caption_is_not_rendered_twice(env):
+    """Applied both before and after the injection, alt/title captioned the entry
+    inline AND from the template."""
+    _captioned_entry("Some Song Bass Transcription")
+    _set_caption_source("alt")
+    d = _detail()
+    inline = (d.get("content_html") or "").count("entry-image-title-text")
+    assert inline <= 1
+    assert not (inline and d.get("image_title_text"))

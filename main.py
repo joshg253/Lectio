@@ -16033,6 +16033,14 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # labels from wrongly-selected nav thumbnails like "Previous" / "Next").
         image_title_text = _suppress_junk_caption(image_title_text, entry)
 
+        # The per-feed caption preference has to be applied BEFORE the inline
+        # injection below, not after it. Applied after, it could not suppress
+        # anything: the injection writes the caption into content_html and then
+        # clears image_title_text, so the later call had nothing left to act on
+        # and caption_source="none" left the caption on screen. It only ever
+        # worked for the template caption, i.e. entries WITH a separate hero.
+        image_title_text = _apply_caption_source_pref(image_title_text, _disp, entry, content_html)
+
         # Inject image_title_text as alt attribute on the first <img> in content_html
         # and insert a caption <p> immediately after it so it appears inline under
         # the image rather than at the bottom of the article.
@@ -16137,7 +16145,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if not _show_lead_in_article:
             lead_image_url = None
 
-        image_title_text = _apply_caption_source_pref(image_title_text, _disp, entry, content_html)
+        # (caption_source is applied above, before the inline injection. Applying
+        # it a second time here would re-read alt/title from storage and render
+        # the caption twice — once inline, once from the template.)
 
         # Fold the channel link through declared host migrations first, so a feed
         # whose channel <link> still names a dead domain can't rebase a correct
