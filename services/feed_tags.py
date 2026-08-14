@@ -259,6 +259,38 @@ def extract_page_tags(html: str | None) -> list[str]:
         if value:
             values.append(value)
 
+    # Tag-classed anchors whose NAME is only in the link text. ArtStation marks
+    # its tag block with classes (project-tag-item, label-tag) but links each
+    # tag to a search page — /search?query=Digital 2D — so there is no title
+    # attribute and no /tag/ or /category/ slug for the tier above to read.
+    #
+    # The text is used rather than the href because the href is ambiguous:
+    # ArtStation writes the tag "Environmental Concept Art &amp; Design"
+    # straight into the query string, so unescaping it yields a bare "&" that
+    # URL-parsing would split into two tags. The link text carries the same
+    # value with no such trap.
+    #
+    # Guarded to keep this from becoming "any tag-classed anchor's text":
+    # the body must be plain (an anchor wrapping an image or markup is the case
+    # the title-attribute tier exists for) and short enough to be a tag rather
+    # than a sentence — the failure mode already on record for gottadeal, where
+    # surrounding prose was harvested as "in XXX, YYY".
+    for m in _ANCHOR_RE.finditer(html):
+        attrs = {}
+        for am in _ANCHOR_ATTR_RE.finditer(m.group(1)):
+            attrs[am.group(1).lower()] = next(
+                (g for g in (am.group(3), am.group(4), am.group(5)) if g is not None), ""
+            )
+        classes = (attrs.get("class") or "").lower()
+        if "tag" not in classes or attrs.get("title"):
+            continue          # titled anchors are the tier above's job
+        body = m.group(2)
+        if "<" in body:
+            continue          # wraps markup — not a plain tag label
+        text = html_module.unescape(body).strip().lstrip("#").strip()
+        if text and len(text) <= 60:
+            values.append(text)
+
     # Taxonomy-URL anchors: a link to /tags/<slug>/ or /categories/<slug>/ IS a
     # tag link, whatever its class. Hugo (and most static generators) mark them
     # only by URL shape — krshrimali.github.io puts its category at the top and

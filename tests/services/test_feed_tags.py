@@ -657,3 +657,52 @@ def test_path_taxonomy_still_wins_its_hyphen_expansion():
     'How-To Guides' case above)."""
     html = '<a href="/tags/pet-supplies/"><img src="i.png"></a>'
     assert extract_page_tags(html) == ["pet supplies"]
+
+
+# --- tag-classed anchors whose name is only in the link text ---------------
+# ArtStation: classed tag block, but each tag links to a search page, so there
+# is no title attribute and no /tag/ or /category/ slug to read.
+
+ARTSTATION_TAGS = (
+    '<div class="project-sidebar-section tags-section"><h4>Tags</h4>'
+    '<ul class="project-tags list-unstyled d-flex flex-wrap">'
+    '<li class="project-tag"><a target="_blank" class="project-tag-item badge label-tag"'
+    ' href="/search?query=Digital 2D"> #Digital 2D </a></li>'
+    '<li class="project-tag"><a target="_blank" class="project-tag-item badge label-tag"'
+    ' href="/search?query=Illustration"> #Illustration </a></li>'
+    '<li class="project-tag"><a target="_blank" class="project-tag-item badge label-tag"'
+    ' href="/search?query=Environmental Concept Art &amp; Design">'
+    ' #Environmental Concept Art &amp; Design </a></li>'
+    '<li class="project-tag"><a target="_blank" class="project-tag-item badge label-tag"'
+    ' href="/search?query=NoAI"> #NoAI </a></li><!----></ul></div>'
+)
+
+
+def test_artstation_tag_block_is_harvested():
+    assert extract_page_tags(ARTSTATION_TAGS) == [
+        "Digital 2D", "Illustration", "Environmental Concept Art & Design", "NoAI",
+    ]
+
+
+def test_ampersand_tag_is_not_split():
+    """The href writes the tag straight into ?query=, so `&amp;` unescapes to a
+    bare `&` that URL-parsing would treat as a parameter separator."""
+    tags = extract_page_tags(ARTSTATION_TAGS)
+    assert "Environmental Concept Art & Design" in tags
+    assert "Design" not in tags
+
+
+def test_anchor_wrapping_markup_is_left_to_the_title_tier():
+    html = '<a class="tag-item" href="/x"><img src="a.png"> Something </a>'
+    assert extract_page_tags(html) == []
+
+
+def test_sentence_length_text_is_not_a_tag():
+    """Guards the gottadeal failure: surrounding prose harvested as a tag."""
+    long_text = "Posted on 7/29/26 in Woot!, Pet Supplies and a great deal more besides"
+    assert extract_page_tags(f'<a class="tag" href="/x">{long_text}</a>') == []
+
+
+def test_titled_anchor_still_uses_its_title():
+    html = '<a class="tag" title="Real Title" href="/x"> ignored text </a>'
+    assert extract_page_tags(html) == ["Real Title"]
