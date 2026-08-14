@@ -100,11 +100,26 @@ class BasslessonsPlugin:
         return self.handles(source_url=source_url)
 
     def strip_selectors(self, *, source_url: str) -> tuple[str, ...]:
-        # The consent banner ships as `display: none` and is revealed by JS, so
-        # it is not visible on the page — but full-page capture keeps every node,
-        # and it sits first in the DOM. Left in, every transcription opens with
-        # ~700 characters of cookie policy ahead of the music.
-        return ("#cookieInfoBanner", ".cookie-info-banner")
+        # Everything here sits ABOVE the music, which is why it is worth naming:
+        # full-page capture keeps every node, and this site builds its chrome
+        # from plain divs, so the `<nav>`/`<header>` removal that path already
+        # does never sees it.
+        #
+        # The consent banner is the worst of them — it ships `display: none` and
+        # is revealed by JS, so it is invisible on the site itself, but it is
+        # first in the DOM and ~700 characters of cookie policy.
+        return (
+            "#cookieInfoBanner", ".cookie-info-banner",
+            ".header-top", ".header",        # log-in strip and the desktop nav
+            ".nav-mobile-header", ".nav-mobile-footer", ".nav-mobile-social",
+            ".innerNav", ".transSupport",    # breadcrumb and the donation pitch
+            ".modal",                        # a hidden "latest updates" dialog
+            # The empty player and its "Searching far and wide for the video"
+            # placeholder: extra_embed_html appends the real iframe, so leaving
+            # these in shows the site still looking for a video that is right
+            # there. The comment form is a form — it cannot work from a capture.
+            ".video-container", ".commentSection",
+        )
 
     def extra_embed_html(self, *, source_url: str, raw_html: str) -> str | None:
         trans_id = self._transcription_id(source_url) if self._host_matches(source_url) else None

@@ -149,6 +149,17 @@ def test_cookie_banner_is_stripped_from_the_capture(page):
     assert _sheet_count(article) == 6            # and the music survived
 
 
+def test_capture_is_the_article_and_nothing_else(page):
+    """Everything above and below the music is site furniture."""
+    _title, article = main.extract_full_page_article(page, TRANS_URL)
+    for gone in ("Log in", "Nederlandstalige Versie", "Click here", "Leave a comment",
+                 "Searching far and wide"):
+        assert gone not in article, gone
+    assert "Searching For A Heart" in article        # title kept
+    assert "Jorge Calder" in article                 # credits kept
+    assert _sheet_count(article) == 6
+
+
 def test_chrome_strip_is_scoped_to_the_site(page):
     _title, article = main.extract_full_page_article(page, "https://example.com/post")
     assert "cookie-info-banner" in article
