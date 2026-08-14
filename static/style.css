@@ -626,12 +626,50 @@ body[data-compact-article="1"] .entry-tags-row .single-back-btn {
 }
 
 /* Omitted on a phone, at Josh's call: suggestion chips are a triage affordance
-   for the desktop tree, and the +/- filter triangles are too small to hit. */
+   for the desktop tree, and the +/- filter triangles are too small to hit.
+   Both objections are about the chips being *always* on screen at desktop size;
+   see the data-entry-tags-open block below, which brings them back for the one
+   moment they are the thing you came for, at a size you can hit. */
 body[data-compact-article="1"] .entry-tag-suggestions,
 body[data-compact-article="1"] .entry-tags-row-sep,
 body[data-compact-article="1"] .author-filter-signs,
 body[data-compact-article="1"] .feed-tag-filter-sign {
   display: none;
+}
+
+/* Tapping Tag opens the input on its own row; the feed's own tags belong there,
+   since adding one is the same action the input is for. Scoped to the open
+   state so the row is unchanged while reading.
+   The author filter signs and the row separator stay hidden: they are not part
+   of tagging, and this row is already tight. */
+body[data-compact-article="1"][data-entry-tags-open="1"] .entry-tag-suggestions {
+  display: contents;
+}
+body[data-compact-article="1"][data-entry-tags-open="1"] .feed-tag-filter-sign {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* The reason they were pulled from the phone in the first place. 2.25rem is
+     a thumb target; the glyphs themselves stay small enough to read as marks
+     rather than buttons. */
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  padding: 0 0.25em;
+  opacity: 0.85;
+}
+body[data-compact-article="1"][data-entry-tags-open="1"] .feed-tag-filter-sign.include,
+body[data-compact-article="1"][data-entry-tags-open="1"] .feed-tag-filter-sign.exclude {
+  /* 0.62em on the desktop row — legible beside a mouse pointer, invisible under
+     a thumb. */
+  font-size: 0.9em;
+}
+body[data-compact-article="1"][data-entry-tags-open="1"] .feed-tag-filter-sign.add-tag {
+  font-size: 1.15em;
+}
+/* A chip is now three thumb targets wide, so it needs to breathe or the three
+   read as one control. */
+body[data-compact-article="1"][data-entry-tags-open="1"] .feed-tag-filter-chip {
+  margin: 0.1rem 0;
 }
 
 /* Tags a post already carries stay visible, but wrap to their own line under the

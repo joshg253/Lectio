@@ -14984,6 +14984,16 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     }
 
     function setEntryTagsExpandedState(expanded) {
+      // Phone reveals the feed-tag chips only while the tag form is open (see
+      // the data-entry-tags-open rules). Mirrored onto <body> because the chips
+      // are not descendants of the button, so CSS cannot reach them from
+      // aria-expanded. Set BEFORE the guard below: a pane with no tag button
+      // must still clear the flag, or it survives onto the next entry.
+      if (expanded) {
+        document.body.setAttribute('data-entry-tags-open', '1');
+      } else {
+        document.body.removeAttribute('data-entry-tags-open');
+      }
       if (!entryTagAddBtn) {
         return;
       }
