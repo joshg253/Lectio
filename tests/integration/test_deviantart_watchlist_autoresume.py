@@ -163,9 +163,24 @@ def test_reconcile_ignores_combined_watch_feed(configured):
     result = main.sync_deviantart_watchlist()
 
     assert result["rate_limited"] is False
-    assert result["added"] == 1  # alice added; watch feed not counted as existing
+    # The Watch feed carries every watched artist, so no per-artist gallery feed
+    # is created while it exists. Creating one here is what silently undid the
+    # 2026-08-12 consolidation: combining DELETES the gallery row this sync
+    # dedupes on, so every merged artist looked new again the next night.
+    assert result["added"] == 0
     assert result["unwatched"] == []
     assert "no longer watched" not in _status()
+
+
+def test_gallery_feeds_still_added_without_a_watch_feed(configured):
+    """The skip is conditional — with no Watch feed, the sync still populates."""
+    configured.setattr(deviantart_service, "list_watching", lambda tok, user: ["alice"])
+    fake, _ = _fake_create(fail_from=99, retry_after=None)
+    configured.setattr(deviantart_service, "create_deviantart_feed", fake)
+
+    result = main.sync_deviantart_watchlist()
+
+    assert result["added"] == 1
 
 
 def _da_deactivated_rows() -> list[str]:
