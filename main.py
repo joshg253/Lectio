@@ -14674,7 +14674,10 @@ def _apply_caption_source_pref(image_title_text, disp, entry, content_html):
 
 
 _LEAD_IMG_OPENER_RE = re.compile(
-    r"^\s*(?:<!--.*?-->\s*)*"  # skip leading HTML comments (e.g. Ghost kg-card-begin)
+    # Skip leading HTML comments (e.g. Ghost kg-card-begin). The body is an
+    # unrolled loop, not `.*?`: with `.*?` a run of "--><!--" backtracks
+    # exponentially when the closing "-->" never arrives.
+    r"^\s*(?:<!--[^-]*(?:-(?!->)[^-]*)*-->\s*)*"
     # skip blank paragraphs (e.g. Blogger <p>&nbsp;</p>). No leading \s* here:
     # it would overlap with (?:&nbsp;|\s)* on plain whitespace, and the two
     # adjacent whitespace-matching quantifiers are ambiguous enough on a run of
