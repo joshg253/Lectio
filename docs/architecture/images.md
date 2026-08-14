@@ -401,6 +401,45 @@ a clamp, so a rule set too high makes images smaller, not larger — the value h
 to be probed per host and remembered next to that feed. A URL without the named
 parameter is returned unchanged, so a rule on the wrong feed is inert.
 
+## An image-less feed body is missing placement, not just pictures
+
+A feed that ships complete prose and no `<img>` (paizo's blog) hides two things:
+the images, and where they went. `inject_source_images` originally appended every
+source image as one gallery at the end, which recovers the first and discards the
+second.
+
+`_source_article_body` prefers the source article itself, readability-extracted
+from the same cached page the gallery already fetched: on a paizo post that is 7
+images interleaved through 1,329 words, at the author's own break points, instead
+of 7 images in a pile.
+
+**Render-time, never stored.** A feed entry's body is overwritten by the next
+refresh — the reason re-fetch refuses feed-provided entries at all — so
+substituting on render is the only version of this that survives.
+
+**The fetch is synchronous**, unlike the gallery's prime-and-retry. Deferring to
+a later open shows a body still missing its pictures, which is the case
+`fetch_source_html_now` exists for. The async path was tried and failed in
+practice: a paizo page is ~1MB against a 0.8s wait, and the cache is per-process,
+so the first open after any deploy produced *no images at all* — the gallery
+fallback reads the same cache. Only the first open of an entry pays.
+
+**A site that marks its content should name it.** `content_selectors` slices the
+page to the article before extraction, and the slice then goes through the
+*whole-body* path rather than readability — the slice is already only the
+article, and re-running readability over a run of sibling section wrappers kept
+the single highest-scoring one, emptying two of three test posts. Readability
+cannot separate a "Back to Blog" link, a tag row, a sharing widget or a
+related-posts rail from the piece, because by its measure they are the same
+stuff. Unmatched selectors fall back to whole-page extraction, so a markup
+change loses the chrome-trimming rather than the body.
+
+Two guards make it decline, falling back to the gallery: an extraction with no
+`<img>`, and one under 50 words. Both describe a page readability could not make
+sense of, and the feed's own text is better than a thin substitute. It is also
+what keeps a webcomic feed — whose page is one image and no prose — on the
+gallery path it already relies on.
+
 ## Image bytes: the dimension cap is not a size cap
 
 `/api/img` downscales a cached image to `LECTIO_IMG_CACHE_MAX_DIM` (3840) on the

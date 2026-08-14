@@ -40,6 +40,12 @@ class SiteContentPlugin(Protocol):
     # asks for full-page usually has to name that chrome itself.
     def strip_selectors(self, *, source_url: str) -> tuple[str, ...]: ...
 
+    # CSS selectors that ARE the article body. When a site marks its content
+    # precisely, naming it beats guessing: readability scores by paragraph
+    # density and cannot tell a "Back to Blog" link or a related-posts rail from
+    # the piece, because they are made of the same stuff.
+    def content_selectors(self, *, source_url: str) -> tuple[str, ...]: ...
+
     # Extra HTML for the captured body — an embed the page itself only produces
     # via JS. Returns None when there is nothing to add. May make ONE network
     # request; must never raise.
@@ -153,8 +159,66 @@ class BasslessonsPlugin:
         return match.group(0)
 
 
+@dataclass(frozen=True)
+class PaizoBlogPlugin:
+    """paizo.com/blog: the body is a run of component wrappers, and nothing else.
+
+    The feed ships complete prose with no images, so these posts are read
+    through the source article (see ``_source_article_body``). Readability alone
+    brought the furniture with it — a "Back to Blog" link and the tag row above
+    the piece, then the sharing widget, a second "Back to Blog", and a "From the
+    Archives" rail of d20 bullets below it.
+
+    None of that is a scoring failure to tune around: the page marks its content
+    exactly, as ``div.blog__article--component_wrapper`` repeated per section,
+    with every other block a sibling of those. Naming the content is both
+    simpler and more durable than naming each piece of chrome.
+    """
+
+    _HOST = "paizo.com"
+
+    def _is_blog_post(self, source_url: str) -> bool:
+        try:
+            parsed = urlparse(source_url)
+        except ValueError:
+            return False
+        host = (parsed.netloc or "").lower().split(":", 1)[0]
+        if host != self._HOST and not host.endswith("." + self._HOST):
+            return False
+        # /blog/<slug>, not the /blog index itself.
+        return len(parsed.path.strip("/").split("/")) > 1 and parsed.path.startswith("/blog")
+
+    def handles(self, *, source_url: str) -> bool:
+        return self._is_blog_post(source_url)
+
+    def prefers_full_page(self, *, source_url: str) -> bool:
+        return False          # the content selector already narrows this
+
+    def strip_selectors(self, *, source_url: str) -> tuple[str, ...]:
+        # Nothing. The closing "Join the conversation in the Paizo Forums!"
+        # call-to-action was stripped here for one build and must not be again:
+        # the block carries no class of its own, so it was matched through the
+        # text container that holds it — and on a post whose whole body sits in
+        # a SINGLE div.blog__paragraph__text, that removed the entire article.
+        # 554 words became 0, leaving one logo, which the caller's minimum-length
+        # guard then rejected, so the post silently fell back to the image-less
+        # feed body. A selector that can delete the article to remove a footer is
+        # not worth having for a link Josh said he does not mind.
+        return ()
+
+    def content_selectors(self, *, source_url: str) -> tuple[str, ...]:
+        return ("div.blog__article--component_wrapper",)
+
+    def embed_at_top(self, *, source_url: str) -> bool:
+        return False
+
+    def extra_embed_html(self, *, source_url: str, raw_html: str) -> str | None:
+        return None
+
+
 DEFAULT_SITE_CONTENT_PLUGINS: tuple[SiteContentPlugin, ...] = (
     BasslessonsPlugin(),
+    PaizoBlogPlugin(),
 )
 
 
@@ -208,6 +272,18 @@ def embed_at_top(
     source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS
 ) -> bool:
     return _flag(source_url, "embed_at_top", plugins)
+
+
+def content_selectors(
+    source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS
+) -> tuple[str, ...]:
+    plugin = plugin_for(source_url, plugins)
+    if plugin is None:
+        return ()
+    try:
+        return tuple(plugin.content_selectors(source_url=source_url))
+    except Exception:  # noqa: BLE001
+        return ()
 
 
 def extra_embed_html(
