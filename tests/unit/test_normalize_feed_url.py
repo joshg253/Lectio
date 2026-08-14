@@ -47,7 +47,7 @@ def test_trailing_slash_stripped():
 def test_blogger_alt_rss_param_stripped():
     result = normalize_feed_url("https://example.blogspot.com/feeds/posts/default?alt=rss")
     assert "alt=rss" not in result
-    assert "example.blogspot.com" in result
+    assert result.startswith("https://example.blogspot.com/")
 
 
 def test_type_format_selector_stripped():
