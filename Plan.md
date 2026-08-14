@@ -13,8 +13,24 @@ project last.
 
 ### basslessons.be (FakeFeedz scrape): real bodies, and video/tabs on keep
 
-Asked for 2026-08-12, investigated but **not built**. Everything below is
-verified against the live site, so this is a build job, not a research job.
+**BUILT 2026-08-13** as `services/site_content_plugins.py` — a per-site capture
+adapter with two hooks (`prefers_full_page`, `extra_embed_html`), documented in
+`docs/architecture/saved.md`. Both fire per entry, on Re-fetch and on the
+star/tag auto-fetch.
+
+⚠ **One premise below was wrong.** "Ordinary readability/full-page extraction
+reaches them" holds only for **full-page**: on the real page readability keeps
+**1 of the 6** sheet scans and scores the cookie banner above the rest. Since
+readability is the default capture mode, the site has to opt into full-page —
+which is what `prefers_full_page` is for. Guarded by a real-page fixture
+(`tests/fixtures/basslessons_transcription.html`), because synthetic markup does
+not reproduce readability's scoring.
+
+**Still to do:** nothing in code — but no live entry has been re-fetched yet, so
+the adapter is unproven against a stored entry. Re-fetch ONE and check it before
+the rest.
+
+The original investigation, kept because it documents the site:
 
 **Today:** the scraped feed (`file:///data/scraped-feeds/c9d2ca59-….xml`, 36
 entries) stores title + link only — `summary` and `content` are both empty. What
@@ -172,15 +188,24 @@ broken, because it looks fixed. Two classes had to be rejected by hand:
 - **Collision** (2) — `sourcery.ai/blog` and `/changelog` both resolving to the
   same site-wide feed, which would merge two distinct subscriptions.
 
-**Waiting on a decision (nothing applied):**
+**Re-measured 2026-08-13 — the 404 work is done.** 176 failing (was 238): 73
+unparseable, 28 conn/DNS, 21 bot challenge, 12 timeout, 11 TLS, 9× 403, 5× 5xx,
+**3× 404**. The 4 duplicate dead rows (tartanllama, xubuntu, krshrimali,
+markjames) are unsubscribed — one healthy row each now, all fetching. The 46
+"no feed found" were removed too.
 
-- **4 dead feeds whose replacement you already subscribe to** — Change URL
-  refused them as duplicates, so these are just redundant dead rows to
-  unsubscribe: tartanllama, xubuntu, krshrimali, markjames.
+⚠ Measure against `data/users/<uid>/lectio_meta.sqlite3`, not the root
+`data/lectio_meta.sqlite3` — the root one is the DEFAULT user's and reports
+nonsense (87 rows, mostly `no such feed`). And `feed_failure_state` holds a row
+per feed, so filter `consecutive_failures > 0` or you count all 2596.
+
+**Still open:**
+
+- **73 unparseable** — the biggest bucket and never characterized. Next job here.
 - **10 risky replacements** above — each is a judgement call about scope, not a
   mechanical fix.
-- **46 with no feed found at all** — host gone or RSS dropped. Unsubscribe
-  candidates, but that needs the go-ahead bulk removal always needs.
+- **3 remaining 404s** — ocw.mit.edu newcourses-6, blog.hipmunk.com (43 and 23
+  consecutive failures), and a bsky.app profile RSS.
 
 ### Finish the Instapaper clone (Read Mode follow-ups)
 
@@ -273,9 +298,17 @@ Not built since it wasn't asked for yet.
 
 ### CodeQL board — watch-note
 
-Board is at zero open alerts as of 2026-08-09 (PR #190 closed out the last 5:
-4× `py/polynomial-redos`, 1× `py/stack-trace-exposure` — detail in that PR's
-history). **If the reflective-XSS class keeps recurring**, the repo already has the pattern
+Board is at zero open alerts as of 2026-08-13 (PR #200 cleared a `py/redos` in
+the lead-image opener and a substring assertion in a test; alert 191,
+`py/url-redirection`, was dismissed as the same false positive as 145/148/177-179.
+Before that, PR #190 closed 4× `py/polynomial-redos` + 1× `py/stack-trace-exposure`).
+
+⚠ **A negative lookahead will not clear a redos alert.** CodeQL's regex model
+ignores lookaheads, so `(?:-(?!->)[^-]*)*` — measurably linear — was re-flagged
+as ambiguous on the first push of #200. Either write the loop lookahead-free or,
+as that PR did, move the scan out of the regex into Python.
+
+**If the reflective-XSS class keeps recurring**, the repo already has the pattern
 for it: `.github/codeql/queries/` holds guard-aware copies of the SSRF and
 path-injection queries that model our audited guards as sanitizer barriers, with
 the stock versions excluded in `codeql-config.yml`. A `LectioReflectiveXss.ql`

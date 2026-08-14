@@ -219,6 +219,25 @@ def safe_get(
     raise UnsafeURLError(f"too many redirects starting from {url!r}")
 
 
+def safe_post(
+    client: httpx.Client,
+    url: str,
+    *,
+    data: dict | None = None,
+    headers: dict | None = None,
+) -> httpx.Response:
+    """SSRF-safe sync POST. Validates the URL and does NOT follow redirects.
+
+    Unlike :func:`safe_get` there is no hop loop: a redirected POST is not
+    something any caller here wants, and re-issuing a body at a new location is
+    exactly the shape that turns one guarded request into an unguarded one. A
+    3xx is handed back as-is for the caller to reject.
+    """
+    if not is_safe_outbound_url(url):
+        raise UnsafeURLError(url)
+    return client.post(url, data=data, headers=headers)
+
+
 def safe_head_follow(
     url: str,
     *,

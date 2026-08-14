@@ -67,7 +67,9 @@ short version:
   the whole view rather than the page your browser happens to have scrolled in.
 - **Tagging a post keeps it forever.** A tag triggers a full offline capture —
   page, readability text, every image, and any files the post links to — so a
-  kept article survives the site going down. Stars are the to-do pile; tags are
+  kept article survives the site going down. A few sites need special handling to
+  capture properly (a page that is images rather than prose, or a player the page
+  loads with JavaScript); those have per-site adapters and need no setup. Stars are the to-do pile; tags are
   the keep pile. Dropping a feed offers to bring its kept posts back to the top
   of the Inbox, so what you saved from it is the first thing you see rather than
   something filed months deep — or, when the feed itself was the mistake, to drop
