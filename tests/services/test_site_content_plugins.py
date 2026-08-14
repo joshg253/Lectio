@@ -128,3 +128,57 @@ def test_only_the_iframe_is_taken_from_the_payload(resolver):
         "message": f'<script>alert(1)</script>{IFRAME}<p>trailing</p>',
     }))
     assert plugins.extra_embed_html(TRANS_URL, "<html></html>") == IFRAME
+
+
+# --- paizo blog: name the content instead of guessing at the chrome ---------
+
+PAIZO_URL = "https://paizo.com/blog/one-week-til-gen-con"
+
+PAIZO_PAGE = (
+    '<html><body><div class="blog__article">'
+    '<div class="blog__article--header"><h1>Title</h1>'
+    '<div class="blog--back"><a href="/blog">Back to Blog</a></div>'
+    '<div class="branding">Gen Con Conventions</div></div>'
+    '<div class="blog__article--component_wrapper"><p>Real prose here.</p>'
+    '<img src="https://cdn.example/one.png"></div>'
+    '<div class="blog__article--component_wrapper"><p>More prose.</p></div>'
+    '<div class="blog__article--component_wrapper">'
+    '<div class="blog__paragraph__text"><h3><a href="https://paizo.com/threads/x">'
+    'Join the conversation in the Paizo Forums!</a></h3></div></div>'
+    '<div class="sharing_widget">social</div>'
+    '<div class="blog--back"><a href="/blog">Back to Blog</a></div>'
+    '<h2>From the Archives</h2>'
+    '<article class="content_card_row">d20 d20 d20</article>'
+    '</div></body></html>'
+)
+
+
+def test_blog_posts_are_handled_but_not_the_index():
+    assert plugins.content_selectors(PAIZO_URL) == ("div.blog__article--component_wrapper",)
+    assert plugins.content_selectors("https://paizo.com/blog") == ()
+    assert plugins.content_selectors("https://example.com/blog/post") == ()
+
+
+def test_content_selector_keeps_the_body_and_drops_the_furniture():
+    import main
+    sliced = main._slice_to_content(PAIZO_PAGE, plugins.content_selectors(PAIZO_URL))
+    assert sliced is not None
+    assert "Real prose here." in sliced
+    assert "one.png" in sliced
+    for gone in ("Back to Blog", "From the Archives", "sharing_widget", "Gen Con Conventions"):
+        assert gone not in sliced, gone
+
+
+def test_forum_call_to_action_is_stripped():
+    """The one piece of furniture that lives INSIDE a content wrapper."""
+    import main
+    sliced = main._slice_to_content(PAIZO_PAGE, plugins.content_selectors(PAIZO_URL))
+    cleaned = main._strip_site_chrome(sliced, PAIZO_URL)
+    assert "Join the conversation" not in cleaned
+    assert "Real prose here." in cleaned
+
+
+def test_unmatched_selectors_fall_back_to_whole_page():
+    import main
+    assert main._slice_to_content("<html><body><p>no wrappers</p></body></html>",
+                                  ("div.blog__article--component_wrapper",)) is None

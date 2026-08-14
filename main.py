@@ -14616,6 +14616,26 @@ def _inject_recovered_source_embeds(content_html, entry):
     return _place_recovered_embeds(_strip_play_button_glyphs(body), items)
 
 
+def _slice_to_content(raw_html: str, selectors: tuple[str, ...]) -> str | None:
+    """Reduce a page to the nodes a plugin named as its article body.
+
+    Returns a document rather than a fragment so the caller's extraction keeps
+    working normally on it. None when nothing matched, so a site that changes
+    its markup falls back to whole-page extraction instead of losing the body.
+    """
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        parts = [str(node) for sel in selectors for node in soup.select(sel)]
+    except Exception:  # noqa: BLE001
+        return None
+    if not parts:
+        return None
+    # <base> carries the original document's URL resolution into the slice, so a
+    # relative src in a lifted node still resolves.
+    return f"<html><head></head><body>{''.join(parts)}</body></html>"
+
+
 def _source_article_body(entry) -> str | None:
     """The source page's article, readability-extracted, or None.
 
@@ -14643,8 +14663,24 @@ def _source_article_body(entry) -> str | None:
     if not cached:
         return None
     _base, raw_html = cached
+    # When the site names its content, slice to it first and let the normal
+    # extraction run over the slice — that keeps every sanitizing, lazy-media
+    # and image-sizing step, while giving readability a document that is only
+    # the article. Readability cannot separate "Back to Blog", a tag row, a
+    # sharing widget or a related-posts rail from the piece, because they are
+    # the same stuff by its measure.
+    selectors = site_content_plugins.content_selectors(entry.link)
+    sliced = _slice_to_content(raw_html, selectors) if selectors else None
     try:
-        _title, article_html = extract_readability_article(raw_html, entry.link)
+        if sliced:
+            # The slice is ALREADY only the article, so it goes through the
+            # whole-body path. Running readability over it re-ran the very
+            # judgement the selector exists to replace: given a run of sibling
+            # section wrappers it kept the single highest-scoring one, which
+            # emptied two of three test posts outright.
+            _title, article_html = extract_full_page_article(sliced, entry.link)
+        else:
+            _title, article_html = extract_readability_article(raw_html, entry.link)
     except Exception:  # noqa: BLE001 — fall back to the gallery, never fail the render
         LOGGER.debug("source-article extraction failed for %s", entry.link, exc_info=True)
         return None

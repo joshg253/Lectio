@@ -424,6 +424,16 @@ practice: a paizo page is ~1MB against a 0.8s wait, and the cache is per-process
 so the first open after any deploy produced *no images at all* — the gallery
 fallback reads the same cache. Only the first open of an entry pays.
 
+**A site that marks its content should name it.** `content_selectors` slices the
+page to the article before extraction, and the slice then goes through the
+*whole-body* path rather than readability — the slice is already only the
+article, and re-running readability over a run of sibling section wrappers kept
+the single highest-scoring one, emptying two of three test posts. Readability
+cannot separate a "Back to Blog" link, a tag row, a sharing widget or a
+related-posts rail from the piece, because by its measure they are the same
+stuff. Unmatched selectors fall back to whole-page extraction, so a markup
+change loses the chrome-trimming rather than the body.
+
 Two guards make it decline, falling back to the gallery: an extraction with no
 `<img>`, and one under 50 words. Both describe a page readability could not make
 sense of, and the feed's own text is better than a thin substitute. It is also
