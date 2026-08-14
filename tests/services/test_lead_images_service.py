@@ -176,15 +176,15 @@ def test_inline_thumb_url_keeps_comiccontrol_thumb(tmp_path: Path):
 
 
 def test_inline_thumb_url_promotes_bare_plaintext_image_url(tmp_path: Path):
-    # Escaped-plaintext feeds (e.g. orpheus.network news) ship the post image as a
+    # Escaped-plaintext feeds (e.g. tracker.example news) ship the post image as a
     # bare URL with no <img> tag. Without promotion the inline extractor finds
     # nothing and the feed falls back to og_scrape (which on a login-gated source
     # page grabs the site logo). The bare URL must be surfaced as the thumbnail.
     service = _build_service(tmp_path / "meta.sqlite", [])
     entry = _FakeEntry(
-        feed_url="https://orpheus.network/feeds.php?feed=feed_news",
-        entry_id="https://orpheus.network/index.php#news212",
-        link="https://orpheus.network/index.php#news212",
+        feed_url="https://tracker.example/feeds.php?feed=feed_news",
+        entry_id="https://tracker.example/index.php#news212",
+        link="https://tracker.example/index.php#news212",
         content_html=(
             "https://i.ibb.co/Zp25NHbV/2-Sd-RZ3-GBUz.jpg&lt;br&gt;\n"
             "&lt;br&gt;\nAoTM June Round 1 has closed and we have a winner!&lt;br&gt;"
@@ -204,10 +204,10 @@ def test_bare_url_promotion_skips_non_image_urls(tmp_path: Path):
     # A bare non-image URL (forum link) must not be promoted to an <img>.
     service = _build_service(tmp_path / "meta.sqlite", [])
     entry = _FakeEntry(
-        feed_url="https://orpheus.network/feeds.php?feed=feed_news",
+        feed_url="https://tracker.example/feeds.php?feed=feed_news",
         entry_id="news-x",
-        link="https://orpheus.network/index.php#news-x",
-        content_html="Voting is open&lt;br&gt;\nhttps://orpheus.network/forums.php?threadid=1",
+        link="https://tracker.example/index.php#news-x",
+        content_html="Voting is open&lt;br&gt;\nhttps://tracker.example/forums.php?threadid=1",
     )
     assert service.extract_inline_thumb_url(entry) is None
 

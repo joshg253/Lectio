@@ -14037,7 +14037,7 @@ _REAL_HTML_TAG_RE = re.compile(
 def _looks_like_escaped_plaintext(value: str | None) -> bool:
     """True when content declared as HTML is really escaped plain text: it carries
     escaped break markers (``&lt;br&gt;``) but no actual HTML tags. Such feeds
-    (e.g. orpheus.network news) otherwise render as inert escaped text."""
+    (e.g. tracker.example news) otherwise render as inert escaped text."""
     if not value:
         return False
     if "&lt;br" not in value.lower():
@@ -14048,7 +14048,7 @@ def _looks_like_escaped_plaintext(value: str | None) -> bool:
 def _promote_plaintext_summary(summary: str | None) -> str | None:
     """Turn a bare-text summary into renderable HTML, or None to leave it as-is.
 
-    Some feeds (e.g. orpheus.network news) ship no HTML content — only a
+    Some feeds (e.g. tracker.example news) ship no HTML content — only a
     plain-text summary carrying bare ``https://`` URLs and line breaks encoded as
     literal ``<br>`` or double-escaped ``&lt;br&gt;``. Rendered in the template's
     ``<pre>`` fallback those URLs aren't clickable and the breaks show as literal
@@ -15539,7 +15539,7 @@ def _resolve_entry_content_html(entry):
 
     Extracted from get_entry_detail: prefers HTML content, falls back to BBCode
     conversion (Nexus Mods), promotes bare-text/escaped-plaintext summaries
-    (orpheus.network) to real HTML, and repairs URL-encoded ``http%3A/`` schemes
+    (tracker.example) to real HTML, and repairs URL-encoded ``http%3A/`` schemes
     the reader library mangles into relative paths. Returns the HTML or None."""
     content = entry.get_content(prefer_summary=False)
     content_html = None
@@ -15561,7 +15561,7 @@ def _resolve_entry_content_html(entry):
     if not content_html:
         content_html = _promote_plaintext_summary(getattr(entry, "summary", None))
     elif _looks_like_escaped_plaintext(content_html):
-        # Some feeds (e.g. orpheus.network news) declare their content as
+        # Some feeds (e.g. tracker.example news) declare their content as
         # text/html but actually ship escaped plain text — literal
         # ``&lt;br&gt;`` breaks, bare URLs, and double-escaped ``&amp;amp;``
         # ampersands — so it renders as inert escaped text. Promote it the
@@ -16021,7 +16021,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # promote consecutive <br> runs to paragraph breaks so the entry renders as
         # readable paragraphs instead of a wall of text.
         if isinstance(content_html, str):
-            # Some feeds (e.g. Orpheus) double-encode <br> as &lt;br&gt; inside CDATA;
+            # Some feeds (e.g. some trackers) double-encode <br> as &lt;br&gt; inside CDATA;
             # normalize those to actual <br> tags before the conversion check.
             if content_html.lower().count("&lt;br") >= 3:
                 content_html = re.sub(r"&lt;br\s*/?\s*&gt;", "<br>", content_html, flags=re.IGNORECASE)

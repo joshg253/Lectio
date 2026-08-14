@@ -142,7 +142,7 @@ class LeadImageService:
     def _promote_bare_image_urls(cls, text: str) -> str:
         """Wrap bare image URLs in ``<img>`` so inline extraction can find them.
 
-        Escaped-plaintext feeds (e.g. orpheus.network news) ship the post image as a
+        Escaped-plaintext feeds (e.g. tracker.example news) ship the post image as a
         bare URL with no ``<img>`` tag. The article renderer promotes it, but the raw
         feed content the lead-image extractor sees does not — so without this the
         inline strategy finds nothing and the feed falls back to og_scrape (which on a

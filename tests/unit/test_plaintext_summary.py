@@ -69,7 +69,7 @@ def test_image_extensions_detected(ext):
 
 
 def test_double_escaped_ampersands_collapse_to_single():
-    # orpheus.network double-escapes & in URLs (&amp;amp;); the link must end up
+    # tracker.example double-escapes & in URLs (&amp;amp;); the link must end up
     # with a single &amp; (a valid href that decodes to one '&'), not amp;amp;.
     out = main._promote_plaintext_summary(
         "https://o.test/x.php?a=1&amp;amp;b=2 more"
@@ -87,7 +87,7 @@ def test_excessive_break_runs_are_collapsed():
 
 
 def test_looks_like_escaped_plaintext_detects_mislabeled_html():
-    # Content declared text/html but actually escaped plain text (orpheus.network).
+    # Content declared text/html but actually escaped plain text (tracker.example).
     assert main._looks_like_escaped_plaintext(
         "https://x.test/a.jpg&lt;br&gt;hello&lt;br&gt;world"
     ) is True
