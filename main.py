@@ -10932,6 +10932,32 @@ def _reinject_readability_embeds(summary_html: str, raw_html: str) -> str:
     return summary_html + block
 
 
+def _strip_site_chrome(raw_html: str, source_url: str) -> str:
+    """Remove chrome a per-site plugin named, before extraction.
+
+    ``_strip_article_chrome`` above is the generic list and runs on the
+    readability path only — full-page capture keeps every node by design. That
+    design has a cost a site can be specific about: basslessons ships its cookie
+    banner as ``display: none`` (JS reveals it), first in the DOM, so a full-page
+    capture opened with ~700 characters of cookie policy.
+    """
+    selectors = site_content_plugins.strip_selectors(source_url)
+    if not selectors:
+        return raw_html
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        removed = False
+        for sel in selectors:
+            for el in soup.select(sel):
+                el.decompose()
+                removed = True
+        return str(soup) if removed else raw_html
+    except Exception:  # noqa: BLE001 — never fail an extraction over cosmetics
+        LOGGER.debug("site chrome strip failed for %s", source_url, exc_info=True)
+        return raw_html
+
+
 def _append_site_embeds(article_html: str, source_url: str, raw_html: str) -> str:
     """Append a per-site embed the page only produces via JS.
 
@@ -12062,6 +12088,7 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     # entirely, so style-only-sized images (NewsBlur's 18px glyph icons) blow
     # up to column width. Lift style px sizes onto attributes, capture every
     # image's size from the raw page, and reapply after extraction.
+    raw_html = _strip_site_chrome(raw_html, source_url)
     raw_html = html_sanitize.lift_img_style_sizes(raw_html)
     # Strip comment threads first — otherwise readability scores a big comments
     # section above the post and no image-count fallback can recover the body.
@@ -12191,6 +12218,7 @@ def extract_full_page_article(raw_html: str, source_url: str) -> tuple[str, str]
     absent and the prose is the body. Only ``<script>``/``<style>``/``<nav>``/
     ``<header>``/``<footer>`` are removed, as obvious non-content that is never
     the article even on a document page."""
+    raw_html = _strip_site_chrome(raw_html, source_url)
     raw_html = html_sanitize.lift_img_style_sizes(raw_html)
     img_sizes = html_sanitize.collect_img_sizes(raw_html, base_url=source_url)
     title = _page_title_from_html(raw_html, source_url)

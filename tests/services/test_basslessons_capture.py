@@ -135,3 +135,20 @@ def test_fetch_full_page_article_yields_sheets_and_video(page, monkeypatch):
     _title, article = main.fetch_full_page_article(TRANS_URL)
     assert _sheet_count(article) == 6
     assert "youtube-nocookie.com/embed/fxoeU3vzdEw" in article
+
+
+# --- chrome the page itself never shows ------------------------------------
+
+def test_cookie_banner_is_stripped_from_the_capture(page):
+    """It ships `display: none` and sits first in the DOM, so a full-page
+    capture opened with ~700 characters of cookie policy."""
+    assert "cookie-info-banner" in page          # present in the raw page
+    _title, article = main.extract_full_page_article(page, TRANS_URL)
+    assert "cookie-info-banner" not in article
+    assert "necessary cookies to remember" not in article
+    assert _sheet_count(article) == 6            # and the music survived
+
+
+def test_chrome_strip_is_scoped_to_the_site(page):
+    _title, article = main.extract_full_page_article(page, "https://example.com/post")
+    assert "cookie-info-banner" in article

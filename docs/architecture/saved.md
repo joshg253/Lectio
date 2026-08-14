@@ -121,7 +121,7 @@ gating on the feed stripped the escape hatch from every filed article.
 
 ### Per-site capture adapters (`services/site_content_plugins.py`)
 
-Two things a site can override, both defaulting to "no opinion" so an unlisted
+Three things a site can override, all defaulting to "no opinion" so an unlisted
 site behaves exactly as before:
 
 - **`prefers_full_page`** forces `mode="full"` for pages whose content IS their
@@ -135,6 +135,12 @@ site behaves exactly as before:
   the fetched HTML, but basslessons ships an empty `div.videoMask` and fills it
   from `POST /ajax/a_transcriptionVideo.php` (`trans_id` = the link's `?i=`).
   One guarded POST, JSON out, and only the `<iframe>` is taken from the payload.
+
+- **`strip_selectors`** names chrome to remove before extraction. Full-page
+  keeps every node by design, including nodes the page never shows: basslessons
+  ships its consent banner as `display: none` first in the DOM, so the first
+  capture opened with ~700 characters of cookie policy ahead of the music. Scoped
+  to the site, so full-page's "keeps everything" contract is unchanged elsewhere.
 
 The append runs *after* extraction, so `_append_site_embeds` sanitizes its own
 block — otherwise the iframe would join already-sanitized output and never meet

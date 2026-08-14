@@ -35,6 +35,11 @@ class SiteContentPlugin(Protocol):
     # True when readability would mangle this page and the whole body is wanted.
     def prefers_full_page(self, *, source_url: str) -> bool: ...
 
+    # CSS selectors to remove before extraction. Full-page capture keeps
+    # everything by design, including chrome the page never shows; a site that
+    # asks for full-page usually has to name that chrome itself.
+    def strip_selectors(self, *, source_url: str) -> tuple[str, ...]: ...
+
     # Extra HTML to append to the captured body — an embed the page itself only
     # produces via JS. Returns None when there is nothing to add. May make ONE
     # network request; must never raise.
@@ -94,6 +99,13 @@ class BasslessonsPlugin:
     def prefers_full_page(self, *, source_url: str) -> bool:
         return self.handles(source_url=source_url)
 
+    def strip_selectors(self, *, source_url: str) -> tuple[str, ...]:
+        # The consent banner ships as `display: none` and is revealed by JS, so
+        # it is not visible on the page — but full-page capture keeps every node,
+        # and it sits first in the DOM. Left in, every transcription opens with
+        # ~700 characters of cookie policy ahead of the music.
+        return ("#cookieInfoBanner", ".cookie-info-banner")
+
     def extra_embed_html(self, *, source_url: str, raw_html: str) -> str | None:
         trans_id = self._transcription_id(source_url) if self._host_matches(source_url) else None
         if trans_id is None:
@@ -144,6 +156,18 @@ def prefers_full_page(
         return bool(plugin.prefers_full_page(source_url=source_url))
     except Exception:  # noqa: BLE001
         return False
+
+
+def strip_selectors(
+    source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS
+) -> tuple[str, ...]:
+    plugin = plugin_for(source_url, plugins)
+    if plugin is None:
+        return ()
+    try:
+        return tuple(plugin.strip_selectors(source_url=source_url))
+    except Exception:  # noqa: BLE001
+        return ()
 
 
 def extra_embed_html(

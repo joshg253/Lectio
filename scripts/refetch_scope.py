@@ -18,9 +18,14 @@ Scope is kept entries only (starred or tagged) with a usable http(s) link — th
 rule the interactive button uses, because an unkept feed entry gets rewritten by the
 next refresh anyway.
 
+``--unread`` inverts that scope for ONE named feed, for the case the rule above does
+not cover: a scraped link-list feed that ships title and link only, so its unread
+entries are empty now and stay empty however often they refresh.
+
     uv run python scripts/refetch_scope.py --feed https://example.com/feed
     uv run python scripts/refetch_scope.py --folder 4 --limit 20
     uv run python scripts/refetch_scope.py --feed … --apply
+    uv run python scripts/refetch_scope.py --feed file:///… --unread --apply
 """
 from __future__ import annotations
 
@@ -40,6 +45,24 @@ from services import refetch_batch, tenancy  # noqa: E402
 _GLOBAL_DELAY = refetch_batch.GLOBAL_DELAY
 _PER_HOST_DELAY = refetch_batch.PER_HOST_DELAY
 _HOST_FAILURE_LIMIT = refetch_batch.HOST_FAILURE_LIMIT
+
+
+def _eligible_unread(feed_url: str) -> list[tuple[str, str, str]]:
+    """(feed_url, entry_id, link) for UNREAD entries of one feed.
+
+    The opposite of the kept scope below, and only ever for a single named feed.
+    An unread entry is normally rewritten by the next refresh, so re-fetching one
+    is pointless — except on a feed whose stored bodies are empty and stay empty,
+    which is the case this exists for (a scraped link-list feed that ships title
+    and link only, e.g. basslessons.be).
+    """
+    out: list[tuple[str, str, str]] = []
+    with main.get_reader() as reader:
+        for entry in reader.get_entries(feed=feed_url, read=False):
+            link = str(getattr(entry, "link", "") or "")
+            if link.startswith(("http://", "https://")):
+                out.append((feed_url, entry.id, link))
+    return out
 
 
 def _eligible(folder_id: int | None, feed_url: str | None) -> list[tuple[str, str, str]]:
@@ -71,8 +94,8 @@ def _eligible(folder_id: int | None, feed_url: str | None) -> list[tuple[str, st
 
 
 def run(uid: str, folder_id: int | None, feed_url: str | None,
-        apply: bool, limit: int | None) -> None:
-    targets = _eligible(folder_id, feed_url)
+        apply: bool, limit: int | None, unread: bool = False) -> None:
+    targets = _eligible_unread(feed_url) if unread else _eligible(folder_id, feed_url)
     # Interleave hosts so no site sees a run of back-to-back requests even before
     # the per-host delay applies.
     ordered = refetch_batch.interleave_by_host(targets)
@@ -80,7 +103,8 @@ def run(uid: str, folder_id: int | None, feed_url: str | None,
         ordered = ordered[:limit]
 
     scope = feed_url or (f"folder {folder_id}" if folder_id is not None else "everything")
-    print(f"[{uid}] {len(targets):,} kept article(s) in {scope}; attempting {len(ordered):,}")
+    kind = "unread" if unread else "kept"
+    print(f"[{uid}] {len(targets):,} {kind} article(s) in {scope}; attempting {len(ordered):,}")
     # The estimate has to take the per-host delay into account, not just the
     # global one: a single-feed scope is one host, so 89 articles is 89 * 10s, not
     # 89 * 2s. Understating the runtime of a deliberately slow job is the one
@@ -124,13 +148,18 @@ def main_cli() -> int:
     ap.add_argument("--limit", type=int, default=None, help="stop after N articles")
     ap.add_argument("--apply", action="store_true", help="write (default: dry run)")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
+    ap.add_argument("--unread", action="store_true",
+                    help="scope to UNREAD entries of --feed instead of kept ones "
+                         "(for a feed whose stored bodies are empty)")
     args = ap.parse_args()
     if not args.feed and args.folder is None:
         ap.error("give --feed or --folder; re-fetching everything is not a thing to do by accident")
+    if args.unread and not args.feed:
+        ap.error("--unread needs --feed; unread across a folder is not a scope worth having")
 
     for uid in ([args.user] if args.user else main._background_user_ids()):
         with tenancy.user_context(uid):
-            run(uid, args.folder, args.feed, args.apply, args.limit)
+            run(uid, args.folder, args.feed, args.apply, args.limit, args.unread)
     return 0
 
 
