@@ -686,3 +686,39 @@ class TestTapasDiscovery:
                 preview = probe_url(url)
                 added = discover_feed_urls(url)
         assert [f["url"] for f in preview["feeds"]] == added == ["https://tapas.io/rss/series/217452"]
+
+
+class TestTinyviewRewrite:
+    """Tinyview comics publish at /<comic>/feed.rss.
+
+    The comic page returns 200 with no <link rel="alternate"> at all — the site
+    renders client-side — so generic discovery correctly finds nothing and Add
+    Feed failed on a URL whose feed is entirely predictable.
+    """
+
+    EXPECTED = "https://tinyview.com/they-can-talk/feed.rss"
+
+    def test_comic_page(self):
+        assert rewrite_known_site_url("https://tinyview.com/they-can-talk") == self.EXPECTED
+
+    def test_trailing_slash(self):
+        assert rewrite_known_site_url("https://tinyview.com/they-can-talk/") == self.EXPECTED
+
+    def test_www_host(self):
+        assert rewrite_known_site_url("https://www.tinyview.com/they-can-talk") == self.EXPECTED
+
+    def test_episode_url_resolves_to_the_comic_feed(self):
+        assert rewrite_known_site_url(
+            "https://tinyview.com/they-can-talk/2026/08/13/time") == self.EXPECTED
+
+    def test_feed_url_is_left_alone(self):
+        assert rewrite_known_site_url(self.EXPECTED) == self.EXPECTED
+
+    def test_site_pages_are_not_comics(self):
+        for path in ("about", "subscribe", "search"):
+            url = f"https://tinyview.com/{path}"
+            assert rewrite_known_site_url(url) == url, path
+
+    def test_bare_host_and_other_sites_untouched(self):
+        for url in ("https://tinyview.com", "https://example.com/they-can-talk"):
+            assert rewrite_known_site_url(url) == url, url
