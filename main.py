@@ -1438,8 +1438,27 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
         # re-checks them for reactivation.
         deactivated = _da_deactivated_usernames(conn)
         folder_id = _get_or_create_folder_by_name(conn, folder_name)
+        # The Watch feed IS the watch list — one feed carrying every watched
+        # artist's posts. While it exists, a per-artist gallery feed is a
+        # duplicate of what it already delivers.
+        has_watch_feed = bool(conn.execute(
+            "SELECT 1 FROM deviantart_feeds WHERE COALESCE(source, 'gallery') = 'watch' LIMIT 1"
+        ).fetchone())
 
     to_add = [a for a in watching if a.lower() not in existing and a.lower() not in deactivated]
+    if has_watch_feed and to_add:
+        # This sync and the gallery consolidation were undoing each other. The
+        # consolidation folds a gallery feed into the Watch feed and then DELETES
+        # its deviantart_feeds row (it must — otherwise the refresh loop
+        # regenerates the subscription it just merged). That row is this sync's
+        # only record of "already subscribed", so every consolidated artist came
+        # back looking new and was re-created the next night: 537 gallery feeds
+        # returned over two runs after the 2026-08-12 consolidation, filed back
+        # into the folder, carrying entries the Watch feed had already delivered.
+        LOGGER.info(
+            "[deviantart] watchlist sync: Watch feed present — skipping %d per-artist "
+            "gallery feed(s); the Watch feed already covers them", len(to_add))
+        to_add = []
     LOGGER.info("[deviantart] watchlist sync: %d watched, %d to add into %r", len(watching), len(to_add), folder_name)
     added = 0
     failed = 0
