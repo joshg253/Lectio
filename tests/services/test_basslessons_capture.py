@@ -176,16 +176,13 @@ def test_previous_next_pager_is_stripped(page):
     assert "transNav" not in article
 
 
-def test_first_image_loses_its_caption_text(page):
-    """The hero caption is the first image's alt, and every alt here just
-    restates the headline."""
+def test_images_keep_their_alt_text(page):
+    """The hero caption is a per-feed display preference (caption_source), not
+    something capture should strip — alt is what a screen reader announces."""
     _title, article = main.extract_full_page_article(page, TRANS_URL)
     first = re.search(r"<img[^>]*>", article)
     assert first is not None
-    assert "alt=" not in first.group(0)
-    assert "title=" not in first.group(0)
-    # Later scans keep theirs — alt is still worth having for accessibility.
-    assert article.count("alt=") >= 1
+    assert "alt=" in first.group(0)
 
 
 def test_video_lands_above_the_scans(page, monkeypatch):

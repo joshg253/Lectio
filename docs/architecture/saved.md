@@ -121,7 +121,7 @@ gating on the feed stripped the escape hatch from every filed article.
 
 ### Per-site capture adapters (`services/site_content_plugins.py`)
 
-Five things a site can override, all defaulting to "no opinion" so an unlisted
+Four things a site can override, all defaulting to "no opinion" so an unlisted
 site behaves exactly as before:
 
 - **`prefers_full_page`** forces `mode="full"` for pages whose content IS their
@@ -143,10 +143,14 @@ site behaves exactly as before:
   to the site, so full-page's "keeps everything" contract is unchanged elsewhere.
 
 - **`embed_at_top`** places that embed after the article's first heading rather
-  than at the end, and **`strips_first_image_alt`** drops alt/title from the
-  first image. Both exist because of what the render path does next: the first
-  body image is hoisted to a hero and its alt becomes the caption under it, so a
-  scan whose alt restates the headline captioned the article with its own title.
+  than at the end: the scans are a reference you scroll, the video is the point.
+
+The caption drawn under the hero is deliberately NOT a plugin concern. It comes
+from `entry_lead_images.image_alt`, filled by the lead-image strategy scraping
+the source page, and it is already user-controlled per feed by `caption_source`
+(Feed Properties → Caption). Stripping the alt attribute at capture would have
+suppressed the caption by taking away what a screen reader announces, to
+duplicate a setting that already exists.
 
 The append runs *after* extraction, so `_append_site_embeds` sanitizes its own
 block — otherwise the iframe would join already-sanitized output and never meet

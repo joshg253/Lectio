@@ -48,11 +48,6 @@ class SiteContentPlugin(Protocol):
     # True to place that embed at the top of the body rather than the end.
     def embed_at_top(self, *, source_url: str) -> bool: ...
 
-    # True to drop alt/title from the FIRST image. The first body image is
-    # hoisted to a hero and its alt is rendered under it as a caption, which is
-    # noise when the alt merely names the file ("… Bass Transcription").
-    def strips_first_image_alt(self, *, source_url: str) -> bool: ...
-
 
 @dataclass(frozen=True)
 class BasslessonsPlugin:
@@ -135,12 +130,6 @@ class BasslessonsPlugin:
         # through afterwards.
         return True
 
-    def strips_first_image_alt(self, *, source_url: str) -> bool:
-        # Every scan's alt is a restatement of the title ("Don Henley Searching
-        # For A Heart Jorge Calderón Bass Transcription"), so the hero caption
-        # just repeated the headline.
-        return True
-
     def extra_embed_html(self, *, source_url: str, raw_html: str) -> str | None:
         trans_id = self._transcription_id(source_url) if self._host_matches(source_url) else None
         if trans_id is None:
@@ -219,12 +208,6 @@ def embed_at_top(
     source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS
 ) -> bool:
     return _flag(source_url, "embed_at_top", plugins)
-
-
-def strips_first_image_alt(
-    source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS
-) -> bool:
-    return _flag(source_url, "strips_first_image_alt", plugins)
 
 
 def extra_embed_html(

@@ -10942,27 +10942,17 @@ def _strip_site_chrome(raw_html: str, source_url: str) -> str:
     capture opened with ~700 characters of cookie policy.
     """
     selectors = site_content_plugins.strip_selectors(source_url)
-    drop_alt = site_content_plugins.strips_first_image_alt(source_url)
-    if not selectors and not drop_alt:
+    if not selectors:
         return raw_html
     try:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(raw_html, "html.parser")
-        changed = False
+        removed = False
         for sel in selectors:
             for el in soup.select(sel):
                 el.decompose()
-                changed = True
-        if drop_alt:
-            # After the strip, so "first" means first in the ARTICLE — the
-            # chrome above it carries images of its own (logo, icons).
-            first = soup.find("img")
-            if first is not None:
-                for attr in ("alt", "title"):
-                    if first.has_attr(attr):
-                        del first[attr]
-                        changed = True
-        return str(soup) if changed else raw_html
+                removed = True
+        return str(soup) if removed else raw_html
     except Exception:  # noqa: BLE001 — never fail an extraction over cosmetics
         LOGGER.debug("site chrome strip failed for %s", source_url, exc_info=True)
         return raw_html
