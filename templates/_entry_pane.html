@@ -392,6 +392,12 @@
           value=""
         />
         <button type="submit" class="entry-tags-submit">Apply</button>
+        {# Straight to Settings -> Tags. This row is where a duplicate spelling is
+           noticed — typing "c++" while the chips above show "cpp" — so the fix
+           belongs one click away, not four levels into Settings. Right-clicking
+           any chip gets there too, with the tag filled in. #}
+        <button type="button" class="entry-tags-aliases-btn" id="entry-tags-aliases-btn"
+                title="Manage tag aliases" aria-label="Manage tag aliases">Aliases…</button>
       </form>
       </span>
       <div class="entry-pane-alt-actions">

@@ -4641,6 +4641,35 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       btn.remove();
     });
 
+    document.addEventListener('click', (event) => {
+      const btn = event.target instanceof Element
+        ? event.target.closest('#entry-tags-aliases-btn') : null;
+      if (!btn) return;
+      event.preventDefault();
+      window.openSettingsModal?.('tags');
+    });
+
+    // Right-click any tag chip — manual or suggested — to fold it into another.
+    // This is where a duplicate spelling is actually noticed: reading a post and
+    // seeing "cpp" on something you file under "c++".
+    document.addEventListener('contextmenu', (event) => {
+      const el = event.target instanceof Element
+        ? event.target.closest('.entry-tag-chip, [data-tag-suggestion], .feed-tag-filter-chip')
+        : null;
+      if (!el) return;
+      const tag = el.getAttribute('data-tag-suggestion')
+        || el.querySelector('[data-tag-suggestion]')?.getAttribute('data-tag-suggestion')
+        || el.querySelector('.feed-tag-filter-name')?.textContent?.trim()
+        || el.querySelector('[data-tag-remove]')?.getAttribute('data-tag-remove')
+        || el.textContent?.replace(/^#/, '').replace(/[×+▲▼]/g, '').trim();
+      if (!tag) return;
+      event.preventDefault();
+      window.openSettingsModal?.('tags');
+      const from = document.getElementById('tag-alias-from');
+      if (from) { from.value = tag; }
+      document.getElementById('tag-alias-to')?.focus();
+    });
+
     // Dismiss a suggestion chip from the entry pane.
     document.addEventListener('click', async (event) => {
       const btn = event.target instanceof Element
@@ -11879,6 +11908,14 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const countEl = document.getElementById('tag-inventory-count');
       if (!body) return;
       const q = document.getElementById('tag-inventory-q')?.value || '';
+      // One or two letters match most of a 36,000-word vocabulary, so the result
+      // is a slow query whose answer is useless. Empty is fine — that is the
+      // "most used" view.
+      if (q.length > 0 && q.length < 3) {
+        const countEl0 = document.getElementById('tag-inventory-count');
+        if (countEl0) countEl0.textContent = 'Keep typing — 3 letters or more';
+        return;
+      }
       let data = { items: [], total: 0 };
       try {
         const mine = document.getElementById('tag-inventory-all')?.checked ? 1 : 0;
@@ -15157,9 +15194,20 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         if (!tk.text) return close();
         const have = new Set(input.value.split(COMMA ? ',' : /\s+/)
           .map((t) => norm(stripSign(t))));
+        // Substring, not prefix: "y" should reach "python". Josh types a middle
+        // letter as a shortcut, and a prefix test made that impossible.
+        // Prefix hits still sort first, so "py" offers python before happy, and
+        // longer tags lose to shorter ones at equal position — a tag you meant
+        // is usually the shorter of two that both contain the letters.
         matches = (getTags() || [])
           .map((t) => (typeof t === 'string' ? { tag: t, count: 0 } : t))
-          .filter((m) => m.tag.startsWith(tk.text) && m.tag !== tk.text && !have.has(m.tag))
+          .filter((m) => m.tag.includes(tk.text) && m.tag !== tk.text && !have.has(m.tag))
+          .sort((a, b) => {
+            const ai = a.tag.indexOf(tk.text), bi = b.tag.indexOf(tk.text);
+            if (ai !== bi) return ai - bi;
+            if ((b.count || 0) !== (a.count || 0)) return (b.count || 0) - (a.count || 0);
+            return a.tag.length - b.tag.length;
+          })
           .slice(0, 8);
         if (!matches.length) return close();
         box.style.top = (input.offsetTop + input.offsetHeight) + 'px';
@@ -15551,6 +15599,18 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             btn.textContent = glyph;
             chip.appendChild(btn);
           }
+          // The × the server-rendered chips carry. Without it, a suggestion that
+          // arrived on THIS open (harvested in the background, injected here)
+          // could not be dismissed until the entry was opened a second time, by
+          // which point the server renders it instead.
+          const dismiss = document.createElement('button');
+          dismiss.type = 'button';
+          dismiss.className = 'feed-tag-filter-sign dismiss-feed-tag';
+          dismiss.setAttribute('data-dismiss-feed-tag', tag);
+          dismiss.title = `Never suggest #${tag} for this feed`;
+          dismiss.setAttribute('aria-label', dismiss.title);
+          dismiss.textContent = '×';
+          chip.appendChild(dismiss);
           wrap.appendChild(chip);
         });
         if (data.tags.length > COLLAPSE_AFTER) {

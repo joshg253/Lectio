@@ -8359,3 +8359,20 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
   top: 0;
   background: var(--bg, #fff);
 }
+
+/* "Aliases…" sits in the tag row beside Apply — a quiet link, not a third action
+   competing with tagging itself. */
+.entry-tags-aliases-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85em;
+  padding: 0 0.4em;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.entry-tags-aliases-btn:hover {
+  color: var(--ink);
+}
