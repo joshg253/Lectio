@@ -8864,12 +8864,22 @@ def tag_alias_preview(alias: str, canonical: str) -> dict:
         out["feed"] = int(row["n"]) if row else 0
         # A canonical that is itself aliased would make the new alias a two-hop
         # chain, and _apply_tag_alias deliberately only resolves one.
+        # Chains are refused in BOTH directions, because _apply_tag_alias
+        # deliberately takes one hop: a two-step chain would leave the first tag
+        # resolving to something that no longer holds anything.
         chained = conn.execute(
             "SELECT canonical FROM tag_aliases WHERE alias = ?", (canon_n,)).fetchone()
         if chained:
             out["error"] = (
                 f"#{canon_n} is itself an alias of #{chained['canonical']} — "
                 f"alias #{alias_n} to that instead.")
+            return out
+        incoming = conn.execute(
+            "SELECT alias FROM tag_aliases WHERE canonical = ? LIMIT 1", (alias_n,)).fetchone()
+        if incoming:
+            out["error"] = (
+                f"#{incoming['alias']} is already folded into #{alias_n}, so folding "
+                f"#{alias_n} onward would strand it. Re-point #{incoming['alias']} first.")
     return out
 
 

@@ -11777,11 +11777,144 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         }
       }
 
+    // --- Settings -> Tags ---------------------------------------------------
+    // Aliases fold one spelling into another; the inventory is how you find the pairs worth folding.
+    const tagAliasFrom = () => document.getElementById('tag-alias-from');
+    const tagAliasTo = () => document.getElementById('tag-alias-to');
+
+    async function tagPost(url, params) {
+      const resp = await fetch(url, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-ajax' },
+        body: new URLSearchParams(params).toString(),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      return data;
+    }
+
+    async function renderTagAliases() {
+      const list = document.getElementById('tag-alias-list');
+      const empty = document.getElementById('tag-alias-empty');
+      if (!list) return;
+      let rows = [];
+      try {
+        const resp = await fetch('/tags/aliases', { credentials: 'same-origin' });
+        rows = (await resp.json()).aliases || [];
+      } catch (_e) { /* leave whatever is on screen rather than blanking it */ }
+      list.textContent = '';
+      if (empty) empty.hidden = rows.length > 0;
+      for (const row of rows) {
+        const li = document.createElement('li');
+        li.className = 'feed-prop-alias-item';
+        const name = document.createElement('code');
+        name.textContent = `#${row.alias} → #${row.canonical}`;
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'feed-prop-inline-btn';
+        del.textContent = 'Remove';
+        del.addEventListener('click', async () => {
+          del.disabled = true;
+          try {
+            await tagPost('/tags/aliases/delete', { alias: row.alias });
+            await renderTagAliases();
+          } catch (err) { del.disabled = false; alert('Could not remove: ' + err.message); }
+        });
+        li.append(name, del);
+        list.appendChild(li);
+      }
+    }
+
+    document.getElementById('tag-alias-preview-btn')?.addEventListener('click', async () => {
+      const out = document.getElementById('tag-alias-preview-out');
+      const create = document.getElementById('tag-alias-create-btn');
+      if (create) create.disabled = true;
+      try {
+        const d = await tagPost('/tags/aliases/preview', {
+          alias: tagAliasFrom()?.value || '', canonical: tagAliasTo()?.value || '',
+        });
+        if (d.error) { if (out) out.textContent = d.error; return; }
+        const total = (d.manual || 0) + (d.feed || 0);
+        if (out) {
+          out.textContent = total
+            ? `Folding #${d.alias} into #${d.canonical} rewrites ${d.manual} manual and ${d.feed} feed tag(s). Removing the alias later does NOT put them back — the tags are moved, and nothing records which entries moved.`
+            : `Nothing carries #${d.alias} today. The alias still applies to anything captured later.`;
+        }
+        if (create) create.disabled = false;
+      } catch (err) {
+        if (out) out.textContent = 'Could not preview: ' + err.message;
+      }
+    });
+
+    document.getElementById('tag-alias-create-btn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('tag-alias-create-btn');
+      const out = document.getElementById('tag-alias-preview-out');
+      btn.disabled = true;
+      try {
+        const d = await tagPost('/tags/aliases/create', {
+          alias: tagAliasFrom()?.value || '', canonical: tagAliasTo()?.value || '', rewrite: '1',
+        });
+        if (out) out.textContent = `Done — moved ${d.manual_moved ?? 0} manual and ${d.feed_moved ?? 0} feed tag(s).`;
+        if (tagAliasFrom()) tagAliasFrom().value = '';
+        if (tagAliasTo()) tagAliasTo().value = '';
+        await renderTagAliases();
+        await renderTagInventory();
+      } catch (err) {
+        btn.disabled = false;
+        if (out) out.textContent = 'Could not create: ' + err.message;
+      }
+    });
+
+    let tagInventoryTimer = null;
+    async function renderTagInventory() {
+      const body = document.getElementById('tag-inventory-body');
+      const countEl = document.getElementById('tag-inventory-count');
+      if (!body) return;
+      const q = document.getElementById('tag-inventory-q')?.value || '';
+      let data = { items: [], total: 0 };
+      try {
+        const resp = await fetch(`/tags/inventory?limit=200&q=${encodeURIComponent(q)}`, { credentials: 'same-origin' });
+        data = await resp.json();
+      } catch (_e) { /* an empty table beats a stale one */ }
+      body.textContent = '';
+      const shown = (data.items || []).length;
+      if (countEl) countEl.textContent = `${data.total || 0} tag(s)` + (shown < (data.total || 0) ? ' — showing the first 200' : '');
+      for (const item of data.items || []) {
+        const tr = document.createElement('tr');
+        const name = document.createElement('td');
+        name.textContent = item.tag + (item.alias_of ? ` → ${item.alias_of}` : '');
+        const feed = document.createElement('td'); feed.className = 'num'; feed.textContent = item.feed;
+        const manual = document.createElement('td'); manual.className = 'num'; manual.textContent = item.manual;
+        const act = document.createElement('td');
+        const use = document.createElement('button');
+        use.type = 'button';
+        use.className = 'feed-prop-inline-btn';
+        use.textContent = 'Fold…';
+        use.title = `Put #${item.tag} in the alias box above`;
+        use.addEventListener('click', () => {
+          if (tagAliasFrom()) tagAliasFrom().value = item.tag;
+          tagAliasTo()?.focus();
+        });
+        act.appendChild(use);
+        tr.append(name, feed, manual, act);
+        body.appendChild(tr);
+      }
+    }
+
+    document.getElementById('tag-inventory-q')?.addEventListener('input', () => {
+      window.clearTimeout(tagInventoryTimer);
+      tagInventoryTimer = window.setTimeout(renderTagInventory, 200);
+    });
+
       document.querySelectorAll('[data-settings-tab]').forEach(btn => {
         btn.addEventListener('click', () => {
           const tab = btn.getAttribute('data-settings-tab');
           settSwitchTab(tab);
           if (tab === 'feeds') void markProblematicFeedsViewed();
+          // Loaded on open, not at startup: the inventory scans every tag and most
+          // sessions never look at it.
+          if (tab === 'tags') { void renderTagAliases(); void renderTagInventory(); }
         });
       });
       // Force hidden panels to display:none regardless of stylesheet specificity

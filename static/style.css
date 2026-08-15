@@ -8319,3 +8319,43 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
 }
 .ctx-submenu--left > .ctx-submenu-list { left: auto; right: 100%; }
 .ctx-submenu[open] > .ctx-submenu-summary { background: var(--hover-bg); }
+
+/* Settings -> Tags. The inventory is a long list, so it scrolls inside its own box
+   rather than growing the modal; the counts are right-aligned because the point of
+   the table is comparing them between rival spellings. */
+.tag-alias-form-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.tag-alias-arrow {
+  opacity: 0.7;
+}
+.tag-inventory-wrap {
+  max-height: 20rem;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.tag-inventory-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.tag-inventory-table th,
+.tag-inventory-table td {
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.tag-inventory-table th.num,
+.tag-inventory-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.tag-inventory-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg, #fff);
+}
