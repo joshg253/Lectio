@@ -264,9 +264,43 @@ def _tapas_feed_url(url: str) -> str | None:
     return f"https://tapas.io/rss/series/{segments[1]}"
 
 
+# Tinyview paths that are the site, not a comic. A wrong guess is cheap — the
+# rewritten URL is fetched and validated below, so a non-comic path just fails
+# discovery as it would have anyway — but there is no reason to ask for
+# /about/feed.rss.
+_TINYVIEW_RESERVED = frozenset({
+    "about", "account", "admin", "api", "blog", "comics", "contact", "discover",
+    "faq", "gift", "help", "home", "login", "logout", "privacy", "search",
+    "settings", "signup", "subscribe", "support", "terms", "tinyview",
+})
+
+
+def _tinyview_feed_url(url: str) -> str | None:
+    """Tinyview comics publish at ``tinyview.com/<comic>/feed.rss``.
+
+    The comic page returns 200 with **no** ``<link rel="alternate">`` at all —
+    Tinyview renders client-side, so nothing in the served HTML advertises the
+    feed and generic discovery correctly reports "no feed found" rather than
+    guessing. The URL is entirely predictable, so map it.
+
+    An episode URL (``/<comic>/2026/08/13/time``) resolves to the same comic
+    feed: the first segment is the comic either way.
+    """
+    parsed = urlparse(url)
+    if (parsed.hostname or "").lower() not in ("tinyview.com", "www.tinyview.com"):
+        return None
+    segments = [s for s in parsed.path.split("/") if s]
+    if not segments or segments[-1].lower() == "feed.rss":
+        return None
+    comic = segments[0].lower()
+    if comic in _TINYVIEW_RESERVED or "." in comic:
+        return None
+    return f"https://tinyview.com/{comic}/feed.rss"
+
+
 _SITE_FEED_REWRITES = [
     _pinboard_feed_url, _artstation_feed_url, _behance_feed_url, _freecodecamp_feed_url,
-    _tapas_feed_url,
+    _tapas_feed_url, _tinyview_feed_url,
 ]
 
 # The page's *own* series id. `seriesId: N` is a script variable that appears
