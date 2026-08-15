@@ -27130,6 +27130,7 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
         "folder_feeds",
         "saved_entries",
         "entry_read_state",
+        "entry_unread_batch",
         "read_history",
         "feed_failure_state",
         "entry_lead_images",
