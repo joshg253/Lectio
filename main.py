@@ -31565,6 +31565,92 @@ def apply_unstar_scope(
     return RedirectResponse(url=request.headers.get("referer") or "/read", status_code=303)
 
 
+@app.get("/tags/aliases")
+def list_tag_aliases_route():
+    """Aliases plus the tag inventory behind the Settings -> Tags tab."""
+    return JSONResponse({"ok": True, "aliases": list_tag_aliases()})
+
+
+@app.get("/tags/inventory")
+def tag_inventory_route(q: str = "", limit: int = 200):
+    """Every tag with a count, for spotting split spellings.
+
+    Feed-provided tags and manual tags are counted separately: they are stored
+    in different places (entry_feed_tags rows vs reader entry tags) and an alias
+    rewrite has to touch both, so a combined number would hide which half is
+    which. Search is a plain substring — the point is to type "c" and see
+    cpp / c++ / csharp side by side.
+    """
+    needle = (q or "").strip().lower()
+    limit = max(1, min(int(limit or 200), 1000))
+    with get_meta_connection() as conn:
+        rows = conn.execute(
+            "SELECT tag, COUNT(*) AS n FROM entry_feed_tags GROUP BY tag ORDER BY n DESC"
+        ).fetchall()
+    feed_counts: dict[str, int] = {}
+    for row in rows:
+        key = normalize_tag_value_raw(str(row["tag"])) or str(row["tag"])
+        feed_counts[key] = feed_counts.get(key, 0) + int(row["n"])
+
+    # Manual tags live in reader's entry_tags under a key prefix; one grouped
+    # query beats asking reader per tag (get_entry_counts is a query each, and
+    # there are thousands of distinct tags). Orphan archives keep theirs in the
+    # meta DB instead, which is why has_any_manual_tags checks both.
+    manual_counts: dict[str, int] = {}
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            for key, count in conn.execute(
+                "SELECT key, COUNT(*) FROM entry_tags WHERE key LIKE ? GROUP BY key",
+                (f"{MANUAL_TAG_KEY_PREFIX}%",),
+            ):
+                short = str(key)[len(MANUAL_TAG_KEY_PREFIX):]
+                if short:
+                    manual_counts[short] = manual_counts.get(short, 0) + int(count)
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — the inventory is a convenience, never fatal
+        LOGGER.debug("manual tag inventory unavailable", exc_info=True)
+
+    aliases = {a["alias"]: a["canonical"] for a in list_tag_aliases()}
+    names = set(feed_counts) | set(manual_counts) | set(aliases)
+    items = [
+        {
+            "tag": name,
+            "feed": feed_counts.get(name, 0),
+            "manual": manual_counts.get(name, 0),
+            "alias_of": aliases.get(name),
+        }
+        for name in names
+        if not needle or needle in name
+    ]
+    items.sort(key=lambda item: (-(item["feed"] + item["manual"]), item["tag"]))
+    return JSONResponse({"ok": True, "total": len(items), "items": items[:limit]})
+
+
+@app.post("/tags/aliases/preview")
+def preview_tag_alias_route(alias: str = Form(...), canonical: str = Form(...)):
+    """Counts only — nothing is written, so the UI can show what would move."""
+    return JSONResponse({"ok": True, **tag_alias_preview(alias, canonical)})
+
+
+@app.post("/tags/aliases/create")
+def create_tag_alias_route(alias: str = Form(...), canonical: str = Form(...),
+                           rewrite: int = Form(1)):
+    result = create_tag_alias(alias, canonical, rewrite=bool(rewrite))
+    if result.get("error"):
+        return JSONResponse({"ok": False, **result}, status_code=400)
+    return JSONResponse({"ok": True, **result})
+
+
+@app.post("/tags/aliases/delete")
+def delete_tag_alias_route(alias: str = Form(...)):
+    """Drop the alias. Tags already folded stay folded — the rewrite happened,
+    and un-folding would need to know which entries were moved, which is not
+    recorded (deliberately: it is a rename, not a filter)."""
+    return JSONResponse({"ok": True, "deleted": delete_tag_alias(alias)})
+
+
 @app.post("/feed-tags/dismiss")
 def dismiss_feed_tag(
     request: Request,
