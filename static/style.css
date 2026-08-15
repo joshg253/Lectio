@@ -2499,6 +2499,16 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   display: none;
 }
 
+/* Same reason as the rule above, and the same trap. `.tree-item, .post-item`
+   sets display:flex further down the file, so a single-class `.post-item-filtered`
+   loses on source order at equal specificity and the row stays visible — the
+   filter counted matches correctly and hid nothing. The chunk class was already
+   qualified here; the filter class was not, so it silently did nothing while
+   reporting "2 of 21 loaded". */
+.post-item.post-item-filtered {
+  display: none;
+}
+
 .post-item {
   position: relative;
   align-items: stretch;
