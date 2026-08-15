@@ -8311,12 +8311,13 @@ lead_image_service = LeadImageService(
 )
 
 
-def _persist_page_tags(feed_url: str, entry_id: str, page_html: str) -> None:
+def _persist_page_tags(feed_url: str, entry_id: str, page_html: str,
+                       source_url: str | None = None) -> None:
     """Background source-HTML fetch sink: persist article-page tags for
     entries the feed never tagged (feed-provided tags stay authoritative)."""
     if feed_tag_service.get_tags_for_entry(feed_url, entry_id):
         return
-    tags = feed_tags_service_mod.extract_page_tags(page_html)
+    tags = feed_tags_service_mod.extract_page_tags(page_html, source_url)
     if tags:
         feed_tag_service.record_entry_tags(feed_url, [(entry_id, tags)])
 
@@ -16074,7 +16075,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             try:
                 _cached_page = lead_image_service.get_cached_source_html(str(entry.link))
                 if _cached_page is not None:
-                    _page_tags = feed_tags_service_mod.extract_page_tags(_cached_page[1])
+                    _page_tags = feed_tags_service_mod.extract_page_tags(
+                        _cached_page[1], str(entry.link))
                     if _page_tags:
                         feed_tag_service.record_entry_tags(
                             str(entry.feed_url), [(str(entry.id), _page_tags)]
@@ -24045,7 +24047,7 @@ def entry_feed_tags_route(
             # directly from the cached page as a last resort.
             cached = lead_image_service.get_cached_source_html(entry_link)
             if cached is not None:
-                page_tags = feed_tags_service_mod.extract_page_tags(cached[1])
+                page_tags = feed_tags_service_mod.extract_page_tags(cached[1], entry_link)
                 if page_tags:
                     feed_tag_service.record_entry_tags(feed_url, [(entry_id, page_tags)])
                     raw_tags = page_tags[:MAX_FEED_TAG_SUGGESTIONS]

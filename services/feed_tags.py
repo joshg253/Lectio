@@ -14,7 +14,7 @@ from __future__ import annotations
 import html as html_module
 import logging
 import re
-from urllib.parse import unquote_plus
+from urllib.parse import unquote_plus, urlparse
 import time
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -195,7 +195,59 @@ def _looks_like_a_tag(text: str) -> bool:
     )
 
 
-def extract_page_tags(html: str | None) -> list[str]:
+# Path segments that are structure, not subject. Kept deliberately short: a
+# wrong entry here silently loses a real tag, and the shape rules below already
+# reject most noise.
+_PATH_TAG_STOPWORDS = frozenset({
+    "a", "amp", "article", "articles", "blog", "blogs", "e", "en", "entry",
+    "index", "p", "page", "pages", "post", "posts", "s", "story", "stories",
+    "us", "www",
+})
+_PATH_TAG_SEGMENT_RE = re.compile(r"^[a-z][a-z0-9-]{2,29}$")
+_MAX_PATH_TAGS = 3
+
+
+def tags_from_url_path(url: str | None) -> list[str]:
+    """Taxonomy read from the entry's own URL path.
+
+    ``guitarplayer.com/lessons/advice-tips/<slug>`` states its section and
+    sub-section in the path and links neither, so no anchor tier can see them.
+    This needs no page fetch, which makes it the only tier that works at all on
+    a site that refuses us — gottadeal and realpython both 403 even a browser
+    identity, and their section is still right there in the link.
+
+    The LAST segment is always dropped: it is the article slug, and turning that
+    into a tag would give every post a unique useless one (``realpython.com/
+    ollama/`` has nothing but a slug, and correctly yields nothing).
+
+    Numeric segments go too, so a dated permalink does not file posts under
+    "2026" and "02".
+    """
+    if not url:
+        return []
+    try:
+        path = urlparse(url).path
+    except ValueError:
+        return []
+    segments = [seg for seg in path.split("/") if seg]
+    if len(segments) < 2:
+        return []
+    out: list[str] = []
+    for seg in segments[:-1]:
+        low = seg.lower()
+        if low in _PATH_TAG_STOPWORDS or low.isdigit():
+            continue
+        if not _PATH_TAG_SEGMENT_RE.match(low):
+            continue
+        value = low.replace("-", " ").strip()
+        if value and value not in out:
+            out.append(value)
+        if len(out) >= _MAX_PATH_TAGS:
+            break
+    return out
+
+
+def extract_page_tags(html: str | None, source_url: str | None = None) -> list[str]:
     """Harvest article tags from a source page — the fallback for entries
     whose feed never delivered <category> data (aged out of the feed window,
     or a publisher that strips tags from RSS). Two tiers:
@@ -206,7 +258,7 @@ def extract_page_tags(html: str | None) -> list[str]:
       Valnet sites (MakeUseOf, How-To-Geek) mark their article tag block.
     """
     if not html:
-        return []
+        return tags_from_url_path(source_url)
     # Generous cap: tag blocks often sit at the BOTTOM of article pages
     # (Valnet's footer tag links live past 300KB on ad-heavy pages), and a
     # regex scan of a few MB is milliseconds. The cap only guards degenerate
@@ -341,6 +393,9 @@ def extract_page_tags(html: str | None) -> list[str]:
     years = {v for v in values if v.isdigit() and len(v) == 4 and 1900 <= int(v) <= 2100}
     if len(years) >= _ARCHIVE_YEAR_RUN:
         values = [v for v in values if v not in years]
+    # The URL path last, so an anchor-derived tag with the site's own casing
+    # and punctuation wins the dedupe over a slug-derived one.
+    values.extend(tags_from_url_path(source_url))
     return _clean_tag_values(values, cap=_MAX_PAGE_TAGS)
 
 

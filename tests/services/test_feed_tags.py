@@ -221,7 +221,7 @@ def test_no_sink_registered_is_fine():
 
 # --- extract_page_tags (source-page fallback) ---
 
-from services.feed_tags import extract_page_tags  # noqa: E402
+from services.feed_tags import extract_page_tags, tags_from_url_path  # noqa: E402
 
 
 def test_page_tags_article_tag_metas():
@@ -706,3 +706,53 @@ def test_sentence_length_text_is_not_a_tag():
 def test_titled_anchor_still_uses_its_title():
     html = '<a class="tag" title="Real Title" href="/x"> ignored text </a>'
     assert extract_page_tags(html) == ["Real Title"]
+
+
+# --- taxonomy from the entry's own URL path --------------------------------
+# Needs no page fetch, which makes it the only tier that works on a site that
+# refuses us: gottadeal and realpython 403 even a browser identity, and their
+# section is right there in the link.
+
+def test_section_and_subsection_from_path():
+    assert tags_from_url_path(
+        "https://www.guitarplayer.com/lessons/advice-tips/some-long-headline"
+    ) == ["lessons", "advice tips"]
+
+
+def test_single_section():
+    assert tags_from_url_path("https://gottadeal.com/deals/kohls-55-off-475772") == ["deals"]
+
+
+def test_slug_only_yields_nothing():
+    """The last segment is the article, not a taxonomy — tagging it would give
+    every post a unique useless tag."""
+    assert tags_from_url_path("https://realpython.com/ollama/") == []
+    assert tags_from_url_path("https://example.com/just-a-title") == []
+
+
+def test_dates_are_not_tags():
+    assert tags_from_url_path("https://lernerpython.com/2026/02/21/uv-version-bump/") == []
+    assert tags_from_url_path("https://tinyview.com/they-can-talk/2026/02/25/blizzard") == [
+        "they can talk"
+    ]
+
+
+def test_structure_words_are_dropped():
+    assert tags_from_url_path("https://example.com/blog/post/my-title") == []
+
+
+def test_bad_input_is_safe():
+    for value in (None, "", "not a url", "https://example.com"):
+        assert tags_from_url_path(value) == []
+
+
+def test_path_tags_join_the_page_tags():
+    out = extract_page_tags('<a rel="tag" href="/x">Woot!</a>',
+                            "https://gottadeal.com/deals/a-slug-1")
+    assert "Woot!" in out and "deals" in out
+
+
+def test_path_tags_work_with_no_html_at_all():
+    assert extract_page_tags(None, "https://www.guitarplayer.com/lessons/advice-tips/x") == [
+        "lessons", "advice tips"
+    ]

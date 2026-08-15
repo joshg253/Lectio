@@ -522,15 +522,17 @@ tags*) instead of a third heuristic.
 
 - `guitarplayer.com` — a `DEALS` tag on the post is not picked up
   (`?feed_url=…/feeds/tag/lessons`, entry `wu6rVpzS4PyZRihCreDbEF`).
-- **Sub-categories from the URL path** — `guitarplayer.com/lessons/advice-tips`
-  carries "Lessons" *and* "Advice & Tips" as path segments. A post URL's own path
-  is a taxonomy source no current tier reads; it would also give the parent
-  category for free on sites that do not link it.
+- ~~**Sub-categories from the URL path**~~ — SHIPPED 2026-08-14 as
+  `tags_from_url_path`. Drops the last segment (the slug), numeric segments
+  (so a dated permalink is not filed under "2026") and structure words. It
+  needs no page fetch, which turned out to matter more than expected: gottadeal
+  and realpython 403 even a browser identity, so this is the only tier that
+  works there at all.
 
-Also still open from the same pass: Real Python's page tag block mixes taxonomies
-(`ai` is a topic, `intermediate` is a **skill level**). A four-word stop-list
-(`beginner`/`intermediate`/`advanced`/`basics`) would express that where coverage
-cannot — it is fixed vocabulary, not per-feed frequency.
+~~Real Python's skill-level tags~~ — **dropped 2026-08-14 at Josh's call**:
+"don't care about the skill levels, they can stay as tags". More tags are
+cheaper than missing ones, since an unwanted chip is one dismissal and a tag
+never captured is invisible.
 
 ### Article cleanup — Phase 2: promote a removal into a per-feed rule
 
