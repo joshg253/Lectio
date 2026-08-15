@@ -11881,13 +11881,26 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const q = document.getElementById('tag-inventory-q')?.value || '';
       let data = { items: [], total: 0 };
       try {
-        const all = document.getElementById('tag-inventory-all')?.checked ? 1 : 0;
-        const resp = await fetch(`/tags/inventory?limit=200&include_feed=${all}&q=${encodeURIComponent(q)}`, { credentials: 'same-origin' });
+        const mine = document.getElementById('tag-inventory-all')?.checked ? 1 : 0;
+        const resp = await fetch(`/tags/inventory?limit=200&mine_only=${mine}&q=${encodeURIComponent(q)}`, { credentials: 'same-origin' });
         data = await resp.json();
       } catch (_e) { /* an empty table beats a stale one */ }
       body.textContent = '';
+      // Say WHAT is being counted. One merged number ("33,520 tags") mixed 89
+      // tags Josh applies with tens of thousands of publisher names, most seen
+      // once, and answered no question he had.
+      const sum = data.summary || {};
       const shown = (data.items || []).length;
-      if (countEl) countEl.textContent = `${data.total || 0} tag(s)` + (shown < (data.total || 0) ? ' — showing the first 200' : '');
+      if (countEl) {
+        const parts = [`${(sum.manual || 0).toLocaleString()} yours`];
+        if (data.scope !== 'mine') {
+          parts.push(`${(sum.feed || 0).toLocaleString()} from publishers`
+                     + (sum.feed_seen_once ? ` (${sum.feed_seen_once.toLocaleString()} seen once)` : ''));
+        }
+        const total = (data.total || 0).toLocaleString();
+        countEl.textContent = parts.join(' · ')
+          + (shown < (data.total || 0) ? ` — showing ${shown} of ${total}` : ` — ${total} shown`);
+      }
       for (const item of data.items || []) {
         const tr = document.createElement('tr');
         const name = document.createElement('td');

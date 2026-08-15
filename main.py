@@ -31582,7 +31582,7 @@ def list_tag_aliases_route():
 
 
 @app.get("/tags/inventory")
-def tag_inventory_route(q: str = "", limit: int = 200, include_feed: int = 0):
+def tag_inventory_route(q: str = "", limit: int = 200, mine_only: int = 0):
     """Every tag with a count, for spotting split spellings.
 
     Feed-provided tags and manual tags are counted separately: they are stored
@@ -31591,11 +31591,11 @@ def tag_inventory_route(q: str = "", limit: int = 200, include_feed: int = 0):
     which. Search is a plain substring — the point is to type "c" and see
     cpp / c++ / csharp side by side.
 
-    **Defaults to the tags you applied yourself**, which is 89 names against
-    36,047 of publisher vocabulary — 64% of which appear exactly once. Listing
-    both by default buried c++ and python in one-off noise and reported "33,520
-    tags", a number that answers no question anyone asked. `include_feed=1`
-    brings the publisher side in, for finding a spelling worth folding.
+    Everything is listed, publisher vocabulary included — that is where a rival
+    spelling worth folding turns up. What was wrong before was the *count*: one
+    "33,520 tags" merged 89 tags Josh applies with 36,047 names publishers sent,
+    64% of which appear exactly once. So the response carries the breakdown and
+    the UI states it, rather than a single number that answers no question.
     """
     needle = (q or "").strip().lower()
     limit = max(1, min(int(limit or 200), 1000))
@@ -31630,7 +31630,7 @@ def tag_inventory_route(q: str = "", limit: int = 200, include_feed: int = 0):
 
     aliases = {a["alias"]: a["canonical"] for a in list_tag_aliases()}
     names = set(manual_counts) | set(aliases)
-    if include_feed:
+    if not mine_only:
         names |= set(feed_counts)
     items = [
         {
@@ -31645,8 +31645,19 @@ def tag_inventory_route(q: str = "", limit: int = 200, include_feed: int = 0):
     # Manual first: those are the tags you actually file with, and a publisher
     # tag with a big count is not more interesting than one of yours.
     items.sort(key=lambda item: (-item["manual"], -item["feed"], item["tag"]))
-    return JSONResponse({"ok": True, "total": len(items), "items": items[:limit],
-                         "scope": "all" if include_feed else "manual"})
+    once = sum(1 for name, n in feed_counts.items() if n == 1)
+    return JSONResponse({
+        "ok": True,
+        "total": len(items),
+        "items": items[:limit],
+        "scope": "mine" if mine_only else "all",
+        "summary": {
+            "manual": len(manual_counts),
+            "feed": len(feed_counts),
+            "feed_seen_once": once,
+            "shown": min(len(items), limit),
+        },
+    })
 
 
 @app.post("/tags/aliases/preview")
