@@ -11790,7 +11790,14 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         body: new URLSearchParams(params).toString(),
       });
       const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      if (!resp.ok || !data.ok) {
+        // FastAPI validation errors arrive as {detail: [...]}, not {error}, so a
+        // bare "HTTP 422" hid which field it disliked.
+        const detail = Array.isArray(data.detail)
+          ? data.detail.map((d) => `${(d.loc || []).join('.')}: ${d.msg}`).join('; ')
+          : data.detail;
+        throw new Error(data.error || detail || `HTTP ${resp.status}`);
+      }
       return data;
     }
 
@@ -11874,7 +11881,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const q = document.getElementById('tag-inventory-q')?.value || '';
       let data = { items: [], total: 0 };
       try {
-        const resp = await fetch(`/tags/inventory?limit=200&q=${encodeURIComponent(q)}`, { credentials: 'same-origin' });
+        const all = document.getElementById('tag-inventory-all')?.checked ? 1 : 0;
+        const resp = await fetch(`/tags/inventory?limit=200&include_feed=${all}&q=${encodeURIComponent(q)}`, { credentials: 'same-origin' });
         data = await resp.json();
       } catch (_e) { /* an empty table beats a stale one */ }
       body.textContent = '';
@@ -11884,8 +11892,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         const tr = document.createElement('tr');
         const name = document.createElement('td');
         name.textContent = item.tag + (item.alias_of ? ` → ${item.alias_of}` : '');
-        const feed = document.createElement('td'); feed.className = 'num'; feed.textContent = item.feed;
         const manual = document.createElement('td'); manual.className = 'num'; manual.textContent = item.manual;
+        const feed = document.createElement('td'); feed.className = 'num'; feed.textContent = item.feed;
         const act = document.createElement('td');
         const use = document.createElement('button');
         use.type = 'button';
@@ -11897,10 +11905,12 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           tagAliasTo()?.focus();
         });
         act.appendChild(use);
-        tr.append(name, feed, manual, act);
+        tr.append(name, manual, feed, act);
         body.appendChild(tr);
       }
     }
+
+    document.getElementById('tag-inventory-all')?.addEventListener('change', () => void renderTagInventory());
 
     document.getElementById('tag-inventory-q')?.addEventListener('input', () => {
       window.clearTimeout(tagInventoryTimer);

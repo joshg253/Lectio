@@ -753,34 +753,38 @@
 
       <!-- Tags tab: fold one spelling of a tag into another, and see what you have. -->
       <div id="settings-tab-tags" class="settings-tab-panel" hidden>
-        <h3 class="sett-section-title">Tag aliases</h3>
-        <p class="sett-hint">
-          Publishers disagree about the same subject, so one topic arrives under several spellings and filtering on one silently misses the rest. An alias folds one into another everywhere — manual tags, captured feed tags, filter rules and imports — because every tag path runs through the same normalizer.
-        </p>
-        <div class="sett-row tag-alias-form-row">
-          <input type="text" id="tag-alias-from" class="sett-input" placeholder="cpp" aria-label="Tag to fold away" autocomplete="off" />
-          <span class="tag-alias-arrow" aria-hidden="true">→</span>
-          <input type="text" id="tag-alias-to" class="sett-input" placeholder="c++" aria-label="Fold it into this tag" autocomplete="off" />
-          <button type="button" id="tag-alias-preview-btn" class="settings-secondary-btn">Preview</button>
-          <button type="button" id="tag-alias-create-btn" class="settings-primary-btn" disabled>Create alias</button>
+        <div class="settings-section">
+          <div class="settings-label">Tag aliases</div>
+          <p class="settings-hint">Publishers disagree about the same subject, so one topic arrives under several spellings and filtering on one silently misses the rest. An alias folds one into another everywhere — manual tags, captured feed tags, filter rules and imports.</p>
+          <div class="settings-row-controls tag-alias-form-row">
+            <input type="text" id="tag-alias-from" class="settings-input" placeholder="cpp" aria-label="Tag to fold away" autocomplete="off" />
+            <span class="tag-alias-arrow" aria-hidden="true">→</span>
+            <input type="text" id="tag-alias-to" class="settings-input" placeholder="c++" aria-label="Fold it into this tag" autocomplete="off" />
+            <button type="button" id="tag-alias-preview-btn" class="settings-secondary-btn">Preview</button>
+            <button type="button" id="tag-alias-create-btn" class="settings-save-btn" disabled>Create alias</button>
+          </div>
+          <p id="tag-alias-preview-out" class="settings-hint" role="status" aria-live="polite"></p>
+          <ul id="tag-alias-list" class="feed-prop-alias-list"></ul>
+          <p id="tag-alias-empty" class="settings-hint">No aliases yet.</p>
         </div>
-        <p id="tag-alias-preview-out" class="sett-hint" role="status" aria-live="polite"></p>
-        <ul id="tag-alias-list" class="feed-prop-alias-list"></ul>
-        <p id="tag-alias-empty" class="feed-prop-alias-empty">No aliases yet.</p>
 
-        <h3 class="sett-section-title">Every tag you have</h3>
-        <p class="sett-hint">
-          Counts are kept apart on purpose: <strong>feed</strong> is what publishers sent, <strong>manual</strong> is what you applied by hand. An alias rewrites both, and one combined number would hide which half is which. Type a few letters to put the rival spellings next to each other.
-        </p>
-        <div class="sett-row">
-          <input type="search" id="tag-inventory-q" class="sett-input" placeholder="Search tags, e.g. c" aria-label="Search tags" autocomplete="off" />
-          <span id="tag-inventory-count" class="sett-hint"></span>
-        </div>
-        <div id="tag-inventory-wrap" class="tag-inventory-wrap">
-          <table class="tag-inventory-table">
-            <thead><tr><th>Tag</th><th class="num">Feed</th><th class="num">Manual</th><th></th></tr></thead>
-            <tbody id="tag-inventory-body"></tbody>
-          </table>
+        <div class="settings-section">
+          <div class="settings-label">Your tags</div>
+          <p class="settings-hint">Counts are kept apart on purpose: <strong>manual</strong> is what you applied by hand, <strong>feed</strong> is what publishers sent. An alias rewrites both, and one combined number would hide which half is which.</p>
+          <div class="settings-row-controls">
+            <input type="search" id="tag-inventory-q" class="settings-input" placeholder="Search tags, e.g. c" aria-label="Search tags" autocomplete="off" />
+            <label class="settings-hint tag-inventory-scope">
+              <input type="checkbox" id="tag-inventory-all" />
+              Include publisher tags
+            </label>
+            <span id="tag-inventory-count" class="settings-inline-status"></span>
+          </div>
+          <div id="tag-inventory-wrap" class="tag-inventory-wrap">
+            <table class="tag-inventory-table">
+              <thead><tr><th>Tag</th><th class="num">Manual</th><th class="num">Feed</th><th></th></tr></thead>
+              <tbody id="tag-inventory-body"></tbody>
+            </table>
+          </div>
         </div>
       </div>
 

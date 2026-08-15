@@ -31582,7 +31582,7 @@ def list_tag_aliases_route():
 
 
 @app.get("/tags/inventory")
-def tag_inventory_route(q: str = "", limit: int = 200):
+def tag_inventory_route(q: str = "", limit: int = 200, include_feed: int = 0):
     """Every tag with a count, for spotting split spellings.
 
     Feed-provided tags and manual tags are counted separately: they are stored
@@ -31590,6 +31590,12 @@ def tag_inventory_route(q: str = "", limit: int = 200):
     rewrite has to touch both, so a combined number would hide which half is
     which. Search is a plain substring — the point is to type "c" and see
     cpp / c++ / csharp side by side.
+
+    **Defaults to the tags you applied yourself**, which is 89 names against
+    36,047 of publisher vocabulary — 64% of which appear exactly once. Listing
+    both by default buried c++ and python in one-off noise and reported "33,520
+    tags", a number that answers no question anyone asked. `include_feed=1`
+    brings the publisher side in, for finding a spelling worth folding.
     """
     needle = (q or "").strip().lower()
     limit = max(1, min(int(limit or 200), 1000))
@@ -31623,7 +31629,9 @@ def tag_inventory_route(q: str = "", limit: int = 200):
         LOGGER.debug("manual tag inventory unavailable", exc_info=True)
 
     aliases = {a["alias"]: a["canonical"] for a in list_tag_aliases()}
-    names = set(feed_counts) | set(manual_counts) | set(aliases)
+    names = set(manual_counts) | set(aliases)
+    if include_feed:
+        names |= set(feed_counts)
     items = [
         {
             "tag": name,
@@ -31634,8 +31642,11 @@ def tag_inventory_route(q: str = "", limit: int = 200):
         for name in names
         if not needle or needle in name
     ]
-    items.sort(key=lambda item: (-(item["feed"] + item["manual"]), item["tag"]))
-    return JSONResponse({"ok": True, "total": len(items), "items": items[:limit]})
+    # Manual first: those are the tags you actually file with, and a publisher
+    # tag with a big count is not more interesting than one of yours.
+    items.sort(key=lambda item: (-item["manual"], -item["feed"], item["tag"]))
+    return JSONResponse({"ok": True, "total": len(items), "items": items[:limit],
+                         "scope": "all" if include_feed else "manual"})
 
 
 @app.post("/tags/aliases/preview")
