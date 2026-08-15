@@ -102,3 +102,98 @@ def test_looks_like_escaped_plaintext_rejects_real_html():
 @pytest.mark.parametrize("value", [None, "", "just text, no breaks"])
 def test_looks_like_escaped_plaintext_negative(value):
     assert main._looks_like_escaped_plaintext(value) is False
+
+
+# --- several content elements: take the fullest -----------------------------
+# reader's get_content returns the FIRST html element, and a feed may put a
+# lesser one first.
+
+class _C:
+    def __init__(self, value, is_html=True):
+        self.value = value
+        self.type = "text/html"
+        self.is_html = is_html
+
+
+class _E:
+    def __init__(self, contents):
+        self.content = contents
+        self.summary = None
+
+    def get_content(self, prefer_summary=False):
+        return self.content[0] if self.content else None
+
+
+ARTICLE = "<article><p>" + ("word " * 400) + "</p></article>"
+ESCAPED_EMPTY = "&lt;p&gt;&lt;br&gt;&lt;/p&gt;"
+BLURB = "<p>" + ("bio " * 70) + "</p>"
+
+
+def test_escaped_empty_first_element_is_skipped():
+    e = _E([_C(ESCAPED_EMPTY), _C(ARTICLE)])
+    assert main._richest_content(e, e.content[0]).value == ARTICLE
+
+
+def test_short_author_blurb_first_is_skipped():
+    """Not empty — just not the article. The earlier 'skip only if empty' rule
+    left this one rendering as the bio alone."""
+    e = _E([_C(BLURB), _C(ARTICLE)])
+    assert main._richest_content(e, e.content[0]).value == ARTICLE
+
+
+def test_a_single_element_is_returned_untouched():
+    e = _E([_C(ESCAPED_EMPTY)])
+    assert main._richest_content(e, e.content[0]).value == ESCAPED_EMPTY
+
+
+def test_readers_pick_wins_when_it_is_already_the_fullest():
+    e = _E([_C(ARTICLE), _C(BLURB)])
+    assert main._richest_content(e, e.content[0]).value == ARTICLE
+
+
+def test_escaped_markup_counts_as_markup_not_words():
+    assert main._visible_word_count(ESCAPED_EMPTY) == 0
+    assert main._visible_word_count("<p>two words</p>") == 2
+
+
+# --- Future plc recirculation rail -----------------------------------------
+
+RAIL = (
+    '<div class="product"><a><figure class="van-image-figure">'
+    '<img src="https://cdn.mos.cms.futurecdn.net/x.jpg" height="654" width="661"></figure></a>'
+    '<p><a href="/a"><strong>2026 games</strong></a>: All the upcoming games<br>'
+    '<a href="/b"><strong>Best PC games</strong></a>: Our all-time favorites<br>'
+    '<a href="/c"><strong>Free PC games</strong></a>: Freebie fest</p></div>'
+)
+
+
+def test_trailing_rail_is_dropped():
+    out = main._strip_trailing_recirculation_rail("<p>Article body.</p>" + RAIL)
+    assert "van-image-figure" not in out
+    assert "Best PC games" not in out
+    assert "Article body." in out
+
+
+def test_rail_is_dropped_past_an_empty_trailing_div():
+    """pcgamer closes the article with a bare <div></div> after the rail; an
+    'is it last?' check that counts empty elements left the rail in place."""
+    out = main._strip_trailing_recirculation_rail("<p>Body.</p>" + RAIL + "<div></div>")
+    assert "Best PC games" not in out
+    assert "Body." in out
+
+
+def test_rail_is_kept_when_real_content_follows():
+    out = main._strip_trailing_recirculation_rail(RAIL + "<div>Genuine closing paragraph</div>")
+    assert "Best PC games" in out
+
+
+def test_mid_article_product_div_is_kept():
+    """'product' is a generic class — mid-article it is likely the thing being
+    reviewed."""
+    html = '<div class="product"><img src="review.jpg"><p>Under review</p></div><p>More text</p>'
+    assert "review.jpg" in main._strip_trailing_recirculation_rail(html)
+
+
+def test_trailing_product_without_the_rail_shape_is_kept():
+    html = '<p>Body</p><div class="product"><p>a closing note</p></div>'
+    assert "a closing note" in main._strip_trailing_recirculation_rail(html)

@@ -15643,6 +15643,43 @@ def _apply_entry_media(content_html, entry, feed_url: str, entry_id: str):
     return content_html, audio_feed_suggestion
 
 
+def _visible_word_count(value: str | None) -> int:
+    """Words a reader would actually SEE, with escaped markup counted as markup.
+
+    ``&lt;p&gt;&lt;br&gt;&lt;/p&gt;`` is a paragraph and a line break spelled as
+    text; unescaping before stripping tags scores it 0, which is what it looks
+    like on screen.
+    """
+    if not value:
+        return 0
+    return len(re.sub(r"<[^>]+>", " ", html.unescape(value)).split())
+
+
+def _richest_content(entry, chosen):
+    """Pick the content element with the most visible text.
+
+    reader's ``get_content`` returns the FIRST html element, and a feed may put
+    a lesser one first. pcgamer does both: on some entries an escaped
+    ``&lt;p&gt;&lt;br&gt;&lt;/p&gt;`` (29 characters, zero words) precedes the
+    5,364-character article, so the entry rendered as a stray open and close tag;
+    on others a 77-word author blurb precedes the 464-word piece, so the entry
+    rendered as the bio alone.
+
+    "Skip it only when it is empty" was tried first and is not enough — the blurb
+    is not empty, it is just not the article. Among several representations of
+    one entry the fullest is the one a reader wants, so the choice is by visible
+    word count, html preferred, with reader's own pick as the tie-break.
+    """
+    candidates = [c for c in (getattr(entry, "content", None) or [])
+                  if _visible_word_count(getattr(c, "value", None))]
+    if not candidates:
+        return chosen          # nothing has text; leave reader's choice alone
+    html_ones = [c for c in candidates if getattr(c, "is_html", False)]
+    best = max(html_ones or candidates, key=lambda c: _visible_word_count(c.value))
+    chosen_words = _visible_word_count(getattr(chosen, "value", None)) if chosen is not None else 0
+    return chosen if chosen_words >= _visible_word_count(best.value) else best
+
+
 def _resolve_entry_content_html(entry):
     """Resolve an entry's display HTML from its content/summary.
 
@@ -15650,7 +15687,7 @@ def _resolve_entry_content_html(entry):
     conversion (Nexus Mods), promotes bare-text/escaped-plaintext summaries
     (tracker.example) to real HTML, and repairs URL-encoded ``http%3A/`` schemes
     the reader library mangles into relative paths. Returns the HTML or None."""
-    content = entry.get_content(prefer_summary=False)
+    content = _richest_content(entry, entry.get_content(prefer_summary=False))
     content_html = None
     if content and content.value and content.is_html:
         content_html = content.value
@@ -15738,6 +15775,58 @@ def _promote_comicsthumbs_in_content(content_html: str, full_lead_url: str | Non
     return _COMICSTHUMBS_IMG_SRC_RE.sub(_sub, content_html)
 
 
+def _strip_trailing_recirculation_rail(content_html: str) -> str:
+    """Drop a Future plc "more from us" block from the end of a feed body.
+
+    pcgamer (and its sister sites) close content:encoded with a
+    ``<div class="product">`` holding a full-width promo image and a rail of
+    house links — "2026 games: All the upcoming games", "Best PC games: Our
+    all-time favorites"… It is the site's recirculation widget, not the article,
+    and the image is large enough to read as the post's own.
+
+    Matched by SHAPE rather than by class alone: "product" is a generic name, and
+    a div called that in the middle of a review is likely to be the thing being
+    reviewed. Required: it is the LAST element, and it carries the vanilla image
+    figure or at least three bolded house links.
+    """
+    if not content_html or "product" not in content_html:
+        return content_html
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(content_html, "html.parser")
+        root = soup.body or soup
+        blocks = [n for n in root.find_all("div")
+                  if "product" in (n.get("class") or [])]
+        if not blocks:
+            return content_html
+        changed = False
+        for block in blocks:
+            # Last element of its parent. "Last" ignores whitespace AND empty
+            # containers: pcgamer closes the article with a bare <div></div>
+            # after the rail, which counted as a following element and left the
+            # rail on four posts out of five.
+            tail = []
+            for sib in block.next_siblings:
+                if getattr(sib, "name", None) is None:
+                    if str(sib).strip():
+                        tail.append(sib)
+                    continue
+                if sib.get_text(strip=True) or sib.find("img"):
+                    tail.append(sib)
+            if tail:
+                continue
+            rail_links = [a for a in block.find_all("a") if a.find("strong")]
+            if block.select_one("figure.van-image-figure") or len(rail_links) >= 3:
+                block.decompose()
+                changed = True
+        if not changed:
+            return content_html
+        return (root.decode_contents() if root is not soup else str(soup)).strip()
+    except Exception:  # noqa: BLE001 — a cleanup must never lose the article
+        LOGGER.debug("recirculation-rail strip failed", exc_info=True)
+        return content_html
+
+
 def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     """Apply the per-site / generic feed-content cleanups to an entry's HTML.
 
@@ -15746,6 +15835,8 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     NASA leading-nav strip, mynorthwest "RELATED STORIES" block, Ghost kg-audio
     cards, the WordPress "appeared first on" footer, qwantz nav tables, sanitized
     embed-container iframes, and recovery of stripped YouTube embeds."""
+    content_html = _strip_trailing_recirculation_rail(content_html) if isinstance(content_html, str) else content_html
+
     # NASA Science RSS (earthobservatory.nasa.gov) injects the full site secondary-navigation
     # into content:encoded before the article body. Strip any leading wp-block-nasa-blocks-*
     # divs by tracking div nesting depth so the article starts at actual content.
