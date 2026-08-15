@@ -11890,16 +11890,18 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       // tags Josh applies with tens of thousands of publisher names, most seen
       // once, and answered no question he had.
       const sum = data.summary || {};
-      const shown = (data.items || []).length;
       if (countEl) {
         const parts = [`${(sum.manual || 0).toLocaleString()} yours`];
         if (data.scope !== 'mine') {
           parts.push(`${(sum.feed || 0).toLocaleString()} from publishers`
-                     + (sum.feed_seen_once ? ` (${sum.feed_seen_once.toLocaleString()} seen once)` : ''));
+                     + (sum.feed_seen_once ? `, ${sum.feed_seen_once.toLocaleString()} seen once` : ''));
         }
-        const total = (data.total || 0).toLocaleString();
-        countEl.textContent = parts.join(' · ')
-          + (shown < (data.total || 0) ? ` — showing ${shown} of ${total}` : ` — ${total} shown`);
+        // Never claims a match total: the query is limited in SQL, so the server
+        // has not counted every match and should not pretend to.
+        parts.push(sum.truncated
+          ? `showing the ${sum.shown} most used`
+          : `showing ${sum.shown}`);
+        countEl.textContent = parts.join(' · ');
       }
       for (const item of data.items || []) {
         const tr = document.createElement('tr');

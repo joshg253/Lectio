@@ -31583,43 +31583,36 @@ def list_tag_aliases_route():
 
 @app.get("/tags/inventory")
 def tag_inventory_route(q: str = "", limit: int = 200, mine_only: int = 0):
-    """Every tag with a count, for spotting split spellings.
+    """Tags with counts, for spotting a spelling worth folding.
 
-    Feed-provided tags and manual tags are counted separately: they are stored
-    in different places (entry_feed_tags rows vs reader entry tags) and an alias
-    rewrite has to touch both, so a combined number would hide which half is
-    which. Search is a plain substring — the point is to type "c" and see
-    cpp / c++ / csharp side by side.
+    Feed-provided and manual counts stay separate: they live in different stores
+    (entry_feed_tags rows vs reader entry tags) and an alias rewrite touches
+    both, so one merged number would hide which half is which — and did, when
+    "33,520 tags" turned out to be 89 tags Josh applies plus 33,505 publisher
+    names, 20,974 of them seen exactly once.
 
-    Everything is listed, publisher vocabulary included — that is where a rival
-    spelling worth folding turns up. What was wrong before was the *count*: one
-    "33,520 tags" merged 89 tags Josh applies with 36,047 names publishers sent,
-    64% of which appear exactly once. So the response carries the breakdown and
-    the UI states it, rather than a single number that answers no question.
+    **The full vocabulary is never materialized.** Filtering and the limit are
+    pushed into SQL, so a search reads only matching rows and an unfiltered view
+    reads only the top N by use. Building all 33k in Python and slicing to 200
+    did the same work on every keystroke.
+
+    Manual tags (89) are always loaded whole: they are the ones worth aliasing,
+    they are cheap, and they must never be crowded out of the list by publisher
+    tags with bigger counts.
     """
     needle = (q or "").strip().lower()
-    limit = max(1, min(int(limit or 200), 1000))
-    with get_meta_connection() as conn:
-        rows = conn.execute(
-            "SELECT tag, COUNT(*) AS n FROM entry_feed_tags GROUP BY tag ORDER BY n DESC"
-        ).fetchall()
-    feed_counts: dict[str, int] = {}
-    for row in rows:
-        key = normalize_tag_value_raw(str(row["tag"])) or str(row["tag"])
-        feed_counts[key] = feed_counts.get(key, 0) + int(row["n"])
+    limit = max(1, min(int(limit or 200), 500))
+    like = f"%{needle}%"
 
-    # Manual tags live in reader's entry_tags under a key prefix; one grouped
-    # query beats asking reader per tag (get_entry_counts is a query each, and
-    # there are thousands of distinct tags). Orphan archives keep theirs in the
-    # meta DB instead, which is why has_any_manual_tags checks both.
     manual_counts: dict[str, int] = {}
     try:
         conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
         try:
-            for key, count in conn.execute(
-                "SELECT key, COUNT(*) FROM entry_tags WHERE key LIKE ? GROUP BY key",
-                (f"{MANUAL_TAG_KEY_PREFIX}%",),
-            ):
+            sql = ("SELECT key, COUNT(*) FROM entry_tags WHERE key LIKE ?"
+                   + (" AND LOWER(key) LIKE ?" if needle else "")
+                   + " GROUP BY key")
+            args: list = [f"{MANUAL_TAG_KEY_PREFIX}%"] + ([like] if needle else [])
+            for key, count in conn.execute(sql, args):
                 short = str(key)[len(MANUAL_TAG_KEY_PREFIX):]
                 if short:
                     manual_counts[short] = manual_counts.get(short, 0) + int(count)
@@ -31628,34 +31621,55 @@ def tag_inventory_route(q: str = "", limit: int = 200, mine_only: int = 0):
     except Exception:  # noqa: BLE001 — the inventory is a convenience, never fatal
         LOGGER.debug("manual tag inventory unavailable", exc_info=True)
 
+    feed_counts: dict[str, int] = {}
+    feed_total = feed_once = 0
+    with get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN c = 1 THEN 1 ELSE 0 END), 0) AS once "
+            "FROM (SELECT tag, COUNT(*) AS c FROM entry_feed_tags GROUP BY tag)"
+        ).fetchone()
+        if row:
+            feed_total, feed_once = int(row["n"]), int(row["once"])
+        if not mine_only:
+            sql = "SELECT tag, COUNT(*) AS n FROM entry_feed_tags"
+            args = []
+            if needle:
+                sql += " WHERE LOWER(tag) LIKE ?"
+                args.append(like)
+            # Over-fetch a little: several raw tags can normalize to one name,
+            # so the top `limit` rows here can collapse to fewer entries.
+            sql += " GROUP BY tag ORDER BY n DESC LIMIT ?"
+            args.append(limit * 3)
+            for r in conn.execute(sql, args):
+                key = normalize_tag_value_raw(str(r["tag"])) or str(r["tag"])
+                feed_counts[key] = feed_counts.get(key, 0) + int(r["n"])
+
     aliases = {a["alias"]: a["canonical"] for a in list_tag_aliases()}
-    names = set(manual_counts) | set(aliases)
-    if not mine_only:
-        names |= set(feed_counts)
+    names = set(manual_counts) | set(aliases) | set(feed_counts)
     items = [
         {
             "tag": name,
-            "feed": feed_counts.get(name, 0),
             "manual": manual_counts.get(name, 0),
+            "feed": feed_counts.get(name, 0),
             "alias_of": aliases.get(name),
         }
         for name in names
         if not needle or needle in name
     ]
-    # Manual first: those are the tags you actually file with, and a publisher
-    # tag with a big count is not more interesting than one of yours.
+    # Yours first: a publisher tag with a big count is not more interesting than
+    # one you actually file with.
     items.sort(key=lambda item: (-item["manual"], -item["feed"], item["tag"]))
-    once = sum(1 for name, n in feed_counts.items() if n == 1)
     return JSONResponse({
         "ok": True,
-        "total": len(items),
         "items": items[:limit],
         "scope": "mine" if mine_only else "all",
         "summary": {
             "manual": len(manual_counts),
-            "feed": len(feed_counts),
-            "feed_seen_once": once,
+            "feed": feed_total,
+            "feed_seen_once": feed_once,
+            "matched": len(items),
             "shown": min(len(items), limit),
+            "truncated": len(items) > limit,
         },
     })
 
