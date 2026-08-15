@@ -162,6 +162,40 @@ feedparser will happily bless a feed reader then refuses), and must not widen
 scope silently: a category feed replaced by the site firehose is a wrong answer
 that looks like a right one.
 
+### Redirecting feeds — no way to find them in bulk
+
+Idea 2026-08-14, **not built.** Josh keeps subscriptions on the URL the
+publisher actually serves and checks feeds on sites by hand to spot moves.
+Nothing helps him: there is no report of redirecting feeds, and the refresh path
+does not record that a fetch *was* redirected — it follows the hop and moves on.
+2,281 http(s) feeds to check by hand.
+
+Why it is worth more than tidiness: a feed reached through a 301 costs two
+requests per poll forever, and it dies silently the day the publisher retires
+the redirect (which they do once a migration finishes). The stored URL also
+feeds the Change-URL field, the dupe scan and discovery, so a forwarder makes
+all three describe somewhere the posts do not come from.
+
+Shape: mirror `scripts/probe_dead_feeds.py` — HEAD each feed, follow redirects,
+report where the final URL differs, `--apply` through `POST /feeds/change-url`,
+which already migrates reader, every meta table, the `feed_url_rewrites` host
+alias and entry ids on the old host. Read-only and paced by default, like the
+dead-feed probe.
+
+Two distinctions the report has to make, or applying it does damage:
+
+- **301 vs 302.** A temporary redirect must not be applied.
+- **Moved vs replaced.** A hop that lands on a *different* feed (a site-wide
+  firehose, a FeedBurner default) is not the same feed at a new address — the
+  same "a discovered feed is not a replacement" trap the 404 sweep hit, where 8
+  of 23 candidates were the site firehose standing in for a section feed.
+
+Worked example (lerner.co.il, 2026-08-14): `lerner.co.il/blog/feed/` 301s to
+`lernerpython.com/blog/feed/`. Applying it migrated 55 entries and re-homed the
+19 whose ids still used the old host. Note it fixed nothing visible — the
+symptom that prompted it (old posts arriving daily) was the publisher
+re-importing its archive under the new domain, and continued afterwards.
+
 ### Failing feeds — re-measured 2026-08-12, with work applied
 
 ⚠ **The 950 figure from 2026-08-11 was inflated by stale rows** — since fixed
