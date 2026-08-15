@@ -3911,16 +3911,17 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   height: auto;
   display: block;
 }
-/* One column where two would leave each panel unreadably narrow. Matches the
-   float breakpoint above, for the same reason: below this, side-by-side costs
-   more than the scrolling it saves. */
+/* Two across on a phone as well, at Josh's call: a comic panel is legible at
+   half a portrait screen, and four of them stacked is four screens of scrolling
+   for one joke — the same reason the grid exists at all. The gap tightens
+   rather than the count dropping, so the panels keep as much width as possible.
+   (Unlike the floats above, which DO unfloat on narrow screens: a float has to
+   leave room for text beside it, where these panels only sit beside each
+   other.) */
 @media (max-width: 620px) {
   .entry-content .source-gallery {
-    grid-template-columns: 1fr;
+    gap: 0.3rem;
   }
-}
-body[data-compact-article="1"] .entry-content .source-gallery {
-  grid-template-columns: 1fr;
 }
 
 /* Tumblr NPF gallery rows — render side-by-side images correctly without Tumblr's CSS */
