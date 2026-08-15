@@ -364,3 +364,131 @@ def test_cold_compute_caches_counts_when_generation_stable(monkeypatch):
 
     assert result == {"http://feed/": 2}
     assert main.unread_counts_cache["unread_counts"][1] == {"http://feed/": 2}
+
+
+# ---------------------------------------------------------------------------
+# /entries/mark-newer-than-unread  (the mirror action)
+# ---------------------------------------------------------------------------
+
+class _UnreadEntry:
+    def __init__(self, eid, published, important=False):
+        self.id = eid
+        self.feed_url = "http://feed/"
+        self.published = published
+        self.updated = None
+        self.added = None
+        self.important = important
+
+
+class _UnreadReader:
+    """Records what got marked unread."""
+
+    def __init__(self, entries):
+        self._entries = entries
+        self.unread: list[tuple[str, str]] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get_entries(self, feed=None, read=None):
+        return list(self._entries)
+
+    def mark_entry_as_unread(self, key):
+        self.unread.append(key)
+
+
+def _unread_meta_conn() -> sqlite3.Connection:
+    """A meta conn with the tables this route touches — it reads saved_entries
+    for the kept set and writes the undo batch."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE saved_entries (feed_url TEXT, entry_id TEXT)")
+    conn.execute("CREATE TABLE entry_read_state (feed_url TEXT, entry_id TEXT, read_at TEXT,"
+                 " PRIMARY KEY (feed_url, entry_id))")
+    conn.execute("CREATE TABLE entry_unread_batch (feed_url TEXT, entry_id TEXT, unread_at TEXT,"
+                 " PRIMARY KEY (feed_url, entry_id))")
+    return conn
+
+
+def _build_newer_than_app(monkeypatch, entries, kept=frozenset()):
+    from datetime import datetime, timedelta, timezone
+
+    app = FastAPI()
+    app.post("/entries/mark-newer-than-unread")(main.mark_entries_newer_than_unread)
+    reader = _UnreadReader(entries)
+    monkeypatch.setattr(main, "get_meta_connection", _unread_meta_conn)
+    monkeypatch.setattr(main, "get_folder_feed_urls", lambda _c, _f: {"http://feed/"})
+    monkeypatch.setattr(main, "filter_feed_urls", lambda urls, _l: urls)
+    monkeypatch.setattr(main, "get_tagged_entry_keys", lambda _urls: set(kept))
+    monkeypatch.setattr(main, "get_reader", lambda: reader)
+    monkeypatch.setattr(main, "unread_counts_cache", {})
+    return app, reader, datetime, timedelta, timezone
+
+
+def test_newer_than_unread_marks_recent_and_skips_old(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    entries = [_UnreadEntry("recent", now - timedelta(hours=2)),
+               _UnreadEntry("old", now - timedelta(days=40))]
+    app, reader, *_ = _build_newer_than_app(monkeypatch, entries)
+    with TestClient(app) as client:
+        r = client.post("/entries/mark-newer-than-unread",
+                        data={"folder_id": "1", "min_age_days": "7"}, headers=_ASYNC_HEADER)
+    assert r.status_code == 200
+    assert [e for _f, e in reader.unread] == ["recent"]
+    assert r.json()["unmarked"] == 1
+
+
+def test_kept_posts_are_skipped(monkeypatch):
+    """Starred or tagged means you already dealt with it — marking it unread
+    drags it back into the Inbox as though it were new."""
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    entries = [_UnreadEntry("plain", now - timedelta(hours=1)),
+               _UnreadEntry("starred", now - timedelta(hours=1), important=True),
+               _UnreadEntry("tagged", now - timedelta(hours=1))]
+    app, reader, *_ = _build_newer_than_app(
+        monkeypatch, entries, kept={("http://feed/", "tagged")})
+    with TestClient(app) as client:
+        client.post("/entries/mark-newer-than-unread",
+                    data={"folder_id": "1", "min_age_days": "7"}, headers=_ASYNC_HEADER)
+    assert [e for _f, e in reader.unread] == ["plain"]
+
+
+def test_undo_token_is_returned_for_a_non_empty_batch(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    app, _reader, *_ = _build_newer_than_app(
+        monkeypatch, [_UnreadEntry("a", now - timedelta(hours=1))])
+    with TestClient(app) as client:
+        body = client.post("/entries/mark-newer-than-unread",
+                           data={"folder_id": "1", "min_age_days": "7"},
+                           headers=_ASYNC_HEADER).json()
+    assert body["undo_token"]
+
+
+def test_no_undo_token_when_nothing_matched(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    app, _reader, *_ = _build_newer_than_app(
+        monkeypatch, [_UnreadEntry("old", now - timedelta(days=90))])
+    with TestClient(app) as client:
+        body = client.post("/entries/mark-newer-than-unread",
+                           data={"folder_id": "1", "min_age_days": "7"},
+                           headers=_ASYNC_HEADER).json()
+    assert body["undo_token"] is None
+    assert body["unmarked"] == 0
+
+
+def test_newer_than_unread_sync_redirects(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    app, _reader, *_ = _build_newer_than_app(
+        monkeypatch, [_UnreadEntry("a", now - timedelta(hours=1))])
+    with TestClient(app) as client:
+        r = client.post("/entries/mark-newer-than-unread",
+                        data={"folder_id": "1", "min_age_days": "7"}, follow_redirects=False)
+    assert r.status_code == 303

@@ -8191,6 +8191,88 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
 
     bindPostListInteractions();
 
+    // Mark-as-unread: posts like its mark-read sibling so the batch can be
+    // undone, but does NOT reuse that handler — it would optimistically grey the
+    // rows it is about to un-grey. The list membership changes under an unread
+    // filter, so this reloads rather than patching the DOM.
+    document.addEventListener('submit', async (event) => {
+      const form = event.target instanceof HTMLFormElement && event.target.closest('.mark-unread-action-form');
+      if (!form) return;
+      event.preventDefault();
+      event.stopPropagation();
+      form.closest('details.mark-unread-submenu')?.removeAttribute('open');
+      form.closest('details.mark-read-menu')?.removeAttribute('open');
+      const body = new URLSearchParams();
+      for (const [k, v] of new FormData(form).entries()) body.append(k, String(v));
+      const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+      const headers = {
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        'X-Requested-With': 'lectio-mark-read',
+      };
+      if (csrfMeta && csrfMeta.content) headers['X-CSRF-Token'] = csrfMeta.content;
+      try {
+        const resp = await fetch(form.action, {
+          method: 'POST', credentials: 'same-origin', headers, body: body.toString(),
+        });
+        const data = await resp.json();
+        if (data && data.undo_token && data.unmarked > 0) {
+          sessionStorage.setItem('lectio-undo-mark-unread', JSON.stringify(
+            { token: data.undo_token, count: data.unmarked, at: Date.now() }));
+        }
+      } catch (_err) {
+        /* fall through to the reload — the server either did it or it did not */
+      }
+      window.location.reload();
+    });
+
+    // The toast has to survive the reload above, so it is handed over in
+    // sessionStorage and shown on the way back in.
+    (function restoreUndoMarkUnreadToast() {
+      let raw = null;
+      try { raw = sessionStorage.getItem('lectio-undo-mark-unread'); } catch (_e) { return; }
+      if (!raw) return;
+      try { sessionStorage.removeItem('lectio-undo-mark-unread'); } catch (_e) { /* ignore */ }
+      let info;
+      try { info = JSON.parse(raw); } catch (_e) { return; }
+      if (!info || !info.token || Date.now() - (info.at || 0) > 30000) return;
+      showUndoMarkUnreadToast(info.count, info.token);
+    })();
+
+    function showUndoMarkUnreadToast(count, undoToken) {
+      document.getElementById('toast-message')?.remove();
+      const toast = document.createElement('div');
+      toast.id = 'toast-message';
+      toast.className = 'toast-message';
+      toast.textContent = `Marked ${count} post${count === 1 ? '' : 's'} unread. `;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toast-action-btn';
+      btn.textContent = 'Undo';
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const resp = await fetch('/entries/undo-mark-unread', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+            body: new URLSearchParams({ unread_at: undoToken }).toString(),
+          });
+          const data = await resp.json();
+          if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+          window.location.reload();
+        } catch (err) {
+          toast.remove();
+          alert('Undo failed: ' + (err.message || err));
+        }
+      });
+      toast.appendChild(btn);
+      document.body.appendChild(toast);
+      window.setTimeout(() => {
+        toast.classList.add('fade-out');
+        window.setTimeout(() => toast.remove(), 500);
+      }, 8000);
+    }
+
     document.addEventListener('submit', (event) => {
       const form = event.target instanceof HTMLFormElement && event.target.closest('.mark-read-action-form');
       if (!form) return;

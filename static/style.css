@@ -2124,6 +2124,34 @@ button:hover, .button-link:hover {
   transform: rotate(180deg);
 }
 
+/* "Mark as unread ▸" — a nested disclosure inside the mark-read popover, so the
+   menu opens short and the unread ages are one click away rather than a wall of
+   options. Styled as a menu row, not a second popover: it expands in place,
+   which behaves on touch where a hover-out flyout does not. */
+.mark-unread-submenu {
+  border: 0;
+}
+.mark-unread-summary {
+  cursor: pointer;
+  list-style: none;
+  width: 100%;
+}
+.mark-unread-summary::-webkit-details-marker {
+  display: none;
+}
+.mark-unread-caret {
+  margin-left: auto;
+  font-size: 1.1em;
+  opacity: 0.7;
+  transition: transform 0.15s ease;
+}
+.mark-unread-submenu[open] .mark-unread-caret {
+  transform: rotate(90deg);
+}
+.mark-unread-submenu-body {
+  padding-left: 0.9em;
+}
+
 .mark-read-popover {
   position: absolute;
   top: calc(100% + 0.35rem);
