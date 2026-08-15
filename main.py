@@ -9124,6 +9124,9 @@ def attachment_links_in_html(content_html: str, base_url: str, exts: list[str]) 
     return found
 
 
+FEED_TAGS_SUPPRESS_ALL = "*"
+
+
 def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     """Feed-provided tags captured at ingest (entry_feed_tags meta table).
 
@@ -9161,6 +9164,13 @@ def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     # while the stored feed tag is "Popular Deals" — a plain lowercase compare
     # gives "popular deals" and misses. Single-word tags normalize to themselves,
     # which is why "python" and "accu" stuck and every multi-word tag came back.
+    # "*" means this feed shows no suggestions at all. Dismissing tag by tag is
+    # whack-a-mole on a feed whose tags are never wanted — a webcomic tagged
+    # "Comics" and "Cartoons" says nothing about the strip, and each new tag the
+    # publisher adds needs dismissing again. Stored in the same table, so it
+    # undoes from the same place (Feed Properties -> Hidden tags).
+    if any((d or "").strip() == FEED_TAGS_SUPPRESS_ALL for d in dismissed):
+        return []
     dismissed_norm = {normalize_tag_value(d) for d in dismissed}
     return [t for t in tags
             if normalize_tag_value(t) not in dismissed_norm][:MAX_FEED_TAG_SUGGESTIONS]
