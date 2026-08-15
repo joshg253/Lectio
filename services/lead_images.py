@@ -2794,11 +2794,13 @@ class LeadImageService:
         exclude_paths = {urlparse(u).path for u in (exclude_urls or set()) if u}
         results: list[str] = []
         seen: set[str] = set()
+        entry_path = urlparse(entry_link).path.rstrip("/").lower()
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             context_before = html_text[max(0, tag_match.start() - 500):tag_match.start()]
             if self._AUTHOR_CONTEXT_RE.search(context_before) or self._SITE_CHROME_CONTEXT_RE.search(context_before):
                 continue
             attrs = self._parse_img_attrs(tag_match.group(0))
+            tag_urls: list[str] = []
             for resolved in self._iter_acceptable_img_urls(attrs, base_url, entry_link):
                 if resolved in seen or urlparse(resolved).path in exclude_paths:
                     continue
@@ -2811,9 +2813,25 @@ class LeadImageService:
                     source_url=entry_link, attrs=attrs, resolved_url=resolved
                 ) <= self._PLUGIN_CHROME_SCORE:
                     continue
-                seen.add(resolved)
-                results.append(resolved)
-                break  # one URL per <img> tag
+                tag_urls.append(resolved)
+            if not tag_urls:
+                continue
+            # One URL per <img>, but prefer the copy filed under THIS post.
+            # tinyview gives a panel two addresses — the dated
+            # /<comic>/<yyyy>/<mm>/<dd>/<slug>/<panel>.jpg (200) and a bare
+            # /<comic>/<panel>.jpg (404) — and which one lands in `src` varies
+            # between panels of the same strip. Taking the first acceptable URL
+            # therefore injected dead images for some panels and not others: a
+            # 3-panel strip rendered as one frame, its neighbour rendered whole.
+            # _drop_duplicate_basenames below cannot repair that, because it only
+            # sees the single URL this loop kept.
+            chosen = next(
+                (u for u in tag_urls
+                 if entry_path and urlparse(u).path.lower().startswith(entry_path + "/")),
+                tag_urls[0],
+            )
+            seen.add(chosen)
+            results.append(chosen)
             if len(results) >= limit:
                 break
         return self._drop_duplicate_basenames(results, entry_link)[:limit]
@@ -2836,7 +2854,7 @@ class LeadImageService:
         the copy filed under this post. Falls back to first-seen order, so a site
         without that pattern is unaffected.
         """
-        slug = urlparse(entry_link).path.rstrip("/").rsplit("/", 1)[-1].lower()
+        entry_path = urlparse(entry_link).path.rstrip("/").lower()
         by_name: dict[str, list[str]] = {}
         for u in urls:
             name = urlparse(u).path.rsplit("/", 1)[-1].lower()
@@ -2845,7 +2863,16 @@ class LeadImageService:
         for name, group in by_name.items():
             if len(group) < 2 or not name:
                 continue
-            preferred = next((g for g in group if slug and slug in urlparse(g).path.lower()), group[0])
+            # Match the entry's whole PATH, not just its last segment. Matching
+            # the slug alone accepted either copy here, because tinyview names
+            # the panels after the strip: the slug "blizzard" is inside
+            # dog_blizzard2.jpg as well as inside the dated directory, so the
+            # 404 copy satisfied the test whenever it happened to come first.
+            preferred = next(
+                (g for g in group
+                 if entry_path and urlparse(g).path.lower().startswith(entry_path + "/")),
+                group[0],
+            )
             dropped.update(g for g in group if g != preferred)
         return [u for u in urls if u not in dropped]
 
