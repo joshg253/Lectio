@@ -14,7 +14,7 @@ from __future__ import annotations
 import html as html_module
 import logging
 import re
-from urllib.parse import unquote_plus
+from urllib.parse import unquote_plus, urlparse
 import time
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -59,9 +59,15 @@ def _clean_tag_values(values: list[str], cap: int | None = None) -> list[str]:
         if not compact or len(compact) > 60:
             continue
         lowered = compact.lower()
-        if lowered in seen or lowered in JUNK_TAGS:
+        # Dedupe on the NORMALIZED form, which is what the chips are rendered
+        # and dismissed as. A page can state the same taxonomy two ways — a
+        # meta tag saying "Advice & Tips" and the URL path saying "advice tips"
+        # — and a plain lowercase compare keeps both, so the reader sees the
+        # same tag twice and has to dismiss it twice.
+        key = re.sub(r"[^a-z0-9]+", "-", lowered).strip("-") or lowered
+        if key in seen or lowered in JUNK_TAGS:
             continue
-        seen.add(lowered)
+        seen.add(key)
         cleaned.append(compact)
         if cap is not None and len(cleaned) >= cap:
             break
@@ -195,7 +201,107 @@ def _looks_like_a_tag(text: str) -> bool:
     )
 
 
-def extract_page_tags(html: str | None) -> list[str]:
+# Path segments that are structure, not subject. Kept deliberately short: a
+# wrong entry here silently loses a real tag, and the shape rules below already
+# reject most noise.
+_PATH_TAG_STOPWORDS = frozenset({
+    "a", "amp", "article", "articles", "blog", "blogs", "e", "en", "entry",
+    "index", "p", "page", "pages", "post", "posts", "s", "story", "stories",
+    "us", "www",
+})
+_PATH_TAG_SEGMENT_RE = re.compile(r"^[a-z][a-z0-9-]{2,29}$")
+_MAX_PATH_TAGS = 3
+
+
+# Future plc sites (guitarplayer, pcgamer, TechRadar, Tom's Hardware…) publish
+# their taxonomy in one meta tag rather than in links, so no anchor tier sees it:
+#   <meta property="mrf:tags" content="region:GB;articleType:Deals;channel:Music tech;…">
+# Keys worth keeping. `control` is internal plumbing (serversidehawk,
+# print-to-web-archive-free) and `region` is which edition you got, not a subject.
+_MRF_TAG_KEYS = frozenset({"category", "articletype", "channel", "freeform",
+                           "unindexedfreeform"})
+_MRF_META_RE = re.compile(
+    r'<meta[^>]+(?:property|name)=["\']mrf:tags["\'][^>]+content=["\']([^"\']*)["\']',
+    re.IGNORECASE,
+)
+
+
+def tags_from_mrf_meta(html: str | None) -> list[str]:
+    """Taxonomy from a Future plc ``mrf:tags`` meta tag.
+
+    A "DEALS" label shown on the article is stated only here — it is not an
+    anchor anywhere in the page, so every anchor tier missed it.
+
+    **Unescape before splitting.** The pairs are ``;``-separated and the values
+    carry HTML entities, which also end in ``;`` — so a naive split turns
+    ``category:Advice &amp; Tips`` into ``Advice &amp`` plus a stray ``Tips``.
+    """
+    if not html or "mrf:tags" not in html:
+        return []
+    out: list[str] = []
+    for match in _MRF_META_RE.finditer(html):
+        for part in html_module.unescape(match.group(1)).split(";"):
+            key, sep, value = part.partition(":")
+            if not sep:
+                continue
+            if key.strip().lower() not in _MRF_TAG_KEYS:
+                continue
+            value = value.strip()
+            if value and value not in out:
+                out.append(value)
+    return out
+
+
+def tags_from_url_path(url: str | None) -> list[str]:
+    """Taxonomy read from the entry's own URL path.
+
+    ``guitarplayer.com/lessons/advice-tips/<slug>`` states its section and
+    sub-section in the path and links neither, so no anchor tier can see them.
+    This needs no page fetch, which makes it the only tier that works at all on
+    a site that refuses us — gottadeal and realpython both 403 even a browser
+    identity, and their section is still right there in the link.
+
+    The LAST segment is always dropped: it is the article slug, and turning that
+    into a tag would give every post a unique useless one (``realpython.com/
+    ollama/`` has nothing but a slug, and correctly yields nothing).
+
+    Numeric segments go too, so a dated permalink does not file posts under
+    "2026" and "02".
+    """
+    if not url:
+        return []
+    try:
+        path = urlparse(url).path
+    except ValueError:
+        return []
+    segments = [seg for seg in path.split("/") if seg]
+    if len(segments) < 2:
+        return []
+    # A date in the path means this is a permalink, and the segments around it
+    # are the site's own filing (the comic, the blog section) rather than a
+    # subject. tinyview.com/they-can-talk/2026/02/25/blizzard would otherwise
+    # tag every strip with the comic's name — which is the feed itself, so it
+    # says nothing about the post. Not a coverage heuristic: it reads the URL's
+    # SHAPE, and never looks at how often a tag occurs (see the twice-reverted
+    # suppression experiments in Plan.md).
+    if any(seg.isdigit() and len(seg) in (2, 4) for seg in segments):
+        return []
+    out: list[str] = []
+    for seg in segments[:-1]:
+        low = seg.lower()
+        if low in _PATH_TAG_STOPWORDS or low.isdigit():
+            continue
+        if not _PATH_TAG_SEGMENT_RE.match(low):
+            continue
+        value = low.replace("-", " ").strip()
+        if value and value not in out:
+            out.append(value)
+        if len(out) >= _MAX_PATH_TAGS:
+            break
+    return out
+
+
+def extract_page_tags(html: str | None, source_url: str | None = None) -> list[str]:
     """Harvest article tags from a source page — the fallback for entries
     whose feed never delivered <category> data (aged out of the feed window,
     or a publisher that strips tags from RSS). Two tiers:
@@ -206,7 +312,7 @@ def extract_page_tags(html: str | None) -> list[str]:
       Valnet sites (MakeUseOf, How-To-Geek) mark their article tag block.
     """
     if not html:
-        return []
+        return tags_from_url_path(source_url)
     # Generous cap: tag blocks often sit at the BOTTOM of article pages
     # (Valnet's footer tag links live past 300KB on ad-heavy pages), and a
     # regex scan of a few MB is milliseconds. The cap only guards degenerate
@@ -341,6 +447,10 @@ def extract_page_tags(html: str | None) -> list[str]:
     years = {v for v in values if v.isdigit() and len(v) == 4 and 1900 <= int(v) <= 2100}
     if len(years) >= _ARCHIVE_YEAR_RUN:
         values = [v for v in values if v not in years]
+    # The URL path last, so an anchor-derived tag with the site's own casing
+    # and punctuation wins the dedupe over a slug-derived one.
+    values.extend(tags_from_mrf_meta(html))
+    values.extend(tags_from_url_path(source_url))
     return _clean_tag_values(values, cap=_MAX_PAGE_TAGS)
 
 

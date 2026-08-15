@@ -1,0 +1,236 @@
+  <div id="unsub-migrate-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="unsub-migrate-title">
+      <div class="modal-header-row">
+        <h3 id="unsub-migrate-title" class="action-modal-title">Unsubscribe feed</h3>
+        <button type="button" class="modal-close" data-close-modal="unsub-migrate-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <p id="unsub-migrate-body" class="action-modal-hint"></p>
+      <div id="unsub-migrate-curation" hidden>
+        <p id="unsub-migrate-curation-note" class="afd-msg afd-msg--warn"></p>
+        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-keep" value="keep" checked /> Keep curated posts (hide the feed but keep its starred/tagged items — browse them in Saved)</label>
+        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-skip" value="skip" />Just unsubscribe (starred and tagged posts stay in Saved as offline copies)</label>
+        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-move" value="move" /> Move items to another feed:</label>
+        <div id="unsub-migrate-move-panel" hidden>
+          <input id="unsub-migrate-target" class="action-modal-input" list="unsub-migrate-candidates" placeholder="Type to search feeds…" autocomplete="off" />
+          <datalist id="unsub-migrate-candidates"></datalist>
+          <label class="action-modal-label unsub-migrate-select-all-row"><input type="checkbox" id="unsub-migrate-select-all" checked /> Select all</label>
+          <div id="unsub-migrate-items" class="unsub-migrate-items"></div>
+        </div>
+        {# The way out when the feed itself was the mistake. Without it the only
+           options preserve the curation, and a star or tag holds the offline
+           capture — so "just unsubscribe" still leaves the posts in Saved. #}
+        <label class="action-modal-label unsub-migrate-drop-row"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-drop" value="drop" /> Unsubscribe and drop everything (untag, unstar and delete the offline copies)</label>
+        {# Applies to the three keeping choices — the curated items survive in
+           each, they just survive somewhere different. Meaningless under "drop
+           everything", which the JS enforces by disabling it there. Unchecked by
+           default: it reorders the Inbox, which is not what a plain unsubscribe
+           should do unasked. #}
+        <label class="action-modal-label unsub-migrate-restar-row"><input type="checkbox" id="unsub-migrate-restar" /> Star them and set the date to now, so they show at the top of the Inbox</label>
+      </div>
+      <div class="action-modal-actions">
+        <button type="button" class="action-modal-cancel" data-close-modal="unsub-migrate-modal">Cancel</button>
+        <button type="button" id="unsub-migrate-move-only" class="feed-prop-inline-btn" hidden title="Move the checked items to the picked feed and keep this dialog open — repeat with a different feed for the next batch">Move selected</button>
+        <button type="button" id="unsub-migrate-confirm" class="feed-prop-unsubscribe-btn">Unsubscribe</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="move-entry-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="move-entry-title">
+      <div class="modal-header-row">
+        <h3 id="move-entry-title" class="action-modal-title">Move entry to feed</h3>
+        <button type="button" class="modal-close" data-close-modal="move-entry-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <p id="move-entry-body" class="action-modal-hint"></p>
+      <label class="action-modal-label" for="move-entry-target">Target feed</label>
+      <input id="move-entry-target" class="action-modal-input" list="move-entry-candidates" placeholder="Type to search feeds…" autocomplete="off" />
+      <datalist id="move-entry-candidates"></datalist>
+      <p class="action-modal-hint">Carries the entry's star, tags, and read state. The copy left in this feed is marked read.</p>
+      <div class="action-modal-actions">
+        <button type="button" class="action-modal-cancel" data-close-modal="move-entry-modal">Cancel</button>
+        <button type="button" id="move-entry-confirm" class="feed-prop-inline-btn feed-prop-inline-btn--primary" disabled>Move</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="delete-folder-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="delete-folder-title">
+      <div class="modal-header-row">
+        <h3 id="delete-folder-title" class="action-modal-title">Delete folder</h3>
+        <button type="button" class="modal-close" data-close-modal="delete-folder-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <div class="action-modal-body">
+        <p id="delete-folder-message">This folder contains feeds. What should happen to them?</p>
+        <div class="delete-folder-options" style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.5rem">
+          <label style="display:flex;align-items:center;gap:0.5rem">
+            <input type="radio" name="delete-folder-action" value="unsub" checked> Unsubscribe all feeds
+          </label>
+          <label style="display:flex;align-items:center;gap:0.5rem">
+            <input type="radio" name="delete-folder-action" value="move"> Move all feeds to:
+          </label>
+          <select id="delete-folder-target" class="text-input" disabled style="width:100%">
+            <option value="-1">Uncategorized (no folder)</option>
+            {% for folder in folder_options if folder.depth > 0 %}
+            <option value="{{ folder.id }}">{{ folder.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="action-modal-footer">
+        <button type="button" class="btn-secondary" data-close-modal="delete-folder-modal">Cancel</button>
+        <button type="button" id="delete-folder-confirm" class="btn-primary danger">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="tag-rename-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="tag-rename-title">
+      <div class="modal-header-row">
+        <h3 id="tag-rename-title" class="action-modal-title">Rename tag</h3>
+        <button type="button" class="modal-close" data-close-modal="tag-rename-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <div class="action-modal-body">
+        <label for="tag-rename-input" id="tag-rename-label">New name for <strong id="tag-rename-old"></strong>:</label>
+        <input type="text" id="tag-rename-input" class="text-input" autocomplete="off" spellcheck="false" style="margin-top:0.5rem;width:100%">
+        <p id="tag-rename-error" class="form-error" hidden></p>
+      </div>
+      <div class="action-modal-footer">
+        <button type="button" class="btn-secondary" data-close-modal="tag-rename-modal">Cancel</button>
+        <button type="button" id="tag-rename-confirm" class="btn-primary">Rename</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="debug-confirm-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="debug-confirm-title">
+      <div class="modal-header-row">
+        <h3 id="debug-confirm-title" class="action-modal-title">Clear Image Cache</h3>
+        <button type="button" class="modal-close" data-close-modal="debug-confirm-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <p id="debug-confirm-message" class="action-modal-label"></p>
+      <div class="action-modal-actions">
+        <button type="button" class="action-modal-cancel" data-close-modal="debug-confirm-modal">Cancel</button>
+        <button type="button" id="debug-confirm-ok" class="danger">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="save-article-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="sva-title">
+      <div class="modal-header-row">
+        <h3 id="sva-title" class="action-modal-title">Save Article</h3>
+        <button type="button" class="modal-close" data-close-modal="save-article-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <div class="afd-url-row">
+        <input id="sva-url" type="url" placeholder="https://example.com/some-article" autocomplete="off" />
+        <span id="sva-spinner" class="afd-spinner" hidden aria-hidden="true"></span>
+      </div>
+      <div id="sva-msg" class="afd-msg" hidden></div>
+      <p class="action-modal-hint">Saves the page's readable text into <strong>Saved Articles</strong> and stars it, so it's kept offline even if the site goes away.</p>
+      {# Off by default on purpose: full capture keeps nav/sidebar chrome that
+         readability strips, so it is the escape hatch for document-shaped
+         pages, not the better option. Same capture the Re-fetch full page
+         menu item runs, offered before a known-bad shape is captured wrong. #}
+      <label class="sva-fullpage-label"><input type="checkbox" id="sva-fullpage"> Capture the whole page</label>
+      <p class="action-modal-hint sva-fullpage-hint">For pages the reader mangles — a manual, docs-style page whose text is scattered rather than in one article body. Keeps everything, including nav and sidebars, so leave it off unless a normal save came out wrong.</p>
+      <div class="action-modal-actions">
+        <button type="button" class="action-modal-cancel" data-close-modal="save-article-modal">Cancel</button>
+        <button type="button" id="sva-submit" disabled>Save Article</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="global-note-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="global-note-modal-title">
+      <div class="modal-header-row">
+        <h3 id="global-note-modal-title" class="action-modal-title">Global Note</h3>
+        <button type="button" class="modal-close" data-close-modal="global-note-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <form id="global-note-form" method="post" action="/settings/global-note" class="action-modal-form">
+        <textarea id="global-note-text" name="note_text" class="action-modal-textarea" placeholder="Write anything...">{{ global_note or '' }}</textarea>
+        <div class="action-modal-actions">
+          <button type="button" class="action-modal-cancel" data-close-modal="global-note-modal">Cancel</button>
+          <button id="global-note-save" type="submit">Save Note</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="email-article-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="email-article-modal-title">
+      <div class="modal-header-row">
+        <h3 id="email-article-modal-title" class="action-modal-title">Email Article</h3>
+        <button type="button" class="modal-close" data-close-modal="email-article-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <form id="email-article-form" class="action-modal-form">
+        <input type="hidden" id="email-article-feed-url" name="feed_url" value="{{ selected_entry.feed_url if selected_entry else '' }}" />
+        <input type="hidden" id="email-article-entry-id" name="entry_id" value="{{ selected_entry.id if selected_entry else '' }}" />
+        <label class="action-modal-label" for="email-article-to">To</label>
+        {% if email_to_default or email_contacts %}
+        <select id="email-article-contact-select" class="action-modal-input" aria-label="Choose a saved contact">
+          <option value="">— choose a saved contact —</option>
+          {% if email_to_default %}<option value="{{ email_to_default }}">Me ({{ email_to_default }})</option>{% endif %}
+          {% for c in email_contacts or [] %}
+          <option value="{{ c.address }}">{{ c.label }} ({{ c.address }})</option>
+          {% endfor %}
+        </select>
+        {% endif %}
+        <input
+          id="email-article-to"
+          name="to_addr"
+          type="email"
+          class="action-modal-input"
+          value="{{ email_to_default or '' }}"
+          placeholder="you@example.com"
+          required
+          autocomplete="email"
+        />
+        {% if profile_email %}
+        <label class="action-modal-checkbox">
+          <input type="checkbox" id="email-article-cc-me" name="cc_me" value="1" />
+          Cc me ({{ profile_email }}) so replies come back to a thread
+        </label>
+        {% endif %}
+        <div class="action-modal-actions">
+          <button type="button" class="action-modal-cancel" data-close-modal="email-article-modal">Cancel</button>
+          <button id="email-article-send" type="submit">Send</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="reddit-submit-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="reddit-submit-modal-title">
+      <div class="modal-header-row">
+        <h3 id="reddit-submit-modal-title" class="action-modal-title">Submit to Reddit</h3>
+        <button type="button" class="modal-close" aria-label="Close" onclick="document.getElementById('reddit-submit-modal').setAttribute('hidden','')"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <div class="action-modal-form">
+        <label class="action-modal-label" for="reddit-submit-sub">Subreddit</label>
+        <input type="text" id="reddit-submit-sub" class="action-modal-input" placeholder="r/subreddit" maxlength="100" autocomplete="off" />
+        <label class="action-modal-label" for="reddit-submit-title">Title</label>
+        <input type="text" id="reddit-submit-title" class="action-modal-input" placeholder="Post title" maxlength="300" autocomplete="off" />
+        <label class="action-modal-label" for="reddit-submit-url">URL</label>
+        <input type="url" id="reddit-submit-url" class="action-modal-input" placeholder="https://…" maxlength="2000" autocomplete="off" />
+        <p id="reddit-submit-error" class="action-modal-error" style="color:var(--color-error,#c33);margin:0.25rem 0 0"></p>
+        <div class="action-modal-actions">
+          <button type="button" class="action-modal-cancel" id="reddit-submit-cancel">Cancel</button>
+          <button type="button" id="reddit-submit-confirm">Submit</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="action-input-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="action-modal-title">
+      <h3 id="action-modal-title" class="action-modal-title">Add</h3>
+      <form id="action-modal-form" class="action-modal-form">
+        <label for="action-modal-input" id="action-modal-label" class="action-modal-label">Value</label>
+        <input id="action-modal-input" type="text" required />
+        <div class="action-modal-actions">
+          <button type="button" id="action-modal-cancel" class="action-modal-cancel">Cancel</button>
+          <button type="submit" id="action-modal-submit">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>

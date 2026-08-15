@@ -8311,12 +8311,13 @@ lead_image_service = LeadImageService(
 )
 
 
-def _persist_page_tags(feed_url: str, entry_id: str, page_html: str) -> None:
+def _persist_page_tags(feed_url: str, entry_id: str, page_html: str,
+                       source_url: str | None = None) -> None:
     """Background source-HTML fetch sink: persist article-page tags for
     entries the feed never tagged (feed-provided tags stay authoritative)."""
     if feed_tag_service.get_tags_for_entry(feed_url, entry_id):
         return
-    tags = feed_tags_service_mod.extract_page_tags(page_html)
+    tags = feed_tags_service_mod.extract_page_tags(page_html, source_url)
     if tags:
         feed_tag_service.record_entry_tags(feed_url, [(entry_id, tags)])
 
@@ -9123,6 +9124,9 @@ def attachment_links_in_html(content_html: str, base_url: str, exts: list[str]) 
     return found
 
 
+FEED_TAGS_SUPPRESS_ALL = "*"
+
+
 def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     """Feed-provided tags captured at ingest (entry_feed_tags meta table).
 
@@ -9160,6 +9164,13 @@ def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     # while the stored feed tag is "Popular Deals" — a plain lowercase compare
     # gives "popular deals" and misses. Single-word tags normalize to themselves,
     # which is why "python" and "accu" stuck and every multi-word tag came back.
+    # "*" means this feed shows no suggestions at all. Dismissing tag by tag is
+    # whack-a-mole on a feed whose tags are never wanted — a webcomic tagged
+    # "Comics" and "Cartoons" says nothing about the strip, and each new tag the
+    # publisher adds needs dismissing again. Stored in the same table, so it
+    # undoes from the same place (Feed Properties -> Hidden tags).
+    if any((d or "").strip() == FEED_TAGS_SUPPRESS_ALL for d in dismissed):
+        return []
     dismissed_norm = {normalize_tag_value(d) for d in dismissed}
     return [t for t in tags
             if normalize_tag_value(t) not in dismissed_norm][:MAX_FEED_TAG_SUGGESTIONS]
@@ -16074,7 +16085,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             try:
                 _cached_page = lead_image_service.get_cached_source_html(str(entry.link))
                 if _cached_page is not None:
-                    _page_tags = feed_tags_service_mod.extract_page_tags(_cached_page[1])
+                    _page_tags = feed_tags_service_mod.extract_page_tags(
+                        _cached_page[1], str(entry.link))
                     if _page_tags:
                         feed_tag_service.record_entry_tags(
                             str(entry.feed_url), [(str(entry.id), _page_tags)]
@@ -24045,7 +24057,7 @@ def entry_feed_tags_route(
             # directly from the cached page as a last resort.
             cached = lead_image_service.get_cached_source_html(entry_link)
             if cached is not None:
-                page_tags = feed_tags_service_mod.extract_page_tags(cached[1])
+                page_tags = feed_tags_service_mod.extract_page_tags(cached[1], entry_link)
                 if page_tags:
                     feed_tag_service.record_entry_tags(feed_url, [(entry_id, page_tags)])
                     raw_tags = page_tags[:MAX_FEED_TAG_SUGGESTIONS]

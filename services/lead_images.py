@@ -3973,7 +3973,7 @@ class LeadImageService:
             return True
         return event.wait(timeout=timeout)
 
-    def set_page_tag_sink(self, sink: Callable[[str, str, str], None] | None) -> None:
+    def set_page_tag_sink(self, sink: Callable[[str, str, str, str], None] | None) -> None:
         self._page_tag_sink = sink
 
     def queue_source_html_fetch(
@@ -4024,7 +4024,7 @@ class LeadImageService:
                             self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title)
                         if feed_url and entry_id and self._page_tag_sink is not None:
                             try:
-                                self._page_tag_sink(feed_url, entry_id, source_html)
+                                self._page_tag_sink(feed_url, entry_id, source_html, entry_link)
                             except Exception:
                                 LOGGER.warning("page-tag sink failed for %s", entry_link, exc_info=True)
             except Exception:

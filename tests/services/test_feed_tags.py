@@ -221,7 +221,7 @@ def test_no_sink_registered_is_fine():
 
 # --- extract_page_tags (source-page fallback) ---
 
-from services.feed_tags import extract_page_tags  # noqa: E402
+from services.feed_tags import extract_page_tags, tags_from_mrf_meta, tags_from_url_path  # noqa: E402
 
 
 def test_page_tags_article_tag_metas():
@@ -706,3 +706,99 @@ def test_sentence_length_text_is_not_a_tag():
 def test_titled_anchor_still_uses_its_title():
     html = '<a class="tag" title="Real Title" href="/x"> ignored text </a>'
     assert extract_page_tags(html) == ["Real Title"]
+
+
+# --- taxonomy from the entry's own URL path --------------------------------
+# Needs no page fetch, which makes it the only tier that works on a site that
+# refuses us: gottadeal and realpython 403 even a browser identity, and their
+# section is right there in the link.
+
+def test_section_and_subsection_from_path():
+    assert tags_from_url_path(
+        "https://www.guitarplayer.com/lessons/advice-tips/some-long-headline"
+    ) == ["lessons", "advice tips"]
+
+
+def test_single_section():
+    assert tags_from_url_path("https://gottadeal.com/deals/kohls-55-off-475772") == ["deals"]
+
+
+def test_slug_only_yields_nothing():
+    """The last segment is the article, not a taxonomy — tagging it would give
+    every post a unique useless tag."""
+    assert tags_from_url_path("https://realpython.com/ollama/") == []
+    assert tags_from_url_path("https://example.com/just-a-title") == []
+
+
+def test_a_dated_permalink_yields_nothing():
+    """A date in the path means the segments around it are the site's own
+    filing, not a subject: tagging every strip with the comic's name repeats
+    the feed itself. Reads the URL's SHAPE — not how often a tag occurs, which
+    is the suppression approach reverted twice (see Plan.md)."""
+    assert tags_from_url_path("https://lernerpython.com/2026/02/21/uv-version-bump/") == []
+    assert tags_from_url_path("https://tinyview.com/they-can-talk/2026/02/25/blizzard") == []
+    assert tags_from_url_path("https://example.com/tech/2026/some-post") == []
+
+
+def test_a_year_inside_a_slug_is_not_a_date_segment():
+    assert tags_from_url_path(
+        "https://example.com/section/subsection/a-post-2026-roundup"
+    ) == ["section", "subsection"]
+
+
+def test_structure_words_are_dropped():
+    assert tags_from_url_path("https://example.com/blog/post/my-title") == []
+
+
+def test_bad_input_is_safe():
+    for value in (None, "", "not a url", "https://example.com"):
+        assert tags_from_url_path(value) == []
+
+
+def test_path_tags_join_the_page_tags():
+    out = extract_page_tags('<a rel="tag" href="/x">Woot!</a>',
+                            "https://gottadeal.com/deals/a-slug-1")
+    assert "Woot!" in out and "deals" in out
+
+
+def test_path_tags_work_with_no_html_at_all():
+    assert extract_page_tags(None, "https://www.guitarplayer.com/lessons/advice-tips/x") == [
+        "lessons", "advice tips"
+    ]
+
+
+# --- the same taxonomy stated twice ----------------------------------------
+
+def test_meta_and_path_forms_collapse_to_one_chip():
+    """A page can state one taxonomy two ways — a meta tag "Advice & Tips" and
+    the URL path "advice-tips". Deduping on the lowercased string keeps both,
+    so the reader sees the same tag twice and dismisses it twice."""
+    out = extract_page_tags(
+        '<meta property="mrf:tags" content="category:Advice &amp; Tips">',
+        "https://www.guitarplayer.com/lessons/advice-tips/a-headline",
+    )
+    assert out.count("Advice & Tips") == 1
+    assert "advice tips" not in out
+    assert "lessons" in out or "Lessons" in out
+
+
+# --- Future plc mrf:tags ---------------------------------------------------
+
+def test_mrf_meta_taxonomy():
+    html = ('<meta property="mrf:tags" content="region:GB;articleType:Deals;'
+            'channel:Music tech;control:serversidehawk;freeform:Joe Bonamassa">')
+    out = tags_from_mrf_meta(html)
+    assert out == ["Deals", "Music tech", "Joe Bonamassa"]
+
+
+def test_mrf_entities_do_not_split_the_pairs():
+    """Pairs are ';'-separated and values carry entities that also end in ';',
+    so a naive split yields 'Advice &amp' plus a stray 'Tips'."""
+    assert tags_from_mrf_meta(
+        '<meta property="mrf:tags" content="category:Advice &amp; Tips;channel:X">'
+    ) == ["Advice & Tips", "X"]
+
+
+def test_mrf_absent_is_cheap_and_safe():
+    assert tags_from_mrf_meta("<html><body>no meta here</body></html>") == []
+    assert tags_from_mrf_meta(None) == []

@@ -291,5 +291,9 @@ def test_the_chosen_type_persists():
 
 
 def test_the_filter_row_exists_in_the_template():
-    tpl = (main.BASE_DIR / "templates" / "index.html").read_text()
-    assert 'id="hl-rule-type-filter"' in tpl
+    """Searches every template, not index.html alone: the modals were split into
+    partials (_settings_modal.html and friends), and pinning the file this markup
+    happens to live in makes a template reorganization look like a broken
+    feature."""
+    templates = (main.BASE_DIR / "templates").glob("*.html")
+    assert any('id="hl-rule-type-filter"' in t.read_text() for t in templates)

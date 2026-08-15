@@ -4537,13 +4537,26 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     // from a wanted one ("Lessons" — what the post IS); both read as boilerplate
     // to any frequency or feed-name test. A mis-click must not be permanent, and
     // this list is the only place the decision is visible.
+    // The "*" row is the ignore-all switch, not a hidden tag — it drives the
+    // checkbox and is kept out of the per-tag Restore list, or it would render
+    // as a tag literally named "*".
+    const FEED_TAGS_SUPPRESS_ALL = '*';
+
     function renderFeedPropHiddenTags(feedUrl, tags) {
       const list = document.getElementById('feed-prop-hidden-tag-list');
       const empty = document.getElementById('feed-prop-hidden-tag-empty');
+      const ignoreAll = document.getElementById('feed-prop-ignore-all-tags');
       if (!list) return;
       list.textContent = '';
-      const rows = Array.isArray(tags) ? tags : [];
-      if (empty) empty.hidden = rows.length > 0;
+      const all = Array.isArray(tags) ? tags : [];
+      const rows = all.filter((t) => String(t).trim() !== FEED_TAGS_SUPPRESS_ALL);
+      if (ignoreAll) {
+        ignoreAll.checked = all.some((t) => String(t).trim() === FEED_TAGS_SUPPRESS_ALL);
+        ignoreAll.dataset.feedUrl = feedUrl || '';
+        // Per-tag restores are moot while everything is ignored.
+        list.hidden = ignoreAll.checked;
+      }
+      if (empty) empty.hidden = rows.length > 0 || (ignoreAll && ignoreAll.checked);
       for (const tag of rows) {
         const li = document.createElement('li');
         li.className = 'feed-prop-alias-item';
@@ -4559,6 +4572,32 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         list.appendChild(li);
       }
     }
+
+    document.getElementById('feed-prop-ignore-all-tags')?.addEventListener('change', async (event) => {
+      const box = event.target;
+      if (!(box instanceof HTMLInputElement)) return;
+      const feedUrl = box.dataset.feedUrl || '';
+      if (!feedUrl) return;
+      try {
+        const resp = await fetch('/feed-tags/dismiss', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded',
+                     'X-Requested-With': 'lectio-ajax' },
+          body: new URLSearchParams({
+            feed_url: feedUrl,
+            tag: FEED_TAGS_SUPPRESS_ALL,
+            dismissed: box.checked ? '1' : '0',
+          }).toString(),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        renderFeedPropHiddenTags(feedUrl, data.suppressed || []);
+      } catch (err) {
+        box.checked = !box.checked;   // put the switch back; nothing was saved
+        alert('Could not save: ' + (err.message || err));
+      }
+    });
 
     document.getElementById('feed-prop-hidden-tag-list')?.addEventListener('click', async (event) => {
       const btn = event.target instanceof Element
