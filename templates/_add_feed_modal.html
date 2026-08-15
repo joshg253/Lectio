@@ -1,0 +1,97 @@
+  <div id="add-feed-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="afd-title">
+      <div class="modal-header-row">
+        <h3 id="afd-title" class="action-modal-title">Add Feed</h3>
+        <button type="button" class="modal-close" data-close-modal="add-feed-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+
+      <div class="afd-url-row">
+        <input id="afd-url" type="url" placeholder="https://example.com/ or paste a feed URL" autocomplete="off" />
+        <span id="afd-spinner" class="afd-spinner" hidden aria-hidden="true"></span>
+      </div>
+
+      <div id="afd-msg" class="afd-msg" hidden></div>
+
+      <div id="afd-pick" class="afd-pick" hidden></div>
+
+      <div id="afd-devto" class="afd-pf" hidden>
+        <label class="action-modal-label">Tag <span class="action-modal-label-hint">(blank = front page)</span></label>
+        <input id="afd-devto-tag" placeholder="e.g. python" autocomplete="off" />
+        <label class="action-modal-label">Top posts window <span class="action-modal-label-hint">(days; blank = latest posts)</span></label>
+        <input id="afd-devto-top" type="number" min="1" placeholder="e.g. 7" />
+        <label class="action-modal-label">Minimum reactions <span class="action-modal-label-hint">(blank = no minimum)</span></label>
+        <input id="afd-devto-minreact" type="number" min="1" placeholder="e.g. 10" />
+        <label class="action-modal-label">Exclude tags <span class="action-modal-label-hint">(comma-separated, optional)</span></label>
+        <input id="afd-devto-exclude" placeholder="e.g. webdev, career" autocomplete="off" />
+        <label class="fakefeedz-mode-label"><input type="checkbox" id="afd-devto-english" checked /> English-only (uses dev.to's own language label)</label>
+      </div>
+
+      <details id="afd-pf" class="afd-pf" hidden>
+        <summary class="afd-pf-toggle">Page Feed options</summary>
+        <label class="action-modal-label">Feed title <span class="action-modal-label-hint">(optional)</span></label>
+        <input id="afd-pf-title" placeholder="Detected from page title" />
+        <label class="action-modal-label">Scraping mode</label>
+        <div class="fakefeedz-modes">
+          <label class="fakefeedz-mode-label"><input type="radio" name="afd-mode" value="link_list" checked /> <strong>Link list</strong> — new links on the page become entries</label>
+          <label class="fakefeedz-mode-label"><input type="radio" name="afd-mode" value="change_detect" /> <strong>Change detect</strong> — entry posted when page content changes</label>
+        </div>
+        <label class="action-modal-label">CSS selector <span class="action-modal-label-hint">(optional)</span></label>
+        <div class="afd-pf-selector-row">
+          <input id="afd-pf-selector" placeholder="e.g. .changelog a, article a" />
+          <button type="button" id="afd-pf-pick-btn" class="afd-pf-preview-btn" hidden>Pick from page</button>
+          <button type="button" id="afd-pf-preview-btn" class="afd-pf-preview-btn">Preview</button>
+        </div>
+        <p class="action-modal-hint">For link list, selects link elements (a container like <code>ul &gt; li</code> also works). For change detect, selects the content region to watch.</p>
+        <div id="afd-pf-suggestions" class="afd-pf-suggestions" hidden>
+          <span class="afd-pf-suggest-label">Suggested:</span>
+          <span id="afd-pf-suggestions-chips"></span>
+        </div>
+        <div id="afd-pf-picker" class="afd-pf-picker" hidden>
+          <div class="afd-pf-picker-head"><span>Click a headline link in the page to build a selector.</span><button type="button" id="afd-pf-picker-close" class="afd-pf-picker-close" title="Close picker">×</button></div>
+          <iframe id="afd-pf-picker-frame" class="afd-pf-picker-frame" title="Page picker" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        </div>
+        <div id="afd-pf-preview" class="afd-pf-preview" hidden></div>
+        <label class="fakefeedz-mode-label afd-pf-backfill"><input type="checkbox" id="afd-pf-backfill" /> Include items already on the page (backfill), not just new ones</label>
+      </details>
+
+      <label for="afd-folder" class="action-modal-label">Folder</label>
+      <select id="afd-folder">
+        {% for folder in folder_options %}
+        {% if folder.depth == 0 %}
+        <option value="{{ folder.id }}" {% if folder.id == selected_folder_id %}selected{% endif %}>{{ folder.name }}</option>
+        {% else %}
+        <option value="{{ folder.id }}" {% if folder.id == selected_folder_id %}selected{% endif %}>&#8195;{{ folder.name }}</option>
+        {% endif %}
+        {% endfor %}
+        <option value="__new__">+ New folder…</option>
+      </select>
+      <div id="afd-new-folder" class="afd-new-folder" hidden>
+        <input id="afd-new-folder-name" placeholder="Folder name" />
+        <button type="button" id="afd-new-folder-btn">Create</button>
+      </div>
+
+      <div class="action-modal-actions">
+        <button type="button" class="action-modal-cancel" data-close-modal="add-feed-modal">Cancel</button>
+        <button type="button" id="afd-submit" disabled>Add Feed</button>
+      </div>
+
+      <form id="afd-feed-form" method="post" action="/feeds" hidden>
+        <input type="hidden" name="feed_url" id="afd-ff-url" />
+        <input type="hidden" name="folder_id" id="afd-ff-folder" />
+        <input type="hidden" name="devto_tag" id="afd-ff-devto-tag" />
+        <input type="hidden" name="devto_top_days" id="afd-ff-devto-top" />
+        <input type="hidden" name="devto_english_only" id="afd-ff-devto-english" />
+        <input type="hidden" name="devto_min_reactions" id="afd-ff-devto-minreact" />
+        <input type="hidden" name="devto_tags_exclude" id="afd-ff-devto-exclude" />
+        <input type="hidden" name="force" id="afd-ff-force" value="" />
+      </form>
+      <form id="afd-pf-form" method="post" action="/scraped-feeds" hidden>
+        <input type="hidden" name="source_url" id="afd-pff-url" />
+        <input type="hidden" name="folder_id" id="afd-pff-folder" />
+        <input type="hidden" name="mode" id="afd-pff-mode" />
+        <input type="hidden" name="feed_title" id="afd-pff-title" />
+        <input type="hidden" name="selector" id="afd-pff-selector" />
+        <input type="hidden" name="backfill" id="afd-pff-backfill" />
+      </form>
+    </div>
+  </div>
