@@ -229,7 +229,7 @@ class MinifluxService:
             result.append({
                 "id": fid,
                 "user_id": 1,
-                "title": f.title or url,
+                "title": getattr(f, "user_title", None) or f.title or url,
                 "site_url": str(f.link or ""),
                 "feed_url": url,
                 "checked_at": _iso(f.updated),

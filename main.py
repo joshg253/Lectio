@@ -2236,7 +2236,7 @@ async def lifespan(app: FastAPI):
                         entry_id,
                         str(getattr(entry, "title", None) or ""),
                         str(getattr(entry, "link", None) or ""),
-                        str(getattr(feed, "title", None) or ""),
+                        str(getattr(feed, "resolved_title", None) or getattr(feed, "title", None) or ""),
                         read_at,
                     ))
             if not to_insert:
@@ -5693,7 +5693,7 @@ def _safe_dedup_norm_body(entry) -> str:
 def _safe_dedup_collect(reader, feed_urls: set[str], max_per_feed: int, read_filter) -> list[dict]:
     """Read entries from each feed and build the record list for safe-dedup."""
     records: list[dict] = []
-    feed_title_map = {f.url: (f.title or str(f.url)) for f in reader.get_feeds()}
+    feed_title_map = {f.url: (f.resolved_title or f.title or str(f.url)) for f in reader.get_feeds()}
     for feed_url in feed_urls:
         try:
             kwargs: dict = {"feed": feed_url, "limit": max_per_feed}
@@ -5928,7 +5928,7 @@ def _dry_run_dedup(
     per_feed_limit = max(1, max_entries // max(1, len(feed_urls)))
 
     with get_reader() as reader:
-        feed_title_map = {f.url: (f.title or str(f.url)) for f in reader.get_feeds()}
+        feed_title_map = {f.url: (f.resolved_title or f.title or str(f.url)) for f in reader.get_feeds()}
         slug_index: dict[str, list[dict]] = {}
         title_index: dict[str, list[dict]] = {}
         combined_index: dict[tuple[str, str], list[dict]] = {}
@@ -6096,7 +6096,7 @@ def _dry_run_pattern(
     total_matches = 0
 
     with get_reader() as reader:
-        feed_title_map = {str(f.url): (f.title or str(f.url)) for f in reader.get_feeds()}
+        feed_title_map = {str(f.url): (f.resolved_title or f.title or str(f.url)) for f in reader.get_feeds()}
 
         def iter_entries():
             if feed_urls is None:
@@ -6430,7 +6430,7 @@ def _run_now_pattern(
                     if fu not in feed_title_cache:
                         try:
                             f = reader.get_feed(fu)
-                            feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
+                            feed_title_cache[fu] = str(getattr(f, "resolved_title", None) or getattr(f, "title", None) or fu)
                         except Exception:
                             feed_title_cache[fu] = fu
                     matched_entries.append({
@@ -6576,7 +6576,7 @@ def _run_tag_filter(
             if fu not in feed_title_cache:
                 try:
                     f = reader.get_feed(fu)
-                    feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
+                    feed_title_cache[fu] = str(getattr(f, "resolved_title", None) or getattr(f, "title", None) or fu)
                 except Exception:
                     feed_title_cache[fu] = fu
             return feed_title_cache[fu]
@@ -7427,7 +7427,7 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                             if fu not in feed_title_cache:
                                 try:
                                     f = reader.get_feed(fu)
-                                    feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
+                                    feed_title_cache[fu] = str(getattr(f, "resolved_title", None) or getattr(f, "title", None) or fu)
                                 except Exception:
                                     feed_title_cache[fu] = fu
 
@@ -7558,7 +7558,7 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                             if fu not in feed_title_cache:
                                 try:
                                     f = reader.get_feed(fu)
-                                    feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
+                                    feed_title_cache[fu] = str(getattr(f, "resolved_title", None) or getattr(f, "title", None) or fu)
                                 except Exception:
                                     feed_title_cache[fu] = fu
 
@@ -13639,7 +13639,7 @@ def mark_entry_read_everywhere(feed_url: str, entry_id: str) -> None:
             feed_url, entry_id,
             str(getattr(entry, "title", None) or ""),
             str(getattr(entry, "link", None) or ""),
-            str(getattr(feed, "title", None) or ""),
+            str(getattr(feed, "resolved_title", None) or getattr(feed, "title", None) or ""),
         )
     except Exception:
         LOGGER.warning("mark_entry_read_everywhere: history append failed for %s/%s",
