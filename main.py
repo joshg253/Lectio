@@ -4641,6 +4641,15 @@ _HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "dedupli
 _HIGHLIGHT_VALID_SEARCH_IN = {"title", "body", "both"}
 _HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
 _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
+_DEDUP_FUZZY_PCT_DEFAULT = 80
+
+def _dedup_fuzzy_threshold(pct: int | None) -> float:
+    """Percent knob -> similarity ratio. Below 50% fuzzy matches near-anything."""
+    try:
+        v = int(pct if pct is not None else _DEDUP_FUZZY_PCT_DEFAULT)
+    except (TypeError, ValueError):
+        v = _DEDUP_FUZZY_PCT_DEFAULT
+    return max(50, min(100, v)) / 100.0
 
 
 def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
@@ -5925,6 +5934,7 @@ def _dry_run_dedup(
     max_entries: int = 5000,
     exclude_scope_ids: str = "",
     custom_feed_urls: set[str] | None = None,
+    fuzzy_threshold: float = 0.80,
 ) -> dict:
     """Preview which entries a deduplicate rule would mark read."""
     feed_urls = _resolve_dedup_feed_urls(conn, scope, scope_id, exclude_scope_ids, custom_feed_urls)
@@ -6026,7 +6036,7 @@ def _dry_run_dedup(
     groups: list[dict] = []
     seen_links: set[str] = set()
     window_secs = window_hours * 3600
-    _FUZZY_THRESHOLD = 0.80
+    _FUZZY_THRESHOLD = fuzzy_threshold
 
     if match_method == "slug":
         for slug, entries in slug_index.items():
@@ -6213,6 +6223,7 @@ def _run_now_dedup(
     window_hours: int,
     max_per_feed: int = 500,
     exclude_scope_ids: str = "",
+    fuzzy_threshold: float = 0.80,
 ) -> dict:
     """Execute dedup rule on unread entries. Mark newer duplicates as read."""
     global _unread_counts_generation
@@ -6276,7 +6287,7 @@ def _run_now_dedup(
     combined_index: dict[tuple[str, str], list[dict]] = {}
     fuzzy_entries: dict[str, list[dict]] = {}
     window_secs = window_hours * 3600
-    _FUZZY_THRESHOLD = 0.80
+    _FUZZY_THRESHOLD = fuzzy_threshold
 
     with get_reader() as reader:
         for feed_url in feed_urls:
@@ -24409,6 +24420,7 @@ def rules_dry_run_route(
     search_in: str = Query("title"),
     dedup_window_hours: int = Query(168),
     exclude_scope_ids: str = Query(""),
+    fuzzy_pct: int = Query(_DEDUP_FUZZY_PCT_DEFAULT),
     feed_urls: str = Query(""),  # comma-separated; overrides scope for dedup
     yt_include_shorts: int = Query(1),
     yt_min_minutes: int = Query(0),
@@ -24423,7 +24435,8 @@ def rules_dry_run_route(
             if feed_urls:
                 custom = {u.strip() for u in feed_urls.split(",") if u.strip()}
             result = _dry_run_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
-                                    exclude_scope_ids=exclude_scope_ids, custom_feed_urls=custom)
+                                    exclude_scope_ids=exclude_scope_ids, custom_feed_urls=custom,
+                                    fuzzy_threshold=_dedup_fuzzy_threshold(fuzzy_pct))
         elif type in ("highlight", "mark_as_read", "email_article", "webhook", "youtube_playlist",
                       "instapaper", "quire", "save_article"):
             # youtube_playlist's keyword is an optional filter — a blank keyword
@@ -24547,6 +24560,7 @@ def rules_run_now_route(
     search_in: str = Form("title"),
     dedup_window_hours: int = Form(168),
     exclude_scope_ids: str = Form(""),
+    fuzzy_pct: int = Form(_DEDUP_FUZZY_PCT_DEFAULT),
 ):
     with get_meta_connection() as conn:
         if type == "deduplicate":
@@ -24557,7 +24571,8 @@ def rules_run_now_route(
             # high-volume feeds — e.g. entries restored to unread days later.
             result = _run_now_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
                                     max_per_feed=10000,
-                                    exclude_scope_ids=exclude_scope_ids)
+                                    exclude_scope_ids=exclude_scope_ids,
+                                    fuzzy_threshold=_dedup_fuzzy_threshold(fuzzy_pct))
         elif type == "mark_as_read":
             result = _run_now_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in)
         elif type == "tag_filter":

@@ -6906,6 +6906,33 @@ mark.highlight-mark {
 .hl-compare-mode { font-weight: 600; min-width: 6rem; }
 .hl-compare-groups { color: var(--muted, #888); min-width: 6rem; }
 .hl-compare-mark { color: var(--muted, #888); flex: 1; }
+.hl-compare-unique { color: var(--muted, #888); white-space: nowrap; }
+.hl-compare-fuzz {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 0.3rem 0 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted, #888);
+}
+.hl-compare-fuzz-label { display: flex; align-items: center; gap: 0.4rem; }
+.hl-compare-fuzz-slider { width: 10rem; max-width: 40vw; accent-color: var(--accent, #4f89ab); }
+.hl-compare-fuzz-val { font-weight: 600; color: var(--ink, #222); min-width: 2.6rem; }
+.hl-compare-fuzz-run { margin: 0; }
+.hl-compare-fuzz-run:disabled { opacity: 0.45; cursor: default; }
+.hl-compare-consensus-toggle {
+  display: block;
+  margin: 0 0 0.35rem;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--line, #ccc);
+  border-radius: 3px;
+  background: none;
+  color: var(--muted, #888);
+  cursor: pointer;
+}
+.hl-compare-consensus-toggle:hover { color: var(--accent, #4f89ab); border-color: var(--accent, #4f89ab); }
 .hl-compare-expand {
   margin-left: auto;
   padding: 0.1rem 0.4rem;

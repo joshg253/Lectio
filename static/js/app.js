@@ -9685,9 +9685,21 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
 
       const _hlCmpModes = ['slug', 'title', 'both', 'fuzzy'];
       const _hlCmpModeLabels = { slug: 'URL Slug', title: 'Title', both: 'Slug+Title', fuzzy: 'Fuzzy' };
+      const _hlFuzzyPctDefault = 80;
 
-      function hlBuildModeComparisonWrap(results, activeMode) {
+      // One dry-run per mode. Only Fuzzy depends on the % knob, so a re-run at a new
+      // threshold reuses the other three results instead of re-querying them.
+      function hlFetchAllModes(baseParams, fuzzyPct, priorResults) {
+        return Promise.all(_hlCmpModes.map((m, i) => {
+          if (priorResults && m !== 'fuzzy') return Promise.resolve(priorResults[i]);
+          const qs = new URLSearchParams({ ...baseParams, type: 'deduplicate', keyword: m, fuzzy_pct: String(fuzzyPct) });
+          return fetch('/rules/dry-run?' + qs, { credentials: 'same-origin' }).then(r => r.json());
+        }));
+      }
+
+      function hlBuildModeComparisonWrap(results, activeMode, refetch, fuzzyPct) {
         const modes = _hlCmpModes, modeLabels = _hlCmpModeLabels;
+        const curPct = fuzzyPct || _hlFuzzyPctDefault;
         function makePairEl(p) {
           const pairKey = (p.keep.link || p.keep.title || '') + '||' + (p.mark.link || p.mark.title || '');
           const isFalse = hlFalseMatches.has(pairKey);
@@ -9746,13 +9758,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
               if (!resultEl.hidden) { resultEl.hidden = true; pairCmpBtn.textContent = 'Compare feeds'; return; }
               pairCmpBtn.disabled = true; pairCmpBtn.textContent = 'Comparing…';
               try {
-                const feedUrlsParam = [p.keep.feed_url, p.mark.feed_url].join(',');
-                const results = await Promise.all(_hlCmpModes.map(m => {
-                  const qs = new URLSearchParams({ type: 'deduplicate', scope: 'global', keyword: m, feed_urls: feedUrlsParam, dedup_window_hours: 168 });
-                  return fetch('/rules/dry-run?' + qs, { credentials: 'same-origin' }).then(r => r.json());
-                }));
+                const base = { scope: 'global', feed_urls: [p.keep.feed_url, p.mark.feed_url].join(','), dedup_window_hours: '168' };
+                const refetch = (pct, prior) => hlFetchAllModes(base, pct, prior);
+                const results = await hlFetchAllModes(base, _hlFuzzyPctDefault);
                 resultEl.innerHTML = '';
-                resultEl.appendChild(hlBuildModeComparisonWrap(results, null));
+                resultEl.appendChild(hlBuildModeComparisonWrap(results, null, refetch, _hlFuzzyPctDefault));
                 resultEl.hidden = false;
                 pairCmpBtn.textContent = 'Hide compare';
               } catch { pairCmpBtn.textContent = 'Compare feeds'; }
@@ -9780,6 +9790,76 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         }
         const wrap = document.createElement('div');
         wrap.className = 'hl-compare-wrap';
+
+        if (refetch) {
+          const ctl = document.createElement('div');
+          ctl.className = 'hl-compare-fuzz';
+          const lbl = document.createElement('label');
+          lbl.className = 'hl-compare-fuzz-label';
+          lbl.textContent = 'Fuzzy title match ≥';
+          const slider = document.createElement('input');
+          slider.type = 'range'; slider.min = '50'; slider.max = '100'; slider.step = '1';
+          slider.value = String(curPct);
+          slider.className = 'hl-compare-fuzz-slider';
+          const out = document.createElement('span');
+          out.className = 'hl-compare-fuzz-val';
+          out.textContent = curPct + '%';
+          const runBtn = document.createElement('button');
+          runBtn.type = 'button';
+          runBtn.className = 'hl-dryrun-compare-btn hl-compare-fuzz-run';
+          runBtn.textContent = 'Re-run';
+          runBtn.disabled = true;
+          slider.addEventListener('input', () => {
+            out.textContent = slider.value + '%';
+            runBtn.disabled = Number(slider.value) === curPct;
+          });
+          runBtn.addEventListener('click', async () => {
+            const pct = Number(slider.value);
+            runBtn.disabled = true; runBtn.textContent = 'Re-running…';
+            try {
+              const next = await refetch(pct, results);
+              wrap.replaceWith(hlBuildModeComparisonWrap(next, activeMode, refetch, pct));
+            } catch { runBtn.textContent = 'Re-run failed'; runBtn.disabled = false; }
+          });
+          lbl.appendChild(slider); lbl.appendChild(out);
+          ctl.appendChild(lbl); ctl.appendChild(runBtn);
+          wrap.appendChild(ctl);
+        }
+
+        // Which modes found each keep/mark pair — computed up front so the per-mode
+        // detail panels can hide the pairs every mode agrees on.
+        const pairMap = new Map();
+        modes.forEach((m, mi) => {
+          const d = results[mi];
+          if (!d.groups) return;
+          for (const g of d.groups) {
+            const keepKey = g.keep.link || g.keep.title || '';
+            for (const e of g.mark_read) {
+              const markKey = e.link || e.title || '';
+              if (!markKey) continue;
+              const pairKey = keepKey + '||' + markKey;
+              if (!pairMap.has(pairKey)) pairMap.set(pairKey, { keep: g.keep, mark: e, modes: new Set() });
+              pairMap.get(pairKey).modes.add(m);
+            }
+          }
+        });
+        const allPairs = [...pairMap.values()].map(p => ({ ...p, modes: [...p.modes] }))
+          .sort((a, b) => a.modes.length - b.modes.length || (a.mark.title || '').localeCompare(b.mark.title || ''));
+        const consensusKeys = new Set();
+        for (const [k, p] of pairMap) if (p.modes.size === modes.length) consensusKeys.add(k);
+        function stripConsensus(d) {
+          const groups = [];
+          let wouldMark = 0;
+          for (const g of (d.groups || [])) {
+            const keepKey = g.keep.link || g.keep.title || '';
+            const rest = (g.mark_read || []).filter(e => !consensusKeys.has(keepKey + '||' + (e.link || e.title || '')));
+            if (rest.length === 0) continue;
+            groups.push({ ...g, mark_read: rest });
+            wouldMark += rest.length;
+          }
+          return { ...d, groups, total_would_mark_read: wouldMark };
+        }
+
         const tbl = document.createElement('div');
         tbl.className = 'hl-compare-table';
         modes.forEach((m, mi) => {
@@ -9794,14 +9874,37 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           modeSpan.appendChild(badge);
           const grpSpan = document.createElement('span');
           grpSpan.className = 'hl-compare-groups';
-          grpSpan.textContent = (d.groups ? d.groups.length : '—') + ' groups';
+          grpSpan.textContent = (d.groups ? d.groups.length : '—') + ' group' + (d.groups && d.groups.length === 1 ? '' : 's');
           const markSpan = document.createElement('span');
           markSpan.className = 'hl-compare-mark';
           markSpan.textContent = (d.total_would_mark_read !== undefined ? d.total_would_mark_read : '—') + ' mark read';
+          const dOutliers = stripConsensus(d);
+          const consensusHidden = (d.total_would_mark_read || 0) - (dOutliers.total_would_mark_read || 0);
+          const onlyCount = allPairs.filter(p => p.modes.length === 1 && p.modes[0] === m).length;
+          const uniqueSpan = document.createElement('span');
+          uniqueSpan.className = 'hl-compare-unique';
+          uniqueSpan.textContent = onlyCount + ' only this mode';
+          uniqueSpan.title = 'Pairs no other mode caught';
           const detailPanel = document.createElement('div');
           detailPanel.className = 'hl-rule-dryrun-panel hl-compare-detail-panel';
           detailPanel.dataset.comparePanel = '1';
           detailPanel.hidden = true;
+          const detailBody = document.createElement('div');
+          detailBody.dataset.comparePanel = '1';
+          const consensusBtn = document.createElement('button');
+          consensusBtn.type = 'button';
+          consensusBtn.className = 'hl-compare-consensus-toggle';
+          consensusBtn.hidden = consensusHidden === 0;
+          let hideConsensus = true;
+          const renderDetail = () => {
+            consensusBtn.textContent = hideConsensus
+              ? 'Differences only — ' + consensusHidden + ' pair' + (consensusHidden === 1 ? '' : 's') + ' all modes agree on hidden · Show all'
+              : 'All pairs shown · Hide the ' + consensusHidden + ' all modes agree on';
+            hlRenderDryRunResult(detailBody, { ...(hideConsensus ? dOutliers : d), type: 'deduplicate' }, null);
+          };
+          consensusBtn.addEventListener('click', () => { hideConsensus = !hideConsensus; renderDetail(); });
+          detailPanel.appendChild(consensusBtn);
+          detailPanel.appendChild(detailBody);
           const expandBtn = document.createElement('button');
           expandBtn.type = 'button';
           expandBtn.className = 'hl-compare-expand';
@@ -9810,53 +9913,29 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             if (detailPanel.hidden) {
               detailPanel.hidden = false; expandBtn.textContent = 'Hide';
               if (!detailPanel.dataset.rendered) {
-                hlRenderDryRunResult(detailPanel, { ...d, type: 'deduplicate' }, null);
+                renderDetail();
                 detailPanel.dataset.rendered = '1';
               }
             } else { detailPanel.hidden = true; expandBtn.textContent = 'Details'; }
           });
           rowEl.appendChild(modeSpan); rowEl.appendChild(grpSpan);
-          rowEl.appendChild(markSpan); rowEl.appendChild(expandBtn);
+          rowEl.appendChild(markSpan); rowEl.appendChild(uniqueSpan); rowEl.appendChild(expandBtn);
           tbl.appendChild(rowEl);
           tbl.appendChild(detailPanel);
         });
         wrap.appendChild(tbl);
-        const pairMap = new Map();
-        modes.forEach((m, mi) => {
-          const d = results[mi];
-          if (!d.groups) return;
-          for (const g of d.groups) {
-            const keepKey = g.keep.link || g.keep.title || '';
-            for (const e of g.mark_read) {
-              const markKey = e.link || e.title || '';
-              const pairKey = keepKey + '||' + markKey;
-              if (!markKey) continue;
-              if (!pairMap.has(pairKey)) pairMap.set(pairKey, { keep: g.keep, mark: e, modes: new Set() });
-              pairMap.get(pairKey).modes.add(m);
-            }
-          }
-        });
-        const allPairs = [...pairMap.values()].map(p => ({ ...p, modes: [...p.modes] }))
-          .sort((a, b) => b.modes.length - a.modes.length || (a.mark.title || '').localeCompare(b.mark.title || ''));
         const totalPairs = allPairs.length;
         if (totalPairs > 0) {
           const ovHdr = document.createElement('div');
           ovHdr.className = 'hl-compare-overlap-hdr';
-          ovHdr.textContent = totalPairs + ' duplicate pair' + (totalPairs === 1 ? '' : 's') + ' across all modes';
+          ovHdr.textContent = totalPairs + ' duplicate pair' + (totalPairs === 1 ? '' : 's') + ' across all modes · '
+            + (totalPairs - consensusKeys.size) + ' where the modes disagree · ' + consensusKeys.size + ' found by all ' + modes.length;
           wrap.appendChild(ovHdr);
-          for (const [minCount, label, cls, open] of [
-            [4, 'All 4 modes agree', 'hl-cmp-bucket--4', true],
-            [3, '3 modes agree',     'hl-cmp-bucket--3', true],
-            [2, '2 modes agree',     'hl-cmp-bucket--2', true],
-          ]) {
-            const sec = makeBucketSection(label, cls, allPairs.filter(p => p.modes.length === minCount), open);
-            if (sec) wrap.appendChild(sec);
-          }
           const singlePairs = allPairs.filter(p => p.modes.length === 1);
           if (singlePairs.length > 0) {
             const outerSec = document.createElement('details');
             outerSec.className = 'hl-cmp-bucket hl-cmp-bucket--1';
-            outerSec.open = false;
+            outerSec.open = true;
             const outerSum = document.createElement('summary');
             outerSum.className = 'hl-cmp-bucket-summary';
             outerSum.textContent = 'Single mode only — review for false positives (' + singlePairs.length + ')';
@@ -9866,7 +9945,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
               if (mPairs.length === 0) continue;
               const subSec = document.createElement('details');
               subSec.className = 'hl-cmp-bucket hl-cmp-bucket--1-sub';
-              subSec.open = false;
+              subSec.open = mPairs.length <= 25;  // outliers are the point; only a long tail stays folded
               const subSum = document.createElement('summary');
               subSum.className = 'hl-cmp-bucket-summary hl-cmp-bucket-summary--sub';
               const subBadge = document.createElement('span');
@@ -9879,6 +9958,14 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
               outerSec.appendChild(subSec);
             }
             wrap.appendChild(outerSec);
+          }
+          for (const [count, label, cls, open] of [
+            [2, '2 modes agree', 'hl-cmp-bucket--2', true],
+            [3, '3 modes agree', 'hl-cmp-bucket--3', true],
+            [modes.length, 'All ' + modes.length + ' modes agree — consensus', 'hl-cmp-bucket--4', false],
+          ]) {
+            const sec = makeBucketSection(label, cls, allPairs.filter(p => p.modes.length === count), open);
+            if (sec) wrap.appendChild(sec);
           }
         }
         return wrap;
@@ -10740,15 +10827,16 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             cmpBtn.textContent = 'Compare all modes';
             cmpBtn.addEventListener('click', async () => {
               cmpBtn.disabled = true; cmpBtn.textContent = 'Comparing…';
-              const modes = ['slug', 'title', 'both', 'fuzzy'];
-              const modeLabels = { slug: 'URL Slug', title: 'Title', both: 'Slug+Title', fuzzy: 'Fuzzy' };
               try {
-                const results = await Promise.all(modes.map(m => {
-                  const qs = new URLSearchParams({ type: 'deduplicate', scope: rule.scope, scope_id: rule.scope_id || '', keyword: m, dedup_window_hours: rule.dedup_window_hours || 168, exclude_scope_ids: rule.exclude_scope_ids || '' });
-                  return fetch('/rules/dry-run?' + qs, { credentials: 'same-origin' }).then(r => r.json());
-                }));
+                const base = {
+                  scope: rule.scope, scope_id: rule.scope_id || '',
+                  dedup_window_hours: String(rule.dedup_window_hours || 168),
+                  exclude_scope_ids: rule.exclude_scope_ids || '',
+                };
+                const refetch = (pct, prior) => hlFetchAllModes(base, pct, prior);
+                const results = await hlFetchAllModes(base, _hlFuzzyPctDefault);
 
-                cmpBtn.replaceWith(hlBuildModeComparisonWrap(results, rule.keyword));
+                cmpBtn.replaceWith(hlBuildModeComparisonWrap(results, rule.keyword, refetch, _hlFuzzyPctDefault));
               } catch (err) { cmpBtn.textContent = 'Compare failed'; cmpBtn.disabled = false; }
             });
             panel.appendChild(cmpBtn);
@@ -10783,13 +10871,13 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
                 if (urlA === urlB) { window.alert('Select two different feeds.'); return; }
                 runBtn.disabled = true; runBtn.textContent = 'Comparing…';
                 try {
-                  const feedUrlsParam = [urlA, urlB].join(',');
-                  const windowHours = rule ? (rule.dedup_window_hours || 168) : 168;
-                  const results = await Promise.all(_hlCmpModes.map(m => {
-                    const qs = new URLSearchParams({ type: 'deduplicate', scope: 'global', keyword: m, feed_urls: feedUrlsParam, dedup_window_hours: windowHours });
-                    return fetch('/rules/dry-run?' + qs, { credentials: 'same-origin' }).then(r => r.json());
-                  }));
-                  form.replaceWith(hlBuildModeComparisonWrap(results, null));
+                  const base = {
+                    scope: 'global', feed_urls: [urlA, urlB].join(','),
+                    dedup_window_hours: String(rule ? (rule.dedup_window_hours || 168) : 168),
+                  };
+                  const refetch = (pct, prior) => hlFetchAllModes(base, pct, prior);
+                  const results = await hlFetchAllModes(base, _hlFuzzyPctDefault);
+                  form.replaceWith(hlBuildModeComparisonWrap(results, null, refetch, _hlFuzzyPctDefault));
                 } catch { runBtn.disabled = false; runBtn.textContent = 'Compare'; window.alert('Compare failed.'); }
               });
               form.appendChild(selA); form.appendChild(selB); form.appendChild(runBtn);
