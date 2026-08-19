@@ -317,6 +317,18 @@ a fourth feed wants it; not before.
 **Check what the feed already provides before writing a plugin** — two of three
 needed derivation, one needed only the right strategy.
 
+### Signed image URLs rot, and the cache is not catching them
+
+**Measured 2026-08-18.** Of 120,302 stored lead-image URLs, 22,903 are DeviantArt wixmp links signed with a `?token=` JWT, and **only 583 (2.5%) have bytes in the image cache**. Everything else signed is 75 rows. A spot-checked entry: wixmp host, no cached bytes, live fetch HTTP 400. Unrecoverable from the stored URL. This decays continuously — every new DeviantArt entry starts a timer.
+
+`_IMG_CACHE_VOLATILE_PARAMS` strips the token from the *cache key*, which is sound but does far less than its comment claimed: the bytes still have to have been fetched once while the token was valid, and to have survived `last_accessed` eviction since. For a feed not opened within the token's lifetime that race is lost every time. (Comment corrected 2026-08-18.)
+
+**Stop the bleeding: pin thumbnail-sized bytes during the enhance pass**, while the token is fresh. About 25 KB each against the ~121 KB average currently in the cache, and host-agnostic, so it covers any future signing CDN rather than DeviantArt alone. Same pinning mechanism as the per-feed thumbnail (`_feed_thumb_cache_key`, exempt from eviction) — that one is keyed per feed; this wants keying per entry. Does nothing for what has already expired.
+
+**Heal the scar: re-resolve dead ones through the DeviantArt API.** Every one of the 22,884 DA entries stores the deviation UUID as its entry id (all 50 guids in a sample feed are UUIDs), so a fresh image URL is one API call away per deviation. Wants to be a paced background backfill, not a one-shot — DA rate limits. DeviantArt-only, unlike the pinning.
+
+Build the pinning first: self-contained, no API budget, no pacing to get right, and it turns the backfill into a one-time cleanup instead of a permanent crutch.
+
 ### og_scrape feeds with no og:image at all
 
 Found in the 2026-08-13 lead-image sweep, **no action taken.** Of 585

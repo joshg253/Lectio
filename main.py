@@ -32767,11 +32767,15 @@ def _img_cache_store(cache_key: str, body: bytes, content_type: str) -> None:
         LOGGER.warning("[img-cache] store failed for %s", cache_key, exc_info=True)
 
 
-# Query params that are per-request signing tokens, not image identity. Stripping
-# them from the cache key lets a signed-CDN image (GitHub private-user-images JWT,
-# wixmp/S3 ?token/X-Amz-*) stay cache-resident across token rotations, so it keeps
-# loading after the original short-lived URL expires. The full URL (with token) is
-# still used for the actual fetch.
+# Query params that are per-request signing tokens, not image identity. Stripping them from the cache key
+# lets a signed-CDN image (GitHub private-user-images JWT, wixmp/S3 ?token/X-Amz-*) stay cache-resident
+# across token rotations. The full URL (with token) is still used for the actual fetch.
+#
+# This does NOT mean a signed image keeps loading after its URL expires, which is what this comment used to
+# claim. Two preconditions have to hold: the bytes must have been fetched at least once while the token was
+# still valid, and they must have survived last_accessed eviction since. Neither is guaranteed for an image
+# nobody looked at in time. Measured 2026-08-18 against the live library: of 22,903 stored wixmp lead-image
+# URLs, 583 had cached bytes — 2.5%. Durable protection needs pinning at ingest, not caching on demand.
 _IMG_CACHE_VOLATILE_PARAMS = frozenset({
     # Tapas signs its episode art as `?__token__=exp=…~acl=…` — one param
     # carrying the whole grant. Stripping it means the bytes cache once and keep
