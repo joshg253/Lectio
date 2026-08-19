@@ -11090,6 +11090,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           const on = regexBtn.getAttribute('aria-pressed') !== 'true';
           regexBtn.setAttribute('aria-pressed', String(on));
           regexBtn.classList.toggle('active', on);
+          syncTypeControls();   // the placeholder advertises comma lists only in plain mode
         });
         draft.appendChild(regexBtn);
 
@@ -11805,7 +11806,9 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           // new videos in scope); reflect that in the placeholder.
           patInput.placeholder = isYtPlaylist ? 'optional keyword filter (blank = all videos)'
             : (t === 'instapaper' ? 'optional keyword filter (blank = save all)'
-            : (isTagFilter ? 'comma-separated feed tags: -drops, +good (rescues from drops), ++required' : 'keyword or pattern'));
+            : (isTagFilter ? 'comma-separated feed tags: -drops, +good (rescues from drops), ++required'
+            : (regexBtn.getAttribute('aria-pressed') === 'true' ? 'regular expression'
+            : 'keyword, or a comma list: apple, iphone, macbook')));
           // The feed picker shows for every type, including deduplicate — dedup can
           // run across an explicit set of selected feeds (>=2). Selection is decoupled
           // (selectedFeedUrls), so a type change keeps the chosen feed(s) automatically.
