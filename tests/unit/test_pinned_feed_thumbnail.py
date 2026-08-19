@@ -61,3 +61,12 @@ def test_thumb_proxy_serves_the_pinned_copy():
     assert "_feed_thumb_cache_key(pinned_feed)" in body
     # The branch has to come before the scheme check that would 400 it.
     assert body.index('url.startswith("/api/feed-thumb?")') < body.index('parsed.scheme not in {"http", "https"}')
+
+
+def test_github_release_auto_rule_does_not_override_a_pinned_thumbnail():
+    """GitHub release feeds get list thumbnails suppressed automatically. That ran on a schedule and
+    overwrote an explicit choice every pass, so a pinned icon disappeared hours after being set — the
+    original 'I've set this more than once and it keeps going away' report."""
+    body = _slice("def _auto_tag_github_release_feeds")
+    assert "show_lead_image_as_thumb = 0" in body
+    assert "WHERE feed_display_prefs.feed_thumbnail_url IS NULL" in body

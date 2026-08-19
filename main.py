@@ -23633,11 +23633,14 @@ def _auto_tag_github_release_feeds() -> None:
                         (feed_url, now),
                     )
                     lead_image_service.store_feed_strategy(feed_url, "og_scrape", manual=False)
-                # Ensure row exists and thumbnail is off.
+                # Ensure row exists and thumbnail is off — unless the user pinned one. This runs on a
+                # schedule, so without the guard it re-disabled thumbnails every pass and a deliberately
+                # chosen icon kept vanishing hours after it was set, looking like the setting never saved.
                 conn.execute(
                     "INSERT INTO feed_display_prefs (feed_url, show_lead_image_as_thumb)"
                     " VALUES (?, 0)"
-                    " ON CONFLICT(feed_url) DO UPDATE SET show_lead_image_as_thumb = 0",
+                    " ON CONFLICT(feed_url) DO UPDATE SET show_lead_image_as_thumb = 0"
+                    " WHERE feed_display_prefs.feed_thumbnail_url IS NULL",
                     (feed_url,),
                 )
     except Exception:
