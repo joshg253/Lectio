@@ -4641,6 +4641,35 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       btn.remove();
     });
 
+    document.addEventListener('click', (event) => {
+      const btn = event.target instanceof Element
+        ? event.target.closest('#entry-tags-aliases-btn') : null;
+      if (!btn) return;
+      event.preventDefault();
+      window.openSettingsModal?.('tags');
+    });
+
+    // Right-click any tag chip — manual or suggested — to fold it into another.
+    // This is where a duplicate spelling is actually noticed: reading a post and
+    // seeing "cpp" on something you file under "c++".
+    document.addEventListener('contextmenu', (event) => {
+      const el = event.target instanceof Element
+        ? event.target.closest('.entry-tag-chip, [data-tag-suggestion], .feed-tag-filter-chip')
+        : null;
+      if (!el) return;
+      const tag = el.getAttribute('data-tag-suggestion')
+        || el.querySelector('[data-tag-suggestion]')?.getAttribute('data-tag-suggestion')
+        || el.querySelector('.feed-tag-filter-name')?.textContent?.trim()
+        || el.querySelector('[data-tag-remove]')?.getAttribute('data-tag-remove')
+        || el.textContent?.replace(/^#/, '').replace(/[×+▲▼]/g, '').trim();
+      if (!tag) return;
+      event.preventDefault();
+      window.openSettingsModal?.('tags');
+      const from = document.getElementById('tag-alias-from');
+      if (from) { from.value = tag; }
+      document.getElementById('tag-alias-to')?.focus();
+    });
+
     // Dismiss a suggestion chip from the entry pane.
     document.addEventListener('click', async (event) => {
       const btn = event.target instanceof Element
@@ -11777,11 +11806,177 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         }
       }
 
+    // --- Settings -> Tags ---------------------------------------------------
+    // Aliases fold one spelling into another; the inventory is how you find the pairs worth folding.
+    const tagAliasFrom = () => document.getElementById('tag-alias-from');
+    const tagAliasTo = () => document.getElementById('tag-alias-to');
+
+    async function tagPost(url, params) {
+      const resp = await fetch(url, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-ajax' },
+        body: new URLSearchParams(params).toString(),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.ok) {
+        // FastAPI validation errors arrive as {detail: [...]}, not {error}, so a
+        // bare "HTTP 422" hid which field it disliked.
+        const detail = Array.isArray(data.detail)
+          ? data.detail.map((d) => `${(d.loc || []).join('.')}: ${d.msg}`).join('; ')
+          : data.detail;
+        throw new Error(data.error || detail || `HTTP ${resp.status}`);
+      }
+      return data;
+    }
+
+    async function renderTagAliases() {
+      const list = document.getElementById('tag-alias-list');
+      const empty = document.getElementById('tag-alias-empty');
+      if (!list) return;
+      let rows = [];
+      try {
+        const resp = await fetch('/tags/aliases', { credentials: 'same-origin' });
+        rows = (await resp.json()).aliases || [];
+      } catch (_e) { /* leave whatever is on screen rather than blanking it */ }
+      list.textContent = '';
+      if (empty) empty.hidden = rows.length > 0;
+      for (const row of rows) {
+        const li = document.createElement('li');
+        li.className = 'feed-prop-alias-item';
+        const name = document.createElement('code');
+        name.textContent = `#${row.alias} → #${row.canonical}`;
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'feed-prop-inline-btn';
+        del.textContent = 'Remove';
+        del.addEventListener('click', async () => {
+          del.disabled = true;
+          try {
+            await tagPost('/tags/aliases/delete', { alias: row.alias });
+            await renderTagAliases();
+          } catch (err) { del.disabled = false; alert('Could not remove: ' + err.message); }
+        });
+        li.append(name, del);
+        list.appendChild(li);
+      }
+    }
+
+    document.getElementById('tag-alias-preview-btn')?.addEventListener('click', async () => {
+      const out = document.getElementById('tag-alias-preview-out');
+      const create = document.getElementById('tag-alias-create-btn');
+      if (create) create.disabled = true;
+      try {
+        const d = await tagPost('/tags/aliases/preview', {
+          alias: tagAliasFrom()?.value || '', canonical: tagAliasTo()?.value || '',
+        });
+        if (d.error) { if (out) out.textContent = d.error; return; }
+        const total = (d.manual || 0) + (d.feed || 0);
+        if (out) {
+          out.textContent = total
+            ? `Folding #${d.alias} into #${d.canonical} rewrites ${d.manual} manual and ${d.feed} feed tag(s). Removing the alias later does NOT put them back — the tags are moved, and nothing records which entries moved.`
+            : `Nothing carries #${d.alias} today. The alias still applies to anything captured later.`;
+        }
+        if (create) create.disabled = false;
+      } catch (err) {
+        if (out) out.textContent = 'Could not preview: ' + err.message;
+      }
+    });
+
+    document.getElementById('tag-alias-create-btn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('tag-alias-create-btn');
+      const out = document.getElementById('tag-alias-preview-out');
+      btn.disabled = true;
+      try {
+        const d = await tagPost('/tags/aliases/create', {
+          alias: tagAliasFrom()?.value || '', canonical: tagAliasTo()?.value || '', rewrite: '1',
+        });
+        if (out) out.textContent = `Done — moved ${d.manual_moved ?? 0} manual and ${d.feed_moved ?? 0} feed tag(s).`;
+        if (tagAliasFrom()) tagAliasFrom().value = '';
+        if (tagAliasTo()) tagAliasTo().value = '';
+        await renderTagAliases();
+        await renderTagInventory();
+      } catch (err) {
+        btn.disabled = false;
+        if (out) out.textContent = 'Could not create: ' + err.message;
+      }
+    });
+
+    let tagInventoryTimer = null;
+    async function renderTagInventory() {
+      const body = document.getElementById('tag-inventory-body');
+      const countEl = document.getElementById('tag-inventory-count');
+      if (!body) return;
+      const q = document.getElementById('tag-inventory-q')?.value || '';
+      // One or two letters match most of a 36,000-word vocabulary, so the result
+      // is a slow query whose answer is useless. Empty is fine — that is the
+      // "most used" view.
+      if (q.length > 0 && q.length < 3) {
+        const countEl0 = document.getElementById('tag-inventory-count');
+        if (countEl0) countEl0.textContent = 'Keep typing — 3 letters or more';
+        return;
+      }
+      let data = { items: [], total: 0 };
+      try {
+        const mine = document.getElementById('tag-inventory-all')?.checked ? 1 : 0;
+        const resp = await fetch(`/tags/inventory?limit=200&mine_only=${mine}&q=${encodeURIComponent(q)}`, { credentials: 'same-origin' });
+        data = await resp.json();
+      } catch (_e) { /* an empty table beats a stale one */ }
+      body.textContent = '';
+      // Say WHAT is being counted. One merged number ("33,520 tags") mixed 89
+      // tags Josh applies with tens of thousands of publisher names, most seen
+      // once, and answered no question he had.
+      const sum = data.summary || {};
+      if (countEl) {
+        const parts = [`${(sum.manual || 0).toLocaleString()} yours`];
+        if (data.scope !== 'mine') {
+          parts.push(`${(sum.feed || 0).toLocaleString()} from publishers`
+                     + (sum.feed_seen_once ? `, ${sum.feed_seen_once.toLocaleString()} seen once` : ''));
+        }
+        // Never claims a match total: the query is limited in SQL, so the server
+        // has not counted every match and should not pretend to.
+        parts.push(sum.truncated
+          ? `showing the ${sum.shown} most used`
+          : `showing ${sum.shown}`);
+        countEl.textContent = parts.join(' · ');
+      }
+      for (const item of data.items || []) {
+        const tr = document.createElement('tr');
+        const name = document.createElement('td');
+        name.textContent = item.tag + (item.alias_of ? ` → ${item.alias_of}` : '');
+        const manual = document.createElement('td'); manual.className = 'num'; manual.textContent = item.manual;
+        const feed = document.createElement('td'); feed.className = 'num'; feed.textContent = item.feed;
+        const act = document.createElement('td');
+        const use = document.createElement('button');
+        use.type = 'button';
+        use.className = 'feed-prop-inline-btn';
+        use.textContent = 'Fold…';
+        use.title = `Put #${item.tag} in the alias box above`;
+        use.addEventListener('click', () => {
+          if (tagAliasFrom()) tagAliasFrom().value = item.tag;
+          tagAliasTo()?.focus();
+        });
+        act.appendChild(use);
+        tr.append(name, manual, feed, act);
+        body.appendChild(tr);
+      }
+    }
+
+    document.getElementById('tag-inventory-all')?.addEventListener('change', () => void renderTagInventory());
+
+    document.getElementById('tag-inventory-q')?.addEventListener('input', () => {
+      window.clearTimeout(tagInventoryTimer);
+      tagInventoryTimer = window.setTimeout(renderTagInventory, 200);
+    });
+
       document.querySelectorAll('[data-settings-tab]').forEach(btn => {
         btn.addEventListener('click', () => {
           const tab = btn.getAttribute('data-settings-tab');
           settSwitchTab(tab);
           if (tab === 'feeds') void markProblematicFeedsViewed();
+          // Loaded on open, not at startup: the inventory scans every tag and most
+          // sessions never look at it.
+          if (tab === 'tags') { void renderTagAliases(); void renderTagInventory(); }
         });
       });
       // Force hidden panels to display:none regardless of stylesheet specificity
@@ -14999,9 +15194,20 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         if (!tk.text) return close();
         const have = new Set(input.value.split(COMMA ? ',' : /\s+/)
           .map((t) => norm(stripSign(t))));
+        // Substring, not prefix: "y" should reach "python". Josh types a middle
+        // letter as a shortcut, and a prefix test made that impossible.
+        // Prefix hits still sort first, so "py" offers python before happy, and
+        // longer tags lose to shorter ones at equal position — a tag you meant
+        // is usually the shorter of two that both contain the letters.
         matches = (getTags() || [])
           .map((t) => (typeof t === 'string' ? { tag: t, count: 0 } : t))
-          .filter((m) => m.tag.startsWith(tk.text) && m.tag !== tk.text && !have.has(m.tag))
+          .filter((m) => m.tag.includes(tk.text) && m.tag !== tk.text && !have.has(m.tag))
+          .sort((a, b) => {
+            const ai = a.tag.indexOf(tk.text), bi = b.tag.indexOf(tk.text);
+            if (ai !== bi) return ai - bi;
+            if ((b.count || 0) !== (a.count || 0)) return (b.count || 0) - (a.count || 0);
+            return a.tag.length - b.tag.length;
+          })
           .slice(0, 8);
         if (!matches.length) return close();
         box.style.top = (input.offsetTop + input.offsetHeight) + 'px';
@@ -15393,6 +15599,18 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             btn.textContent = glyph;
             chip.appendChild(btn);
           }
+          // The × the server-rendered chips carry. Without it, a suggestion that
+          // arrived on THIS open (harvested in the background, injected here)
+          // could not be dismissed until the entry was opened a second time, by
+          // which point the server renders it instead.
+          const dismiss = document.createElement('button');
+          dismiss.type = 'button';
+          dismiss.className = 'feed-tag-filter-sign dismiss-feed-tag';
+          dismiss.setAttribute('data-dismiss-feed-tag', tag);
+          dismiss.title = `Never suggest #${tag} for this feed`;
+          dismiss.setAttribute('aria-label', dismiss.title);
+          dismiss.textContent = '×';
+          chip.appendChild(dismiss);
           wrap.appendChild(chip);
         });
         if (data.tags.length > COLLAPSE_AFTER) {

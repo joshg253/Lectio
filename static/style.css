@@ -2499,6 +2499,16 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   display: none;
 }
 
+/* Same reason as the rule above, and the same trap. `.tree-item, .post-item`
+   sets display:flex further down the file, so a single-class `.post-item-filtered`
+   loses on source order at equal specificity and the row stays visible — the
+   filter counted matches correctly and hid nothing. The chunk class was already
+   qualified here; the filter class was not, so it silently did nothing while
+   reporting "2 of 21 loaded". */
+.post-item.post-item-filtered {
+  display: none;
+}
+
 .post-item {
   position: relative;
   align-items: stretch;
@@ -8319,3 +8329,60 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
 }
 .ctx-submenu--left > .ctx-submenu-list { left: auto; right: 100%; }
 .ctx-submenu[open] > .ctx-submenu-summary { background: var(--hover-bg); }
+
+/* Settings -> Tags. The inventory is a long list, so it scrolls inside its own box
+   rather than growing the modal; the counts are right-aligned because the point of
+   the table is comparing them between rival spellings. */
+.tag-alias-form-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.tag-alias-arrow {
+  opacity: 0.7;
+}
+.tag-inventory-wrap {
+  max-height: 20rem;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.tag-inventory-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.tag-inventory-table th,
+.tag-inventory-table td {
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.tag-inventory-table th.num,
+.tag-inventory-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.tag-inventory-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg, #fff);
+}
+
+/* "Aliases…" sits in the tag row beside Apply — a quiet link, not a third action
+   competing with tagging itself. */
+.entry-tags-aliases-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85em;
+  padding: 0 0.4em;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.entry-tags-aliases-btn:hover {
+  color: var(--ink);
+}

@@ -569,3 +569,18 @@ to October 2024. A real month beats a precise-looking lie.
   (`_HIGH_FANOUT_PACE_SECONDS`) so a big serial burst isn't throttled into
   spurious 404s (YouTube 404s a ~700-request burst though each feed is fine
   singly) — a polite-client measure, feeds to other hosts interleave at full speed.
+
+
+## Tag aliases
+
+Publishers disagree about the same subject, so one topic arrives under several spellings and filtering on one silently misses the rest. The live library carried `c++` (4,965 uses) beside `cpp` (223), and `c#` (606) beside `csharp` (152).
+
+An alias is applied inside `normalize_tag_value`, which every tag path already runs through — manual tagging, captured feed tags, filter rules, imports — so one row covers all of them. That function is hot (51 call sites, several per entry during a refresh), so the map is cached per user and dropped on write rather than read from the meta DB per call.
+
+`normalize_tag_value_raw` is the same normalization **without** the alias. The editor needs it: once `cpp -> c++` exists, normalizing "cpp" through the aliased path returns "c++", so an alias could never be listed, edited or deleted by the name it was created under.
+
+**Creating one rewrites what is already stored**, in both places tags live: reader entry tags (via the existing rename, which merges rather than colliding) and `entry_feed_tags` rows. A row whose entry already carries the canonical is deleted first, since `(feed_url, entry_id, tag)` is the primary key. Removing the alias afterwards does **not** unwind that — nothing records which entries moved, deliberately: it is a rename, not a filter.
+
+**Chains are refused in both directions.** `_apply_tag_alias` takes exactly one hop, so `a -> b -> c` would leave `a` resolving to a tag that holds nothing. Creating an alias whose canonical is itself an alias is refused, and so is aliasing a tag that other aliases already point at.
+
+Counts in the inventory keep feed-provided and manual tags apart because they live in different stores and a rewrite touches both; one combined number would hide which half is which. Manual counts come from a single grouped query against reader's `entry_tags`, not `get_entry_counts` per tag — there are 33,511 distinct tags.
