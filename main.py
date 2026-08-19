@@ -20128,6 +20128,10 @@ def build_reader_page(
     # Same allowlist as the list rows: the feed's <em> renders, and a literal
     # <T> or <chrono> in a C++ title stays visible text.
     esc_title = html_sanitize.sanitize_inline_title(title or "(untitled)")
+    # <title> is RCDATA — markup does not render there, it shows as tag text. It
+    # gets the tag-stripped, escaped form instead (what the other reader builder
+    # already does).
+    head_title = html.escape(html_sanitize.title_plain_text(title or "(untitled)"))
     esc_src = html.escape(source_link or "", quote=True)
     esc_back = html.escape(back_href or "/read", quote=True)
     esc_feed = html.escape(feed_url or "", quote=True)
@@ -20233,7 +20237,7 @@ def build_reader_page(
     # one of its recognized sanitizers (false positive).
     doc = (
         "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
-        f"<title>{esc_title}</title>"
+        f"<title>{head_title}</title>"
         "<meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'>"
         "<meta name='robots' content='noindex'>"
         f"<meta name='csrf-token' content='{esc_csrf}'>"

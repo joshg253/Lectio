@@ -112,15 +112,32 @@ def test_decode_title_entities(raw, expected):
     assert html_sanitize.decode_title_entities(raw) == expected
 
 
-@pytest.mark.parametrize("raw", [
-    "Using &lt;details&gt; in HTML",
-    "A &#60;tag&#62; in the title",
+@pytest.mark.parametrize("raw,decoded", [
+    ("Using &lt;details&gt; in HTML", "Using <details> in HTML"),
+    ("A &#60;tag&#62; in the title", "A <tag> in the title"),
 ])
-def test_markup_entities_are_left_encoded(raw):
-    """Decoding these would put a raw < into every render path a title reaches —
-    list rows, the pane header, the page <title>, mail, webhook payloads."""
-    out = html_sanitize.decode_title_entities(raw)
-    assert "<" not in out and ">" not in out
+def test_markup_entities_decode_too_because_rendering_re_escapes(raw, decoded):
+    """Keeping these encoded was the worse outcome: the ampersand gets escaped in
+    turn, so the reader saw a literal "&lt;details&gt;" on screen. Safe because a
+    stored title is never rendered raw — sanitize_inline_title re-escapes
+    anything outside the feed's own inline formatting."""
+    stored = html_sanitize.decode_title_entities(raw)
+    assert stored == decoded
+    rendered = html_sanitize.sanitize_inline_title(stored)
+    assert "<details>" not in rendered and "<tag>" not in rendered
+    assert "&lt;" in rendered
+
+
+@pytest.mark.parametrize("payload", [
+    'Payload <img src=x onerror="window.__XSS=1"> here',
+    "Payload <script>window.__XSS=1</script> here",
+])
+def test_a_title_carrying_markup_renders_as_text(payload):
+    """41 stored titles already hold a literal `<` from their publisher; the
+    escaping is what makes decoding safe, so it is asserted here."""
+    rendered = html_sanitize.sanitize_inline_title(payload)
+    assert "<img" not in rendered and "<script" not in rendered
+    assert "&lt;" in rendered
 
 
 def test_ingest_decodes_the_entry_title():

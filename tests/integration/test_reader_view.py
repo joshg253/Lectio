@@ -376,3 +376,23 @@ def test_a_short_post_with_outbound_links_is_not_a_stub():
     assert not main.is_paywall_stub("<p>Short note, no links.</p>", "https://x.test/a")
     assert not main.is_paywall_stub("<p>" + ("word " * 300) + "</p>", "https://x.test/a")
     assert not main.is_paywall_stub(None, "https://x.test/a")
+
+
+def test_reader_head_title_is_plain_escaped_text():
+    """<title> is RCDATA — markup does not render there, it shows as tag text.
+    The <h1> keeps the feed's inline formatting; the head element must not."""
+    import re as _re
+
+    resp = main.build_reader_page(
+        title="A <em>bold</em> claim about ReadOnlySpan<T>",
+        article_html="<p>body</p>", source_link="https://example.test/a",
+        prev_href="", next_href="", back_href="/read",
+        feed_url="https://example.test/feed", entry_id="e1",
+        is_archived=False, csrf_token="tok",
+    )
+    body = resp.body.decode()
+    head = _re.search(r"<title>(.*?)</title>", body, _re.S).group(1)
+    assert head == "A bold claim about ReadOnlySpan&lt;T&gt;"
+    assert "<em>" not in head
+    # The headline still renders the feed's own emphasis.
+    assert "<h1 class='reader-headline'>A <em>bold</em> claim" in body
