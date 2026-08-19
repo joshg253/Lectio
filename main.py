@@ -22475,6 +22475,22 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
             headers={"Cache-Control": "public, max-age=604800, immutable"},
         )
 
+    # A pinned feed thumbnail lives in our own cache, not on the network. The post list pipes every
+    # thumbnail through /thumb, so without this branch the pinned copy fails the http(s) check below and
+    # the feed renders no thumbnail at all — the bytes are there and nothing shows them. Served as-is, the
+    # way the data: branch above is: these are already thumbnail-sized, and the crop is applied in CSS.
+    if url.startswith("/api/feed-thumb?"):
+        pinned_feed = parse_qs(urlparse(url).query).get("feed_url", [""])[0]
+        hit = _img_cache_get(_feed_thumb_cache_key(pinned_feed)) if pinned_feed else None
+        if hit is None:
+            return Response(status_code=404)
+        pinned_body, pinned_type = hit
+        return Response(
+            content=pinned_body,
+            media_type=pinned_type or "image/jpeg",
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
+
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return Response(status_code=400)

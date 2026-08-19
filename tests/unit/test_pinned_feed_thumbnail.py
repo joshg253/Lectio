@@ -51,3 +51,13 @@ def test_pinned_thumbnails_are_never_evicted():
     body = _slice("def _evict_img_cache")
     assert "cache_key NOT LIKE ?" in body
     assert "_FEED_THUMB_CACHE_PREFIX" in body
+
+
+def test_thumb_proxy_serves_the_pinned_copy():
+    """The post list pipes every thumbnail through /thumb, which rejects anything that is not http(s).
+    Without an explicit branch the pinned bytes exist and nothing ever renders them."""
+    body = _slice("def thumbnail_proxy", "\n@app.")
+    assert 'url.startswith("/api/feed-thumb?")' in body
+    assert "_feed_thumb_cache_key(pinned_feed)" in body
+    # The branch has to come before the scheme check that would 400 it.
+    assert body.index('url.startswith("/api/feed-thumb?")') < body.index('parsed.scheme not in {"http", "https"}')
