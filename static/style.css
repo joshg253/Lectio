@@ -8233,6 +8233,42 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
 .feed-prop-ext-chip:hover {
   border-color: var(--accent);
 }
+/* The chip and its dismiss read as one pill: the chip keeps the suggestion, the × stops it being offered.
+   Joined into a single outline so the × cannot be mistaken for a separate suggestion. */
+.feed-prop-ext-chip-wrap {
+  display: inline-flex;
+  align-items: center;
+}
+.feed-prop-ext-chip-wrap .feed-prop-ext-chip {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+}
+.feed-prop-ext-chip-drop {
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 0.05rem 0.35rem 0.15rem;
+  border: 1px solid var(--line);
+  border-top-right-radius: 999px;
+  border-bottom-right-radius: 999px;
+  background: var(--surface);
+  color: var(--muted, #888);
+  cursor: pointer;
+}
+.feed-prop-ext-chip-drop:hover {
+  border-color: var(--danger, #c0392b);
+  color: var(--danger, #c0392b);
+}
+/* Dismissed types stay visible but recede — a mis-click needs a way back, and nothing else here does. */
+.feed-prop-ext-ignored-label {
+  margin-left: 0.5rem;
+}
+.feed-prop-ext-chip--ignored {
+  color: var(--muted, #888);
+  border-style: dashed;
+  text-decoration: line-through;
+}
 
 /* The restore control is the recovery path for a re-fetch that replaced an
    article with the wrong content, and it was one unlabelled icon among several

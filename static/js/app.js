@@ -4726,13 +4726,40 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       } catch (e) {
         return;   // a suggestion is never worth an error
       }
+      renderFeedPropAttachmentCandidates(feedUrl, data, box, input);
+    }
+
+    // Each chip carries its own dismiss. The scanner reads the last dot-segment of a link path, so a bare
+    // domain leaves its TLD behind and ".il" gets offered as a file type; there is no fixed blocklist that
+    // gets this right, because ".zip" and ".mov" are TLDs and file types at once.
+    async function suppressFeedPropAttachmentExt(feedUrl, ext, suppressed, box, input) {
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, ext, suppressed: suppressed ? '1' : '0' });
+        const resp = await fetch('/feeds/attachment-candidate-suppress', {
+          method: 'POST', body, credentials: 'same-origin',
+        });
+        if (!resp.ok) return;
+        renderFeedPropAttachmentCandidates(feedUrl, await resp.json(), box, input);
+      } catch (e) {
+        // A suggestion is never worth an error.
+      }
+    }
+
+    function renderFeedPropAttachmentCandidates(feedUrl, data, box, input) {
       const rows = (data && data.candidates) || [];
-      if (!rows.length) return;
-      const label = document.createElement('span');
-      label.className = 'feed-prop-ext-label';
-      label.textContent = 'This feed links: ';
-      box.appendChild(label);
+      const hidden = (data && data.suppressed) || [];
+      box.textContent = '';
+      if (!rows.length && !hidden.length) { box.hidden = true; return; }
+
+      if (rows.length) {
+        const label = document.createElement('span');
+        label.className = 'feed-prop-ext-label';
+        label.textContent = 'This feed links: ';
+        box.appendChild(label);
+      }
       for (const row of rows) {
+        const wrap = document.createElement('span');
+        wrap.className = 'feed-prop-ext-chip-wrap';
         const chip = document.createElement('button');
         chip.type = 'button';
         chip.className = 'feed-prop-ext-chip';
@@ -4750,7 +4777,31 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           }
           input.focus();
         });
-        box.appendChild(chip);
+        const drop = document.createElement('button');
+        drop.type = 'button';
+        drop.className = 'feed-prop-ext-chip-drop';
+        drop.textContent = '×';
+        drop.title = `Stop suggesting .${row.ext} for this feed`;
+        drop.setAttribute('aria-label', `Ignore ${row.ext}`);
+        drop.addEventListener('click', () => suppressFeedPropAttachmentExt(feedUrl, row.ext, true, box, input));
+        wrap.append(chip, drop);
+        box.appendChild(wrap);
+      }
+
+      if (hidden.length) {
+        const back = document.createElement('span');
+        back.className = 'feed-prop-ext-label feed-prop-ext-ignored-label';
+        back.textContent = 'Ignored: ';
+        box.appendChild(back);
+        for (const ext of hidden) {
+          const restore = document.createElement('button');
+          restore.type = 'button';
+          restore.className = 'feed-prop-ext-chip feed-prop-ext-chip--ignored';
+          restore.textContent = ext;
+          restore.title = `Suggest .${ext} again`;
+          restore.addEventListener('click', () => suppressFeedPropAttachmentExt(feedUrl, ext, false, box, input));
+          box.appendChild(restore);
+        }
       }
       box.hidden = false;
     }
