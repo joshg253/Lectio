@@ -50,3 +50,12 @@ def test_ui_offers_dismiss_and_restore():
     assert "feed-prop-ext-chip-drop" in APP_JS
     assert "suppressFeedPropAttachmentExt(feedUrl, row.ext, true" in APP_JS
     assert re.search(r"suppressFeedPropAttachmentExt\(feedUrl, ext, false", APP_JS)
+
+
+def test_dismissals_follow_a_feed_url_rewrite():
+    """A feed whose URL is rewritten keeps its rows in every other per-feed table; leaving the suppression
+    tables out meant every chip the user had waved off silently came back."""
+    table_list = MAIN[MAIN.index("_feed_url_tables = ["):]
+    table_list = table_list[: table_list.index("]")]
+    assert '"suppressed_feed_attachment_exts"' in table_list
+    assert '"suppressed_feed_tags"' in table_list, "the table this one mirrors had the same gap"

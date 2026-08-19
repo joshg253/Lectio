@@ -13332,6 +13332,9 @@ def list_entries_for_feeds(
 
     with get_meta_connection() as _prefs_conn:
         _all_display_prefs = get_all_feed_display_prefs(_prefs_conn)
+    # Which feeds have a pinned thumbnail copy, read once. This used to be a has_pinned_feed_thumbnail()
+    # call inside the per-entry loop — one image-cache query per rendered row.
+    _pinned_thumb_keys = pinned_feed_thumbnail_keys()
     # Declared host migrations (feed_url_rewrites), so the proxy-rebase below
     # can't send correct entry links back to an author's dead domain still named
     # in a feed's channel <link>. Loaded once — {} for the common no-rules case.
@@ -13378,7 +13381,7 @@ def list_entries_for_feeds(
             # Prefer the pinned copy: the chosen URL may be a signed CDN link that has since expired.
             _raw_thumb = (
                 f"/api/feed-thumb?feed_url={quote_plus(feed_url_str)}"
-                if has_pinned_feed_thumbnail(feed_url_str)
+                if _feed_thumb_cache_key(feed_url_str) in _pinned_thumb_keys
                 else str(_feed_thumb_setting)
             )
         elif _feed_thumb_setting == "__favicon__":
@@ -22490,15 +22493,9 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
     # way the data: branch above is: these are already thumbnail-sized, and the crop is applied in CSS.
     if url.startswith("/api/feed-thumb?"):
         pinned_feed = parse_qs(urlparse(url).query).get("feed_url", [""])[0]
-        hit = _img_cache_get(_feed_thumb_cache_key(pinned_feed)) if pinned_feed else None
-        if hit is None:
+        if not pinned_feed:
             return Response(status_code=404)
-        pinned_body, pinned_type = hit
-        return Response(
-            content=pinned_body,
-            media_type=pinned_type or "image/jpeg",
-            headers={"Cache-Control": "private, max-age=86400"},
-        )
+        return _pinned_thumb_response(pinned_feed)
 
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
@@ -23854,6 +23851,36 @@ def _drop_pinned_feed_thumbnail(feed_url: str) -> None:
         LOGGER.debug("[feed-thumb] could not drop pinned bytes for %s", feed_url, exc_info=True)
 
 
+def pinned_feed_thumbnail_keys() -> set[str]:
+    """Every pinned-thumbnail cache key, for callers rendering a list of feeds.
+
+    One query instead of one per row: the set is tiny (a pinned thumbnail is a deliberate per-feed act),
+    while the list path asks about it once per entry.
+    """
+    try:
+        with get_img_cache_connection() as conn:
+            rows = conn.execute(
+                "SELECT cache_key FROM img_cache WHERE cache_key LIKE ?", (_FEED_THUMB_CACHE_PREFIX + "%",)
+            ).fetchall()
+        return {str(r["cache_key"]) for r in rows}
+    except Exception:
+        return set()
+
+
+def _pinned_thumb_response(feed_url: str) -> Response:
+    """The one place a pinned thumbnail becomes a response, so /api/feed-thumb and /thumb cannot drift
+    apart on cache headers or on what a miss looks like."""
+    hit = _img_cache_get(_feed_thumb_cache_key(feed_url))
+    if hit is None:
+        return Response(status_code=404)
+    body, content_type = hit
+    return Response(
+        content=body,
+        media_type=content_type or "image/jpeg",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
 def has_pinned_feed_thumbnail(feed_url: str) -> bool:
     try:
         with get_img_cache_connection() as conn:
@@ -23869,15 +23896,7 @@ def has_pinned_feed_thumbnail(feed_url: str) -> bool:
 def api_feed_thumb(feed_url: str = Query(...)):
     """Serve the pinned copy of a feed's chosen thumbnail. Stable URL, so the page never points at a
     signed CDN link that will expire."""
-    hit = _img_cache_get(_feed_thumb_cache_key(feed_url))
-    if hit is None:
-        return Response(status_code=404)
-    body, content_type = hit
-    return Response(
-        content=body,
-        media_type=content_type or "image/jpeg",
-        headers={"Cache-Control": "private, max-age=86400"},
-    )
+    return _pinned_thumb_response(feed_url)
 
 
 @app.post("/feeds/thumbnail-url")
@@ -26930,6 +26949,10 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
         "disabled_feeds",
         "feed_display_prefs",
         "feed_strategy_cache",
+        # Dismissed suggestion chips are per feed, so they have to follow the feed when its URL is
+        # rewritten — otherwise the dismissals orphan and every chip the user waved off comes back.
+        "suppressed_feed_tags",
+        "suppressed_feed_attachment_exts",
         "rule_run_log_entries",
         "email_batch_queue",
     ]

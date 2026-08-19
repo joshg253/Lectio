@@ -43,7 +43,9 @@ def test_only_images_within_a_size_limit_are_pinned():
 
 def test_render_prefers_the_pinned_copy():
     assert "/api/feed-thumb?feed_url=" in MAIN
-    assert "has_pinned_feed_thumbnail(feed_url_str)" in MAIN
+    # Membership in a set loaded once per request, not a query per rendered row.
+    assert "_feed_thumb_cache_key(feed_url_str) in _pinned_thumb_keys" in MAIN
+    assert "_pinned_thumb_keys = pinned_feed_thumbnail_keys()" in MAIN
 
 
 def test_pinned_thumbnails_are_never_evicted():
@@ -58,7 +60,8 @@ def test_thumb_proxy_serves_the_pinned_copy():
     Without an explicit branch the pinned bytes exist and nothing ever renders them."""
     body = _slice("def thumbnail_proxy", "\n@app.")
     assert 'url.startswith("/api/feed-thumb?")' in body
-    assert "_feed_thumb_cache_key(pinned_feed)" in body
+    # Both serving paths go through one response builder so headers cannot drift.
+    assert "_pinned_thumb_response(pinned_feed)" in body
     # The branch has to come before the scheme check that would 400 it.
     assert body.index('url.startswith("/api/feed-thumb?")') < body.index('parsed.scheme not in {"http", "https"}')
 
