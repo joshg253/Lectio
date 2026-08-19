@@ -140,3 +140,87 @@ def test_after_refresh_automation_reads_the_column(env, monkeypatch):
                         lambda *a, **kw: seen.append(kw.get("fuzzy_threshold")) or {"count": 0})
     main._run_automation_after_refresh({FEED_A})
     assert seen == [pytest.approx(0.65)]
+
+
+# --- title-length floor -----------------------------------------------------
+
+
+def test_short_titles_are_skipped_by_fuzzy(env):
+    """Two feeds carrying the same 3-word title: below the floor, no match."""
+    reader = main.get_reader()
+    when = dt.datetime(2024, 5, 1, tzinfo=dt.timezone.utc)
+    for feed, eid in [(FEED_A, "short-a"), (FEED_B, "short-b")]:
+        reader.add_entry({"feed_url": feed, "id": eid, "title": "weekly open thread",
+                          "link": f"{feed}/{eid}", "summary": "x", "published": when})
+    with main.get_meta_connection() as conn:
+        at4 = main._dry_run_dedup(conn, "global", "", "fuzzy", 168,
+                                  custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.80)
+        at3 = main._dry_run_dedup(conn, "global", "", "fuzzy", 168,
+                                  custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.80,
+                                  min_title_words=3)
+    assert at4["total_would_mark_read"] == 0
+    assert at3["total_would_mark_read"] == 1
+
+
+def test_title_mode_now_has_a_floor(env):
+    reader = main.get_reader()
+    when = dt.datetime(2024, 5, 1, tzinfo=dt.timezone.utc)
+    for feed, eid in [(FEED_A, "t-a"), (FEED_B, "t-b")]:
+        reader.add_entry({"feed_url": feed, "id": eid, "title": "Open Thread",
+                          "link": f"{feed}/{eid}", "summary": "x", "published": when})
+    with main.get_meta_connection() as conn:
+        res = main._dry_run_dedup(conn, "global", "", "title", 168,
+                                  custom_feed_urls={FEED_A, FEED_B})
+        low = main._dry_run_dedup(conn, "global", "", "title", 168,
+                                  custom_feed_urls={FEED_A, FEED_B}, min_title_words=2)
+    assert res["total_would_mark_read"] == 0
+    assert low["total_would_mark_read"] == 1
+
+
+def test_min_words_round_trips_and_clamps(env):
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "global", "", "fuzzy", "yellow", rule_type="deduplicate",
+                                   enabled=1, dedup_min_title_words=6)
+        assert [r for r in main.get_highlight_keywords(conn)][0]["dedup_min_title_words"] == 6
+        main.add_highlight_keyword(conn, "global", "", "fuzzy", "yellow", rule_type="deduplicate",
+                                   enabled=1, dedup_min_title_words=99)
+        assert [r for r in main.get_highlight_keywords(conn)][0]["dedup_min_title_words"] == 10
+    assert main._clamp_min_title_words(1) == 3
+    assert main._clamp_min_title_words(None) == 4
+    assert main._clamp_min_title_words("x") == 4
+
+
+def test_after_refresh_automation_reads_the_word_floor(env, monkeypatch):
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "global", "", "fuzzy", "yellow", rule_type="deduplicate",
+                                   enabled=1, dedup_min_title_words=7)
+    seen: list[int] = []
+    monkeypatch.setattr(main, "_run_now_dedup",
+                        lambda *a, **kw: seen.append(kw.get("min_title_words")) or {"count": 0})
+    main._run_automation_after_refresh({FEED_A})
+    assert seen == [7]
+
+
+# --- title normalization ----------------------------------------------------
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("best.cat()", "best.cat"),                       # word boundaries never move
+    ("second-best.cat()", "second-best.cat"),
+    ("C++ vs C# in 2025", "c++ vs c# in 2025"),       # + and # are the title
+    ("AT&T buys #hashtag", "at&t buys #hashtag"),
+    ("state-of-the-art e-mail", "state-of-the-art e-mail"),
+    ("Title—Subtitle here", "title subtitle here"),   # em dash separates
+    ("Don't panic — really", "don't panic really"),   # lone dash is dropped
+    ("“Quoted” Words Are Fine!", "quoted words are fine"),   # quotes fold, then strip
+    ("node.js 3.5 released", "node.js 3.5 released"),
+    ("  Hello   World!  ", "hello world"),
+])
+def test_title_normalization(raw, expected):
+    assert main.normalize_entry_title_for_dedupe(raw) == expected
+
+
+def test_punctuation_no_longer_costs_a_match():
+    a = main.normalize_entry_title_for_dedupe("Apple Ships a New Laptop!")
+    b = main.normalize_entry_title_for_dedupe("Apple ships a new laptop.")
+    assert a == b

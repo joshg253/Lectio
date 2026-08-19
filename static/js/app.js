@@ -9689,6 +9689,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const _hlCmpModes = ['slug', 'title', 'both', 'fuzzy'];
       const _hlCmpModeLabels = { slug: 'URL Slug', title: 'Title', both: 'Slug+Title', fuzzy: 'Fuzzy' };
       const _hlFuzzyPctDefault = 80;
+      const _hlMinTitleWordsDefault = 4;
 
       // One dry-run per mode. Only Fuzzy depends on the % knob, so a re-run at a new
       // threshold reuses the other three results instead of re-querying them.
@@ -10406,6 +10407,13 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
               winBadge.textContent = Math.round((rule.dedup_window_hours || 168) / 24) + 'd';
               row.appendChild(winBadge);
             }
+            if (['fuzzy', 'title'].includes(rule.keyword)) {
+              const wordsBadge = document.createElement('span');
+              wordsBadge.className = 'hl-rule-search-in-badge';
+              wordsBadge.textContent = '≥' + (rule.dedup_min_title_words || _hlMinTitleWordsDefault) + 'w';
+              wordsBadge.title = 'Titles shorter than this are ignored — short titles repeat across unrelated posts';
+              row.appendChild(wordsBadge);
+            }
             if (rule.keyword === 'fuzzy') {
               const pctBadge = document.createElement('span');
               pctBadge.className = 'hl-rule-search-in-badge';
@@ -10560,6 +10568,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
                 dedup_window_hours: rule.dedup_window_hours || 168,
                 exclude_scope_ids: rule.exclude_scope_ids || '',
                 fuzzy_pct: rule.dedup_fuzzy_pct || _hlFuzzyPctDefault,
+                min_title_words: rule.dedup_min_title_words || _hlMinTitleWordsDefault,
                 yt_include_shorts: rule.yt_include_shorts ? 1 : 0,
                 yt_min_minutes: rule.yt_min_minutes || 0,
                 yt_max_minutes: rule.yt_max_minutes || 0,
@@ -10599,6 +10608,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
                   dedup_window_hours: rule.dedup_window_hours || 168,
                   exclude_scope_ids: rule.exclude_scope_ids || '',
                   fuzzy_pct: rule.dedup_fuzzy_pct || _hlFuzzyPctDefault,
+                  min_title_words: rule.dedup_min_title_words || _hlMinTitleWordsDefault,
                 });
                 const resp = await fetch('/rules/run-now', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
                 const data = await resp.json();
@@ -10845,6 +10855,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
                   scope: rule.scope, scope_id: rule.scope_id || '',
                   dedup_window_hours: String(rule.dedup_window_hours || 168),
                   exclude_scope_ids: rule.exclude_scope_ids || '',
+                  min_title_words: String(rule.dedup_min_title_words || _hlMinTitleWordsDefault),
                 };
                 const startPct = rule.dedup_fuzzy_pct || _hlFuzzyPctDefault;
                 const refetch = (pct, prior) => hlFetchAllModes(base, pct, prior);
@@ -11297,6 +11308,23 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         fuzzyPctWrap.appendChild(fuzzyPctInput);
         fuzzyPctWrap.appendChild(document.createTextNode('% alike'));
         draft.appendChild(fuzzyPctWrap);
+
+        // Title-length floor (Deduplicate + title/fuzzy). Short titles ("Weekly
+        // roundup") repeat across unrelated posts, so they are skipped entirely.
+        const minWordsWrap = document.createElement('label');
+        minWordsWrap.className = 'hl-draft-field-label hl-draft-minwords-wrap';
+        minWordsWrap.textContent = 'skip titles under ';
+        const minWordsInput = document.createElement('input');
+        minWordsInput.type = 'number';
+        minWordsInput.className = 'hl-draft-batch-count hl-draft-min-words';
+        minWordsInput.min = '3';
+        minWordsInput.max = '10';
+        minWordsInput.step = '1';
+        minWordsInput.value = String(prefill.dedup_min_title_words || _hlMinTitleWordsDefault);
+        minWordsInput.title = 'Titles with fewer words than this are never matched (3-10)';
+        minWordsWrap.appendChild(minWordsInput);
+        minWordsWrap.appendChild(document.createTextNode(' words'));
+        draft.appendChild(minWordsWrap);
 
         // Exclude folders token-input sub-row (Deduplicate + global scope only)
         const excludeRow = document.createElement('div');
@@ -11769,6 +11797,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           matchMethodSel.style.display = isDedup ? '' : 'none';
           windowHoursWrap.style.display = dedupNeedsWindow ? '' : 'none';
           fuzzyPctWrap.style.display = (isDedup && matchMethodSel.value === 'fuzzy') ? '' : 'none';
+          minWordsWrap.style.display = (isDedup && ['fuzzy', 'title'].includes(matchMethodSel.value)) ? '' : 'none';
           excludeRow.style.display = isGlobalDedup ? '' : 'none';
           webhookRow.style.display = isWebhook ? '' : 'none';
           ytRow.style.display = isYtPlaylist ? '' : 'none';
@@ -11854,11 +11883,12 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             else                       { scope = 'global'; scopeId = ''; }
             const excludeIds = getExcludeIds();
             const fuzzyPct = Math.max(50, Math.min(100, parseInt(fuzzyPctInput.value || '80', 10) || 80));
+            const minWords = Math.max(3, Math.min(10, parseInt(minWordsInput.value || '4', 10) || 4));
             await onSave({ scope, scope_id: scopeId, keyword: matchMethod, color: 'yellow',
                            is_regex: 0, type: 'deduplicate', search_in: 'title',
                            delivery: 'immediately', email_to: '', batch_time: '', batch_count: 0,
                            cc_me: 0, dedup_window_hours: windowHours, exclude_scope_ids: excludeIds,
-                           dedup_fuzzy_pct: fuzzyPct });
+                           dedup_fuzzy_pct: fuzzyPct, dedup_min_title_words: minWords });
             return;
           }
 
@@ -11907,6 +11937,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           enabled: r.enabled !== undefined ? r.enabled : 0,
           dedup_window_hours: r.dedup_window_hours || 168,
           dedup_fuzzy_pct: r.dedup_fuzzy_pct || _hlFuzzyPctDefault,
+          dedup_min_title_words: r.dedup_min_title_words || _hlMinTitleWordsDefault,
           exclude_scope_ids: r.exclude_scope_ids || '',
           webhook_url: r.webhook_url || '', webhook_format: r.webhook_format || 'generic', webhook_batch: r.webhook_batch ? 1 : 0,
           yt_playlist_id: r.yt_playlist_id || '', yt_playlist_title: r.yt_playlist_title || '',
