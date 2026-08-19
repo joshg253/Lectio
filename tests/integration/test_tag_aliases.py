@@ -39,6 +39,18 @@ def test_normalize_applies_the_alias(env):
     assert main.normalize_tag_value("CPP") == "c++"
 
 
+def test_a_tag_with_no_alias_is_left_alone(env):
+    """The other half of the rule: aliasing must be a lookup, not a rewrite that everything passes through.
+    Every tag in the library goes through normalize_tag_value, so a bug that remapped unmatched tags would
+    corrupt the whole vocabulary rather than fail visibly."""
+    main.create_tag_alias("cpp", "c++", rewrite=False)
+
+    assert main.normalize_tag_value("rust") == "rust"
+    assert main.normalize_tag_value("Rust") == "rust"          # still case-normalized
+    assert main.normalize_tag_value("c++") == "c++"            # the canonical side is not re-aliased
+    assert main.normalize_tag_value("cpp-lang") == "cpp-lang"  # not a prefix match on the alias
+
+
 def test_raw_normalize_does_not(env):
     """The editor needs this: normalizing through the aliased path would return
     'c++' for 'cpp' the moment the alias exists, so an alias could never be
