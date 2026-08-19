@@ -400,7 +400,7 @@ class _UnreadReader:
         self.unread.append(key)
 
 
-def _unread_meta_conn() -> sqlite3.Connection:
+def _unread_meta_conn(saved=()) -> sqlite3.Connection:
     """A meta conn with the tables this route touches — it reads saved_entries
     for the kept set and writes the undo batch."""
     conn = sqlite3.connect(":memory:")
@@ -410,16 +410,20 @@ def _unread_meta_conn() -> sqlite3.Connection:
                  " PRIMARY KEY (feed_url, entry_id))")
     conn.execute("CREATE TABLE entry_unread_batch (feed_url TEXT, entry_id TEXT, unread_at TEXT,"
                  " PRIMARY KEY (feed_url, entry_id))")
+    # Seeded per connection because each call builds a fresh in-memory DB — a row inserted by the test
+    # would land in a different database than the one the route opens.
+    for _feed_url, _entry_id in saved:
+        conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (_feed_url, _entry_id))
     return conn
 
 
-def _build_newer_than_app(monkeypatch, entries, kept=frozenset()):
+def _build_newer_than_app(monkeypatch, entries, kept=frozenset(), saved=()):
     from datetime import datetime, timedelta, timezone
 
     app = FastAPI()
     app.post("/entries/mark-newer-than-unread")(main.mark_entries_newer_than_unread)
     reader = _UnreadReader(entries)
-    monkeypatch.setattr(main, "get_meta_connection", _unread_meta_conn)
+    monkeypatch.setattr(main, "get_meta_connection", lambda: _unread_meta_conn(saved))
     monkeypatch.setattr(main, "get_folder_feed_urls", lambda _c, _f: {"http://feed/"})
     monkeypatch.setattr(main, "filter_feed_urls", lambda urls, _l: urls)
     monkeypatch.setattr(main, "get_tagged_entry_keys", lambda _urls: set(kept))
@@ -492,3 +496,40 @@ def test_newer_than_unread_sync_redirects(monkeypatch):
         r = client.post("/entries/mark-newer-than-unread",
                         data={"folder_id": "1", "min_age_days": "7"}, follow_redirects=False)
     assert r.status_code == 303
+
+
+def test_saved_posts_are_skipped_too(monkeypatch):
+    """Kept has two sources — tagged (get_tagged_entry_keys) and saved (saved_entries). The tagged half was
+    covered; a regression in the saved lookup would have gone unnoticed and quietly resurfaced articles the
+    user had explicitly put aside."""
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    entries = [_UnreadEntry("plain", now - timedelta(hours=1)),
+               _UnreadEntry("saved", now - timedelta(hours=1))]
+    app, reader, *_ = _build_newer_than_app(
+        monkeypatch, entries, saved=[("http://feed/", "saved")])
+
+    with TestClient(app) as client:
+        client.post("/entries/mark-newer-than-unread",
+                    data={"folder_id": "1", "min_age_days": "7"}, headers=_ASYNC_HEADER)
+
+    assert [e for _f, e in reader.unread] == ["plain"]
+
+
+def test_an_undo_token_with_a_timezone_offset_is_not_a_500():
+    """The token is echoed back by the client, so it is untrusted. fromisoformat returns an AWARE datetime
+    for anything carrying an offset, and subtracting that from a naive datetime.now() raises TypeError —
+    a crafted value turned the undo endpoints into a 500."""
+    assert main._undo_token_problem("2026-08-18T12:00:00+01:00") is not None   # window, not a crash
+    assert main._undo_token_problem("2026-08-18T12:00:00Z") is not None
+    assert main._undo_token_problem("not a timestamp") is not None
+    # And a fresh naive token still passes.
+    from datetime import datetime
+    assert main._undo_token_problem(datetime.now().isoformat()) is None
+
+
+def test_a_fresh_aware_token_is_accepted(monkeypatch):
+    """Aware must mean 'compared correctly', not 'always rejected' — an offset-carrying token that is
+    inside the window has to work."""
+    from datetime import datetime, timezone
+    assert main._undo_token_problem(datetime.now(timezone.utc).isoformat()) is None

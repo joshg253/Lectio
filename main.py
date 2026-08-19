@@ -32041,12 +32041,9 @@ def undo_mark_unread(unread_at: str = Form(...)):
     Same shape and same window: one shared timestamp per batch is the token, and
     only that batch is put back, so reads either side of it are untouched.
     """
-    try:
-        stamped = datetime.fromisoformat(unread_at)
-    except ValueError:
-        return JSONResponse({"ok": False, "error": "Bad undo token."}, status_code=400)
-    if datetime.now() - stamped > _UNDO_MARK_READ_WINDOW:
-        return JSONResponse({"ok": False, "error": "The undo window has passed."}, status_code=410)
+    _bad_token = _undo_token_problem(unread_at)
+    if _bad_token is not None:
+        return _bad_token
 
     with get_meta_connection() as conn:
         pairs = [(str(r["feed_url"]), str(r["entry_id"])) for r in conn.execute(
@@ -32083,6 +32080,26 @@ def undo_mark_unread(unread_at: str = Form(...)):
 _UNDO_MARK_READ_WINDOW = timedelta(minutes=15)
 
 
+def _undo_token_problem(raw: str) -> JSONResponse | None:
+    """Parse and window-check a bulk-action undo token; None when it is good.
+
+    The token is the batch's shared timestamp echoed back by the client, so it is untrusted input.
+    ``fromisoformat`` returns an AWARE datetime for anything carrying an offset ("...+01:00"), and
+    subtracting that from a naive ``datetime.now()`` raises TypeError — a 500 from a crafted value. Compare
+    on a common footing by reading "now" in whatever zone the token claims.
+
+    Shared by the mark-read and mark-unread undos so their window and token handling cannot drift.
+    """
+    try:
+        stamped = datetime.fromisoformat(raw)
+    except (ValueError, TypeError):
+        return JSONResponse({"ok": False, "error": "Bad undo token."}, status_code=400)
+    now = datetime.now(stamped.tzinfo) if stamped.tzinfo is not None else datetime.now()
+    if now - stamped > _UNDO_MARK_READ_WINDOW:
+        return JSONResponse({"ok": False, "error": "The undo window has passed."}, status_code=410)
+    return None
+
+
 @app.post("/entries/undo-mark-read")
 def undo_mark_read(read_at: str = Form(...)):
     """Undo a bulk mark-as-read (the toast's Undo button).
@@ -32092,12 +32109,9 @@ def undo_mark_read(read_at: str = Form(...)):
     batch to unread — reads before or after it are untouched. Tokens older
     than the undo window are refused: this is a just-pressed-the-wrong-button
     escape hatch, not history."""
-    try:
-        stamped = datetime.fromisoformat(read_at)
-    except ValueError:
-        return JSONResponse({"ok": False, "error": "Bad undo token."}, status_code=400)
-    if datetime.now() - stamped > _UNDO_MARK_READ_WINDOW:
-        return JSONResponse({"ok": False, "error": "The undo window has passed."}, status_code=410)
+    _bad_token = _undo_token_problem(read_at)
+    if _bad_token is not None:
+        return _bad_token
 
     with get_meta_connection() as conn:
         pairs = conn.execute(
@@ -32145,11 +32159,19 @@ def mark_entries_newer_than_unread(
     # annoying. The "older than" direction has no equivalent problem — marking a
     # kept post READ does not resurface it.
     kept = get_tagged_entry_keys(set(filtered_feed_urls))
-    with get_meta_connection() as conn:
-        kept |= {
-            (str(r["feed_url"]), str(r["entry_id"]))
-            for r in conn.execute("SELECT feed_url, entry_id FROM saved_entries")
-        }
+    _kept_feed_urls = list(filtered_feed_urls)
+    if _kept_feed_urls:
+        # Scoped to the feeds in play, the way the tagged half already is. Reading every saved row meant
+        # a whole-table scan on a library with thousands of saves, to answer a question about one folder.
+        with get_meta_connection() as conn:
+            _q = ",".join("?" * len(_kept_feed_urls))
+            kept |= {
+                (str(r["feed_url"]), str(r["entry_id"]))
+                for r in conn.execute(
+                    f"SELECT feed_url, entry_id FROM saved_entries WHERE feed_url IN ({_q})",
+                    _kept_feed_urls,
+                )
+            }
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=min_age_days)
     unmarked_count = 0
