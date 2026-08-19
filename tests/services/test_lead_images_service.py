@@ -2369,11 +2369,13 @@ def test_feed_media_thumbnails_fetch_is_bounded_and_never_hands_feedparser_a_url
     )
 
     seen_timeouts: list[object] = []
+    seen_follow_redirects: list[object] = []
     real_client = httpx.Client
 
     class _RecordingClient(real_client):
         def __init__(self, *args, **kwargs):
             seen_timeouts.append(kwargs.get("timeout"))
+            seen_follow_redirects.append(kwargs.get("follow_redirects"))
             super().__init__(*args, **kwargs)
 
     monkeypatch.setattr(lead_images_module.httpx, "Client", _RecordingClient)
@@ -2395,3 +2397,8 @@ def test_feed_media_thumbnails_fetch_is_bounded_and_never_hands_feedparser_a_url
 
     assert thumbs == {"https://example.com/post": "https://example.com/thumb.jpg"}
     assert seen_timeouts and all(t is not None for t in seen_timeouts), "the feed fetch must carry a timeout"
+    # follow_redirects=False is what lets url_guard.safe_get validate every hop; with httpx following
+    # redirects itself, a public URL could bounce to an internal address after the pre-check passed.
+    assert seen_follow_redirects and all(fr is False for fr in seen_follow_redirects), (
+        "the feed fetch must disable httpx redirect following so url_guard checks each hop"
+    )

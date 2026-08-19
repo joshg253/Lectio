@@ -5307,6 +5307,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         }
       });
       feedPropUserTitle.addEventListener('keydown', event => {
+        // Enter also commits an IME composition, so blurring here would save half-composed text.
+        if (event.isComposing) return;
         if (event.key === 'Enter') {
           event.preventDefault();
           feedPropUserTitle.blur();  // the blur handler is the single save path
