@@ -16372,6 +16372,15 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             except Exception:
                 pass
 
+        # A feed that ships its own full HTML floats images with its site's classes (WordPress
+        # alignleft/alignright), and a reader never ships that stylesheet — so the class survived and did
+        # nothing, and every image landed full-width with the text meant to wrap beside it pushed below.
+        # lift_float_classes was only ever applied to source-page extraction, so scraped articles floated
+        # correctly and feed-supplied ones did not. Lifted here, before the opener strip, so the float guard
+        # in _strip_lead_image_opener can see a class-based float as the inline style it checks for.
+        if isinstance(content_html, str) and content_html:
+            content_html = html_sanitize.lift_float_classes(content_html)
+
         image_title_text, _in_feed_title_is_lead_img, _persisted_alt, _persisted_title = (
             _initial_image_caption(content_html, entry, lead_image_url)
         )
