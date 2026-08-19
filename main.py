@@ -7479,7 +7479,6 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
 def _get_entry_excerpt(entry: object) -> str:
     """Return a short plain-text excerpt from an entry's content or summary."""
-    import re as _re
     raw = ""
     content = getattr(entry, "content", None) or []
     for c in content:
@@ -7489,10 +7488,7 @@ def _get_entry_excerpt(entry: object) -> str:
             break
     if not raw:
         raw = str(getattr(entry, "summary", None) or "")
-    # Strip HTML tags
-    plain = _re.sub(r"<[^>]+>", " ", raw)
-    plain = " ".join(plain.split())
-    return plain[:300]
+    return html_sanitize.plain_text_excerpt(raw)
 
 
 def _is_local_dev_feed(feed_url: str) -> bool:
@@ -32794,17 +32790,10 @@ def email_entry(
     link = entry.link or ""
     feed_title = (entry.feed.title if entry.feed else None) or ""
 
-    # Prefer plain-text summary; fall back to stripping HTML content.
-    excerpt = ""
-    if entry.summary:
-        excerpt = re.sub(r"<[^>]+>", " ", entry.summary)
-        excerpt = re.sub(r"\s+", " ", excerpt).strip()
-    elif entry.content:
-        raw = entry.content[0].value if entry.content else ""
-        excerpt = re.sub(r"<[^>]+>", " ", raw)
-        excerpt = re.sub(r"\s+", " ", excerpt).strip()
-    if excerpt and len(excerpt) > 300:
-        excerpt = excerpt[:297] + "…"
+    # Prefer the summary; fall back to the full content. Entities are decoded
+    # here because the mail builder escapes again — see plain_text_excerpt.
+    raw = entry.summary or (entry.content[0].value if entry.content else "")
+    excerpt = html_sanitize.plain_text_excerpt(raw)
 
     ok, error = send_article_email(
         api_key=get_resend_api_key(),

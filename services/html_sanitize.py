@@ -522,6 +522,30 @@ _RELATIVE_URL_ATTRS = (
 _NON_RESOLVABLE_SCHEMES = ("data:", "mailto:", "javascript:", "tel:", "blob:", "about:", "#")
 
 
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def plain_text_excerpt(html_text: str, limit: int = 300) -> str:
+    """Body HTML -> a plain-text excerpt for somewhere that cannot render HTML.
+
+    Tags are stripped BEFORE entities are decoded, never after: decoding first
+    would turn an escaped ``&lt;script&gt;`` into a real tag for the stripper to
+    eat, losing the text a reader is supposed to see.
+
+    Decoding matters because the caller escapes again. Email showed
+    ``&lt;chrono&gt;, his date &amp; time library`` in the preview — the body's
+    entities survived tag-stripping as literal text, then ``html.escape`` escaped
+    the ampersands a second time.
+    """
+    if not html_text:
+        return ""
+    plain = _TAG_RE.sub(" ", html_text)
+    plain = " ".join(html_stdlib.unescape(plain).split())
+    if limit and len(plain) > limit:
+        plain = plain[: max(0, limit - 1)].rstrip() + "\u2026"
+    return plain
+
+
 def decode_title_entities(title: str) -> str:
     """Decode HTML entities left in a plain-text title.
 
