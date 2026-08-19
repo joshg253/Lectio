@@ -347,15 +347,6 @@ dismissal — a settings row listing dismissed groups with an un-dismiss button
 would be the natural follow-up if a wrong dismissal ever needs clawing back.
 Not built since it wasn't asked for yet.
 
-### Dedup fuzzy threshold is not persisted per rule
-
-Shipped 2026-08-19: the mode-comparison view has a % slider (`fuzzy_pct`, 50–100,
-default 80) that both `/rules/dry-run` and `/rules/run-now` accept, so a
-threshold can be tuned and compared. A saved deduplicate rule still has no
-column for it — scheduled runs always use 80%. Adding one means a
-`highlight_keywords` column plus the startup per-user migration; worth doing
-only once a tuned value proves better than the default.
-
 ### CodeQL board — watch-note
 
 Board is at zero open alerts as of 2026-08-13 (PR #200 cleared a `py/redos` in

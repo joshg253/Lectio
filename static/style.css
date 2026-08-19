@@ -6919,8 +6919,7 @@ mark.highlight-mark {
 .hl-compare-fuzz-label { display: flex; align-items: center; gap: 0.4rem; }
 .hl-compare-fuzz-slider { width: 10rem; max-width: 40vw; accent-color: var(--accent, #4f89ab); }
 .hl-compare-fuzz-val { font-weight: 600; color: var(--ink, #222); min-width: 2.6rem; }
-.hl-compare-fuzz-run { margin: 0; }
-.hl-compare-fuzz-run:disabled { opacity: 0.45; cursor: default; }
+.hl-compare-fuzz-note { font-style: italic; opacity: 0.8; }
 .hl-compare-consensus-toggle {
   display: block;
   margin: 0 0 0.35rem;

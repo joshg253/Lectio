@@ -9804,25 +9804,26 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           const out = document.createElement('span');
           out.className = 'hl-compare-fuzz-val';
           out.textContent = curPct + '%';
-          const runBtn = document.createElement('button');
-          runBtn.type = 'button';
-          runBtn.className = 'hl-dryrun-compare-btn hl-compare-fuzz-run';
-          runBtn.textContent = 'Re-run';
-          runBtn.disabled = true;
-          slider.addEventListener('input', () => {
-            out.textContent = slider.value + '%';
-            runBtn.disabled = Number(slider.value) === curPct;
-          });
-          runBtn.addEventListener('click', async () => {
+          const note = document.createElement('span');
+          note.className = 'hl-compare-fuzz-note';
+          note.textContent = 'preview only — set it on the rule to keep it';
+          // Dragging previews at once (on release, not per pixel): the point of the
+          // knob is seeing what the number does, not clicking a second button.
+          slider.addEventListener('input', () => { out.textContent = slider.value + '%'; });
+          slider.addEventListener('change', async () => {
             const pct = Number(slider.value);
-            runBtn.disabled = true; runBtn.textContent = 'Re-running…';
+            if (pct === curPct) return;
+            slider.disabled = true; note.textContent = 'previewing ' + pct + '%…';
             try {
               const next = await refetch(pct, results);
               wrap.replaceWith(hlBuildModeComparisonWrap(next, activeMode, refetch, pct));
-            } catch { runBtn.textContent = 'Re-run failed'; runBtn.disabled = false; }
+            } catch {
+              note.textContent = 'preview failed'; slider.disabled = false;
+              out.textContent = curPct + '%'; slider.value = String(curPct);
+            }
           });
           lbl.appendChild(slider); lbl.appendChild(out);
-          ctl.appendChild(lbl); ctl.appendChild(runBtn);
+          ctl.appendChild(lbl); ctl.appendChild(note);
           wrap.appendChild(ctl);
         }
 
@@ -10402,6 +10403,13 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
               winBadge.textContent = Math.round((rule.dedup_window_hours || 168) / 24) + 'd';
               row.appendChild(winBadge);
             }
+            if (rule.keyword === 'fuzzy') {
+              const pctBadge = document.createElement('span');
+              pctBadge.className = 'hl-rule-search-in-badge';
+              pctBadge.textContent = '≥' + (rule.dedup_fuzzy_pct || _hlFuzzyPctDefault) + '%';
+              pctBadge.title = 'Title similarity needed to call two entries the same article';
+              row.appendChild(pctBadge);
+            }
             if (rule.exclude_scope_ids) {
               const exclIds = rule.exclude_scope_ids.split(',').map(s => s.trim()).filter(Boolean);
               if (exclIds.length > 0) {
@@ -10548,6 +10556,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
                 search_in: rule.search_in || 'title',
                 dedup_window_hours: rule.dedup_window_hours || 168,
                 exclude_scope_ids: rule.exclude_scope_ids || '',
+                fuzzy_pct: rule.dedup_fuzzy_pct || _hlFuzzyPctDefault,
                 yt_include_shorts: rule.yt_include_shorts ? 1 : 0,
                 yt_min_minutes: rule.yt_min_minutes || 0,
                 yt_max_minutes: rule.yt_max_minutes || 0,
@@ -10586,6 +10595,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
                   search_in: rule.search_in || 'title',
                   dedup_window_hours: rule.dedup_window_hours || 168,
                   exclude_scope_ids: rule.exclude_scope_ids || '',
+                  fuzzy_pct: rule.dedup_fuzzy_pct || _hlFuzzyPctDefault,
                 });
                 const resp = await fetch('/rules/run-now', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
                 const data = await resp.json();
@@ -10833,10 +10843,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
                   dedup_window_hours: String(rule.dedup_window_hours || 168),
                   exclude_scope_ids: rule.exclude_scope_ids || '',
                 };
+                const startPct = rule.dedup_fuzzy_pct || _hlFuzzyPctDefault;
                 const refetch = (pct, prior) => hlFetchAllModes(base, pct, prior);
-                const results = await hlFetchAllModes(base, _hlFuzzyPctDefault);
+                const results = await hlFetchAllModes(base, startPct);
 
-                cmpBtn.replaceWith(hlBuildModeComparisonWrap(results, rule.keyword, refetch, _hlFuzzyPctDefault));
+                cmpBtn.replaceWith(hlBuildModeComparisonWrap(results, rule.keyword, refetch, startPct));
               } catch (err) { cmpBtn.textContent = 'Compare failed'; cmpBtn.disabled = false; }
             });
             panel.appendChild(cmpBtn);
@@ -11266,6 +11277,23 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         const windowHrsSuffix = document.createTextNode(' days');
         windowHoursWrap.appendChild(windowHrsSuffix);
         draft.appendChild(windowHoursWrap);
+
+        // Fuzzy similarity (Deduplicate + fuzzy match only) — the value the rule
+        // runs at, on refresh and on Run Now.
+        const fuzzyPctWrap = document.createElement('label');
+        fuzzyPctWrap.className = 'hl-draft-field-label hl-draft-fuzzy-wrap';
+        fuzzyPctWrap.textContent = 'titles ≥ ';
+        const fuzzyPctInput = document.createElement('input');
+        fuzzyPctInput.type = 'number';
+        fuzzyPctInput.className = 'hl-draft-batch-count hl-draft-fuzzy-pct';
+        fuzzyPctInput.min = '50';
+        fuzzyPctInput.max = '100';
+        fuzzyPctInput.step = '1';
+        fuzzyPctInput.value = String(prefill.dedup_fuzzy_pct || _hlFuzzyPctDefault);
+        fuzzyPctInput.title = 'Share of title words two entries must have in common (50-100)';
+        fuzzyPctWrap.appendChild(fuzzyPctInput);
+        fuzzyPctWrap.appendChild(document.createTextNode('% alike'));
+        draft.appendChild(fuzzyPctWrap);
 
         // Exclude folders token-input sub-row (Deduplicate + global scope only)
         const excludeRow = document.createElement('div');
@@ -11737,6 +11765,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           if (!isEmail) contactFormRow.style.display = 'none';
           matchMethodSel.style.display = isDedup ? '' : 'none';
           windowHoursWrap.style.display = dedupNeedsWindow ? '' : 'none';
+          fuzzyPctWrap.style.display = (isDedup && matchMethodSel.value === 'fuzzy') ? '' : 'none';
           excludeRow.style.display = isGlobalDedup ? '' : 'none';
           webhookRow.style.display = isWebhook ? '' : 'none';
           ytRow.style.display = isYtPlaylist ? '' : 'none';
@@ -11821,10 +11850,12 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             else if (folderId)         { scope = 'folder'; scopeId = folderId; }
             else                       { scope = 'global'; scopeId = ''; }
             const excludeIds = getExcludeIds();
+            const fuzzyPct = Math.max(50, Math.min(100, parseInt(fuzzyPctInput.value || '80', 10) || 80));
             await onSave({ scope, scope_id: scopeId, keyword: matchMethod, color: 'yellow',
                            is_regex: 0, type: 'deduplicate', search_in: 'title',
                            delivery: 'immediately', email_to: '', batch_time: '', batch_count: 0,
-                           cc_me: 0, dedup_window_hours: windowHours, exclude_scope_ids: excludeIds });
+                           cc_me: 0, dedup_window_hours: windowHours, exclude_scope_ids: excludeIds,
+                           dedup_fuzzy_pct: fuzzyPct });
             return;
           }
 
@@ -11872,6 +11903,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           batch_count: r.batch_count || 0, cc_me: r.cc_me || 0,
           enabled: r.enabled !== undefined ? r.enabled : 0,
           dedup_window_hours: r.dedup_window_hours || 168,
+          dedup_fuzzy_pct: r.dedup_fuzzy_pct || _hlFuzzyPctDefault,
           exclude_scope_ids: r.exclude_scope_ids || '',
           webhook_url: r.webhook_url || '', webhook_format: r.webhook_format || 'generic', webhook_batch: r.webhook_batch ? 1 : 0,
           yt_playlist_id: r.yt_playlist_id || '', yt_playlist_title: r.yt_playlist_title || '',

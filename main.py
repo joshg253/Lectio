@@ -3996,6 +3996,10 @@ def ensure_meta_schema() -> None:
         except Exception:
             pass
         try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN dedup_fuzzy_pct INTEGER NOT NULL DEFAULT 80")
+        except Exception:
+            pass
+        try:
             conn.execute("ALTER TABLE highlight_keywords ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
             conn.execute("UPDATE highlight_keywords SET sort_order = rowid WHERE sort_order = 0")
         except Exception:
@@ -4643,19 +4647,25 @@ _HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
 _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
 _DEDUP_FUZZY_PCT_DEFAULT = 80
 
-def _dedup_fuzzy_threshold(pct: int | None) -> float:
-    """Percent knob -> similarity ratio. Below 50% fuzzy matches near-anything."""
+def _clamp_fuzzy_pct(pct: int | None) -> int:
+    """Percent knob, clamped. Below 50% a fuzzy title match catches near-anything."""
     try:
         v = int(pct if pct is not None else _DEDUP_FUZZY_PCT_DEFAULT)
     except (TypeError, ValueError):
         v = _DEDUP_FUZZY_PCT_DEFAULT
-    return max(50, min(100, v)) / 100.0
+    return max(50, min(100, v))
+
+
+def _dedup_fuzzy_threshold(pct: int | None) -> float:
+    """Percent knob -> similarity ratio."""
+    return _clamp_fuzzy_pct(pct) / 100.0
 
 
 def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
-        " email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids, sort_order,"
+        " email_to, batch_time, batch_count, cc_me, dedup_window_hours, dedup_fuzzy_pct,"
+        " exclude_scope_ids, sort_order,"
         " webhook_url, webhook_format, webhook_batch,"
         " yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
         " yt_min_minutes, yt_max_minutes"
@@ -4724,6 +4734,7 @@ def add_highlight_keyword(
     enabled: int = 0,
     dedup_window_hours: int = 168,
     exclude_scope_ids: str = "",
+    dedup_fuzzy_pct: int = _DEDUP_FUZZY_PCT_DEFAULT,
     webhook_url: str = "",
     webhook_format: str = "generic",
     webhook_batch: bool = False,
@@ -4759,14 +4770,16 @@ def add_highlight_keyword(
         "INSERT OR REPLACE INTO highlight_keywords"
         " (scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
         "  email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids,"
+        "  dedup_fuzzy_pct,"
         "  webhook_url, webhook_format, webhook_batch,"
         "  yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
         "  yt_min_minutes, yt_max_minutes)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0, 1 if enabled else 0,
          rule_type, search_in, delivery,
          email_to.strip(), batch_time.strip(), max(0, int(batch_count or 0)), 1 if cc_me else 0,
          max(1, int(dedup_window_hours or 168)), exclude_scope_ids.strip(),
+         _clamp_fuzzy_pct(dedup_fuzzy_pct),
          webhook_url.strip(), webhook_format, 1 if webhook_batch else 0,
          yt_playlist_id.strip(), yt_playlist_title.strip(),
          1 if yt_include_shorts else 0, 1 if yt_mark_read else 0,
@@ -7336,6 +7349,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
                         result = _run_now_dedup(
                             conn, scope, scope_id, match_method, window_hours,
                             exclude_scope_ids=exclude_scope_ids,
+                            fuzzy_threshold=_dedup_fuzzy_threshold(rule.get("dedup_fuzzy_pct")),
                         )
                         if "error" not in result and result.get("count", 0) > 0:
                             _log_auto_run(conn, now, rule_type, scope, scope_id, keyword, result)
@@ -24244,6 +24258,7 @@ def add_highlight_route(
     enabled: int = Form(0),
     dedup_window_hours: int = Form(168),
     exclude_scope_ids: str = Form(""),
+    dedup_fuzzy_pct: int = Form(_DEDUP_FUZZY_PCT_DEFAULT),
     webhook_url: str = Form(""),
     webhook_format: str = Form("generic"),
     webhook_batch: int = Form(0),
@@ -24302,6 +24317,7 @@ def add_highlight_route(
         add_highlight_keyword(conn, scope, scope_id, keyword, color, bool(is_regex),
                               type, search_in, delivery, email_to, batch_time, batch_count,
                               bool(cc_me), enabled, dedup_window_hours, exclude_scope_ids,
+                              _clamp_fuzzy_pct(dedup_fuzzy_pct),
                               webhook_url, webhook_format, bool(webhook_batch),
                               yt_playlist_id, yt_playlist_title,
                               bool(yt_include_shorts), bool(yt_mark_read),
@@ -24312,6 +24328,7 @@ def add_highlight_route(
                          "email_to": email_to, "batch_time": batch_time, "batch_count": batch_count,
                          "cc_me": bool(cc_me), "enabled": bool(enabled),
                          "dedup_window_hours": dedup_window_hours,
+                         "dedup_fuzzy_pct": _clamp_fuzzy_pct(dedup_fuzzy_pct),
                          "exclude_scope_ids": exclude_scope_ids.strip(),
                          "webhook_url": webhook_url.strip(), "webhook_format": webhook_format,
                          "webhook_batch": bool(webhook_batch),

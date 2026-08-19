@@ -78,3 +78,51 @@ def test_route_passes_the_percent_knob_through(env):
 ])
 def test_threshold_clamped_to_a_sane_range(pct, expected):
     assert main._dedup_fuzzy_threshold(pct) == pytest.approx(expected)
+
+
+def test_rule_round_trips_the_saved_percent(env):
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "global", "", "fuzzy", "yellow",
+                                   rule_type="deduplicate", enabled=1, dedup_fuzzy_pct=65)
+        rule = [r for r in main.get_highlight_keywords(conn) if r["type"] == "deduplicate"][0]
+    assert rule["dedup_fuzzy_pct"] == 65
+
+
+def test_rule_percent_is_clamped_on_save(env):
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "global", "", "fuzzy", "yellow",
+                                   rule_type="deduplicate", enabled=1, dedup_fuzzy_pct=5)
+        rule = [r for r in main.get_highlight_keywords(conn) if r["type"] == "deduplicate"][0]
+    assert rule["dedup_fuzzy_pct"] == 50
+
+
+def test_default_percent_for_a_rule_saved_without_one(env):
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "global", "", "title", "yellow",
+                                   rule_type="deduplicate", enabled=1)
+        rule = [r for r in main.get_highlight_keywords(conn) if r["type"] == "deduplicate"][0]
+    assert rule["dedup_fuzzy_pct"] == 80
+
+
+def test_run_now_honors_the_saved_percent(env, monkeypatch):
+    """The after-refresh automation reads the rule's column; Run Now sends it as a
+    form field. Both land on _run_now_dedup's fuzzy_threshold."""
+    seen: list[float] = []
+    real = main._run_now_dedup
+    monkeypatch.setattr(main, "_run_now_dedup",
+                        lambda *a, **kw: (seen.append(kw.get("fuzzy_threshold")), real(*a, **kw))[1])
+    main.rules_run_now_route(type="deduplicate", scope="global", scope_id="", keyword="fuzzy",
+                             is_regex=0, search_in="title", dedup_window_hours=168,
+                             exclude_scope_ids="", fuzzy_pct=65)
+    assert seen == [pytest.approx(0.65)]
+
+
+def test_after_refresh_automation_reads_the_column(env, monkeypatch):
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "global", "", "fuzzy", "yellow",
+                                   rule_type="deduplicate", enabled=1, dedup_fuzzy_pct=65)
+    seen: list[float] = []
+    monkeypatch.setattr(main, "_run_now_dedup",
+                        lambda *a, **kw: seen.append(kw.get("fuzzy_threshold")) or {"count": 0})
+    main._run_automation_after_refresh({FEED_A})
+    assert seen == [pytest.approx(0.65)]
