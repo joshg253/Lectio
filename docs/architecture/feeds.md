@@ -32,7 +32,7 @@ Two mechanisms prevent duplicate articles from accumulating in the reader DB:
 
 **Title normalization strips punctuation from token EDGES only.** `normalize_entry_title_for_dedupe` NFKC-normalizes, folds smart quotes, splits en/em dashes *between* letters (they separate phrases), casefolds, then strips sentence punctuation from each token's edges. Word boundaries never move: `second-best.cat()` stays one token instead of becoming `second best cat`, because splitting compounds was measured as strictly worse (30 → 28 true cross-feed pairs on a 5,588-entry backlog — splitting inflates the token count on whichever side spells the compound out). The strip set deliberately omits `+ # & @ $ *`: `C++` and `C#` both collapse to `c` otherwise, merging unrelated programming posts. Adopting the strip added 6 cross-feed fuzzy pairs at 80%, all of them near-misses already scoring 0.71–0.79 — punctuation was costing genuine duplicates about 0.12 of similarity.
 
-**One title-length floor, `_DEDUP_MIN_TITLE_WORDS`, tunable per rule.** Shared by fuzzy, exact-title, the safe combo and GUID-churn suppression, which each carried their own literal `4`. It is a false-positive guard, not an optimization: titles under 4 words produced 11 same-feed false collisions against 1 real cross-feed duplicate. It also bounds what the % knob can express — two 4-word titles can only score 1.0, 0.6, 0.33 or 0.14, so every threshold from 61% to 100% behaves identically there. `dedup_min_title_words` (3–10) overrides it per rule and now applies to Title mode too, which had no floor at all.
+**One title-length floor, `_DEDUP_MIN_TITLE_WORDS`, tunable per rule.** Shared by fuzzy, exact-title, the safe combo and GUID-churn suppression, which each carried their own literal `4`. It is a false-positive guard, not an optimization: titles under 4 words produced 11 same-feed false collisions against 1 real cross-feed duplicate. It also bounds what the % knob can express — two 4-word titles can only score 1.0, 0.6, 0.33 or 0.14, so every threshold from 61% to 100% behaves identically there. `dedup_min_title_words` (3–10) overrides it per rule and now applies to Title mode too, which had no floor at all. The default is **5**, not 4: the 4-word band itself contributed 2 more same-feed false collisions and no true cross-feed ones. Rules created with the shipped default of 4 are raised once at startup, behind an `app_settings` flag so a deliberate 4 set later survives.
 
 **Deduplicate rules: the fuzzy threshold belongs to the rule, not the code.** `fuzzy` matching is Jaccard word overlap on normalized titles (`title_word_similarity`), and the cutoff that separates a syndicated repost from two different articles is corpus-specific — 80% was a guess that suited no feed in particular. It is a `highlight_keywords.dedup_fuzzy_pct` column (50-100, clamped by `_clamp_fuzzy_pct`), read by the after-refresh automation and sent as `fuzzy_pct` by dry-run and Run Now, so one number governs preview, future entries, and the backlog sweep. The mode-comparison panel exists to *find* that number: it buckets pairs by how many of the four modes agreed, opens on the single-mode outliers, and hides the all-modes-agree consensus inside each mode's detail panel — the pairs every mode caught need no review, and burying the disagreements under them was the original mistake.
 
@@ -258,6 +258,15 @@ keeping services free of main/DB imports.
 - **Id mapping re-derives, never zips.** `_process_feed` skips unparsable
   entries, so positions do not line up. A sink failure is logged and swallowed —
   tag capture must never fail a feed parse.
+- **Shopify's `<s:vendor>` counts as a category.** A storefront collection feed
+  (`…/collections/<name>.atom`) files the maker in the Shopify product namespace,
+  never in `<category>` — and on a record shop that element is the *artist*, the
+  one thing worth tagging. feedparser flattens an unknown namespace using the
+  document's own prefix, so the key is `s_vendor` for the usual `xmlns:s`;
+  `_shopify_vendor_tags` matches any `<prefix>_vendor` rather than betting on one
+  spelling, and takes plain strings only (a structured value belongs to some other
+  schema's `vendor`). A bare `vendor` key is ignored — unnamespaced, it could mean
+  anything.
 - **Storage.** `entry_feed_tags(feed_url, entry_id, tag, first_seen_at)`, tags
   stored **raw** and normalized only at display, because the raw text is the
   foundation for tag-filtered feed adapters. Replace-per-entry semantics, so
