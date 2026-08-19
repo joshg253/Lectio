@@ -96,3 +96,38 @@ def test_srcset_candidates_are_resolved():
 def test_untouched_html_is_returned_unchanged():
     html = '<p>No links here.</p>'
     assert html_sanitize.resolve_relative_urls(html, FEED_URL) is html
+
+
+# --- entities left in a plain-text title -------------------------------------
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("AT&amp;T buys a rival", "AT&T buys a rival"),
+    ("Apple&rsquo;s new laptop", "Apple’s new laptop"),
+    ("Long &ndash; dash &hellip; ellipsis", "Long – dash … ellipsis"),
+    ("Nothing to decode", "Nothing to decode"),
+    ("Double &amp;amp; encoded", "Double &amp; encoded"),
+])
+def test_decode_title_entities(raw, expected):
+    assert html_sanitize.decode_title_entities(raw) == expected
+
+
+@pytest.mark.parametrize("raw", [
+    "Using &lt;details&gt; in HTML",
+    "A &#60;tag&#62; in the title",
+])
+def test_markup_entities_are_left_encoded(raw):
+    """Decoding these would put a raw < into every render path a title reaches —
+    list rows, the pane header, the page <title>, mail, webhook payloads."""
+    out = html_sanitize.decode_title_entities(raw)
+    assert "<" not in out and ">" not in out
+
+
+def test_ingest_decodes_the_entry_title():
+    xml = FIXTURE.read_text().replace(
+        "<title>Post in a dated subdirectory</title>",
+        "<title>AT&amp;amp;T &amp;rsquo;90s Special</title>")
+    parser = SanitizingFeedparserParser()
+    _feed, entries = parser(FEED_URL, io.BytesIO(xml.encode()), {"content-location": FEED_URL})
+    titles = [e.title for e in entries]
+    assert "AT&T ’90s Special" in titles

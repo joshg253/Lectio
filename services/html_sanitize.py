@@ -522,6 +522,33 @@ _RELATIVE_URL_ATTRS = (
 _NON_RESOLVABLE_SCHEMES = ("data:", "mailto:", "javascript:", "tel:", "blob:", "about:", "#")
 
 
+# Everything except the two that would introduce markup characters. Titles flow
+# into a lot of render paths (list rows, the pane header, the page <title>, mail,
+# webhooks, send-to-destination payloads); decoding `&lt;` would put a raw `<`
+# into all of them at once, and 38 stored titles would gain one. The other 976
+# are apostrophes, dashes, ellipses and ampersands, which is what a reader should
+# see — and what a plain rule keyword compares against.
+_TITLE_ENTITY_KEEP = {"&lt;": "\x00LT\x00", "&gt;": "\x00GT\x00",
+                      "&#60;": "\x00LT\x00", "&#62;": "\x00GT\x00",
+                      "&#x3c;": "\x00LT\x00", "&#x3e;": "\x00GT\x00"}
+
+
+def decode_title_entities(title: str) -> str:
+    """Decode HTML entities left in a plain-text title, except `&lt;`/`&gt;`.
+
+    feedparser decodes once; a double-encoded source still arrives as
+    ``AT&amp;T`` or ``Apple&rsquo;s``, which is what the reader then sees and what
+    a rule keyword has to match letter for letter.
+    """
+    if not title or "&" not in title:
+        return title
+    protected = title
+    for entity, sentinel in _TITLE_ENTITY_KEEP.items():
+        protected = re.sub(re.escape(entity), sentinel, protected, flags=re.IGNORECASE)
+    decoded = html_stdlib.unescape(protected)
+    return decoded.replace("\x00LT\x00", "&lt;").replace("\x00GT\x00", "&gt;")
+
+
 def resolve_relative_urls(html: str, base_url: str) -> str:
     """Absolutize relative src/href in *html* against *base_url*.
 

@@ -122,3 +122,34 @@ def test_dry_run_run_now_and_live_matching_share_one_matcher(monkeypatch):
 
     assert calls == [("spoiler, leak", False), ("leak, rumor", False),
                      ("spoiler, leak", False), ("leak, rumor", False)]
+
+
+# --- curly punctuation folds, so a term matches either spelling ---------------
+
+
+@pytest.mark.parametrize("title", [
+    "Apple’s new laptop",     # typographic
+    "Apple's new laptop",          # ASCII
+])
+def test_apostrophe_spelling_does_not_matter(title):
+    assert main.build_keyword_matcher("apple's", False)(title) is True
+
+
+def test_a_curly_term_matches_ascii_text_too():
+    """Folded on both sides — the reader may paste either form."""
+    assert main.build_keyword_matcher("apple’s", False)("APPLE'S DEAL") is True
+
+
+def test_curly_double_quotes_fold():
+    assert main.build_keyword_matcher('"deal of the day"', False)(
+        "“Deal of the Day” roundup") is True
+
+
+def test_non_breaking_space_folds_to_a_plain_space():
+    assert main.build_keyword_matcher("50% off", False)("Now 50% off!") is True
+
+
+def test_regex_mode_is_not_folded():
+    """A pattern says what it says — folding would silently rewrite it."""
+    assert main.build_keyword_matcher("apple’s", True)("Apple's deal") is False
+    assert main.build_keyword_matcher("apple’s", True)("Apple’s deal") is True

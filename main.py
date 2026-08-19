@@ -6188,6 +6188,23 @@ def split_keyword_terms(keyword: str) -> list[str]:
     return [term for term in (part.strip() for part in keyword.split(",")) if term]
 
 
+# Publishers spell the same punctuation two ways and the reader cannot see which:
+# 2,773 stored titles use a typographic apostrophe, 6,761 the ASCII one. A term
+# typed as "Apple's" must match "Apple’s". Folded on BOTH sides of a plain
+# compare, so it only ever adds matches. Regex mode is left alone — a pattern
+# says what it says.
+_MATCH_FOLD = {
+    ord("\u2018"): "'", ord("\u2019"): "'", ord("\u201b"): "'", ord("\u2032"): "'",
+    ord("\u201c"): '"', ord("\u201d"): '"', ord("\u201e"): '"', ord("\u201f"): '"', ord("\u2033"): '"',
+    ord("\u00a0"): " ", ord("\u2007"): " ", ord("\u202f"): " ",
+}
+
+
+def fold_for_match(text: str) -> str:
+    """Lowercase and fold curly punctuation for a plain (non-regex) comparison."""
+    return text.translate(_MATCH_FOLD).lower()
+
+
 def build_keyword_matcher(keyword: str, is_regex: bool):
     """Text -> bool matcher for a rule's keyword. Raises re.error on a bad regex.
 
@@ -6197,16 +6214,17 @@ def build_keyword_matcher(keyword: str, is_regex: bool):
     if is_regex:
         pattern = re.compile(keyword, re.IGNORECASE)
         return lambda text: bool(pattern.search(text)) if text else False
-    terms = [term.lower() for term in split_keyword_terms(keyword)]
+    terms = [fold_for_match(term) for term in split_keyword_terms(keyword)]
     if len(terms) == 1:
         only = terms[0]
-        return lambda text: only in (text or "").lower()
+        return lambda text: only in fold_for_match(text or "")
 
     def _match_any(text: str) -> bool:
-        # Lowercase the body ONCE, not once per term: a rule with a dozen terms
-        # otherwise re-walks the whole entry body a dozen times.
-        lowered = (text or "").lower()
-        return any(term in lowered for term in terms)
+        # Fold the body ONCE, not once per term: translate() costs more than the
+        # old .lower(), and a rule with a dozen terms otherwise re-walks the whole
+        # entry body a dozen times.
+        folded = fold_for_match(text or "")
+        return any(term in folded for term in terms)
 
     return _match_any
 

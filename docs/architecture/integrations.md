@@ -87,6 +87,12 @@ boundary traps live (`Apple|AirPods|iPhone|MacBook` matched *Grapplers* and *Dol
 Pineapple Tidbits* in a deals folder — `\b(Apple|…)` with a **leading** boundary
 only is the fix, since a trailing one also drops `iPhones` and `AppleTV`).
 
+Plain terms also fold **curly punctuation** (`’ ‘ “ ” → ' "`, plus the
+non-breaking spaces) and lowercase, on both sides of the compare: publishers
+spell the same apostrophe two ways — 2,773 stored titles use the typographic one,
+6,761 the ASCII one — and the reader cannot see which a given title used. Regex
+mode is never folded; a pattern says what it says.
+
 The split deliberately does **not** imply a word boundary: measured across the
 live library, 4 plain rules match only *inside* words and would stop matching
 entirely. A term containing a literal comma needs regex mode.
