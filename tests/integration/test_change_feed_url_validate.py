@@ -190,3 +190,58 @@ def test_old_host_is_reported_for_the_alias_prefill(configured, monkeypatch):
         r = c.post("/feeds/change-url", data={"old_url": FEED, "new_url": new_url})
 
     assert r.json()["old_host"] == "example.test"
+
+
+# --- a page that advertises someone else's feed must not be adopted silently --
+
+
+def test_cross_host_discovery_needs_confirm(configured, monkeypatch):
+    """Pasting a section page whose HTML advertises the network-wide feed used to
+    swap the subscription for that feed AND seed a host-alias rule, with no
+    prompt — a music-section URL silently became the whole publisher network."""
+    network_feed = "https://publisher.test/posts.atom"
+    _patch_probe(monkeypatch, {"status": "feed", "feeds": [{"url": network_feed}]})
+    with _client() as c:
+        r = c.post("/feeds/change-url",
+                   data={"old_url": FEED, "new_url": "https://music.publisher.test/c/instruments"})
+    assert r.status_code == 422
+    body = r.json()
+    assert body["needs_confirm"] is True
+    assert body["resolved_url"] == network_feed
+    with main.get_reader() as reader:                    # nothing changed yet
+        assert reader.get_feed(FEED, None) is not None
+        assert reader.get_feed(network_feed, None) is None
+    with main.get_meta_connection() as conn:
+        assert conn.execute("SELECT count(*) FROM feed_url_rewrites").fetchone()[0] == 0
+
+
+def test_confirming_adopts_the_resolved_feed(configured, monkeypatch):
+    """The client re-posts the resolved URL with force — not the pasted page."""
+    network_feed = "https://publisher.test/posts.atom"
+    _patch_probe(monkeypatch, {"status": "none", "feeds": []})   # force skips the probe
+    with _client() as c:
+        r = c.post("/feeds/change-url",
+                   data={"old_url": FEED, "new_url": network_feed, "force": "1"})
+    assert r.status_code == 200 and r.json()["new_url"] == network_feed
+
+
+def test_direct_feed_redirecting_across_hosts_still_resolves_silently(configured, monkeypatch):
+    """A feed URL that 301s to another host is the same feed under a new address —
+    the canonical-URL case, which must not start prompting."""
+    moved = "https://newhost.test/feed.xml"
+    _patch_probe(monkeypatch, {"status": "feed", "direct": True, "feeds": [{"url": moved}]})
+    with _client() as c:
+        r = c.post("/feeds/change-url",
+                   data={"old_url": FEED, "new_url": "https://oldhost.test/feed.xml"})
+    assert r.status_code == 200 and r.json()["new_url"] == moved
+
+
+def test_resolving_onto_an_existing_subscription_names_that_url(configured, monkeypatch):
+    other = "https://example.test/other.xml"
+    with main.get_reader() as reader:
+        reader.add_feed(other, exist_ok=True)
+    _patch_probe(monkeypatch, {"status": "feed", "feeds": [{"url": other}]})
+    with _client() as c:
+        r = c.post("/feeds/change-url", data={"old_url": FEED, "new_url": "https://example.test/blog"})
+    assert r.status_code == 409
+    assert other in r.json()["error"]

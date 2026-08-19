@@ -6556,9 +6556,9 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         return;
       }
       feedPropChangeUrlSave.disabled = true;
-      const submitChangeUrl = async (force) => {
+      const submitChangeUrl = async (force, urlOverride) => {
         feedPropChangeUrlStatus.textContent = force ? 'Changing…' : 'Checking feed…';
-        const body = new URLSearchParams({ old_url: oldUrl, new_url: newUrl });
+        const body = new URLSearchParams({ old_url: oldUrl, new_url: urlOverride || newUrl });
         if (force) body.set('force', '1');
         const resp = await fetch('/feeds/change-url', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
         return { resp, json: await resp.json() };
@@ -6570,7 +6570,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         if (resp.status === 422 && json.needs_confirm) {
           feedPropChangeUrlStatus.textContent = '';
           if (!confirm(json.error)) { feedPropChangeUrlSave.disabled = false; return; }
-          ({ resp, json } = await submitChangeUrl(true));
+          // resolved_url = the server found a feed, on another site, and wants an
+          // OK before adopting it. Confirming means "use THAT one" — forcing the
+          // pasted page URL instead would subscribe to an HTML page.
+          ({ resp, json } = await submitChangeUrl(true, json.resolved_url));
         }
         if (!json.ok) throw new Error(json.error || 'Change failed');
         feedPropChangeUrlStatus.textContent = '';
