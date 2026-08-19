@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from urllib.parse import urlparse
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
@@ -163,7 +164,7 @@ def _drop_placeholder_date(value):
     return None if dt.year <= _MIN_PUBLISH_YEAR else value
 
 
-def _sanitize_entry(entry):
+def _sanitize_entry(entry, feed_url: str = ""):
     """Return ``entry`` with its content/summary run through html_sanitize, and
     any placeholder publish date dropped.
 
@@ -180,13 +181,20 @@ def _sanitize_entry(entry):
         cleaned = _drop_placeholder_date(raw)
         if cleaned is not raw:
             changed[field] = cleaned
+    base = _entry_html_base(entry, feed_url)
+
+    def _clean(raw: str) -> str:
+        # Resolve BEFORE sanitizing: the sanitizer's embed host-allowlist judges
+        # absolute URLs, which is what feedparser used to hand it.
+        return html_sanitize.sanitize_html(html_sanitize.resolve_relative_urls(raw, base))
+
     summary = getattr(entry, "summary", None)
     if isinstance(summary, str) and summary:
-        changed["summary"] = html_sanitize.sanitize_html(summary)
+        changed["summary"] = _clean(summary)
     content = getattr(entry, "content", None)
     if content:
         new_content = tuple(
-            dataclasses.replace(c, value=html_sanitize.sanitize_html(c.value))
+            dataclasses.replace(c, value=_clean(c.value))
             if isinstance(getattr(c, "value", None), str) and c.value
             else c
             for c in content
@@ -195,13 +203,37 @@ def _sanitize_entry(entry):
     return dataclasses.replace(entry, **changed) if changed else entry
 
 
+def _entry_html_base(entry, feed_url: str) -> str:
+    """Base URL for relative links inside an entry's HTML.
+
+    The entry's own link, but only when it is on the feed's host: an aggregator
+    links out to other sites while its markup stays relative to its own, and
+    rebasing onto someone else's domain would invent URLs.
+    """
+    link = str(getattr(entry, "link", "") or "").strip()
+    if not link:
+        return feed_url
+    if not feed_url:
+        return link
+    try:
+        if urlparse(link).netloc.lower() == urlparse(feed_url).netloc.lower():
+            return link
+    except ValueError:
+        return feed_url
+    return feed_url
+
+
 class SanitizingFeedparserParser(FeedparserParser):
     """Like reader's FeedparserParser, but sanitization is ours, not feedparser's."""
 
     def __call__(self, url, resource, headers=None):
         result = feedparser.parse(
             resource,
-            resolve_relative_uris=True,
+            # OFF because feedparser can only resolve against the document base
+            # (reader sets it to the feed URL); _sanitize_entry redoes it per
+            # entry against the item's own link. The flag governs embedded markup
+            # ONLY — entry links and enclosures are still resolved by feedparser.
+            resolve_relative_uris=False,
             sanitize_html=False,  # Lectio sanitizes instead (keeps safe embeds)
             response_headers=headers or {},
         )
@@ -209,7 +241,7 @@ class SanitizingFeedparserParser(FeedparserParser):
         # id derivation and everything downstream see the current-domain values.
         _rewrite_raw_urls(url, result)
         feed, entries = _process_feed(url, result)
-        entries = [_sanitize_entry(e) for e in entries]
+        entries = [_sanitize_entry(e, url) for e in entries]
         _collect_entry_tags(url, result, entries)
         _record_feed_window(url, entries)
         return feed, entries

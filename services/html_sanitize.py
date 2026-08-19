@@ -514,6 +514,62 @@ def lift_img_style_sizes(html: str) -> str:
     return str(soup) if changed else html
 
 
+_RELATIVE_URL_ATTRS = (
+    ("img", "src"), ("img", "data-src"), ("source", "src"), ("a", "href"),
+    ("video", "src"), ("video", "poster"), ("audio", "src"), ("iframe", "src"),
+    ("embed", "src"), ("object", "data"), ("track", "src"),
+)
+_NON_RESOLVABLE_SCHEMES = ("data:", "mailto:", "javascript:", "tel:", "blob:", "about:", "#")
+
+
+def resolve_relative_urls(html: str, base_url: str) -> str:
+    """Absolutize relative src/href in *html* against *base_url*.
+
+    feedparser can do this, but only against the document base — which reader
+    sets to the FEED url. A generator that copies a page's markup into the item
+    verbatim writes paths relative to THAT PAGE, so `<img src="images/x.jpg">` in
+    an item at /news/202608/post.html resolves to /news/images/x.jpg and 404s.
+    The item's own link is the base those paths were written against.
+    """
+    if not html or not base_url or "<" not in html:
+        return html
+    from urllib.parse import urljoin
+
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    changed = False
+    for tag_name, attr in _RELATIVE_URL_ATTRS:
+        for tag in soup.find_all(tag_name):
+            val = str(tag.attrs.get(attr) or "").strip()
+            if not val or val.lower().startswith(_NON_RESOLVABLE_SCHEMES):
+                continue
+            if "://" in val or val.startswith("//"):
+                continue
+            absolute = urljoin(base_url, val)
+            if absolute != val:
+                tag.attrs[attr] = absolute
+                changed = True
+    # srcset is a comma-separated list of "url descriptor" pairs.
+    for tag in soup.find_all(["img", "source"]):
+        raw = str(tag.attrs.get("srcset") or "").strip()
+        if not raw:
+            continue
+        parts = []
+        for candidate in raw.split(","):
+            candidate = candidate.strip()
+            if not candidate:
+                continue
+            url, _, descriptor = candidate.partition(" ")
+            if url and "://" not in url and not url.startswith(("//", "data:")):
+                url = urljoin(base_url, url)
+                changed = True
+            parts.append(f"{url} {descriptor}".strip())
+        if parts:
+            tag.attrs["srcset"] = ", ".join(parts)
+    return str(soup) if changed else html
+
+
 def collect_img_sizes(html: str, base_url: str | None = None) -> dict[str, tuple[str | None, str | None]]:
     """Map absolutized img src → (width, height) attributes from *html*.
 
