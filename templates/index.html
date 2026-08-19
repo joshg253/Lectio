@@ -704,10 +704,16 @@
                 {% endfor %}
 
                 <hr class="mark-read-divider" />
-                <p class="mark-read-header-label">Mark as unread:</p>
+                <details class="mark-unread-submenu">
+                  <summary class="mark-read-action mark-unread-summary" role="menuitem">
+                    <span class="material-symbols-rounded mark-read-action-icon" aria-hidden="true">mark_email_unread</span>
+                    <span>Mark as unread</span>
+                    <span class="material-symbols-rounded mark-unread-caret" aria-hidden="true">chevron_right</span>
+                  </summary>
+                  <div class="mark-unread-submenu-body" role="group" aria-label="Mark unread actions">
                 <p class="mark-read-section-label">Newer than:</p>
 
-                {% for age_days, age_label in [(30, '1 month'), (14, '2 weeks'), (7, '1 week')] %}
+                {% for age_days, age_label in [(1, '1 day'), (7, '1 week'), (30, '1 month')] %}
                 <form method="post" action="/entries/mark-newer-than-unread" class="mark-unread-action-form">
                   <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
                   <input type="hidden" name="min_age_days" value="{{ age_days }}" />
@@ -724,6 +730,8 @@
                   </button>
                 </form>
                 {% endfor %}
+                  </div>
+                </details>
                 </div>
               </details>
             </div>

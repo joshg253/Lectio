@@ -3389,6 +3389,20 @@ def ensure_meta_schema() -> None:
         # Scoped per feed because a tag useless on one feed can matter on another.
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS entry_unread_batch (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                unread_at TEXT NOT NULL,
+                PRIMARY KEY (feed_url, entry_id)
+            )
+            """
+        )
+        # Mirrors entry_read_state in the other direction: a bulk mark-as-UNREAD
+        # stamps its whole batch with one timestamp so the toast can put exactly
+        # that batch back. entry_read_state cannot serve — its rows mean "read
+        # at", and this batch has just stopped being read (they are deleted).
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS suppressed_feed_tags (
                 feed_url TEXT NOT NULL,
                 tag TEXT NOT NULL,
@@ -27116,6 +27130,7 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
         "folder_feeds",
         "saved_entries",
         "entry_read_state",
+        "entry_unread_batch",
         "read_history",
         "feed_failure_state",
         "entry_lead_images",
@@ -32019,7 +32034,70 @@ def mark_entries_older_than_read(
     )
 
 
+@app.post("/entries/undo-mark-unread")
+def undo_mark_unread(unread_at: str = Form(...)):
+    """Undo a bulk mark-as-unread — the mirror of undo_mark_read.
+
+    Same shape and same window: one shared timestamp per batch is the token, and
+    only that batch is put back, so reads either side of it are untouched.
+    """
+    _bad_token = _undo_token_problem(unread_at)
+    if _bad_token is not None:
+        return _bad_token
+
+    with get_meta_connection() as conn:
+        pairs = [(str(r["feed_url"]), str(r["entry_id"])) for r in conn.execute(
+            "SELECT feed_url, entry_id FROM entry_unread_batch WHERE unread_at = ?", (unread_at,)
+        )]
+    if not pairs:
+        return JSONResponse({"ok": False, "error": "Nothing to undo."}, status_code=404)
+
+    restored = 0
+    with get_reader() as reader:
+        for feed_url, entry_id in pairs:
+            try:
+                reader.mark_entry_as_read((feed_url, entry_id))
+                restored += 1
+            except Exception:  # noqa: BLE001 — entry may have been deleted since
+                LOGGER.debug("[undo-mark-unread] could not restore %s in %s", entry_id, feed_url)
+
+    when = datetime.now().isoformat()
+    with get_meta_connection() as conn:
+        conn.executemany(
+            """
+            INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)
+            ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at
+            """,
+            [(f, e, when) for f, e in pairs],
+        )
+        conn.execute("DELETE FROM entry_unread_batch WHERE unread_at = ?", (unread_at,))
+    global _unread_counts_generation
+    _unread_counts_generation += 1
+    unread_counts_cache.clear()
+    return JSONResponse({"ok": True, "restored": restored})
+
+
 _UNDO_MARK_READ_WINDOW = timedelta(minutes=15)
+
+
+def _undo_token_problem(raw: str) -> JSONResponse | None:
+    """Parse and window-check a bulk-action undo token; None when it is good.
+
+    The token is the batch's shared timestamp echoed back by the client, so it is untrusted input.
+    ``fromisoformat`` returns an AWARE datetime for anything carrying an offset ("...+01:00"), and
+    subtracting that from a naive ``datetime.now()`` raises TypeError — a 500 from a crafted value. Compare
+    on a common footing by reading "now" in whatever zone the token claims.
+
+    Shared by the mark-read and mark-unread undos so their window and token handling cannot drift.
+    """
+    try:
+        stamped = datetime.fromisoformat(raw)
+    except (ValueError, TypeError):
+        return JSONResponse({"ok": False, "error": "Bad undo token."}, status_code=400)
+    now = datetime.now(stamped.tzinfo) if stamped.tzinfo is not None else datetime.now()
+    if now - stamped > _UNDO_MARK_READ_WINDOW:
+        return JSONResponse({"ok": False, "error": "The undo window has passed."}, status_code=410)
+    return None
 
 
 @app.post("/entries/undo-mark-read")
@@ -32031,12 +32109,9 @@ def undo_mark_read(read_at: str = Form(...)):
     batch to unread — reads before or after it are untouched. Tokens older
     than the undo window are refused: this is a just-pressed-the-wrong-button
     escape hatch, not history."""
-    try:
-        stamped = datetime.fromisoformat(read_at)
-    except ValueError:
-        return JSONResponse({"ok": False, "error": "Bad undo token."}, status_code=400)
-    if datetime.now() - stamped > _UNDO_MARK_READ_WINDOW:
-        return JSONResponse({"ok": False, "error": "The undo window has passed."}, status_code=410)
+    _bad_token = _undo_token_problem(read_at)
+    if _bad_token is not None:
+        return _bad_token
 
     with get_meta_connection() as conn:
         pairs = conn.execute(
@@ -32078,12 +32153,34 @@ def mark_entries_newer_than_unread(
         feed_urls = get_folder_feed_urls(conn, folder_id)
     filtered_feed_urls = filter_feed_urls(feed_urls, list_feed_url)
 
+    # Kept posts are left alone. Starred or manually tagged means you already
+    # decided about it; dragging it back into the Inbox as though it were new is
+    # read-state flattening, which is exactly what made the DeviantArt merge
+    # annoying. The "older than" direction has no equivalent problem — marking a
+    # kept post READ does not resurface it.
+    kept = get_tagged_entry_keys(set(filtered_feed_urls))
+    _kept_feed_urls = list(filtered_feed_urls)
+    if _kept_feed_urls:
+        # Scoped to the feeds in play, the way the tagged half already is. Reading every saved row meant
+        # a whole-table scan on a library with thousands of saves, to answer a question about one folder.
+        with get_meta_connection() as conn:
+            _q = ",".join("?" * len(_kept_feed_urls))
+            kept |= {
+                (str(r["feed_url"]), str(r["entry_id"]))
+                for r in conn.execute(
+                    f"SELECT feed_url, entry_id FROM saved_entries WHERE feed_url IN ({_q})",
+                    _kept_feed_urls,
+                )
+            }
+
     cutoff = datetime.now(timezone.utc) - timedelta(days=min_age_days)
     unmarked_count = 0
     to_delete: list[tuple[str, str]] = []
     with get_reader() as reader:
         for fu in filtered_feed_urls:
             for entry in reader.get_entries(feed=fu, read=True):
+                if (entry.feed_url, entry.id) in kept or entry.important:
+                    continue
                 # Same date basis as the list / optimistic client (published or
                 # updated or added) so mark-newer mirrors what the UI un-marks.
                 date = entry_effective_date(entry)
@@ -32100,11 +32197,21 @@ def mark_entries_newer_than_unread(
                 to_delete.append((entry.feed_url, entry.id))
                 unmarked_count += 1
 
+    undo_token = None
     if to_delete:
+        undo_token = datetime.now().isoformat()
         with get_meta_connection() as conn:
             conn.executemany(
                 "DELETE FROM entry_read_state WHERE feed_url = ? AND entry_id = ?",
                 to_delete,
+            )
+            conn.executemany(
+                """
+                INSERT INTO entry_unread_batch (feed_url, entry_id, unread_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(feed_url, entry_id) DO UPDATE SET unread_at = excluded.unread_at
+                """,
+                [(fu, eid, undo_token) for fu, eid in to_delete],
             )
         global _unread_counts_generation
         _unread_counts_generation += 1
@@ -32119,7 +32226,8 @@ def mark_entries_newer_than_unread(
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_mnu)
     message = "No read posts newer than that." if unmarked_count == 0 else f"Marked {unmarked_count} posts as unread."
     if is_async_action_request(request, "lectio-mark-read"):
-        return JSONResponse({"ok": True, "unmarked": unmarked_count, "min_age_days": min_age_days, "message": message})
+        return JSONResponse({"ok": True, "unmarked": unmarked_count, "min_age_days": min_age_days,
+                             "message": message, "undo_token": undo_token})
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,
