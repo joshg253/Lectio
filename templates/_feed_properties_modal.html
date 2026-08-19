@@ -7,8 +7,7 @@
       </div>
       <div class="hl-tab-bar feed-prop-tab-bar" role="tablist">
         <button type="button" class="hl-tab-btn hl-tab-btn--active" data-feed-prop-tab="info" role="tab" aria-selected="true">Info</button>
-        {# Split from one overloaded "Tuning" tab: what arrives / how it looks /
-           upkeep were three unrelated jobs sharing a panel. #}
+        {# Split from one overloaded "Tuning" tab: what arrives / how it looks / upkeep were three unrelated jobs sharing a panel. #}
         <button type="button" class="hl-tab-btn" data-feed-prop-tab="content" role="tab" aria-selected="false">Content</button>
         <button type="button" class="hl-tab-btn" data-feed-prop-tab="tuning" role="tab" aria-selected="false">Tuning</button>
         <button type="button" class="hl-tab-btn" data-feed-prop-tab="maint" role="tab" aria-selected="false">Maintenance</button>
@@ -17,6 +16,8 @@
       </div>
       <div id="feed-prop-tab-info" class="feed-prop-tab-panel">
         <dl class="feed-properties-grid">
+
+
           <dt>Display name</dt>
           <dd>
             <span class="feed-prop-name-wrap">
@@ -24,7 +25,9 @@
               <button type="button" id="feed-prop-reset-title-btn" class="feed-prop-reset-title" title="Reset to feed title" hidden>×</button>
             </span>
           </dd>
-          <dt>Feed title</dt><dd id="feed-prop-real-title">-</dd>
+          <dt>Original title</dt><dd id="feed-prop-real-title">-</dd>
+
+
           <dt>Website</dt>
           <dd id="feed-prop-website-row">
             <span id="feed-prop-website">-</span>
@@ -37,79 +40,19 @@
               <span id="feed-prop-change-website-status" class="feed-prop-inline-status"></span>
             </span>
           </dd>
-          {# Tags this feed's posts usually want. Feed-provided chips only exist
-             when the publisher ships them, and a feed with a stable subject
-             ships none — a guitar blog doesn't tag posts "guitar" — so filing
-             meant typing the same word every time. These are offered as chips
-             on every post in the feed, pinned to the front. A suggestion, never
-             applied automatically: a tag rule already does that. #}
-          <dt>Suggested tags</dt>
-          <dd id="feed-prop-suggested-tags-row">
-            <input type="text" id="feed-prop-suggested-tags-input" class="feed-prop-url-input"
-                   placeholder="e.g. guitar bass" autocomplete="off"
-                   aria-describedby="feed-prop-suggested-tags-hint" />
-            <button type="button" id="feed-prop-suggested-tags-save" class="feed-prop-inline-btn feed-prop-inline-btn--primary">Save</button>
-            <span id="feed-prop-suggested-tags-status" class="feed-prop-inline-status"></span>
-            <div id="feed-prop-suggested-tags-hint" class="feed-prop-hint">Offered as chips on every post in this feed, before the feed's own tags.</div>
-          </dd>
-          {# Linked files worth keeping with the post. guitar-pro links .gp tabs
-             and .pdf lyric sheets that disappear along with the article, so
-             keeping the text without them keeps the wrong half. Extensions
-             only — no wildcard, deliberately: the list is what makes this a
-             capture of named file types rather than a crawl of every link. #}
-          <dt>Keep linked files</dt>
-          <dd id="feed-prop-attachments-row">
-            <input type="text" id="feed-prop-attachments-input" class="feed-prop-url-input"
-                   placeholder="none — nothing kept" autocomplete="off"
-                   aria-describedby="feed-prop-attachments-hint" />
-            <button type="button" id="feed-prop-attachments-save" class="feed-prop-inline-btn feed-prop-inline-btn--primary">Save</button>
-            <span id="feed-prop-attachments-status" class="feed-prop-inline-status"></span>
-            {# What THIS feed actually links to, counted from its stored posts —
-               the field used to carry a fixed example, which advised every feed
-               in the library to keep Guitar Pro tabs. #}
-            <div id="feed-prop-attachments-candidates" class="feed-prop-ext-candidates" hidden></div>
-            <div id="feed-prop-attachments-hint" class="feed-prop-hint">Saved with the post when you star or tag it. <code>gp*</code> covers gp/gp3/gp5/gpx. Page types (html, php…) are always ignored, and there is no bare <code>*</code>.</div>
-          </dd>
-          {# Declared domain migrations. Without this the rules act invisibly —
-             they rewrite at ingest and feed the global dedupe alias map, but
-             nothing rendered them and only an inferrable host could be added. #}
+          {# Declared domain migrations. Without this the rules act invisibly — they rewrite at ingest and feed the global dedupe alias map, but nothing rendered them and only an inferrable host could be added. #}
           <dt>Other domains</dt>
           <dd id="feed-prop-aliases-row">
             <ul id="feed-prop-alias-list" class="feed-prop-alias-list"></ul>
             <span id="feed-prop-alias-empty" class="feed-prop-alias-empty">None declared.</span>
             <span id="feed-prop-alias-add-wrap">
-              <input type="text" id="feed-prop-alias-input" class="feed-prop-url-input" placeholder="Old domain (e.g. olddomain.com)" autocomplete="off" />
+              <input type="text" id="feed-prop-alias-input" class="feed-prop-url-input" placeholder="Old domain (e.g. olddomain.com)" autocomplete="off" /> 
               <button type="button" id="feed-prop-alias-add" class="feed-prop-inline-btn feed-prop-inline-btn--primary">Add</button>
               <span id="feed-prop-alias-status" class="feed-prop-inline-status"></span>
             </span>
           </dd>
-          {# Undo for dismissed suggestion chips. A mis-click on the × must not be
-             permanent, and this is the only place the decision is visible. #}
-          <dt>Hidden suggested tags</dt>
-          <dd id="feed-prop-hidden-tags-row">
-            {# One switch for a feed whose tags are never wanted. Dismissing them
-               one at a time is whack-a-mole: a webcomic tagged "Comics" and
-               "Cartoons" says nothing about the strip, and each new tag the
-               publisher invents needs dismissing again. Stored as the "*" row in
-               the same table, so it is the same mechanism, listed and undone in
-               the same place. #}
-            <label class="feed-prop-checkbox-label" for="feed-prop-ignore-all-tags">
-              <input type="checkbox" id="feed-prop-ignore-all-tags" class="feed-prop-checkbox" />
-              <span>Ignore all suggested tags from this feed</span>
-            </label>
-            <ul id="feed-prop-hidden-tag-list" class="feed-prop-alias-list"></ul>
-            <span id="feed-prop-hidden-tag-empty" class="feed-prop-alias-empty">None hidden — every tag this feed provides is offered as a suggestion.</span>
-          </dd>
-          <dt>Folder</dt>
-          <dd id="feed-prop-folder-row">
-            <select id="feed-prop-folder-select" class="feed-prop-strategy-select" style="width:auto" aria-label="Feed folder">
-              <option value="-1">Uncategorized (no folder)</option>
-              {% for opt in folder_options if opt.depth > 0 %}
-              <option value="{{ opt.id }}">{{ opt.name }}</option>
-              {% endfor %}
-            </select>
-            <span id="feed-prop-folder-status" class="feed-prop-inline-status"></span>
-          </dd>
+
+
           <dt>XML address</dt>
           <dd id="feed-prop-xml-row">
             <span id="feed-prop-xml">-</span>
@@ -122,19 +65,79 @@
               <span id="feed-prop-change-url-status" class="feed-prop-inline-status"></span>
             </span>
           </dd>
-          <dt>Health</dt><dd id="feed-prop-health">-</dd>
-          <dt>Detail</dt><dd id="feed-prop-health-detail">-</dd>
+
+
+          
+
+
+          <dt>Folder</dt>
+          <dd id="feed-prop-folder-row">
+            <select id="feed-prop-folder-select" class="feed-prop-strategy-select" style="width:auto" aria-label="Feed folder">
+              <option value="-1">Uncategorized (no folder)</option>
+              {% for opt in folder_options if opt.depth > 0 %}
+              <option value="{{ opt.id }}">{{ opt.name }}</option>
+              {% endfor %}
+            </select>
+            <span id="feed-prop-folder-status" class="feed-prop-inline-status"></span>
+          </dd>
+
+          
+
+
+          {# Tags this feed's posts usually want. Feed-provided chips only exist when the publisher ships them, and a feed with a stable subject ships none — a guitar blog doesn't tag posts "guitar" — so filing meant typing the same word every time. These are offered as chips on every post in the feed, pinned to the front. A suggestion, never applied automatically: a tag rule already does that. #}
+          <dt>Suggested tags</dt>
+          <dd id="feed-prop-suggested-tags-row">
+            <input type="text" id="feed-prop-suggested-tags-input" class="feed-prop-url-input" placeholder="e.g. guitar bass" autocomplete="off" aria-describedby="feed-prop-suggested-tags-hint" />
+            <button type="button" id="feed-prop-suggested-tags-save" class="feed-prop-inline-btn feed-prop-inline-btn--primary">Save</button>
+            <span id="feed-prop-suggested-tags-status" class="feed-prop-inline-status"></span>
+            <div id="feed-prop-suggested-tags-hint" class="feed-prop-hint">Offered as chips on every post in this feed, before the feed's own tags.</div>
+          </dd>
+          {# Undo for dismissed suggestion chips. A mis-click on the × must not be permanent, and this is the only place the decision is visible. #}
+          <dt>Hidden suggested tags</dt>
+          <dd id="feed-prop-hidden-tags-row">
+            {# One switch for a feed whose tags are never wanted. Dismissing them one at a time is whack-a-mole: a webcomic tagged "Comics" and "Cartoons" says nothing about the strip, and each new tag the publisher invents needs dismissing again. Stored as the "*" row in the same table, so it is the same mechanism, listed and undone in the same place. #}
+            <label class="feed-prop-checkbox-label" for="feed-prop-ignore-all-tags">
+              <input type="checkbox" id="feed-prop-ignore-all-tags" class="feed-prop-checkbox" />
+              <span>Ignore all suggested tags from this feed</span>
+            </label>
+            <ul id="feed-prop-hidden-tag-list" class="feed-prop-alias-list"></ul>
+            <span id="feed-prop-hidden-tag-empty" class="feed-prop-alias-empty">None hidden — every tag this feed provides is offered as a suggestion.</span>
+          </dd>
+
+
+          {# Linked files worth keeping with the post. guitar-pro links .gp tabs and .pdf lyric sheets that disappear along with the article, so keeping the text without them keeps the wrong half. Extensions only — no wildcard, deliberately: the list is what makes this a capture of named file types rather than a crawl of every link. #}
+          <dt>Keep linked files</dt>
+          <dd id="feed-prop-attachments-row">
+            <input type="text" id="feed-prop-attachments-input" class="feed-prop-url-input" placeholder="none — nothing kept" autocomplete="off" aria-describedby="feed-prop-attachments-hint" />
+            <button type="button" id="feed-prop-attachments-save" class="feed-prop-inline-btn feed-prop-inline-btn--primary">Save</button>
+            <span id="feed-prop-attachments-status" class="feed-prop-inline-status"></span>
+            {# What THIS feed actually links to, counted from its stored posts — the field used to carry a fixed example, which advised every feed in the library to keep Guitar Pro tabs. #}
+            <div id="feed-prop-attachments-candidates" class="feed-prop-ext-candidates" hidden></div>
+            <div id="feed-prop-attachments-hint" class="feed-prop-hint">Saved with the post when you star or tag it. <code>gp*</code> covers gp/gp3/gp5/gpx. Page types (html, php…) are always ignored, and there is no bare <code>*</code>.</div>
+          </dd>
+
+          
+          <dt>Health</dt>
+            <dd>
+              <span id="feed-prop-health">-</span> - <span id="feed-prop-health-detail">-</span>
+            </dd>
+
           <dt>Updates</dt>
           <dd id="feed-prop-updates-row">
             <span id="feed-prop-updates-label">-</span>
           </dd>
-          <dt>Total posts</dt><dd id="feed-prop-total">-</dd>
-          <dt>Unread posts</dt><dd id="feed-prop-unread">-</dd>
+
+          <dt>Total posts</dt>
+          <dd>
+            <span id="feed-prop-total">-</span> (<span id="feed-prop-unread">-</span> unread)
+          </dd>
+
           <dt>Date followed</dt><dd id="feed-prop-added">-</dd>
+          <dt>Last post</dt><dd id="feed-prop-last-post">-</dd>
           <dt>Last crawled</dt><dd id="feed-prop-updated">-</dd>
           <dt id="feed-prop-cooldown-label" hidden>Crawl hold</dt><dd id="feed-prop-cooldown" hidden>-</dd>
           <dt>Last received</dt><dd id="feed-prop-received">-</dd>
-          <dt>Last post</dt><dd id="feed-prop-last-post">-</dd>
+          
         </dl>
         <div class="feed-prop-footer">
           <button type="button" id="feed-prop-disable-btn" class="feed-prop-inline-btn" title="Stop fetching this feed without unsubscribing"></button>
@@ -231,7 +234,6 @@
               <span>Use the source article for image-less bodies (recovers pictures in place, e.g. paizo)</span>
             </label>
           </div>
-
           <div class="feed-prop-caption-source-row" id="feed-prop-caption-source-row">
             <span class="feed-prop-caption-source-label">Caption</span>
             <span class="feed-prop-caption-checks">

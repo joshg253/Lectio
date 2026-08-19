@@ -3397,6 +3397,20 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Extension chips dismissed from the "This feed links:" suggestion row. The scanner cannot tell a
+        # file type from a TLD lookalike — ".il" is Israel, but ".zip" and ".mov" are both real TLDs AND real
+        # file types, so no fixed blocklist gets this right. Let the user say so instead. Per feed, matching
+        # suppressed_feed_tags: a type that is noise on one feed can be the point on another.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS suppressed_feed_attachment_exts (
+                feed_url TEXT NOT NULL,
+                ext TEXT NOT NULL,
+                suppressed_at REAL NOT NULL,
+                PRIMARY KEY (feed_url, ext)
+            )
+            """
+        )
         # Duplicate-scan groups the user has explicitly said aren't dupes
         # (reported 2026-08-10: "Need a way to mark as Not Dupes, don't
         # suggest"). Keyed by the exact set of feed URLs shown in the group
@@ -9012,6 +9026,51 @@ _TLD_LOOKALIKES = frozenset({
 })
 
 
+def suppressed_attachment_exts(feed_url: str) -> set[str]:
+    """Extension suggestions the user dismissed for this feed, lowercased for comparison."""
+    try:
+        with get_meta_connection() as conn:
+            rows = conn.execute(
+                "SELECT ext FROM suppressed_feed_attachment_exts WHERE feed_url = ?", (feed_url,)
+            ).fetchall()
+    except Exception:  # noqa: BLE001 — a suggestion is never worth an error
+        LOGGER.debug("suppressed attachment ext lookup failed for %s", feed_url, exc_info=True)
+        return set()
+    return {str(r["ext"]).strip().lower() for r in rows}
+
+
+def set_attachment_ext_suppressed(feed_url: str, ext: str, suppressed: bool) -> None:
+    """Dismiss (or restore) one extension suggestion for one feed."""
+    clean = (ext or "").strip().lower().lstrip("*").lstrip(".")
+    if not clean:
+        return
+    with get_meta_connection() as conn:
+        if suppressed:
+            conn.execute(
+                "INSERT OR REPLACE INTO suppressed_feed_attachment_exts (feed_url, ext, suppressed_at)"
+                " VALUES (?, ?, ?)",
+                (feed_url, clean, time.time()),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM suppressed_feed_attachment_exts WHERE feed_url = ? AND ext = ?",
+                (feed_url, clean),
+            )
+
+
+def suppressed_attachment_ext_list(feed_url: str) -> list[str]:
+    """Dismissed extensions for the Feed Properties restore row — a mis-click needs a way back."""
+    try:
+        with get_meta_connection() as conn:
+            rows = conn.execute(
+                "SELECT ext FROM suppressed_feed_attachment_exts WHERE feed_url = ? ORDER BY ext",
+                (feed_url,),
+            ).fetchall()
+    except Exception:  # noqa: BLE001
+        return []
+    return [str(r["ext"]) for r in rows]
+
+
 def scan_feed_attachment_extensions(feed_url: str, limit: int = 10) -> list[dict]:
     """File extensions this feed's posts actually link to, most common first.
 
@@ -9024,6 +9083,7 @@ def scan_feed_attachment_extensions(feed_url: str, limit: int = 10) -> list[dict
     """
     from collections import Counter
 
+    dismissed = suppressed_attachment_exts(feed_url)
     counts: Counter[str] = Counter()
     try:
         with get_reader() as reader:
@@ -9043,7 +9103,7 @@ def scan_feed_attachment_extensions(feed_url: str, limit: int = 10) -> list[dict
                     if not _ATTACHMENT_EXT_RE.match(ext):
                         continue
                     if (ext in _NEVER_ATTACHMENT_EXTS or ext in _ARCHIVED_IMAGE_EXTS
-                            or ext in _TLD_LOOKALIKES):
+                            or ext in _TLD_LOOKALIKES or ext in dismissed):
                         continue
                     counts[ext] += 1
     except Exception:  # noqa: BLE001 — a suggestion is never worth an error
@@ -13272,6 +13332,9 @@ def list_entries_for_feeds(
 
     with get_meta_connection() as _prefs_conn:
         _all_display_prefs = get_all_feed_display_prefs(_prefs_conn)
+    # Which feeds have a pinned thumbnail copy, read once. This used to be a has_pinned_feed_thumbnail()
+    # call inside the per-entry loop — one image-cache query per rendered row.
+    _pinned_thumb_keys = pinned_feed_thumbnail_keys()
     # Declared host migrations (feed_url_rewrites), so the proxy-rebase below
     # can't send correct entry links back to an author's dead domain still named
     # in a feed's channel <link>. Loaded once — {} for the common no-rules case.
@@ -13315,7 +13378,12 @@ def list_entries_for_feeds(
         _show_thumb = bool(_feed_prefs.get("show_lead_image_as_thumb", 1))
         _thumb_strategy = _feed_prefs.get("thumb_strategy") or None
         if _feed_thumb_setting and _feed_thumb_setting != "__favicon__":
-            _raw_thumb = str(_feed_thumb_setting)  # pinned URL override
+            # Prefer the pinned copy: the chosen URL may be a signed CDN link that has since expired.
+            _raw_thumb = (
+                f"/api/feed-thumb?feed_url={quote_plus(feed_url_str)}"
+                if _feed_thumb_cache_key(feed_url_str) in _pinned_thumb_keys
+                else str(_feed_thumb_setting)
+            )
         elif _feed_thumb_setting == "__favicon__":
             _raw_thumb = None
         else:
@@ -16307,6 +16375,15 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             except Exception:
                 pass
 
+        # A feed that ships its own full HTML floats images with its site's classes (WordPress
+        # alignleft/alignright), and a reader never ships that stylesheet — so the class survived and did
+        # nothing, and every image landed full-width with the text meant to wrap beside it pushed below.
+        # lift_float_classes was only ever applied to source-page extraction, so scraped articles floated
+        # correctly and feed-supplied ones did not. Lifted here, before the opener strip, so the float guard
+        # in _strip_lead_image_opener can see a class-based float as the inline style it checks for.
+        if isinstance(content_html, str) and content_html:
+            content_html = html_sanitize.lift_float_classes(content_html)
+
         image_title_text, _in_feed_title_is_lead_img, _persisted_alt, _persisted_title = (
             _initial_image_caption(content_html, entry, lead_image_url)
         )
@@ -18814,7 +18891,10 @@ def _evict_img_cache() -> None:
     cutoff = time.time() - days * 86400
     try:
         with get_img_cache_connection() as conn:
-            cur = conn.execute("DELETE FROM img_cache WHERE last_accessed < ?", (cutoff,))
+            cur = conn.execute(
+                "DELETE FROM img_cache WHERE last_accessed < ? AND cache_key NOT LIKE ?",
+                (cutoff, _FEED_THUMB_CACHE_PREFIX + "%"),
+            )
             LOGGER.info("[maintenance] img cache: evicted %d entries older than %d days", cur.rowcount, days)
     except Exception:
         LOGGER.exception("[maintenance] img cache eviction failed")
@@ -22407,6 +22487,16 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
             headers={"Cache-Control": "public, max-age=604800, immutable"},
         )
 
+    # A pinned feed thumbnail lives in our own cache, not on the network. The post list pipes every
+    # thumbnail through /thumb, so without this branch the pinned copy fails the http(s) check below and
+    # the feed renders no thumbnail at all — the bytes are there and nothing shows them. Served as-is, the
+    # way the data: branch above is: these are already thumbnail-sized, and the crop is applied in CSS.
+    if url.startswith("/api/feed-thumb?"):
+        pinned_feed = parse_qs(urlparse(url).query).get("feed_url", [""])[0]
+        if not pinned_feed:
+            return Response(status_code=404)
+        return _pinned_thumb_response(pinned_feed)
+
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return Response(status_code=400)
@@ -23549,11 +23639,14 @@ def _auto_tag_github_release_feeds() -> None:
                         (feed_url, now),
                     )
                     lead_image_service.store_feed_strategy(feed_url, "og_scrape", manual=False)
-                # Ensure row exists and thumbnail is off.
+                # Ensure row exists and thumbnail is off — unless the user pinned one. This runs on a
+                # schedule, so without the guard it re-disabled thumbnails every pass and a deliberately
+                # chosen icon kept vanishing hours after it was set, looking like the setting never saved.
                 conn.execute(
                     "INSERT INTO feed_display_prefs (feed_url, show_lead_image_as_thumb)"
                     " VALUES (?, 0)"
-                    " ON CONFLICT(feed_url) DO UPDATE SET show_lead_image_as_thumb = 0",
+                    " ON CONFLICT(feed_url) DO UPDATE SET show_lead_image_as_thumb = 0"
+                    " WHERE feed_display_prefs.feed_thumbnail_url IS NULL",
                     (feed_url,),
                 )
     except Exception:
@@ -23718,6 +23811,94 @@ def backfill_hide_shorts_route():
     return JSONResponse({"ok": True, "marked": marked})
 
 
+_FEED_THUMB_CACHE_PREFIX = "feedthumb:"
+_FEED_THUMB_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _feed_thumb_cache_key(feed_url: str) -> str:
+    """Keyed by feed, not by URL, so re-pinning replaces the copy and an expiring source URL cannot
+    orphan it. Hashed because the key is a primary key and feed URLs are long and arbitrary."""
+    return _FEED_THUMB_CACHE_PREFIX + hashlib.sha1(feed_url.encode("utf-8", "replace")).hexdigest()
+
+
+def _pin_feed_thumbnail_bytes(feed_url: str, thumbnail_url: str) -> bool:
+    """Copy a pinned thumbnail into the image cache so it survives its source URL.
+
+    Signed-CDN thumbnails expire: a Telegram cdn4.telesco.pe link 404s within days, so a manually chosen
+    icon kept vanishing and had to be re-set. `_IMG_CACHE_VOLATILE_PARAMS` cannot help — Telegram signs in
+    the path, not the query string. Storing the bytes once is what makes "keep it until I change it" true.
+    """
+    try:
+        with httpx.Client(follow_redirects=False, timeout=15.0) as client:
+            resp = url_guard.safe_get(client, thumbnail_url, headers={"User-Agent": LECTIO_HONEST_USER_AGENT})
+        resp.raise_for_status()
+        body = resp.content
+        content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if not body or not content_type.startswith("image/") or len(body) > _FEED_THUMB_MAX_BYTES:
+            return False
+        _img_cache_store(_feed_thumb_cache_key(feed_url), body, content_type)
+        return True
+    except Exception:  # noqa: BLE001 — the URL still gets stored; this is only the durable copy
+        LOGGER.info("[feed-thumb] could not pin bytes for %s", feed_url, exc_info=True)
+        return False
+
+
+def _drop_pinned_feed_thumbnail(feed_url: str) -> None:
+    try:
+        with get_img_cache_connection() as conn:
+            conn.execute("DELETE FROM img_cache WHERE cache_key = ?", (_feed_thumb_cache_key(feed_url),))
+    except Exception:
+        LOGGER.debug("[feed-thumb] could not drop pinned bytes for %s", feed_url, exc_info=True)
+
+
+def pinned_feed_thumbnail_keys() -> set[str]:
+    """Every pinned-thumbnail cache key, for callers rendering a list of feeds.
+
+    One query instead of one per row: the set is tiny (a pinned thumbnail is a deliberate per-feed act),
+    while the list path asks about it once per entry.
+    """
+    try:
+        with get_img_cache_connection() as conn:
+            rows = conn.execute(
+                "SELECT cache_key FROM img_cache WHERE cache_key LIKE ?", (_FEED_THUMB_CACHE_PREFIX + "%",)
+            ).fetchall()
+        return {str(r["cache_key"]) for r in rows}
+    except Exception:
+        return set()
+
+
+def _pinned_thumb_response(feed_url: str) -> Response:
+    """The one place a pinned thumbnail becomes a response, so /api/feed-thumb and /thumb cannot drift
+    apart on cache headers or on what a miss looks like."""
+    hit = _img_cache_get(_feed_thumb_cache_key(feed_url))
+    if hit is None:
+        return Response(status_code=404)
+    body, content_type = hit
+    return Response(
+        content=body,
+        media_type=content_type or "image/jpeg",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
+def has_pinned_feed_thumbnail(feed_url: str) -> bool:
+    try:
+        with get_img_cache_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM img_cache WHERE cache_key = ?", (_feed_thumb_cache_key(feed_url),)
+            ).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
+@app.get("/api/feed-thumb")
+def api_feed_thumb(feed_url: str = Query(...)):
+    """Serve the pinned copy of a feed's chosen thumbnail. Stable URL, so the page never points at a
+    signed CDN link that will expire."""
+    return _pinned_thumb_response(feed_url)
+
+
 @app.post("/feeds/thumbnail-url")
 def set_feed_thumbnail_url_route(
     feed_url: str = Form(...),
@@ -23730,7 +23911,12 @@ def set_feed_thumbnail_url_route(
         # re-enable them if the feed was previously set to Disabled.
         if cleaned:
             upsert_feed_display_pref(conn, feed_url, "show_lead_image_as_thumb", 1)
-    return JSONResponse({"ok": True})
+    pinned = False
+    if cleaned and cleaned != "__favicon__":
+        pinned = _pin_feed_thumbnail_bytes(feed_url, cleaned)
+    else:
+        _drop_pinned_feed_thumbnail(feed_url)
+    return JSONResponse({"ok": True, "pinned": pinned})
 
 
 @app.post("/feeds/thumb-crop")
@@ -26763,6 +26949,10 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
         "disabled_feeds",
         "feed_display_prefs",
         "feed_strategy_cache",
+        # Dismissed suggestion chips are per feed, so they have to follow the feed when its URL is
+        # rewritten — otherwise the dismissals orphan and every chip the user waved off comes back.
+        "suppressed_feed_tags",
+        "suppressed_feed_attachment_exts",
         "rule_run_log_entries",
         "email_batch_queue",
     ]
@@ -27673,7 +27863,33 @@ def feed_attachment_candidates_route(feed_url: str = Query(...)):
     library was advised to keep Guitar Pro tabs. Counted from stored entries, so
     it costs no requests.
     """
-    return JSONResponse({"ok": True, "candidates": scan_feed_attachment_extensions(feed_url)})
+    return JSONResponse({
+        "ok": True,
+        "candidates": scan_feed_attachment_extensions(feed_url),
+        "suppressed": suppressed_attachment_ext_list(feed_url),
+    })
+
+
+@app.post("/feeds/attachment-candidate-suppress")
+def suppress_feed_attachment_candidate_route(
+    feed_url: str = Form(...), ext: str = Form(...), suppressed: str = Form("1")
+):
+    """Dismiss one extension suggestion for one feed, or restore it.
+
+    The scanner reads the last dot-segment of a link path, so a bare domain leaves a TLD behind — ".il" was
+    offered as a file type. `_TLD_LOOKALIKES` catches the common ones, but it cannot be complete: ".zip" and
+    ".mov" are simultaneously real TLDs and real file types, so anything global is wrong for somebody.
+    """
+    with get_reader() as reader:
+        if reader.get_feed(feed_url, None) is None:
+            return JSONResponse({"ok": False, "error": "Feed not found."}, status_code=404)
+    on = str(suppressed).strip().lower() not in {"0", "false", "no", ""}
+    set_attachment_ext_suppressed(feed_url, ext, on)
+    return JSONResponse({
+        "ok": True,
+        "candidates": scan_feed_attachment_extensions(feed_url),
+        "suppressed": suppressed_attachment_ext_list(feed_url),
+    })
 
 
 @app.post("/feeds/attachment-exts")
@@ -32583,11 +32799,15 @@ def _img_cache_store(cache_key: str, body: bytes, content_type: str) -> None:
         LOGGER.warning("[img-cache] store failed for %s", cache_key, exc_info=True)
 
 
-# Query params that are per-request signing tokens, not image identity. Stripping
-# them from the cache key lets a signed-CDN image (GitHub private-user-images JWT,
-# wixmp/S3 ?token/X-Amz-*) stay cache-resident across token rotations, so it keeps
-# loading after the original short-lived URL expires. The full URL (with token) is
-# still used for the actual fetch.
+# Query params that are per-request signing tokens, not image identity. Stripping them from the cache key
+# lets a signed-CDN image (GitHub private-user-images JWT, wixmp/S3 ?token/X-Amz-*) stay cache-resident
+# across token rotations. The full URL (with token) is still used for the actual fetch.
+#
+# This does NOT mean a signed image keeps loading after its URL expires, which is what this comment used to
+# claim. Two preconditions have to hold: the bytes must have been fetched at least once while the token was
+# still valid, and they must have survived last_accessed eviction since. Neither is guaranteed for an image
+# nobody looked at in time. Measured 2026-08-18 against the live library: of 22,903 stored wixmp lead-image
+# URLs, 583 had cached bytes — 2.5%. Durable protection needs pinning at ingest, not caching on demand.
 _IMG_CACHE_VOLATILE_PARAMS = frozenset({
     # Tapas signs its episode art as `?__token__=exp=…~acl=…` — one param
     # carrying the whole grant. Stripping it means the bytes cache once and keep

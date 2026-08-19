@@ -317,6 +317,18 @@ a fourth feed wants it; not before.
 **Check what the feed already provides before writing a plugin** — two of three
 needed derivation, one needed only the right strategy.
 
+### Signed image URLs rot, and the cache is not catching them
+
+**Measured 2026-08-18.** Of 120,302 stored lead-image URLs, 22,903 are DeviantArt wixmp links signed with a `?token=` JWT, and **only 583 (2.5%) have bytes in the image cache**. Everything else signed is 75 rows. A spot-checked entry: wixmp host, no cached bytes, live fetch HTTP 400. Unrecoverable from the stored URL. This decays continuously — every new DeviantArt entry starts a timer.
+
+`_IMG_CACHE_VOLATILE_PARAMS` strips the token from the *cache key*, which is sound but does far less than its comment claimed: the bytes still have to have been fetched once while the token was valid, and to have survived `last_accessed` eviction since. For a feed not opened within the token's lifetime that race is lost every time. (Comment corrected 2026-08-18.)
+
+**Stop the bleeding: pin thumbnail-sized bytes during the enhance pass**, while the token is fresh. About 25 KB each against the ~121 KB average currently in the cache, and host-agnostic, so it covers any future signing CDN rather than DeviantArt alone. Same pinning mechanism as the per-feed thumbnail (`_feed_thumb_cache_key`, exempt from eviction) — that one is keyed per feed; this wants keying per entry. Does nothing for what has already expired.
+
+**Re-signing already exists on the article path** — `_resign_expired_deviantart_url` re-signs a dead wixmp token when an entry is opened, and skips the API call when the image proxy already holds the bytes. So the gap is narrower than the raw 2.5% suggests: opening a DeviantArt post repairs it. What is NOT covered is the LIST thumbnail, which reads the stored URL out of `entry_lead_images` and never goes through that path, so a feed's thumbnails stay broken until each entry is opened one at a time. Either re-sign on the list path too, or make pinning moot by storing the bytes. Every one of the 22,884 DA entries stores the deviation UUID as its entry id, so a paced backfill is possible if it turns out to be wanted — but fix the list path before building one.
+
+Build the pinning first: self-contained, no API budget, no pacing to get right, and it turns the backfill into a one-time cleanup instead of a permanent crutch.
+
 ### og_scrape feeds with no og:image at all
 
 Found in the 2026-08-13 lead-image sweep, **no action taken.** Of 585
@@ -453,6 +465,22 @@ articles"). What remains:
 - **166 already-converted stars** — tagged entries starred by that backfill
   before it was fixed. Indistinguishable from a genuine star-and-tag, so they
   cannot be surgically reverted; the unstar-tagged pass is what removes them.
+
+### Combine cross-feed duplicates instead of marking one read
+
+Dedup's only action is "mark the newer copy read". That is destructive, which is why the Safe tier insists on body corroboration, which is why it finds nothing in the folders where duplicates actually pile up. Combining removes the reason for the strictness: a false positive costs an extra link on an entry and a click to split, instead of silently hiding something you wanted.
+
+**Measured 2026-08-18** with `tmp/dedup_experiment.py` (repointed at the per-user DB — it had been surveying the stale legacy one). Library-wide: 101 safe, 13 needs-review. Tech News: **0 safe, 5 review**, every candidate at `body_j = 0.00`, because the folder pairs aggregators against sources and an HN body is `article url: … comments url: … points: 23`. Deals: **zero candidate pairs even across 60k entries** — Reddit deals posts have distinct slugs and human-written titles, and fuzzy cannot rescue it because `cand_pairs` is seeded only from feeds that already share an exact slug or title (`main.py` `_safe_dedup_find_pairs`), so in a folder with no exact match the fuzzy tier never runs at all.
+
+**The behavior.** A duplicate group renders as one entry. The primary is the member with the richest body — not the oldest, which is today's rule and which would keep HN's stub over the real article. The other members appear **in the entry body only, not in the list**: the list shows one ordinary item. Body gets an "Also at" line — `Also at: OSnews` / `Discussion: Hacker News (23 points, 10 comments)`. One unread item; marking it read marks the group; splitting restores the members.
+
+HN's stub body stops being the problem and becomes the feature: `points:` / `# comments:` and the comments URL parse into a real discussion affordance. Josh subscribes to HN for the comments, so an HN link must never be the copy that disappears — combining satisfies that without a per-feed "discussion feed" flag, which was the alternative design and is not needed if nothing is destroyed.
+
+**Matching.** Two tiers, split by what the action costs. Combining accepts the current safe combos plus `{slug,title}` and exact cross-feed title; anything that marks read keeps today's strict rule. Slug alone stays out of both — there is a real false positive in the survey (two different Microsoft stories sharing a slug, `title_j = 0.09`, four days apart).
+
+**Storage.** New meta table for the groups (group id, feed_url, entry_id, role primary/alt). `dedup_false_matches` already records "these two are not the same" and should feed the splitter. Needs the per-user startup migration or existing tenants 500.
+
+**Open.** Whether combining runs as an automation rule, a scan you invoke, or at ingest. Unread counts and the offline outbox both need to agree that a group is one item.
 
 ### Cross-feed duplicate scan — the dupes you can actually feel
 
