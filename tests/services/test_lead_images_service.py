@@ -2348,3 +2348,57 @@ def test_a_non_end_tag_is_not_eaten(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
     page = '<script>x</scriptfoo><img src="/real.png">'
     assert "/real.png" in service._strip_script_blocks(page)
+
+
+def test_feed_media_thumbnails_fetch_is_bounded_and_never_hands_feedparser_a_url(tmp_path: Path, monkeypatch):
+    """feedparser.parse(url) fetches with urllib and no timeout, so a host that accepts the connection and
+    then goes silent wedges the calling thread forever. It wedged the scheduler in production until the
+    watchdog restarted the process. The fetch must go through url_guard with an explicit timeout, and
+    feedparser must only ever see already-downloaded bytes."""
+    import httpx
+
+    from services import lead_images as lead_images_module
+
+    service = _build_service(tmp_path / "meta.sqlite", [])
+
+    feed_xml = (
+        b'<?xml version="1.0"?><rss xmlns:media="http://search.yahoo.com/mrss/"><channel><item>'
+        b"<link>https://example.com/post</link>"
+        b'<media:thumbnail url="https://example.com/thumb.jpg" width="600" height="400"/>'
+        b"</item></channel></rss>"
+    )
+
+    seen_timeouts: list[object] = []
+    seen_follow_redirects: list[object] = []
+    real_client = httpx.Client
+
+    class _RecordingClient(real_client):
+        def __init__(self, *args, **kwargs):
+            seen_timeouts.append(kwargs.get("timeout"))
+            seen_follow_redirects.append(kwargs.get("follow_redirects"))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(lead_images_module.httpx, "Client", _RecordingClient)
+    monkeypatch.setattr(
+        lead_images_module.url_guard,
+        "safe_get",
+        lambda client, url, **kw: httpx.Response(200, content=feed_xml, request=httpx.Request("GET", url)),
+    )
+
+    real_parse = lead_images_module.feedparser.parse
+
+    def _reject_urls(source, *args, **kwargs):
+        assert not isinstance(source, str), "feedparser must be handed bytes, not a URL to fetch itself"
+        return real_parse(source, *args, **kwargs)
+
+    monkeypatch.setattr(lead_images_module.feedparser, "parse", _reject_urls)
+
+    thumbs = service._fetch_feed_media_thumbnails("https://example.com/feed.xml")
+
+    assert thumbs == {"https://example.com/post": "https://example.com/thumb.jpg"}
+    assert seen_timeouts and all(t is not None for t in seen_timeouts), "the feed fetch must carry a timeout"
+    # follow_redirects=False is what lets url_guard.safe_get validate every hop; with httpx following
+    # redirects itself, a public URL could bounce to an internal address after the pre-check passed.
+    assert seen_follow_redirects and all(fr is False for fr in seen_follow_redirects), (
+        "the feed fetch must disable httpx redirect following so url_guard checks each hop"
+    )

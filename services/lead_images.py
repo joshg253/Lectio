@@ -111,6 +111,8 @@ class LeadImageService:
         r'<meta[^>]+content=["\']([0-9]+)["\'][^>]+(?:property|name)=["\']og:image:height["\']',
         re.IGNORECASE,
     )
+    # Whole-feed fetch for media:thumbnail recovery. Bounded so a silent host cannot wedge a background thread.
+    _FEED_FETCH_TIMEOUT_SECONDS = 15.0
     _TAG_RE = re.compile(r"<[^>]+>", re.IGNORECASE)
     _HREF_IMAGE_RE = re.compile(r'href=["\']([^"\']+\.(?:jpe?g|png|webp|gif|avif)(?:\?[^"\']*)?)["\']', re.IGNORECASE)
     # Blogger CDN w{W}-h{H} crop-format URLs (used for social share cards) distort
@@ -3357,11 +3359,15 @@ class LeadImageService:
         python-reader on the Entry object so we parse the live feed once per
         background cycle to recover them."""
         try:
-            parsed = feedparser.parse(
-                feed_url,
-                agent=self._user_agent,
-                request_headers={"User-Agent": self._user_agent},
-            )
+            # Fetch the bytes ourselves rather than letting feedparser fetch the URL: feedparser calls
+            # urllib.request.urlopen() with no timeout, so a host that accepts the connection and then never
+            # answers wedges this thread forever. That is not hypothetical — it stalled the scheduler thread
+            # (and this backfill thread) on a real feed until the watchdog restarted the process, roughly
+            # hourly. follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
+            with httpx.Client(follow_redirects=False, timeout=self._FEED_FETCH_TIMEOUT_SECONDS) as client:
+                response = url_guard.safe_get(client, feed_url, headers={"User-Agent": self._user_agent})
+            response.raise_for_status()
+            parsed = feedparser.parse(response.content)
         except Exception:
             return {}
 

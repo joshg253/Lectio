@@ -5283,14 +5283,20 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       fd.append('feed_url', feedUrl);
       fd.append('user_title', userTitle);
       try {
-        await fetch('/feeds/set-user-title', { method: 'POST', body: fd, credentials: 'same-origin' });
+        // A rejected save used to be indistinguishable from a successful one: the response was never
+        // checked and the catch was empty, so a failed rename sat in the box looking saved until a
+        // reload put the old name back.
+        const resp = await fetch('/feeds/set-user-title', { method: 'POST', body: fd, credentials: 'same-origin' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const displayTitle = userTitle || feedPropUserTitle?.placeholder || feedUrl;
         document.querySelectorAll(`.feed-link[data-feed-url="${CSS.escape(feedUrl)}"]`).forEach(link => {
           const nameSpan = link.querySelector('.feed-label > span:last-of-type');
           if (nameSpan) nameSpan.textContent = displayTitle;
         });
         if (feedPropResetTitleBtn) feedPropResetTitleBtn.hidden = !userTitle;
-      } catch (_err) {}
+      } catch (err) {
+        if (typeof showToastMessage === 'function') showToastMessage(`Could not save the name: ${err.message || err}`);
+      }
     }
 
     if (feedPropUserTitle) {
@@ -5298,6 +5304,14 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         if (!feedPropUserTitle.value) {
           feedPropUserTitle.value = feedPropUserTitle.placeholder;
           feedPropUserTitle.select();
+        }
+      });
+      feedPropUserTitle.addEventListener('keydown', event => {
+        // Enter also commits an IME composition, so blurring here would save half-composed text.
+        if (event.isComposing) return;
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          feedPropUserTitle.blur();  // the blur handler is the single save path
         }
       });
       feedPropUserTitle.addEventListener('blur', () => {

@@ -178,8 +178,8 @@ def _configure_persistent_logging() -> None:
     """Attach a rotating file handler when LECTIO_LOG_DIR is set.
 
     Defaults: 5 MB per file, 5 backups (LECTIO_LOG_MAX_BYTES, LECTIO_LOG_BACKUPS).
-    Stdout logging is left untouched so local dev (and uvicorn defaults) keep
-    working. Without LECTIO_LOG_DIR the app behaves exactly as before.
+    This is the durable record; :func:`_configure_console_logging` mirrors the same
+    stream to the console. Without LECTIO_LOG_DIR only the console handler runs.
     """
     log_dir_str = os.getenv("LECTIO_LOG_DIR", "").strip()
     if not log_dir_str:
@@ -204,6 +204,36 @@ def _configure_persistent_logging() -> None:
     root.addHandler(handler)
 
 
+def _configure_console_logging() -> None:
+    """Mirror everything the app logs to the console, so `docker compose logs` shows it.
+
+    uvicorn installs handlers on its own loggers with propagate=False, so its startup lines appear on the
+    console while every app, reader and library log record propagates to the root logger — which, in the
+    container, owns only the rotating file handler under LECTIO_LOG_DIR. The result was that all app logging
+    was invisible to `docker compose logs` and readable only from inside the container. That cost hours during
+    the 2026-08-18 restart hunt: the scheduler watchdog logged two ERROR lines before every exit and the
+    container log showed nothing but a silent restart.
+
+    Writes to stderr, which is where uvicorn's own handlers write, so the interleaving stays sane. The check
+    below excludes FileHandler because RotatingFileHandler is itself a StreamHandler subclass.
+    """
+    root = logging.getLogger()
+    for existing in root.handlers:
+        if isinstance(existing, logging.StreamHandler) and not isinstance(existing, logging.FileHandler):
+            return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    # INFO by default, because the whole point is that app logs become visible. But loosening the root
+    # level is a decision about someone else's process, so LECTIO_LOG_LEVEL takes precedence when set —
+    # a deployment that wants a quieter console says so instead of being overruled.
+    wanted = os.getenv("LECTIO_LOG_LEVEL", "").strip().upper()
+    if wanted:
+        root.setLevel(getattr(logging, wanted, logging.INFO))
+    elif root.level > logging.INFO or root.level == logging.NOTSET:
+        root.setLevel(logging.INFO)
+    root.addHandler(handler)
+
+
 def _configure_access_log_filter() -> None:
     # Kept for backward-compat with previous wiring; the actual access log is
     # now emitted by _AccessLogMiddleware (uvicorn's --no-access-log disables
@@ -216,6 +246,7 @@ def _attach_pending_access_filter() -> None:
 
 
 _configure_reader_logging()
+_configure_console_logging()
 _configure_persistent_logging()
 _configure_access_log_filter()
 
@@ -2211,7 +2242,7 @@ async def lifespan(app: FastAPI):
                         entry_id,
                         str(getattr(entry, "title", None) or ""),
                         str(getattr(entry, "link", None) or ""),
-                        str(getattr(feed, "title", None) or ""),
+                        str(getattr(feed, "resolved_title", None) or getattr(feed, "title", None) or ""),
                         read_at,
                     ))
             if not to_insert:
@@ -5668,7 +5699,7 @@ def _safe_dedup_norm_body(entry) -> str:
 def _safe_dedup_collect(reader, feed_urls: set[str], max_per_feed: int, read_filter) -> list[dict]:
     """Read entries from each feed and build the record list for safe-dedup."""
     records: list[dict] = []
-    feed_title_map = {f.url: (f.title or str(f.url)) for f in reader.get_feeds()}
+    feed_title_map = {f.url: feed_display_title(f, str(f.url)) for f in reader.get_feeds()}
     for feed_url in feed_urls:
         try:
             kwargs: dict = {"feed": feed_url, "limit": max_per_feed}
@@ -5903,7 +5934,7 @@ def _dry_run_dedup(
     per_feed_limit = max(1, max_entries // max(1, len(feed_urls)))
 
     with get_reader() as reader:
-        feed_title_map = {f.url: (f.title or str(f.url)) for f in reader.get_feeds()}
+        feed_title_map = {f.url: feed_display_title(f, str(f.url)) for f in reader.get_feeds()}
         slug_index: dict[str, list[dict]] = {}
         title_index: dict[str, list[dict]] = {}
         combined_index: dict[tuple[str, str], list[dict]] = {}
@@ -6071,7 +6102,7 @@ def _dry_run_pattern(
     total_matches = 0
 
     with get_reader() as reader:
-        feed_title_map = {str(f.url): (f.title or str(f.url)) for f in reader.get_feeds()}
+        feed_title_map = {str(f.url): feed_display_title(f, str(f.url)) for f in reader.get_feeds()}
 
         def iter_entries():
             if feed_urls is None:
@@ -6405,7 +6436,7 @@ def _run_now_pattern(
                     if fu not in feed_title_cache:
                         try:
                             f = reader.get_feed(fu)
-                            feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
+                            feed_title_cache[fu] = feed_display_title(f, fu)
                         except Exception:
                             feed_title_cache[fu] = fu
                     matched_entries.append({
@@ -6551,7 +6582,7 @@ def _run_tag_filter(
             if fu not in feed_title_cache:
                 try:
                     f = reader.get_feed(fu)
-                    feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
+                    feed_title_cache[fu] = feed_display_title(f, fu)
                 except Exception:
                     feed_title_cache[fu] = fu
             return feed_title_cache[fu]
@@ -7402,7 +7433,7 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                             if fu not in feed_title_cache:
                                 try:
                                     f = reader.get_feed(fu)
-                                    feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
+                                    feed_title_cache[fu] = feed_display_title(f, fu)
                                 except Exception:
                                     feed_title_cache[fu] = fu
 
@@ -7533,7 +7564,7 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                             if fu not in feed_title_cache:
                                 try:
                                     f = reader.get_feed(fu)
-                                    feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
+                                    feed_title_cache[fu] = feed_display_title(f, fu)
                                 except Exception:
                                     feed_title_cache[fu] = fu
 
@@ -9383,6 +9414,17 @@ def get_favicon_url(feed_url: str, site_url: str | None = None) -> str | None:
     if not host:
         return None
     return f"/api/favicon?domain={quote_plus(host)}"
+
+
+def feed_display_title(feed, fallback: str = "") -> str:
+    """The name to show for a feed: the user's rename if there is one, else the feed's own title.
+
+    ``reader`` keeps three fields — ``title`` (what the feed calls itself), ``user_title`` (the rename) and
+    ``resolved_title`` (user_title or title). Reading ``title`` directly ignores renames, which is what made
+    a renamed feed keep its old name on every post while the sidebar showed the new one. One helper so the
+    display paths cannot drift apart again.
+    """
+    return str(getattr(feed, "resolved_title", None) or getattr(feed, "title", None) or fallback)
 
 
 def get_feed_title_map() -> dict[str, str]:
@@ -13614,7 +13656,7 @@ def mark_entry_read_everywhere(feed_url: str, entry_id: str) -> None:
             feed_url, entry_id,
             str(getattr(entry, "title", None) or ""),
             str(getattr(entry, "link", None) or ""),
-            str(getattr(feed, "title", None) or ""),
+            str(getattr(feed, "resolved_title", None) or getattr(feed, "title", None) or ""),
         )
     except Exception:
         LOGGER.warning("mark_entry_read_everywhere: history append failed for %s/%s",

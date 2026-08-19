@@ -6,6 +6,13 @@ services:
     image: lectio:latest
     container_name: lectio
     restart: unless-stopped
+    # The app mirrors its logs to the console now, so cap the json-file log; the durable record is the
+    # rotating file under LECTIO_LOG_DIR (/data/logs), which has its own limits.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ulimits:
       nofile:
         soft: 65536

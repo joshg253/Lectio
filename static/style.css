@@ -6823,7 +6823,14 @@ mark.highlight-mark {
   padding: 0 0.2em;
   border-radius: 3px;
 }
-#feed-prop-alias-add-wrap { display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+/* Keep "Add" on the input's row, the way every other Feed Properties control sits beside its field.
+   The input asks for min(360px, 100%), which in this narrow dd is wider than the row can hold, so the
+   button wrapped underneath. Let the input shrink instead (min-width: 0 — flex items refuse to shrink
+   below content width without it) and hold the button at its natural size. The status message keeps the
+   right to wrap onto its own line. */
+#feed-prop-alias-add-wrap { display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+#feed-prop-alias-add-wrap #feed-prop-alias-input { flex: 1 1 12rem; min-width: 0; width: auto; }
+#feed-prop-alias-add-wrap #feed-prop-alias-add { flex: 0 0 auto; }
 #feed-prop-alias-status { color: var(--muted, #888); }
 .unsub-migrate-select-all-row { font-size: 0.85rem; margin: 0.35rem 0 0; }
 /* Sits under the three choices and applies to all of them, so it gets a
