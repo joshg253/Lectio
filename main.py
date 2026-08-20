@@ -3996,6 +3996,10 @@ def ensure_meta_schema() -> None:
         except Exception:
             pass
         try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN dedup_fuzzy_pct INTEGER NOT NULL DEFAULT 80")
+        except Exception:
+            pass
+        try:
             conn.execute("ALTER TABLE highlight_keywords ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
             conn.execute("UPDATE highlight_keywords SET sort_order = rowid WHERE sort_order = 0")
         except Exception:
@@ -4641,12 +4645,27 @@ _HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "dedupli
 _HIGHLIGHT_VALID_SEARCH_IN = {"title", "body", "both"}
 _HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
 _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
+_DEDUP_FUZZY_PCT_DEFAULT = 80
+
+def _clamp_fuzzy_pct(pct: int | None) -> int:
+    """Percent knob, clamped. Below 50% a fuzzy title match catches near-anything."""
+    try:
+        v = int(pct if pct is not None else _DEDUP_FUZZY_PCT_DEFAULT)
+    except (TypeError, ValueError):
+        v = _DEDUP_FUZZY_PCT_DEFAULT
+    return max(50, min(100, v))
+
+
+def _dedup_fuzzy_threshold(pct: int | None) -> float:
+    """Percent knob -> similarity ratio."""
+    return _clamp_fuzzy_pct(pct) / 100.0
 
 
 def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
-        " email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids, sort_order,"
+        " email_to, batch_time, batch_count, cc_me, dedup_window_hours, dedup_fuzzy_pct,"
+        " exclude_scope_ids, sort_order,"
         " webhook_url, webhook_format, webhook_batch,"
         " yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
         " yt_min_minutes, yt_max_minutes"
@@ -4715,6 +4734,7 @@ def add_highlight_keyword(
     enabled: int = 0,
     dedup_window_hours: int = 168,
     exclude_scope_ids: str = "",
+    dedup_fuzzy_pct: int = _DEDUP_FUZZY_PCT_DEFAULT,
     webhook_url: str = "",
     webhook_format: str = "generic",
     webhook_batch: bool = False,
@@ -4750,14 +4770,16 @@ def add_highlight_keyword(
         "INSERT OR REPLACE INTO highlight_keywords"
         " (scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
         "  email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids,"
+        "  dedup_fuzzy_pct,"
         "  webhook_url, webhook_format, webhook_batch,"
         "  yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
         "  yt_min_minutes, yt_max_minutes)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0, 1 if enabled else 0,
          rule_type, search_in, delivery,
          email_to.strip(), batch_time.strip(), max(0, int(batch_count or 0)), 1 if cc_me else 0,
          max(1, int(dedup_window_hours or 168)), exclude_scope_ids.strip(),
+         _clamp_fuzzy_pct(dedup_fuzzy_pct),
          webhook_url.strip(), webhook_format, 1 if webhook_batch else 0,
          yt_playlist_id.strip(), yt_playlist_title.strip(),
          1 if yt_include_shorts else 0, 1 if yt_mark_read else 0,
@@ -5925,6 +5947,7 @@ def _dry_run_dedup(
     max_entries: int = 5000,
     exclude_scope_ids: str = "",
     custom_feed_urls: set[str] | None = None,
+    fuzzy_threshold: float = 0.80,
 ) -> dict:
     """Preview which entries a deduplicate rule would mark read."""
     feed_urls = _resolve_dedup_feed_urls(conn, scope, scope_id, exclude_scope_ids, custom_feed_urls)
@@ -6026,7 +6049,7 @@ def _dry_run_dedup(
     groups: list[dict] = []
     seen_links: set[str] = set()
     window_secs = window_hours * 3600
-    _FUZZY_THRESHOLD = 0.80
+    _FUZZY_THRESHOLD = fuzzy_threshold
 
     if match_method == "slug":
         for slug, entries in slug_index.items():
@@ -6213,6 +6236,7 @@ def _run_now_dedup(
     window_hours: int,
     max_per_feed: int = 500,
     exclude_scope_ids: str = "",
+    fuzzy_threshold: float = 0.80,
 ) -> dict:
     """Execute dedup rule on unread entries. Mark newer duplicates as read."""
     global _unread_counts_generation
@@ -6276,7 +6300,7 @@ def _run_now_dedup(
     combined_index: dict[tuple[str, str], list[dict]] = {}
     fuzzy_entries: dict[str, list[dict]] = {}
     window_secs = window_hours * 3600
-    _FUZZY_THRESHOLD = 0.80
+    _FUZZY_THRESHOLD = fuzzy_threshold
 
     with get_reader() as reader:
         for feed_url in feed_urls:
@@ -7325,6 +7349,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
                         result = _run_now_dedup(
                             conn, scope, scope_id, match_method, window_hours,
                             exclude_scope_ids=exclude_scope_ids,
+                            fuzzy_threshold=_dedup_fuzzy_threshold(rule.get("dedup_fuzzy_pct")),
                         )
                         if "error" not in result and result.get("count", 0) > 0:
                             _log_auto_run(conn, now, rule_type, scope, scope_id, keyword, result)
@@ -24233,6 +24258,7 @@ def add_highlight_route(
     enabled: int = Form(0),
     dedup_window_hours: int = Form(168),
     exclude_scope_ids: str = Form(""),
+    dedup_fuzzy_pct: int = Form(_DEDUP_FUZZY_PCT_DEFAULT),
     webhook_url: str = Form(""),
     webhook_format: str = Form("generic"),
     webhook_batch: int = Form(0),
@@ -24291,6 +24317,7 @@ def add_highlight_route(
         add_highlight_keyword(conn, scope, scope_id, keyword, color, bool(is_regex),
                               type, search_in, delivery, email_to, batch_time, batch_count,
                               bool(cc_me), enabled, dedup_window_hours, exclude_scope_ids,
+                              _clamp_fuzzy_pct(dedup_fuzzy_pct),
                               webhook_url, webhook_format, bool(webhook_batch),
                               yt_playlist_id, yt_playlist_title,
                               bool(yt_include_shorts), bool(yt_mark_read),
@@ -24301,6 +24328,7 @@ def add_highlight_route(
                          "email_to": email_to, "batch_time": batch_time, "batch_count": batch_count,
                          "cc_me": bool(cc_me), "enabled": bool(enabled),
                          "dedup_window_hours": dedup_window_hours,
+                         "dedup_fuzzy_pct": _clamp_fuzzy_pct(dedup_fuzzy_pct),
                          "exclude_scope_ids": exclude_scope_ids.strip(),
                          "webhook_url": webhook_url.strip(), "webhook_format": webhook_format,
                          "webhook_batch": bool(webhook_batch),
@@ -24409,6 +24437,7 @@ def rules_dry_run_route(
     search_in: str = Query("title"),
     dedup_window_hours: int = Query(168),
     exclude_scope_ids: str = Query(""),
+    fuzzy_pct: int = Query(_DEDUP_FUZZY_PCT_DEFAULT),
     feed_urls: str = Query(""),  # comma-separated; overrides scope for dedup
     yt_include_shorts: int = Query(1),
     yt_min_minutes: int = Query(0),
@@ -24423,7 +24452,8 @@ def rules_dry_run_route(
             if feed_urls:
                 custom = {u.strip() for u in feed_urls.split(",") if u.strip()}
             result = _dry_run_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
-                                    exclude_scope_ids=exclude_scope_ids, custom_feed_urls=custom)
+                                    exclude_scope_ids=exclude_scope_ids, custom_feed_urls=custom,
+                                    fuzzy_threshold=_dedup_fuzzy_threshold(fuzzy_pct))
         elif type in ("highlight", "mark_as_read", "email_article", "webhook", "youtube_playlist",
                       "instapaper", "quire", "save_article"):
             # youtube_playlist's keyword is an optional filter — a blank keyword
@@ -24547,6 +24577,7 @@ def rules_run_now_route(
     search_in: str = Form("title"),
     dedup_window_hours: int = Form(168),
     exclude_scope_ids: str = Form(""),
+    fuzzy_pct: int = Form(_DEDUP_FUZZY_PCT_DEFAULT),
 ):
     with get_meta_connection() as conn:
         if type == "deduplicate":
@@ -24557,7 +24588,8 @@ def rules_run_now_route(
             # high-volume feeds — e.g. entries restored to unread days later.
             result = _run_now_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
                                     max_per_feed=10000,
-                                    exclude_scope_ids=exclude_scope_ids)
+                                    exclude_scope_ids=exclude_scope_ids,
+                                    fuzzy_threshold=_dedup_fuzzy_threshold(fuzzy_pct))
         elif type == "mark_as_read":
             result = _run_now_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in)
         elif type == "tag_filter":

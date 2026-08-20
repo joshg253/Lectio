@@ -85,6 +85,10 @@ short version:
 - **Automation.** Highlight, mark-as-read, tag-filter, deduplicate, and
   send-to-destination rules (Instapaper, Pinterest, Reddit, Quire, email,
   YouTube playlists, webhooks) at any scope, with dry-run and run history.
+  Dedup dry-runs compare all four match modes side by side, leading with the
+  pairs only one mode caught, and the fuzzy title match carries its own
+  similarity threshold — preview it on a slider, save it on the rule, and it
+  applies to new entries on refresh and to the backlog on Run Now.
 - **Feed management that expects the real web.** Resilient auto-discovery,
   Page Feeds for feedless sites — which read each post's own publish date rather
   than stamping the whole backlog with the scrape time — dev.to and DeviantArt
