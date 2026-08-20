@@ -1,8 +1,9 @@
 """Decode HTML entities left in already-stored entry titles.
 
 New entries are handled at ingest (services.reader_sanitize); this is the one-off
-for what is already in reader. `&lt;`/`&gt;` are deliberately left encoded — see
-html_sanitize.decode_title_entities.
+for what is already in reader. Every entity decodes, `&lt;`/`&gt;` included: a
+stored title is never rendered raw — sanitize_inline_title re-escapes anything
+outside the feed's own inline formatting. See html_sanitize.decode_title_entities.
 
 Usage (inside the app container):
     /app/.venv/bin/python scripts/decode_entry_title_entities.py            # dry-run
