@@ -522,6 +522,50 @@ _RELATIVE_URL_ATTRS = (
 _NON_RESOLVABLE_SCHEMES = ("data:", "mailto:", "javascript:", "tel:", "blob:", "about:", "#")
 
 
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def plain_text_excerpt(html_text: str, limit: int = 300) -> str:
+    """Body HTML -> a plain-text excerpt for somewhere that cannot render HTML.
+
+    Tags are stripped BEFORE entities are decoded, never after: decoding first
+    would turn an escaped ``&lt;script&gt;`` into a real tag for the stripper to
+    eat, losing the text a reader is supposed to see.
+
+    Decoding matters because the caller escapes again. Email showed
+    ``&lt;chrono&gt;, his date &amp; time library`` in the preview — the body's
+    entities survived tag-stripping as literal text, then ``html.escape`` escaped
+    the ampersands a second time.
+    """
+    if not html_text:
+        return ""
+    plain = _TAG_RE.sub(" ", html_text)
+    plain = " ".join(html_stdlib.unescape(plain).split())
+    if limit and len(plain) > limit:
+        plain = plain[: max(0, limit - 1)].rstrip() + "\u2026"
+    return plain
+
+
+def decode_title_entities(title: str) -> str:
+    """Decode HTML entities left in a plain-text title.
+
+    feedparser decodes once; a double-encoded source still arrives as
+    ``AT&amp;T`` or ``Apple&rsquo;s``, which is what the reader then sees and what
+    a rule keyword has to match letter for letter.
+
+    ``&lt;``/``&gt;`` decode too. A stored title is never rendered raw: the list
+    rows and reader head run it through :func:`sanitize_inline_title`, whose
+    allowlist re-escapes anything that is not the feed's own ``<em>``-style
+    formatting, and 41 titles already hold a literal ``<`` from their publisher
+    (``ReadOnlySpan<T>``, ``<chrono> and more``) and have always rendered as text.
+    Keeping them encoded was the worse outcome — the ampersand gets escaped in
+    turn, so the reader saw a literal ``&lt;details&gt;`` on screen.
+    """
+    if not title or "&" not in title:
+        return title
+    return html_stdlib.unescape(title)
+
+
 def resolve_relative_urls(html: str, base_url: str) -> str:
     """Absolutize relative src/href in *html* against *base_url*.
 

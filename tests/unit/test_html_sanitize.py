@@ -289,3 +289,39 @@ def test_a_feed_cannot_smuggle_a_target_onto_a_fragment_link():
     out = H.sanitize_html('<a href="#x" target="_blank" rel="opener">x</a>')
     assert "target=" not in out
     assert "rel=" not in out
+
+
+# --- plain-text excerpts (email preview, digest) ------------------------------
+
+
+def test_excerpt_decodes_entities_because_the_caller_escapes_again():
+    """Email showed "&lt;chrono&gt;, his date &amp; time library": the body's
+    entities survived tag-stripping as literal text, and html.escape then escaped
+    the ampersands a second time."""
+    body = ("<p>Rob and Jason talk about &lt;chrono&gt;, his date &amp; time "
+            "library and his work on move semantics.</p>")
+    out = H.plain_text_excerpt(body)
+    assert out == ("Rob and Jason talk about <chrono>, his date & time library "
+                   "and his work on move semantics.")
+
+
+def test_tags_are_stripped_before_entities_are_decoded():
+    """The other order would turn an escaped <script> into a real tag for the
+    stripper to eat, losing text the reader is meant to see."""
+    out = H.plain_text_excerpt("<p>escaped &lt;script&gt;alert(1)&lt;/script&gt; here</p>")
+    assert out == "escaped <script>alert(1)</script> here"
+
+
+def test_excerpt_collapses_whitespace_and_drops_markup():
+    out = H.plain_text_excerpt("<div>\n  a  <b>b</b>\n\n  <img src=x>  c\n</div>")
+    assert out == "a b c"
+
+
+def test_excerpt_truncates_with_an_ellipsis():
+    out = H.plain_text_excerpt("<p>" + "word " * 200 + "</p>", limit=50)
+    assert len(out) == 50 and out.endswith("…")
+
+
+def test_excerpt_of_nothing_is_empty():
+    assert H.plain_text_excerpt("") == ""
+    assert H.plain_text_excerpt(None) == ""

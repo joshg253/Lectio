@@ -181,6 +181,12 @@ def _sanitize_entry(entry, feed_url: str = ""):
         cleaned = _drop_placeholder_date(raw)
         if cleaned is not raw:
             changed[field] = cleaned
+    title = getattr(entry, "title", None)
+    if isinstance(title, str) and "&" in title:
+        decoded_title = html_sanitize.decode_title_entities(title)
+        if decoded_title != title:
+            changed["title"] = decoded_title
+
     base = _entry_html_base(entry, feed_url)
 
     def _clean(raw: str) -> str:

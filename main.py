@@ -6188,6 +6188,23 @@ def split_keyword_terms(keyword: str) -> list[str]:
     return [term for term in (part.strip() for part in keyword.split(",")) if term]
 
 
+# Publishers spell the same punctuation two ways and the reader cannot see which:
+# 2,773 stored titles use a typographic apostrophe, 6,761 the ASCII one. A term
+# typed as "Apple's" must match "Apple’s". Folded on BOTH sides of a plain
+# compare, so it only ever adds matches. Regex mode is left alone — a pattern
+# says what it says.
+_MATCH_FOLD = {
+    ord("\u2018"): "'", ord("\u2019"): "'", ord("\u201b"): "'", ord("\u2032"): "'",
+    ord("\u201c"): '"', ord("\u201d"): '"', ord("\u201e"): '"', ord("\u201f"): '"', ord("\u2033"): '"',
+    ord("\u00a0"): " ", ord("\u2007"): " ", ord("\u202f"): " ",
+}
+
+
+def fold_for_match(text: str) -> str:
+    """Lowercase and fold curly punctuation for a plain (non-regex) comparison."""
+    return text.translate(_MATCH_FOLD).lower()
+
+
 def build_keyword_matcher(keyword: str, is_regex: bool):
     """Text -> bool matcher for a rule's keyword. Raises re.error on a bad regex.
 
@@ -6197,16 +6214,17 @@ def build_keyword_matcher(keyword: str, is_regex: bool):
     if is_regex:
         pattern = re.compile(keyword, re.IGNORECASE)
         return lambda text: bool(pattern.search(text)) if text else False
-    terms = [term.lower() for term in split_keyword_terms(keyword)]
+    terms = [fold_for_match(term) for term in split_keyword_terms(keyword)]
     if len(terms) == 1:
         only = terms[0]
-        return lambda text: only in (text or "").lower()
+        return lambda text: only in fold_for_match(text or "")
 
     def _match_any(text: str) -> bool:
-        # Lowercase the body ONCE, not once per term: a rule with a dozen terms
-        # otherwise re-walks the whole entry body a dozen times.
-        lowered = (text or "").lower()
-        return any(term in lowered for term in terms)
+        # Fold the body ONCE, not once per term: translate() costs more than the
+        # old .lower(), and a rule with a dozen terms otherwise re-walks the whole
+        # entry body a dozen times.
+        folded = fold_for_match(text or "")
+        return any(term in folded for term in terms)
 
     return _match_any
 
@@ -7461,7 +7479,6 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
 def _get_entry_excerpt(entry: object) -> str:
     """Return a short plain-text excerpt from an entry's content or summary."""
-    import re as _re
     raw = ""
     content = getattr(entry, "content", None) or []
     for c in content:
@@ -7471,10 +7488,7 @@ def _get_entry_excerpt(entry: object) -> str:
             break
     if not raw:
         raw = str(getattr(entry, "summary", None) or "")
-    # Strip HTML tags
-    plain = _re.sub(r"<[^>]+>", " ", raw)
-    plain = " ".join(plain.split())
-    return plain[:300]
+    return html_sanitize.plain_text_excerpt(raw)
 
 
 def _is_local_dev_feed(feed_url: str) -> bool:
@@ -20110,6 +20124,10 @@ def build_reader_page(
     # Same allowlist as the list rows: the feed's <em> renders, and a literal
     # <T> or <chrono> in a C++ title stays visible text.
     esc_title = html_sanitize.sanitize_inline_title(title or "(untitled)")
+    # <title> is RCDATA — markup does not render there, it shows as tag text. It
+    # gets the tag-stripped, escaped form instead (what the other reader builder
+    # already does).
+    head_title = html.escape(html_sanitize.title_plain_text(title or "(untitled)"))
     esc_src = html.escape(source_link or "", quote=True)
     esc_back = html.escape(back_href or "/read", quote=True)
     esc_feed = html.escape(feed_url or "", quote=True)
@@ -20215,7 +20233,7 @@ def build_reader_page(
     # one of its recognized sanitizers (false positive).
     doc = (
         "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
-        f"<title>{esc_title}</title>"
+        f"<title>{head_title}</title>"
         "<meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'>"
         "<meta name='robots' content='noindex'>"
         f"<meta name='csrf-token' content='{esc_csrf}'>"
@@ -32772,17 +32790,10 @@ def email_entry(
     link = entry.link or ""
     feed_title = (entry.feed.title if entry.feed else None) or ""
 
-    # Prefer plain-text summary; fall back to stripping HTML content.
-    excerpt = ""
-    if entry.summary:
-        excerpt = re.sub(r"<[^>]+>", " ", entry.summary)
-        excerpt = re.sub(r"\s+", " ", excerpt).strip()
-    elif entry.content:
-        raw = entry.content[0].value if entry.content else ""
-        excerpt = re.sub(r"<[^>]+>", " ", raw)
-        excerpt = re.sub(r"\s+", " ", excerpt).strip()
-    if excerpt and len(excerpt) > 300:
-        excerpt = excerpt[:297] + "…"
+    # Prefer the summary; fall back to the full content. Entities are decoded
+    # here because the mail builder escapes again — see plain_text_excerpt.
+    raw = entry.summary or (entry.content[0].value if entry.content else "")
+    excerpt = html_sanitize.plain_text_excerpt(raw)
 
     ok, error = send_article_email(
         api_key=get_resend_api_key(),
