@@ -88,7 +88,10 @@ short version:
   Dedup dry-runs compare all four match modes side by side, leading with the
   pairs only one mode caught, and the fuzzy title match carries its own
   similarity threshold — preview it on a slider, save it on the rule, and it
-  applies to new entries on refresh and to the backlog on Run Now.
+  applies to new entries on refresh and to the backlog on Run Now. Title
+  matching ignores case and punctuation (without ever merging `C++` into `C`)
+  and skips titles shorter than a per-rule word floor, since "Weekly roundup"
+  repeats across unrelated posts.
 - **Feed management that expects the real web.** Resilient auto-discovery,
   Page Feeds for feedless sites — which read each post's own publish date rather
   than stamping the whole backlog with the scrape time — dev.to and DeviantArt
