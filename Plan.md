@@ -73,13 +73,23 @@ and lets one be checked before the rest.
 Asked for 2026-08-12. **The retry half shipped 2026-08-12**
 (`add_img_proxy_fallback`): a body image that fails to load now swaps its `src`
 for `/api/img?u=…` and only gives up if that fails too — the same `onerror` the
-hero has always carried. That closed the sonarsource case below. **Preemptive
-proxying is still not built, and Josh wants to test that one thoroughly.**
+hero has always carried. That closed the SonarSource case below.
 
-Read Mode already does it (`_proxy_reader_body_images`): every `<img src>` in the
-body is rewritten to `/api/img?u=…`, and `srcset`/`data-src` are dropped so the
-browser cannot pick a direct URL instead. The main app's article pane does not —
-it renders third-party image URLs raw.
+**Preemptive proxying shipped 2026-08-20**, behind a default-OFF per-user
+toggle (`proxy_body_images`, Settings → Account → Appearance). When on,
+`get_entry_detail` routes every remote `<img src>` in the article pane through
+`/api/img` and drops `srcset`, using the same rewrite Read Mode always ran
+(shared now as `proxy_all_body_images`, renamed from `proxy_reader_images`);
+only the named-host hotlink rewrite is skipped as redundant — the onerror
+fallback still runs even when proxying is on, since it's what hides an image
+that's dead at the source rather than leaving a broken-image icon (a real bug
+in the first cut of this, caught and fixed the same day — see
+`docs/architecture/images.md`, "A body image that fails has to be able to try
+again"). **Confirmed working by Josh 2026-08-20** against the live library, no
+image regressions. Article loads can feel a touch slower on a not-yet-cached
+image (one extra server-side fetch to a possibly-distant host before the
+browser gets anything), expected and not measured further since it reads as
+normal VPS-distance latency, not a regression.
 
 Three things that buys, in order of how much they matter:
 
@@ -91,13 +101,6 @@ Three things that buys, in order of how much they matter:
 - **The image cache starts covering article bodies**, which today it does not.
 - **No silent `http://`-on-`https://` upgrade dependency**, which only works
   because browsers quietly fix it and does not work offline.
-
-⚠ Not a drop-in: proxying every body image raises `/api/img` traffic and cache
-size sharply (bodies carry many more images than heroes do), so the cache budget
-and eviction want checking against the live library first — and `srcset` removal
-changes what high-DPI screens fetch. Ship behind a per-feed or global toggle so a
-regression is one setting away from being undone, and test with a big article
-before it goes near everything.
 
 ### joanwestenberg: an avatar became the lead image, with a URL that cannot load
 
@@ -326,6 +329,8 @@ needed derivation, one needed only the right strategy.
 **Stop the bleeding: pin thumbnail-sized bytes during the enhance pass**, while the token is fresh. About 25 KB each against the ~121 KB average currently in the cache, and host-agnostic, so it covers any future signing CDN rather than DeviantArt alone. Same pinning mechanism as the per-feed thumbnail (`_feed_thumb_cache_key`, exempt from eviction) — that one is keyed per feed; this wants keying per entry. Does nothing for what has already expired.
 
 **Re-signing already exists on the article path** — `_resign_expired_deviantart_url` re-signs a dead wixmp token when an entry is opened, and skips the API call when the image proxy already holds the bytes. So the gap is narrower than the raw 2.5% suggests: opening a DeviantArt post repairs it. What is NOT covered is the LIST thumbnail, which reads the stored URL out of `entry_lead_images` and never goes through that path, so a feed's thumbnails stay broken until each entry is opened one at a time. Either re-sign on the list path too, or make pinning moot by storing the bytes. Every one of the 22,884 DA entries stores the deviation UUID as its entry id, so a paced backfill is possible if it turns out to be wanted — but fix the list path before building one.
+
+⚠ **The article-path re-sign had its own bug, found and fixed 2026-08-20.** It only re-signed a token whose JWT carried a readable `exp` claim in the past; a token with no `exp` claim at all was treated as permanent and never checked. That assumption is false — a spot-checked live entry (a GIF) had no `exp` and was already dead (wixmp: `400 image is invalid`), and a feed-wide check found **22,597 of 22,884 stored wixmp tokens carry no `exp` claim**, all previously trusted blind. Fixed by adding `_wixmp_url_is_live`: when `exp` is unreadable, one direct HEAD at the image host (not the DeviantArt API — no rate-limit cost) decides whether to trust the URL or fall through to a real re-sign. Still article-path only — the list-thumbnail gap above is unchanged.
 
 Build the pinning first: self-contained, no API budget, no pacing to get right, and it turns the backfill into a one-time cleanup instead of a permanent crutch.
 

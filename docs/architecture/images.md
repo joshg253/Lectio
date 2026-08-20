@@ -240,6 +240,24 @@ the direct URL stays the first attempt. Preemptive proxying is
 `proxy_hotlink_images`, for hosts where a direct load is known to fail. Only tags
 without an `onerror` are touched, so the pass is idempotent.
 
+**Whole-body preemptive proxying is opt-in** (`proxy_body_images` setting,
+Settings → Account → Appearance, off by default): every remote `<img src>` in
+the article pane routes through `/api/img`, `srcset` is dropped so the browser
+cannot pick a direct URL instead, and only the named-host hotlink rewrite above
+is skipped as redundant — `add_img_proxy_fallback` still runs. **The fallback
+is not just a retry-through-proxy; on an already-proxied image it is the only
+thing that hides a genuine failure** (`display:none`), so an image dead at the
+source (a wixmp token with no readable `exp` claim that turned out to already
+be dead — see "Signed image URLs rot" in Plan.md) rendered as a bare
+broken-image icon the first time this shipped, until the fallback was restored
+for the proxied case too (2026-08-20). Read Mode has always done this
+unconditionally — same job, offline needs the manifest to see same-origin
+URLs — via the now-shared `proxy_all_body_images` (renamed from
+`proxy_reader_images`, since a second caller no longer makes the old name
+accurate). Off by default because proxying every body image (not just heroes
+and known-hotlink hosts) raises `/api/img` traffic and cache size sharply, and
+losing `srcset` costs high-DPI screens their 2x asset.
+
 ## Choosing a lead image: what gets thrown away, and what sneaks through
 
 The selector is a pile of heuristics, and its failures come in two opposite
@@ -550,11 +568,13 @@ ComicControl mistake `_promote_known_thumbnail` documents.
 
 ## DeviantArt mature images: signed for minutes, cached for good
 
-DeviantArt serves images from wixmp with a signed JWT in the query string. Ordinary deviations are signed permanently; **mature** ones are signed for about **15 minutes**, and every variant (`content.src` and every thumb) shares the expiry — so there is no long-lived variant to prefer, and a stored URL is normally dead by the time the post is read, showing neither image nor thumbnail.
+DeviantArt serves images from wixmp with a signed JWT in the query string. Ordinary deviations are *usually* signed with no `exp` claim at all (which is not the same as permanent — see below); **mature** ones are signed for about **15 minutes** with a readable `exp`, and every variant (`content.src` and every thumb) shares the expiry — so there is no long-lived variant to prefer, and a stored URL is normally dead by the time the post is read, showing neither image nor thumbnail.
 
 Nothing scheduled can fix that: a nightly re-sign yields images dead a quarter of an hour later. The re-sign therefore happens **on open** — `_resign_expired_deviantart_images`, run in `get_entry_detail` just before the hotlink-proxy rewrite.
 
-What keeps it cheap is the proxy's byte cache, which was already most of the answer: `wixmp.com` is in `_HOTLINK_IMG_HOSTS`, so these images render through `/api/img`, and `_img_cache_key_url` strips `token`/`sig`/`exp` (`_IMG_CACHE_VOLATILE_PARAMS`) from the cache key. Once the bytes are cached under *any* valid token they answer for every later one. So the re-sign fires only when a token has already expired **and** the cache has no copy — one API call per image over its lifetime, not one per view — and a permanently-signed image (21,564 of 21,568 on the live library) never reaches the API at all. The fresh URL is persisted back onto the entry so the list thumbnail starts from it too.
+What keeps it cheap is the proxy's byte cache, which was already most of the answer: `wixmp.com` is in `_HOTLINK_IMG_HOSTS`, so these images render through `/api/img`, and `_img_cache_key_url` strips `token`/`sig`/`exp` (`_IMG_CACHE_VOLATILE_PARAMS`) from the cache key. Once the bytes are cached under *any* valid token they answer for every later one. So the re-sign fires only when a token has already expired **and** the cache has no copy — one API call per image over its lifetime, not one per view. The fresh URL is persisted back onto the entry so the list thumbnail starts from it too.
+
+**"No `exp` claim" does not mean permanent — found 2026-08-20.** A live entry (a GIF) had a JWT with no `exp` field, was trusted as permanently valid on that basis alone, and was already dead (wixmp answered `400 image is invalid` directly, no proxy involved). A feed-wide check found **22,597 of 22,884 stored wixmp tokens carry no `exp` claim** — the code had been trusting all of them blind. Calling the DeviantArt API for every one of those on first open would burn through its rate limit for no reason, since the large majority genuinely are fine — so `_wixmp_url_is_live` interposes a plain HEAD at the image host itself (SSRF-guarded like any outbound fetch, no DA API budget spent) before trusting a no-`exp` token; only a URL that fails that check falls through to a real re-sign.
 
 `scripts/refresh_expired_deviantart_images.py` remains as a manual catch-up over the same routine. Note it must use `get_deviantart_user_token()` rather than reading `deviantart_access_token` directly: DA access tokens last an hour, so any batch reading the stored value 401s on almost every run.
 

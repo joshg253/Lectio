@@ -385,7 +385,7 @@ def test_reader_images_are_proxied_to_the_same_origin():
     """The precache manifest can only list same-origin URLs, so an article with
     absolute image srcs cached its HTML and none of its pictures — it read fine
     offline with every image broken."""
-    html = main.proxy_reader_images(
+    html = main.proxy_all_body_images(
         '<p>x</p><img src="http://3.bp.blogspot.com/x/Boil.JPG">')
 
     assert 'src="/api/img?u=http%3A%2F%2F3.bp.blogspot.com%2Fx%2FBoil.JPG"' in html
@@ -394,13 +394,13 @@ def test_reader_images_are_proxied_to_the_same_origin():
 def test_proxying_leaves_alone_what_is_already_safe():
     for src in ('/api/img?u=x', 'data:image/png;base64,AAAA'):
         html = f'<img src="{src}">'
-        assert main.proxy_reader_images(html) == html
+        assert main.proxy_all_body_images(html) == html
 
 
 def test_srcset_is_dropped_so_the_browser_cannot_route_around_the_proxy():
     """Left in place the browser picks a direct URL over the proxied src, and the
     manifest misses the image again."""
-    out = main.proxy_reader_images(
+    out = main.proxy_all_body_images(
         '<img src="https://x.test/a.jpg" srcset="https://x.test/a-2x.jpg 2x">')
 
     assert "srcset" not in out
