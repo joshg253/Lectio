@@ -16937,13 +16937,16 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if isinstance(content_html, str) and content_html and not is_saved:
             if proxy_body_images_enabled():
                 # Every remote src already routes through /api/img, so the
-                # hotlink rewrite, referrer stripping and onerror fallback
-                # below are redundant here.
+                # named-host hotlink rewrite below is redundant. The onerror
+                # fallback is NOT: a src that is dead at the source (an
+                # already-expired signed URL, say) still needs it, since the
+                # fallback's job on an already-proxied image is to hide a
+                # genuine failure (display:none), not just to retry.
                 content_html = proxy_all_body_images(content_html)
             else:
                 content_html = proxy_hotlink_images(content_html)
-                content_html = add_no_referrer_to_images(content_html)
-                content_html = add_img_proxy_fallback(content_html)
+            content_html = add_no_referrer_to_images(content_html)
+            content_html = add_img_proxy_fallback(content_html)
 
         if not _show_lead_in_article:
             lead_image_url = None

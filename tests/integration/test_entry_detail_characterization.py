@@ -128,8 +128,10 @@ def test_body_images_proxied_when_setting_enabled(env, monkeypatch):
     d = _detail()
     assert "/api/img?u=https%3A%2F%2Fcdn.test%2Fa.jpg" in d["content_html"]
     assert "srcset" not in d["content_html"]
-    # Redundant once every src is already proxied.
-    assert "onerror=" not in d["content_html"]
+    # An image dead at the source (expired signed URL, etc.) needs to fail
+    # gracefully even when already proxied — the fallback's onerror hides a
+    # genuine failure rather than leaving a broken-image icon, so it stays.
+    assert "onerror=" in d["content_html"]
 
 
 # --- content cleanups ------------------------------------------------------

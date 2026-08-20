@@ -243,8 +243,14 @@ without an `onerror` are touched, so the pass is idempotent.
 **Whole-body preemptive proxying is opt-in** (`proxy_body_images` setting,
 Settings → Account → Appearance, off by default): every remote `<img src>` in
 the article pane routes through `/api/img`, `srcset` is dropped so the browser
-cannot pick a direct URL instead, and the hotlink/no-referrer/onerror-fallback
-trio above is skipped as redundant. Read Mode has always done this
+cannot pick a direct URL instead, and only the named-host hotlink rewrite above
+is skipped as redundant — `add_img_proxy_fallback` still runs. **The fallback
+is not just a retry-through-proxy; on an already-proxied image it is the only
+thing that hides a genuine failure** (`display:none`), so an image dead at the
+source (a wixmp token with no readable `exp` claim that turned out to already
+be dead — see "Signed image URLs rot" in Plan.md) rendered as a bare
+broken-image icon the first time this shipped, until the fallback was restored
+for the proxied case too (2026-08-20). Read Mode has always done this
 unconditionally — same job, offline needs the manifest to see same-origin
 URLs — via the now-shared `proxy_all_body_images` (renamed from
 `proxy_reader_images`, since a second caller no longer makes the old name
