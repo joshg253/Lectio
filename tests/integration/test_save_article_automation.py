@@ -134,7 +134,7 @@ def test_run_now_dedup_sweeps_full_backlog(configured, monkeypatch):
     seen = {}
 
     def fake_run_now_dedup(conn, scope, scope_id, match_method, window_hours,
-                           max_per_feed=500, exclude_scope_ids=""):
+                           max_per_feed=500, exclude_scope_ids="", **kw):
         seen["max_per_feed"] = max_per_feed
         return {"count": 0, "entries": [], "kept": []}
 

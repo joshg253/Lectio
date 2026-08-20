@@ -72,6 +72,20 @@ def test_route_passes_the_percent_knob_through(env):
     assert run(60) == 1
 
 
+def test_route_without_a_percent_uses_the_default(env):
+    """An older client, or any caller that omits the field, must get the same
+    answer as one that sends the default explicitly."""
+    def run(**kw) -> int:
+        res = main.rules_dry_run_route(
+            type="deduplicate", scope="global", scope_id="", keyword="fuzzy",
+            is_regex=0, search_in="title", dedup_window_hours=168,
+            exclude_scope_ids="", feed_urls=f"{FEED_A},{FEED_B}",
+            yt_include_shorts=1, yt_min_minutes=0, yt_max_minutes=0, **kw)
+        return json.loads(bytes(res.body))["total_would_mark_read"]
+
+    assert run() == run(fuzzy_pct=main._DEDUP_FUZZY_PCT_DEFAULT) == 0
+
+
 @pytest.mark.parametrize("pct,expected", [
     (None, 0.80), (80, 0.80), (100, 1.0), (95, 0.95),
     (10, 0.50), (0, 0.50), (140, 1.0), ("x", 0.80),
