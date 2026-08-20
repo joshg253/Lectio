@@ -9914,10 +9914,13 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           grpSpan.textContent = (d.groups ? d.groups.length : '—') + ' group' + (d.groups && d.groups.length === 1 ? '' : 's');
           const markSpan = document.createElement('span');
           markSpan.className = 'hl-compare-mark';
+          const _total = d.total_would_mark_read;
           const _unread = d.total_unread_would_mark_read;
-          markSpan.textContent = (d.total_would_mark_read !== undefined ? d.total_would_mark_read : '—')
-            + ' mark read' + (_unread !== undefined && _unread !== d.total_would_mark_read
-                              ? ' (' + _unread + ' unread)' : '');
+          // No total (the mode errored) means no honest suffix either: "— mark
+          // read (3 unread)" reads as though 3 of nothing were actionable.
+          const _suffix = (_total !== undefined && _unread !== undefined && _unread !== _total)
+            ? ' (' + _unread + ' unread)' : '';
+          markSpan.textContent = (_total !== undefined ? _total : '—') + ' mark read' + _suffix;
           const dOutliers = stripConsensus(d);
           const consensusHidden = (d.total_would_mark_read || 0) - (dOutliers.total_would_mark_read || 0);
           const onlyCount = allPairs.filter(p => p.modes.length === 1 && p.modes[0] === m).length;
