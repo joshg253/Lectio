@@ -6934,6 +6934,7 @@ mark.highlight-mark {
 .hl-compare-fuzz-slider { width: 10rem; max-width: 40vw; accent-color: var(--accent, #4f89ab); }
 .hl-compare-fuzz-val { font-weight: 600; color: var(--ink, #222); min-width: 2.6rem; }
 .hl-compare-fuzz-note { font-style: italic; opacity: 0.8; }
+.hl-compare-fuzz-apply { margin: 0; }
 .hl-compare-consensus-toggle {
   display: block;
   margin: 0 0 0.35rem;

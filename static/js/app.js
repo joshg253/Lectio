@@ -9701,7 +9701,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         }));
       }
 
-      function hlBuildModeComparisonWrap(results, activeMode, refetch, fuzzyPct) {
+      // `saver` (optional) = { savedPct, apply(pct) } — present only when the
+      // comparison belongs to a real rule, so the slider can be kept rather than
+      // re-dialled from memory next time. Ad-hoc feed comparisons have no rule to
+      // save to and keep the preview-only note.
+      function hlBuildModeComparisonWrap(results, activeMode, refetch, fuzzyPct, saver) {
         const modes = _hlCmpModes, modeLabels = _hlCmpModeLabels;
         const curPct = fuzzyPct || _hlFuzzyPctDefault;
         function makePairEl(p) {
@@ -9810,7 +9814,34 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           out.textContent = curPct + '%';
           const note = document.createElement('span');
           note.className = 'hl-compare-fuzz-note';
-          note.textContent = 'preview only — set it on the rule to keep it';
+          // Read through `saver` each time — a captured copy goes stale the moment
+          // Apply succeeds, leaving the button offering what was just saved.
+          const applyBtn = document.createElement('button');
+          applyBtn.type = 'button';
+          applyBtn.className = 'hl-dryrun-compare-btn hl-compare-fuzz-apply';
+          const syncApply = () => {
+            if (!saver) { note.textContent = 'preview only — no rule to save to'; return; }
+            const same = curPct === saver.savedPct;
+            applyBtn.hidden = same;
+            applyBtn.disabled = false;
+            applyBtn.textContent = 'Apply ' + curPct + '% to the rule';
+            note.textContent = same ? 'this is the rule\u2019s saved threshold'
+                                    : 'preview — rule still runs at ' + saver.savedPct + '%';
+          };
+          syncApply();
+          applyBtn.addEventListener('click', async () => {
+            applyBtn.disabled = true; applyBtn.textContent = 'Applying…';
+            try {
+              await saver.apply(curPct);
+              saver.savedPct = curPct;
+              syncApply();
+              note.textContent = 'saved — the rule runs at ' + curPct + '% from now on';
+            } catch {
+              applyBtn.disabled = false;
+              applyBtn.textContent = 'Apply ' + curPct + '% to the rule';
+              note.textContent = 'could not save to the rule';
+            }
+          });
           // Dragging previews at once (on release, not per pixel): the point of the
           // knob is seeing what the number does, not clicking a second button.
           slider.addEventListener('input', () => { out.textContent = slider.value + '%'; });
@@ -9820,7 +9851,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             slider.disabled = true; note.textContent = 'previewing ' + pct + '%…';
             try {
               const next = await refetch(pct, results);
-              wrap.replaceWith(hlBuildModeComparisonWrap(next, activeMode, refetch, pct));
+              wrap.replaceWith(hlBuildModeComparisonWrap(next, activeMode, refetch, pct, saver));
             } catch {
               note.textContent = 'preview failed'; slider.disabled = false;
               out.textContent = curPct + '%'; slider.value = String(curPct);
@@ -9828,6 +9859,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           });
           lbl.appendChild(slider); lbl.appendChild(out);
           ctl.appendChild(lbl); ctl.appendChild(note);
+          if (saver) ctl.appendChild(applyBtn);
           wrap.appendChild(ctl);
         }
 
@@ -10410,7 +10442,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             if (['fuzzy', 'title'].includes(rule.keyword)) {
               const wordsBadge = document.createElement('span');
               wordsBadge.className = 'hl-rule-search-in-badge';
-              wordsBadge.textContent = '≥' + (rule.dedup_min_title_words || _hlMinTitleWordsDefault) + 'w';
+              // Spelled out: "5w" next to the "7d" window badge reads as weeks.
+              wordsBadge.textContent = '≥' + (rule.dedup_min_title_words || _hlMinTitleWordsDefault) + ' words';
               wordsBadge.title = 'Titles shorter than this are ignored — short titles repeat across unrelated posts';
               row.appendChild(wordsBadge);
             }
@@ -10860,8 +10893,35 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
                 const startPct = rule.dedup_fuzzy_pct || _hlFuzzyPctDefault;
                 const refetch = (pct, prior) => hlFetchAllModes(base, pct, prior);
                 const results = await hlFetchAllModes(base, startPct);
+                // INSERT OR REPLACE keys on (scope, scope_id, keyword), and the
+                // match method IS the keyword, so re-adding the rule with the new
+                // percent overwrites it in place — no remove-then-add dance.
+                const saver = {
+                  savedPct: startPct,
+                  apply: async (pct) => {
+                    const body = hlRuleToParams({ ...rule, dedup_fuzzy_pct: pct });
+                    const resp = await fetch('/highlights/add', {
+                      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                      credentials: 'same-origin', body: body.toString(),
+                    });
+                    if (!resp.ok) throw new Error('save failed');
+                    rule.dedup_fuzzy_pct = pct;
+                    const idx = hlRules.findIndex(r => r.scope === rule.scope
+                      && r.scope_id === rule.scope_id && r.keyword === rule.keyword);
+                    if (idx >= 0) hlRules[idx] = { ...hlRules[idx], dedup_fuzzy_pct: pct };
+                    // Repaint the one badge rather than calling hlRenderRules(): a
+                    // full re-render destroys the dry-run panel, which is where the
+                    // button lives — applying would blow away the comparison you
+                    // were reading. The list rebuilds with the new value anyway the
+                    // next time it renders.
+                    const openRow = hlActiveDryRun && hlActiveDryRun.previousElementSibling;
+                    const pctBadge = openRow && [...openRow.querySelectorAll('.hl-rule-search-in-badge')]
+                      .find(el => el.textContent.trim().endsWith('%'));
+                    if (pctBadge) pctBadge.textContent = '≥' + pct + '%';
+                  },
+                };
 
-                cmpBtn.replaceWith(hlBuildModeComparisonWrap(results, rule.keyword, refetch, startPct));
+                cmpBtn.replaceWith(hlBuildModeComparisonWrap(results, rule.keyword, refetch, startPct, saver));
               } catch (err) { cmpBtn.textContent = 'Compare failed'; cmpBtn.disabled = false; }
             });
             panel.appendChild(cmpBtn);
