@@ -2289,6 +2289,18 @@ def test_a_lead_that_is_already_the_crop_is_kept(tmp_path: Path):
     assert service._plugin_thumbnail_variant(entry_link=_DC_LINK, lead_url=_DC_THUMB) == _DC_THUMB
 
 
+def test_dc_minis_secondary_image_derives_the_strip_thumbnail(tmp_path: Path):
+    """A multi-image post whose LEAD resolved to the second image
+    (dc_minis_28_02.jpg, a bonus panel) must still derive the strip's real
+    thumbnail (dc_minis_28_thumbnail.jpg) — not dc_minis_28_02_thumbnail.jpg,
+    which the site never publishes and 404s. Found 2026-08-21: the entry
+    showed no list thumbnail at all."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    lead = "https://dresdencodak.com/wp-content/uploads/2026/08/dc_minis_28_02.jpg"
+    thumb = "https://dresdencodak.com/wp-content/uploads/2026/08/dc_minis_28_thumbnail.jpg"
+    assert service._plugin_thumbnail_variant(entry_link=_DC_LINK, lead_url=lead) == thumb
+
+
 def test_dark_science_derives_nothing(tmp_path: Path):
     """ds_185/186/187 have no _thumbnail.jpg — deriving blind would 404 them all.
 
