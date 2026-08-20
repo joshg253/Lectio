@@ -6201,7 +6201,14 @@ def build_keyword_matcher(keyword: str, is_regex: bool):
     if len(terms) == 1:
         only = terms[0]
         return lambda text: only in (text or "").lower()
-    return lambda text: any(term in (text or "").lower() for term in terms)
+
+    def _match_any(text: str) -> bool:
+        # Lowercase the body ONCE, not once per term: a rule with a dozen terms
+        # otherwise re-walks the whole entry body a dozen times.
+        lowered = (text or "").lower()
+        return any(term in lowered for term in terms)
+
+    return _match_any
 
 
 def _dry_run_pattern(
@@ -6233,7 +6240,10 @@ def _dry_run_pattern(
     else:
         try:
             match_fn = build_keyword_matcher(keyword, is_regex)
-        except _re.error as e:
+        except re.error as e:
+            # Same module object the matcher compiles with — `_re` is an alias
+            # some of these functions import locally, and mixing the two names
+            # made it look like the handler might not catch.
             return {"error": f"Invalid regex: {e}"}
 
     if scope == "folder":
@@ -6533,7 +6543,7 @@ def _run_now_pattern(
 
     try:
         match_fn = build_keyword_matcher(keyword, is_regex)
-    except _re.error as e:
+    except re.error as e:
         return {"error": f"Invalid regex: {e}"}
 
     if scope == "folder":
@@ -7481,7 +7491,7 @@ def _entry_matches_rule(entry: object, keyword: str, is_regex: bool, search_in: 
         return False
     try:
         match_fn = build_keyword_matcher(keyword, is_regex)
-    except _re.error:
+    except re.error:
         return False
 
     title = str(getattr(entry, "title", None) or "")

@@ -48,6 +48,22 @@ def test_empty_text_never_matches():
         assert match(None) is False
 
 
+def test_regex_mode_is_case_insensitive_and_safe_on_empty_text():
+    match = main.build_keyword_matcher(r"a{1,2}b", True)
+    assert match("AAB") is True
+    assert match("") is False
+    assert match(None) is False
+
+
+def test_a_plain_term_cannot_require_a_literal_comma():
+    """The limitation stated plainly: in plain mode the comma is the separator,
+    so "hello, world" matches text with neither comma present."""
+    match = main.build_keyword_matcher("hello, world", False)
+    assert match("hello world") is True      # matched by the term "hello"
+    assert match("world domination") is True  # and by "world" alone
+    assert main.build_keyword_matcher(r"hello, world", True)("say hello, world!") is True
+
+
 def test_regex_mode_ignores_commas():
     """A comma is a legal regex character; splitting one would silently rewrite
     the pattern."""
@@ -97,4 +113,12 @@ def test_dry_run_run_now_and_live_matching_share_one_matcher(monkeypatch):
 
     assert main._entry_matches_rule(_Entry(), "spoiler, leak", False, "title") is True
     assert main._entry_matches_rule(_Entry(), "leak, rumor", False, "title") is False
-    assert calls == [("spoiler, leak", False), ("leak, rumor", False)]
+
+    # The other two call sites, which are the ones that actually drift: a preview
+    # that matches differently from the run is the bug this consolidation fixes.
+    with main.get_meta_connection() as conn:
+        main._dry_run_pattern(conn, "global", "", "spoiler, leak", False, "title")
+        main._run_now_pattern(conn, "global", "", "leak, rumor", False, "title")
+
+    assert calls == [("spoiler, leak", False), ("leak, rumor", False),
+                     ("spoiler, leak", False), ("leak, rumor", False)]
