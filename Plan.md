@@ -73,7 +73,7 @@ and lets one be checked before the rest.
 Asked for 2026-08-12. **The retry half shipped 2026-08-12**
 (`add_img_proxy_fallback`): a body image that fails to load now swaps its `src`
 for `/api/img?u=…` and only gives up if that fails too — the same `onerror` the
-hero has always carried. That closed the sonarsource case below.
+hero has always carried. That closed the SonarSource case below.
 
 **Preemptive proxying shipped 2026-08-20**, behind a default-OFF per-user
 toggle (`proxy_body_images`, Settings → Account → Appearance). When on,
