@@ -240,6 +240,18 @@ the direct URL stays the first attempt. Preemptive proxying is
 `proxy_hotlink_images`, for hosts where a direct load is known to fail. Only tags
 without an `onerror` are touched, so the pass is idempotent.
 
+**Whole-body preemptive proxying is opt-in** (`proxy_body_images` setting,
+Settings → Account → Appearance, off by default): every remote `<img src>` in
+the article pane routes through `/api/img`, `srcset` is dropped so the browser
+cannot pick a direct URL instead, and the hotlink/no-referrer/onerror-fallback
+trio above is skipped as redundant. Read Mode has always done this
+unconditionally — same job, offline needs the manifest to see same-origin
+URLs — via the now-shared `proxy_all_body_images` (renamed from
+`proxy_reader_images`, since a second caller no longer makes the old name
+accurate). Off by default because proxying every body image (not just heroes
+and known-hotlink hosts) raises `/api/img` traffic and cache size sharply, and
+losing `srcset` costs high-DPI screens their 2x asset.
+
 ## Choosing a lead image: what gets thrown away, and what sneaks through
 
 The selector is a pile of heuristics, and its failures come in two opposite

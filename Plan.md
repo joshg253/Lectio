@@ -73,13 +73,19 @@ and lets one be checked before the rest.
 Asked for 2026-08-12. **The retry half shipped 2026-08-12**
 (`add_img_proxy_fallback`): a body image that fails to load now swaps its `src`
 for `/api/img?u=…` and only gives up if that fails too — the same `onerror` the
-hero has always carried. That closed the sonarsource case below. **Preemptive
-proxying is still not built, and Josh wants to test that one thoroughly.**
+hero has always carried. That closed the sonarsource case below.
 
-Read Mode already does it (`_proxy_reader_body_images`): every `<img src>` in the
-body is rewritten to `/api/img?u=…`, and `srcset`/`data-src` are dropped so the
-browser cannot pick a direct URL instead. The main app's article pane does not —
-it renders third-party image URLs raw.
+**Preemptive proxying shipped 2026-08-20**, behind a default-OFF per-user
+toggle (`proxy_body_images`, Settings → Account → Appearance). When on,
+`get_entry_detail` routes every remote `<img src>` in the article pane through
+`/api/img` and drops `srcset`, using the same rewrite Read Mode always ran
+(shared now as `proxy_all_body_images`, renamed from `proxy_reader_images`);
+the hotlink/no-referrer/onerror-fallback trio is skipped as redundant when it's
+on. Rationale and the cache-budget caveat are in `docs/architecture/images.md`
+("A body image that fails has to be able to try again"). **Josh still needs to
+flip it on and test against the live library** — the cache-size-growth and
+srcset-loss tradeoffs below were reasoned about, not measured against real
+traffic.
 
 Three things that buys, in order of how much they matter:
 
@@ -91,13 +97,6 @@ Three things that buys, in order of how much they matter:
 - **The image cache starts covering article bodies**, which today it does not.
 - **No silent `http://`-on-`https://` upgrade dependency**, which only works
   because browsers quietly fix it and does not work offline.
-
-⚠ Not a drop-in: proxying every body image raises `/api/img` traffic and cache
-size sharply (bodies carry many more images than heroes do), so the cache budget
-and eviction want checking against the live library first — and `srcset` removal
-changes what high-DPI screens fetch. Ship behind a per-feed or global toggle so a
-regression is one setting away from being undone, and test with a big article
-before it goes near everything.
 
 ### joanwestenberg: an avatar became the lead image, with a URL that cannot load
 

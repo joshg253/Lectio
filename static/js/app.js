@@ -12442,6 +12442,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         }
         const pwEl = document.getElementById('sett-portrait-img-width');
         if (pwEl && d.portrait_img_max_width != null) pwEl.value = String(d.portrait_img_max_width);
+        { const el = document.getElementById('sett-proxy-body-images'); if (el) el.checked = !!d.proxy_body_images; }
         v('sett-maint-hour', d.maintenance_hour);
         const maintLast = document.getElementById('sett-maint-last');
         if (maintLast) {
@@ -12784,6 +12785,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             profile_email: g('sett-profile-email'),
             tz_display: g('sett-tz-display'),
             portrait_img_max_width: g('sett-portrait-img-width'),
+            proxy_body_images: (document.getElementById('sett-proxy-body-images')?.checked ? '1' : '0'),
           };
         } else if (scope === 'profile') {
           payload = { profile_name: g('sett-profile-name'), profile_email: g('sett-profile-email') };

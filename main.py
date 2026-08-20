@@ -396,6 +396,12 @@ PROFILE_NAME_SETTING_KEY = "profile_name"
 PROFILE_EMAIL_SETTING_KEY = "profile_email"
 SETTING_TZ_DISPLAY = "tz_display"
 SETTING_PORTRAIT_IMG_MAX_WIDTH = "portrait_img_max_width"
+# Per-user: rewrite every third-party <img src> in the article pane body to
+# /api/img?u=… instead of loading it directly. Off ("0") by default — raises
+# /api/img traffic and cache size, and drops srcset (so high-DPI screens fetch
+# the proxied single-resolution src). Read Mode always does this regardless of
+# this setting (see proxy_all_body_images).
+SETTING_PROXY_BODY_IMAGES = "proxy_body_images"
 SETTING_MAINTENANCE_HOUR = "maintenance_hour"
 SETTING_IMG_CACHE_DAYS = "img_cache_days"
 SETTING_IMG_CACHE_MAX_DIM = "img_cache_max_dim"
@@ -1696,6 +1702,12 @@ def get_portrait_img_max_width() -> int:
         except ValueError:
             pass
     return _ENV_PORTRAIT_IMG_MAX_WIDTH
+
+
+def proxy_body_images_enabled() -> bool:
+    """Per-user: preemptively proxy every article-pane body image through
+    /api/img instead of loading third-party URLs directly. Off by default."""
+    return get_runtime_setting(SETTING_PROXY_BODY_IMAGES, "0") == "1"
 
 
 def get_img_cache_days() -> int:
@@ -16923,9 +16935,15 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             content_html = _resign_expired_deviantart_images(content_html, feed_url, entry_id)
 
         if isinstance(content_html, str) and content_html and not is_saved:
-            content_html = proxy_hotlink_images(content_html)
-            content_html = add_no_referrer_to_images(content_html)
-            content_html = add_img_proxy_fallback(content_html)
+            if proxy_body_images_enabled():
+                # Every remote src already routes through /api/img, so the
+                # hotlink rewrite, referrer stripping and onerror fallback
+                # below are redundant here.
+                content_html = proxy_all_body_images(content_html)
+            else:
+                content_html = proxy_hotlink_images(content_html)
+                content_html = add_no_referrer_to_images(content_html)
+                content_html = add_img_proxy_fallback(content_html)
 
         if not _show_lead_in_article:
             lead_image_url = None
@@ -19769,7 +19787,7 @@ def _prepend_reader_lead_image(feed_url: str | None, entry_id: str | None, body:
     already there. Readability extraction usually strips the opening image (Lectio
     tracks it separately as the lead image), so without this the first image is
     missing in Read Mode — the normal reader view re-adds it client-side."""
-    body = proxy_reader_images(body)
+    body = proxy_all_body_images(body)
     if not (feed_url and entry_id):
         return body
     try:
@@ -19876,22 +19894,29 @@ def _drop_feed_beacon_images(content: str) -> str:
 _READER_IMG_SRC_RE = re.compile(r'(<img\b[^>]*?\bsrc\s*=\s*)(["\'])(.*?)\2', re.IGNORECASE | re.DOTALL)
 
 
-def proxy_reader_images(content: str) -> str:
-    """Point every remote <img> in the e-ink reader at /api/img.
+def proxy_all_body_images(content: str) -> str:
+    """Point every remote <img> in an article body at /api/img.
 
-    Offline reading needs the page to request the SAME URLs the precache
-    manifest stores, and the manifest can only list same-origin ones — so an
-    article whose images are absolute (blogspot, most feeds) precached its HTML
-    and none of its pictures, and read fine with every image broken.
+    Read Mode (e-ink reader) always runs this: offline reading needs the page
+    to request the SAME URLs the precache manifest stores, and the manifest can
+    only list same-origin ones — so an article whose images are absolute
+    (blogspot, most feeds) precached its HTML and none of its pictures, and
+    read fine with every image broken.
 
-    Proxying also removes a quieter dependency: those srcs are frequently
-    ``http://`` on an ``https://`` page, and they load today only because Chrome
-    silently upgrades them. That upgrade needs the network, which is precisely
-    what offline does not have.
+    The main article pane runs this too, opt-in via proxy_body_images_enabled()
+    (Settings → Account → Appearance): it stops content blockers that filter a
+    third-party image CDN from leaving the article looking empty, and brings
+    body images into the same cache heroes already use.
+
+    Proxying also removes a quieter dependency either way: those srcs are
+    frequently ``http://`` on an ``https://`` page, and they load today only
+    because Chrome silently upgrades them. That upgrade needs the network,
+    which is precisely what offline does not have.
 
     Same guard, cache and user-agent as any other /api/img load. srcset is
-    dropped alongside, or the browser picks a direct URL over the proxied src and
-    the manifest misses it again.
+    dropped alongside, or the browser picks a direct URL over the proxied src
+    (defeating the manifest offline, and high-DPI screens fetch a single
+    resolution instead when this runs in the main pane).
     """
     if "<img" not in content.lower():
         return content
@@ -26770,6 +26795,7 @@ def get_all_settings():
         "profile_email": profile_email,
         "tz_display": get_runtime_setting(SETTING_TZ_DISPLAY),
         "portrait_img_max_width": get_portrait_img_max_width(),
+        "proxy_body_images": proxy_body_images_enabled(),
         "tz_default": os.environ.get("TZ") or "UTC",
         "maintenance_hour": get_runtime_setting(SETTING_MAINTENANCE_HOUR),
         "maintenance_last_ran_at": maint_last,
@@ -26894,7 +26920,8 @@ async def save_all_settings(request: Request):
                   SETTING_FRESHRSS_PASSWORD, SETTING_TTRSS_PASSWORD}
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
-        SETTING_TZ_DISPLAY, SETTING_PORTRAIT_IMG_MAX_WIDTH, SETTING_MAINTENANCE_HOUR,
+        SETTING_TZ_DISPLAY, SETTING_PORTRAIT_IMG_MAX_WIDTH, SETTING_PROXY_BODY_IMAGES,
+        SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
         SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL, SETTING_YT_QUOTA_CAP,

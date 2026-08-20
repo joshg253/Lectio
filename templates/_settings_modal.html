@@ -78,6 +78,11 @@
           <label class="settings-label" for="sett-portrait-img-width">Portrait image max width (px)</label>
           <input type="number" id="sett-portrait-img-width" class="settings-input" min="0" step="10" placeholder="650" autocomplete="off" />
           <p class="settings-hint">Caps tall (portrait) article images to this width; wide images stay full-width. 0 disables.</p>
+          <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem;grid-column:1 / -1;margin-top:1rem">
+            <input type="checkbox" id="sett-proxy-body-images" />
+            <span class="settings-label" style="margin:0">Proxy article images through the cache</span>
+          </label>
+          <p class="settings-hint">Loads every image in an article's body through Lectio's image cache instead of directly from the source site. Stops content blockers from breaking articles whose images they filter, at the cost of more cache traffic and losing high-DPI (srcset) images.</p>
         </div>
         <div class="settings-actions">
           <button type="button" class="settings-save-btn" data-settings-save="account">Save</button>

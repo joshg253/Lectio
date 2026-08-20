@@ -113,6 +113,25 @@ def test_plain_content_renders(env):
     assert "<strong>world</strong>" in d["content_html"]
 
 
+# --- body image proxying toggle ---------------------------------------------
+
+def test_body_images_not_proxied_by_default(env):
+    _add(content='<p>Body.</p><img src="https://cdn.test/a.jpg">')
+    d = _detail()
+    assert 'src="https://cdn.test/a.jpg"' in d["content_html"]
+    assert 'onerror=' in d["content_html"]
+
+
+def test_body_images_proxied_when_setting_enabled(env, monkeypatch):
+    monkeypatch.setattr(main, "proxy_body_images_enabled", lambda: True)
+    _add(content='<p>Body.</p><img src="https://cdn.test/a.jpg" srcset="https://cdn.test/a-2x.jpg 2x">')
+    d = _detail()
+    assert "/api/img?u=https%3A%2F%2Fcdn.test%2Fa.jpg" in d["content_html"]
+    assert "srcset" not in d["content_html"]
+    # Redundant once every src is already proxied.
+    assert "onerror=" not in d["content_html"]
+
+
 # --- content cleanups ------------------------------------------------------
 
 def test_wordpress_footer_stripped(env):
