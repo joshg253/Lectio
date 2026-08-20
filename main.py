@@ -5862,8 +5862,9 @@ def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[st
         for entries in idx.values():
             if len({e["feed_url"] for e in entries}) < 2:
                 continue
-            for i, a in enumerate(sorted(entries, key=lambda e: e["published_ts"] or 0)):
-                for b in sorted(entries, key=lambda e: e["published_ts"] or 0)[i + 1:]:
+            _ordered = sorted(entries, key=dedup_order_key)
+            for i, a in enumerate(_ordered):
+                for b in _ordered[i + 1:]:
                     if a["feed_url"] != b["feed_url"] and a["link"] != b["link"]:
                         pairs.add(_mk_pair(a, b))
         return pairs
@@ -5990,6 +5991,18 @@ def _resolve_dedup_feed_urls(
     return feed_urls
 
 
+def dedup_order_key(info: dict) -> tuple:
+    """Ordering for duplicate copies: oldest first, then a STABLE tie-break.
+
+    Sister papers on one wire publish the same story in the same second — 164 of
+    190 cross-paper pairs among three local Reporter feeds shared a timestamp to
+    the second. With date alone the winner fell out of set-iteration order over
+    the feed URLs, so which copy was kept changed between runs, and so did which
+    one got marked read. Feed URL then link makes it repeatable.
+    """
+    return (info.get("published_ts") or 0.0, str(info.get("feed_url") or ""), str(info.get("link") or ""))
+
+
 def _dry_run_dedup(
     conn: sqlite3.Connection,
     scope: str,
@@ -6114,7 +6127,7 @@ def _dry_run_dedup(
         for slug, entries in slug_index.items():
             if len({e["feed_url"] for e in entries}) < 2:
                 continue
-            sorted_entries = sorted(entries, key=lambda e: e["published_ts"] or 0)
+            sorted_entries = sorted(entries, key=dedup_order_key)
             keep = sorted_entries[0]
             mark_read = sorted_entries[1:]
             groups.append({"match_by": "slug", "matched_value": slug, "keep": keep, "mark_read": mark_read})
@@ -6125,7 +6138,7 @@ def _dry_run_dedup(
         for norm_title, entries in title_index.items():
             if len({e["feed_url"] for e in entries}) < 2:
                 continue
-            sorted_entries = sorted(entries, key=lambda e: e["published_ts"] or 0)
+            sorted_entries = sorted(entries, key=dedup_order_key)
             oldest_ts = sorted_entries[0]["published_ts"] or 0.0
             newest_ts = sorted_entries[-1]["published_ts"] or 0.0
             if oldest_ts > 0 and newest_ts > 0 and (newest_ts - oldest_ts) > window_secs:
@@ -6138,7 +6151,7 @@ def _dry_run_dedup(
         for (slug, norm_title), entries in combined_index.items():
             if len({e["feed_url"] for e in entries}) < 2:
                 continue
-            sorted_entries = sorted(entries, key=lambda e: e["published_ts"] or 0)
+            sorted_entries = sorted(entries, key=dedup_order_key)
             oldest_ts = sorted_entries[0]["published_ts"] or 0.0
             newest_ts = sorted_entries[-1]["published_ts"] or 0.0
             if oldest_ts > 0 and newest_ts > 0 and (newest_ts - oldest_ts) > window_secs:
@@ -6148,7 +6161,7 @@ def _dry_run_dedup(
             groups.append({"match_by": "slug+title", "matched_value": norm_title, "keep": keep, "mark_read": mark_read})
 
     if match_method == "fuzzy":
-        feed_list = [u for u in feed_urls if u in fuzzy_entries]
+        feed_list = sorted(u for u in feed_urls if u in fuzzy_entries)
         seen_mark_links: set[str] = set()
         for i, feed_i in enumerate(feed_list):
             for feed_j in feed_list[i + 1:]:
@@ -6161,7 +6174,8 @@ def _dry_run_dedup(
                         sim = title_word_similarity(ei["norm_title"], ej["norm_title"])
                         if sim < _FUZZY_THRESHOLD:
                             continue
-                        keep, newer = (ei, ej) if ts_i <= ts_j else (ej, ei)
+                        keep, newer = ((ei, ej) if dedup_order_key(ei) <= dedup_order_key(ej)
+                                       else (ej, ei))
                         if newer["link"] in seen_mark_links:
                             continue
                         seen_mark_links.add(newer["link"])
@@ -6469,7 +6483,7 @@ def _run_now_dedup(
             for slug, entries in slug_index.items():
                 if len({e["feed_url"] for e in entries}) < 2:
                     continue
-                sorted_entries = sorted(entries, key=lambda e: e["published_ts"] or 0)
+                sorted_entries = sorted(entries, key=dedup_order_key)
                 kept_keys.add((sorted_entries[0]["feed_url"], sorted_entries[0]["entry_id"]))
                 for e in sorted_entries[1:]:
                     to_mark.add((e["feed_url"], e["entry_id"]))
@@ -6479,7 +6493,7 @@ def _run_now_dedup(
             for norm_title, entries in title_index.items():
                 if len({e["feed_url"] for e in entries}) < 2:
                     continue
-                sorted_entries = sorted(entries, key=lambda e: e["published_ts"] or 0)
+                sorted_entries = sorted(entries, key=dedup_order_key)
                 oldest_ts = sorted_entries[0]["published_ts"] or 0.0
                 newest_ts = sorted_entries[-1]["published_ts"] or 0.0
                 if oldest_ts > 0 and newest_ts > 0 and (newest_ts - oldest_ts) > window_secs:
@@ -6493,7 +6507,7 @@ def _run_now_dedup(
             for (slug, norm_title), entries in combined_index.items():
                 if len({e["feed_url"] for e in entries}) < 2:
                     continue
-                sorted_entries = sorted(entries, key=lambda e: e["published_ts"] or 0)
+                sorted_entries = sorted(entries, key=dedup_order_key)
                 oldest_ts = sorted_entries[0]["published_ts"] or 0.0
                 newest_ts = sorted_entries[-1]["published_ts"] or 0.0
                 if oldest_ts > 0 and newest_ts > 0 and (newest_ts - oldest_ts) > window_secs:
@@ -6504,7 +6518,7 @@ def _run_now_dedup(
                     mark_to_keep[(e["feed_url"], e["entry_id"])] = sorted_entries[0].get("link", "")
 
         if match_method == "fuzzy":
-            feed_list = [u for u in feed_urls if u in fuzzy_entries]
+            feed_list = sorted(u for u in feed_urls if u in fuzzy_entries)
             for i, feed_i in enumerate(feed_list):
                 for feed_j in feed_list[i + 1:]:
                     for ei in fuzzy_entries[feed_i]:
@@ -6516,7 +6530,7 @@ def _run_now_dedup(
                             sim = title_word_similarity(ei["norm_title"], ej["norm_title"])
                             if sim < _FUZZY_THRESHOLD:
                                 continue
-                            newer = ej if ts_i <= ts_j else ei
+                            newer = ej if dedup_order_key(ei) <= dedup_order_key(ej) else ei
                             older = ei if newer is ej else ej
                             to_mark.add((newer["feed_url"], newer["entry_id"]))
                             kept_keys.add((older["feed_url"], older["entry_id"]))
