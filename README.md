@@ -85,6 +85,8 @@ short version:
 - **Automation.** Highlight, mark-as-read, tag-filter, deduplicate, and
   send-to-destination rules (Instapaper, Pinterest, Reddit, Quire, email,
   YouTube playlists, webhooks) at any scope, with dry-run and run history.
+  A rule's keyword can be a comma-separated list of terms — no regex needed
+  until you want one.
   Dedup dry-runs compare all four match modes side by side, leading with the
   pairs only one mode caught, and the fuzzy title match carries its own
   similarity threshold — preview it on a slider, save it on the rule, and it

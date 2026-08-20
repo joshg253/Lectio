@@ -362,6 +362,28 @@ Needs a conversation before rewording — Josh raised the idea of replacing the
 radios with checkboxes for *what* to keep (entries? read state? tags? unread?)
 rather than two bundled outcomes. Decide the model first; the copy follows.
 
+### Utilities: find rules that could be one rule
+
+Marking things read in Deals now takes several rules (Apple products, one set of
+stores, …) because a keyword was one term until comma lists landed. Nothing
+surfaces that they are mergeable, so they accumulate.
+
+Measured 2026-08-19 on the live library: **5 rules could collapse** — 3 global
+`highlight` + 3 `highlight` on folder 9 + 2 `mark_as_read` on folder 8, each
+group already sharing type, scope, `search_in` and the regex flag. That last
+pair is regex, so merging means `(a)|(b)`, not a comma join.
+
+Rules for merging: same type + same scope + same `search_in` + same regex flag →
+offer to join the keywords (comma list when plain, alternation when regex). A
+folder rule and a feed rule are **not** merged — different scopes are the point.
+But a feed rule whose scope sits inside a folder that already has a same-type
+rule whose keyword covers it is **redundant** and should be flagged for removal.
+(Zero of those today, so it is the secondary case.)
+
+Josh: "maybe they should?" — wants to discuss whether redundant-feed-rule
+removal is automatic or a suggestion. Suggestion-with-preview is the safer
+default, and matches how the dupe scans already behave (nothing pre-checked).
+
 ### CodeQL board — watch-note
 
 Board is at zero open alerts as of 2026-08-13 (PR #200 cleared a `py/redos` in

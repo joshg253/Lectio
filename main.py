@@ -6173,6 +6173,44 @@ def _dry_run_dedup(
     }
 
 
+def split_keyword_terms(keyword: str) -> list[str]:
+    """Split a plain (non-regex) keyword into its comma-separated OR terms.
+
+    Multiple terms used to mean writing a regex, and a regex written by hand is
+    where the word-boundary traps live (``Apple|iPhone`` also matches "grapples"
+    and "pineapple"). A comma list needs no escaping and no boundary syntax.
+
+    Terms keep SUBSTRING semantics, exactly as a single keyword always had:
+    measured on the live library, 4 plain rules match only *inside* words and
+    would stop matching entirely if the split implied a word boundary.
+    A term containing a literal comma needs regex mode.
+    """
+    return [term for term in (part.strip() for part in keyword.split(",")) if term]
+
+
+def build_keyword_matcher(keyword: str, is_regex: bool):
+    """Text -> bool matcher for a rule's keyword. Raises re.error on a bad regex.
+
+    Shared by the dry-run, Run Now and live-refresh paths, which each built their
+    own copy of this and could drift apart.
+    """
+    if is_regex:
+        pattern = re.compile(keyword, re.IGNORECASE)
+        return lambda text: bool(pattern.search(text)) if text else False
+    terms = [term.lower() for term in split_keyword_terms(keyword)]
+    if len(terms) == 1:
+        only = terms[0]
+        return lambda text: only in (text or "").lower()
+
+    def _match_any(text: str) -> bool:
+        # Lowercase the body ONCE, not once per term: a rule with a dozen terms
+        # otherwise re-walks the whole entry body a dozen times.
+        lowered = (text or "").lower()
+        return any(term in lowered for term in terms)
+
+    return _match_any
+
+
 def _dry_run_pattern(
     conn: sqlite3.Connection,
     scope: str,
@@ -6201,13 +6239,11 @@ def _dry_run_pattern(
         match_fn = lambda text: True
     else:
         try:
-            if is_regex:
-                pattern = _re.compile(keyword, _re.IGNORECASE)
-                match_fn = lambda text: bool(pattern.search(text)) if text else False
-            else:
-                kw_lower = keyword.lower()
-                match_fn = lambda text: kw_lower in (text or "").lower()
-        except _re.error as e:
+            match_fn = build_keyword_matcher(keyword, is_regex)
+        except re.error as e:
+            # Same module object the matcher compiles with — `_re` is an alias
+            # some of these functions import locally, and mixing the two names
+            # made it look like the handler might not catch.
             return {"error": f"Invalid regex: {e}"}
 
     if scope == "folder":
@@ -6506,13 +6542,8 @@ def _run_now_pattern(
         return {"count": 0}
 
     try:
-        if is_regex:
-            pattern = _re.compile(keyword, _re.IGNORECASE)
-            match_fn = lambda text: bool(pattern.search(text)) if text else False
-        else:
-            kw_lower = keyword.lower()
-            match_fn = lambda text: kw_lower in (text or "").lower()
-    except _re.error as e:
+        match_fn = build_keyword_matcher(keyword, is_regex)
+    except re.error as e:
         return {"error": f"Invalid regex: {e}"}
 
     if scope == "folder":
@@ -7459,13 +7490,8 @@ def _entry_matches_rule(entry: object, keyword: str, is_regex: bool, search_in: 
     if not keyword:
         return False
     try:
-        if is_regex:
-            pattern = _re.compile(keyword, _re.IGNORECASE)
-            match_fn = lambda t: bool(pattern.search(t)) if t else False
-        else:
-            kw_lower = keyword.lower()
-            match_fn = lambda t: kw_lower in (t or "").lower()
-    except _re.error:
+        match_fn = build_keyword_matcher(keyword, is_regex)
+    except re.error:
         return False
 
     title = str(getattr(entry, "title", None) or "")

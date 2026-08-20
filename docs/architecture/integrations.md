@@ -76,6 +76,21 @@ Per-user OAuth destinations, quotas and the automation that drives them.
   in **Testing** mode (refresh tokens expire ~7 days → occasional reconnect).
 - **Auto add-to-playlist automation** (`youtube_playlist` rule type) — builds on the
   OAuth integration above to add new entries' videos to a playlist at refresh time.
+### Rule keywords: one matcher, comma-separated OR terms
+
+`build_keyword_matcher(keyword, is_regex)` is the single text→bool builder behind
+the dry-run, Run Now and after-refresh paths, which each carried their own copy
+and could drift. In regex mode the keyword compiles as written. In plain mode it
+splits on commas into OR'd terms, each still a case-insensitive **substring**
+test: multiple terms previously meant hand-writing a regex, which is where the
+boundary traps live (`Apple|AirPods|iPhone|MacBook` matched *Grapplers* and *Dole
+Pineapple Tidbits* in a deals folder — `\b(Apple|…)` with a **leading** boundary
+only is the fix, since a trailing one also drops `iPhones` and `AppleTV`).
+
+The split deliberately does **not** imply a word boundary: measured across the
+live library, 4 plain rules match only *inside* words and would stop matching
+entirely. A term containing a literal comma needs regex mode.
+
   It's a **general** automation rule (any feed/folder scope, via the shared
   `highlight_keywords` table + after-refresh pass), not YT-folder-bound, because a
   YouTube video can be embedded in any feed's article and an entry can carry several.
