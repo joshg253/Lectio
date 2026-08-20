@@ -18954,8 +18954,27 @@ def _img_cache_has(url: str) -> bool:
         return False
 
 
+def _wixmp_url_is_live(url: str) -> bool:
+    """Cheap liveness check for a wixmp URL whose token carries no readable
+    ``exp`` claim. That does NOT mean permanent — a GIF whose JWT had no exp
+    at all turned out to already be dead (wixmp answered 400 "image is
+    invalid" directly) — so a token with no way to prove itself fresh gets one
+    direct HEAD before being trusted. Same SSRF guard as any other outbound
+    fetch; failures (including a network error) are treated as "not live" so
+    the caller falls through to a real re-sign rather than trusting a URL that
+    could not be checked."""
+    try:
+        if not url_guard.is_safe_outbound_url(url):
+            return False
+        with url_guard.build_client(timeout=5.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+            resp = client.head(url)
+        return resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image/")
+    except Exception:
+        return False
+
+
 def _resign_expired_deviantart_url(url: str | None, entry_id: str) -> str | None:
-    """Re-sign one expired DeviantArt image URL, or return it unchanged.
+    """Re-sign one dead DeviantArt image URL, or return it unchanged.
 
     The single place that decides *whether* a re-sign is warranted, so the body
     HTML and the lead image (resolved on a different path, from the lead-image
@@ -18964,11 +18983,13 @@ def _resign_expired_deviantart_url(url: str | None, entry_id: str) -> str | None
     """
     if not url or "wixmp" not in url:
         return url
-    exp = deviantart_service.image_token_expiry(url)
-    if exp is None or exp > time.time():
-        return url  # permanent, or still valid
     if _img_cache_has(url):
         return url  # the proxy holds the bytes; the token no longer matters
+    exp = deviantart_service.image_token_expiry(url)
+    if exp is not None and exp > time.time():
+        return url  # still valid
+    if exp is None and _wixmp_url_is_live(url):
+        return url  # no exp claim, and it just proved itself live
     token = get_deviantart_user_token()
     if not token:
         return url
@@ -18983,12 +19004,17 @@ def _resign_expired_deviantart_images(content_html: str, feed_url: str, entry_id
     scheduled re-sign can't help at that lifetime — the moment that matters is
     when the post is opened, which is here.
 
-    Two things keep this cheap. The proxy's byte cache is consulted first: once
+    Three things keep this cheap. The proxy's byte cache is consulted first: once
     an image has been fetched under *any* valid token it answers forever (the
     cache key drops the token), so a re-sign happens at most once per image
-    rather than once per view. And a still-valid token is left alone, so
-    ordinary permanently-signed deviations — 21,564 of 21,568 on the live
-    library — never reach the API at all.
+    rather than once per view. A still-valid (readable ``exp``, not yet passed)
+    token is left alone. And a token with no ``exp`` claim at all — the vast
+    majority, since ordinary deviations sign that way — gets one direct HEAD
+    at the image host (_wixmp_url_is_live) rather than a DeviantArt API call;
+    only a URL that fails even that reaches the API. No-``exp`` does NOT mean
+    permanent — one turned out to already be dead with nothing in the token to
+    say so (2026-08-20) — so this only skips the *paid* API call for the
+    common case, not the correctness check itself.
     """
     if not content_html or "wixmp" not in content_html:
         return content_html
