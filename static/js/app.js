@@ -9914,7 +9914,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           grpSpan.textContent = (d.groups ? d.groups.length : '—') + ' group' + (d.groups && d.groups.length === 1 ? '' : 's');
           const markSpan = document.createElement('span');
           markSpan.className = 'hl-compare-mark';
-          markSpan.textContent = (d.total_would_mark_read !== undefined ? d.total_would_mark_read : '—') + ' mark read';
+          const _unread = d.total_unread_would_mark_read;
+          markSpan.textContent = (d.total_would_mark_read !== undefined ? d.total_would_mark_read : '—')
+            + ' mark read' + (_unread !== undefined && _unread !== d.total_would_mark_read
+                              ? ' (' + _unread + ' unread)' : '');
           const dOutliers = stripConsensus(d);
           const consensusHidden = (d.total_would_mark_read || 0) - (dOutliers.total_would_mark_read || 0);
           const onlyCount = allPairs.filter(p => p.modes.length === 1 && p.modes[0] === m).length;
@@ -10881,7 +10884,18 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             if (groups.length === 0) {
               summary.textContent = 'No duplicates found' + (data.message ? ' — ' + data.message : '') + ' (' + (data.total_entries_scanned || 0) + ' scanned)';
             } else {
-              summary.textContent = groups.length + ' duplicate group' + (groups.length === 1 ? '' : 's') + ' · ' + data.total_would_mark_read + ' would be marked read · ' + (data.total_entries_scanned || 0) + ' scanned';
+              const total = data.total_would_mark_read;
+              const actionable = data.total_unread_would_mark_read;
+              // The preview scans read entries too, so a threshold can be tuned
+              // against real history; the rule only marks UNREAD. Saying "12 would
+              // be marked read" when none are unread sends you to Run Now for a
+              // "no matching unread entries" toast.
+              const marked = (actionable === undefined || actionable === total)
+                ? total + ' would be marked read'
+                : actionable + ' would be marked read now — ' + (total - actionable)
+                  + ' of ' + total + ' already read';
+              summary.textContent = groups.length + ' duplicate group' + (groups.length === 1 ? '' : 's')
+                + ' · ' + marked + ' · ' + (data.total_entries_scanned || 0) + ' scanned';
             }
           };
           updateSummary();
@@ -10933,6 +10947,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
                   },
                 };
 
+                // The comparison supersedes the single-mode list this panel opened
+                // with — keeping both means reading the same duplicates twice, once
+                // flat and once bucketed.
+                if (groupsEl) groupsEl.hidden = true;
+                if (cmpFeedsBtn) cmpFeedsBtn.hidden = true;
                 cmpBtn.replaceWith(hlBuildModeComparisonWrap(results, rule.keyword, refetch, startPct, saver));
               } catch (err) { cmpBtn.textContent = 'Compare failed'; cmpBtn.disabled = false; }
             });

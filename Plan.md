@@ -400,6 +400,24 @@ did change. That closes the hole, but the real shape is a single `POST
 /highlights/edit` doing both in one transaction — worth building the next time
 this area is open, since any future caller can re-introduce the same race.
 
+### Saved: see and sort by item size, to clear the big ones first
+
+Saved articles carry captured content (and, for archived ones, offline copies in
+the starred-archive DB), so a handful of heavyweight captures can dominate the
+store while hundreds of small ones are irrelevant. Nothing surfaces per-item
+size, so pruning is guesswork.
+
+Wanted: a size column in the Saved view, sortable descending, so the worst
+offenders are the first thing on screen. Size means the stored body plus its
+archived assets, not the source page's weight — the two diverge sharply for a
+full-page capture with images.
+
+Open questions before building: whether the number is computed live (a LENGTH()
+over content plus a join to the archive's asset rows, fine for a few thousand
+items, less so as a sort key on every render) or maintained as a column at
+capture/re-fetch time; and whether the same sort belongs in the Kept view, where
+an unsubscribed feed's retained posts accumulate unseen.
+
 ### CodeQL board — watch-note
 
 Board is at zero open alerts as of 2026-08-13 (PR #200 cleared a `py/redos` in

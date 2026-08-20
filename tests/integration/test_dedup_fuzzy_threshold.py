@@ -245,3 +245,31 @@ def test_four_word_rules_are_bumped_once_but_a_deliberate_four_survives(env):
     main.ensure_meta_schema()          # a later startup must not re-bump it
     with main.get_meta_connection() as conn:
         assert main.get_highlight_keywords(conn)[0]["dedup_min_title_words"] == 4
+
+
+# --- the preview counts read entries; the rule only acts on unread -----------
+
+
+def test_preview_reports_how_many_matches_are_actionable(env):
+    """The dry run deliberately scans read entries too — a folder whose dupes are
+    already marked would otherwise preview as a bare zero, with nothing to tune a
+    threshold against. So it has to say how many are UNREAD, which is all the rule
+    will touch. Reported as 12 pairs / 0 actionable, this cost Josh a Run Now and
+    a 'no matching unread entries' toast."""
+    reader = main.get_reader()
+    # Both copies: the two entries share a timestamp, so which one the run picks as
+    # the keeper follows set-iteration order and flips between runs.
+    reader.mark_entry_as_read((FEED_A, "e-a"))
+    reader.mark_entry_as_read((FEED_B, "e-b"))
+    with main.get_meta_connection() as conn:
+        res = main._dry_run_dedup(conn, "global", "", "fuzzy", 168,
+                                  custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
+    assert res["total_would_mark_read"] == 1
+    assert res["total_unread_would_mark_read"] == 0
+
+
+def test_all_unread_matches_report_the_same_number(env):
+    with main.get_meta_connection() as conn:
+        res = main._dry_run_dedup(conn, "global", "", "fuzzy", 168,
+                                  custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
+    assert res["total_would_mark_read"] == res["total_unread_would_mark_read"] == 1

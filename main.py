@@ -6077,6 +6077,12 @@ def _dry_run_dedup(
                         "feed_title": feed_title_map.get(str(entry.feed_url or ""), str(entry.feed_url or "")),
                         "published": published.isoformat() if published else None,
                         "published_ts": published.timestamp() if published else 0.0,
+                        # The preview deliberately scans read entries too — a folder
+                        # whose duplicates were already marked would otherwise preview
+                        # as a bare zero, and there would be nothing to tune a
+                        # threshold against. But the rule only ever acts on UNREAD, so
+                        # the count has to say how many of these are actionable.
+                        "read": bool(getattr(entry, "read", False)),
                     }
                     if match_method == "slug" and entry.link:
                         slug = entry_url_slug(entry.link)
@@ -6170,6 +6176,9 @@ def _dry_run_dedup(
         "groups": groups,
         "total_entries_scanned": total_scanned,
         "total_would_mark_read": sum(len(g["mark_read"]) for g in groups),
+        "total_unread_would_mark_read": sum(
+            1 for g in groups for e in g["mark_read"] if not e.get("read")
+        ),
     }
 
 
