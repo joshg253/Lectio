@@ -6176,8 +6176,14 @@ def _dry_run_dedup(
         "groups": groups,
         "total_entries_scanned": total_scanned,
         "total_would_mark_read": sum(len(g["mark_read"]) for g in groups),
+        # What Run Now would actually do. It loads UNREAD entries only, so a group
+        # is reproduced there only by its unread members — and one of them becomes
+        # the keeper. A pair whose older copy is already read simply does not form:
+        # counting the unread mark alone promised a mark that never came, and Run
+        # Now answered "no matching unread entries found".
         "total_unread_would_mark_read": sum(
-            1 for g in groups for e in g["mark_read"] if not e.get("read")
+            max(0, sum(1 for e in [g["keep"], *g["mark_read"]] if not e.get("read")) - 1)
+            for g in groups
         ),
     }
 

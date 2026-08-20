@@ -273,3 +273,40 @@ def test_all_unread_matches_report_the_same_number(env):
         res = main._dry_run_dedup(conn, "global", "", "fuzzy", 168,
                                   custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
     assert res["total_would_mark_read"] == res["total_unread_would_mark_read"] == 1
+
+
+def test_a_pair_whose_older_copy_is_read_is_not_actionable(env):
+    """Run Now loads unread entries only, so a group is reproduced there by its
+    unread members alone — and one of THOSE becomes the keeper. With only one
+    unread copy left the pair never forms, which is why counting the unread mark
+    on its own promised a mark that never arrived."""
+    reader = main.get_reader()
+    with main.get_meta_connection() as conn:
+        before = main._dry_run_dedup(conn, "global", "", "fuzzy", 168,
+                                     custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
+        reader.mark_entry_as_read((FEED_A, "e-a"))
+        after = main._dry_run_dedup(conn, "global", "", "fuzzy", 168,
+                                    custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
+    assert before["total_unread_would_mark_read"] == 1
+    assert after["total_would_mark_read"] == 1          # still previewed
+    assert after["total_unread_would_mark_read"] == 0   # but nothing Run Now could do
+
+
+def test_three_copies_with_a_read_oldest_still_leave_one_mark(env):
+    """Two unread copies remain: Run Now keeps one and marks the other."""
+    reader = main.get_reader()
+    when = dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)   # the fixture's epoch:
+    for host, offset in (("c", 6), ("d", 8)):                # a later one falls outside
+                                                             # the 168h window entirely
+        feed = f"https://{host}.test/feed"
+        reader.add_feed(feed, allow_invalid_url=True)
+        reader.add_entry({"feed_url": feed, "id": f"e-{host}",
+                          "title": "alpha beta gamma delta epsilon",
+                          "link": f"{feed}/e-{host}", "summary": "x",
+                          "published": when + dt.timedelta(hours=offset)})
+    reader.mark_entry_as_read((FEED_A, "e-a"))          # the oldest copy
+    feeds = {FEED_A, "https://c.test/feed", "https://d.test/feed"}
+    with main.get_meta_connection() as conn:
+        res = main._dry_run_dedup(conn, "global", "", "title", 168, custom_feed_urls=feeds)
+    assert res["total_would_mark_read"] == 2            # preview counts all three
+    assert res["total_unread_would_mark_read"] == 1     # Run Now keeps one unread, marks one
