@@ -27120,7 +27120,25 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
         result = _probe_url(new_url)
         feeds = result.get("feeds") or []
         if result.get("status") in ("feed", "feeds") and feeds:
-            new_url = str(feeds[0]["url"])  # resolved feed (post-redirect / discovered)
+            resolved = str(feeds[0]["url"])  # resolved feed (post-redirect / discovered)
+            # A PAGE that advertises a feed on another host is advertising a
+            # different publication, not a redirect of what was typed: a section
+            # page hands back the network-wide feed, and swapping it in silently
+            # replaces the subscription with something far broader — then seeds a
+            # host-alias rule for it. Ask first. A direct feed URL that redirects
+            # across hosts is still the same feed, so that resolves silently.
+            typed_host = _normalize_alias_host(parsed.netloc)
+            resolved_host = _normalize_alias_host(urlparse(resolved).netloc)
+            if (not result.get("direct") and typed_host and resolved_host
+                    and typed_host != resolved_host):
+                return JSONResponse(
+                    {"ok": False, "needs_confirm": True, "attempted_url": new_url,
+                     "resolved_url": resolved,
+                     "error": f"That page advertises a feed on a different site:\n\n{resolved}\n\n"
+                              "It may cover much more than the page you pasted. Use it anyway?"},
+                    status_code=422,
+                )
+            new_url = resolved
         else:
             return JSONResponse(
                 {"ok": False, "needs_confirm": True,
@@ -27131,6 +27149,14 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
             )
         if new_url == old_url:
             return JSONResponse({"ok": False, "error": "That resolves to the feed's current URL."}, status_code=400)
+        # Name the URL that actually collides — reader raises FeedExistsError for
+        # the resolved address, which the user never typed and cannot see.
+        with get_reader() as reader:
+            if reader.get_feed(new_url, None) is not None:
+                return JSONResponse(
+                    {"ok": False, "error": f"That resolves to {new_url}, which you are already "
+                     "subscribed to. Consolidate the duplicate instead (Settings → Feeds → Utilities)."},
+                    status_code=409)
 
     try:
         with get_reader() as reader:
