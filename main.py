@@ -16509,12 +16509,22 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     base_html = ""
                 # If base_html is plain text (no HTML tags), linkify bare URLs
                 # so they render as clickable links rather than plain text.
+                #
+                # "Plain text" here still arrives HTML-ESCAPED — a YouTube
+                # description ships "Sources &amp; further reading" — so escaping
+                # it again rendered a literal "&amp;" on screen. Unescape first,
+                # exactly as _promote_plaintext_summary does, then escape once.
                 if base_html and not re.search(r"<[a-z]", base_html, re.IGNORECASE):
                     def _linkify_url(m: re.Match) -> str:
-                        url = m.group(0)
-                        esc = html.escape(url, quote=True)
-                        return f'<a href="{esc}" target="_blank" rel="noopener noreferrer">{html.escape(url)}</a>'
-                    base_html = re.sub(r"https?://[^\s<>\"']+", _linkify_url, html.escape(base_html))
+                        # The match comes out of text this function already escaped,
+                        # so escaping it again turns a URL's "&amp;" into
+                        # "&amp;amp;". The regex excludes spaces, quotes and angle
+                        # brackets, so the segment is href-safe as it stands — the
+                        # same contract _promote_plaintext_summary's linkifier uses.
+                        seg = m.group(0)
+                        return f'<a href="{seg}" target="_blank" rel="noopener noreferrer">{seg}</a>'
+                    base_html = re.sub(r"https?://[^\s<>\"']+", _linkify_url,
+                                       html.escape(html.unescape(base_html)))
                 content_html = embed_html + f"<div>{base_html}</div>"
 
         # Podcast audio player + footer attachments + (when no audio) a suggestion
