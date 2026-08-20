@@ -44,6 +44,8 @@ _PER_HOST_DELAY = refetch_batch.PER_HOST_DELAY
 class _Prober:
     """HEAD (falling back to GET) with the same pacing the re-fetch batch uses."""
 
+    _CACHE_CAP = 5000                 # a run probes one feed's images; this is slack
+
     def __init__(self) -> None:
         self._cache: dict[str, int | str] = {}
         self._last_global = 0.0
@@ -70,6 +72,8 @@ class _Prober:
             out: int | str = resp.status_code
         except Exception as exc:  # noqa: BLE001 — a dead host is a result, not a crash
             out = type(exc).__name__
+        if len(self._cache) >= self._CACHE_CAP:
+            self._cache.clear()       # bounded: a repeat probe costs one request
         self._cache[url] = out
         return out
 
@@ -106,6 +110,7 @@ def run(uid: str, apply: bool, only_feed: str | None) -> None:
     print(f"[{uid}] {len(candidates)} candidate entries across {len(hosts)} host(s); probing…")
 
     prober = _Prober()
+    writes: list[tuple] = []          # applied once at the end, on one connection
     fixed: Counter = Counter()
     skipped_ok: Counter = Counter()
     dead: Counter = Counter()
@@ -133,11 +138,16 @@ def run(uid: str, apply: bool, only_feed: str | None) -> None:
         fixed[feed] += len(rewrites)
         print(f"   {'fix ' if apply else 'would fix '}{len(rewrites)} img · {entry_id[:88]}")
         if apply:
-            with main.get_reader() as reader:
-                db = reader._storage.get_db()
-                db.execute("UPDATE entries SET summary = ?, content = ? WHERE feed = ? AND id = ?",
-                           (new_summary, new_content, feed, entry_id))
-                db.commit()
+            writes.append((new_summary, new_content, feed, entry_id))
+
+    if writes:
+        # One reader/DB handle for the whole run: reopening per entry meant a
+        # connection setup and a commit for each one.
+        with main.get_reader() as reader:
+            db = reader._storage.get_db()
+            db.executemany(
+                "UPDATE entries SET summary = ?, content = ? WHERE feed = ? AND id = ?", writes)
+            db.commit()
 
     print(f"\n[{uid}] {'repaired' if apply else 'would repair'}: "
           f"{sum(fixed.values())} images in {len(fixed)} feed(s)")

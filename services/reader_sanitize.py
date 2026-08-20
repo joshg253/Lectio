@@ -219,6 +219,8 @@ def _entry_html_base(entry, feed_url: str) -> str:
         if urlparse(link).netloc.lower() == urlparse(feed_url).netloc.lower():
             return link
     except ValueError:
+        # urlparse does raise: a malformed IPv6 literal ("http://[::1") is a
+        # ValueError, and a publisher's typo must not break the whole parse.
         return feed_url
     return feed_url
 
