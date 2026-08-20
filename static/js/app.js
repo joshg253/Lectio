@@ -9701,7 +9701,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         }));
       }
 
-      function hlBuildModeComparisonWrap(results, activeMode, refetch, fuzzyPct) {
+      // `saver` (optional) = { savedPct, apply(pct) } — present only when the
+      // comparison belongs to a real rule, so the slider can be kept rather than
+      // re-dialled from memory next time. Ad-hoc feed comparisons have no rule to
+      // save to and keep the preview-only note.
+      function hlBuildModeComparisonWrap(results, activeMode, refetch, fuzzyPct, saver) {
         const modes = _hlCmpModes, modeLabels = _hlCmpModeLabels;
         const curPct = fuzzyPct || _hlFuzzyPctDefault;
         function makePairEl(p) {
@@ -9810,7 +9814,34 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           out.textContent = curPct + '%';
           const note = document.createElement('span');
           note.className = 'hl-compare-fuzz-note';
-          note.textContent = 'preview only — set it on the rule to keep it';
+          // Read through `saver` each time — a captured copy goes stale the moment
+          // Apply succeeds, leaving the button offering what was just saved.
+          const applyBtn = document.createElement('button');
+          applyBtn.type = 'button';
+          applyBtn.className = 'hl-dryrun-compare-btn hl-compare-fuzz-apply';
+          const syncApply = () => {
+            if (!saver) { note.textContent = 'preview only — no rule to save to'; return; }
+            const same = curPct === saver.savedPct;
+            applyBtn.hidden = same;
+            applyBtn.disabled = false;
+            applyBtn.textContent = 'Apply ' + curPct + '% to the rule';
+            note.textContent = same ? 'this is the rule\u2019s saved threshold'
+                                    : 'preview — rule still runs at ' + saver.savedPct + '%';
+          };
+          syncApply();
+          applyBtn.addEventListener('click', async () => {
+            applyBtn.disabled = true; applyBtn.textContent = 'Applying…';
+            try {
+              await saver.apply(curPct);
+              saver.savedPct = curPct;
+              syncApply();
+              note.textContent = 'saved — the rule runs at ' + curPct + '% from now on';
+            } catch {
+              applyBtn.disabled = false;
+              applyBtn.textContent = 'Apply ' + curPct + '% to the rule';
+              note.textContent = 'could not save to the rule';
+            }
+          });
           // Dragging previews at once (on release, not per pixel): the point of the
           // knob is seeing what the number does, not clicking a second button.
           slider.addEventListener('input', () => { out.textContent = slider.value + '%'; });
@@ -9820,7 +9851,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             slider.disabled = true; note.textContent = 'previewing ' + pct + '%…';
             try {
               const next = await refetch(pct, results);
-              wrap.replaceWith(hlBuildModeComparisonWrap(next, activeMode, refetch, pct));
+              wrap.replaceWith(hlBuildModeComparisonWrap(next, activeMode, refetch, pct, saver));
             } catch {
               note.textContent = 'preview failed'; slider.disabled = false;
               out.textContent = curPct + '%'; slider.value = String(curPct);
@@ -9828,6 +9859,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           });
           lbl.appendChild(slider); lbl.appendChild(out);
           ctl.appendChild(lbl); ctl.appendChild(note);
+          if (saver) ctl.appendChild(applyBtn);
           wrap.appendChild(ctl);
         }
 
@@ -9882,7 +9914,13 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           grpSpan.textContent = (d.groups ? d.groups.length : '—') + ' group' + (d.groups && d.groups.length === 1 ? '' : 's');
           const markSpan = document.createElement('span');
           markSpan.className = 'hl-compare-mark';
-          markSpan.textContent = (d.total_would_mark_read !== undefined ? d.total_would_mark_read : '—') + ' mark read';
+          const _total = d.total_would_mark_read;
+          const _unread = d.total_unread_would_mark_read;
+          // No total (the mode errored) means no honest suffix either: "— mark
+          // read (3 unread)" reads as though 3 of nothing were actionable.
+          const _suffix = (_total !== undefined && _unread !== undefined && _unread !== _total)
+            ? ' (' + _unread + ' unread)' : '';
+          markSpan.textContent = (_total !== undefined ? _total : '—') + ' mark read' + _suffix;
           const dOutliers = stripConsensus(d);
           const consensusHidden = (d.total_would_mark_read || 0) - (dOutliers.total_would_mark_read || 0);
           const onlyCount = allPairs.filter(p => p.modes.length === 1 && p.modes[0] === m).length;
@@ -10410,7 +10448,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             if (['fuzzy', 'title'].includes(rule.keyword)) {
               const wordsBadge = document.createElement('span');
               wordsBadge.className = 'hl-rule-search-in-badge';
-              wordsBadge.textContent = '≥' + (rule.dedup_min_title_words || _hlMinTitleWordsDefault) + 'w';
+              // Spelled out: "5w" next to the "7d" window badge reads as weeks.
+              wordsBadge.textContent = '≥' + (rule.dedup_min_title_words || _hlMinTitleWordsDefault) + ' words';
               wordsBadge.title = 'Titles shorter than this are ignored — short titles repeat across unrelated posts';
               row.appendChild(wordsBadge);
             }
@@ -10703,14 +10742,26 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             const origScope = rule.scope, origScopeId = rule.scope_id, origKeyword = rule.keyword;
             const origEnabled = rule.enabled;
             const draft = hlBuildDraft(rule, 'Save', async (updated) => {
-              const removeBody = new URLSearchParams({ scope: origScope, scope_id: origScopeId, keyword: origKeyword });
               const addBody = hlRuleToParams({ ...updated, enabled: origEnabled });
+              const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+              // A rule's identity is (scope, scope_id, keyword). When none of the
+              // three changed there is nothing to remove — INSERT OR REPLACE
+              // overwrites the row in place. Sending both in parallel DESTROYED
+              // the rule: the add landed first and the remove then deleted it, 20
+              // times out of 20 in a local reproduction, with both responses OK so
+              // the UI reported success. A dedup rule hits this every time, since
+              // its match method IS the keyword.
+              const sameIdentity = updated.scope === origScope
+                && String(updated.scope_id || '') === String(origScopeId || '')
+                && updated.keyword === origKeyword;
               try {
-                const [r1, r2] = await Promise.all([
-                  fetch('/highlights/remove', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: removeBody.toString() }),
-                  fetch('/highlights/add', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: addBody.toString() }),
-                ]);
-                if (!r1.ok || !r2.ok) throw new Error('failed');
+                if (!sameIdentity) {
+                  const removeBody = new URLSearchParams({ scope: origScope, scope_id: origScopeId, keyword: origKeyword });
+                  const r1 = await post('/highlights/remove', removeBody);   // strictly before the add
+                  if (!r1.ok) throw new Error('failed');
+                }
+                const r2 = await post('/highlights/add', addBody);
+                if (!r2.ok) throw new Error('failed');
                 const idx = hlRules.findIndex(r => r.scope === origScope && r.scope_id === origScopeId && r.keyword === origKeyword);
                 if (idx >= 0) hlRules[idx] = { ...updated, enabled: origEnabled };
                 hlHideDraft();
@@ -10836,7 +10887,18 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             if (groups.length === 0) {
               summary.textContent = 'No duplicates found' + (data.message ? ' — ' + data.message : '') + ' (' + (data.total_entries_scanned || 0) + ' scanned)';
             } else {
-              summary.textContent = groups.length + ' duplicate group' + (groups.length === 1 ? '' : 's') + ' · ' + data.total_would_mark_read + ' would be marked read · ' + (data.total_entries_scanned || 0) + ' scanned';
+              const total = data.total_would_mark_read;
+              const actionable = data.total_unread_would_mark_read;
+              // The preview scans read entries too, so a threshold can be tuned
+              // against real history; the rule only marks UNREAD. Saying "12 would
+              // be marked read" when none are unread sends you to Run Now for a
+              // "no matching unread entries" toast.
+              const marked = (actionable === undefined || actionable === total)
+                ? total + ' would be marked read'
+                : actionable + ' would be marked read now — ' + (total - actionable)
+                  + ' of ' + total + ' already read';
+              summary.textContent = groups.length + ' duplicate group' + (groups.length === 1 ? '' : 's')
+                + ' · ' + marked + ' · ' + (data.total_entries_scanned || 0) + ' scanned';
             }
           };
           updateSummary();
@@ -10860,8 +10922,40 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
                 const startPct = rule.dedup_fuzzy_pct || _hlFuzzyPctDefault;
                 const refetch = (pct, prior) => hlFetchAllModes(base, pct, prior);
                 const results = await hlFetchAllModes(base, startPct);
+                // INSERT OR REPLACE keys on (scope, scope_id, keyword), and the
+                // match method IS the keyword, so re-adding the rule with the new
+                // percent overwrites it in place — no remove-then-add dance.
+                const saver = {
+                  savedPct: startPct,
+                  apply: async (pct) => {
+                    const body = hlRuleToParams({ ...rule, dedup_fuzzy_pct: pct });
+                    const resp = await fetch('/highlights/add', {
+                      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                      credentials: 'same-origin', body: body.toString(),
+                    });
+                    if (!resp.ok) throw new Error('save failed');
+                    rule.dedup_fuzzy_pct = pct;
+                    const idx = hlRules.findIndex(r => r.scope === rule.scope
+                      && r.scope_id === rule.scope_id && r.keyword === rule.keyword);
+                    if (idx >= 0) hlRules[idx] = { ...hlRules[idx], dedup_fuzzy_pct: pct };
+                    // Repaint the one badge rather than calling hlRenderRules(): a
+                    // full re-render destroys the dry-run panel, which is where the
+                    // button lives — applying would blow away the comparison you
+                    // were reading. The list rebuilds with the new value anyway the
+                    // next time it renders.
+                    const openRow = hlActiveDryRun && hlActiveDryRun.previousElementSibling;
+                    const pctBadge = openRow && [...openRow.querySelectorAll('.hl-rule-search-in-badge')]
+                      .find(el => el.textContent.trim().endsWith('%'));
+                    if (pctBadge) pctBadge.textContent = '≥' + pct + '%';
+                  },
+                };
 
-                cmpBtn.replaceWith(hlBuildModeComparisonWrap(results, rule.keyword, refetch, startPct));
+                // The comparison supersedes the single-mode list this panel opened
+                // with — keeping both means reading the same duplicates twice, once
+                // flat and once bucketed.
+                if (groupsEl) groupsEl.hidden = true;
+                if (cmpFeedsBtn) cmpFeedsBtn.hidden = true;
+                cmpBtn.replaceWith(hlBuildModeComparisonWrap(results, rule.keyword, refetch, startPct, saver));
               } catch (err) { cmpBtn.textContent = 'Compare failed'; cmpBtn.disabled = false; }
             });
             panel.appendChild(cmpBtn);

@@ -384,6 +384,40 @@ Josh: "maybe they should?" — wants to discuss whether redundant-feed-rule
 removal is automatic or a suggestion. Suggestion-with-preview is the safer
 default, and matches how the dupe scans already behave (nothing pre-checked).
 
+### Rule editing has no atomic endpoint
+
+Editing a rule is a client-side remove-then-add against `/highlights/remove` and
+`/highlights/add`, because there is no update route. Sending both at once
+destroyed the rule whenever the identity `(scope, scope_id, keyword)` had not
+changed — the add landed first and the remove deleted it, 20 times out of 20 in
+a local reproduction, with both responses OK so the UI reported success. Josh
+lost a Deals dedup rule to it on 2026-08-20 (a dedup rule hits this on every
+edit, since its match method IS the keyword).
+
+Fixed on the client 2026-08-20: skip the remove when the identity is unchanged
+(`INSERT OR REPLACE` overwrites in place), and await it before the add when it
+did change. That closes the hole, but the real shape is a single `POST
+/highlights/edit` doing both in one transaction — worth building the next time
+this area is open, since any future caller can re-introduce the same race.
+
+### Saved: see and sort by item size, to clear the big ones first
+
+Saved articles carry captured content (and, for archived ones, offline copies in
+the starred-archive DB), so a handful of heavyweight captures can dominate the
+store while hundreds of small ones are irrelevant. Nothing surfaces per-item
+size, so pruning is guesswork.
+
+Wanted: a size column in the Saved view, sortable descending, so the worst
+offenders are the first thing on screen. Size means the stored body plus its
+archived assets, not the source page's weight — the two diverge sharply for a
+full-page capture with images.
+
+Open questions before building: whether the number is computed live (a LENGTH()
+over content plus a join to the archive's asset rows, fine for a few thousand
+items, less so as a sort key on every render) or maintained as a column at
+capture/re-fetch time; and whether the same sort belongs in the Kept view, where
+an unsubscribed feed's retained posts accumulate unseen.
+
 ### CodeQL board — watch-note
 
 Board is at zero open alerts as of 2026-08-13 (PR #200 cleared a `py/redos` in

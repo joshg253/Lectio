@@ -245,3 +245,68 @@ def test_four_word_rules_are_bumped_once_but_a_deliberate_four_survives(env):
     main.ensure_meta_schema()          # a later startup must not re-bump it
     with main.get_meta_connection() as conn:
         assert main.get_highlight_keywords(conn)[0]["dedup_min_title_words"] == 4
+
+
+# --- the preview counts read entries; the rule only acts on unread -----------
+
+
+def test_preview_reports_how_many_matches_are_actionable(env):
+    """The dry run deliberately scans read entries too — a folder whose dupes are
+    already marked would otherwise preview as a bare zero, with nothing to tune a
+    threshold against. So it has to say how many are UNREAD, which is all the rule
+    will touch. Reported as 12 pairs / 0 actionable, this cost Josh a Run Now and
+    a 'no matching unread entries' toast."""
+    reader = main.get_reader()
+    # Both copies: the two entries share a timestamp, so which one the run picks as
+    # the keeper follows set-iteration order and flips between runs.
+    reader.mark_entry_as_read((FEED_A, "e-a"))
+    reader.mark_entry_as_read((FEED_B, "e-b"))
+    with main.get_meta_connection() as conn:
+        res = main._dry_run_dedup(conn, "global", "", "fuzzy", 168,
+                                  custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
+    assert res["total_would_mark_read"] == 1
+    assert res["total_unread_would_mark_read"] == 0
+
+
+def test_all_unread_matches_report_the_same_number(env):
+    with main.get_meta_connection() as conn:
+        res = main._dry_run_dedup(conn, "global", "", "fuzzy", 168,
+                                  custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
+    assert res["total_would_mark_read"] == res["total_unread_would_mark_read"] == 1
+
+
+def test_a_pair_whose_older_copy_is_read_is_not_actionable(env):
+    """Run Now loads unread entries only, so a group is reproduced there by its
+    unread members alone — and one of THOSE becomes the keeper. With only one
+    unread copy left the pair never forms, which is why counting the unread mark
+    on its own promised a mark that never arrived."""
+    reader = main.get_reader()
+    with main.get_meta_connection() as conn:
+        before = main._dry_run_dedup(conn, "global", "", "fuzzy", 168,
+                                     custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
+        reader.mark_entry_as_read((FEED_A, "e-a"))
+        after = main._dry_run_dedup(conn, "global", "", "fuzzy", 168,
+                                    custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
+    assert before["total_unread_would_mark_read"] == 1
+    assert after["total_would_mark_read"] == 1          # still previewed
+    assert after["total_unread_would_mark_read"] == 0   # but nothing Run Now could do
+
+
+def test_three_copies_with_a_read_oldest_still_leave_one_mark(env):
+    """Two unread copies remain: Run Now keeps one and marks the other."""
+    reader = main.get_reader()
+    when = dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)   # the fixture's epoch:
+    for host, offset in (("c", 6), ("d", 8)):                # a later one falls outside
+                                                             # the 168h window entirely
+        feed = f"https://{host}.test/feed"
+        reader.add_feed(feed, allow_invalid_url=True)
+        reader.add_entry({"feed_url": feed, "id": f"e-{host}",
+                          "title": "alpha beta gamma delta epsilon",
+                          "link": f"{feed}/e-{host}", "summary": "x",
+                          "published": when + dt.timedelta(hours=offset)})
+    reader.mark_entry_as_read((FEED_A, "e-a"))          # the oldest copy
+    feeds = {FEED_A, "https://c.test/feed", "https://d.test/feed"}
+    with main.get_meta_connection() as conn:
+        res = main._dry_run_dedup(conn, "global", "", "title", 168, custom_feed_urls=feeds)
+    assert res["total_would_mark_read"] == 2            # preview counts all three
+    assert res["total_unread_would_mark_read"] == 1     # Run Now keeps one unread, marks one

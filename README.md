@@ -90,7 +90,8 @@ short version:
   Dedup dry-runs compare all four match modes side by side, leading with the
   pairs only one mode caught, and the fuzzy title match carries its own
   similarity threshold — preview it on a slider, save it on the rule, and it
-  applies to new entries on refresh and to the backlog on Run Now. Title
+  applies to new entries on refresh and to the backlog on Run Now — tune it on
+  the slider, then Apply it to the rule without leaving the comparison. Title
   matching ignores case and punctuation (without ever merging `C++` into `C`)
   and skips titles shorter than a per-rule word floor, since "Weekly roundup"
   repeats across unrelated posts.
