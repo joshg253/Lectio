@@ -80,12 +80,16 @@ toggle (`proxy_body_images`, Settings → Account → Appearance). When on,
 `get_entry_detail` routes every remote `<img src>` in the article pane through
 `/api/img` and drops `srcset`, using the same rewrite Read Mode always ran
 (shared now as `proxy_all_body_images`, renamed from `proxy_reader_images`);
-the hotlink/no-referrer/onerror-fallback trio is skipped as redundant when it's
-on. Rationale and the cache-budget caveat are in `docs/architecture/images.md`
-("A body image that fails has to be able to try again"). **Josh still needs to
-flip it on and test against the live library** — the cache-size-growth and
-srcset-loss tradeoffs below were reasoned about, not measured against real
-traffic.
+only the named-host hotlink rewrite is skipped as redundant — the onerror
+fallback still runs even when proxying is on, since it's what hides an image
+that's dead at the source rather than leaving a broken-image icon (a real bug
+in the first cut of this, caught and fixed the same day — see
+`docs/architecture/images.md`, "A body image that fails has to be able to try
+again"). **Confirmed working by Josh 2026-08-20** against the live library, no
+image regressions. Article loads can feel a touch slower on a not-yet-cached
+image (one extra server-side fetch to a possibly-distant host before the
+browser gets anything), expected and not measured further since it reads as
+normal VPS-distance latency, not a regression.
 
 Three things that buys, in order of how much they matter:
 
