@@ -317,7 +317,6 @@ class DresdenCodakPlugin:
 
     _MINIS_IMAGE_RE = re.compile(
         r"^(?P<base>https?://[^/]*dresdencodak\.com/.*?/dc_minis_[0-9]+)"
-        r"[a-z0-9_-]*"
         r"(?P<ext>\.(?:jpg|jpeg|png|webp))$",
         re.IGNORECASE,
     )
@@ -359,15 +358,21 @@ class DresdenCodakPlugin:
         return None
 
     def thumbnail_from_lead_image(self, *, entry_link: str, lead_url: str) -> str | None:
-        """The site's `_thumbnail.jpg` is keyed to the STRIP NUMBER, not to
-        which image within the post got picked as lead — a multi-image post
-        (#28's bonus panel resolved as lead over the strip itself) has a lead
-        URL like `dc_minis_28_02.jpg`, and `_MINIS_IMAGE_RE`'s `base` group
-        stops at the digits so the trailing `_02` is dropped rather than
-        carried into the derived name. Carrying it produced
-        `dc_minis_28_02_thumbnail.jpg`, which 404s — the real file is
-        `dc_minis_28_thumbnail.jpg` (found 2026-08-21, the entry showed no
-        list thumbnail at all)."""
+        """Derive `_thumbnail.jpg` ONLY from the bare full-comic filename
+        (`dc_minis_<n>.jpg`) — never from a suffixed variant.
+
+        #28's lead resolved to `dc_minis_28_02.jpg`, the site's own og:image: a
+        1500x1126 crop of one panel, and a perfectly good thumbnail as-is.
+        Deriving from it anyway (`_MINIS_IMAGE_RE` used to swallow the `_02`
+        into `base`) produced `dc_minis_28_02_thumbnail.jpg`, a 404 — but even
+        matching just the digits and reaching the REAL `dc_minis_28_thumbnail.jpg`
+        was still wrong: that file is a stale wide crop, mostly blank space
+        with the art squeezed into one third, predating whatever now makes the
+        site publish `_02` as its own thumbnail (found 2026-08-21). The fix is
+        to not derive at all once the lead is anything other than the bare
+        tall strip — `_MINIS_IMAGE_RE` now matches only `dc_minis_<n>.<ext>`
+        exactly, so any suffixed variant declines (returns None) and the
+        caller uses the lead URL itself, unmodified, as the thumbnail."""
         if not lead_url or not self._is_ours(lead_url):
             return None
         if "_thumbnail" in lead_url.lower():
