@@ -119,7 +119,34 @@ def extract_feed_entry_tags(raw_entry: object) -> list[str]:
     if category:
         values.extend(_split_multi_value_term(str(category)))
 
+    values.extend(_shopify_vendor_tags(raw_entry))
+
     return _clean_tag_values(values)
+
+
+# Shopify's product namespace (http://jadedpixel.com/-/spec/shopify) carries the
+# maker in <s:vendor>, which every storefront's collection feed emits — for a
+# record shop that element IS the artist, the one thing worth tagging, and it is
+# nowhere in <category>. feedparser flattens an unknown namespace using the
+# document's own prefix, so the key is `s_vendor` for the usual `xmlns:s` and
+# `<prefix>_vendor` for anything else; match on the suffix rather than betting on
+# one spelling.
+_VENDOR_KEY_RE = re.compile(r"^[a-z0-9]{1,12}_vendor$")
+_MAX_VENDOR_LEN = 60
+
+
+def _shopify_vendor_tags(raw_entry: object) -> list[str]:
+    keys = raw_entry.keys() if hasattr(raw_entry, "keys") else ()
+    out: list[str] = []
+    for key in keys:
+        if not _VENDOR_KEY_RE.match(str(key).lower()):
+            continue
+        value = raw_entry.get(key)
+        # A structured value (dict/list) is some other namespace's `vendor`, not
+        # Shopify's plain string.
+        if isinstance(value, str) and 0 < len(value.strip()) <= _MAX_VENDOR_LEN:
+            out.append(value.strip())
+    return out
 
 
 _META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.IGNORECASE)

@@ -802,3 +802,59 @@ def test_mrf_entities_do_not_split_the_pairs():
 def test_mrf_absent_is_cheap_and_safe():
     assert tags_from_mrf_meta("<html><body>no meta here</body></html>") == []
     assert tags_from_mrf_meta(None) == []
+
+
+# --- Shopify product feeds: <s:vendor> is the maker (for a record shop, the artist)
+
+
+_SHOPIFY_ATOM = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:s="http://jadedpixel.com/-/spec/shopify">
+  <title>Store</title>
+  <entry>
+    <id>https://store.test/products/1</id>
+    <title>Pearl Jam - Live 1995 | Vinyl</title>
+    <s:type>Vinyl</s:type>
+    <s:vendor>Pearl Jam</s:vendor>
+    <s:price>16.99</s:price>
+    <summary type="html">&lt;p&gt;&lt;strong&gt;Vendor: &lt;/strong&gt;Pearl Jam&lt;/p&gt;</summary>
+  </entry>
+</feed>
+"""
+
+
+def _first_entry(xml: str):
+    import feedparser
+    return feedparser.parse(xml.encode()).entries[0]
+
+
+def test_shopify_vendor_becomes_a_tag():
+    assert extract_feed_entry_tags(_first_entry(_SHOPIFY_ATOM)) == ["Pearl Jam"]
+
+
+def test_vendor_is_found_under_any_namespace_prefix():
+    """feedparser flattens an unknown namespace with the document's own prefix,
+    so the key depends on what the store wrote in xmlns:…"""
+    xml = _SHOPIFY_ATOM.replace("xmlns:s=", "xmlns:shop=").replace("<s:", "<shop:").replace("</s:", "</shop:")
+    assert extract_feed_entry_tags(_first_entry(xml)) == ["Pearl Jam"]
+
+
+def test_a_bare_vendor_key_is_not_harvested():
+    """Only a namespaced `<prefix>_vendor`. A bare `vendor` element belongs to
+    whatever schema defined it and may mean something else entirely."""
+    assert extract_feed_entry_tags({"vendor": "Some Corp"}) == []
+
+
+def test_vendor_folds_into_an_identical_category():
+    """Case-insensitive dedupe: a store that also files the artist as a category
+    must not produce the same chip twice."""
+    import feedparser
+    entry = feedparser.FeedParserDict(
+        tags=[feedparser.FeedParserDict(term="Pearl Jam", label=None, scheme=None)],
+        s_vendor="pearl jam")
+    assert extract_feed_entry_tags(entry) == ["Pearl Jam"]
+
+
+def test_structured_or_oversized_vendor_values_are_ignored():
+    assert extract_feed_entry_tags({"s_vendor": {"name": "x"}}) == []
+    assert extract_feed_entry_tags({"s_vendor": "x" * 61}) == []
+    assert extract_feed_entry_tags({"s_vendor": "   "}) == []

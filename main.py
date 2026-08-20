@@ -4001,7 +4001,19 @@ def ensure_meta_schema() -> None:
         except Exception:
             pass
         try:
-            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN dedup_min_title_words INTEGER NOT NULL DEFAULT 4")
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN dedup_min_title_words INTEGER NOT NULL DEFAULT 5")
+        except Exception:
+            pass
+        # The column shipped pre-filled with 4, so no rule holding 4 had it chosen
+        # by anyone. Raise those once — 5 drops two same-feed false collisions and
+        # loses no real duplicate. Flagged so a deliberate 4 set later survives.
+        try:
+            if get_setting(conn, "dedup_min_title_words_bumped_to_5") != "1":
+                conn.execute(
+                    "UPDATE highlight_keywords SET dedup_min_title_words = 5"
+                    " WHERE type = 'deduplicate' AND dedup_min_title_words = 4"
+                )
+                set_setting(conn, "dedup_min_title_words_bumped_to_5", "1")
         except Exception:
             pass
         try:
@@ -4655,8 +4667,9 @@ _DEDUP_FUZZY_PCT_DEFAULT = 80
 # One floor for every title-based dedup signal (fuzzy, exact title, the safe
 # combo, GUID-churn suppression). Below it, "New post" / "Weekly update" collide
 # across unrelated feeds: measured on a 5,588-entry backlog, titles under 4 words
-# produced 11 same-feed false collisions against 1 real cross-feed duplicate.
-_DEDUP_MIN_TITLE_WORDS = 4
+# produced 11 same-feed false collisions against 1 real cross-feed duplicate, and
+# the 4-word band itself added 2 more false collisions and no true ones. Hence 5.
+_DEDUP_MIN_TITLE_WORDS = 5
 
 def _clamp_min_title_words(words: int | None) -> int:
     """Title-length floor, clamped. Under 3 words a title is a category label."""

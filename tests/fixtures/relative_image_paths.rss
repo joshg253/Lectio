@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>Site News</title>
+  <link>https://example.test/news/index.html</link>
+  <description>Static generator that copies each page's markup verbatim.</description>
+  <item>
+    <title>Post in a dated subdirectory</title>
+    <description><![CDATA[<p>Text.</p><img src="images/photo.jpg" alt="p" width="800" height="600">
+      <a href="other.html">next post</a>]]></description>
+    <link>https://example.test/news/202608/a-post.html</link>
+    <guid>https://example.test/news/./202608/a-post.html</guid>
+  </item>
+  <item>
+    <title>Post whose images are already absolute</title>
+    <description><![CDATA[<img src="https://cdn.example.test/full.jpg">]]></description>
+    <link>https://example.test/news/202608/b-post.html</link>
+    <guid>https://example.test/news/./202608/b-post.html</guid>
+  </item>
+</channel></rss>

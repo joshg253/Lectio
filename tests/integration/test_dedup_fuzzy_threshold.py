@@ -186,8 +186,8 @@ def test_min_words_round_trips_and_clamps(env):
                                    enabled=1, dedup_min_title_words=99)
         assert [r for r in main.get_highlight_keywords(conn)][0]["dedup_min_title_words"] == 10
     assert main._clamp_min_title_words(1) == 3
-    assert main._clamp_min_title_words(None) == 4
-    assert main._clamp_min_title_words("x") == 4
+    assert main._clamp_min_title_words(None) == main._DEDUP_MIN_TITLE_WORDS == 5
+    assert main._clamp_min_title_words("x") == 5
 
 
 def test_after_refresh_automation_reads_the_word_floor(env, monkeypatch):
@@ -226,3 +226,22 @@ def test_punctuation_no_longer_costs_a_match():
     # Pin the value, not just the agreement: two inputs normalizing to the same
     # WRONG string would satisfy equality alone.
     assert a == b == "apple ships a new laptop"
+
+
+def test_four_word_rules_are_bumped_once_but_a_deliberate_four_survives(env):
+    """The column shipped pre-filled with 4, so nobody had chosen it; the startup
+    bump raises those to 5. A 4 set deliberately AFTER the bump must stick."""
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "global", "", "fuzzy", "yellow",
+                                   rule_type="deduplicate", enabled=1, dedup_min_title_words=4)
+        conn.execute("DELETE FROM app_settings WHERE key = 'dedup_min_title_words_bumped_to_5'")
+    main._app_settings_cache.clear()   # the flag is read through a per-user cache
+    main.ensure_meta_schema()
+    with main.get_meta_connection() as conn:
+        assert main.get_highlight_keywords(conn)[0]["dedup_min_title_words"] == 5
+        assert main.get_setting(conn, "dedup_min_title_words_bumped_to_5") == "1"
+        main.add_highlight_keyword(conn, "global", "", "fuzzy", "yellow",
+                                   rule_type="deduplicate", enabled=1, dedup_min_title_words=4)
+    main.ensure_meta_schema()          # a later startup must not re-bump it
+    with main.get_meta_connection() as conn:
+        assert main.get_highlight_keywords(conn)[0]["dedup_min_title_words"] == 4

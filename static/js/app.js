@@ -9689,7 +9689,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const _hlCmpModes = ['slug', 'title', 'both', 'fuzzy'];
       const _hlCmpModeLabels = { slug: 'URL Slug', title: 'Title', both: 'Slug+Title', fuzzy: 'Fuzzy' };
       const _hlFuzzyPctDefault = 80;
-      const _hlMinTitleWordsDefault = 4;
+      const _hlMinTitleWordsDefault = 5;
 
       // One dry-run per mode. Only Fuzzy depends on the % knob, so a re-run at a new
       // threshold reuses the other three results instead of re-querying them.
@@ -11883,7 +11883,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             else                       { scope = 'global'; scopeId = ''; }
             const excludeIds = getExcludeIds();
             const fuzzyPct = Math.max(50, Math.min(100, parseInt(fuzzyPctInput.value || '80', 10) || 80));
-            const minWords = Math.max(3, Math.min(10, parseInt(minWordsInput.value || '4', 10) || 4));
+            const minWords = Math.max(3, Math.min(10, parseInt(minWordsInput.value || '5', 10) || 5));
             await onSave({ scope, scope_id: scopeId, keyword: matchMethod, color: 'yellow',
                            is_regex: 0, type: 'deduplicate', search_in: 'title',
                            delivery: 'immediately', email_to: '', batch_time: '', batch_count: 0,

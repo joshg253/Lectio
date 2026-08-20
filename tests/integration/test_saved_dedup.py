@@ -110,14 +110,15 @@ def _seed_saved(reader) -> None:
                link="https://a.example.test/my-great-article?utm_source=ig",
                title="My Great Article",
                published=datetime(2026, 7, 1, tzinfo=timezone.utc))
-    # Possible pair: same 4+ word title on two different domains/slugs.
+    # Possible pair: one title, long enough to clear _DEDUP_MIN_TITLE_WORDS, on
+    # two different domains/slugs.
     _add_entry(reader, SAVED, "https://b.example.test/reposted-piece",
                link="https://b.example.test/reposted-piece",
-               title="Four Word Title Here",
+               title="Five Whole Words In Title",
                published=datetime(2026, 2, 1, tzinfo=timezone.utc))
     _add_entry(reader, SAVED, "https://c.example.test/original-piece",
                link="https://c.example.test/original-piece",
-               title="Four Word Title Here",
+               title="Five Whole Words In Title",
                published=datetime(2026, 2, 2, tzinfo=timezone.utc))
     # Unrelated article — must not appear in any group.
     _add_entry(reader, SAVED, "https://d.example.test/something-else-entirely",
@@ -174,7 +175,7 @@ def test_saved_duplicates_scan_groups_and_tiers(configured):
 
     assert len(data["possible"]) == 1
     ptitles = {e["title"] for e in data["possible"][0]["entries"]}
-    assert ptitles == {"Four Word Title Here"}
+    assert ptitles == {"Five Whole Words In Title"}
     assert "same title" in data["possible"][0]["reasons"]
 
 
