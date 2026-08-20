@@ -223,4 +223,6 @@ def test_title_normalization(raw, expected):
 def test_punctuation_no_longer_costs_a_match():
     a = main.normalize_entry_title_for_dedupe("Apple Ships a New Laptop!")
     b = main.normalize_entry_title_for_dedupe("Apple ships a new laptop.")
-    assert a == b
+    # Pin the value, not just the agreement: two inputs normalizing to the same
+    # WRONG string would satisfy equality alone.
+    assert a == b == "apple ships a new laptop"
