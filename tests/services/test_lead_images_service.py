@@ -2289,6 +2289,21 @@ def test_a_lead_that_is_already_the_crop_is_kept(tmp_path: Path):
     assert service._plugin_thumbnail_variant(entry_link=_DC_LINK, lead_url=_DC_THUMB) == _DC_THUMB
 
 
+def test_dc_minis_suffixed_lead_is_not_rewritten(tmp_path: Path):
+    """A lead like dc_minis_28_02.jpg is the site's OWN og:image — a good
+    thumbnail already, not the tall full strip that needs cropping. The
+    plugin must decline (None) rather than derive
+    dc_minis_28_02_thumbnail.jpg (404, the site never publishes suffixed
+    thumbnails) or dc_minis_28_thumbnail.jpg (loads, but is a stale, mostly-
+    blank wide crop predating this post's own og:image). Declining lets the
+    caller use the lead URL itself, unmodified. Found 2026-08-21: the entry
+    first showed no list thumbnail at all, then a worse one after a first
+    attempt at this fix over-matched the suffix away."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    lead = "https://dresdencodak.com/wp-content/uploads/2026/08/dc_minis_28_02.jpg"
+    assert service._plugin_thumbnail_variant(entry_link=_DC_LINK, lead_url=lead) is None
+
+
 def test_dark_science_derives_nothing(tmp_path: Path):
     """ds_185/186/187 have no _thumbnail.jpg — deriving blind would 404 them all.
 

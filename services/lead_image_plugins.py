@@ -316,7 +316,7 @@ class DresdenCodakPlugin:
     host: str = "dresdencodak.com"
 
     _MINIS_IMAGE_RE = re.compile(
-        r"^(?P<base>https?://[^/]*dresdencodak\.com/.*?/dc_minis_[0-9]+[a-z0-9_-]*)"
+        r"^(?P<base>https?://[^/]*dresdencodak\.com/.*?/dc_minis_[0-9]+)"
         r"(?P<ext>\.(?:jpg|jpeg|png|webp))$",
         re.IGNORECASE,
     )
@@ -358,6 +358,11 @@ class DresdenCodakPlugin:
         return None
 
     def thumbnail_from_lead_image(self, *, entry_link: str, lead_url: str) -> str | None:
+        """Derive `_thumbnail.jpg` only from the bare full-comic filename
+        (`dc_minis_<n>.<ext>`, no suffix). A lead with a suffix (e.g.
+        `dc_minis_28_02.jpg`) is already a purpose-made crop — the site's own
+        og:image — and declining lets the caller use it unmodified rather
+        than deriving a wrong or stale sibling file."""
         if not lead_url or not self._is_ours(lead_url):
             return None
         if "_thumbnail" in lead_url.lower():
