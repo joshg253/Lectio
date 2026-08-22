@@ -1349,7 +1349,7 @@ class TestRestarCuratedEntries:
         client, token = _csrf_client()
         r = client.post("/feeds/unsubscribe", data={
             "_csrf": token,
-            "folder_id": _root_folder_id(), "feed_url": FEED, "keep_entries": "1",
+            "folder_id": _root_folder_id(), "feed_url": FEED,
         })
         assert r.status_code != 403
         assert calls == []
@@ -1358,7 +1358,7 @@ class TestRestarCuratedEntries:
         client.post("/feeds/unsubscribe", data={
             "_csrf": token,
             "folder_id": _root_folder_id(), "feed_url": FEED,
-            "keep_entries": "1", "restar_curated": "1",
+            "restar_curated": "1",
         })
         assert calls == [FEED]
 

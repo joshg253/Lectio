@@ -6123,7 +6123,6 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     async function unsubscribeFeedRequest(feedUrl, folderId, opts = {}) {
       const body = new URLSearchParams({ folder_id: folderId, feed_url: feedUrl });
       if (opts.migrateCurationTo) body.set('migrate_curation_to', opts.migrateCurationTo);
-      if (opts.keepEntries) body.set('keep_entries', '1');
       if (opts.restarCurated) body.set('restar_curated', '1');
       if (opts.dropCuration) body.set('drop_curation', '1');
       const resp = await fetch('/feeds/unsubscribe', {
@@ -6233,7 +6232,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         const parts = [];
         if (counts.stars) parts.push(`${counts.stars} starred`);
         if (counts.tagged) parts.push(`${counts.tagged} tagged`);
-        noteEl.textContent = `This feed has ${parts.join(' and ')} item${(counts.stars + counts.tagged) === 1 ? '' : 's'}. They'll be kept and browsable in Saved (default), or move them onto another feed.`;
+        noteEl.textContent = `This feed has ${parts.join(' and ')} item${(counts.stars + counts.tagged) === 1 ? '' : 's'}.`;
         // Filterable typeahead: datalist option label -> feed url. Titles can
         // repeat, so disambiguate duplicate labels with a short host hint.
         targetList.innerHTML = '';
@@ -6254,13 +6253,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           const o = document.createElement('option'); o.value = uniq; targetList.appendChild(o);
         });
         targetSel._labelToUrl = labelToUrl;
-        // "Keep curated posts" is the default when a feed carries curation — it
-        // retains the starred/tagged items (browsable in Saved) instead of losing
-        // tags. The dialog opens clean (no list); "Move items" reveals the picker.
-        const keepRadio = document.getElementById('unsub-migrate-keep');
+        // The modal is reused, so a prior feed's choice (e.g. "drop") could
+        // still be checked. Reset to the default every open: keep the
+        // starred/tagged items in Saved. "Move items" reveals the picker.
         const skipRadio = document.getElementById('unsub-migrate-skip');
-        if (keepRadio) keepRadio.checked = true;
-        if (skipRadio) skipRadio.checked = false;
+        if (skipRadio) skipRadio.checked = true;
         moveRadio.checked = false;
         moveRadio.disabled = candidates.length === 0;
         curationEl.hidden = false;
@@ -6323,7 +6320,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             if (dc.stars) parts.push(`${dc.stars} starred`);
             if (dc.tagged) parts.push(`${dc.tagged} tagged`);
             if (parts.length) {
-              noteEl.textContent = `This feed has ${parts.join(' and ')} item${(dc.stars + dc.tagged) === 1 ? '' : 's'}. They'll be kept and browsable in Saved (default), or move them onto another feed.`;
+              noteEl.textContent = `This feed has ${parts.join(' and ')} item${(dc.stars + dc.tagged) === 1 ? '' : 's'}.`;
             } else {
               noteEl.textContent = 'All curated items have been moved — nothing left to lose.';
             }
@@ -6432,7 +6429,6 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         async function onConfirm() {
           let migrateTo = null;
           let moveSubset = null;
-          const keepEntries = hasCuration && currentChoice() === 'keep';
           const dropCuration = hasCuration && currentChoice() === 'drop';
           // Applies to the keeping choices only. Read before cleanup() hides
           // the modal.
@@ -6448,10 +6444,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           }
           if (hasCuration && currentChoice() === 'move') {
             migrateTo = (targetSel._labelToUrl && targetSel._labelToUrl.get(targetSel.value)) || null;
-            if (!migrateTo) { window.alert('Pick a feed to move the items to, or choose "Just unsubscribe".'); return; }
+            if (!migrateTo) { window.alert('Pick a feed to move the items to, or choose "Remove the feed, keep the stars & tags".'); return; }
             const ids = checkedIds();
             const total = itemsEl?.querySelectorAll('.unsub-migrate-item-check').length || 0;
-            if (!ids.length) { window.alert('Select at least one item to move, or choose "Just unsubscribe".'); return; }
+            if (!ids.length) { window.alert('Select at least one item to move, or choose "Remove the feed, keep the stars & tags".'); return; }
             // Everything checked → the whole-feed migration path (also carries
             // read-state slugs). A subset → batch-move just those first, then
             // plain unsubscribe (unmoved stars get archived as usual).
@@ -6477,7 +6473,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             }
           }
           cleanup();
-          try { await unsubscribeFeedRequest(feedUrl, folderId, { ...opts, migrateCurationTo: migrateTo, keepEntries, restarCurated, dropCuration }); resolve(true); }
+          try { await unsubscribeFeedRequest(feedUrl, folderId, { ...opts, migrateCurationTo: migrateTo, restarCurated, dropCuration }); resolve(true); }
           catch (err) { window.alert(`Unsubscribe failed: ${err}`); resolve(false); }
         }
         function onCancel() { cleanup(); resolve(false); }

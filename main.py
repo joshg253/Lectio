@@ -27527,7 +27527,6 @@ def unsubscribe_feed(
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
     migrate_curation_to: str | None = Form(default=None),
-    keep_entries: str = Form(default=""),
     restar_curated: str = Form(default=""),
     drop_curation: str = Form(default=""),
 ):
@@ -27536,7 +27535,6 @@ def unsubscribe_feed(
     star_only_query = build_star_only_query(star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
     read_filter_query_s = build_read_filter_query(read_filter)
-    keep = normalize_star_only(keep_entries)  # reuse the truthy-form parser
 
     ok = True
     message = "Feed unsubscribed."
@@ -27565,37 +27563,19 @@ def unsubscribe_feed(
             ).fetchone()
 
         if not still_used:
-            if keep:
-                # Keep-but-unsubscribe: retain the reader feed + its curated
-                # (starred/tagged) entries so they stay browsable per-feed in the
-                # Saved/Kept view. Just hide it from the tree and stop updates.
+            # When a target feed is given, migrate this feed's tags/stars onto it
+            # (synthesizing entries) instead of archiving the stars — so curation
+            # isn't lost on unsubscribe.
+            _migrate_to = (migrate_curation_to or "").strip() or None
+            if _migrate_to == feed_url:
+                _migrate_to = None  # can't migrate onto itself
+            with get_reader() as reader:
                 with get_meta_connection() as conn:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO kept_feeds (feed_url) VALUES (?)",
-                        (feed_url,),
+                    purge_orphaned_feed(
+                        reader, conn, feed_url,
+                        archive_pending=_migrate_to is None,
+                        migrate_curation_to=_migrate_to,
                     )
-                disable_feed(feed_url)
-                # Flush any pending captures so content survives if the feed is
-                # ever fully removed later.
-                try:
-                    starred_archive_service.force_archive_pending_for_feed(feed_url)
-                except Exception as exc:  # noqa: BLE001
-                    LOGGER.warning("[keep] force-archive failed for %s: %s", feed_url, exc)
-                message = "Feed unsubscribed; curated posts kept."
-            else:
-                # When a target feed is given, migrate this feed's tags/stars onto it
-                # (synthesizing entries) instead of archiving the stars — so curation
-                # isn't lost on unsubscribe.
-                _migrate_to = (migrate_curation_to or "").strip() or None
-                if _migrate_to == feed_url:
-                    _migrate_to = None  # can't migrate onto itself
-                with get_reader() as reader:
-                    with get_meta_connection() as conn:
-                        purge_orphaned_feed(
-                            reader, conn, feed_url,
-                            archive_pending=_migrate_to is None,
-                            migrate_curation_to=_migrate_to,
-                        )
         if dropped:
             message = (
                 "Feed unsubscribed; "

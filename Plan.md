@@ -352,21 +352,6 @@ dismissal — a settings row listing dismissed groups with an un-dismiss button
 would be the natural follow-up if a wrong dismissal ever needs clawing back.
 Not built since it wasn't asked for yet.
 
-### Unsubscribe dialog — the two "keep" options do not read as different
-
-The radio labels are "Keep curated posts (hide the feed but keep its
-starred/tagged items — browse them in Saved)" and "Just unsubscribe (starred
-and tagged posts stay in Saved as offline copies)". Both promise Saved keeps
-your stuff, so nothing on screen says what actually differs: **Keep** retains
-the reader feed and every entry (`kept_feeds` + `disable_feed`), so read state,
-tags and dates survive and resubscribing resumes; **Just unsubscribe** deletes
-the feed and its entries (`purge_orphaned_feed`), leaving starred/tagged posts
-only as force-archived offline snapshots.
-
-Needs a conversation before rewording — Josh raised the idea of replacing the
-radios with checkboxes for *what* to keep (entries? read state? tags? unread?)
-rather than two bundled outcomes. Decide the model first; the copy follows.
-
 ### Utilities: find rules that could be one rule
 
 Marking things read in Deals now takes several rules (Apple products, one set of
