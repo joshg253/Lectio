@@ -497,7 +497,6 @@ SETTING_SHARED_REDDIT_CLIENT_ID = "shared_reddit_client_id"
 SETTING_SHARED_REDDIT_CLIENT_SECRET = "shared_reddit_client_secret"
 SETTING_STAR_SEND_REDDIT_SUBREDDIT = "star_send_reddit_subreddit"
 # Instance tuning settings (admin-only, stored in admin's app_settings).
-SETTING_FETCH_HISTORY_KEEP = "fetch_history_keep"
 SETTING_FETCH_HISTORY_MAX_AGE_DAYS = "fetch_history_max_age_days"
 SETTING_TOMBSTONE_SWEEP_DAYS = "tombstone_sweep_days"
 SETTING_LOGIN_MAX_FAILURES = "login_max_failures"
@@ -895,12 +894,14 @@ def _get_shared_credential(key: str) -> str:
     return _get_admin_instance_setting(key)
 
 
-def get_fetch_history_keep() -> int:
-    return int(get_instance_setting(SETTING_FETCH_HISTORY_KEEP) or 50)
-
-
 def get_fetch_history_max_age_days() -> int:
     return int(get_instance_setting(SETTING_FETCH_HISTORY_MAX_AGE_DAYS) or 30)
+
+
+# Fixed per-feed row ceiling for feed_fetch_history — a backstop against a
+# pathologically-retried feed, not a user-facing setting. Normal cadence (even
+# hourly for the full max-age window) stays far under this.
+FETCH_HISTORY_ROW_CEILING = 5000
 
 
 def get_tombstone_sweep_days() -> int:
@@ -19082,9 +19083,10 @@ def _daily_maintenance_for_user() -> None:
     except Exception:
         LOGGER.exception("[maintenance] rule log prune failed")
 
-    # 1b. Bound feed_fetch_history: keep the most recent FEED_FETCH_HISTORY_KEEP
-    # rows per feed and drop anything older than the age cap, so the diagnostic
-    # log can't grow without limit on busy installs.
+    # 1b. Bound feed_fetch_history: drop anything older than the age cap, plus a
+    # fixed per-feed ceiling as a backstop against a pathologically-retried feed
+    # (normal cadence — even hourly for 30 days — stays far under this; it exists
+    # only so a genuine bug can't grow the table without limit).
     try:
         cutoff = time.time() - get_fetch_history_max_age_days() * 86400
         with get_meta_connection() as conn:
@@ -19098,7 +19100,7 @@ def _daily_maintenance_for_user() -> None:
                     ) WHERE rn > ?
                 )
                 """,
-                (get_fetch_history_keep(),),
+                (FETCH_HISTORY_ROW_CEILING,),
             )
             pruned = cur.rowcount
             cur = conn.execute("DELETE FROM feed_fetch_history WHERE fetched_at < ?", (cutoff,))
@@ -21472,7 +21474,6 @@ def administration_page(request: Request, msg: str | None = None, error: str | N
             "shared_reddit_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_SECRET)),
             "shared_reddit_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_SECRET, "")),
             # Instance tuning
-            "fetch_history_keep": get_fetch_history_keep(),
             "fetch_history_max_age_days": get_fetch_history_max_age_days(),
         "tombstone_sweep_days": get_tombstone_sweep_days(),
             "login_max_failures": get_login_max_failures(),
@@ -26914,7 +26915,6 @@ def get_all_settings():
         "contacts": contacts,
         "email_to_default": email_to_default,
         "public_url": LECTIO_PUBLIC_URL,
-        "fetch_history_keep": get_fetch_history_keep(),
         "fetch_history_max_age_days": get_fetch_history_max_age_days(),
         "tombstone_sweep_days": get_tombstone_sweep_days(),
         "login_max_failures": get_login_max_failures(),
@@ -26975,7 +26975,7 @@ async def save_all_settings(request: Request):
         SETTING_REDDIT_CLIENT_ID, SETTING_REDDIT_CLIENT_SECRET,
         SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
         SETTING_STAR_SEND_REDDIT_SUBREDDIT,
-        SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
+        SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
         SETTING_TOMBSTONE_SWEEP_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
@@ -26990,7 +26990,7 @@ async def save_all_settings(request: Request):
         SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
-        SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
+        SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
         SETTING_TOMBSTONE_SWEEP_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
