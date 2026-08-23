@@ -849,44 +849,27 @@ mechanical file split.
    split; treat as its own carefully-tested project.
 
 
-### Inoreader replacement — the migration (start ~Dec 2026)
+### Inoreader replacement — the migration
 
-**Scheduled, not urgent**: renewal is 2027-03-16, so starting around Dec 2026 leaves
-~3 months to validate before the date. Pulling it earlier buys nothing; the plan is
-already paid and won't prorate.
+Started early (2026-08-21/22), ahead of the original "start ~Dec 2026"
+schedule. Folder-by-folder audit done for all 27 folders (method: health
+check + silent-stall check + live Ino comparison via `services/inoreader.py`,
+reusing `get_subscriptions`/`get_stream_contents` — this superseded the
+originally-planned automated comparison report, same result by hand). 26/27
+folders are safe to cut over; YouTube is the one open blocker (silent
+multi-week stalls, root cause not yet found).
 
-The blocker is **bot-blocking**: feeds Inoreader can fetch but Lectio can't.
-Publishers allowlist known aggregators (Inoreader/Feedly) by UA/IP; Lectio fetches
-from the VPS IP with an honest UA and gets 403'd (the 🟢 "blocked" bucket in the
-Failing Feeds filter — isocpp 752, libhunt newsletters, etc.). Good-citizen policy
-forbids spoofing Ino's UA or evading IP blocks; Lectio already auto-escalates to
-browser-UA on refusal (`browser_ua_feeds`), which recovers some 403s but not
-IP/aggregator-only blocks.
+**No fetch-proxy.** Considered pulling feeds Inoreader can reach but Lectio
+can't (bot-walled: isocpp, libhunt newsletters, Project Euler, etc. — about a
+dozen feeds) via Ino's API instead of the origin. Rejected 2026-08-22: it only
+works on a paid Ino account, which defeats the point of dropping Ino. These
+feeds are accepted as permanent losses — same call for the 2 Cloudflare-walled
+Deals feeds (camelcamelcamel, homebrewfinds). Nothing further planned here;
+let the Ino plan lapse 2027-03-16 (annual SaaS rarely prorates; worth asking,
+but plan to ride it out).
 
-Both steps reuse the **existing** `services/inoreader.py` (OAuth +
-`get_subscriptions` + `get_stream_contents`).
-
-**9a — Comparison report** (read-only; start here). Cross-reference Inoreader
-subscriptions vs Lectio feeds and flag three sets:
-
-- **(a) in-Ino-with-recent-items but failing-in-Lectio** = the "Ino can, we can't"
-  risk set. This is also the **triage list that gates Part C pass 2**, produced
-  mechanically instead of by hand, and it names the feeds that need 9b.
-- **(b) in Ino, not in Lectio** — subscriptions never migrated.
-- **(c) in Lectio, not in Ino** — Lectio-only, safe to ignore for the cutover.
-
-Turns "safe to drop Ino?" into a concrete checklist.
-
-**9b — Inoreader as fetch-proxy.** The step that actually lets Ino lapse, and
-legitimate rather than evasion — Ino *is* the subscriber. A per-feed "fetch via
-Inoreader" toggle pulling items from `stream/contents` instead of the origin, for
-the stubborn bot-walled feeds in set (a). Keep Ino connected as a quiet backend, not
-the reader. **Scope depends on how big set (a) turns out to be — run 9a first and let
-the count decide whether this is worth building at all.**
-
-Sequence: connect Ino → comparison report (9a) → triage/replace dead feeds → Tag-as-keep
-Part C pass 2 (Now) → proxy the only-Ino feeds (9b) → let the plan lapse 2027-03-16
-(annual SaaS rarely prorates; worth asking, but plan to ride it out).
+Remaining before Ino can fully lapse: Comics & Art and !NSFW dead-feed
+pruning (mechanical), and the YouTube root-cause dig.
 
 ### Full-content fetch at ingest for body-less feeds
 
@@ -894,10 +877,10 @@ meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
 description/content element at all; older stored entries have bodies, so this
 is upstream). A per-feed "fetch full content from the source page at ingest"
 option (readability pipeline already exists) would fix such feeds generally —
-per-feed opt-in in Feed Properties, capped/throttled like enhancement. Overlaps
-with Inoreader replacement above: some "we can't fetch" feeds get fixed here
-instead of via the Ino proxy, so it's worth revisiting once the comparison
-report sizes set (a).
+per-feed opt-in in Feed Properties, capped/throttled like enhancement. Doesn't
+help the bot-walled feeds above (they're blocked at fetch, before content
+matters) but could recover feeds elsewhere that are body-less rather than
+blocked.
 
 ### Instapaper-alternative: reader-only view for saved/starred items
 
