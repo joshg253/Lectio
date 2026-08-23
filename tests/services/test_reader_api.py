@@ -191,3 +191,45 @@ def test_session_timeout_omitted_keeps_readers_default(monkeypatch):
     ReaderApi("test.sqlite").client()
 
     assert "session_timeout" not in captured
+
+
+# --- _fix_feed_response: a header-only challenge with an empty body ---
+#
+# kcls.org's AWS WAF challenge is HTTP 202 with a 0-byte body — the pre-existing
+# "no body, nothing to fix" early return swallowed it silently, and it surfaced
+# downstream as a raw AttributeError crash in reader's own parser instead of a
+# labeled bot-challenge failure.
+
+class _FakeRaw:
+    def __init__(self, data: bytes):
+        self._data = data
+        self.decode_content = False
+
+    def read(self):
+        return self._data
+
+
+class _FakeResponse:
+    def __init__(self, headers: dict, body: bytes = b""):
+        self.raw = _FakeRaw(body)
+        self.headers = headers
+        self._content = None
+
+
+def test_empty_body_with_waf_challenge_header_raises_feed_blocked_error():
+    from services import bot_challenge
+
+    response = _FakeResponse({"x-amzn-waf-action": "challenge"}, body=b"")
+
+    try:
+        reader_api._fix_feed_response(None, response, None)
+    except bot_challenge.FeedBlockedError as exc:
+        assert "AWS WAF challenge" in str(exc)
+    else:
+        raise AssertionError("expected FeedBlockedError, no exception was raised")
+
+
+def test_empty_body_with_no_challenge_header_returns_none_as_before():
+    response = _FakeResponse({}, body=b"")
+
+    assert reader_api._fix_feed_response(None, response, None) is None
