@@ -231,6 +231,31 @@ def _entry_html_base(entry, feed_url: str) -> str:
     return feed_url
 
 
+def _accept_recovered_bozo(url, result) -> None:
+    """A bozo feed whose loose-parser recovery still produced a real version
+    and entries is a feed reader._process_feed would otherwise discard whole —
+    it raises ParseError on any bozo_exception outside its own two-item
+    whitelist, even when feedparser's fallback parser recovered usable
+    content (e.g. one bad byte deep in a post body, single unescaped '&').
+    Confirmed against the live library: 13 feeds across the folder audit were
+    being treated as permanently dead by this policy alone, one with 368
+    entries sitting behind a single malformed token. Only overrides when
+    recovery actually produced something (version + entries) — a bozo feed
+    that recovered nothing (an HTML page swapped in for the XML, a FeedBurner
+    error page) still raises exactly as before.
+    """
+    if not result.get("bozo"):
+        return
+    if not result.get("version") or not result.get("entries"):
+        return
+    exc = result.get("bozo_exception")
+    LOGGER.warning(
+        "feed recovered via loose parser despite %s; accepting instead of discarding: %s",
+        f"{type(exc).__name__}: {exc}" if exc else "bozo flag", url,
+    )
+    result["bozo"] = 0
+
+
 class SanitizingFeedparserParser(FeedparserParser):
     """Like reader's FeedparserParser, but sanitization is ours, not feedparser's."""
 
@@ -245,6 +270,7 @@ class SanitizingFeedparserParser(FeedparserParser):
             sanitize_html=False,  # Lectio sanitizes instead (keeps safe embeds)
             response_headers=headers or {},
         )
+        _accept_recovered_bozo(url, result)
         # Rewrite old author domains -> current, on the raw result, so reader's
         # id derivation and everything downstream see the current-domain values.
         _rewrite_raw_urls(url, result)
