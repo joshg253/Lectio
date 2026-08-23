@@ -444,6 +444,20 @@ items, less so as a sort key on every render) or maintained as a column at
 capture/re-fetch time; and whether the same sort belongs in the Kept view, where
 an unsubscribed feed's retained posts accumulate unseen.
 
+### GIL-contention request stalls — tally
+
+Not fixed, not investigated further yet — just tracking how often it's bad
+enough to notice before deciding whether it's worth the architectural work
+(background refresh and request handling currently share the same
+process/threads, so a request can sit for seconds with nothing itself wrong,
+starved of CPU by a concurrent background refresh doing CPU-bound work —
+parsing, sanitizing). Add a line each time Josh notices one; look for a
+pattern (time of day, request type, cadence) once there are enough to see one.
+
+| Date | Request | Wall time | Notes |
+|---|---|---|---|
+| 2026-08-23 | `GET /?folder_id=23&sort_dir=desc&star_only=1` (5 items) | 6919ms | 6.3s gap between two already-fast, already-logged steps — nothing itself slow |
+
 ### CodeQL board — watch-note
 
 Board is at zero open alerts as of 2026-08-13 (PR #200 cleared a `py/redos` in
