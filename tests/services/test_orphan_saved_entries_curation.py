@@ -214,3 +214,12 @@ def test_kept_scope_kept_still_includes_tagged_only_orphans(archive, meta):
     meta.commit()
     out = _svc(archive, meta).get_orphan_saved_entries(live_feed_urls=set(), kept_scope="kept")
     assert [o["id"] for o in out] == ["tagged-one"]
+
+
+def test_get_orphan_feed_title_none_for_unknown_url(archive, meta):
+    assert _svc(archive, meta).get_orphan_feed_title("https://never.example/feed") is None
+
+
+def test_get_orphan_feed_title_returns_title_for_known_orphan(archive, meta):
+    _add(archive, "any-entry", feed_title="Gone Blog")
+    assert _svc(archive, meta).get_orphan_feed_title(FEED) == "Gone Blog"

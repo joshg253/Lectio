@@ -184,3 +184,57 @@ def test_orphan_with_only_a_star_is_kept_and_saved(orphan_env, monkeypatch):
     detail = _orphan_detail(monkeypatch)
     assert detail["kept"] is True
     assert detail["saved"] is True
+
+
+# Feed Properties on an unsubscribed feed: the modal used to hard-fail with
+# "Feed not found" (get_feed_properties bails the instant reader.get_feed()
+# returns None) and Suggested Tags' Save button silently did nothing (the
+# route 404'd on the same check) — so a batch of orphaned-but-kept entries had
+# no way to get their one-click tag suggestion chip back. Both routes now
+# treat a feed_url the starred archive still recognizes as editable, distinct
+# from a genuinely unknown URL.
+
+def _seed_archive_row(feed_url=ORPHAN_FEED, entry_id=ORPHAN_ENTRY, feed_title="Gone Blog"):
+    main.ensure_starred_archive_schema()
+    with main.get_starred_archive_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO archived_entry (feed_url, entry_id, status, starred_at, feed_title)"
+            " VALUES (?, ?, 'complete', 0, ?)",
+            (feed_url, entry_id, feed_title),
+        )
+        conn.commit()
+
+
+def test_feed_properties_404s_for_a_url_with_no_archive_at_all(orphan_env):
+    props = main.get_feed_properties("https://never-heard-of.example/feed")
+    assert props["found"] is False
+
+
+def test_feed_properties_returns_minimal_response_for_known_orphan(orphan_env):
+    _seed_archive_row()
+    props = main.get_feed_properties(ORPHAN_FEED)
+    assert props["found"] is True
+    assert props["is_orphan"] is True
+    assert props["real_title"] == "Gone Blog"
+    assert props["suggested_tags"] == []
+
+
+def test_feed_properties_orphan_reflects_already_set_suggested_tags(orphan_env):
+    _seed_archive_row()
+    main.set_feed_pinned_tags(ORPHAN_FEED, "c++ cpp")
+    props = main.get_feed_properties(ORPHAN_FEED)
+    assert props["suggested_tags"] == ["c++", "cpp"]
+
+
+def test_suggested_tags_route_saves_for_a_known_orphan_feed(orphan_env):
+    _seed_archive_row()
+    resp = main.set_feed_suggested_tags_route(feed_url=ORPHAN_FEED, tags="c++")
+    assert resp.status_code == 200
+    assert main.get_feed_pinned_tags(ORPHAN_FEED) == ["c++"]
+
+
+def test_suggested_tags_route_still_404s_for_a_genuinely_unknown_url(orphan_env):
+    resp = main.set_feed_suggested_tags_route(
+        feed_url="https://never-heard-of.example/feed", tags="c++"
+    )
+    assert resp.status_code == 404

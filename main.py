@@ -10008,10 +10008,29 @@ def get_feed_properties(feed_url: str) -> dict:
         feed_obj = reader.get_feed(feed_url, None)
 
         if feed_obj is None:
+            # Not in reader — either unsubscribed (its saves/tags survive in the
+            # starred archive, kept-stars-unsub's whole point) or a genuinely
+            # unknown URL. Only the former gets a minimal, editable response:
+            # real_title + suggested_tags (both meta-DB-only, no reader needed)
+            # so a tagged orphan batch can still offer its suggestion chip —
+            # everything else the modal fetches (health, counts, folder, image
+            # strategy, etc.) has no live-feed meaning and stays absent; the
+            # client already defaults every one of those fields on a falsy value.
+            archived_title = starred_archive_service.get_orphan_feed_title(feed_url)
+            if archived_title is None:
+                return {
+                    "feed_url": feed_url,
+                    "found": False,
+                    "error": "Feed not found.",
+                }
             return {
                 "feed_url": feed_url,
-                "found": False,
-                "error": "Feed not found.",
+                "found": True,
+                "is_orphan": True,
+                "real_title": archived_title or feed_url,
+                "health": "unsubscribed",
+                "health_detail": "This feed was unsubscribed — showing archived saves only.",
+                "suggested_tags": get_feed_pinned_tags(feed_url),
             }
 
         total_posts = 0
@@ -28300,8 +28319,9 @@ def set_feed_suggested_tags_route(feed_url: str = Form(...), tags: str = Form(""
     already exists for people who want it applied without looking.
     """
     with get_reader() as reader:
-        if reader.get_feed(feed_url, None) is None:
-            return JSONResponse({"ok": False, "error": "Feed not found."}, status_code=404)
+        is_live = reader.get_feed(feed_url, None) is not None
+    if not is_live and starred_archive_service.get_orphan_feed_title(feed_url) is None:
+        return JSONResponse({"ok": False, "error": "Feed not found."}, status_code=404)
     kept = set_feed_pinned_tags(feed_url, tags)
     invalidate_meta_structure_cache()
     return JSONResponse({"ok": True, "tags": kept})

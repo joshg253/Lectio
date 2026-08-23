@@ -694,6 +694,27 @@ class StarredArchiveService:
             "content_html": content_html,
         }
 
+    def get_orphan_feed_title(self, feed_url: str) -> str | None:
+        """A representative feed_title for an unsubscribed feed, or None if
+        the archive has never heard of *feed_url* at all.
+
+        Distinguishes "genuinely unknown URL" (None) from "known orphan with
+        no title on file" (empty string) — Feed Properties uses this to decide
+        whether a feed no longer in reader is a real orphan (safe to let the
+        user set suggested tags on) or a typo/garbage feed_url (still a 404).
+        """
+        try:
+            with self._archive_conn() as conn:
+                row = conn.execute(
+                    "SELECT feed_title FROM archived_entry WHERE feed_url = ? LIMIT 1",
+                    (feed_url,),
+                ).fetchone()
+        except sqlite3.Error:
+            return None
+        if row is None:
+            return None
+        return str(row["feed_title"] or "")
+
     def get_orphan_saved_entries(
         self,
         live_feed_urls: set[str],
