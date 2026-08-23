@@ -7501,6 +7501,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             ? linkedPostItem.getAttribute('data-post-folder-id')
             : document.querySelector('.entry-pane-title')?.getAttribute('data-post-folder-id'));
           adjustSavedFolderBadge(paneStarFolderId, nextIsSaved ? +1 : -1);
+          const dropFromInbox = !nextIsSaved && isInboxKeptScope() && linkedPostItem instanceof HTMLElement;
+          if (dropFromInbox) linkedPostItem.hidden = true;
 
           try {
             const response = await fetch(entrySaveForm.action, {
@@ -7516,7 +7518,9 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             if (!response.ok) {
               throw new Error(`HTTP ${response.status}`);
             }
+            if (dropFromInbox) linkedPostItem.remove();
           } catch (_error) {
+            if (dropFromInbox) linkedPostItem.hidden = false;
             applyEntryPaneSavedState(!nextIsSaved);
             if (linkedPostItem instanceof HTMLElement) {
               applyPostItemSavedState(linkedPostItem, !nextIsSaved);
@@ -8086,6 +8090,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? +1 : -1);
           const starFolderId = postItem.getAttribute('data-post-folder-id');
           adjustSavedFolderBadge(starFolderId, nextIsSaved ? +1 : -1);
+          const dropFromInbox = !nextIsSaved && isInboxKeptScope();
+          if (dropFromInbox) postItem.hidden = true;
 
           try {
             const response = await fetch(saveForm.action, {
@@ -8101,7 +8107,9 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             if (!response.ok) {
               throw new Error(`HTTP ${response.status}`);
             }
+            if (dropFromInbox) postItem.remove();
           } catch (_error) {
+            if (dropFromInbox) postItem.hidden = false;
             applyPostItemSavedState(postItem, !nextIsSaved);
             if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? -1 : +1);
             adjustSavedFolderBadge(starFolderId, nextIsSaved ? -1 : +1);
@@ -8671,6 +8679,14 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       });
       if (document.visibilityState === 'visible') _start();
     }());
+
+    // The Inbox (star_only=1&kept=starred) filters on the star axis alone —
+    // unlike the general Kept view, a tag does not keep an item there. Removing
+    // the star while viewing it must drop the row, or an unstarred-but-tagged
+    // item sits in the Inbox forever with a stale starred icon.
+    function isInboxKeptScope() {
+      return new URLSearchParams(window.location.search).get('kept') === 'starred';
+    }
 
     function applyPostItemSavedState(postItem, isSaved) {
       if (!postItem) {
