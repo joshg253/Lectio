@@ -151,8 +151,16 @@ candidate resolves (or at least refusing one whose host is the *site's own* page
 path with an embedded absolute URL) would catch the whole class, not just
 Substack.
 
-**Also unexplained on the same feed:** star and re-fetch do not pull content.
-Not yet diagnosed.
+**"Star and re-fetch do not pull content" — RESOLVED 2026-08-23, not a bug.**
+Re-fetch on this exact entry now runs clean (`ok`, `extracted`) and correctly
+pulls 11.7KB of real page content — it's just that the page *is* a paywall
+promo: this specific post is a paid Substack post ("∙ Paid", "Continue
+reading this post for free... or purchase a paid subscription"), confirmed
+independently by curling the raw page directly. Checked several of her other
+recent posts on the same feed — free, full text, no paywall — so this is one
+occasional paid post, not a feed-wide change. Nothing to fix; there is no
+fuller version of this specific post publicly available to extract. The
+avatar/mangled-URL lead-image bug above is unrelated and still open.
 
 ### Feed known-migrations into discovery, so a 404 is not the end
 
