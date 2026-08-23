@@ -278,8 +278,11 @@
               <span class="material-symbols-rounded saved-items-icon" aria-hidden="true">menu</span>
               <span class="name">Feeds</span>
             </a>
+            {# Unlike Feeds (no single obvious start view -> load nothing),
+               Saved has one: the Inbox. Landing on an empty scope-tab shell
+               just made you click Inbox immediately afterward. #}
             <a
-              href="/?folder_id={{ root_folder_row.id }}&star_only=1&home=1"
+              href="/?folder_id={{ root_folder_row.id }}&star_only=1&kept=starred"
               class="tree-item saved-item scope-tab {% if selected_star_only %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-saved-items="true"
