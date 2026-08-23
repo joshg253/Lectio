@@ -14173,6 +14173,7 @@ def merge_orphan_saved_entries(
     only_feed_url: str | None = None,
     archived: bool | None = None,
     search_terms: list[str] | None = None,
+    kept_scope: str = "kept",
 ) -> list[dict]:
     """Append archive-only saved entries (orphans), then re-sort + clip.
 
@@ -14182,9 +14183,18 @@ def merge_orphan_saved_entries(
     is what made the Archive view show nothing under some sort orders — a single
     archived post sorted to the bottom and fell outside the window.
 
-    Orphans are starred entries whose feed is no longer in any folder; their
-    metadata comes entirely from the starred archive. Rendered alongside live
-    saved entries so unsubscribing a feed doesn't make its saves disappear.
+    Orphans are kept (starred or tagged) entries whose feed is no longer in any
+    folder; their metadata comes entirely from the starred archive. Rendered
+    alongside live saved entries so unsubscribing a feed doesn't make its
+    saves disappear.
+
+    *kept_scope*, forwarded to get_orphan_saved_entries: "starred" (the Inbox)
+    narrows to the star axis alone, same as the live-entry path two lines up
+    from this function's callers. Each returned orphan carries its own
+    is_starred/manual_tags — used below instead of the old hardcoded
+    saved=True, which made a tagged-then-unstarred orphan look identically
+    starred to a real star in the list (disagreeing with the entry pane) and,
+    without this scope, kept it pinned in the Inbox forever.
 
     When *only_feed_url* is given, restrict orphans to that single feed (matched
     canonically) — used when the user clicks the feed link of an orphaned save
@@ -14200,7 +14210,9 @@ def merge_orphan_saved_entries(
         posts = [p for p in posts
                  if ((str(p["feed_url"]), str(p["id"])) in archived_keys) == archived]
 
-    orphans = starred_archive_service.get_orphan_saved_entries(live_feed_urls, search_terms)
+    orphans = starred_archive_service.get_orphan_saved_entries(
+        live_feed_urls, search_terms, kept_scope=kept_scope
+    )
     if archived is not None:
         orphans = [o for o in orphans
                    if ((str(o["feed_url"]), str(o["id"])) in archived_keys) == archived]
@@ -14246,10 +14258,10 @@ def merge_orphan_saved_entries(
                 "thumbnail_url": None,
                 "feed_title": orphan["feed_title"],
                 "feed_icon_url": None,
-                "manual_tags": [],
+                "manual_tags": orphan.get("manual_tags") or [],
                 "kept": True,
                 "read": True,
-                "saved": True,
+                "saved": bool(orphan.get("is_starred")),
                 "post_sort_value": post_iso,
                 "received_sort_value": recv_iso,
                 "saved_sort_value": _sort_value_from_epoch(orphan.get("starred_at")),
@@ -20104,6 +20116,7 @@ def resolve_reader_backlog(
                 limit=limit,
                 archived=archived,
                 search_terms=search_terms_from_query(search_query),
+                kept_scope=kept_scope,
             )
             _merged_orphans = True
         except Exception as exc:  # noqa: BLE001
@@ -22364,6 +22377,7 @@ def _home_inner(
                 limit=limit,
                 only_feed_url=orphan_only_feed,
                 search_terms=search_terms_from_query(selected_query),
+                kept_scope=("starred" if inbox_view else "kept"),
             )
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("orphan saved entry merge (feed %s) failed: %s", orphan_only_feed, exc)
@@ -22392,6 +22406,7 @@ def _home_inner(
                 sort_by=selected_sort_by,
                 sort_dir=selected_sort_dir,
                 limit=limit,
+                kept_scope=("starred" if inbox_view else "kept"),
             )
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("orphan saved entry merge failed: %s", exc)

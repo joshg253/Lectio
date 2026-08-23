@@ -695,7 +695,11 @@ class StarredArchiveService:
         }
 
     def get_orphan_saved_entries(
-        self, live_feed_urls: set[str], search_terms: list[str] | None = None
+        self,
+        live_feed_urls: set[str],
+        search_terms: list[str] | None = None,
+        *,
+        kept_scope: str = "kept",
     ) -> list[dict[str, Any]]:
         """Return archive rows whose feed isn't in `live_feed_urls` AND are
         actually kept — starred or manually tagged (via orphan_entry_tags,
@@ -711,6 +715,17 @@ class StarredArchiveService:
         archive still exists" as its own, weaker definition of kept. An
         uncurated leftover (feed long gone, never starred or tagged, or
         unstarred after the fact) is not shown as Saved.
+
+        *kept_scope* mirrors the live-entry path's own parameter: "starred"
+        narrows to the star axis alone (the Inbox), same as
+        main.merge_orphan_saved_entries' caller already does for live entries.
+        Before this, every orphan row was unconditionally treated as kept AND
+        as `saved=True` regardless of which axis actually applied — so a
+        tagged-then-unstarred orphan stayed pinned in the Inbox forever with a
+        stale starred icon, and the icon disagreed with the entry pane (which
+        already computed real star state via main._entry_is_starred). Each
+        returned row now carries its own `is_starred` and `manual_tags` so the
+        caller can render the true state instead of assuming.
 
         *search_terms*, if given, filters to rows where every term appears
         (case-insensitively) in title, link, feed_title, or author — the same
@@ -741,7 +756,7 @@ class StarredArchiveService:
         # not orphaned at all.
         candidate_feeds = sorted({str(r["feed_url"]) for r in candidate_rows})
         starred: set[tuple[str, str]] = set()
-        tagged: set[tuple[str, str]] = set()
+        tags_by_key: dict[tuple[str, str], list[str]] = {}
         try:
             with self._get_meta_connection() as meta_conn:
                 for i in range(0, len(candidate_feeds), 900):
@@ -753,19 +768,24 @@ class StarredArchiveService:
                             chunk,
                         )
                     )
-                    tagged.update(
-                        (str(f), str(e)) for f, e in meta_conn.execute(
-                            f"SELECT DISTINCT feed_url, entry_id FROM orphan_entry_tags WHERE feed_url IN ({ph})",
-                            chunk,
-                        )
-                    )
+                    for f, e, tag in meta_conn.execute(
+                        f"SELECT feed_url, entry_id, tag FROM orphan_entry_tags WHERE feed_url IN ({ph})",
+                        chunk,
+                    ):
+                        tags_by_key.setdefault((str(f), str(e)), []).append(str(tag))
         except sqlite3.Error:
-            starred, tagged = set(), set()
+            starred, tags_by_key = set(), {}
         out: list[dict[str, Any]] = []
         for row in candidate_rows:
             feed_url = str(row["feed_url"])
             entry_id = str(row["entry_id"])
-            if (feed_url, entry_id) not in starred and (feed_url, entry_id) not in tagged:
+            key = (feed_url, entry_id)
+            is_starred = key in starred
+            manual_tags = sorted(tags_by_key.get(key, ()))
+            if kept_scope == "starred":
+                if not is_starred:
+                    continue
+            elif not is_starred and not manual_tags:
                 continue
             if search_terms:
                 haystack = " ".join(str(row[c] or "") for c in
@@ -780,6 +800,8 @@ class StarredArchiveService:
                     "link": str(row["link"] or ""),
                     "feed_title": str(row["feed_title"] or feed_url),
                     "author": row["author"],
+                    "is_starred": is_starred,
+                    "manual_tags": manual_tags,
                     "published_at": float(row["published_at"]) if row["published_at"] is not None else None,
                     "received_at": float(row["received_at"]) if row["received_at"] is not None else None,
                     # When the star was made — the Inbox's "Recently starred"
