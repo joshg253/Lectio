@@ -1116,7 +1116,15 @@ def get_inoreader_token() -> str:
     try:
         data = inoreader_service.refresh_access_token(cid, secret, refresh)
     except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("[inoreader] token refresh failed; reconnect required: %s", exc)
+        LOGGER.warning("[inoreader] token refresh failed: %s", exc)
+        if "invalid_grant" in str(exc):
+            # Inoreader has permanently rejected this refresh token (not a transient
+            # network/outage failure) — clear it so inoreader_connected() stops
+            # reporting stale "Connected." and the UI offers Connect again.
+            with get_meta_connection() as conn:
+                set_setting(conn, SETTING_INOREADER_ACCESS_TOKEN, "")
+                set_setting(conn, SETTING_INOREADER_REFRESH_TOKEN, "")
+                set_setting(conn, SETTING_INOREADER_TOKEN_EXPIRES_AT, "")
         return ""
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_INOREADER_ACCESS_TOKEN, data["access_token"])
