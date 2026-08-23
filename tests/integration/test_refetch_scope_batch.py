@@ -211,6 +211,25 @@ def _run(results, rows=None, job=None):
     return job, calls
 
 
+def test_batch_does_not_bump_saved_at(configured, monkeypatch):
+    """A single deliberate re-fetch surfaces the article at the top of the
+    Inbox on purpose (bump_received defaults to True for a capture). A bulk
+    backfill across dozens of old articles isn't that — it used to dump the
+    whole Inbox's star order onto whatever finished last in the batch."""
+    seen_kwargs = []
+
+    def _fake(feed_url, entry_id, mode, **kwargs):
+        seen_kwargs.append(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", _fake)
+    monkeypatch.setattr(main.time, "sleep", lambda _s: None)
+
+    _run([None] * 3)
+
+    assert seen_kwargs == [{"bump_received": False}] * 3
+
+
 def test_outcomes_are_counted_apart(configured, monkeypatch):
     """A refusal is not a failure: the guard did its job and the stored copy was
     deliberately left alone. Lumping them together would read as breakage."""
@@ -229,7 +248,7 @@ def test_outcomes_are_counted_apart(configured, monkeypatch):
 
 
 def test_one_exploding_entry_does_not_end_the_run(configured, monkeypatch):
-    def _boom(feed_url, entry_id, _mode):
+    def _boom(feed_url, entry_id, _mode, **_kw):
         if entry_id == "1":
             raise RuntimeError("network went sideways")
         return {"ok": True}

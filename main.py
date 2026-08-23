@@ -31077,7 +31077,8 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
 
 
 def _refresh_captured_article_for_current_user(
-    feed_url: str, entry_id: str, mode: str = "readability"
+    feed_url: str, entry_id: str, mode: str = "readability",
+    bump_received: bool | None = None,
 ) -> dict:
     """Re-fetch a Lectio capture that lives on a real feed (post auto-filing),
     with the current tenancy's reader/meta DB.
@@ -31090,7 +31091,9 @@ def _refresh_captured_article_for_current_user(
     live page. The automatic archive fallback below only triggers when the live
     fetch is *refused* (parked page, 404), which leaves out the case that sent
     users to archive.org by hand: a publisher serving a page that passes every
-    guard but is no longer the article — rewritten, truncated, or paywalled."""
+    guard but is no longer the article — rewritten, truncated, or paywalled.
+
+    *bump_received* is forwarded as-is to refresh_captured_article — see there."""
     from_archive: str | None = None
     if mode == CAPTURE_MODE_ARCHIVE:
         from_archive = wayback_snapshot_url(_entry_source_url(feed_url, entry_id) or entry_id)
@@ -31128,6 +31131,7 @@ def _refresh_captured_article_for_current_user(
             extract=extract,
             enqueue_archive=starred_archive_service.enqueue_archive,
             is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
+            bump_received=bump_received,
         )
     if from_archive and result.get("ok"):
         result["from_archive"] = from_archive
@@ -31149,6 +31153,7 @@ def _refresh_captured_article_for_current_user(
                     extract=_from_archive,
                     enqueue_archive=starred_archive_service.enqueue_archive,
                     is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
+                    bump_received=bump_received,
                 )
             if archived_result.get("ok"):
                 archived_result["from_archive"] = snapshot
@@ -31831,7 +31836,13 @@ def _run_refetch_batch(rows: list[tuple[str, str, str]], job: dict) -> None:
             host_last[host] = time.monotonic()
 
             try:
-                result = _refresh_captured_article_for_current_user(feed_u, entry_id, "readability")
+                # False: a bulk backfill across dozens of old articles isn't
+                # "look, this one changed" the way a deliberate single re-fetch
+                # is — bumping every touched saved_at at once used to dump the
+                # whole Inbox's order onto whatever finished last.
+                result = _refresh_captured_article_for_current_user(
+                    feed_u, entry_id, "readability", bump_received=False
+                )
             except Exception:  # noqa: BLE001 — one bad entry must not end the run
                 LOGGER.warning("[refetch-batch] failed for %s", entry_id, exc_info=True)
                 result = {"ok": False}

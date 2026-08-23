@@ -376,8 +376,18 @@ def refresh_captured_article(
     extract: Callable[[str], tuple[str, str]],
     enqueue_archive: Callable[[str, str], None] | None = None,
     is_boilerplate_extraction: Callable[[str, str, str], bool] | None = None,
+    bump_received: bool | None = None,
 ) -> dict:
     """Re-fetch and re-extract a Lectio capture in place, wherever it lives.
+
+    *bump_received*, when given, overrides the default is_capture-based
+    surfacing decision below — None keeps today's behavior (a capture bumps,
+    a feed entry doesn't). A batch re-fetch passes False explicitly: bulk-
+    backfilling old articles isn't "look, something changed" the way a
+    deliberate single re-fetch is, and bumping 50 saved_at's at once dumped
+    the whole Inbox's order onto whatever finished last. Kept as a real
+    parameter (not a special case) so a future "Now / Original / Pub date"
+    choice on the re-fetch button has something to plug straight into.
 
     Replaces ``save_article(refresh_content=True)`` as the re-fetch path, and
     fixes two things that one gets wrong:
@@ -552,10 +562,11 @@ def refresh_captured_article(
     try:
         # A feed entry keeps its date and gets its content pinned against the
         # next refresh; a capture bumps to the top and needs no pin (its feed
-        # never refreshes).
+        # never refreshes) — unless the caller overrode the bump decision.
         replace_entry_content(
             reader, conn, entry_id, new_title, article_html, feed_url=feed_url,
-            bump_received=is_capture, pin_content=not is_capture,
+            bump_received=is_capture if bump_received is None else bump_received,
+            pin_content=not is_capture,
         )
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("refresh-capture: content replace failed for %s: %s", entry_id, exc)
