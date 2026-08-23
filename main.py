@@ -14402,6 +14402,17 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     # before this table existed, or unstarred after the feed was already gone)
     # looked identically "kept" to one you'd actually curated.
     is_kept = is_starred or bool(manual_tags)
+    # Orphans have no reader resource, so there's no feed-provided (publisher)
+    # tags to merge in here (see the manual_tags comment above) — but the
+    # user's own pinned/suggested tags (Feed Properties, meta-DB only) are
+    # exactly as available as they are for a live entry. This was hardcoded to
+    # [] before, so an orphan feed's suggestion chip never showed no matter
+    # what was pinned to it. Same "already applied -> stop suggesting" rule
+    # as the live path (main.entry_pane).
+    _manual_now = {normalize_tag_value(t) for t in manual_tags}
+    feed_tag_suggestions = [
+        t for t in get_feed_pinned_tags(feed_url) if t not in _manual_now
+    ]
 
     return {
         "feed_url": feed_url,
@@ -14427,7 +14438,7 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "kept": is_kept,
         "manual_tags": manual_tags,
         "manual_tags_text": " ".join(manual_tags),
-        "feed_tag_suggestions": [],
+        "feed_tag_suggestions": feed_tag_suggestions,
         "feed_tag_chips_collapsed": FEED_TAG_CHIPS_COLLAPSED,
         "feed_tag_filter_signs": {},
         "author_filter_token": None,
@@ -16601,7 +16612,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                         feed_tag_service.record_entry_tags(
                             str(entry.feed_url), [(str(entry.id), _page_tags)]
                         )
-                        raw_feed_tags = _page_tags[:MAX_FEED_TAG_SUGGESTIONS]
+                        # Re-derive through the dismissal-aware getter rather
+                        # than using _page_tags directly: dismissing every
+                        # suggested tag for a feed makes get_feed_tag_suggestions
+                        # return [] just like "never harvested" does, so without
+                        # this a freshly re-harvested (but dismissed) tag came
+                        # back as a chip on every single open.
+                        raw_feed_tags = get_feed_tag_suggestions(str(entry.feed_url), str(entry.id))
                 else:
                     # feed_url/entry_id let the fetch worker persist harvested
                     # tags immediately (survives restarts/cache eviction);
@@ -24725,29 +24742,47 @@ def entry_feed_tags_route(
     no feed-tag chips. Waits briefly for the background source-page fetch the
     entry-open queued (whose sink persists harvested tags), then returns the
     normalized suggestions + filter-rule signs so the client can inject the
-    [ + tag ▲ ▼ ] chips into the already-open pane."""
+    [ + tag ▲ ▼ ] chips into the already-open pane.
+
+    An orphan entry (feed unsubscribed) has no reader resource for
+    get_feed_tag_suggestions/get_manual_tags_for_resource to read, and no
+    live page to fetch publisher tags from — but it still has manual tags
+    (orphan_entry_tags) and pinned/suggested tags (feed_display_prefs, same
+    as a live feed). Without this branch, saving a new suggested tag from
+    Feed Properties on an already-open orphan entry called this route (see
+    submitFeedPropSuggestedTags) and got a 404, so the chip never appeared
+    without a full pane reopen — same bug class as _build_orphan_entry_detail
+    previously hardcoding feed_tag_suggestions=[].
+    """
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
-        if entry is None:
-            return JSONResponse({"error": "unknown entry"}, status_code=404)
-        entry_link = str(entry.link or "")
-        manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
+        if entry is not None:
+            entry_link = str(entry.link or "")
+            manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
 
-    raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
-    if not raw_tags and entry_link and url_guard.is_safe_outbound_url(entry_link):
-        # Wait for the fetch queued by the entry-open handler (returns
-        # immediately when it already finished or none is in flight).
-        lead_image_service.wait_for_source_html_fetch(entry_link, timeout=8.0)
+    if entry is None:
+        if starred_archive_service.get_orphan_feed_title(feed_url) is None:
+            return JSONResponse({"error": "unknown entry"}, status_code=404)
+        entry_link = ""
+        manual_tags = _get_orphan_manual_tags(feed_url, entry_id)
+        raw_tags: list[str] = []
+    else:
         raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
-        if not raw_tags:
-            # Fetch finished before the sink existed or raced it — harvest
-            # directly from the cached page as a last resort.
-            cached = lead_image_service.get_cached_source_html(entry_link)
-            if cached is not None:
-                page_tags = feed_tags_service_mod.extract_page_tags(cached[1], entry_link)
-                if page_tags:
-                    feed_tag_service.record_entry_tags(feed_url, [(entry_id, page_tags)])
-                    raw_tags = page_tags[:MAX_FEED_TAG_SUGGESTIONS]
+        if not raw_tags and entry_link and url_guard.is_safe_outbound_url(entry_link):
+            # Wait for the fetch queued by the entry-open handler (returns
+            # immediately when it already finished or none is in flight).
+            lead_image_service.wait_for_source_html_fetch(entry_link, timeout=8.0)
+            raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
+            if not raw_tags:
+                # Fetch finished before the sink existed or raced it — harvest
+                # directly from the cached page as a last resort.
+                cached = lead_image_service.get_cached_source_html(entry_link)
+                if cached is not None:
+                    page_tags = feed_tags_service_mod.extract_page_tags(cached[1], entry_link)
+                    if page_tags:
+                        feed_tag_service.record_entry_tags(feed_url, [(entry_id, page_tags)])
+                        # Re-derive dismissal-aware, same reason as the pane build.
+                        raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
 
     # The user's pinned tags go FIRST — they are the ones being reached for, and
     # a feed that ships 28 tags a post would otherwise bury them past the

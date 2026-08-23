@@ -238,3 +238,71 @@ def test_suggested_tags_route_still_404s_for_a_genuinely_unknown_url(orphan_env)
         feed_url="https://never-heard-of.example/feed", tags="c++"
     )
     assert resp.status_code == 404
+
+
+# A pinned/suggested tag set via Feed Properties must actually show as a chip
+# on the orphan's article header — this was hardcoded to [] in
+# _build_orphan_entry_detail, and the late-chip-delivery route
+# (/entries/feed-tags, called when saving a pinned tag while the entry is
+# already open) 404'd for the same reason. Both are the actual "chip not
+# showing on article header" bug, one layer past the Feed Properties save
+# itself working.
+
+def test_orphan_entry_detail_surfaces_pinned_feed_tags_as_suggestions(orphan_env, monkeypatch):
+    main.set_feed_pinned_tags(ORPHAN_FEED, "c++")
+    monkeypatch.setattr(
+        main.starred_archive_service, "get_archived_entry_detail",
+        lambda f, e: {
+            "title": "t", "link": "https://gone.example/article-1", "content_html": "<p>hi</p>",
+            "feed_title": "Gone", "author": None, "published_at": None, "received_at": None,
+        },
+    )
+    monkeypatch.setattr(main.starred_archive_service, "get_entry_asset_map", lambda f, e: {})
+    detail = main._build_orphan_entry_detail(ORPHAN_FEED, ORPHAN_ENTRY)
+    assert detail["feed_tag_suggestions"] == ["c++"]
+
+
+def test_orphan_entry_detail_stops_suggesting_a_pinned_tag_once_applied(orphan_env, monkeypatch):
+    main.set_feed_pinned_tags(ORPHAN_FEED, "c++")
+    main.set_manual_tags_for_entry(ORPHAN_FEED, ORPHAN_ENTRY, "c++")
+    monkeypatch.setattr(
+        main.starred_archive_service, "get_archived_entry_detail",
+        lambda f, e: {
+            "title": "t", "link": "https://gone.example/article-1", "content_html": "<p>hi</p>",
+            "feed_title": "Gone", "author": None, "published_at": None, "received_at": None,
+        },
+    )
+    monkeypatch.setattr(main.starred_archive_service, "get_entry_asset_map", lambda f, e: {})
+    detail = main._build_orphan_entry_detail(ORPHAN_FEED, ORPHAN_ENTRY)
+    assert detail["feed_tag_suggestions"] == []
+    assert detail["manual_tags"] == ["c++"]
+
+
+def test_entry_feed_tags_route_404s_for_a_genuinely_unknown_entry(orphan_env):
+    resp = main.entry_feed_tags_route(
+        feed_url="https://never-heard-of.example/feed", entry_id="x"
+    )
+    assert resp.status_code == 404
+
+
+def test_entry_feed_tags_route_serves_pinned_tags_for_an_orphan_entry(orphan_env):
+    _seed_archive_row()
+    main.set_feed_pinned_tags(ORPHAN_FEED, "c++")
+    resp = main.entry_feed_tags_route(feed_url=ORPHAN_FEED, entry_id=ORPHAN_ENTRY)
+    assert resp.status_code == 200
+    import json
+    body = json.loads(resp.body)
+    assert body["ok"] is True
+    assert body["tags"] == ["c++"]
+    assert body["pinned"] == ["c++"]
+
+
+def test_entry_feed_tags_route_excludes_already_applied_orphan_tag(orphan_env):
+    _seed_archive_row()
+    main.set_feed_pinned_tags(ORPHAN_FEED, "c++")
+    main.set_manual_tags_for_entry(ORPHAN_FEED, ORPHAN_ENTRY, "c++")
+    resp = main.entry_feed_tags_route(feed_url=ORPHAN_FEED, entry_id=ORPHAN_ENTRY)
+    import json
+    body = json.loads(resp.body)
+    assert body["tags"] == []
+    assert body["manual_tags"] == ["c++"]
