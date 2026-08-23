@@ -3902,7 +3902,11 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   max-width: 100%;
   width: auto;
   height: auto;
-  margin: 0 0 0.85rem;
+  /* Centered like the source site renders it (a standalone illustration
+     narrower than the column, e.g. what-if's diagrams) rather than hugging
+     the left edge — only visible when the image is narrower than its
+     container; a full-width photo is unaffected either way. */
+  margin: 0 auto 0.85rem;
   /* Same reasoning as .entry-content img below: a transparent lead image
      (xkcd/what-if diagrams, logos) drawn for a light page rendered
      black-on-black here even after that rule existed, because the lead
