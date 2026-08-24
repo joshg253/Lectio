@@ -100,6 +100,7 @@ def _csrf_client() -> tuple[TestClient, str]:
     client = TestClient(main.app)
     client.get("/healthz")  # establishes the session + token
     cookie = client.cookies.get("session")
+    assert cookie is not None
     signer = TimestampSigner(main.SESSION_SECRET_KEY)
     session_data = json.loads(base64.b64decode(signer.unsign(cookie, max_age=main.SESSION_MAX_AGE_SECONDS)))
     return client, session_data["csrf_token"]
@@ -1354,7 +1355,7 @@ class TestRestarCuratedEntries:
         client, token = _csrf_client()
         r = client.post("/feeds/unsubscribe", data={
             "_csrf": token,
-            "folder_id": _root_folder_id(), "feed_url": FEED,
+            "folder_id": str(_root_folder_id()), "feed_url": FEED,
         })
         assert r.status_code != 403
         assert calls == []
@@ -1362,7 +1363,7 @@ class TestRestarCuratedEntries:
         _add_feed_to_folder(FEED, _root_folder_id())
         client.post("/feeds/unsubscribe", data={
             "_csrf": token,
-            "folder_id": _root_folder_id(), "feed_url": FEED,
+            "folder_id": str(_root_folder_id()), "feed_url": FEED,
             "restar_curated": "1",
         })
         assert calls == [FEED]
@@ -1384,7 +1385,7 @@ class TestRestarCuratedEntries:
         client, token = _csrf_client()
         client.post("/feeds/unsubscribe", data={
             "_csrf": token,
-            "folder_id": _root_folder_id(), "feed_url": FEED, "restar_curated": "1",
+            "folder_id": str(_root_folder_id()), "feed_url": FEED, "restar_curated": "1",
         })
         assert seen["feed_exists"] is True
 
@@ -1491,13 +1492,13 @@ class TestDropAllCuration:
         _add_feed_to_folder(FEED, _root_folder_id())
         client, token = _csrf_client()
         client.post("/feeds/unsubscribe", data={
-            "_csrf": token, "folder_id": _root_folder_id(), "feed_url": FEED,
+            "_csrf": token, "folder_id": str(_root_folder_id()), "feed_url": FEED,
         })
         assert calls == []
 
         _add_feed_to_folder(FEED, _root_folder_id())
         client.post("/feeds/unsubscribe", data={
-            "_csrf": token, "folder_id": _root_folder_id(), "feed_url": FEED,
+            "_csrf": token, "folder_id": str(_root_folder_id()), "feed_url": FEED,
             "drop_curation": "1",
         })
         assert calls == [FEED]

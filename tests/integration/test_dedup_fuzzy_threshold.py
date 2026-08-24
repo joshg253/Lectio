@@ -124,7 +124,7 @@ def test_run_now_honors_the_saved_percent(env, monkeypatch):
     seen: list[float] = []
     real = main._run_now_dedup
     monkeypatch.setattr(main, "_run_now_dedup",
-                        lambda *a, **kw: (seen.append(kw.get("fuzzy_threshold")), real(*a, **kw))[1])
+                        lambda *a, **kw: (seen.append(kw["fuzzy_threshold"]), real(*a, **kw))[1])
     main.rules_run_now_route(type="deduplicate", scope="global", scope_id="", keyword="fuzzy",
                              is_regex=0, search_in="title", dedup_window_hours=168,
                              exclude_scope_ids="", fuzzy_pct=65)
@@ -137,7 +137,7 @@ def test_after_refresh_automation_reads_the_column(env, monkeypatch):
                                    rule_type="deduplicate", enabled=1, dedup_fuzzy_pct=65)
     seen: list[float] = []
     monkeypatch.setattr(main, "_run_now_dedup",
-                        lambda *a, **kw: seen.append(kw.get("fuzzy_threshold")) or {"count": 0})
+                        lambda *a, **kw: seen.append(kw["fuzzy_threshold"]) or {"count": 0})
     main._run_automation_after_refresh({FEED_A})
     assert seen == [pytest.approx(0.65)]
 
@@ -187,7 +187,7 @@ def test_min_words_round_trips_and_clamps(env):
         assert [r for r in main.get_highlight_keywords(conn)][0]["dedup_min_title_words"] == 10
     assert main._clamp_min_title_words(1) == 3
     assert main._clamp_min_title_words(None) == main._DEDUP_MIN_TITLE_WORDS == 5
-    assert main._clamp_min_title_words("x") == 5
+    assert main._clamp_min_title_words("x") == 5  # ty: ignore[invalid-argument-type]  # deliberately malformed input, exercises the except branch
 
 
 def test_after_refresh_automation_reads_the_word_floor(env, monkeypatch):
@@ -196,7 +196,7 @@ def test_after_refresh_automation_reads_the_word_floor(env, monkeypatch):
                                    enabled=1, dedup_min_title_words=7)
     seen: list[int] = []
     monkeypatch.setattr(main, "_run_now_dedup",
-                        lambda *a, **kw: seen.append(kw.get("min_title_words")) or {"count": 0})
+                        lambda *a, **kw: seen.append(kw["min_title_words"]) or {"count": 0})
     main._run_automation_after_refresh({FEED_A})
     assert seen == [7]
 
