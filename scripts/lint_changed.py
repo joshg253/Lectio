@@ -1,4 +1,4 @@
-"""Fail only on ruff findings that sit on lines this change actually touched.
+"""Fail only on ruff/ty findings that sit on lines this change actually touched.
 
 Whole-repo linting is not adoptable here: main.py alone carries ~120 existing
 findings and is touched by nearly every change, so a "changed files" gate would
@@ -6,6 +6,13 @@ be red forever and get ignored — which is how a duplicate method definition sa
 in services/lead_images.py unnoticed. Gating the *lines* you wrote is green on
 day one by construction, and still means nothing new joins the pile. The pile
 shrinks whenever someone cleans a file they are already editing.
+
+Both repo-wide backlogs happen to be at zero as of 2026-08-24, but that is not
+why this stays line-scoped — ty is a preview tool, and a version bump already
+changed its diagnostic count once with no code change (see Plan.md "Code
+health"). A whole-repo gate would go red on an unrelated PR the next time that
+happens; the whole-repo `ty check .` / `ruff check .` CI steps are informational
+for exactly that reason.
 
 Used by both .githooks/pre-commit (staged changes) and the CI lint job (the
 whole PR), so a commit that passed locally cannot fail in CI.
@@ -56,22 +63,13 @@ def changed_lines(base: str | None) -> dict[str, set[int]]:
     return dict(out)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="Lint only the lines this change touches.")
-    ap.add_argument("--base", default=None, help="base ref to diff against (default: staged changes)")
-    args = ap.parse_args()
-
-    touched = changed_lines(args.base)
-    if not touched:
-        print("lint: no Python lines changed")
-        return 0
-
+def _ruff_hits(touched: dict[str, set[int]]) -> list[str]:
     raw = _run(["ruff", "check", "--output-format=json", "--", *sorted(touched)])
     try:
         findings = json.loads(raw) if raw.strip() else []
     except json.JSONDecodeError:
         print("lint: could not parse ruff output; treating as pass", file=sys.stderr)
-        return 0
+        return []
 
     # ruff reports absolute paths while git reports repo-relative ones; without
     # normalising, nothing ever matches and the gate silently passes everything
@@ -83,20 +81,59 @@ def main() -> int:
         try:
             rel = str(Path(name).resolve().relative_to(Path(root).resolve()))
         except (ValueError, OSError):
-            rel = name.lstrip("./")
-        if f.get("location", {}).get("row") in touched.get(rel, set()):
-            hits.append(f)
+            rel = name.removeprefix("./")
+        row = f.get("location", {}).get("row")
+        if row in touched.get(rel, set()):
+            loc = f.get("location", {})
+            hits.append(f"{f.get('filename')}:{loc.get('row')}:{loc.get('column')}: "
+                        f"[ruff] {f.get('code')} {f.get('message')}")
+    return hits
+
+
+def _ty_hits(touched: dict[str, set[int]]) -> list[str]:
+    # gitlab format gives repo-relative paths (ty run from repo root against
+    # repo-relative args) and real line numbers in one JSON shot — unlike
+    # ruff, ty needs no path normalising here.
+    raw = _run(["ty", "check", "--output-format=gitlab", "--", *sorted(touched)])
+    try:
+        findings = json.loads(raw) if raw.strip() else []
+    except json.JSONDecodeError:
+        print("lint: could not parse ty output; treating as pass", file=sys.stderr)
+        return []
+
+    hits = []
+    for f in findings:
+        loc = f.get("location", {})
+        rel = loc.get("path", "")
+        row = loc.get("positions", {}).get("begin", {}).get("line")
+        col = loc.get("positions", {}).get("begin", {}).get("column")
+        if row in touched.get(rel, set()):
+            # description already leads with "<check_name>: ", so print it alone.
+            hits.append(f"{rel}:{row}:{col}: [ty] {f.get('description')}")
+    return hits
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Lint only the lines this change touches.")
+    ap.add_argument("--base", default=None, help="base ref to diff against (default: staged changes)")
+    args = ap.parse_args()
+
+    touched = changed_lines(args.base)
+    if not touched:
+        print("lint: no Python lines changed")
+        return 0
+
+    hits = _ruff_hits(touched) + _ty_hits(touched)
     if not hits:
         print(f"lint: {len(touched)} file(s) checked, nothing new on the lines you changed")
         return 0
 
-    for f in hits:
-        loc = f.get("location", {})
-        print(f"{f.get('filename')}:{loc.get('row')}:{loc.get('column')}: "
-              f"{f.get('code')} {f.get('message')}")
+    for h in hits:
+        print(h)
     print(f"\nlint: {len(hits)} finding(s) on lines this change touches.")
-    print("  fix:    uv run ruff check --fix <file>")
-    print("  bypass: git commit --no-verify")
+    print("  fix (ruff): uv run ruff check --fix <file>")
+    print("  fix (ty):   uv run ty check <file>  # then edit by hand")
+    print("  bypass:     git commit --no-verify")
     return 1
 
 
