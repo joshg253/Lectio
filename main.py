@@ -19545,6 +19545,7 @@ def _daily_maintenance_loop(stop_event: threading.Event) -> None:
     opportunity. The last-run date is persisted (data-dir marker) so restarts
     don't re-run the same day."""
     last_batch_check_hhmm: str | None = None
+    last_premiere_recheck_at = 0.0
     while not stop_event.wait(30):
         # Flush email batches at their configured batch_time (once per clock
         # minute), per user — email_batch_queue lives in each user's meta DB.
@@ -19557,6 +19558,23 @@ def _daily_maintenance_loop(stop_event: threading.Event) -> None:
                         _check_and_flush_batch_times()
                     except Exception:
                         LOGGER.exception("[maintenance] email batch flush failed for user %r", _uid)
+
+        # Recheck still-"upcoming" YouTube videos hourly, independent of any
+        # feed's own refresh cadence — a channel that refreshes rarely could
+        # otherwise leave a premiere's status stale for hours after it airs.
+        # Fixed interval rather than a clock-hour boundary: "roughly hourly"
+        # is the point, not exactness, and this sidesteps DST/timezone noise.
+        now_mono = time.monotonic()
+        if now_mono - last_premiere_recheck_at >= 3600:
+            last_premiere_recheck_at = now_mono
+            for _uid in _background_user_ids():
+                with tenancy.user_context(_uid):
+                    try:
+                        _checked = youtube_duration_service.refresh_upcoming_videos()
+                        if _checked:
+                            LOGGER.info("[maintenance] rechecked %d upcoming YouTube video(s)", _checked)
+                    except Exception:
+                        LOGGER.exception("[maintenance] YouTube premiere recheck failed for user %r", _uid)
 
         # Daily maintenance: once per day, at or after the configured hour.
         maint_hour = get_maintenance_hour()
