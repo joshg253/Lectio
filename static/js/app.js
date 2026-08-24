@@ -3127,6 +3127,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     const feedPropImgSection = document.getElementById('feed-prop-img-section');
     const feedPropDevSection = document.getElementById('feed-prop-dev-section');
     const feedPropHideShorts = document.getElementById('feed-prop-hide-shorts');
+    const feedPropHideUnpremiered = document.getElementById('feed-prop-hide-unpremiered');
     const feedPropHidePaywalled = document.getElementById('feed-prop-hide-paywalled');
     const feedPropFlushBatchBtn = document.getElementById('feed-prop-flush-batch-btn');
     const feedPropFlushBatchStatus = document.getElementById('feed-prop-flush-batch-status');
@@ -5092,6 +5093,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       setActivePreset('');
       if (feedPropShowInArticle) feedPropShowInArticle.checked = true;
       if (feedPropHideShorts) feedPropHideShorts.checked = false;
+      if (feedPropHideUnpremiered) feedPropHideUnpremiered.checked = false;
       if (feedPropHidePaywalled) feedPropHidePaywalled.checked = false;
       const _thumbSourceSelect = document.getElementById('feed-prop-thumb-source');
       if (_thumbSourceSelect) { _thumbSourceSelect.value = ''; _thumbSourceSelect.dataset.feedUrl = feedUrl; delete _thumbSourceSelect.dataset.savedThumbUrl; }
@@ -5262,6 +5264,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         if (feedPropHideShorts) {
           feedPropHideShorts.checked = !!data.hide_shorts;
           feedPropHideShorts.dataset.feedUrl = feedUrl;
+        }
+        if (feedPropHideUnpremiered) {
+          feedPropHideUnpremiered.checked = !!data.hide_unpremiered;
+          feedPropHideUnpremiered.dataset.feedUrl = feedUrl;
         }
         if (feedPropFlushBatchBtn) feedPropFlushBatchBtn.dataset.feedUrl = feedUrl;
         if (feedPropFlushBatchStatus) feedPropFlushBatchStatus.textContent = '';
@@ -6972,6 +6978,18 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         }
       }
       catch (e) { feedPropHideShorts.checked = !feedPropHideShorts.checked; }
+    });
+
+    feedPropHideUnpremiered?.addEventListener('change', async () => {
+      const feedUrl = feedPropHideUnpremiered.dataset.feedUrl;
+      if (!feedUrl) return;
+      try {
+        await saveDisplayPref(feedUrl, 'hide_unpremiered', feedPropHideUnpremiered.checked ? 1 : 0);
+        // A render-time filter, not mark-as-read — refresh so the current view
+        // reflects it immediately instead of waiting for the next navigation.
+        try { await refreshCurrentFeedOrFolder(); } catch (e) { console.error('hide-unpremiered: view refresh failed', e); }
+      }
+      catch (e) { feedPropHideUnpremiered.checked = !feedPropHideUnpremiered.checked; }
     });
 
     document.getElementById('feed-prop-devto-save')?.addEventListener('click', async () => {
@@ -12481,6 +12499,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         _ytAccountFeaturesEnabled = !!d.yt_embed_account_features;
         { const el = document.getElementById('sett-yt-account-features'); if (el) el.checked = !!d.yt_embed_account_features; }
         { const el = document.getElementById('sett-yt-hide-shorts'); if (el) el.checked = !!d.yt_hide_shorts_global; }
+        { const el = document.getElementById('sett-yt-hide-unpremiered'); if (el) el.checked = !!d.yt_hide_unpremiered_global; }
         {
           const el = document.getElementById('sett-yt-quota');
           const q = d.yt_quota;
@@ -12815,6 +12834,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             yt_folder_name: g('sett-yt-folder'),
             yt_embed_account_features: (document.getElementById('sett-yt-account-features')?.checked ? '1' : '0'),
             yt_hide_shorts_global: (document.getElementById('sett-yt-hide-shorts')?.checked ? '1' : '0'),
+            yt_hide_unpremiered_global: (document.getElementById('sett-yt-hide-unpremiered')?.checked ? '1' : '0'),
             instapaper_username: g('sett-ip-user'),
             instapaper_password: g('sett-ip-pass'),
             yt_oauth_client_id: g('sett-yt-oauth-client-id'),

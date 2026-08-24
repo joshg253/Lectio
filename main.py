@@ -416,6 +416,10 @@ SETTING_YT_EMBED_ACCOUNT_FEATURES = "yt_embed_account_features"
 # Global per-user toggle: auto-mark YouTube Shorts read across ALL YouTube feeds at
 # refresh, regardless of the per-feed hide_shorts pref. Off ("0") by default.
 SETTING_YT_HIDE_SHORTS_GLOBAL = "yt_hide_shorts_global"
+# Global per-user toggle: don't show YouTube videos that haven't premiered yet
+# (liveBroadcastContent == "upcoming") across ALL YouTube feeds, regardless of
+# the per-feed hide_unpremiered pref. Off ("0") by default.
+SETTING_YT_HIDE_UNPREMIERED_GLOBAL = "yt_hide_unpremiered_global"
 # Daily YouTube Data API quota cap (units). Google's default is 10,000/day; make it
 # a setting in case a higher quota is granted.
 SETTING_YT_QUOTA_CAP = "yt_quota_cap"
@@ -744,6 +748,12 @@ def youtube_hide_shorts_global() -> bool:
     """Per-user: auto-mark Shorts read on ALL YouTube feeds at refresh (overrides the
     per-feed pref). Off by default."""
     return get_runtime_setting(SETTING_YT_HIDE_SHORTS_GLOBAL, "0") == "1"
+
+
+def youtube_hide_unpremiered_global() -> bool:
+    """Per-user: hide not-yet-premiered videos on ALL YouTube feeds (overrides the
+    per-feed pref). Off by default."""
+    return get_runtime_setting(SETTING_YT_HIDE_UNPREMIERED_GLOBAL, "0") == "1"
 
 
 def _pacific_today() -> str:
@@ -3146,6 +3156,17 @@ def ensure_yt_duration_schema() -> None:
             )
             """
         )
+        # Premiere/live status, fetched alongside duration from the same
+        # videos.list call (snippet.liveBroadcastContent, liveStreamingDetails.
+        # scheduledStartTime) — used to detect videos that haven't aired yet.
+        try:
+            conn.execute("ALTER TABLE youtube_video_duration ADD COLUMN live_broadcast_content TEXT")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE youtube_video_duration ADD COLUMN scheduled_start_time TEXT")
+        except Exception:
+            pass
 
 
 def get_starred_archive_connection() -> sqlite3.Connection:
@@ -4323,6 +4344,10 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_shorts INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_unpremiered INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         # Paywalled/subscriber-only posts: a Substack paid post ships a body that
         # is nothing but a "Read more" link back to itself, so it can be spotted
         # without any explicit marker (Substack provides none).
@@ -4562,7 +4587,7 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 _DISPLAY_PREF_KEYS = frozenset({
     "show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption",
-    "hide_shorts", "hide_paywalled", "inject_source_images",
+    "hide_shorts", "hide_unpremiered", "hide_paywalled", "inject_source_images",
 })
 # Pre-built UPDATE statements (one per column) so conn.execute() never receives an f-string.
 _DISPLAY_PREF_COLS: dict[str, str] = {k: k for k in _DISPLAY_PREF_KEYS}
@@ -4572,7 +4597,7 @@ _DISPLAY_PREF_SQLS: dict[str, str] = {
 }
 _DISPLAY_PREF_DEFAULTS: dict = {
     "show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1,
-    "show_image_caption": -1, "hide_shorts": 0, "hide_paywalled": 0,
+    "show_image_caption": -1, "hide_shorts": 0, "hide_unpremiered": 0, "hide_paywalled": 0,
     "inject_source_images": 0, "feed_thumbnail_url": None, "thumb_crop": "cover",
     "thumb_strategy": None, "smart_min_scale": None, "fill_zoom": None,
 }
@@ -7036,6 +7061,55 @@ def _is_youtube_short(entry: object) -> bool:
             return True
 
     return False
+
+
+def _youtube_unpremiered_video_id(feed_url: str | None, link: str | None) -> str | None:
+    """Return the video id if (feed_url, link) is a YouTube video that hasn't
+    premiered/gone live yet (liveBroadcastContent == "upcoming"), else None.
+    A stream already live, or a normal published video, is not "unpremiered".
+
+    Works from raw (feed_url, link) strings — not just a reader Entry — so the
+    same check covers both the entry-object bulk-mark-read loops and the raw
+    SQL rows _prune_entries reads."""
+    if not link or not feed_url or "youtube.com/feeds/videos.xml" not in str(feed_url):
+        return None
+    vid = youtube_duration_service.extract_video_id(str(link))
+    if not vid:
+        return None
+    live_status, _ = youtube_duration_service.get_cached_live_status(vid)
+    return vid if live_status == "upcoming" else None
+
+
+def _is_youtube_unpremiered(entry: object) -> bool:
+    """True if entry is a YouTube video that hasn't premiered/gone live yet."""
+    return _youtube_unpremiered_video_id(
+        getattr(entry, "feed_url", None), getattr(entry, "link", None)
+    ) is not None
+
+
+def _youtube_premiere_prefix(video_id: str) -> str | None:
+    """'[Premieres in Xd]'-style title prefix for a video still scheduled to
+    air, or None if it isn't an upcoming premiere. Computed live from the
+    cached scheduled time on every render, so it self-corrects if YouTube
+    moves the date instead of drifting like a baked-in "Live in N days"
+    string would."""
+    live_status, scheduled_start_time = youtube_duration_service.get_cached_live_status(video_id)
+    if live_status != "upcoming":
+        return None
+    when = _parse_stored_dt(scheduled_start_time)
+    if when is None:
+        return "Premieres soon"
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    delta = when - datetime.now(timezone.utc)
+    if delta.total_seconds() <= 0:
+        return "Premieres soon"
+    if delta.days >= 1:
+        return f"Premieres in {delta.days}d"
+    hours = int(delta.total_seconds() // 3600)
+    if hours >= 1:
+        return f"Premieres in {hours}h"
+    return "Premieres soon"
 
 
 def _mark_existing_shorts_read(feed_urls: Iterable[str]) -> int:
@@ -10159,6 +10233,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "show_image_caption": int(_disp.get("show_image_caption", -1)),
             "caption_source": _disp.get("caption_source") or "auto",
             "hide_shorts": bool(_disp.get("hide_shorts", 0)),
+            "hide_unpremiered": bool(_disp.get("hide_unpremiered", 0)),
             "hide_paywalled": bool(_disp.get("hide_paywalled", 0)),
             "inject_source_images": bool(_disp.get("inject_source_images", 0)),
             "feed_thumbnail_url": _disp.get("feed_thumbnail_url") or None,
@@ -13599,6 +13674,14 @@ def list_entries_for_feeds(
             sort_key = "post_sort_value" if normalized_sort_by == "post" else "received_sort_value"
             sort_desc = normalized_sort_dir == "desc"
 
+        # Loaded here (before the filter loop, not just the later enrichment
+        # phase) so "don't show unpremiered videos yet" can drop entries before
+        # the sort+limit clip — a filtered-out row must not steal one of the
+        # top-N display slots from a real (already-aired) entry.
+        with get_meta_connection() as _prefs_conn:
+            _all_display_prefs = get_all_feed_display_prefs(_prefs_conn)
+        _hide_unpremiered_global = youtube_hide_unpremiered_global()
+
         light_records: list[dict] = []
         for entry in all_feed_entries:
             is_read = bool(entry.read)
@@ -13620,6 +13703,12 @@ def list_entries_for_feeds(
                 continue
             if not normalized_star_only and normalized_read_filter == "history" and not is_read:
                 continue
+            if "youtube.com/feeds/videos.xml" in str(entry.feed_url):
+                _feed_hide_unpremiered = _hide_unpremiered_global or bool(
+                    _all_display_prefs.get(entry.feed_url, _DISPLAY_PREF_DEFAULTS).get("hide_unpremiered")
+                )
+                if _feed_hide_unpremiered and _is_youtube_unpremiered(entry):
+                    continue
             published_dt = entry_effective_date(entry)
             read_dt = read_state_map.get((entry.feed_url, entry.id))
             if read_dt is None:
@@ -13731,8 +13820,7 @@ def list_entries_for_feeds(
         except Exception:  # noqa: BLE001 — a missing flag only hides a menu item
             LOGGER.warning("visible-tag probe failed", exc_info=True)
 
-    with get_meta_connection() as _prefs_conn:
-        _all_display_prefs = get_all_feed_display_prefs(_prefs_conn)
+    # _all_display_prefs was already loaded above, before the filter loop.
     # Which feeds have a pinned thumbnail copy, read once. This used to be a has_pinned_feed_thumbnail()
     # call inside the per-entry loop — one image-cache query per rendered row.
     _pinned_thumb_keys = pinned_feed_thumbnail_keys()
@@ -13759,10 +13847,15 @@ def list_entries_for_feeds(
             if isinstance(entry_feed_url, str) and "youtube.com/feeds/videos.xml" in entry_feed_url and entry_link:
                 vid = youtube_duration_service.extract_video_id(entry_link)
                 if vid:
-                    duration_seconds, duration_display = youtube_duration_service.get_cached_duration(vid)
-                    if duration_display:
-                        title_text = f"[{duration_display}] {title_text}"
+                    premiere_prefix = _youtube_premiere_prefix(vid)
+                    if premiere_prefix:
+                        title_text = f"[{premiere_prefix}] {title_text}"
                         rec["title"] = title_text
+                    else:
+                        duration_seconds, duration_display = youtube_duration_service.get_cached_duration(vid)
+                        if duration_display:
+                            title_text = f"[{duration_display}] {title_text}"
+                            rec["title"] = title_text
         except Exception:
             duration_seconds = None
             duration_display = None
@@ -16588,7 +16681,11 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if feed_url.startswith("https://www.youtube.com/feeds/videos.xml?") and entry.link:
             video_id = youtube_duration_service.extract_video_id(entry.link)
             if video_id:
-                duration_seconds, duration_display = youtube_duration_service.get_cached_duration(video_id)
+                premiere_prefix = _youtube_premiere_prefix(video_id)
+                if premiere_prefix:
+                    duration_display = premiere_prefix
+                else:
+                    duration_seconds, duration_display = youtube_duration_service.get_cached_duration(video_id)
 
             # Determine base HTML to attach embed to (use existing content_html or fallback to summary)
             base_html = content_html if isinstance(content_html, str) and content_html.strip() else (entry.summary or "")
@@ -17226,6 +17323,10 @@ def mark_feeds_as_read(feed_urls: set[str]) -> tuple[int, str | None]:
     with get_reader() as reader:
         for feed_url in feed_urls:
             for entry in reader.get_entries(feed=feed_url, read=False):
+                # A premiere that hasn't aired yet shouldn't be swallowed by a
+                # blanket mark-all-as-read — it hasn't delivered its content.
+                if _is_youtube_unpremiered(entry):
+                    continue
                 reader.mark_entry_as_read((entry.feed_url, entry.id))
                 to_sync.append((entry.feed_url, entry.id))
 
@@ -26962,6 +27063,7 @@ def get_all_settings():
         "yt_folder_name": get_yt_folder_name(),
         "yt_embed_account_features": youtube_embed_account_features_enabled(),
         "yt_hide_shorts_global": youtube_hide_shorts_global(),
+        "yt_hide_unpremiered_global": youtube_hide_unpremiered_global(),
         "yt_quota": get_yt_quota_status(),
         "yt_quota_cap": youtube_quota_cap(),
         "star_send_instapaper": get_runtime_setting(SETTING_STAR_SEND_INSTAPAPER, "0") == "1",
@@ -27080,7 +27182,8 @@ async def save_all_settings(request: Request):
         SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
-        SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL, SETTING_YT_QUOTA_CAP,
+        SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL,
+        SETTING_YT_HIDE_UNPREMIERED_GLOBAL, SETTING_YT_QUOTA_CAP,
         SETTING_YT_OAUTH_CLIENT_ID, SETTING_YT_OAUTH_CLIENT_SECRET,
         SETTING_STAR_SEND_INSTAPAPER, SETTING_STAR_SEND_YT_PLAYLIST,
         SETTING_STAR_SEND_YT_PLAYLIST_TITLE, SETTING_STAR_SEND_EMAIL,
@@ -27795,10 +27898,13 @@ def _prune_entries(
     entries whose effective date (published/updated/added) is older — read
     only unless include_unread. Always protected: **any entry carrying a keep
     signal** — starred (TODO), manually tagged (filed), or archived (done) — plus
-    the Saved Articles feed itself. Archived is the newest of the three and the
-    one worth stating: Archive removes the star, so without an explicit exemption
-    an archived item would fall straight through into the prune, which is the
-    opposite of "Archive keeps its contents".
+    the Saved Articles feed itself, plus a YouTube video that hasn't premiered
+    yet (it hasn't delivered its content, so its age shouldn't count against
+    it — a delayed premiere must not get swept before it ever airs). Archived
+    is the newest of the four and the one worth stating: Archive removes the
+    star, so without an explicit exemption an archived item would fall
+    straight through into the prune, which is the opposite of "Archive keeps
+    its contents".
 
     Deletes are tombstoned (deleted_entries) so a refresh can't resurrect
     copies still inside the publisher's feed window. Returns the count
@@ -27835,7 +27941,7 @@ def _prune_entries(
     with get_reader() as reader:
         rows = reader._storage.get_db().execute(
             # Manually tagged entries are user-curated — never prune them.
-            f"""SELECT e.feed, e.id, e.read, e.read_modified, e.published, e.updated, e.first_updated
+            f"""SELECT e.feed, e.id, e.link, e.read, e.read_modified, e.published, e.updated, e.first_updated
                 FROM entries e
                 WHERE e.feed IN ({placeholders})
                   AND NOT EXISTS (SELECT 1 FROM entry_tags t
@@ -27844,9 +27950,11 @@ def _prune_entries(
             feed_urls,
         ).fetchall()
 
-        for feed, eid, read, read_modified, published, updated, first_updated in rows:
+        for feed, eid, link, read, read_modified, published, updated, first_updated in rows:
             pair = (str(feed), str(eid))
             if pair in protected:
+                continue
+            if _youtube_unpremiered_video_id(str(feed), link) is not None:
                 continue
             if read_cutoff is not None:
                 if not read:
@@ -32304,6 +32412,10 @@ def mark_entries_range_read(
                 for post in target_posts:
                     if post["read"]:
                         continue
+                    # A premiere that hasn't aired yet shouldn't be swallowed by
+                    # a blanket "read above/below" sweep.
+                    if _youtube_unpremiered_video_id(post.get("feed_url"), post.get("link")) is not None:
+                        continue
                     try:
                         reader.mark_entry_as_read((post["feed_url"], post["id"]))
                     except Exception:
@@ -32385,6 +32497,10 @@ def mark_entries_older_than_read(
                 if date.tzinfo is None:
                     date = date.replace(tzinfo=timezone.utc)
                 if date >= cutoff:
+                    continue
+                # A premiere that hasn't aired yet shouldn't be swallowed by a
+                # blanket "mark older than X" sweep.
+                if _is_youtube_unpremiered(entry):
                     continue
                 try:
                     reader.mark_entry_as_read((entry.feed_url, entry.id))
