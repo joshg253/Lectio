@@ -47,7 +47,9 @@ def test_ops_apply_in_order_against_a_mutating_tree():
     """The client derives each path from the DOM as it stands after the
     previous click, so index 1 means different nodes in the two ops."""
     first = _op(HTML, [0])
-    after_first = "".join(str(t) for t in BeautifulSoup(f"<div>{HTML}</div>", "html.parser").div.contents[1:])
+    wrapper_div = BeautifulSoup(f"<div>{HTML}</div>", "html.parser").div
+    assert wrapper_div is not None
+    after_first = "".join(str(t) for t in wrapper_div.contents[1:])
     second = _op(after_first, [0])
     new_html, applied, unmatched = content_edits.apply_ops(HTML, [first, second])
     assert applied == 2 and unmatched == []

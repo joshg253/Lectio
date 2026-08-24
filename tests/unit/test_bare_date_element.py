@@ -22,7 +22,9 @@ from services import publish_date as pd
 
 def test_a_tailwind_byline_date_is_found():
     html = '<p class="text-[var(--color-muted-foreground)] text-sm font-serif">April 26, 2026</p>'
-    assert pd.from_visible_text(html).date().isoformat() == "2026-04-26"
+    found = pd.from_visible_text(html)
+    assert found is not None
+    assert found.date().isoformat() == "2026-04-26"
 
 
 def test_a_labelled_date_still_wins_over_a_bare_one():
@@ -30,7 +32,9 @@ def test_a_labelled_date_still_wins_over_a_bare_one():
     its date up properly is still believed first."""
     html = ('<p class="whatever">April 26, 2026</p>'
             '<span class="post-date">March 1, 2020</span>')
-    assert pd.from_visible_text(html).date().isoformat() == "2020-03-01"
+    found = pd.from_visible_text(html)
+    assert found is not None
+    assert found.date().isoformat() == "2020-03-01"
 
 
 @pytest.mark.parametrize("text", [
@@ -49,7 +53,9 @@ def test_prose_containing_a_date_is_not_a_byline(text):
     ("2026-02-03", "2026-02-03"),
 ])
 def test_each_supported_date_shape_works_bare(text, expected):
-    assert pd.from_visible_text(f"<div>{text}</div>").date().isoformat() == expected
+    found = pd.from_visible_text(f"<div>{text}</div>")
+    assert found is not None
+    assert found.date().isoformat() == expected
 
 
 def test_out_of_range_dates_are_still_rejected():

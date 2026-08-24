@@ -12196,7 +12196,7 @@ def _lead_image_from_html(raw_html: str, source_url: str) -> str | None:
         ):
             tag = finder()
             if tag:
-                url = (tag.get("content") or tag.get("href") or "").strip()
+                url = str(tag.get("content") or tag.get("href") or "").strip()
                 if url:
                     break
         if not url or url.lower().rsplit("?", 1)[0].endswith(".svg"):
@@ -12235,7 +12235,7 @@ def _bs4_content_fallback(raw_html: str) -> str:
             else:
                 elem = soup.find(value)
             if elem:
-                for nav_div in elem.find_all("div", class_=lambda c: c and "nav" in c.split()):
+                for nav_div in elem.find_all("div", class_=lambda c: bool(c) and "nav" in c.split()):
                     nav_div.decompose()
                 return str(elem)
         return ""
@@ -27978,10 +27978,12 @@ def _set_orphan_entry_date(feed_url: str, entry_id: str, published: str) -> JSON
                 (feed_url, entry_id),
             )
         else:
-            dt = _parse_local_date_to_utc(published)
+            # dt is the one parsed above — validated non-None there (an invalid
+            # date already returned 400 before this block), and published hasn't
+            # changed since, so re-parsing it here would just repeat that work.
             conn.execute(
                 "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published) VALUES (?, ?, ?)",
-                (feed_url, entry_id, dt.strftime("%Y-%m-%d %H:%M:%S")),  # ty: ignore[possibly-unbound-attribute]
+                (feed_url, entry_id, dt.strftime("%Y-%m-%d %H:%M:%S")),
             )
     invalidate_unread_counts_cache()
     return JSONResponse({"ok": True, "orphan": True, "cleared": not published})
