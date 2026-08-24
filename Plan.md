@@ -1241,10 +1241,28 @@ around 2026-08-24. `make lint` is now part of what's worth keeping green —
 watch for regression, no further backlog to burn down.
 
 **Whole-repo type backlog — CLEARED 2026-08-24.** `make types` went 165 → 0,
-same day as the lint sweep above, across ~15 commits. `ty` still isn't wired
-into CI (only `ruff` is, and only on changed lines) — worth reconsidering
-now that there's a real zero to protect, but not done here since that's a
-CI/workflow change, not a cleanup one.
+same day as the lint sweep above, across ~15 commits. `ty` is now wired into
+CI and the pre-commit hook — `scripts/lint_changed.py` runs both ruff and ty,
+blocking only on lines a change touches, same shape as ruff always had; a
+new informational whole-repo `ty check .` CI step sits alongside the
+existing informational whole-repo `ruff check .` one. Deliberately not
+blocking whole-repo: ty is a preview tool, and its diagnostic count already
+shifted once from a version bump alone with no code change (the dependency
+sweep that led into this whole cleanup).
+
+**The `.lstrip("www.")` bug (see the bullet below) turned out to be a
+recurring class, not a one-off** — a repo-wide grep for multi-char
+`lstrip`/`rstrip` literals found 4 more real instances the same day:
+`services/reddit.py`'s `submit_link` and two `main.py` call sites all did
+`subreddit.lstrip("r/")`, mangling any subreddit actually starting with `r`
+("running" → "unning") — live bug in both the `/api/reddit/submit` route and
+the star-to-Reddit background sender. `scripts/lint_changed.py`'s own path
+fallback did `name.lstrip("./")`, mangling any touched file in a
+dot-prefixed directory (`.github/workflows/x.py` → `github/workflows/x.py`)
+— the exact script that gates CI lint on touched lines. All fixed with
+`removeprefix`. Worth grepping for `\.lstrip\(["'][^"']{2,}["']\)` /
+`\.rstrip\(...)` again if this area is ever touched — nothing guarantees
+these were the last ones, just the last ones as of 2026-08-24.
 
 Two real bugs surfaced along the way, beyond the lint pass's two:
 
