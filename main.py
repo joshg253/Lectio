@@ -5148,7 +5148,7 @@ def get_feeds_needing_replacement(conn: sqlite3.Connection | None = None) -> set
         return {str(r["feed_url"]) for r in own.execute("SELECT feed_url FROM feeds_needing_replacement")}
 
 
-def unsubscribed_feed_urls_among(feed_urls: Iterable[str]) -> set[str]:
+def unsubscribed_feed_urls_among(feed_urls: Iterable[str | None]) -> set[str]:
     """Which of these feeds you are no longer subscribed to.
 
     Two different states read as "unsubscribed" to a reader and both belong here:

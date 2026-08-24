@@ -184,7 +184,7 @@ def test_move_requires_a_target(tenant):
 
     with TestClient(_app()) as client:
         resp = client.post("/entries/move-visible-to-feed",
-                           data={"folder_id": UNCAT, "target_url": "  "})
+                           data={"folder_id": str(UNCAT), "target_url": "  "})
 
     assert resp.status_code == 400
     assert resp.json()["ok"] is False

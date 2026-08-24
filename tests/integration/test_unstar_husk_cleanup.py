@@ -67,7 +67,7 @@ def _unstar(entry_id, feed=SAVED):
     with TestClient(_app()) as client:
         return client.post(
             "/entries/saved",
-            data={"folder_id": 1, "feed_url": feed, "entry_id": entry_id, "saved": 0},
+            data={"folder_id": "1", "feed_url": feed, "entry_id": entry_id, "saved": "0"},
             headers={"X-Requested-With": "lectio-post-save-toggle"},
         )
 
