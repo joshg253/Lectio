@@ -5109,8 +5109,12 @@ def get_folder_feed_urls(conn: sqlite3.Connection, folder_id: int) -> set[str]:
     # no folder. The home view widens root the same way for display and counts, so
     # folder actions (mark-read/older, refresh) must match — otherwise entries in
     # uncategorized feeds show under All Feeds but can't be marked from there.
+    # The Saved Articles virtual feed (lectio:saved) is excluded here too: unlike
+    # Uncategorized (which keeps it reachable for the Saved sidebar's own
+    # Uncategorized grouping — see the home route), root has no such need, and
+    # it must never show as a subscription — or be actionable — in Feeds mode.
     if folder_id == get_root_folder_id(conn):
-        return get_all_reader_feed_urls()
+        return get_all_reader_feed_urls() - {saved_articles_service.SAVED_FEED_URL}
     descendant_ids = get_descendant_folder_ids(conn, folder_id)
     placeholders = ",".join("?" for _ in descendant_ids)
     rows = conn.execute(
@@ -22135,7 +22139,10 @@ def _home_inner(
         _uncat_display_urls = uncategorized_feed_urls - {saved_articles_service.SAVED_FEED_URL}
         folder_feed_urls_by_id = dict(folder_feed_urls_by_id)
         direct_feed_urls_by_folder = dict(direct_feed_urls_by_folder)
-        folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
+        # Unlike Uncategorized (kept inclusive for the Saved sidebar's own
+        # reachability, see below), root has no such need — it must never show
+        # lectio:saved as a subscription in Feeds mode.
+        folder_feed_urls_by_id[root_id] = all_feed_urls | _uncat_display_urls
         folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = uncategorized_feed_urls
         direct_feed_urls_by_folder[UNCATEGORIZED_FOLDER_ID] = sorted(_uncat_display_urls)
         _tick("structure_snapshot")
