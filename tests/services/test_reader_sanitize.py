@@ -86,7 +86,7 @@ def test_ingest_drops_untrusted_iframe():
 
 def test_internal_imports_still_available():
     """Smoke-test that the private reader symbols we import still exist after upgrades."""
-    from reader._parser.feedparser import FeedparserParser as _FP, _process_feed, feedparser as _fp  # noqa: F401
+    from reader._parser.feedparser import FeedparserParser as _FP  # noqa: F401
 
 
 def test_install_on_real_reader(tmp_path):

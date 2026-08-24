@@ -1,7 +1,6 @@
 """Unit tests for the email service: HTML/text rendering and send logic."""
 from __future__ import annotations
 
-import pytest
 from services.email import _build_html, _build_text, send_article_email
 
 

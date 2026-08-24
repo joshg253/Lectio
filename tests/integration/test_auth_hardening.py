@@ -21,8 +21,6 @@ def _enable_auth(monkeypatch, *, debug=False, max_failures=5, window_seconds=300
     monkeypatch.setattr(main, "get_login_max_failures", lambda: max_failures)
     monkeypatch.setattr(main, "get_login_window_seconds", lambda: window_seconds)
     # Make user_store.verify_login accept "tester"/"secret" as valid credentials.
-    original_verify = main.user_store.verify_login if main.user_store else None
-
     def _fake_verify(username, password, **kwargs):
         if username == "tester" and password == "secret":
             return "u_test_tester"

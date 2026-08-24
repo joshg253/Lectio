@@ -111,6 +111,7 @@ def test_oversized_body_passed_through_not_cached(monkeypatch):
         r1 = client.get("/api/img", params={"u": "https://pub.test/big-body.png"})
         r2 = client.get("/api/img", params={"u": "https://pub.test/big-body.png"})
     assert r1.status_code == 200 and r1.content == raw
+    assert r2.status_code == 200 and r2.content == raw
     assert calls["n"] == 2  # not cached → upstream fetched again on the 2nd request
 
 

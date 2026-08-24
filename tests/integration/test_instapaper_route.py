@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import urllib.request
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
-
 
 # ---------------------------------------------------------------------------
 # Helpers

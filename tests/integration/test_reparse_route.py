@@ -6,7 +6,7 @@ from __future__ import annotations
 import contextlib
 import types
 
-from fastapi import FastAPI, Form
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main

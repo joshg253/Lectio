@@ -165,7 +165,8 @@ def _build_digest_html(articles: list[dict]) -> str:
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
           body {{ margin:0; padding:0; background:#f5f4f0; font-family:Georgia,'Times New Roman',serif; color:#1a1a1a; }}
-          .wrapper {{ max-width:600px; margin:32px auto; background:#fff; border-radius:6px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.10); }}
+          .wrapper {{ max-width:600px; margin:32px auto; background:#fff; border-radius:6px;
+            overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.10); }}
           .header {{ background:#1a1a1a; padding:18px 28px; }}
           .wordmark {{ color:#f5f4f0; font-family:Georgia,serif; font-size:22px; font-weight:normal; letter-spacing:.04em; margin:0; }}
           .tagline {{ color:#888; font-family:-apple-system,sans-serif; font-size:12px; margin:2px 0 0; }}

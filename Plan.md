@@ -1225,6 +1225,30 @@ extension keeps working too.
 
 ### Code health (deferred — low value, no user impact)
 
+**Whole-repo lint backlog — CLEARED 2026-08-24.** `make lint` went 220 → 0.
+Four dead one-off debug scripts deleted (unreferenced, from a resolved
+investigation), `ruff --fix` handled the mechanical rest, and the remaining
+72 were hand-fixed: renamed ambiguous/unused loop vars, lambda→def,
+`raise ... from`, split long lines, and a per-file `pyproject.toml` ignore
+for main.py's FastAPI `Query`/`File`/`Form` route defaults (B008 false
+positive — that's the framework's required idiom). Two real bugs surfaced
+along the way, not lint-only: `lead_images.py` used
+`.lstrip("www.")` on a cookie-challenge domain (strips the character set,
+not the literal prefix — `www.wired.com` became `ired.com`; fixed with
+`removeprefix`), and a dead `tok = ... if False else None` block in the
+Miniflux token route. Full history in the "Weekly stack sweep" commits
+around 2026-08-24. `make lint` is now part of what's worth keeping green —
+watch for regression, no further backlog to burn down.
+
+**Whole-repo type backlog — still open, 165 diagnostics.** `ty` isn't in CI
+at all (only `ruff` is, and only on changed lines). Confirmed pre-existing,
+not caused by the dependency sweep. Unlike the lint pass, most of these are
+`invalid-argument-type`/`no-matching-overload`/`unsupported-operator` —
+likely a mix of real stub mismatches and noise from `ty` being a preview
+tool; each needs individual judgment rather than a mechanical fix, so this
+is a separate, larger pass if it's ever picked up. Keep tracking the count
+in the weekly sweep either way.
+
 **Flaky test seen 2026-07-21:**
 `tests/integration/test_youtube_playlist_rules.py::test_add_route_accepts_blank_keyword`
 failed once in a full run, then passed in isolation and in two further full

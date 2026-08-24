@@ -31,7 +31,7 @@ import json
 import re
 import sqlite3
 import zipfile
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 
 import main

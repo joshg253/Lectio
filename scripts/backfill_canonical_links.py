@@ -72,7 +72,7 @@ def resolve_wayback(url: str) -> str | None:
     embedded in the wayback path (/web/<ts>/<original>). archive.org rate-
     limits the /web/ endpoint aggressively — back off and retry on 429."""
     import httpx
-    for attempt in range(3):
+    for _attempt in range(3):
         try:
             with httpx.Client(follow_redirects=True, timeout=30.0,
                               headers={"User-Agent": "Lectio/1.0 (+https://github.com/joshg253/Lectio)"}) as client:
@@ -206,7 +206,10 @@ def main() -> None:
     ap.add_argument("--user", help="only this user id (default: legacy + all users)")
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
     ap.add_argument("--live-resolve", action="store_true", help="follow still-alive redirectors over the network")
-    ap.add_argument("--wayback", action="store_true", help="recover dead redirectors via the Wayback Machine's archived redirects (rate-limited, ~2s/link)")
+    ap.add_argument(
+        "--wayback", action="store_true",
+        help="recover dead redirectors via the Wayback Machine's archived redirects (rate-limited, ~2s/link)",
+    )
     args = ap.parse_args()
 
     data_dir = Path(os.environ.get("LECTIO_DATA_DIR", "data")).resolve()

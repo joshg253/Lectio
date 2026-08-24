@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import main
 
-
 RAW = (
     "<html><body>"
     '<iframe src="https://open.spotify.com/embed/track/abc"></iframe>'

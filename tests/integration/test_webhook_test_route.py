@@ -34,7 +34,9 @@ def test_test_send_posts_sample_payload(monkeypatch):
 def test_test_send_ifttt_format(monkeypatch):
     app, captured = _build_app(monkeypatch)
     with TestClient(app) as client:
-        r = client.post("/rules/webhook-test", data={"webhook_url": "https://maker.ifttt.com/trigger/e/with/key/k", "webhook_format": "ifttt"})
+        r = client.post("/rules/webhook-test", data={
+            "webhook_url": "https://maker.ifttt.com/trigger/e/with/key/k", "webhook_format": "ifttt",
+        })
     assert r.status_code == 200
     assert set(captured["payload"]) == {"value1", "value2", "value3"}
 

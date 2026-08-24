@@ -26,4 +26,4 @@ def assert_safe_feed_id(feed_id: "str | _uuid.UUID") -> None:
     try:
         _uuid.UUID(feed_id)
     except ValueError:
-        raise ValueError(f"Invalid feed_id: {feed_id!r}")
+        raise ValueError(f"Invalid feed_id: {feed_id!r}") from None

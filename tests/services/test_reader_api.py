@@ -125,7 +125,6 @@ def test_ua_hook_fires_on_real_reader(tmp_path):
     actual _parser.lazy_init_funcs / retrievers internal API path end-to-end,
     not just a fake stand-in.
     """
-    import reader as reader_lib
 
     db = str(tmp_path / "test.sqlite")
     r = ReaderApi(db).client()

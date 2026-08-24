@@ -10,7 +10,6 @@ argument so the match happens in SQL across the whole library, before the limit.
 from __future__ import annotations
 
 import datetime as dt
-from pathlib import Path
 
 import pytest
 

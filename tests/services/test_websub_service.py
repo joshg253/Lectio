@@ -4,17 +4,13 @@ import hashlib
 import hmac
 import sqlite3
 import time
-from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 import httpx
 
 from services import websub as websub_mod
 from services.websub import WebSubService
-
 
 _FEED_URL = "https://example.com/feed.xml"
 _HUB_URL = "https://hub.example.com/"

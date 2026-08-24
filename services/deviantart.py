@@ -809,7 +809,8 @@ def watch_user(access_token: str, username: str) -> tuple[bool, str]:
     body = {f"watch[{k}]": "1" for k in
             ("friend", "deviations", "journals", "forum_threads", "critiques", "scraps", "activity", "collections")}
     resp = _request("POST", f"{_API_BASE}/user/friends/watch/{username}", headers=_user_headers(access_token), data=body)
-    if resp.status_code == 200 and (resp.json().get("success") if resp.headers.get("content-type", "").startswith("application/json") else False):
+    is_json = resp.headers.get("content-type", "").startswith("application/json")
+    if resp.status_code == 200 and (resp.json().get("success") if is_json else False):
         return True, "ok"
     return False, f"HTTP {resp.status_code}: {resp.text[:160]}"
 

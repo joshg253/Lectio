@@ -5,7 +5,6 @@ import pytest
 
 from main import normalize_feed_url
 
-
 # --- ArtStation subdomain → main-domain normalization ---
 
 @pytest.mark.parametrize("raw, expected", [

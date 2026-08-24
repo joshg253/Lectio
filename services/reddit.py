@@ -204,7 +204,6 @@ def refresh_all_reddit_feeds(
     Feeds are processed oldest-synced-first so all subscriptions get attention
     across multiple scheduler ticks. Returns the number of new entries added.
     """
-    import sqlite3
 
     rows = meta_conn.execute(
         """

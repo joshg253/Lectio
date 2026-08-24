@@ -10,7 +10,6 @@ import pytest
 
 from services import takeout_service
 
-
 # ---------------------------------------------------------------------------
 # Helpers: create minimal in-memory DBs
 # ---------------------------------------------------------------------------

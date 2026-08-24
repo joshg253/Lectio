@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import collections
 import base64
+import collections
 import contextlib
 import hashlib
 import html
@@ -11,13 +11,13 @@ import logging
 import mimetypes
 import os
 import re
-import unicodedata
 import secrets
 import shutil
 import sqlite3
 import tempfile
 import threading
 import time
+import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
 from contextlib import asynccontextmanager, closing, contextmanager
@@ -94,7 +94,7 @@ from services import url_guard
 from services.webhooks import WEBHOOK_VALID_FORMATS, build_webhook_batch_payload, build_webhook_payload, send_webhook
 from services.users import UserExistsError, UserStore
 from services.email import send_article_email, send_digest_email
-from services.feed_discovery import discover_feed_urls, discover_feed_urls_ex
+from services.feed_discovery import discover_feed_urls_ex
 from services.feed_refresh import FeedRefreshService
 from services.lead_images import LeadImageService, upgrade_image_size_param
 from services.reader_api import ReaderApi
@@ -1519,7 +1519,9 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
         try:
             with get_meta_connection() as conn:
                 with get_reader() as reader:
-                    _fid, file_url = deviantart_service.create_deviantart_feed(conn, reader, artist, cid, secret, access_token=token, limit=24)
+                    _fid, file_url = deviantart_service.create_deviantart_feed(
+                        conn, reader, artist, cid, secret, access_token=token, limit=24
+                    )
                 conn.execute(
                     "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
                     (folder_id, file_url),
@@ -2653,19 +2655,15 @@ class _RejectPrefetchMiddleware:
         is_spa_fetch = False
         sec_fetch_dest = b""
         sec_fetch_mode = b""
-        sec_purpose_value = b""
-        purpose_value = b""
         x_requested_with = b""
         user_agent = b""
         referer = b""
         for header_name, header_value in headers:
             name = header_name.decode("latin-1").lower()
             if name == "sec-purpose":
-                sec_purpose_value = header_value
                 if b"prefetch" in header_value.lower() or b"prerender" in header_value.lower():
                     is_prefetch = True
             elif name == "purpose":
-                purpose_value = header_value
                 low = header_value.lower()
                 if b"prefetch" in low or b"preview" in low or b"prerender" in low:
                     is_prefetch = True
@@ -4679,7 +4677,10 @@ _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'
 _HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed', 'feeds'})
 
 
-_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist", "instapaper", "quire", "tag_filter", "save_article"}
+_HIGHLIGHT_VALID_TYPES = {
+    "highlight", "mark_as_read", "email_article", "deduplicate", "webhook",
+    "youtube_playlist", "instapaper", "quire", "tag_filter", "save_article",
+}
 _HIGHLIGHT_VALID_SEARCH_IN = {"title", "body", "both"}
 _HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
 _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
@@ -5551,7 +5552,11 @@ def get_unread_counts_by_feed() -> dict[str, int]:
         with unread_counts_compute_lock:
             if not unread_counts_refresh_inflight:
                 unread_counts_refresh_inflight = True
-                threading.Thread(target=_run_in_user_context, args=(tenancy.current_user_id(), _refresh_unread_counts_async, current_gen), daemon=True).start()
+                threading.Thread(
+                    target=_run_in_user_context,
+                    args=(tenancy.current_user_id(), _refresh_unread_counts_async, current_gen),
+                    daemon=True,
+                ).start()
         return value.copy()
 
     # Cold cache: first arriver computes synchronously, others wait on lock.
@@ -5946,12 +5951,18 @@ def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[st
     pair_modes: dict[tuple[str, str], list[str]] = {}
     for pk in all_pairs:
         modes: list[str] = []
-        if pk in guid_pairs:        modes.append("guid")
-        if pk in slug_pairs:        modes.append("slug")
-        if pk in title_pairs:       modes.append("title")
-        if pk in fuzzy_pairs:       modes.append("fuzzy_near")
-        if pk in body_pairs:        modes.append("body")
-        if pk in body_fuzzy_pairs:  modes.append("body_fuzzy")
+        if pk in guid_pairs:
+            modes.append("guid")
+        if pk in slug_pairs:
+            modes.append("slug")
+        if pk in title_pairs:
+            modes.append("title")
+        if pk in fuzzy_pairs:
+            modes.append("fuzzy_near")
+        if pk in body_pairs:
+            modes.append("body")
+        if pk in body_fuzzy_pairs:
+            modes.append("body_fuzzy")
         # A shared GUID is accepted on its own; everything else needs a
         # corroborated combo from _SAFE_DEDUP_COMBOS.
         if "guid" in modes or frozenset(modes) in _SAFE_DEDUP_COMBOS:
@@ -6169,7 +6180,7 @@ def _dry_run_dedup(
             groups.append({"match_by": "title", "matched_value": norm_title, "keep": keep, "mark_read": mark_read})
 
     if match_method == "both":
-        for (slug, norm_title), entries in combined_index.items():
+        for (_slug, norm_title), entries in combined_index.items():
             if len({e["feed_url"] for e in entries}) < 2:
                 continue
             sorted_entries = sorted(entries, key=dedup_order_key)
@@ -6299,12 +6310,12 @@ def _dry_run_pattern(
     youtube_playlist: a blank keyword means "every entry in scope"). ``exclude_shorts``
     drops YouTube Shorts from the preview so it matches what a youtube_playlist rule
     with Include-Shorts off would actually add."""
-    import re as _re
 
     if not keyword:
         if not match_all_if_empty:
             return {"matches": [], "total_scanned": 0, "total_matches": 0, "truncated": False}
-        match_fn = lambda text: True
+        def match_fn(text):
+            return True
     else:
         try:
             match_fn = build_keyword_matcher(keyword, is_regex)
@@ -6501,7 +6512,7 @@ def _run_now_dedup(
         mark_to_keep: dict[tuple[str, str], str] = {}
 
         if match_method == "slug":
-            for slug, entries in slug_index.items():
+            for _slug, entries in slug_index.items():
                 if len({e["feed_url"] for e in entries}) < 2:
                     continue
                 sorted_entries = sorted(entries, key=dedup_order_key)
@@ -6511,7 +6522,7 @@ def _run_now_dedup(
                     mark_to_keep[(e["feed_url"], e["entry_id"])] = sorted_entries[0].get("link", "")
 
         if match_method == "title":
-            for norm_title, entries in title_index.items():
+            for _norm_title, entries in title_index.items():
                 if len({e["feed_url"] for e in entries}) < 2:
                     continue
                 sorted_entries = sorted(entries, key=dedup_order_key)
@@ -6525,7 +6536,7 @@ def _run_now_dedup(
                     mark_to_keep[(e["feed_url"], e["entry_id"])] = sorted_entries[0].get("link", "")
 
         if match_method == "both":
-            for (slug, norm_title), entries in combined_index.items():
+            for (_slug, _norm_title), entries in combined_index.items():
                 if len({e["feed_url"] for e in entries}) < 2:
                     continue
                 sorted_entries = sorted(entries, key=dedup_order_key)
@@ -6603,7 +6614,6 @@ def _run_now_pattern(
     search_in: str,
 ) -> dict:
     """Execute mark_as_read rule: find matching unread entries and mark them read."""
-    import re as _re
     global _unread_counts_generation
 
     if not keyword:
@@ -7210,7 +7220,7 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
                     if len(norm.split()) >= _CHURN_TITLE_MIN_WORDS:
                         title_entries.setdefault(norm, []).append((pub_ts, entry))
 
-            for slug, items in slug_entries.items():
+            for _slug, items in slug_entries.items():
                 if len(items) < 2:
                     continue
                 items.sort(key=lambda x: x[0])
@@ -7220,7 +7230,7 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
                         suppressed_ids.add(eid)
                         all_to_suppress.append(entry)
 
-            for norm, items in title_entries.items():
+            for _norm, items in title_entries.items():
                 if len(items) < 2:
                     continue
                 items.sort(key=lambda x: x[0])
@@ -7254,7 +7264,7 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
             pub_ts = pub.timestamp() if pub else 0.0
             link_entries.setdefault(canon, []).append((pub_ts, entry))
 
-        for canon, items in link_entries.items():
+        for _canon, items in link_entries.items():
             # Only act when entries come from at least two different feeds.
             if len({str(e.feed_url) for _, e in items}) < 2:
                 continue
@@ -7550,7 +7560,6 @@ def _is_local_dev_feed(feed_url: str) -> bool:
 
 
 def _entry_matches_rule(entry: object, keyword: str, is_regex: bool, search_in: str) -> bool:
-    import re as _re
     if not keyword:
         return False
     try:
@@ -7583,7 +7592,8 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
         return
 
     try:
-        from datetime import timedelta, timezone as _tz
+        from datetime import timedelta
+        from datetime import timezone as _tz
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -7720,7 +7730,8 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
         return
 
     try:
-        from datetime import timedelta, timezone as _tz
+        from datetime import timedelta
+        from datetime import timezone as _tz
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -7841,7 +7852,8 @@ def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
         return
 
     try:
-        from datetime import timedelta, timezone as _tz
+        from datetime import timedelta
+        from datetime import timezone as _tz
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -7927,7 +7939,8 @@ def _run_save_article_rules_after_refresh(refreshed_feed_urls: set[str]) -> None
     if not refreshed_feed_urls:
         return
     try:
-        from datetime import timedelta, timezone as _tz
+        from datetime import timedelta
+        from datetime import timezone as _tz
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -8010,7 +8023,8 @@ def _run_quire_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
         return
 
     try:
-        from datetime import timedelta, timezone as _tz
+        from datetime import timedelta
+        from datetime import timezone as _tz
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -8103,7 +8117,8 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
     global _unread_counts_generation
 
     try:
-        from datetime import timedelta, timezone as _tz
+        from datetime import timedelta
+        from datetime import timezone as _tz
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -8517,13 +8532,14 @@ youtube_duration_service = YouTubeDurationService(
 # current user's daily quota meter.
 youtube_oauth_service.set_quota_sink(record_yt_quota_spend)
 import services.youtube_sync as _youtube_sync_mod
+
 _youtube_sync_mod.set_quota_sink(record_yt_quota_spend)
 
 # Quire calls feed the per-user sliding-window rate meter (per-minute/hour).
 quire_service.set_usage_sink(record_quire_call)
 
-from services import reader_sanitize
 from services import feed_tags as feed_tags_service_mod
+from services import reader_sanitize
 from services.feed_tags import FeedTagService
 
 # Feed-provided entry tags (<category>) captured at ingest: the sanitizing
@@ -10065,7 +10081,8 @@ def get_feed_properties(feed_url: str) -> dict:
         with get_meta_connection() as _pc:
             _disp = get_feed_display_prefs(_pc, feed_url)
             _strat_rows = _pc.execute(
-                "SELECT strategy, image_url, fetched_at, error, image_alt, image_title FROM feed_strategy_cache WHERE feed_url = ? ORDER BY strategy",
+                "SELECT strategy, image_url, fetched_at, error, image_alt, image_title "
+                "FROM feed_strategy_cache WHERE feed_url = ? ORDER BY strategy",
                 (feed_url,),
             ).fetchall()
             _feed_backoff_row = _pc.execute(
@@ -10095,7 +10112,10 @@ def get_feed_properties(feed_url: str) -> dict:
 
         _now_ts = time.time()
         _feed_next_retry = float(_feed_backoff_row["next_retry_at"]) if _feed_backoff_row and _feed_backoff_row["next_retry_at"] else None
-        _domain_next_retry = float(_domain_backoff_row["next_retry_at"]) if _domain_backoff_row and _domain_backoff_row["next_retry_at"] else None
+        _domain_next_retry = (
+            float(_domain_backoff_row["next_retry_at"])
+            if _domain_backoff_row and _domain_backoff_row["next_retry_at"] else None
+        )
         _feed_failures = int(_feed_backoff_row["consecutive_failures"]) if _feed_backoff_row else 0
         _domain_failures = int(_domain_backoff_row["consecutive_failures"]) if _domain_backoff_row else 0
         _effective_next_retry = max(f for f in [_feed_next_retry or 0.0, _domain_next_retry or 0.0]) or None
@@ -10170,7 +10190,10 @@ def get_feed_properties(feed_url: str) -> dict:
             "backoff_active": _backoff_active,
             "backoff_domain_driven": _backoff_domain_driven,
             "backoff_domain": _feed_domain if _backoff_domain_driven else None,
-            "backoff_retry_at": format_datetime_for_ui(datetime.fromtimestamp(_effective_next_retry, tz=timezone.utc)) if _effective_next_retry else None,
+            "backoff_retry_at": (
+                format_datetime_for_ui(datetime.fromtimestamp(_effective_next_retry, tz=timezone.utc))
+                if _effective_next_retry else None
+            ),
             "backoff_feed_failures": _feed_failures,
             "backoff_domain_failures": _domain_failures,
         }
@@ -11917,7 +11940,6 @@ def build_source_proxy_response(source_url: str, picker: bool = False) -> HTMLRe
 
     sanitized = normalize_proxy_lazy_media(sanitized)
     escaped_source = html.escape(str(response.url))
-    unescaped_source = str(response.url)
     proxy_style = (
         "<style>"
         "img[alt*='image unavailable' i],"
@@ -13815,7 +13837,7 @@ def list_entries_for_feeds(
                 # C++ title's std::vector<T> survives — see sanitize_inline_title.
                 "title_html": html_sanitize.sanitize_inline_title(title_text),
                 "post_timestamp": published_dt.isoformat() if published_dt else None,
-                "received_timestamp": getattr(entry, "added").isoformat() if getattr(entry, "added", None) else None,
+                "received_timestamp": entry.added.isoformat() if getattr(entry, "added", None) else None,
                 "read_timestamp": read_dt.isoformat() if read_dt else None,
                 # When this was starred — carried so the orphan merge can re-sort
                 # by it after list_entries_for_feeds pops the sort values.
@@ -22938,7 +22960,9 @@ def _mark_thumb_fetch_failed(url: str) -> None:
 
 
 @app.get("/thumb")
-def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), ms: str = Query(default=""), fz: str = Query(default="")) -> Response:
+def thumbnail_proxy(
+    url: str = Query(...), crop: str = Query(default="cover"), ms: str = Query(default=""), fz: str = Query(default="")
+) -> Response:
     """Fetch a remote image, resize it to thumbnail dimensions with LANCZOS, and
     return a cached JPEG.  This eliminates the progressive-load flicker caused by
     downloading full-size hero images into the small post-list thumbnail slot."""
@@ -25164,7 +25188,10 @@ def youtube_oauth_connect(request: Request):
     """Kick off the YouTube OAuth flow → redirect to Google's consent page."""
     cid, secret = get_youtube_oauth_credentials()
     if not cid or not secret:
-        return RedirectResponse(url="/?message=" + quote_plus("YouTube OAuth client is not configured (set YOUTUBE_OAUTH_CLIENT_ID/SECRET)."), status_code=303)
+        return RedirectResponse(
+            url="/?message=" + quote_plus("YouTube OAuth client is not configured (set YOUTUBE_OAUTH_CLIENT_ID/SECRET)."),
+            status_code=303,
+        )
     state = secrets.token_urlsafe(24)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_YT_OAUTH_STATE, state)
@@ -25221,7 +25248,10 @@ def pinterest_oauth_connect(request: Request):
     """Kick off the Pinterest OAuth flow → redirect to Pinterest's consent page."""
     cid, secret = get_pinterest_oauth_credentials()
     if not cid or not secret:
-        return RedirectResponse(url="/?message=" + quote_plus("Pinterest OAuth client is not configured (set PINTEREST_OAUTH_CLIENT_ID/SECRET)."), status_code=303)
+        return RedirectResponse(
+            url="/?message=" + quote_plus("Pinterest OAuth client is not configured (set PINTEREST_OAUTH_CLIENT_ID/SECRET)."),
+            status_code=303,
+        )
     state = secrets.token_urlsafe(24)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_PINTEREST_OAUTH_STATE, state)
@@ -25270,7 +25300,12 @@ def reddit_oauth_connect(request: Request):
     """Kick off the Reddit OAuth flow → redirect to Reddit's consent page."""
     cid, secret = get_reddit_credentials()
     if not cid or not secret:
-        return RedirectResponse(url="/?message=" + quote_plus("Reddit OAuth client is not configured (enter client ID and secret in Integrations → Reddit)."), status_code=303)
+        return RedirectResponse(
+            url="/?message=" + quote_plus(
+                "Reddit OAuth client is not configured (enter client ID and secret in Integrations → Reddit)."
+            ),
+            status_code=303,
+        )
     state = secrets.token_urlsafe(24)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_REDDIT_OAUTH_STATE, state)
@@ -25381,7 +25416,10 @@ def inoreader_oauth_connect(request: Request):
     cid, secret = get_inoreader_credentials()
     if not cid or not secret:
         return RedirectResponse(
-            url="/?message=" + quote_plus("Inoreader OAuth client is not configured (set INOREADER_CLIENT_ID/SECRET or enter them in Settings → Integrations → Inoreader)."),
+            url="/?message=" + quote_plus(
+                "Inoreader OAuth client is not configured (set INOREADER_CLIENT_ID/SECRET "
+                "or enter them in Settings → Integrations → Inoreader)."
+            ),
             status_code=303,
         )
     state = secrets.token_urlsafe(24)
@@ -25477,7 +25515,6 @@ def inoreader_import_start(delete_mode: int = Form(default=0), since: str = Form
             since_ot = int(since)
         except ValueError:
             try:
-                from datetime import date
                 since_ot = int(datetime.fromisoformat(since.strip()).timestamp())
             except Exception:
                 pass
@@ -27085,7 +27122,6 @@ async def save_all_settings(request: Request):
     yt_configured_before = bool(get_yt_api_key() and get_yt_channel_id())
     quire_project_before = quire_project_oid()
 
-    import json as _json
     with get_meta_connection() as conn:
         for key, value in body.items():
             if key not in _ALLOWED:
@@ -28883,7 +28919,6 @@ def combine_feeds_route(
         return JSONResponse({"ok": False, "message": "Pick a survivor and at least one other feed."}, status_code=400)
     do_unread = move_unread in ("1", "true", "on", "yes")
 
-    migrated = {"tags": 0, "stars": 0, "synth": 0}
     rescued = 0
     try:
         with get_reader() as reader:
@@ -28924,7 +28959,7 @@ def combine_feeds_route(
                         migrate_curation_to=survivor_url,
                     )
         invalidate_meta_structure_cache()
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         LOGGER.exception("[combine] failed combining into %s", survivor_url)
         return JSONResponse({"ok": False, "message": "Combine failed — see server logs."}, status_code=500)
 
@@ -29011,7 +29046,6 @@ def get_feed_duplicates():
                 continue
             keep_folder_ids = {fid for fid, _ in url_folders.get(keep, [])}
             remove_folder_ids = {fid for fid, _ in url_folders.get(remove, [])}
-            shared = keep_folder_ids & remove_folder_ids
             only_in_remove = remove_folder_ids - keep_folder_ids
 
             content_identical = _pair_is_content_identical(keep, remove)
@@ -29780,15 +29814,15 @@ def _current_autofile_plan(restrict_to: set[str] | None = None) -> tuple[list[di
             }
             non_feed = {r[0] for r in conn.execute("SELECT host FROM autofile_non_feed_hosts")}
         saved_rows = [
-            (str(i), str(l or i))
-            for i, l in db.execute(
+            (str(i), str(link or i))
+            for i, link in db.execute(
                 "SELECT id, link FROM entries WHERE feed = ?", (saved_url,)
             )
             if str(i) in kept and (restrict_to is None or str(i) in restrict_to)
         ]
         feed_links = [
-            (str(f), str(l))
-            for f, l in db.execute(
+            (str(f), str(link))
+            for f, link in db.execute(
                 "SELECT feed, link FROM entries WHERE link IS NOT NULL AND feed != ?",
                 (saved_url,),
             )
@@ -30466,7 +30500,7 @@ def bulk_feed_action(
             invalidate_meta_structure_cache()
         else:
             return JSONResponse({"ok": False, "error": f"Unknown action: {action}"}, status_code=400)
-    except Exception as exc:
+    except Exception:
         LOGGER.exception("[feeds/bulk] action=%s failed", action)
         # Don't leak internal exception detail to the client; it's in the logs.
         return JSONResponse({"ok": False, "error": "Action failed."}, status_code=500)
@@ -32360,7 +32394,10 @@ def mark_entries_older_than_read(
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_mot)
     message = "No unread posts older than that." if marked_count == 0 else f"Marked {marked_count} posts as read."
     if is_async_action_request(request, "lectio-mark-read"):
-        return JSONResponse({"ok": True, "marked": marked_count, "max_age_days": max_age_days, "message": message, "undo_token": undo_token})
+        return JSONResponse({
+            "ok": True, "marked": marked_count, "max_age_days": max_age_days,
+            "message": message, "undo_token": undo_token,
+        })
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,
@@ -34371,9 +34408,6 @@ async def miniflux_auth_token(request: Request) -> Response:
     uid = user_store.verify_login(username, password) if username and password else None
     if not uid:
         return JSONResponse({"error_message": "Invalid credentials."}, status_code=401)
-    with tenancy.user_context(uid):
-        with get_meta_connection() as conn:
-            tok = get_runtime_setting(conn, "api_token") if False else None
     # Resolve the api_token directly from the auth DB
     with user_store._connect() as conn:
         row = conn.execute(

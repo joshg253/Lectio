@@ -14,9 +14,8 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from urllib.parse import urlparse
 from datetime import datetime, timezone
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 # Use the EXACT feedparser module reader uses (it may be the vendored copy,
 # reader._vendor.feedparser). reader's _process_feed decides which bozo

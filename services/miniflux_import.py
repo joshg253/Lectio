@@ -9,7 +9,7 @@ No rate limits (self-hosted), so the full import runs in a single pass.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 import httpx
 

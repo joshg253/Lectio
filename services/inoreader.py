@@ -14,11 +14,11 @@ within limits automatically.
 """
 from __future__ import annotations
 
-from services import link_canonical
-
-from urllib.parse import urlencode, quote
+from urllib.parse import quote, urlencode
 
 import httpx
+
+from services import link_canonical
 
 _AUTHORIZE_URL = "https://www.inoreader.com/oauth2/auth"
 _TOKEN_URL = "https://www.inoreader.com/oauth2/token"
@@ -343,7 +343,7 @@ def parse_export_json(data) -> list[dict]:
 
 def _parse_jsonfeed(data: dict) -> list[dict]:
     """Parse a jsonfeed.org/version/1 export from Inoreader."""
-    from datetime import datetime, timezone
+    from datetime import datetime
     out = []
     for item in data.get("items", []):
         pub = None

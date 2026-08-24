@@ -6,18 +6,19 @@ re-validates every redirect hop. Before the migration a public page could
 302-bounce the fetch to an internal target (e.g. the cloud metadata IP); these
 tests confirm that hop is now refused.
 
+NB: only scraper_service and starred_archive have test functions below —
+lead_images' fetch path (services/lead_images.py, ~3365/3470) goes through
+the same url_guard.safe_get guard but isn't independently exercised here.
+
 httpx.MockTransport + a stubbed is_safe_outbound_url keep this deterministic
 (no real DNS or network I/O).
 """
 from __future__ import annotations
 
-import functools
-
 import httpx
 import pytest
 
 from services import scraper_service, starred_archive, url_guard
-from services import lead_images
 
 
 def _unsafe_host(url: str) -> bool:
@@ -49,8 +50,10 @@ def mock_net(monkeypatch):
         kwargs["transport"] = httpx.MockTransport(_handler)
         return real_client(*args, **kwargs)
 
-    for mod in (scraper_service, lead_images, starred_archive):
-        monkeypatch.setattr(mod.httpx, "Client", _patched)
+    # httpx is a singleton module — patching Client here reaches every module
+    # that did `import httpx`, scraper_service/lead_images/starred_archive
+    # included, without needing a handle through each one individually.
+    monkeypatch.setattr(httpx, "Client", _patched)
 
 
 def test_scraper_fetch_blocks_internal_redirect(mock_net):

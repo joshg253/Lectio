@@ -8,7 +8,6 @@ import pytest
 import main
 import services.feed_discovery as feed_discovery
 
-
 # ── M1: allowlist HTML sanitizer (replaces the bypassable regex sanitizers) ──
 _XSS_VECTORS = [
     "<img src=x onerror=alert(1)>",          # unquoted event handler

@@ -96,7 +96,7 @@ def test_rule_ignores_entries_older_than_cutoff(configured, monkeypatch):
     with main.get_reader() as reader:
         _seed(reader)
     # Pretend the refresh happened long after the entries arrived.
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     real_now = datetime.now
 
     class _FakeDateTime(datetime):

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import main
 
-
 # Shape mirrors the real qwantz.com/rssfeed.php description (unescaped).
 QWANTZ = (
     '<center><table width=740 border=0 cellspacing=5 cellpadding=5>'

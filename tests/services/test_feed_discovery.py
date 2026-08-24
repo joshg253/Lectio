@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from services.feed_discovery import _ct_is_feed, _parse_attrs, discover_feed_urls, probe_url, rewrite_known_site_url
 
 
@@ -66,7 +64,10 @@ def _head_alive(url, **_kwargs):
 
 class TestDiscoverFeedUrls:
     def test_url_already_a_feed(self):
-        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/feed.xml", "application/rss+xml")):
+        with patch(
+            "services.feed_discovery._guarded_get",
+            return_value=_mock_response("https://example.com/feed.xml", "application/rss+xml"),
+        ):
             result = discover_feed_urls("https://example.com/feed.xml")
         assert result == ["https://example.com/feed.xml"]
 

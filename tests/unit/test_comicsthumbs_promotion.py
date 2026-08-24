@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import main
 
-
 BODY = '<p>x</p><img src="https://www.atomic-robo.com/comicsthumbs/1782426356-ARV1701_05.jpg" />'
 
 

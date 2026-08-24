@@ -11,7 +11,6 @@ visible and nothing is pre-checked.
 from __future__ import annotations
 
 import pytest
-from starlette.testclient import TestClient
 
 import main
 from services import tenancy

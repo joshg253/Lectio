@@ -3,13 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-import time
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from services.fever import FeverService
-
 
 _USERNAME = "alice"
 _FEVER_PASS = "hunter2"

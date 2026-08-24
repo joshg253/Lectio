@@ -3,10 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 
-import pytest
-
 import main
-
 
 # ---------------------------------------------------------------------------
 # show_as_thumb is suppressed when feed_thumbnail_url is set

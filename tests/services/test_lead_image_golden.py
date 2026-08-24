@@ -25,12 +25,11 @@ Test design principles:
 
 from __future__ import annotations
 
+import html as _html
+import re as _re
 import sqlite3
 from pathlib import Path
 
-import pytest
-
-from services.lead_images import LeadImageService
 from services.lead_image_plugins import (
     FutureSiteLeadImagePlugin,
     GunnerkriggPlugin,
@@ -39,7 +38,7 @@ from services.lead_image_plugins import (
     StandardEbooksLeadImagePlugin,
     WordPressComicPlugin,
 )
-
+from services.lead_images import LeadImageService
 
 # ---------------------------------------------------------------------------
 # Infrastructure (mirrors tests/services/test_lead_images_service.py)
@@ -425,7 +424,7 @@ def test_pcgamer_cached_flexi_is_rescraped(tmp_path: Path, monkeypatch):
     )
 
     # Thumbnail extraction should bypass the cached flexi URL
-    thumb = service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+    service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
     # The flexi URL may still be returned from the inline img (that's ok for
     # the thumbnail path); what matters is that the cache bypass flag fires.
     assert service._should_bypass_cached_url(entry_link=PCGAMER_ENTRY_LINK, cached_url=PCGAMER_FLEXI_URL)
@@ -776,9 +775,6 @@ def test_lead_image_dedup_does_not_match_unrelated_url():
 # These tests mirror the exact regex patterns used in main.py so that any
 # change to the extraction or injection code causes an immediate failure here.
 # ---------------------------------------------------------------------------
-
-import html as _html
-import re as _re
 
 # Mirrors the img-title extraction regex in main.py _build_entry_data.
 _IMG_TITLE_RE = _re.compile(

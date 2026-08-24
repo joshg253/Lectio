@@ -71,7 +71,8 @@ def test_get_cached_duration_falls_back_to_db(tmp_path: Path):
 
     with get_meta_connection() as conn:
         conn.execute(
-            "INSERT INTO youtube_video_duration(video_id, duration_seconds, duration_display, fetched_at) VALUES (?, ?, ?, datetime('now'))",
+            "INSERT INTO youtube_video_duration(video_id, duration_seconds, duration_display, fetched_at) "
+            "VALUES (?, ?, ?, datetime('now'))",
             ("ABCDEFGHIJK", 95, "1:35"),
         )
 

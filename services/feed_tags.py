@@ -14,10 +14,10 @@ from __future__ import annotations
 import html as html_module
 import logging
 import re
-from urllib.parse import unquote_plus, urlparse
 import time
 from collections.abc import Callable, Iterable
 from typing import Any
+from urllib.parse import unquote_plus, urlparse
 
 LOGGER = logging.getLogger(__name__)
 

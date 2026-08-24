@@ -15,10 +15,7 @@ from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlparse, urlsp
 import feedparser
 import httpx
 
-from services import bluesky
-from services import tenancy
-from services import url_guard
-from services import svg_sanitize
+from services import bluesky, svg_sanitize, tenancy, url_guard
 from services.lead_image_plugins import DEFAULT_LEAD_IMAGE_PLUGINS, LeadImagePlugin
 from services.url_guard import is_safe_outbound_url
 
@@ -2323,7 +2320,9 @@ class LeadImageService:
         re.IGNORECASE,
     )
 
-    def _extract_first_image_url_from_html(self, html_text: str, base_url: str, source_url: str | None = None, allow_extensionless: bool = False) -> str | None:
+    def _extract_first_image_url_from_html(
+        self, html_text: str, base_url: str, source_url: str | None = None, allow_extensionless: bool = False
+    ) -> str | None:
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             tag = tag_match.group(0)
             attrs = self._parse_img_attrs(tag)
@@ -2706,7 +2705,9 @@ class LeadImageService:
         url, _ = self._extract_preferred_source_image_data(html_text, base_url, source_url, is_webcomic=is_webcomic)
         return url
 
-    def _extract_preferred_source_image_data(self, html_text: str, base_url: str, source_url: str, is_webcomic: bool = False) -> tuple[str | None, str | None]:
+    def _extract_preferred_source_image_data(
+        self, html_text: str, base_url: str, source_url: str, is_webcomic: bool = False
+    ) -> tuple[str | None, str | None]:
         """Like _extract_preferred_source_image_url but also returns the winning img's alt text."""
         # Drop related/recent-post containers so a sibling post's thumbnail can't
         # win when the article itself has no og:image or hero image of its own.
@@ -3050,7 +3051,10 @@ class LeadImageService:
                 continue
         return False
 
-    def _is_image_url_acceptable(self, image_url: str, width: int | None, height: int | None, *, allow_extensionless: bool = False, skip_logo_patterns: bool = False, source_url: str | None = None) -> bool:
+    def _is_image_url_acceptable(
+        self, image_url: str, width: int | None, height: int | None, *,
+        allow_extensionless: bool = False, skip_logo_patterns: bool = False, source_url: str | None = None,
+    ) -> bool:
         # Sanitized inline-SVG data URIs (from services.svg_sanitize, e.g. a
         # per-feed plugin's hero SVG) are trusted and carry no remote host to vet —
         # unless they're an icon-classed UI glyph (e.g. a cached download icon),
@@ -3478,7 +3482,7 @@ class LeadImageService:
                             if "=" in cookie_str:
                                 cname, cval = cookie_str.split("=", 1)
                                 parsed_host = urlparse(url)
-                                domain = parsed_host.netloc.lstrip("www.")
+                                domain = parsed_host.netloc.removeprefix("www.")
                                 client.cookies.set(cname.strip(), cval.strip(), domain=domain)
                             response = url_guard.safe_get(client, url)
                     if response.status_code not in (403, 503):
@@ -3654,7 +3658,8 @@ class LeadImageService:
         """
         import re as _re
 
-        _strip = lambda s: _re.sub(r"<[^>]+>", "", s).strip() or None if s else None
+        def _strip(s):
+            return (_re.sub(r"<[^>]+>", "", s).strip() or None) if s else None
 
         def _finalize(alt: str | None, title: str | None, page_html: str | None) -> tuple[str | None, str | None]:
             # Webcomic hover text lives in a balloon element / og:description, not the

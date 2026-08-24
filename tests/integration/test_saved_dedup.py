@@ -150,7 +150,7 @@ def test_shared_unclosed_logo_tag_is_not_same_content(configured):
     for tier in ("confirmed", "possible"):
         for g in data[tier]:
             links = [e["link"] for e in g["entries"]]
-            assert not any("/writing/" in l for l in links), \
+            assert not any("/writing/" in link for link in links), \
                 f"unrelated pages grouped by shared logo fragment: {g['reasons']}"
 
 
