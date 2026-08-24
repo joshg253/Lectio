@@ -12980,7 +12980,22 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             const phaseLabels = { subscriptions: 'Subscribing feeds…', labels_list: 'Fetching label list…', labels_items: 'Importing labels…', starred: 'Importing starred…' };
             const summary = `${d.subs_added || 0} feeds, ${d.items_tagged || 0} tagged, ${d.items_starred || 0} starred${rl}`;
             if (d.done) {
-              if (apiStatus) apiStatus.textContent = `Done ✓ — ${summary}`;
+              // updated_at is when this run finished — shown so "when did I last
+              // trickle-import" doesn't require checking the DB by hand, and used
+              // to default Since on the next run to pick up where this one left
+              // off, without clobbering a date the user already typed in.
+              let lastRunSuffix = '';
+              const sinceInput = document.getElementById('mig-ino-api-since');
+              if (d.updated_at) {
+                const finished = new Date(d.updated_at);
+                if (!Number.isNaN(finished.getTime())) {
+                  lastRunSuffix = ` · Last completed ${finished.toLocaleString()}`;
+                  if (sinceInput && !sinceInput.value) {
+                    sinceInput.value = finished.toISOString().slice(0, 10);
+                  }
+                }
+              }
+              if (apiStatus) apiStatus.textContent = `Done ✓ — ${summary}${lastRunSuffix}`;
               if (apiStart) apiStart.hidden = true;
               if (apiRun) apiRun.hidden = true;
               if (apiReset) apiReset.hidden = false;
