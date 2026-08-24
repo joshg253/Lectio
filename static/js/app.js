@@ -12996,7 +12996,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
                 }
               }
               if (apiStatus) apiStatus.textContent = `Done ✓ — ${summary}${lastRunSuffix}`;
-              if (apiStart) apiStart.hidden = true;
+              // Start stays visible: the backend already reinitializes cleanly on
+              // a repeat call (no reset required), and hiding it here meant the
+              // only way to run another import was Reset — which wipes updated_at,
+              // destroying the Since default this same run just set up.
+              if (apiStart) apiStart.hidden = false;
               if (apiRun) apiRun.hidden = true;
               if (apiReset) apiReset.hidden = false;
             } else if (d.error) {
