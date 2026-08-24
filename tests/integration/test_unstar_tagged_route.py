@@ -8,7 +8,10 @@ trusting a client id list.
 """
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
+from fastapi import Request
 
 import main
 from services import tenancy
@@ -72,7 +75,7 @@ def _apply(keep_tags=None):
         async def json(self):
             return {"keep_tags": keep_tags or []}
 
-    res = asyncio.run(main.apply_unstar_tagged(_Req()))
+    res = asyncio.run(main.apply_unstar_tagged(cast(Request, _Req())))
     return json.loads(bytes(res.body))
 
 

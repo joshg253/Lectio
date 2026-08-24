@@ -42,6 +42,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from typing import cast
+
+from fastapi import Request
 
 sys.path.insert(0, "/app")
 
@@ -83,7 +86,7 @@ def run(user_id: str, limit: int, apply: bool) -> int:
             src = da.feed_file_url(feed_id)
             try:
                 resp = main.combine_feeds_route(
-                    request=None, survivor_url=survivor,
+                    request=cast(Request, None), survivor_url=survivor,
                     source_url=[src], move_unread="1")
                 body = json.loads(bytes(resp.body).decode())
                 if not body.get("ok"):

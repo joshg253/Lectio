@@ -17,13 +17,18 @@ from __future__ import annotations
 
 import datetime as dt
 import time
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 import main
 from services import tenancy
+
+# combine_feeds_route never touches `request` — verified against main.py.
+_NO_REQUEST = cast(Request, None)
 
 FEED = "https://example.test/feed"
 FEED2 = "https://example.test/feed/"  # slash variant for dedup tests
@@ -1003,7 +1008,7 @@ class TestCombineFeedsSurvivorFolderPlacement:
         _add_feed_to_folder(FEED, folder)
         new_url = "https://example.test/feed?feed=json1"
         result = main.combine_feeds_route(
-            None, survivor_url=new_url, source_url=[FEED], move_unread="",
+            _NO_REQUEST, survivor_url=new_url, source_url=[FEED], move_unread="",
         )
         import json as _json
         body = _json.loads(result.body)
@@ -1020,7 +1025,7 @@ class TestCombineFeedsSurvivorFolderPlacement:
         _add_feed_to_folder(FEED, folder_a)
         _add_feed_to_folder(FEED2, folder_b)
         main.combine_feeds_route(
-            None, survivor_url=FEED, source_url=[FEED2], move_unread="",
+            _NO_REQUEST, survivor_url=FEED, source_url=[FEED2], move_unread="",
         )
         assert self._folders_of(FEED) == {folder_a}
 
@@ -1153,7 +1158,7 @@ class TestDedupDismissal:
             async def json(self):
                 return {"feed_urls": urls}
 
-        return asyncio.run(main.dismiss_feed_duplicate(_FakeRequest()))
+        return asyncio.run(main.dismiss_feed_duplicate(cast(Request, _FakeRequest())))
 
     def test_dismissed_same_folder_pair_is_excluded(self, env):
         fid = _make_child_folder("Comics")
@@ -1219,7 +1224,7 @@ class TestCombineAutoDismisses:
         subscribed -- nothing to delete, but the group must stop recurring."""
         _add_feed_to_folder("http://example.test/blog?feed=atom", _root_folder_id())
         result = main.combine_feeds_route(
-            None,
+            _NO_REQUEST,
             survivor_url="http://example.test/blog?feed=atom",
             source_url=["http://example.test/blog?feed=rss", "http://example.test/blog?feed=rss2"],
             move_unread="",
@@ -1239,7 +1244,7 @@ class TestCombineAutoDismisses:
         two alternates."""
         _add_feed_to_folder("http://example.test/blog?feed=atom", _root_folder_id())
         main.combine_feeds_route(
-            None,
+            _NO_REQUEST,
             survivor_url="http://example.test/blog?feed=atom",
             source_url=[
                 "http://example.test/blog",
@@ -1260,7 +1265,7 @@ class TestCombineAutoDismisses:
         root = _root_folder_id()
         _add_feed_to_folder(FEED, root)
         _add_feed_to_folder(FEED2, root)
-        main.combine_feeds_route(None, survivor_url=FEED, source_url=[FEED2], move_unread="")
+        main.combine_feeds_route(_NO_REQUEST, survivor_url=FEED, source_url=[FEED2], move_unread="")
         key = main._dedup_dismiss_key([FEED, FEED2])
         assert key in self._dismissed_keys()
 
