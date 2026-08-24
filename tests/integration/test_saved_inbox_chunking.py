@@ -160,7 +160,7 @@ def _inbox_chunk_via_route(monkeypatch, chunk: int | None,
             captured["context"] = ctx
             return real_stream(ctx, *a, **kw)
 
-        tmpl.stream = _stream
+        tmpl.stream = _stream  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
         return tmpl
 
     monkeypatch.setattr(main.templates.env, "get_template", _capture_template)
@@ -205,7 +205,7 @@ def _saved_all_via_route(monkeypatch, **kwargs) -> list[str]:
             captured["context"] = ctx
             return real_stream(ctx, *a, **k)
 
-        tmpl.stream = _stream
+        tmpl.stream = _stream  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
         return tmpl
 
     monkeypatch.setattr(main.templates.env, "get_template", _capture_template)

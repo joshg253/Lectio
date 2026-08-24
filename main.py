@@ -1788,7 +1788,7 @@ BOOTSTRAP_ADMIN_USERNAME = os.getenv("LECTIO_ADMIN_USERNAME", "admin")
 BOOTSTRAP_ADMIN_PASSWORD = os.getenv("LECTIO_ADMIN_PASSWORD", _DEFAULT_ADMIN_PASSWORD)
 
 AUTH_ENABLED = True  # kept as a module-level bool so tests can monkeypatch it
-user_store = UserStore(AUTH_DB_PATH)
+user_store: UserStore | None = UserStore(AUTH_DB_PATH)
 SESSION_SECRET_KEY = os.getenv("LECTIO_SECRET_KEY") or secrets.token_hex(32)
 if AUTH_ENABLED and not os.getenv("LECTIO_SECRET_KEY"):
     LOGGER.warning(
@@ -21479,8 +21479,9 @@ def _admin_user_rows() -> list[dict]:
     """User list for the Administration page, enriched with per-user stats
     (feed count, personal DB size, last-active). Each user's stats are read under
     its own tenancy context."""
+    assert user_store is not None  # only called from administration_page, which already checked
     rows: list[dict] = []
-    for u in user_store.list_users():  # type: ignore[union-attr]
+    for u in user_store.list_users():
         uid = u["user_id"]
         feeds = 0
         db_bytes = 0
@@ -29969,7 +29970,7 @@ async def apply_unstar_tagged(request: Request):
 def _current_archive_old_stars_plan(days: int) -> dict:
     """Assemble the archive-old-stars plan for the current user. Read-only."""
     with get_meta_connection() as conn:
-        starred_at: dict[tuple[str, str], datetime] = {}
+        starred_at: dict[tuple[str, str], datetime | None] = {}
         for feed, eid, when in conn.execute(
             "SELECT feed_url, entry_id, saved_at FROM saved_entries"
         ):
@@ -34429,6 +34430,7 @@ def miniflux_me(request: Request) -> Response:
     uid = _miniflux_ok(request)
     if not uid:
         return JSONResponse({"error_message": "Access Unauthorized."}, status_code=401)
+    assert user_store is not None  # _miniflux_ok only returns a uid when user_store is set
     with tenancy.user_context(uid):
         with user_store._connect() as conn:
             row = conn.execute(

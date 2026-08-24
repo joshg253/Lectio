@@ -29,7 +29,7 @@ DEFAULT_DAYS = 30
 
 
 def build_archive_plan(
-    starred_at: dict[Key, datetime],
+    starred_at: dict[Key, datetime | None],
     archived: set[Key],
     *,
     days: int,
@@ -73,7 +73,7 @@ def build_archive_plan(
 
 
 def age_buckets(
-    starred_at: dict[Key, datetime],
+    starred_at: dict[Key, datetime | None],
     archived: set[Key],
     *,
     now: datetime | None = None,

@@ -86,7 +86,7 @@ def test_refresh_route_throttled_skips_update(monkeypatch):
 
 def test_refresh_feed_route_success_updates_single_feed(monkeypatch):
     app = _build_refresh_app()
-    captured: dict[str, list[str]] = {}
+    captured: dict[str, object] = {}
 
     monkeypatch.setattr(main, "check_and_mark_manual_refresh", lambda: 0)
 

@@ -67,11 +67,12 @@ def parse_size(value: str) -> int:
 
 
 def _human(n: int) -> str:
+    size: float = n
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if abs(n) < 1024 or unit == "TB":
-            return f"{n:,.1f}{unit}" if unit != "B" else f"{n:,}B"
-        n /= 1024.0
-    return f"{n:.1f}TB"
+        if abs(size) < 1024 or unit == "TB":
+            return f"{size:,.1f}{unit}" if unit != "B" else f"{size:,.0f}B"
+        size /= 1024.0
+    return f"{size:.1f}TB"
 
 
 def generations(dest_dir: Path, stems: list[str]) -> list[tuple[str, list[Path]]]:
