@@ -11,6 +11,34 @@ measurement/investigation jobs, then scheduled or genuinely low-urgency
 work, then the two standing watch-lists, then the one big multi-session
 project last.
 
+### Undo unstar (matching the existing undo-mark-read/unread)
+
+Raised 2026-08-23: Josh hit F (star toggle) repeatedly by accident while
+sitting in the Inbox, unstarring ~16 articles with no way to identify which
+ones afterward — unlike mark-read/unread, there's no undo token for a star
+toggle. `apply_star_state`'s unstar path is a hard `DELETE FROM
+saved_entries`, so once it lands there's no trace of which entry it was,
+only that *something* changed (couldn't reconstruct after the fact even from
+server logs — the access log has no request body, and nothing else records
+per-entry star history).
+
+Made worse by two compounding factors this time (worth remembering, not
+necessarily fixing): the Inbox's "unstar removes the row immediately" fix
+(shipped earlier the same day) means each repeat keypress hits a *different*
+entry, not the same one toggling back and forth — `getActivePostItem()`
+falls through to whatever's newest at the top once the active one's gone.
+And a concurrent Ino trickle-import was inserting new stars the entire time,
+so even "what's at the top of the Inbox now" can't stand in for "what was
+there right before the incident."
+
+**Fix direction**: give `/entries/saved` unstar the same short-lived undo
+token pattern `/entries/mark-range-read` already uses (see
+`_run_scheduled_refresh_for_all_users` era mark-read undo, or the
+`/entries/undo-mark-read` route) — keep the just-removed
+`(feed_url, entry_id, saved_at)` around briefly (a toast with an Undo action,
+or a short server-side buffer) rather than committing to a hard delete
+immediately.
+
 ### basslessons.be (FakeFeedz scrape): real bodies, and video/tabs on keep
 
 **BUILT 2026-08-13** as `services/site_content_plugins.py` — a per-site capture
