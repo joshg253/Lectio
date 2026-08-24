@@ -89,7 +89,7 @@ def test_plan_no_longer_reports_archived_loss():
     plan = build_unstar_plan({A, B}, {A: ["python"], B: ["books"]}, keep_tags={"books"})
     assert "archived_at_lost" not in plan["totals"]
     with pytest.raises(TypeError):
-        build_unstar_plan({A}, {A: ["python"]}, archived={A})
+        build_unstar_plan({A}, {A: ["python"]}, archived={A})  # ty: ignore[unknown-argument]  # proves the removed param is really gone
 
 
 def test_a_duplicated_tag_on_one_entry_counts_once():

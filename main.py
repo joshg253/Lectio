@@ -17534,7 +17534,7 @@ def _is_subscribable_feed_url(url: str) -> bool:
         return False
 
 
-def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
+def add_feed_to_folder(feed_url: str, folder_id: int) -> str:
     feed_url = feed_url.strip()
     if not feed_url:
         raise ValueError("Feed URL is required.")
