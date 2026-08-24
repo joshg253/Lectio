@@ -32034,7 +32034,11 @@ def tag_inventory_route(q: str = "", limit: int = 200, mine_only: int = 0):
                 feed_counts[key] = feed_counts.get(key, 0) + int(r["n"])
 
     aliases = {a["alias"]: a["canonical"] for a in list_tag_aliases()}
-    names = set(manual_counts) | set(aliases) | set(feed_counts)
+    names = [n for n in set(manual_counts) | set(aliases) | set(feed_counts)
+             if not needle or needle in n]
+    # Yours first: a publisher tag with a big count is not more interesting than
+    # one you actually file with.
+    names.sort(key=lambda name: (-manual_counts.get(name, 0), -feed_counts.get(name, 0), name))
     items = [
         {
             "tag": name,
@@ -32043,11 +32047,7 @@ def tag_inventory_route(q: str = "", limit: int = 200, mine_only: int = 0):
             "alias_of": aliases.get(name),
         }
         for name in names
-        if not needle or needle in name
     ]
-    # Yours first: a publisher tag with a big count is not more interesting than
-    # one you actually file with.
-    items.sort(key=lambda item: (-item["manual"], -item["feed"], item["tag"]))
     return JSONResponse({
         "ok": True,
         "items": items[:limit],
@@ -32780,7 +32780,7 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
                 "last_post_sort": last_dt.timestamp() if last_dt else 0.0,
                 "days_since": (_now_utc - last_dt).days if last_dt else None,
             })
-        stale_feeds.sort(key=lambda x: x["last_post_sort"])
+        stale_feeds.sort(key=lambda x: float(x["last_post_sort"]))
         html = templates.env.get_template("_settings_feeds_stale.html").render({
             "stale_feeds": stale_feeds,
             # Unsubscribe fallback target for unfoldered feeds. The inline
