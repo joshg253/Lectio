@@ -1225,17 +1225,29 @@ extension keeps working too.
 
 ### Code health (deferred — low value, no user impact)
 
-**Whole-repo lint/type backlog — tracked, not gated.** CI already lints only
-the lines a PR touches (`scripts/lint_changed.py`) plus an informational
-whole-repo `ruff` pass; `ty` isn't in CI at all. Measured 2026-08-24 during the
-weekly stack sweep: `make lint` → 220 errors (112 auto-fixable), `make types`
-→ 164 diagnostics. Confirmed pre-existing (same 220/158 on `main` before that
-day's dependency bump; the extra 6 type diagnostics came from the `ty` 0.0.74
-bump getting stricter on `no-matching-overload`/`unsupported-operator`, not
-new bugs). Not worth a dedicated cleanup pass — main.py alone carries most of
-it and a file-level gate would just stay red — but worth a number to watch:
-add "whole-repo lint/type count" to the weekly sweep alongside the CodeQL
-board check, so a real regression (vs. slow accumulation) stands out.
+**Whole-repo lint backlog — CLEARED 2026-08-24.** `make lint` went 220 → 0.
+Four dead one-off debug scripts deleted (unreferenced, from a resolved
+investigation), `ruff --fix` handled the mechanical rest, and the remaining
+72 were hand-fixed: renamed ambiguous/unused loop vars, lambda→def,
+`raise ... from`, split long lines, and a per-file `pyproject.toml` ignore
+for main.py's FastAPI `Query`/`File`/`Form` route defaults (B008 false
+positive — that's the framework's required idiom). Two real bugs surfaced
+along the way, not lint-only: `lead_images.py` used
+`.lstrip("www.")` on a cookie-challenge domain (strips the character set,
+not the literal prefix — `www.wired.com` became `ired.com`; fixed with
+`removeprefix`), and a dead `tok = ... if False else None` block in the
+Miniflux token route. Full history in the "Weekly stack sweep" commits
+around 2026-08-24. `make lint` is now part of what's worth keeping green —
+watch for regression, no further backlog to burn down.
+
+**Whole-repo type backlog — still open, 165 diagnostics.** `ty` isn't in CI
+at all (only `ruff` is, and only on changed lines). Confirmed pre-existing,
+not caused by the dependency sweep. Unlike the lint pass, most of these are
+`invalid-argument-type`/`no-matching-overload`/`unsupported-operator` —
+likely a mix of real stub mismatches and noise from `ty` being a preview
+tool; each needs individual judgment rather than a mechanical fix, so this
+is a separate, larger pass if it's ever picked up. Keep tracking the count
+in the weekly sweep either way.
 
 **Flaky test seen 2026-07-21:**
 `tests/integration/test_youtube_playlist_rules.py::test_add_route_accepts_blank_keyword`
