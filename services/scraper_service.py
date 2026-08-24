@@ -341,7 +341,7 @@ def suggest_selectors(html: str, source_url: str, limit: int = 6) -> list[dict]:
         groups.setdefault(selector, []).append(item)
 
     suggestions: list[dict] = []
-    for selector, items in groups.items():
+    for selector, _items in groups.items():
         # Verify the derived selector actually resolves (skip if BS4 rejects it),
         # and use the resolved de-duped count so the chip matches the live preview.
         try:

@@ -62,7 +62,12 @@ select = ["E", "F", "W", "I", "B"]
 # anything. The late import block is that deliberate ordering, not drift — E402
 # flags all 55 of them and none will ever be "fixed", so the rule is noise here
 # and would block every change that adds an import.
-"main.py" = ["E402"]
+#
+# B008 flags FastAPI's `Query(...)`/`File(...)`/`Form(...)` route defaults as
+# "function call in argument default" — that's the framework's required idiom
+# (FastAPI inspects the default at import time to build request parsing), not
+# a mutable-default bug, so the rule is a false positive here specifically.
+"main.py" = ["E402", "B008"]
 
 # Ruff is the canonical linter/formatter for this project. The `select` list
 # enables pycodestyle (`E`), pyflakes (`F`), warnings (`W`), isort-style

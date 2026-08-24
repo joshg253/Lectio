@@ -2653,19 +2653,15 @@ class _RejectPrefetchMiddleware:
         is_spa_fetch = False
         sec_fetch_dest = b""
         sec_fetch_mode = b""
-        sec_purpose_value = b""
-        purpose_value = b""
         x_requested_with = b""
         user_agent = b""
         referer = b""
         for header_name, header_value in headers:
             name = header_name.decode("latin-1").lower()
             if name == "sec-purpose":
-                sec_purpose_value = header_value
                 if b"prefetch" in header_value.lower() or b"prerender" in header_value.lower():
                     is_prefetch = True
             elif name == "purpose":
-                purpose_value = header_value
                 low = header_value.lower()
                 if b"prefetch" in low or b"preview" in low or b"prerender" in low:
                     is_prefetch = True
@@ -6169,7 +6165,7 @@ def _dry_run_dedup(
             groups.append({"match_by": "title", "matched_value": norm_title, "keep": keep, "mark_read": mark_read})
 
     if match_method == "both":
-        for (slug, norm_title), entries in combined_index.items():
+        for (_slug, norm_title), entries in combined_index.items():
             if len({e["feed_url"] for e in entries}) < 2:
                 continue
             sorted_entries = sorted(entries, key=dedup_order_key)
@@ -6303,7 +6299,8 @@ def _dry_run_pattern(
     if not keyword:
         if not match_all_if_empty:
             return {"matches": [], "total_scanned": 0, "total_matches": 0, "truncated": False}
-        match_fn = lambda text: True
+        def match_fn(text):
+            return True
     else:
         try:
             match_fn = build_keyword_matcher(keyword, is_regex)
@@ -6500,7 +6497,7 @@ def _run_now_dedup(
         mark_to_keep: dict[tuple[str, str], str] = {}
 
         if match_method == "slug":
-            for slug, entries in slug_index.items():
+            for _slug, entries in slug_index.items():
                 if len({e["feed_url"] for e in entries}) < 2:
                     continue
                 sorted_entries = sorted(entries, key=dedup_order_key)
@@ -6510,7 +6507,7 @@ def _run_now_dedup(
                     mark_to_keep[(e["feed_url"], e["entry_id"])] = sorted_entries[0].get("link", "")
 
         if match_method == "title":
-            for norm_title, entries in title_index.items():
+            for _norm_title, entries in title_index.items():
                 if len({e["feed_url"] for e in entries}) < 2:
                     continue
                 sorted_entries = sorted(entries, key=dedup_order_key)
@@ -6524,7 +6521,7 @@ def _run_now_dedup(
                     mark_to_keep[(e["feed_url"], e["entry_id"])] = sorted_entries[0].get("link", "")
 
         if match_method == "both":
-            for (slug, norm_title), entries in combined_index.items():
+            for (_slug, _norm_title), entries in combined_index.items():
                 if len({e["feed_url"] for e in entries}) < 2:
                     continue
                 sorted_entries = sorted(entries, key=dedup_order_key)
@@ -7208,7 +7205,7 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
                     if len(norm.split()) >= _CHURN_TITLE_MIN_WORDS:
                         title_entries.setdefault(norm, []).append((pub_ts, entry))
 
-            for slug, items in slug_entries.items():
+            for _slug, items in slug_entries.items():
                 if len(items) < 2:
                     continue
                 items.sort(key=lambda x: x[0])
@@ -7218,7 +7215,7 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
                         suppressed_ids.add(eid)
                         all_to_suppress.append(entry)
 
-            for norm, items in title_entries.items():
+            for _norm, items in title_entries.items():
                 if len(items) < 2:
                     continue
                 items.sort(key=lambda x: x[0])
@@ -7252,7 +7249,7 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
             pub_ts = pub.timestamp() if pub else 0.0
             link_entries.setdefault(canon, []).append((pub_ts, entry))
 
-        for canon, items in link_entries.items():
+        for _canon, items in link_entries.items():
             # Only act when entries come from at least two different feeds.
             if len({str(e.feed_url) for _, e in items}) < 2:
                 continue
@@ -11921,7 +11918,6 @@ def build_source_proxy_response(source_url: str, picker: bool = False) -> HTMLRe
 
     sanitized = normalize_proxy_lazy_media(sanitized)
     escaped_source = html.escape(str(response.url))
-    unescaped_source = str(response.url)
     proxy_style = (
         "<style>"
         "img[alt*='image unavailable' i],"
@@ -28885,7 +28881,6 @@ def combine_feeds_route(
         return JSONResponse({"ok": False, "message": "Pick a survivor and at least one other feed."}, status_code=400)
     do_unread = move_unread in ("1", "true", "on", "yes")
 
-    migrated = {"tags": 0, "stars": 0, "synth": 0}
     rescued = 0
     try:
         with get_reader() as reader:
@@ -29013,7 +29008,6 @@ def get_feed_duplicates():
                 continue
             keep_folder_ids = {fid for fid, _ in url_folders.get(keep, [])}
             remove_folder_ids = {fid for fid, _ in url_folders.get(remove, [])}
-            shared = keep_folder_ids & remove_folder_ids
             only_in_remove = remove_folder_ids - keep_folder_ids
 
             content_identical = _pair_is_content_identical(keep, remove)
@@ -29782,15 +29776,15 @@ def _current_autofile_plan(restrict_to: set[str] | None = None) -> tuple[list[di
             }
             non_feed = {r[0] for r in conn.execute("SELECT host FROM autofile_non_feed_hosts")}
         saved_rows = [
-            (str(i), str(l or i))
-            for i, l in db.execute(
+            (str(i), str(link or i))
+            for i, link in db.execute(
                 "SELECT id, link FROM entries WHERE feed = ?", (saved_url,)
             )
             if str(i) in kept and (restrict_to is None or str(i) in restrict_to)
         ]
         feed_links = [
-            (str(f), str(l))
-            for f, l in db.execute(
+            (str(f), str(link))
+            for f, link in db.execute(
                 "SELECT feed, link FROM entries WHERE link IS NOT NULL AND feed != ?",
                 (saved_url,),
             )
@@ -34373,9 +34367,6 @@ async def miniflux_auth_token(request: Request) -> Response:
     uid = user_store.verify_login(username, password) if username and password else None
     if not uid:
         return JSONResponse({"error_message": "Invalid credentials."}, status_code=401)
-    with tenancy.user_context(uid):
-        with get_meta_connection() as conn:
-            tok = get_runtime_setting(conn, "api_token") if False else None
     # Resolve the api_token directly from the auth DB
     with user_store._connect() as conn:
         row = conn.execute(

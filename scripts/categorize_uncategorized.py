@@ -233,7 +233,7 @@ def cmd_review(args) -> None:
         raise SystemExit(
             "The review pass needs the anthropic SDK. Re-run with:\n"
             "  uv run --with anthropic scripts/categorize_uncategorized.py --review ..."
-        )
+        ) from None
 
     _, meta = _db_paths(Path(args.data_dir), args.user)
     folders = _valid_folder_names(meta)
@@ -318,7 +318,6 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--data-dir", default="data")
     p.add_argument("--user", default=None, help="user id (multi-user); omit for single-user")
-    sub = p.add_subparsers(dest="cmd", required=False)
     p.add_argument("--propose", action="store_true")
     p.add_argument("--review", dest="review_csv", default=None,
                    help="fill blank rows in this proposal CSV via Claude")

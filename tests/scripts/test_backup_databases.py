@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import sqlite3
 from pathlib import Path
 
@@ -86,7 +87,7 @@ def test_parse_size(text, expected):
 
 @pytest.mark.parametrize("bad", ["", "abc", "-1G", "G"])
 def test_parse_size_rejects_garbage(bad):
-    with pytest.raises(Exception):
+    with pytest.raises(argparse.ArgumentTypeError):
         backup_databases.parse_size(bad)
 
 

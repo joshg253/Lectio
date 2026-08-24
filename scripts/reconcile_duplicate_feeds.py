@@ -39,8 +39,8 @@ def _db_paths(data_dir: Path, user: str | None) -> tuple[Path, Path]:
     return base / "lectio_reader.sqlite", base / "lectio_meta.sqlite3"
 
 
-def _norm_link(l):
-    return l.split("#")[0].rstrip("/") if l else None
+def _norm_link(link):
+    return link.split("#")[0].rstrip("/") if link else None
 
 
 def _duplicate_pairs(reader_db: Path, meta_db: Path) -> list[dict]:
@@ -74,7 +74,7 @@ def _duplicate_pairs(reader_db: Path, meta_db: Path) -> list[dict]:
         # Survivor = the feed that actually holds the content (most entries), so
         # curation migrates onto existing items instead of synthesizing them.
         # Tie-break toward a foldered member, then the canonical ("upgraded") URL.
-        def rank(m: str) -> tuple:
+        def rank(m: str, canon: str = canon) -> tuple:
             return (entry_count.get(m, 0), m in foldered, m == canon)
         survivor = max(members, key=rank)
         for m in members:

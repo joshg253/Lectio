@@ -3475,7 +3475,7 @@ class LeadImageService:
                             if "=" in cookie_str:
                                 cname, cval = cookie_str.split("=", 1)
                                 parsed_host = urlparse(url)
-                                domain = parsed_host.netloc.lstrip("www.")
+                                domain = parsed_host.netloc.removeprefix("www.")
                                 client.cookies.set(cname.strip(), cval.strip(), domain=domain)
                             response = url_guard.safe_get(client, url)
                     if response.status_code not in (403, 503):
@@ -3651,7 +3651,8 @@ class LeadImageService:
         """
         import re as _re
 
-        _strip = lambda s: _re.sub(r"<[^>]+>", "", s).strip() or None if s else None
+        def _strip(s):
+            return (_re.sub(r"<[^>]+>", "", s).strip() or None) if s else None
 
         def _finalize(alt: str | None, title: str | None, page_html: str | None) -> tuple[str | None, str | None]:
             # Webcomic hover text lives in a balloon element / og:description, not the

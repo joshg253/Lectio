@@ -307,7 +307,6 @@ def test_get_stream_item_ids_reading_list(tmp_path):
 def test_get_stream_item_ids_exclude_read(tmp_path):
     db = tmp_path / "meta.sqlite"
     unread = _mock_entry(read=False)
-    read = _mock_entry(entry_id=_ENTRY_ID2, read=True)
     mock_reader = MagicMock()
     mock_reader.get_feeds.return_value = []
     mock_reader.get_entries.return_value = [unread]  # reader already filters when read=False passed

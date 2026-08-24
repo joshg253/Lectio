@@ -72,7 +72,7 @@ def resolve_wayback(url: str) -> str | None:
     embedded in the wayback path (/web/<ts>/<original>). archive.org rate-
     limits the /web/ endpoint aggressively — back off and retry on 429."""
     import httpx
-    for attempt in range(3):
+    for _attempt in range(3):
         try:
             with httpx.Client(follow_redirects=True, timeout=30.0,
                               headers={"User-Agent": "Lectio/1.0 (+https://github.com/joshg253/Lectio)"}) as client:

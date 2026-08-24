@@ -28,7 +28,7 @@ def _patch_read(monkeypatch, *, backlog, archived_keys=frozenset(), article="<p>
                 starred=True, manual_tags=(), all_tag_names=()):
     marks: list[tuple] = []
     monkeypatch.setattr(main, "resolve_reader_backlog", lambda **k: list(backlog))
-    monkeypatch.setattr(main, "resolve_reader_article_html", lambda f, e, l: article)
+    monkeypatch.setattr(main, "resolve_reader_article_html", lambda f, e, link: article)
     monkeypatch.setattr(main, "_mark_entry_read_background", lambda *a: marks.append(a[:2]))
     monkeypatch.setattr(main, "get_archived_saved_keys", lambda: set(archived_keys))
     # Archive lives on the star row, so the button only renders for a starred

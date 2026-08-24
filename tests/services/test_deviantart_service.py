@@ -402,9 +402,10 @@ def test_item_xml_emits_category_per_tag():
 def test_fetch_deviation_tags_batches_and_maps():
     # 60 ids → two metadata calls of ≤50 (plus the initial token call).
     ids = [f"d{i}" for i in range(60)]
-    meta = lambda batch: {"metadata": [
-        {"deviationid": d, "tags": [{"tag_name": f"tag-{d}"}]} for d in batch
-    ]}
+    def meta(batch):
+        return {"metadata": [
+            {"deviationid": d, "tags": [{"tag_name": f"tag-{d}"}]} for d in batch
+        ]}
     responses = [
         (200, {"access_token": "T", "expires_in": 3600}),
         (200, meta(ids[:50])),
@@ -440,6 +441,7 @@ def test_fetch_and_store_missing_tags_updates_rows_and_marks_checked():
     with patch.object(da, "fetch_deviation_tags",
                       return_value={"d2": ["fantasy", "dragon"], "d1": []}) as fetched:
         tagged = da.fetch_and_store_missing_tags(conn, "f1", "cid", "sec")
+    fetched.assert_called_once()
     assert tagged == 1
     rows = {r["deviationid"]: r for r in conn.execute("SELECT * FROM deviantart_entries")}
     assert rows["d2"]["tags"] == "fantasy,dragon"
