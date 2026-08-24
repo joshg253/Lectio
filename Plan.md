@@ -1240,14 +1240,34 @@ Miniflux token route. Full history in the "Weekly stack sweep" commits
 around 2026-08-24. `make lint` is now part of what's worth keeping green —
 watch for regression, no further backlog to burn down.
 
-**Whole-repo type backlog — still open, 165 diagnostics.** `ty` isn't in CI
-at all (only `ruff` is, and only on changed lines). Confirmed pre-existing,
-not caused by the dependency sweep. Unlike the lint pass, most of these are
-`invalid-argument-type`/`no-matching-overload`/`unsupported-operator` —
-likely a mix of real stub mismatches and noise from `ty` being a preview
-tool; each needs individual judgment rather than a mechanical fix, so this
-is a separate, larger pass if it's ever picked up. Keep tracking the count
-in the weekly sweep either way.
+**Whole-repo type backlog — CLEARED 2026-08-24.** `make types` went 165 → 0,
+same day as the lint sweep above, across ~15 commits. `ty` still isn't wired
+into CI (only `ruff` is, and only on changed lines) — worth reconsidering
+now that there's a real zero to protect, but not done here since that's a
+CI/workflow change, not a cleanup one.
+
+Two real bugs surfaced along the way, beyond the lint pass's two:
+
+- `services/inoreader.py`'s `edit_tag_remove` built httpx `data=` as a list
+  of `(key, value)` tuples — a `requests`-era idiom httpx's `data=` doesn't
+  support (it wants a `Mapping`; a non-Mapping routes through httpx's raw-
+  content fallback, which would fail trying to write tuples as HTTP body
+  bytes). Never actually called from anywhere, so never crashed anyone —
+  fixed to `{"r": tag, "i": item_ids}`, which httpx's own encoder expands
+  into repeated `i=` params, and verified the wire output.
+- `/api/save` merged POST form data into `params` with a plain
+  `dict.update()`; a multipart file field named `url`/`username`/`token`
+  would have overwritten the query param with an `UploadFile` object that
+  downstream code treats as a plain string (auth token comparison, URL
+  parsing) — now only `str`-valued form fields are merged in.
+
+Plus two real annotation bugs (not just missing ones): `add_feed_to_folder`
+was typed `-> None` but a real caller captures its return value (the
+slash-normalized/reused feed URL), and `services/lead_images.py`'s
+`_page_tag_sink` field was typed as a 3-arg callable when the setter, the
+one real call site, and the one real sink implementation all agree on 4.
+
+Full history in the "Type cleanup" commits following the lint sweep.
 
 **Flaky test seen 2026-07-21:**
 `tests/integration/test_youtube_playlist_rules.py::test_add_route_accepts_blank_keyword`
