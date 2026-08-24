@@ -802,7 +802,10 @@
         </div>
       </div>
       {% endif %}
-      <div class="posts" data-chunk-size="10">
+      <div class="posts {% if not posts and not selected_home and not is_chunk_delta_fetch %}posts-empty{% endif %}" data-chunk-size="10">
+        {% if not posts and not selected_home and not is_chunk_delta_fetch %}
+        <div class="empty-state-message muted">No posts match this filter.</div>
+        {% endif %}
         {% for post in posts %}
         {% set list_feed_query = '&list_feed_url=' ~ (selected_feed_url | urlencode) if selected_feed_url else '' %}
         {% set tag_query = '&tag=' ~ (selected_tag | urlencode) if selected_tag else '' %}

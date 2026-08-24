@@ -22751,6 +22751,10 @@ def _home_inner(
         "inactive_feeds": inactive_feeds,
         "inactive_feed_count": len(inactive_feeds),
         "posts": posts,
+        # An empty *delta* chunk means "no more to load" (infinite-scroll end),
+        # not "nothing matches" — the empty-state message must only render on
+        # a full/initial fetch, or it would get appended below real posts.
+        "is_chunk_delta_fetch": bool(chunk and chunk_delta),
         "selected_entry": selected_entry,
         "message": message,
         "no_rss_url": no_rss_url,
