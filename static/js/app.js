@@ -13013,6 +13013,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
               if (apiStart) apiStart.hidden = true;
               if (apiRun) apiRun.hidden = false;
               if (apiReset) apiReset.hidden = false;
+              // The local-files import polls itself while running (below); this
+              // path never did, so the status line just sat on whatever phase it
+              // was in when the panel last loaded even while the drip step kept
+              // advancing in the background. Same interval as that path.
+              setTimeout(_migInoRefreshStatus, 3000);
             }
           }
         } catch { /* ignore */ }
