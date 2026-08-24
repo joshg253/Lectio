@@ -118,7 +118,7 @@ def sync_youtube_folder(
     channel_identifier: str,
     folder_id: int,
     get_folder_feed_urls: Callable[[int], list[str]],
-    add_feed: Callable[[str, int], None],
+    add_feed: Callable[[str, int], object],
     remove_feed: Callable[[str, int], None],
 ) -> dict:
     """Sync subscriptions to/from a Lectio folder.
