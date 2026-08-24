@@ -1225,6 +1225,18 @@ extension keeps working too.
 
 ### Code health (deferred — low value, no user impact)
 
+**Whole-repo lint/type backlog — tracked, not gated.** CI already lints only
+the lines a PR touches (`scripts/lint_changed.py`) plus an informational
+whole-repo `ruff` pass; `ty` isn't in CI at all. Measured 2026-08-24 during the
+weekly stack sweep: `make lint` → 220 errors (112 auto-fixable), `make types`
+→ 164 diagnostics. Confirmed pre-existing (same 220/158 on `main` before that
+day's dependency bump; the extra 6 type diagnostics came from the `ty` 0.0.74
+bump getting stricter on `no-matching-overload`/`unsupported-operator`, not
+new bugs). Not worth a dedicated cleanup pass — main.py alone carries most of
+it and a file-level gate would just stay red — but worth a number to watch:
+add "whole-repo lint/type count" to the weekly sweep alongside the CodeQL
+board check, so a real regression (vs. slow accumulation) stands out.
+
 **Flaky test seen 2026-07-21:**
 `tests/integration/test_youtube_playlist_rules.py::test_add_route_accepts_blank_keyword`
 failed once in a full run, then passed in isolation and in two further full
