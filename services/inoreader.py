@@ -190,7 +190,13 @@ def edit_tag_remove(access_token: str, item_ids: list[str], tag: str) -> dict:
     """Remove *tag* from one or more Inoreader items in one POST. Returns rate_limits."""
     if not item_ids:
         return {}
-    params = [("r", tag)] + [("i", iid) for iid in item_ids]
+    # httpx's data= wants a Mapping — a repeated key (multiple item ids under
+    # "i") is a list value, not a list of (key, value) tuples. The old list-of-
+    # tuples form isn't a Mapping, so httpx routes it through its raw-content
+    # path (deprecation warning, then tries to write each tuple as request
+    # body bytes) instead of url-encoding it — never actually exercised
+    # because nothing calls this function yet.
+    params: dict[str, str | list[str]] = {"r": tag, "i": item_ids}
     with httpx.Client(timeout=_TIMEOUT, headers=_headers(access_token)) as client:
         resp = client.post(
             f"{_API_BASE}/edit-tag",

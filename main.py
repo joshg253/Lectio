@@ -15025,7 +15025,11 @@ def _norm_media_link(url: str | None) -> str:
 _HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 
 
-def _strip_play_button_glyphs(content_html: str) -> str:
+@overload
+def _strip_play_button_glyphs(content_html: str) -> str: ...
+@overload
+def _strip_play_button_glyphs(content_html: None) -> None: ...
+def _strip_play_button_glyphs(content_html: str | None) -> str | None:
     """Remove a facade's standalone play-button glyph.
 
     A "video facade" is a thumbnail plus a play triangle the publisher positions
@@ -15036,7 +15040,7 @@ def _strip_play_button_glyphs(content_html: str) -> str:
     video. Overlaid or not, it is decoration: the recovered embed has a real
     play button of its own.
     """
-    if "play-button" not in (content_html or ""):
+    if content_html is None or "play-button" not in content_html:
         return content_html
     from bs4 import BeautifulSoup
     soup = BeautifulSoup(content_html, "html.parser")

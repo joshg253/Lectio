@@ -99,6 +99,7 @@ def test_bad_token_rejected_in_multiuser_mode(configured, tmp_path):
     store = UserStore(tmp_path / "auth.sqlite")
     uid = store.create("josh", "hunter2-hunter2", is_admin=True)
     real_token = store.get_api_token(uid)
+    assert real_token is not None
     main.user_store = store
     # Provision the tenant's data dir + meta schema (normally done at user creation).
     with tenancy.user_context(uid):

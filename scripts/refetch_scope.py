@@ -95,7 +95,11 @@ def _eligible(folder_id: int | None, feed_url: str | None) -> list[tuple[str, st
 
 def run(uid: str, folder_id: int | None, feed_url: str | None,
         apply: bool, limit: int | None, unread: bool = False) -> None:
-    targets = _eligible_unread(feed_url) if unread else _eligible(folder_id, feed_url)
+    if unread:
+        assert feed_url is not None  # CLI enforces --unread requires --feed
+        targets = _eligible_unread(feed_url)
+    else:
+        targets = _eligible(folder_id, feed_url)
     # Interleave hosts so no site sees a run of back-to-back requests even before
     # the per-host delay applies.
     ordered = refetch_batch.interleave_by_host(targets)

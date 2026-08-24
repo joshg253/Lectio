@@ -525,7 +525,7 @@ _NON_RESOLVABLE_SCHEMES = ("data:", "mailto:", "javascript:", "tel:", "blob:", "
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
-def plain_text_excerpt(html_text: str, limit: int = 300) -> str:
+def plain_text_excerpt(html_text: str | None, limit: int = 300) -> str:
     """Body HTML -> a plain-text excerpt for somewhere that cannot render HTML.
 
     Tags are stripped BEFORE entities are decoded, never after: decoding first

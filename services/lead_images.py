@@ -370,7 +370,10 @@ class LeadImageService:
     @classmethod
     def is_ad_dimension(cls, width: object, height: object) -> bool:
         try:
-            return (int(width), int(height)) in cls._AD_DIMENSIONS
+            # width/height are deliberately `object` — callers pass whatever a
+            # page's markup gave them (str, int, None, garbage), and int()'s
+            # own TypeError/ValueError is exactly the validation this needs.
+            return (int(width), int(height)) in cls._AD_DIMENSIONS  # ty: ignore[invalid-argument-type]
         except (TypeError, ValueError):
             return False
 

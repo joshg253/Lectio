@@ -175,6 +175,7 @@ def test_forum_call_to_action_is_kept():
     article. Kept deliberately; Josh does not mind the link."""
     import main
     sliced = main._slice_to_content(PAIZO_PAGE, plugins.content_selectors(PAIZO_URL))
+    assert sliced is not None
     cleaned = main._strip_site_chrome(sliced, PAIZO_URL)
     assert "Join the conversation" in cleaned
     assert "Real prose here." in cleaned
@@ -194,6 +195,7 @@ def test_a_single_text_container_body_survives():
         "</div></div></div></div></body></html>"
     )
     sliced = main._slice_to_content(page, plugins.content_selectors(PAIZO_URL))
+    assert sliced is not None
     cleaned = main._strip_site_chrome(sliced, PAIZO_URL)
     assert len(re.sub(r"<[^>]+>", " ", cleaned).split()) >= 200
 

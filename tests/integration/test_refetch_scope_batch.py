@@ -201,7 +201,7 @@ def test_the_status_payload_never_exposes_the_cancel_flag(configured):
 
 
 # ── the run loop ──
-def _run(results, rows=None, job=None):
+def _run(results, rows=None, job: dict | None = None):
     """Drive _run_refetch_batch with canned per-entry results and no sleeping."""
     rows = rows or [("f", str(i), f"https://h{i}.test/x") for i in range(len(results))]
     job = job if job is not None else {"running": True, "cancel": False}

@@ -15,6 +15,7 @@ Two paths had it, in two different disguises:
 from __future__ import annotations
 
 import io
+from typing import cast
 
 import pytest
 from PIL import Image
@@ -40,7 +41,7 @@ def _line_art(mode: str) -> bytes:
 
 def _mean_luma(img: Image.Image) -> float:
     grey = img.convert("L")
-    data = list(grey.get_flattened_data())
+    data = cast("tuple[int, ...]", grey.get_flattened_data())
     return sum(data) / len(data)
 
 
