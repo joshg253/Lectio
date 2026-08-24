@@ -7,11 +7,9 @@ in reader view while its jpg loads.
 from __future__ import annotations
 
 import httpx
-import pytest
 
 import main
 from services import url_guard
-
 
 _PAGE = (
     "<html><head><title>My favorite keyboards</title></head><body><article>"

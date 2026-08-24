@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from services.feed_discovery import _ct_is_feed, _parse_attrs, discover_feed_urls, probe_url, rewrite_known_site_url
 
 

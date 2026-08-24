@@ -1,13 +1,12 @@
 """Tests for the Reddit OAuth/feed service."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from services import reddit as svc
-
 
 # ---------------------------------------------------------------------------
 # URL helpers

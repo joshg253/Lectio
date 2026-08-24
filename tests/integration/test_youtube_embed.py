@@ -6,7 +6,6 @@ use YouTube's canonical markup (nocookie host, referrerpolicy, no enablejsapi).
 from __future__ import annotations
 
 import datetime as dt
-from pathlib import Path
 
 import pytest
 

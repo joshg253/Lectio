@@ -5,7 +5,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
-from services import quire as quire_svc
 
 
 def _build_app(monkeypatch, *, connected=True, token="qtok", settings_oid="default-oid", usage_state="ok"):

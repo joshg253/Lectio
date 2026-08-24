@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import collections
 import base64
+import collections
 import contextlib
 import hashlib
 import html
@@ -11,13 +11,13 @@ import logging
 import mimetypes
 import os
 import re
-import unicodedata
 import secrets
 import shutil
 import sqlite3
 import tempfile
 import threading
 import time
+import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
 from contextlib import asynccontextmanager, closing, contextmanager
@@ -94,7 +94,7 @@ from services import url_guard
 from services.webhooks import WEBHOOK_VALID_FORMATS, build_webhook_batch_payload, build_webhook_payload, send_webhook
 from services.users import UserExistsError, UserStore
 from services.email import send_article_email, send_digest_email
-from services.feed_discovery import discover_feed_urls, discover_feed_urls_ex
+from services.feed_discovery import discover_feed_urls_ex
 from services.feed_refresh import FeedRefreshService
 from services.lead_images import LeadImageService, upgrade_image_size_param
 from services.reader_api import ReaderApi
@@ -6299,7 +6299,6 @@ def _dry_run_pattern(
     youtube_playlist: a blank keyword means "every entry in scope"). ``exclude_shorts``
     drops YouTube Shorts from the preview so it matches what a youtube_playlist rule
     with Include-Shorts off would actually add."""
-    import re as _re
 
     if not keyword:
         if not match_all_if_empty:
@@ -6603,7 +6602,6 @@ def _run_now_pattern(
     search_in: str,
 ) -> dict:
     """Execute mark_as_read rule: find matching unread entries and mark them read."""
-    import re as _re
     global _unread_counts_generation
 
     if not keyword:
@@ -7550,7 +7548,6 @@ def _is_local_dev_feed(feed_url: str) -> bool:
 
 
 def _entry_matches_rule(entry: object, keyword: str, is_regex: bool, search_in: str) -> bool:
-    import re as _re
     if not keyword:
         return False
     try:
@@ -7583,7 +7580,8 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
         return
 
     try:
-        from datetime import timedelta, timezone as _tz
+        from datetime import timedelta
+        from datetime import timezone as _tz
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -7720,7 +7718,8 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
         return
 
     try:
-        from datetime import timedelta, timezone as _tz
+        from datetime import timedelta
+        from datetime import timezone as _tz
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -7841,7 +7840,8 @@ def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
         return
 
     try:
-        from datetime import timedelta, timezone as _tz
+        from datetime import timedelta
+        from datetime import timezone as _tz
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -7927,7 +7927,8 @@ def _run_save_article_rules_after_refresh(refreshed_feed_urls: set[str]) -> None
     if not refreshed_feed_urls:
         return
     try:
-        from datetime import timedelta, timezone as _tz
+        from datetime import timedelta
+        from datetime import timezone as _tz
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -8010,7 +8011,8 @@ def _run_quire_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
         return
 
     try:
-        from datetime import timedelta, timezone as _tz
+        from datetime import timedelta
+        from datetime import timezone as _tz
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -8103,7 +8105,8 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
     global _unread_counts_generation
 
     try:
-        from datetime import timedelta, timezone as _tz
+        from datetime import timedelta
+        from datetime import timezone as _tz
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -8517,13 +8520,14 @@ youtube_duration_service = YouTubeDurationService(
 # current user's daily quota meter.
 youtube_oauth_service.set_quota_sink(record_yt_quota_spend)
 import services.youtube_sync as _youtube_sync_mod
+
 _youtube_sync_mod.set_quota_sink(record_yt_quota_spend)
 
 # Quire calls feed the per-user sliding-window rate meter (per-minute/hour).
 quire_service.set_usage_sink(record_quire_call)
 
-from services import reader_sanitize
 from services import feed_tags as feed_tags_service_mod
+from services import reader_sanitize
 from services.feed_tags import FeedTagService
 
 # Feed-provided entry tags (<category>) captured at ingest: the sanitizing
@@ -13815,7 +13819,7 @@ def list_entries_for_feeds(
                 # C++ title's std::vector<T> survives — see sanitize_inline_title.
                 "title_html": html_sanitize.sanitize_inline_title(title_text),
                 "post_timestamp": published_dt.isoformat() if published_dt else None,
-                "received_timestamp": getattr(entry, "added").isoformat() if getattr(entry, "added", None) else None,
+                "received_timestamp": entry.added.isoformat() if getattr(entry, "added", None) else None,
                 "read_timestamp": read_dt.isoformat() if read_dt else None,
                 # When this was starred — carried so the orphan merge can re-sort
                 # by it after list_entries_for_feeds pops the sort values.
@@ -25477,7 +25481,6 @@ def inoreader_import_start(delete_mode: int = Form(default=0), since: str = Form
             since_ot = int(since)
         except ValueError:
             try:
-                from datetime import date
                 since_ot = int(datetime.fromisoformat(since.strip()).timestamp())
             except Exception:
                 pass
@@ -27085,7 +27088,6 @@ async def save_all_settings(request: Request):
     yt_configured_before = bool(get_yt_api_key() and get_yt_channel_id())
     quire_project_before = quire_project_oid()
 
-    import json as _json
     with get_meta_connection() as conn:
         for key, value in body.items():
             if key not in _ALLOWED:
@@ -28924,7 +28926,7 @@ def combine_feeds_route(
                         migrate_curation_to=survivor_url,
                     )
         invalidate_meta_structure_cache()
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         LOGGER.exception("[combine] failed combining into %s", survivor_url)
         return JSONResponse({"ok": False, "message": "Combine failed — see server logs."}, status_code=500)
 
@@ -30466,7 +30468,7 @@ def bulk_feed_action(
             invalidate_meta_structure_cache()
         else:
             return JSONResponse({"ok": False, "error": f"Unknown action: {action}"}, status_code=400)
-    except Exception as exc:
+    except Exception:
         LOGGER.exception("[feeds/bulk] action=%s failed", action)
         # Don't leak internal exception detail to the client; it's in the logs.
         return JSONResponse({"ok": False, "error": "Action failed."}, status_code=500)

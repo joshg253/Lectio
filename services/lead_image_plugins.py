@@ -8,8 +8,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from services import svg_sanitize
-from services import url_guard
+from services import svg_sanitize, url_guard
 from services.url_guard import is_safe_outbound_url
 
 # A whole inline <svg>…</svg> element (non-greedy).

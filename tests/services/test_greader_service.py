@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import sqlite3
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
 from services.greader import GReaderService
-
 
 _USERNAME = "alice"
 _PASSWORD = "hunter2"

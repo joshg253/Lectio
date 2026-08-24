@@ -108,7 +108,7 @@ def cmd_find(args) -> None:
     print(f"  with curation to migrate: {len(with_cur)}  "
           f"({sum(p['tags'] for p in pairs)} tags, {sum(p['stars'] for p in pairs)} stars)")
     print(f"  pure drops (no curation):  {len(pairs) - len(with_cur)}")
-    print(f"\ncuration-bearing pairs [dupe(fold?) -> survivor(fold?)  tags/stars]:")
+    print("\ncuration-bearing pairs [dupe(fold?) -> survivor(fold?)  tags/stars]:")
     for p in with_cur:
         print(f"  {'F' if p['dupe_foldered'] else 'u'} {p['dupe'][:44]:44} -> "
               f"{'F' if p['survivor_foldered'] else 'u'} {p['survivor'][:44]:44}  "

@@ -8,8 +8,6 @@ comment avatars). These tests pin that comment containers are removed and the
 real body survives, without touching content that merely mentions comments."""
 from __future__ import annotations
 
-import re
-
 import main
 
 URL = "https://blog.test/post"

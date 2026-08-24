@@ -10,8 +10,6 @@ runs for every tenant — a meta table added anywhere else 500s for existing use
 """
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
 
 import main

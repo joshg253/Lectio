@@ -13,7 +13,6 @@ contaminate the developer's real `lectio_meta.sqlite3` /
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest

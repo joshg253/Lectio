@@ -28,9 +28,6 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-import pytest
-
-from services.lead_images import LeadImageService
 from services.lead_image_plugins import (
     FutureSiteLeadImagePlugin,
     GunnerkriggPlugin,
@@ -39,7 +36,7 @@ from services.lead_image_plugins import (
     StandardEbooksLeadImagePlugin,
     WordPressComicPlugin,
 )
-
+from services.lead_images import LeadImageService
 
 # ---------------------------------------------------------------------------
 # Infrastructure (mirrors tests/services/test_lead_images_service.py)

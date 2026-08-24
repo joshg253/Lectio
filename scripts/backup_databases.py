@@ -196,7 +196,7 @@ def main() -> int:
         held = sum(p.stat().st_size for _s, paths in gens for p in paths if p.exists())
         needed = sum(src.stat().st_size for src, _stem in sources)
         free = shutil.disk_usage(dest_dir).free
-        print(f"DRY RUN — nothing written or deleted")
+        print("DRY RUN — nothing written or deleted")
         print(f"  sources           : {len(sources)} DB(s), ~{_human(needed)}")
         print(f"  existing backups  : {len(gens)} generation(s), {_human(held)}")
         print(f"  free now / after  : {_human(free)} / {_human(free - needed)}")

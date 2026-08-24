@@ -19,7 +19,6 @@ from email.utils import format_datetime as _format_rfc2822
 from pathlib import Path
 from urllib.parse import urljoin
 
-import httpx
 from bs4 import BeautifulSoup
 
 from services import assert_safe_feed_id, publish_date, url_guard

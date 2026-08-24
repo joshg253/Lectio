@@ -12,15 +12,12 @@ _CSRFMiddleware is not in play; CSRF is covered separately in test_csrf.py.
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
 from services import tenancy
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers

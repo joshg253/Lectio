@@ -12,7 +12,6 @@ import pytest
 
 import main
 from services import tenancy
-from services.saved_articles import SAVED_FEED_URL
 
 FEED = "https://example.test/feed"
 MTAG = main.MANUAL_TAG_KEY_PREFIX

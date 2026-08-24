@@ -4,7 +4,6 @@ Mounts the handler on a bare FastAPI app (like test_instapaper_route) so the
 main app's CSRF middleware doesn't reject the test POSTs."""
 from __future__ import annotations
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

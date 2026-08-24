@@ -187,7 +187,7 @@ def _review_chunk(client, folders: list[str], feeds: list[dict]) -> dict[str, st
         "the allowed list below, based on its title and recent entry titles. If "
         "none clearly fits, or the feed looks dead/spammy/uncategorizable, leave "
         "the folder empty (\"\") — do not force a bad match.\n\n"
-        f"Allowed folders:\n- " + "\n- ".join(folders) + "\n\n"
+        "Allowed folders:\n- " + "\n- ".join(folders) + "\n\n"
         f"Feeds:\n{listing}"
     )
     response = client.messages.create(

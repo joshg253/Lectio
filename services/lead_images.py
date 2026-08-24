@@ -15,10 +15,7 @@ from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlparse, urlsp
 import feedparser
 import httpx
 
-from services import bluesky
-from services import tenancy
-from services import url_guard
-from services import svg_sanitize
+from services import bluesky, svg_sanitize, tenancy, url_guard
 from services.lead_image_plugins import DEFAULT_LEAD_IMAGE_PLUGINS, LeadImagePlugin
 from services.url_guard import is_safe_outbound_url
 
