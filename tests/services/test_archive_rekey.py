@@ -58,7 +58,7 @@ def _connect_to(conn):
 def _svc(archive):
     return StarredArchiveService(
         get_archive_connection=_connect_to(archive),
-        get_meta_connection=lambda: None,  # type: ignore[arg-type]
+        get_meta_connection=lambda: None,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         get_reader=lambda: None,  # type: ignore[arg-type]
         user_agent="test",
         sanitize_readability_html=lambda h: h,

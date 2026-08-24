@@ -525,7 +525,7 @@ _NON_RESOLVABLE_SCHEMES = ("data:", "mailto:", "javascript:", "tel:", "blob:", "
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
-def plain_text_excerpt(html_text: str, limit: int = 300) -> str:
+def plain_text_excerpt(html_text: str | None, limit: int = 300) -> str:
     """Body HTML -> a plain-text excerpt for somewhere that cannot render HTML.
 
     Tags are stripped BEFORE entities are decoded, never after: decoding first
@@ -693,6 +693,7 @@ def sanitize_html(content: str) -> str:
     if not content:
         return content
     from bs4 import BeautifulSoup, Comment
+    from bs4.element import AttributeValueList
 
     soup = BeautifulSoup(content, "html.parser")
     for comment in soup.find_all(string=lambda t: isinstance(t, Comment)):
@@ -723,7 +724,9 @@ def sanitize_html(content: str) -> str:
             if alt:
                 img.attrs["alt"] = alt
             obj_class = obj.attrs.get("class")
-            classes = list(obj_class) if isinstance(obj_class, list) else ([obj_class] if obj_class else [])
+            classes = AttributeValueList(obj_class) if isinstance(obj_class, list) else (
+                AttributeValueList([obj_class]) if obj_class else AttributeValueList()
+            )
             classes.append("lectio-math-svg")
             img.attrs["class"] = classes
             # The object's style carries the true rendered px height; the new img has

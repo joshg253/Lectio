@@ -100,13 +100,15 @@ def test_stall_measured_from_last_progress_not_pass_start():
 def test_progress_hook_updates_stage_and_clears_the_stall():
     _set_state(pass_started_at=time.monotonic() - 900,
                last_progress_at=time.monotonic() - 900)
-    assert main._scheduler_stall_seconds() >= 900
+    stalled = main._scheduler_stall_seconds()
+    assert stalled is not None and stalled >= 900
 
     main._note_scheduler_progress("feed 3/10 https://example.test/feed")
 
-    assert main._scheduler_stall_seconds() < 5
+    stalled = main._scheduler_stall_seconds()
+    assert stalled is not None and stalled < 5
     with main._scheduler_state_lock:
-        assert main._scheduler_state["stage"].startswith("feed 3/10")
+        assert str(main._scheduler_state["stage"]).startswith("feed 3/10")
 
 
 # --- watchdog escalation ---------------------------------------------------

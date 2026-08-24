@@ -37,7 +37,7 @@ def _stub_page(monkeypatch):
 def test_reader_view_proxies_hotlink_webp(monkeypatch):
     _stub_page(monkeypatch)
     resp = main.build_readability_response("https://fabiensanglard.net/keyboards/index.html")
-    body = resp.body.decode()
+    body = bytes(resp.body).decode()
     # The webp (hotlink-protected) image is routed through /api/img...
     assert "/api/img?u=https%3A%2F%2Ffabiensanglard.net%2Fkeyboards%2Fmodel_m.webp" in body
     # ...and is no longer loaded directly.
@@ -47,6 +47,6 @@ def test_reader_view_proxies_hotlink_webp(monkeypatch):
 def test_reader_view_adds_no_referrer(monkeypatch):
     _stub_page(monkeypatch)
     resp = main.build_readability_response("https://fabiensanglard.net/keyboards/index.html")
-    body = resp.body.decode()
+    body = bytes(resp.body).decode()
     # Non-hotlink images keep their direct src but gain referrerpolicy.
     assert "referrerpolicy" in body

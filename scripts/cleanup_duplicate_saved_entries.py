@@ -73,6 +73,7 @@ def cleanup(user_id: str, apply: bool) -> tuple[int, int]:
 def resolve_users(explicit: str | None) -> list[str]:
     if explicit:
         return [explicit]
+    assert main.user_store is not None, "multi-user auth must be configured to enumerate users"
     users = main.user_store.list_users()
     return [u["user_id"] if isinstance(u, dict) else getattr(u, "user_id", str(u)) for u in users]
 

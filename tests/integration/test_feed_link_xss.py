@@ -73,12 +73,14 @@ def test_javascript_link_never_rendered_in_post_list(configured):
 
 def test_entry_detail_empties_unsafe_link(configured):
     detail = main.get_entry_detail(FEED, "bad")
+    assert detail is not None
     assert detail["link"] == ""
 
 
 def test_benign_links_still_work(configured):
     """The guard must not break normal articles."""
     detail = main.get_entry_detail(FEED, "good")
+    assert detail is not None
     assert detail["link"] == GOOD
     body = _client().get(f"/?folder_id=1&feed_url={FEED}&entry_id=good").text
     assert GOOD in body

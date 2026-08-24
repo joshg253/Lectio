@@ -70,7 +70,9 @@ def test_failed_adds_are_recorded_as_profile_link_detail(configured):
     # (Read the DB directly — the fixture stubs get_runtime_setting to "me".)
     import json
     with main.get_meta_connection() as conn:
-        detail = json.loads(main.get_setting(conn, main.SETTING_DEVIANTART_SYNC_DETAIL))
+        detail_raw = main.get_setting(conn, main.SETTING_DEVIANTART_SYNC_DETAIL)
+        assert detail_raw is not None
+        detail = json.loads(detail_raw)
     assert detail["failed"] == [{"username": "bob", "error": "not found"}]
     # Status no longer punts the user to "logs".
     assert "see logs" not in _status()

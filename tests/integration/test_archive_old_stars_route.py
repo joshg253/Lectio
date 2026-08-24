@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 import pytest
+from fastapi import Request
 
 import main
 from services import tenancy
@@ -67,7 +69,7 @@ def _apply(days: int = 30) -> dict:
         async def json(self):
             return {"days": days}
 
-    return json.loads(bytes(asyncio.run(main.apply_archive_old_stars(_Req())).body))
+    return json.loads(bytes(asyncio.run(main.apply_archive_old_stars(cast(Request, _Req()))).body))
 
 
 def _starred(eid: str) -> bool:

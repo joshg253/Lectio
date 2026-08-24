@@ -51,7 +51,8 @@ def tenant(tmp_path):
     with main.get_meta_connection() as conn:
         root = main.get_root_folder_id(conn)
         cur = conn.execute("INSERT INTO folders (name, parent_id) VALUES ('Music', ?)", (root,))
-        folder_id = int(cur.lastrowid)
+        assert cur.lastrowid is not None
+        folder_id = cur.lastrowid
         conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
                      (folder_id, FEED))
         conn.commit()

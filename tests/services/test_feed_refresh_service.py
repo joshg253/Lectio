@@ -336,9 +336,9 @@ class _NotFoundError(RuntimeError):
     def __init__(self, status: int):
         super().__init__(f"HTTP {status}")
         class _Info:
-            pass
-        self.http_info = _Info()
-        self.http_info.status = status
+            def __init__(self, status: int):
+                self.status = status
+        self.http_info = _Info(status)
 
 
 class _StatusFailReader(_FakeReader):

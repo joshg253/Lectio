@@ -196,8 +196,9 @@ def test_mined_dates_are_range_checked():
     assert main.mine_publish_date('<meta name="date" content="1900-01-01">') is None
     assert main.mine_publish_date('<meta name="date" content="2099-01-01">') is None
     assert main.mine_publish_date("<p>nothing here</p>") is None
-    assert main.mine_publish_date(
-        '<time datetime="2020-03-04T05:06:07Z">x</time>').year == 2020
+    mined = main.mine_publish_date('<time datetime="2020-03-04T05:06:07Z">x</time>')
+    assert mined is not None
+    assert mined.year == 2020
 
 
 # --- orphan saves: the feed is gone, the entry lives only in the archive -----

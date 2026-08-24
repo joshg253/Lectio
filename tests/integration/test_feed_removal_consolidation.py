@@ -17,13 +17,18 @@ from __future__ import annotations
 
 import datetime as dt
 import time
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 import main
 from services import tenancy
+
+# combine_feeds_route never touches `request` — verified against main.py.
+_NO_REQUEST = cast(Request, None)
 
 FEED = "https://example.test/feed"
 FEED2 = "https://example.test/feed/"  # slash variant for dedup tests
@@ -95,6 +100,7 @@ def _csrf_client() -> tuple[TestClient, str]:
     client = TestClient(main.app)
     client.get("/healthz")  # establishes the session + token
     cookie = client.cookies.get("session")
+    assert cookie is not None
     signer = TimestampSigner(main.SESSION_SECRET_KEY)
     session_data = json.loads(base64.b64decode(signer.unsign(cookie, max_age=main.SESSION_MAX_AGE_SECONDS)))
     return client, session_data["csrf_token"]
@@ -1003,7 +1009,7 @@ class TestCombineFeedsSurvivorFolderPlacement:
         _add_feed_to_folder(FEED, folder)
         new_url = "https://example.test/feed?feed=json1"
         result = main.combine_feeds_route(
-            None, survivor_url=new_url, source_url=[FEED], move_unread="",
+            _NO_REQUEST, survivor_url=new_url, source_url=[FEED], move_unread="",
         )
         import json as _json
         body = _json.loads(result.body)
@@ -1020,7 +1026,7 @@ class TestCombineFeedsSurvivorFolderPlacement:
         _add_feed_to_folder(FEED, folder_a)
         _add_feed_to_folder(FEED2, folder_b)
         main.combine_feeds_route(
-            None, survivor_url=FEED, source_url=[FEED2], move_unread="",
+            _NO_REQUEST, survivor_url=FEED, source_url=[FEED2], move_unread="",
         )
         assert self._folders_of(FEED) == {folder_a}
 
@@ -1153,7 +1159,7 @@ class TestDedupDismissal:
             async def json(self):
                 return {"feed_urls": urls}
 
-        return asyncio.run(main.dismiss_feed_duplicate(_FakeRequest()))
+        return asyncio.run(main.dismiss_feed_duplicate(cast(Request, _FakeRequest())))
 
     def test_dismissed_same_folder_pair_is_excluded(self, env):
         fid = _make_child_folder("Comics")
@@ -1219,7 +1225,7 @@ class TestCombineAutoDismisses:
         subscribed -- nothing to delete, but the group must stop recurring."""
         _add_feed_to_folder("http://example.test/blog?feed=atom", _root_folder_id())
         result = main.combine_feeds_route(
-            None,
+            _NO_REQUEST,
             survivor_url="http://example.test/blog?feed=atom",
             source_url=["http://example.test/blog?feed=rss", "http://example.test/blog?feed=rss2"],
             move_unread="",
@@ -1239,7 +1245,7 @@ class TestCombineAutoDismisses:
         two alternates."""
         _add_feed_to_folder("http://example.test/blog?feed=atom", _root_folder_id())
         main.combine_feeds_route(
-            None,
+            _NO_REQUEST,
             survivor_url="http://example.test/blog?feed=atom",
             source_url=[
                 "http://example.test/blog",
@@ -1260,7 +1266,7 @@ class TestCombineAutoDismisses:
         root = _root_folder_id()
         _add_feed_to_folder(FEED, root)
         _add_feed_to_folder(FEED2, root)
-        main.combine_feeds_route(None, survivor_url=FEED, source_url=[FEED2], move_unread="")
+        main.combine_feeds_route(_NO_REQUEST, survivor_url=FEED, source_url=[FEED2], move_unread="")
         key = main._dedup_dismiss_key([FEED, FEED2])
         assert key in self._dismissed_keys()
 
@@ -1349,7 +1355,7 @@ class TestRestarCuratedEntries:
         client, token = _csrf_client()
         r = client.post("/feeds/unsubscribe", data={
             "_csrf": token,
-            "folder_id": _root_folder_id(), "feed_url": FEED,
+            "folder_id": str(_root_folder_id()), "feed_url": FEED,
         })
         assert r.status_code != 403
         assert calls == []
@@ -1357,7 +1363,7 @@ class TestRestarCuratedEntries:
         _add_feed_to_folder(FEED, _root_folder_id())
         client.post("/feeds/unsubscribe", data={
             "_csrf": token,
-            "folder_id": _root_folder_id(), "feed_url": FEED,
+            "folder_id": str(_root_folder_id()), "feed_url": FEED,
             "restar_curated": "1",
         })
         assert calls == [FEED]
@@ -1379,7 +1385,7 @@ class TestRestarCuratedEntries:
         client, token = _csrf_client()
         client.post("/feeds/unsubscribe", data={
             "_csrf": token,
-            "folder_id": _root_folder_id(), "feed_url": FEED, "restar_curated": "1",
+            "folder_id": str(_root_folder_id()), "feed_url": FEED, "restar_curated": "1",
         })
         assert seen["feed_exists"] is True
 
@@ -1486,13 +1492,13 @@ class TestDropAllCuration:
         _add_feed_to_folder(FEED, _root_folder_id())
         client, token = _csrf_client()
         client.post("/feeds/unsubscribe", data={
-            "_csrf": token, "folder_id": _root_folder_id(), "feed_url": FEED,
+            "_csrf": token, "folder_id": str(_root_folder_id()), "feed_url": FEED,
         })
         assert calls == []
 
         _add_feed_to_folder(FEED, _root_folder_id())
         client.post("/feeds/unsubscribe", data={
-            "_csrf": token, "folder_id": _root_folder_id(), "feed_url": FEED,
+            "_csrf": token, "folder_id": str(_root_folder_id()), "feed_url": FEED,
             "drop_curation": "1",
         })
         assert calls == [FEED]

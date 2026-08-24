@@ -233,7 +233,7 @@ def capture(base_url: str, out_dir: Path) -> None:
         # 15: the phone layout — one pane at a time below 720px.
         ctx = browser.new_context(viewport={"width": 390, "height": 844},
                                   device_scale_factor=3, is_mobile=True,
-                                  has_touch=True)  # ty: ignore[invalid-argument-type]
+                                  has_touch=True)
         page = ctx.new_page()
         _set_theme(page, "dark")
         page.goto(base_url + "/?read_filter=all", wait_until="networkidle")

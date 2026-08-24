@@ -259,6 +259,7 @@ def test_orphan_entry_detail_surfaces_pinned_feed_tags_as_suggestions(orphan_env
     )
     monkeypatch.setattr(main.starred_archive_service, "get_entry_asset_map", lambda f, e: {})
     detail = main._build_orphan_entry_detail(ORPHAN_FEED, ORPHAN_ENTRY)
+    assert detail is not None
     assert detail["feed_tag_suggestions"] == ["c++"]
 
 
@@ -274,6 +275,7 @@ def test_orphan_entry_detail_stops_suggesting_a_pinned_tag_once_applied(orphan_e
     )
     monkeypatch.setattr(main.starred_archive_service, "get_entry_asset_map", lambda f, e: {})
     detail = main._build_orphan_entry_detail(ORPHAN_FEED, ORPHAN_ENTRY)
+    assert detail is not None
     assert detail["feed_tag_suggestions"] == []
     assert detail["manual_tags"] == ["c++"]
 

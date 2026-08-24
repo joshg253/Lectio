@@ -5,11 +5,16 @@ import re
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
+from typing import TypedDict
 
 from reader import make_reader
 from reader._storage import Storage as _ReaderStorage
 
 from services import bot_challenge, reader_sanitize
+
+
+class _ExtraReaderKwargs(TypedDict, total=False):
+    session_timeout: tuple[float, float]
 
 # Honest default identity for feed fetches — names the app + links the repo.
 _HONEST_USER_AGENT = "Lectio/0.1 (+https://github.com/joshg253/Lectio)"
@@ -186,7 +191,9 @@ class ReaderApi:
         # waits. It is a per-socket-read deadline, not a total one — a host that
         # trickles bytes can still outlast it, which is what the scheduler watchdog
         # in main.py is for.
-        extra = {} if self._session_timeout is None else {"session_timeout": self._session_timeout}
+        extra: _ExtraReaderKwargs = (
+            {} if self._session_timeout is None else {"session_timeout": self._session_timeout}
+        )
         r = make_reader(
             self._db_path,
             feed_root='',

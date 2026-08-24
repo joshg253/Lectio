@@ -91,7 +91,10 @@ def _duplicate_pairs(reader_db: Path, meta_db: Path) -> list[dict]:
     rc.close()
     mc.close()
     # Curation-bearing dupes first, then by name.
-    pairs.sort(key=lambda p: (-(p["tags"] + p["stars"]), p["dupe"]))
+    pairs.sort(key=lambda p: (
+        -(tag_by_feed.get(str(p["dupe"]), 0) + star_by_feed.get(str(p["dupe"]), 0)),
+        p["dupe"],
+    ))
     return pairs
 
 

@@ -144,4 +144,5 @@ def test_chunks_past_the_sqlite_variable_limit(tenant):
     conn.close()
     keys = {(FEED, r[0]) for r in ROWS} | {(FEED, e[0]) for e in extra}
     got = main._filter_star_keys_by_search(keys, ["coffee"])
+    assert got is not None
     assert len(got) == 4 + 1200

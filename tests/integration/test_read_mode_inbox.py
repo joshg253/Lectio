@@ -12,11 +12,16 @@ must keep counting *filed* items rather than inbox ones.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import cast
 
 import pytest
+from fastapi import Request
 
 import main
 from services import tenancy
+
+# _build_read_mode_context never touches `request` — verified against main.py.
+_NO_REQUEST = cast(Request, None)
 
 FEED = "https://example.test/feed"
 MTAG = main.MANUAL_TAG_KEY_PREFIX
@@ -176,7 +181,7 @@ def test_all_saved_node_spans_kept_not_just_starred(configured):
     tagged-but-unstarred items exist in one mode and not the other, which is the
     exact cross-mode mismatch Read Mode is meant not to have."""
     ctx = main._build_read_mode_context(
-        None, folder_id=None, tag=None, archived=False, q=None, items=[],
+        _NO_REQUEST, folder_id=None, tag=None, archived=False, q=None, items=[],
         node_selected=True, all_saved=True,
     )
     nodes = {n["label"]: n for n in ctx["folder_nodes"]}
@@ -271,7 +276,7 @@ def test_unstar_scope_removes_stars_and_keeps_tags(configured):
         headers: dict = {}
         session: dict = {}
 
-    main.apply_unstar_scope(_Req(), folder_id=None, list_feed_url=None, tag="python")
+    main.apply_unstar_scope(cast(Request, _Req()), folder_id=None, list_feed_url=None, tag="python")
 
     with main.get_meta_connection() as conn:
         assert conn.execute(
@@ -288,13 +293,13 @@ def test_delete_tag_takes_two_taps(configured):
     """Irreversible, so the first tap only arms it — a browser confirm() is an
     awkward thing to hit on the Supernote's WebView."""
     armed = main._build_read_mode_context(
-        None, folder_id=1, tag="python", archived=False, q=None, items=[],
+        _NO_REQUEST, folder_id=1, tag="python", archived=False, q=None, items=[],
         node_selected=True, confirm_delete_tag="1",
     )
     assert armed["node_actions"]["confirm_delete_tag"] is True
 
     unarmed = main._build_read_mode_context(
-        None, folder_id=1, tag="python", archived=False, q=None, items=[],
+        _NO_REQUEST, folder_id=1, tag="python", archived=False, q=None, items=[],
         node_selected=True,
     )
     assert unarmed["node_actions"]["confirm_delete_tag"] is False
@@ -304,7 +309,7 @@ def test_delete_tag_takes_two_taps(configured):
 def test_no_actions_row_on_the_archive_node(configured):
     """Archive is a review surface, not a place to bulk-destroy curation."""
     ctx = main._build_read_mode_context(
-        None, folder_id=None, tag=None, archived=True, q=None, items=[],
+        _NO_REQUEST, folder_id=None, tag=None, archived=True, q=None, items=[],
         node_selected=True,
     )
     assert ctx["node_actions"] is None

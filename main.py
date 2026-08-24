@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager, closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Annotated, Callable, Iterable, Iterator, Sequence, cast
+from typing import Annotated, Callable, Iterable, Iterator, Literal, Sequence, cast, overload
 from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlencode, urljoin, urlparse, urlsplit, urlunparse, urlunsplit
 
 import feedparser
@@ -1788,7 +1788,7 @@ BOOTSTRAP_ADMIN_USERNAME = os.getenv("LECTIO_ADMIN_USERNAME", "admin")
 BOOTSTRAP_ADMIN_PASSWORD = os.getenv("LECTIO_ADMIN_PASSWORD", _DEFAULT_ADMIN_PASSWORD)
 
 AUTH_ENABLED = True  # kept as a module-level bool so tests can monkeypatch it
-user_store = UserStore(AUTH_DB_PATH)
+user_store: UserStore | None = UserStore(AUTH_DB_PATH)
 SESSION_SECRET_KEY = os.getenv("LECTIO_SECRET_KEY") or secrets.token_hex(32)
 if AUTH_ENABLED and not os.getenv("LECTIO_SECRET_KEY"):
     LOGGER.warning(
@@ -5148,7 +5148,7 @@ def get_feeds_needing_replacement(conn: sqlite3.Connection | None = None) -> set
         return {str(r["feed_url"]) for r in own.execute("SELECT feed_url FROM feeds_needing_replacement")}
 
 
-def unsubscribed_feed_urls_among(feed_urls: Iterable[str]) -> set[str]:
+def unsubscribed_feed_urls_among(feed_urls: Iterable[str | None]) -> set[str]:
     """Which of these feeds you are no longer subscribed to.
 
     Two different states read as "unsubscribed" to a reader and both belong here:
@@ -12196,7 +12196,7 @@ def _lead_image_from_html(raw_html: str, source_url: str) -> str | None:
         ):
             tag = finder()
             if tag:
-                url = (tag.get("content") or tag.get("href") or "").strip()
+                url = str(tag.get("content") or tag.get("href") or "").strip()
                 if url:
                     break
         if not url or url.lower().rsplit("?", 1)[0].endswith(".svg"):
@@ -12235,7 +12235,7 @@ def _bs4_content_fallback(raw_html: str) -> str:
             else:
                 elem = soup.find(value)
             if elem:
-                for nav_div in elem.find_all("div", class_=lambda c: c and "nav" in c.split()):
+                for nav_div in elem.find_all("div", class_=lambda c: bool(c) and "nav" in c.split()):
                     nav_div.decompose()
                 return str(elem)
         return ""
@@ -12769,10 +12769,11 @@ def _page_title_from_html(raw_html: str, source_url: str) -> str:
     try:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(raw_html, "html.parser")
-        for attrs in ({"property": "og:title"}, {"name": "twitter:title"}):
-            tag = soup.find("meta", attrs=attrs)
-            if tag and tag.get("content", "").strip():
-                return tag["content"].strip()
+        attr_options: tuple[dict[str, str], ...] = ({"property": "og:title"}, {"name": "twitter:title"})
+        for attrs in attr_options:
+            tag = soup.find("meta", attrs=cast(dict, attrs))
+            if tag and str(tag.get("content", "")).strip():
+                return str(tag["content"]).strip()
         if soup.title and soup.title.string and soup.title.string.strip():
             return soup.title.string.strip()
         h1 = soup.find("h1")
@@ -13813,7 +13814,8 @@ def list_entries_for_feeds(
         _feed_thumb_crop = str(_feed_prefs.get("thumb_crop") or "cover")
         if _feed_thumb_crop not in _VALID_THUMB_CROPS:
             _feed_thumb_crop = "cover"
-        _entry_crop_override = lead_image_service.get_entry_thumb_crop(feed_url_str, str(getattr(entry, "id", "") or ""))
+        _entry_id = str(getattr(entry, "id", "") or "")
+        _entry_crop_override = lead_image_service.get_entry_thumb_crop(feed_url_str, _entry_id)
         _thumb_crop = _entry_crop_override if _entry_crop_override else _feed_thumb_crop
         _smart_ms = _feed_prefs.get("smart_min_scale")
         _fill_zm = _feed_prefs.get("fill_zoom")
@@ -13831,19 +13833,19 @@ def list_entries_for_feeds(
                 # Starred OR tagged. Drives the re-fetch menu, which must not key
                 # on manual_tags (populated only under a tag filter) nor on the
                 # star alone — tag-as-keep made a tag a keep signal everywhere.
-                "kept": bool(is_saved or (entry.feed_url, entry.id) in _visible_tagged),
+                "kept": bool(is_saved or (feed_url_str, _entry_id) in _visible_tagged),
                 # Inline formatting a feed put in the title (<em>), rendered
                 # rather than escaped. Everything else stays literal text, so a
                 # C++ title's std::vector<T> survives — see sanitize_inline_title.
                 "title_html": html_sanitize.sanitize_inline_title(title_text),
                 "post_timestamp": published_dt.isoformat() if published_dt else None,
-                "received_timestamp": entry.added.isoformat() if getattr(entry, "added", None) else None,
+                "received_timestamp": _added_dt.isoformat() if (_added_dt := getattr(entry, "added", None)) else None,
                 "read_timestamp": read_dt.isoformat() if read_dt else None,
                 # When this was starred — carried so the orphan merge can re-sort
                 # by it after list_entries_for_feeds pops the sort values.
                 "saved_timestamp": (
                     _sv.isoformat()
-                    if (_sv := saved_at_map.get((entry.feed_url, entry.id))) else None
+                    if (_sv := saved_at_map.get((feed_url_str, _entry_id))) else None
                 ),
                 "post_display": format_datetime_for_ui(published_dt),
                 "received_display": format_datetime_for_ui(getattr(entry, "added", None)),
@@ -14066,7 +14068,7 @@ def drop_all_curation(feed_url: str) -> dict[str, int]:
     """
     counts = {"untagged": 0, "unstarred": 0, "archives": 0}
 
-    entries: list[tuple[str, object]] = []
+    entries: list[tuple[str, tuple[str, str]]] = []
     with get_reader() as reader:
         for entry in reader.get_entries(feed=feed_url):
             entries.append((str(entry.id), entry.resource_id))
@@ -15023,7 +15025,11 @@ def _norm_media_link(url: str | None) -> str:
 _HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 
 
-def _strip_play_button_glyphs(content_html: str) -> str:
+@overload
+def _strip_play_button_glyphs(content_html: str) -> str: ...
+@overload
+def _strip_play_button_glyphs(content_html: None) -> None: ...
+def _strip_play_button_glyphs(content_html: str | None) -> str | None:
     """Remove a facade's standalone play-button glyph.
 
     A "video facade" is a thumbnail plus a play triangle the publisher positions
@@ -15034,7 +15040,7 @@ def _strip_play_button_glyphs(content_html: str) -> str:
     video. Overlaid or not, it is decoration: the recovered embed has a real
     play button of its own.
     """
-    if "play-button" not in (content_html or ""):
+    if content_html is None or "play-button" not in content_html:
         return content_html
     from bs4 import BeautifulSoup
     soup = BeautifulSoup(content_html, "html.parser")
@@ -16337,6 +16343,7 @@ def _strip_trailing_recirculation_rail(content_html: str) -> str:
         return content_html
     try:
         from bs4 import BeautifulSoup
+        from bs4 import Tag as _Bs4Tag
         soup = BeautifulSoup(content_html, "html.parser")
         root = soup.body or soup
         blocks = [n for n in root.find_all("div")
@@ -16351,7 +16358,7 @@ def _strip_trailing_recirculation_rail(content_html: str) -> str:
             # rail on four posts out of five.
             tail = []
             for sib in block.next_siblings:
-                if getattr(sib, "name", None) is None:
+                if not isinstance(sib, _Bs4Tag):
                     if str(sib).strip():
                         tail.append(sib)
                     continue
@@ -17532,7 +17539,7 @@ def _is_subscribable_feed_url(url: str) -> bool:
         return False
 
 
-def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
+def add_feed_to_folder(feed_url: str, folder_id: int) -> str:
     feed_url = feed_url.strip()
     if not feed_url:
         raise ValueError("Feed URL is required.")
@@ -18788,7 +18795,7 @@ def scheduler_watchdog_loop(stop_event: threading.Event) -> None:
                 continue
             with _scheduler_state_lock:
                 stage = str(_scheduler_state.get("stage") or "?")
-                logs = int(_scheduler_state.get("consecutive_stall_logs") or 0)
+                logs = cast(int, _scheduler_state.get("consecutive_stall_logs") or 0)
                 _scheduler_state["consecutive_stall_logs"] = logs + 1
             LOGGER.error(
                 "[scheduler] STALLED: no progress for %ds while doing %r. "
@@ -21477,8 +21484,9 @@ def _admin_user_rows() -> list[dict]:
     """User list for the Administration page, enriched with per-user stats
     (feed count, personal DB size, last-active). Each user's stats are read under
     its own tenancy context."""
+    assert user_store is not None  # only called from administration_page, which already checked
     rows: list[dict] = []
-    for u in user_store.list_users():  # type: ignore[union-attr]
+    for u in user_store.list_users():
         uid = u["user_id"]
         feeds = 0
         db_bytes = 0
@@ -22324,7 +22332,7 @@ def _home_inner(
     # made the ROWS lazy left the BUILDING eager; this closes that gap.
     feeds_rendered_for = {selected_folder_id, root_id}
     for row in folder_rows:
-        folder_row_id = int(row["id"])
+        folder_row_id = cast(int, row["id"])
         urls = direct_feed_urls_by_folder.get(folder_row_id, [])
         # Needed for every folder regardless: the post list maps each post's feed
         # back to its folder through this.
@@ -22351,8 +22359,8 @@ def _home_inner(
         all_folder_feeds.sort(key=lambda f: (f.disabled, f.title.casefold()))
         feeds_by_folder[folder_row_id] = [f for f in all_folder_feeds if not f.disabled]
 
-    root_folder_row = next((row for row in folder_rows if int(row["depth"]) == 0), None)
-    child_folder_rows = [row for row in folder_rows if int(row["depth"]) == 1]
+    root_folder_row = next((row for row in folder_rows if cast(int, row["depth"]) == 0), None)
+    child_folder_rows = [row for row in folder_rows if cast(int, row["depth"]) == 1]
     # The Settings → Feeds folders table and stale list are NOT built here:
     # they render a row per feed (megabytes at thousands of feeds), so
     # /settings/feeds/panel/{folders,stale} serves them on first open.
@@ -22558,7 +22566,7 @@ def _home_inner(
     elif selected_folder_id and selected_folder_id != root_id:
         try:
             _title_ctx = next(
-                (str(r["name"]) for r in folder_rows if int(r["id"]) == int(selected_folder_id)),
+                (str(r["name"]) for r in folder_rows if cast(int, r["id"]) == int(selected_folder_id)),
                 None,
             )
         except Exception:  # noqa: BLE001
@@ -22590,7 +22598,7 @@ def _home_inner(
         # Labels the phone's "up to the folder" control when the list is scoped
         # to one feed, so the button says where it goes instead of "Folders".
         "selected_folder_name": next(
-            (str(row["name"]) for row in folder_rows if int(row["id"]) == selected_folder_id),
+            (str(row["name"]) for row in folder_rows if cast(int, row["id"]) == selected_folder_id),
             "",
         ),
         "selected_feed_url": selected_feed_url,
@@ -26522,10 +26530,10 @@ def _freshrss_import_worker() -> None:
         # Phase 2: labels → tags (page through each label stream).
         tags = freshrss_service.get_tags(url, token)
         label_names = [
-            freshrss_service.label_name_from_tag_id(t["id"])
+            name
             for t in tags
-            if freshrss_service.label_name_from_tag_id(t.get("id", ""))
-            and freshrss_service.label_is_tag(freshrss_service.label_name_from_tag_id(t["id"]))  # type: ignore
+            if (name := freshrss_service.label_name_from_tag_id(t.get("id", "")))
+            and freshrss_service.label_is_tag(name)
         ]
         for label_name in label_names:
             stream_id = freshrss_service.label_stream_id(label_name)
@@ -27975,10 +27983,12 @@ def _set_orphan_entry_date(feed_url: str, entry_id: str, published: str) -> JSON
                 (feed_url, entry_id),
             )
         else:
-            dt = _parse_local_date_to_utc(published)
+            # dt is the one parsed above — validated non-None there (an invalid
+            # date already returned 400 before this block), and published hasn't
+            # changed since, so re-parsing it here would just repeat that work.
             conn.execute(
                 "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published) VALUES (?, ?, ?)",
-                (feed_url, entry_id, dt.strftime("%Y-%m-%d %H:%M:%S")),  # ty: ignore[possibly-unbound-attribute]
+                (feed_url, entry_id, dt.strftime("%Y-%m-%d %H:%M:%S")),
             )
     invalidate_unread_counts_cache()
     return JSONResponse({"ok": True, "orphan": True, "cleared": not published})
@@ -29451,9 +29461,13 @@ def get_saved_duplicates():
                 not r["published"], r["published"])
 
     def _emit(groups: list[list[dict]], checks: list[tuple[str, str]]) -> list[dict]:
-        out = []
         for group in groups:
             group.sort(key=_keep_order)
+        # Sort groups by their (already-keep-ordered) first entry's title, before
+        # the "entries" reshape below loses the direct typing on that field.
+        groups = sorted(groups, key=lambda group: str(group[0]["title"] or "").lower())
+        out = []
+        for group in groups:
             out.append({
                 "reasons": _saved_dup_reasons(group, checks),
                 "entries": [
@@ -29461,7 +29475,6 @@ def get_saved_duplicates():
                     for r in group
                 ],
             })
-        out.sort(key=lambda g: (g["entries"][0]["title"] or "").lower())
         return out
 
     confirmed_groups = _saved_dup_groups(records, ("_canon", "_slug"))
@@ -29967,7 +29980,7 @@ async def apply_unstar_tagged(request: Request):
 def _current_archive_old_stars_plan(days: int) -> dict:
     """Assemble the archive-old-stars plan for the current user. Read-only."""
     with get_meta_connection() as conn:
-        starred_at: dict[tuple[str, str], datetime] = {}
+        starred_at: dict[tuple[str, str], datetime | None] = {}
         for feed, eid, when in conn.execute(
             "SELECT feed_url, entry_id, saved_at FROM saved_entries"
         ):
@@ -31045,7 +31058,7 @@ def _mark_autofetch_host_failed(host: str) -> None:
         _autofetch_failed_hosts[host] = time.time() + _AUTOFETCH_HOST_COOLDOWN_S
         # Bounded: this is a politeness memo, not a record.
         if len(_autofetch_failed_hosts) > 512:
-            for stale in sorted(_autofetch_failed_hosts, key=_autofetch_failed_hosts.get)[:128]:
+            for stale in sorted(_autofetch_failed_hosts, key=lambda h: _autofetch_failed_hosts[h])[:128]:
                 del _autofetch_failed_hosts[stale]
 
 
@@ -31341,7 +31354,12 @@ async def api_save_article(request: Request):
     params = dict(request.query_params)
     if request.method == "POST":
         try:
-            params.update(dict(await request.form()))
+            # Form values can be str or UploadFile (multipart file fields); every
+            # field this route reads (url/username/token) is a plain string, so
+            # a file posted under one of those names is dropped rather than
+            # handed to code that expects str.
+            form = await request.form()
+            params.update({k: v for k, v in form.items() if isinstance(v, str)})
         except Exception:  # noqa: BLE001
             pass
     url = params.get("url", "")
@@ -31499,6 +31517,7 @@ async def api_bookmarklet_save(request: Request):
         page_html = page_html[:_BOOKMARKLET_MAX_HTML_CHARS]
 
     def _extract_from_capture(u: str) -> tuple[str, str]:
+        assert page_html is not None  # only wired in as `extract` below when it is
         title, article_html = extract_readability_article(page_html, u)
         if page_title and (not title or title == u):
             title = page_title
@@ -31635,6 +31654,10 @@ _refetch_jobs = _PerUserDict()
 _refetch_jobs_lock = threading.Lock()
 
 
+@overload
+def _refetch_job_state(create: Literal[True]) -> dict: ...
+@overload
+def _refetch_job_state(create: bool = False) -> dict | None: ...
 def _refetch_job_state(create: bool = False) -> dict | None:
     with _refetch_jobs_lock:
         job = _refetch_jobs.get("job")
@@ -32027,7 +32050,11 @@ def tag_inventory_route(q: str = "", limit: int = 200, mine_only: int = 0):
                 feed_counts[key] = feed_counts.get(key, 0) + int(r["n"])
 
     aliases = {a["alias"]: a["canonical"] for a in list_tag_aliases()}
-    names = set(manual_counts) | set(aliases) | set(feed_counts)
+    names = [n for n in set(manual_counts) | set(aliases) | set(feed_counts)
+             if not needle or needle in n]
+    # Yours first: a publisher tag with a big count is not more interesting than
+    # one you actually file with.
+    names.sort(key=lambda name: (-manual_counts.get(name, 0), -feed_counts.get(name, 0), name))
     items = [
         {
             "tag": name,
@@ -32036,11 +32063,7 @@ def tag_inventory_route(q: str = "", limit: int = 200, mine_only: int = 0):
             "alias_of": aliases.get(name),
         }
         for name in names
-        if not needle or needle in name
     ]
-    # Yours first: a publisher tag with a big count is not more interesting than
-    # one you actually file with.
-    items.sort(key=lambda item: (-item["manual"], -item["feed"], item["tag"]))
     return JSONResponse({
         "ok": True,
         "items": items[:limit],
@@ -32773,7 +32796,7 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
                 "last_post_sort": last_dt.timestamp() if last_dt else 0.0,
                 "days_since": (_now_utc - last_dt).days if last_dt else None,
             })
-        stale_feeds.sort(key=lambda x: x["last_post_sort"])
+        stale_feeds.sort(key=lambda x: cast(float, x["last_post_sort"]))
         html = templates.env.get_template("_settings_feeds_stale.html").render({
             "stale_feeds": stale_feeds,
             # Unsubscribe fallback target for unfoldered feeds. The inline
@@ -34423,6 +34446,7 @@ def miniflux_me(request: Request) -> Response:
     uid = _miniflux_ok(request)
     if not uid:
         return JSONResponse({"error_message": "Access Unauthorized."}, status_code=401)
+    assert user_store is not None  # _miniflux_ok only returns a uid when user_store is set
     with tenancy.user_context(uid):
         with user_store._connect() as conn:
             row = conn.execute(

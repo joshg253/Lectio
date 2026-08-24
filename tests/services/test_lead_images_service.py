@@ -992,7 +992,7 @@ def test_backfill_webcomic_prefers_source_panel_over_enclosure(tmp_path: Path):
 
     full_panel = "https://www.everblue-comic.com/comics/x-full.jpg"
     calls: list[tuple] = []
-    service._fetch_source_lead_image = lambda link, **kw: calls.append((link, kw)) or full_panel  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    service._fetch_source_lead_image = lambda link, **kw: calls.append((link, kw)) or full_panel  # type: ignore[method-assign]
     # Webcomic feeds must NOT fetch the feed XML for media thumbs.
     service._fetch_feed_media_thumbnails = lambda *a, **kw: (_ for _ in ()).throw(
         AssertionError("webcomic must skip _fetch_feed_media_thumbnails")

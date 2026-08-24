@@ -71,7 +71,7 @@ def test_read_above_marks_everything_before_the_anchor(tenant):
     anchor = order[3]
     with TestClient(_app()) as client:
         r = client.post("/entries/mark-range-read", data={
-            "folder_id": UNCAT, "feed_url": FEED, "entry_id": anchor,
+            "folder_id": str(UNCAT), "feed_url": FEED, "entry_id": anchor,
             "direction": "above", "read_filter": "unread",
         }, headers={"X-Requested-With": "lectio-post-range-read"})
     assert r.status_code == 200
@@ -87,7 +87,7 @@ def test_anchor_past_the_default_page_is_still_found(tenant):
     anchor = order[300]
     with TestClient(_app()) as client:
         r = client.post("/entries/mark-range-read", data={
-            "folder_id": UNCAT, "feed_url": FEED, "entry_id": anchor,
+            "folder_id": str(UNCAT), "feed_url": FEED, "entry_id": anchor,
             "direction": "above", "read_filter": "unread",
         }, headers={"X-Requested-With": "lectio-post-range-read"})
     assert r.status_code == 200

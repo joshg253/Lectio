@@ -228,7 +228,7 @@ def _review_chunk(client, folders: list[str], feeds: list[dict]) -> dict[str, st
 
 def cmd_review(args) -> None:
     try:
-        import anthropic
+        import anthropic  # ty: ignore[unresolved-import]  # optional: `uv run --with anthropic`, not in the lockfile
     except ImportError:
         raise SystemExit(
             "The review pass needs the anthropic SDK. Re-run with:\n"

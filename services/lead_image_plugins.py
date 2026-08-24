@@ -71,17 +71,21 @@ class LeadImagePlugin(Protocol):
 
     def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None: ...
 
-    # Optional: a deterministic, network-free preferred thumbnail URL derived from
-    # the entry link alone. Implemented only by plugins that can build one cheaply
-    # (e.g. Standard Ebooks covers); consulted on the posts-list fast path. Plugins
-    # that need to fetch a page must NOT implement this (leave it to fallback_lead_image_url).
-    def cheap_preferred_thumbnail_url(self, *, entry_link: str) -> str | None: ...
-
-    # Optional: a different crop for the LIST than for the article, derived from
-    # the already-resolved lead image without a fetch (called on the render
-    # path). Penny Arcade uses it to thumbnail one comic panel while the article
-    # keeps the full strip, which is illegible at thumbnail size.
-    def thumbnail_from_lead_image(self, *, entry_link: str, lead_url: str) -> str | None: ...
+    # cheap_preferred_thumbnail_url(self, *, entry_link: str) -> str | None
+    #   Optional: a deterministic, network-free preferred thumbnail URL derived
+    #   from the entry link alone. Implemented only by plugins that can build one
+    #   cheaply (e.g. Standard Ebooks covers); consulted on the posts-list fast
+    #   path. Plugins that need to fetch a page must NOT implement this (leave it
+    #   to fallback_lead_image_url). Not part of this Protocol — a required
+    #   method here would force every plugin to implement it — so lead_images.py
+    #   reaches it via getattr(plugin, "cheap_preferred_thumbnail_url", None).
+    #
+    # thumbnail_from_lead_image(self, *, entry_link: str, lead_url: str) -> str | None
+    #   Optional: a different crop for the LIST than for the article, derived
+    #   from the already-resolved lead image without a fetch (called on the
+    #   render path). Penny Arcade uses it to thumbnail one comic panel while the
+    #   article keeps the full strip, which is illegible at thumbnail size. Same
+    #   getattr-based access as above, for the same reason.
 
 
 @dataclass(frozen=True)
@@ -1311,6 +1315,9 @@ class TinyviewPlugin:
         if self._CDN in host:
             return 100
         return 0
+
+    def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None:
+        return None  # scoring the inline candidates is enough here; no separate fetch
 
 
 DEFAULT_LEAD_IMAGE_PLUGINS: tuple[LeadImagePlugin, ...] = (

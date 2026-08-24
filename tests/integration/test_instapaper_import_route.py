@@ -61,6 +61,7 @@ def _csrf(client: TestClient) -> str:
 
     client.get("/healthz")  # establish session + token
     cookie = client.cookies.get("session")
+    assert cookie is not None
     signer = TimestampSigner(main.SESSION_SECRET_KEY)
     decoded = signer.unsign(cookie, max_age=main.SESSION_MAX_AGE_SECONDS)
     return json.loads(base64.b64decode(decoded))["csrf_token"]

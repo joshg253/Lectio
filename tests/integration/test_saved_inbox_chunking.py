@@ -8,8 +8,10 @@ coincide with star order, and the broken code passed it. See Plan.md §0b.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 import pytest
+from fastapi import Request
 
 import main
 from services import tenancy
@@ -158,7 +160,7 @@ def _inbox_chunk_via_route(monkeypatch, chunk: int | None,
             captured["context"] = ctx
             return real_stream(ctx, *a, **kw)
 
-        tmpl.stream = _stream
+        tmpl.stream = _stream  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
         return tmpl
 
     monkeypatch.setattr(main.templates.env, "get_template", _capture_template)
@@ -166,7 +168,7 @@ def _inbox_chunk_via_route(monkeypatch, chunk: int | None,
     with main.get_meta_connection() as conn:
         root_id = main.get_root_folder_id(conn)
     main._home_inner(
-        _FakeRequest(),
+        cast(Request, _FakeRequest()),
         folder_id=root_id,
         star_only="1",
         kept="starred",
@@ -203,14 +205,14 @@ def _saved_all_via_route(monkeypatch, **kwargs) -> list[str]:
             captured["context"] = ctx
             return real_stream(ctx, *a, **k)
 
-        tmpl.stream = _stream
+        tmpl.stream = _stream  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
         return tmpl
 
     monkeypatch.setattr(main.templates.env, "get_template", _capture_template)
     with main.get_meta_connection() as conn:
         root_id = main.get_root_folder_id(conn)
     main._home_inner(
-        _FakeRequest(), folder_id=root_id, star_only="1", read_filter="all", **kwargs
+        cast(Request, _FakeRequest()), folder_id=root_id, star_only="1", read_filter="all", **kwargs
     )
     return [p["id"] for p in captured["context"]["posts"]]
 

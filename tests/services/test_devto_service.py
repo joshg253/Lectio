@@ -333,6 +333,7 @@ def test_categories_flow_into_tag_sink_at_ingest():
     from services.reader_sanitize import SanitizingFeedparserParser
 
     e = devto._article_to_entry(_article())
+    assert e is not None
     xml = devto._generate_rss_xml("dev.to #python", "https://dev.to/t/python", [e])
 
     captured = []

@@ -390,8 +390,10 @@ def test_reader_head_title_is_plain_escaped_text():
         feed_url="https://example.test/feed", entry_id="e1",
         is_archived=False, csrf_token="tok",
     )
-    body = resp.body.decode()
-    head = _re.search(r"<title>(.*?)</title>", body, _re.S).group(1)
+    body = bytes(resp.body).decode()
+    title_match = _re.search(r"<title>(.*?)</title>", body, _re.S)
+    assert title_match is not None
+    head = title_match.group(1)
     assert head == "A bold claim about ReadOnlySpan&lt;T&gt;"
     assert "<em>" not in head
     # The headline still renders the feed's own emphasis.

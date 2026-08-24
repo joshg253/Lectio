@@ -8,8 +8,10 @@ for the per-host delay, and two runs cannot overlap.
 from __future__ import annotations
 
 import json
+from typing import cast
 
 import pytest
+from fastapi import Request
 
 import main
 from services import refetch_batch, tenancy
@@ -138,7 +140,7 @@ class _Req:
 
 def _start(payload):
     import asyncio
-    resp = asyncio.run(main.start_refetch_scope(_Req(payload)))
+    resp = asyncio.run(main.start_refetch_scope(cast(Request, _Req(payload))))
     return resp.status_code, json.loads(bytes(resp.body))
 
 
@@ -199,7 +201,7 @@ def test_the_status_payload_never_exposes_the_cancel_flag(configured):
 
 
 # ── the run loop ──
-def _run(results, rows=None, job=None):
+def _run(results, rows=None, job: dict | None = None):
     """Drive _run_refetch_batch with canned per-entry results and no sleeping."""
     rows = rows or [("f", str(i), f"https://h{i}.test/x") for i in range(len(results))]
     job = job if job is not None else {"running": True, "cancel": False}
@@ -300,7 +302,7 @@ def test_a_queued_scope_can_be_dropped_without_stopping_the_run(configured):
     job.update({"running": True, "queue": []})
     _start({"list_feed_url": FEED_A})
 
-    asyncio.run(main.cancel_refetch_scope(_Req({"queued_index": 0})))
+    asyncio.run(main.cancel_refetch_scope(cast(Request, _Req({"queued_index": 0}))))
 
     assert job["queue"] == []
     assert job["running"] is True          # the batch in flight is untouched
@@ -313,7 +315,7 @@ def test_cancel_all_empties_the_queue_too(configured):
     job.update({"running": True, "queue": []})
     _start({"list_feed_url": FEED_A})
 
-    asyncio.run(main.cancel_refetch_scope(_Req({"all": True})))
+    asyncio.run(main.cancel_refetch_scope(cast(Request, _Req({"all": True}))))
 
     assert job["queue"] == []
     assert job["cancel"] is True

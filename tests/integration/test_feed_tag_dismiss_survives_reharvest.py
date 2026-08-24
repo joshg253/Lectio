@@ -92,6 +92,7 @@ def test_get_entry_detail_still_shows_an_undismissed_re_harvested_tag(configured
         lambda html, link: ["rowing"],
     )
     detail = main.get_entry_detail(FEED, ENTRY_LINK)
+    assert detail is not None
     assert "rowing" in detail["feed_tag_suggestions"]
 
 

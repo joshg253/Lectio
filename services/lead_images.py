@@ -370,7 +370,10 @@ class LeadImageService:
     @classmethod
     def is_ad_dimension(cls, width: object, height: object) -> bool:
         try:
-            return (int(width), int(height)) in cls._AD_DIMENSIONS
+            # width/height are deliberately `object` — callers pass whatever a
+            # page's markup gave them (str, int, None, garbage), and int()'s
+            # own TypeError/ValueError is exactly the validation this needs.
+            return (int(width), int(height)) in cls._AD_DIMENSIONS  # ty: ignore[invalid-argument-type]
         except (TypeError, ValueError):
             return False
 
@@ -691,10 +694,10 @@ class LeadImageService:
         self._fetched_at_cache = fetched_at_cache if fetched_at_cache is not None else {}
         self._alt_cache: dict[tuple[str, str], str | None] = {}
         self._title_cache: dict[tuple[str, str], str | None] = {}
-        # Optional fn(feed_url, entry_id, page_html) invoked by the background
-        # source-HTML fetch — lets main persist article-page tags (feed_tags)
-        # the moment the page arrives instead of waiting for a re-open.
-        self._page_tag_sink: Callable[[str, str, str], None] | None = None
+        # Optional fn(feed_url, entry_id, page_html, entry_link) invoked by the
+        # background source-HTML fetch — lets main persist article-page tags
+        # (feed_tags) the moment the page arrives instead of waiting for a re-open.
+        self._page_tag_sink: Callable[[str, str, str, str], None] | None = None
         self._entry_crop_cache: dict[tuple[str, str], str] = {}
         self._webcomic_feeds: set[str] | None = None
         self._plugins = plugins if plugins is not None else DEFAULT_LEAD_IMAGE_PLUGINS

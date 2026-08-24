@@ -51,6 +51,7 @@ def env(tmp_path, monkeypatch):
 
 def _content_html() -> str:
     detail = main.get_entry_detail(FEED, f"yt:video:{VIDEO}")
+    assert detail is not None
     return detail.get("content_html") or ""
 
 

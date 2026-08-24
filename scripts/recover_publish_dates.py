@@ -180,6 +180,8 @@ def recover_for_user(uid: str, apply: bool) -> int:
                 stats["no_date"] += 1
             continue
 
+        assert source is not None  # set alongside every candidate assignment above
+
         found.append({
             "feed_url": key[0], "entry_id": key[1],
             "title": str(row["title"] or "")[:70],

@@ -131,6 +131,9 @@ class BasslessonsPlugin:
             ".video-container", ".commentSection",
         )
 
+    def content_selectors(self, *, source_url: str) -> tuple[str, ...]:
+        return ()  # full-page + strip_selectors does the narrowing here, not this
+
     def embed_at_top(self, *, source_url: str) -> bool:
         # The video is what you came for; the scans are the reference you scroll
         # through afterwards.

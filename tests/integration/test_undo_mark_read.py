@@ -73,6 +73,7 @@ def test_undo_leaves_other_batches_alone(configured):
                           "link": "https://example.test/late", "title": "Late"})
     _, token2 = main.mark_feeds_as_read({FEED})
     assert token1 != token2
+    assert token2 is not None
 
     with _client() as c:
         r = c.post("/entries/undo-mark-read", data={"read_at": token2})

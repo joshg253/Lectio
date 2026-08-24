@@ -119,7 +119,7 @@ def _unstar_via_route(feed_url: str, entry_id: str):
     with TestClient(app) as client:
         return client.post(
             "/entries/saved",
-            data={"folder_id": 0, "feed_url": feed_url, "entry_id": entry_id, "saved": 0},
+            data={"folder_id": "0", "feed_url": feed_url, "entry_id": entry_id, "saved": "0"},
             headers={"X-Requested-With": "lectio-post-save-toggle"},
         )
 
