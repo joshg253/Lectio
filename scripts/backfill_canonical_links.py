@@ -206,7 +206,10 @@ def main() -> None:
     ap.add_argument("--user", help="only this user id (default: legacy + all users)")
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
     ap.add_argument("--live-resolve", action="store_true", help="follow still-alive redirectors over the network")
-    ap.add_argument("--wayback", action="store_true", help="recover dead redirectors via the Wayback Machine's archived redirects (rate-limited, ~2s/link)")
+    ap.add_argument(
+        "--wayback", action="store_true",
+        help="recover dead redirectors via the Wayback Machine's archived redirects (rate-limited, ~2s/link)",
+    )
     args = ap.parse_args()
 
     data_dir = Path(os.environ.get("LECTIO_DATA_DIR", "data")).resolve()

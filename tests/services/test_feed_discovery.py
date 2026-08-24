@@ -64,7 +64,10 @@ def _head_alive(url, **_kwargs):
 
 class TestDiscoverFeedUrls:
     def test_url_already_a_feed(self):
-        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/feed.xml", "application/rss+xml")):
+        with patch(
+            "services.feed_discovery._guarded_get",
+            return_value=_mock_response("https://example.com/feed.xml", "application/rss+xml"),
+        ):
             result = discover_feed_urls("https://example.com/feed.xml")
         assert result == ["https://example.com/feed.xml"]
 

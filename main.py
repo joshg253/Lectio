@@ -1519,7 +1519,9 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
         try:
             with get_meta_connection() as conn:
                 with get_reader() as reader:
-                    _fid, file_url = deviantart_service.create_deviantart_feed(conn, reader, artist, cid, secret, access_token=token, limit=24)
+                    _fid, file_url = deviantart_service.create_deviantart_feed(
+                        conn, reader, artist, cid, secret, access_token=token, limit=24
+                    )
                 conn.execute(
                     "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
                     (folder_id, file_url),
@@ -4675,7 +4677,10 @@ _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'
 _HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed', 'feeds'})
 
 
-_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist", "instapaper", "quire", "tag_filter", "save_article"}
+_HIGHLIGHT_VALID_TYPES = {
+    "highlight", "mark_as_read", "email_article", "deduplicate", "webhook",
+    "youtube_playlist", "instapaper", "quire", "tag_filter", "save_article",
+}
 _HIGHLIGHT_VALID_SEARCH_IN = {"title", "body", "both"}
 _HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
 _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
@@ -5547,7 +5552,11 @@ def get_unread_counts_by_feed() -> dict[str, int]:
         with unread_counts_compute_lock:
             if not unread_counts_refresh_inflight:
                 unread_counts_refresh_inflight = True
-                threading.Thread(target=_run_in_user_context, args=(tenancy.current_user_id(), _refresh_unread_counts_async, current_gen), daemon=True).start()
+                threading.Thread(
+                    target=_run_in_user_context,
+                    args=(tenancy.current_user_id(), _refresh_unread_counts_async, current_gen),
+                    daemon=True,
+                ).start()
         return value.copy()
 
     # Cold cache: first arriver computes synchronously, others wait on lock.
@@ -5942,12 +5951,18 @@ def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[st
     pair_modes: dict[tuple[str, str], list[str]] = {}
     for pk in all_pairs:
         modes: list[str] = []
-        if pk in guid_pairs:        modes.append("guid")
-        if pk in slug_pairs:        modes.append("slug")
-        if pk in title_pairs:       modes.append("title")
-        if pk in fuzzy_pairs:       modes.append("fuzzy_near")
-        if pk in body_pairs:        modes.append("body")
-        if pk in body_fuzzy_pairs:  modes.append("body_fuzzy")
+        if pk in guid_pairs:
+            modes.append("guid")
+        if pk in slug_pairs:
+            modes.append("slug")
+        if pk in title_pairs:
+            modes.append("title")
+        if pk in fuzzy_pairs:
+            modes.append("fuzzy_near")
+        if pk in body_pairs:
+            modes.append("body")
+        if pk in body_fuzzy_pairs:
+            modes.append("body_fuzzy")
         # A shared GUID is accepted on its own; everything else needs a
         # corroborated combo from _SAFE_DEDUP_COMBOS.
         if "guid" in modes or frozenset(modes) in _SAFE_DEDUP_COMBOS:
@@ -10066,7 +10081,8 @@ def get_feed_properties(feed_url: str) -> dict:
         with get_meta_connection() as _pc:
             _disp = get_feed_display_prefs(_pc, feed_url)
             _strat_rows = _pc.execute(
-                "SELECT strategy, image_url, fetched_at, error, image_alt, image_title FROM feed_strategy_cache WHERE feed_url = ? ORDER BY strategy",
+                "SELECT strategy, image_url, fetched_at, error, image_alt, image_title "
+                "FROM feed_strategy_cache WHERE feed_url = ? ORDER BY strategy",
                 (feed_url,),
             ).fetchall()
             _feed_backoff_row = _pc.execute(
@@ -10096,7 +10112,10 @@ def get_feed_properties(feed_url: str) -> dict:
 
         _now_ts = time.time()
         _feed_next_retry = float(_feed_backoff_row["next_retry_at"]) if _feed_backoff_row and _feed_backoff_row["next_retry_at"] else None
-        _domain_next_retry = float(_domain_backoff_row["next_retry_at"]) if _domain_backoff_row and _domain_backoff_row["next_retry_at"] else None
+        _domain_next_retry = (
+            float(_domain_backoff_row["next_retry_at"])
+            if _domain_backoff_row and _domain_backoff_row["next_retry_at"] else None
+        )
         _feed_failures = int(_feed_backoff_row["consecutive_failures"]) if _feed_backoff_row else 0
         _domain_failures = int(_domain_backoff_row["consecutive_failures"]) if _domain_backoff_row else 0
         _effective_next_retry = max(f for f in [_feed_next_retry or 0.0, _domain_next_retry or 0.0]) or None
@@ -10171,7 +10190,10 @@ def get_feed_properties(feed_url: str) -> dict:
             "backoff_active": _backoff_active,
             "backoff_domain_driven": _backoff_domain_driven,
             "backoff_domain": _feed_domain if _backoff_domain_driven else None,
-            "backoff_retry_at": format_datetime_for_ui(datetime.fromtimestamp(_effective_next_retry, tz=timezone.utc)) if _effective_next_retry else None,
+            "backoff_retry_at": (
+                format_datetime_for_ui(datetime.fromtimestamp(_effective_next_retry, tz=timezone.utc))
+                if _effective_next_retry else None
+            ),
             "backoff_feed_failures": _feed_failures,
             "backoff_domain_failures": _domain_failures,
         }
@@ -22938,7 +22960,9 @@ def _mark_thumb_fetch_failed(url: str) -> None:
 
 
 @app.get("/thumb")
-def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), ms: str = Query(default=""), fz: str = Query(default="")) -> Response:
+def thumbnail_proxy(
+    url: str = Query(...), crop: str = Query(default="cover"), ms: str = Query(default=""), fz: str = Query(default="")
+) -> Response:
     """Fetch a remote image, resize it to thumbnail dimensions with LANCZOS, and
     return a cached JPEG.  This eliminates the progressive-load flicker caused by
     downloading full-size hero images into the small post-list thumbnail slot."""
@@ -25164,7 +25188,10 @@ def youtube_oauth_connect(request: Request):
     """Kick off the YouTube OAuth flow → redirect to Google's consent page."""
     cid, secret = get_youtube_oauth_credentials()
     if not cid or not secret:
-        return RedirectResponse(url="/?message=" + quote_plus("YouTube OAuth client is not configured (set YOUTUBE_OAUTH_CLIENT_ID/SECRET)."), status_code=303)
+        return RedirectResponse(
+            url="/?message=" + quote_plus("YouTube OAuth client is not configured (set YOUTUBE_OAUTH_CLIENT_ID/SECRET)."),
+            status_code=303,
+        )
     state = secrets.token_urlsafe(24)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_YT_OAUTH_STATE, state)
@@ -25221,7 +25248,10 @@ def pinterest_oauth_connect(request: Request):
     """Kick off the Pinterest OAuth flow → redirect to Pinterest's consent page."""
     cid, secret = get_pinterest_oauth_credentials()
     if not cid or not secret:
-        return RedirectResponse(url="/?message=" + quote_plus("Pinterest OAuth client is not configured (set PINTEREST_OAUTH_CLIENT_ID/SECRET)."), status_code=303)
+        return RedirectResponse(
+            url="/?message=" + quote_plus("Pinterest OAuth client is not configured (set PINTEREST_OAUTH_CLIENT_ID/SECRET)."),
+            status_code=303,
+        )
     state = secrets.token_urlsafe(24)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_PINTEREST_OAUTH_STATE, state)
@@ -25270,7 +25300,12 @@ def reddit_oauth_connect(request: Request):
     """Kick off the Reddit OAuth flow → redirect to Reddit's consent page."""
     cid, secret = get_reddit_credentials()
     if not cid or not secret:
-        return RedirectResponse(url="/?message=" + quote_plus("Reddit OAuth client is not configured (enter client ID and secret in Integrations → Reddit)."), status_code=303)
+        return RedirectResponse(
+            url="/?message=" + quote_plus(
+                "Reddit OAuth client is not configured (enter client ID and secret in Integrations → Reddit)."
+            ),
+            status_code=303,
+        )
     state = secrets.token_urlsafe(24)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_REDDIT_OAUTH_STATE, state)
@@ -25381,7 +25416,10 @@ def inoreader_oauth_connect(request: Request):
     cid, secret = get_inoreader_credentials()
     if not cid or not secret:
         return RedirectResponse(
-            url="/?message=" + quote_plus("Inoreader OAuth client is not configured (set INOREADER_CLIENT_ID/SECRET or enter them in Settings → Integrations → Inoreader)."),
+            url="/?message=" + quote_plus(
+                "Inoreader OAuth client is not configured (set INOREADER_CLIENT_ID/SECRET "
+                "or enter them in Settings → Integrations → Inoreader)."
+            ),
             status_code=303,
         )
     state = secrets.token_urlsafe(24)
@@ -32356,7 +32394,10 @@ def mark_entries_older_than_read(
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_mot)
     message = "No unread posts older than that." if marked_count == 0 else f"Marked {marked_count} posts as read."
     if is_async_action_request(request, "lectio-mark-read"):
-        return JSONResponse({"ok": True, "marked": marked_count, "max_age_days": max_age_days, "message": message, "undo_token": undo_token})
+        return JSONResponse({
+            "ok": True, "marked": marked_count, "max_age_days": max_age_days,
+            "message": message, "undo_token": undo_token,
+        })
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,

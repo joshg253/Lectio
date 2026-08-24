@@ -225,7 +225,10 @@ class FeedRefreshService:
         if "429" in lowered or "too many requests" in lowered:
             return "The feed server is rate-limiting requests (HTTP 429)."
         if "text/html" in lowered or "no parser for mime type" in lowered:
-            return "The feed URL returned an HTML page instead of RSS/Atom. The server may be blocking automated requests or the URL may be wrong."
+            return (
+                "The feed URL returned an HTML page instead of RSS/Atom. The server may be "
+                "blocking automated requests or the URL may be wrong."
+            )
         if "parseerror" in lowered or "xml" in lowered or "invalid" in lowered:
             return "The feed response could not be parsed as a valid RSS/Atom document."
 
@@ -305,7 +308,8 @@ class FeedRefreshService:
             if domains:
                 domain_placeholders = ",".join("?" for _ in domains)
                 domain_rows = conn.execute(
-                    f"SELECT domain, consecutive_failures, next_retry_at, last_failure_at FROM domain_failure_state WHERE domain IN ({domain_placeholders})",
+                    "SELECT domain, consecutive_failures, next_retry_at, last_failure_at "
+                    f"FROM domain_failure_state WHERE domain IN ({domain_placeholders})",
                     domains,
                 ).fetchall()
                 for row in domain_rows:
@@ -468,7 +472,8 @@ class FeedRefreshService:
                                 with self._get_meta_connection() as conn:
                                     conn.execute(
                                         """
-                                        INSERT INTO feed_failure_state (feed_url, consecutive_failures, next_retry_at, last_error, last_failure_at)
+                                        INSERT INTO feed_failure_state
+                                            (feed_url, consecutive_failures, next_retry_at, last_error, last_failure_at)
                                         VALUES (?, 1, NULL, '410 Gone: feed has been permanently removed', ?)
                                         ON CONFLICT(feed_url) DO UPDATE SET
                                             consecutive_failures = excluded.consecutive_failures,
@@ -509,7 +514,8 @@ class FeedRefreshService:
                                     with self._get_meta_connection() as conn:
                                         conn.execute(
                                             """
-                                            INSERT INTO feed_failure_state (feed_url, consecutive_failures, next_retry_at, last_error, last_success_at)
+                                            INSERT INTO feed_failure_state
+                                                (feed_url, consecutive_failures, next_retry_at, last_error, last_success_at)
                                             VALUES (?, 0, NULL, NULL, ?)
                                             ON CONFLICT(feed_url) DO UPDATE SET
                                                 consecutive_failures = 0,
