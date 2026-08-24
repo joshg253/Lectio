@@ -26241,6 +26241,11 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
             _save()
 
     except inoreader_service.QuotaExceeded:
+        # The tracked z1_remaining is stale here — it only updates from a
+        # successful response's headers, and every call since the real quota
+        # ran out has 429'd before reaching that line. Zero it so the status
+        # line stops showing leftover headroom that no longer exists.
+        state["z1_remaining"] = 0
         LOGGER.info("[inoreader] drip paused: quota exhausted")
         _save()
     except (httpx.TimeoutException, httpx.NetworkError) as exc:

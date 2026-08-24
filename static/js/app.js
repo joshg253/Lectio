@@ -16023,12 +16023,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     }
 
     function getActivePostItem() {
-      const visiblePosts = getVisiblePostItems();
-      if (visiblePosts.length === 0) {
-        return null;
-      }
-      const activePost = document.querySelector('.posts .post-item.active:not(.post-item-hidden):not(.post-item-filtered)');
-      return activePost || visiblePosts[0];
+      // No fallback to the first visible post: this backs keyboard shortcuts
+      // that mutate state (m/f/s/o/b), and acting on an item the user never
+      // selected is exactly how a stray keypress unstars/marks-read the wrong
+      // post. Only navigation (n/p) is allowed to default to the first item.
+      return document.querySelector('.posts .post-item.active:not(.post-item-hidden):not(.post-item-filtered)');
     }
 
     function openPostItemInPane(postItem) {
