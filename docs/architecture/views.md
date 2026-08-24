@@ -374,6 +374,22 @@ both cases is to pass the parameter through rather than invent one — absent me
 "not in the URL", the redirect carries nothing, and the remembered preference
 stands. Suspect this first the next time an order "won't stick".
 
+**The Feeds "Starred" filter (`read_filter=starred`) deliberately never sets
+`star_only`, to stay out of this whole mechanism.** It's a peer of All/Unread/
+History in the Feeds filter dropdown — literal stars only, within the current
+folder/feed scope, ignoring read state — not a sub-mode layered on `star_only`
+the way All/Unread narrowing within Saved is. Since `sort_setting_keys` and
+`normalize_sort_by`'s `allow_starred` gate both key off `star_only`, setting it
+here would silently switch `_home_inner` onto Saved's `saved_sort_by`/
+`saved_sort_dir` keys while the user is still in Feeds — corrupting Saved's
+remembered order on an explicit resort, the exact bug class above. It's also
+exempt from every other automated exclusion (hide_unpremiered, the read/unread
+and history checks) once an entry passes the star check in
+`list_entries_for_feeds`'s phase-1 loop: starring is already how this codebase
+marks "don't touch this" (retention/purge, bulk mark-read), so the filter meant
+to find what you starred has to honor that unconditionally, or starring
+something hidden would defeat the point of being able to find it again.
+
 ## Async bulk mark-read
 
 `/feeds/mark-read`, `/folders/mark-read`, and `/entries/mark-older-than-read` serve two response modes controlled by the `X-Requested-With` request header:

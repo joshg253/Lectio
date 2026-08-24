@@ -68,6 +68,35 @@ def test_unread_without_star_only_unchanged(configured):
     assert _ids(posts) == ["e1", "e3"]
 
 
+def test_read_filter_starred_ignores_read_state(configured):
+    """The Feeds-mode "Starred" filter (read_filter="starred") shows every
+    literal star within scope regardless of read/unread — e1 (unread) and e2
+    (read) both starred, e3 unstarred either way."""
+    posts = main.list_entries_for_feeds({FEED}, read_filter="starred")
+    assert _ids(posts) == ["e1", "e2"]
+
+
+def test_read_filter_starred_is_literal_stars_not_tagged(configured):
+    """Requirement: literal stars only, not the broader star-OR-tag "kept"
+    signal — a manually tagged-but-unstarred entry must not appear."""
+    with main.get_reader() as reader:
+        reader.add_entry({
+            "feed_url": FEED, "id": "e4", "title": "post e4",
+            "link": "https://example.test/e4",
+        })
+    main.set_manual_tags_for_entry(FEED, "e4", "keep")
+    posts = main.list_entries_for_feeds({FEED}, read_filter="starred")
+    assert _ids(posts) == ["e1", "e2"]
+
+
+def test_read_filter_starred_does_not_touch_star_only_kept_scope(configured):
+    """The new filter must be independent of star_only/kept_scope (the
+    Saved-view scope switch) — passing star_only=False alongside it (the
+    Feeds-mode default) must not disable the starred narrowing."""
+    posts_default = main.list_entries_for_feeds({FEED}, read_filter="starred", star_only=False)
+    assert _ids(posts_default) == ["e1", "e2"]
+
+
 def test_old_starred_entries_survive_the_fetch_window(configured):
     """Imported stars are old — they must not be lost to the newest-N fetch
     window (the star fast path point-looks-up saved keys instead of scanning)."""

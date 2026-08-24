@@ -10614,7 +10614,10 @@ def normalize_sort_dir(sort_dir: str | None) -> str:
 
 def normalize_read_filter(read_filter: str | None) -> str:
     # Keep legacy values working while consolidating into all/unread/history modes.
-    if read_filter in {"all", "unread", "history"}:
+    # "starred" is independent of read state entirely (see list_entries_for_feeds)
+    # and deliberately not part of the get_next_read_filter cycle — reachable only
+    # from the filter dropdown, not the cycle shortcut.
+    if read_filter in {"all", "unread", "history", "starred"}:
         return read_filter
     if read_filter == "read":
         return "history"
@@ -13694,6 +13697,12 @@ def list_entries_for_feeds(
             # Kept view keeps anything starred OR tagged (the unified keep axis).
             if normalized_star_only and (entry.feed_url, entry.id) not in kept_entries_set:
                 continue
+            # Feeds-mode "Starred" filter: literal stars only (not tag-kept),
+            # within the current folder/feed scope, ignoring read state
+            # entirely — independent of star_only/kept_scope (the Saved-view
+            # mode switch) so it never touches that scope's remembered sort.
+            if normalized_read_filter == "starred" and not is_saved:
+                continue
             if archived is not None and \
                     (((entry.feed_url, entry.id) in archive_filter_keys) != archived):
                 continue
@@ -13703,7 +13712,12 @@ def list_entries_for_feeds(
                 continue
             if not normalized_star_only and normalized_read_filter == "history" and not is_read:
                 continue
-            if "youtube.com/feeds/videos.xml" in str(entry.feed_url):
+            # A starred entry is exempt from hide_unpremiered, same as it's
+            # already exempt from retention/purge and bulk mark-read — starring
+            # is deliberate "track this," and the Starred filter must show it
+            # regardless of anything else, or starring it would defeat the
+            # point of being able to find it again.
+            if normalized_read_filter != "starred" and "youtube.com/feeds/videos.xml" in str(entry.feed_url):
                 _feed_hide_unpremiered = _hide_unpremiered_global or bool(
                     _all_display_prefs.get(entry.feed_url, _DISPLAY_PREF_DEFAULTS).get("hide_unpremiered")
                 )
