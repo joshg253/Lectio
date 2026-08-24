@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager, closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Annotated, Callable, Iterable, Iterator, Sequence, cast
+from typing import Annotated, Callable, Iterable, Iterator, Literal, Sequence, cast, overload
 from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlencode, urljoin, urlparse, urlsplit, urlunparse, urlunsplit
 
 import feedparser
@@ -13813,7 +13813,8 @@ def list_entries_for_feeds(
         _feed_thumb_crop = str(_feed_prefs.get("thumb_crop") or "cover")
         if _feed_thumb_crop not in _VALID_THUMB_CROPS:
             _feed_thumb_crop = "cover"
-        _entry_crop_override = lead_image_service.get_entry_thumb_crop(feed_url_str, str(getattr(entry, "id", "") or ""))
+        _entry_id = str(getattr(entry, "id", "") or "")
+        _entry_crop_override = lead_image_service.get_entry_thumb_crop(feed_url_str, _entry_id)
         _thumb_crop = _entry_crop_override if _entry_crop_override else _feed_thumb_crop
         _smart_ms = _feed_prefs.get("smart_min_scale")
         _fill_zm = _feed_prefs.get("fill_zoom")
@@ -13831,19 +13832,19 @@ def list_entries_for_feeds(
                 # Starred OR tagged. Drives the re-fetch menu, which must not key
                 # on manual_tags (populated only under a tag filter) nor on the
                 # star alone — tag-as-keep made a tag a keep signal everywhere.
-                "kept": bool(is_saved or (entry.feed_url, entry.id) in _visible_tagged),
+                "kept": bool(is_saved or (feed_url_str, _entry_id) in _visible_tagged),
                 # Inline formatting a feed put in the title (<em>), rendered
                 # rather than escaped. Everything else stays literal text, so a
                 # C++ title's std::vector<T> survives — see sanitize_inline_title.
                 "title_html": html_sanitize.sanitize_inline_title(title_text),
                 "post_timestamp": published_dt.isoformat() if published_dt else None,
-                "received_timestamp": entry.added.isoformat() if getattr(entry, "added", None) else None,
+                "received_timestamp": _added_dt.isoformat() if (_added_dt := getattr(entry, "added", None)) else None,
                 "read_timestamp": read_dt.isoformat() if read_dt else None,
                 # When this was starred — carried so the orphan merge can re-sort
                 # by it after list_entries_for_feeds pops the sort values.
                 "saved_timestamp": (
                     _sv.isoformat()
-                    if (_sv := saved_at_map.get((entry.feed_url, entry.id))) else None
+                    if (_sv := saved_at_map.get((feed_url_str, _entry_id))) else None
                 ),
                 "post_display": format_datetime_for_ui(published_dt),
                 "received_display": format_datetime_for_ui(getattr(entry, "added", None)),
@@ -16337,6 +16338,7 @@ def _strip_trailing_recirculation_rail(content_html: str) -> str:
         return content_html
     try:
         from bs4 import BeautifulSoup
+        from bs4 import Tag as _Bs4Tag
         soup = BeautifulSoup(content_html, "html.parser")
         root = soup.body or soup
         blocks = [n for n in root.find_all("div")
@@ -16351,7 +16353,7 @@ def _strip_trailing_recirculation_rail(content_html: str) -> str:
             # rail on four posts out of five.
             tail = []
             for sib in block.next_siblings:
-                if getattr(sib, "name", None) is None:
+                if not isinstance(sib, _Bs4Tag):
                     if str(sib).strip():
                         tail.append(sib)
                     continue
@@ -31635,6 +31637,10 @@ _refetch_jobs = _PerUserDict()
 _refetch_jobs_lock = threading.Lock()
 
 
+@overload
+def _refetch_job_state(create: Literal[True]) -> dict: ...
+@overload
+def _refetch_job_state(create: bool = False) -> dict | None: ...
 def _refetch_job_state(create: bool = False) -> dict | None:
     with _refetch_jobs_lock:
         job = _refetch_jobs.get("job")

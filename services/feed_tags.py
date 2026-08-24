@@ -16,7 +16,7 @@ import logging
 import re
 import time
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import Any, Mapping, cast
 from urllib.parse import unquote_plus, urlparse
 
 LOGGER = logging.getLogger(__name__)
@@ -136,12 +136,14 @@ _MAX_VENDOR_LEN = 60
 
 
 def _shopify_vendor_tags(raw_entry: object) -> list[str]:
-    keys = raw_entry.keys() if hasattr(raw_entry, "keys") else ()
+    if not hasattr(raw_entry, "keys") or not hasattr(raw_entry, "get"):
+        return []
+    mapping = cast(Mapping[Any, Any], raw_entry)
     out: list[str] = []
-    for key in keys:
+    for key in mapping.keys():
         if not _VENDOR_KEY_RE.match(str(key).lower()):
             continue
-        value = raw_entry.get(key)
+        value = mapping.get(key)
         # A structured value (dict/list) is some other namespace's `vendor`, not
         # Shopify's plain string.
         if isinstance(value, str) and 0 < len(value.strip()) <= _MAX_VENDOR_LEN:
