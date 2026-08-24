@@ -11,6 +11,32 @@ measurement/investigation jobs, then scheduled or genuinely low-urgency
 work, then the two standing watch-lists, then the one big multi-session
 project last.
 
+### Ino import resurrects deliberately-unsubscribed feeds
+
+Bit twice in one day (2026-08-23/24). The `subscriptions` phase of
+`_inoreader_drip_step` (`main.py` ~26117) does `reader.add_feed(furl,
+exist_ok=True)` for every feed Ino still lists as subscribed that's missing
+locally — no check for *why* it's missing. First hit: the initial full Ino
+import re-added 396 feeds Josh had already unsubscribed from in Lectio over
+time, all dumped into Uncategorized with no folder (import never touches
+folders at all, a separate gap). Fixed live both times by hand: diff feeds
+added at the sync's exact timestamp against Uncategorized, bulk-unsubscribe
+via `purge_orphaned_feed`. Second hit: starting the recovery re-sync (to pull
+back the stars an accidental mass-F-press wiped, see the entry below) ran the
+same `subscriptions` phase again and resurrected the exact same 394 feeds a
+second time, since nothing recorded that they'd been deliberately removed.
+
+**Fix direction**: `purge_orphaned_feed` has no audit trail today — a feed
+that's gone because it was merged/deduped and a feed that's gone because the
+user unsubscribed it look identical afterward. Add a small table (e.g.
+`declined_feeds(feed_url, declined_at)`) written only on a genuine
+user-initiated unsubscribe (not dedup/merge/format-upgrade paths, which
+already pass `archive_pending=False`/`migrate_curation_to`), and have the
+`subscriptions` phase skip anything in it instead of blindly re-adding. Same
+shape as `dedup_dismissed` for entries — this is the feed-level equivalent.
+Any future "Start" on the Ino import (not just this recovery run) will
+resurrect the same 394 again until this exists.
+
 ### Undo unstar (matching the existing undo-mark-read/unread)
 
 Raised 2026-08-23: Josh hit F (star toggle) repeatedly by accident while
@@ -38,6 +64,15 @@ token pattern `/entries/mark-range-read` already uses (see
 `(feed_url, entry_id, saved_at)` around briefly (a toast with an Undo action,
 or a short server-side buffer) rather than committing to a hard delete
 immediately.
+
+**2026-08-23, root cause of the "wrong entry" half fixed**: it happened a
+second time (single stray `F` with nothing open) and `getActivePostItem()`'s
+`|| visiblePosts[0]` fallback was confirmed as the actual culprit — `m`/`f`,`s`/`o`,`b`
+were all silently acting on the first visible post whenever nothing was
+`.active`. Fallback removed; those shortcuts now no-op with no selection.
+Undo-token above is still worth having as defense-in-depth for the case where
+the *wrong selected* item gets hit (fat-fingered key, repeat-press on a list
+that's reordering under you) — this fix only closes the *no* selection case.
 
 ### basslessons.be (FakeFeedz scrape): real bodies, and video/tabs on keep
 
@@ -485,6 +520,8 @@ pattern (time of day, request type, cadence) once there are enough to see one.
 | Date | Request | Wall time | Notes |
 |---|---|---|---|
 | 2026-08-23 | `GET /?folder_id=23&sort_dir=desc&star_only=1` (5 items) | 6919ms | 6.3s gap between two already-fast, already-logged steps — nothing itself slow |
+| 2026-08-23 | `GET /?folder_id=1&star_only=1&kept=starred&sort_by=starred&sort_dir=desc` (F5 on Saved) | 18664ms | Landed mid-scheduled-refresh — dozens of concurrent `httpx` feed fetches logged in the same window |
+| 2026-08-23 | 4 back-to-back `GET /?folder_id=1&star_only=1&kept=starred` (clicked Saved) | 2114/7882/8684/18192/9303ms | Cluster, not a one-off — same gap signature (list_entries logs fast, posts_block/meta_block absorb the delay) ~5-7 min after a container restart; may correlate with post-restart cold caches/backfill rather than being independent of it |
 
 ### CodeQL board — watch-note
 
