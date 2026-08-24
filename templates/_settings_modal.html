@@ -128,14 +128,17 @@
             <label class="settings-label" for="sett-yt-folder">Subscription folder</label>
             <input type="text" id="sett-yt-folder" class="settings-input" placeholder="YouTube Subscriptions" maxlength="200" />
           </div>
-          <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem;grid-column:1 / -1">
-            <input type="checkbox" id="sett-yt-hide-shorts" />
-            <span class="settings-label" style="margin:0">Hide Shorts on all YouTube feeds (overrides per-feed setting)</span>
-          </label>
-          <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem;grid-column:1 / -1;margin-top:0.5rem">
-            <input type="checkbox" id="sett-yt-hide-unpremiered" />
-            <span class="settings-label" style="margin:0">Hide upcoming videos on all YouTube feeds until they premiere (overrides per-feed setting)</span>
-          </label>
+          <h4 class="settings-section-title" style="flex:0 0 100%;margin-top:1rem">All YouTube feeds (overrides per-feed setting)</h4>
+          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem 1.5rem;flex:0 0 100%">
+            <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem">
+              <input type="checkbox" id="sett-yt-hide-shorts" />
+              <span class="settings-label" style="margin:0">Hide Shorts</span>
+            </label>
+            <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem">
+              <input type="checkbox" id="sett-yt-hide-unpremiered" />
+              <span class="settings-label" style="margin:0">Hide upcoming videos until they premiere</span>
+            </label>
+          </div>
           <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem;grid-column:1 / -1;margin-top:1rem">
             <input type="checkbox" id="sett-yt-account-features" />
             <span class="settings-label" style="margin:0">Account features in embeds (Share / Watch Later) — requires OAuth below</span>
