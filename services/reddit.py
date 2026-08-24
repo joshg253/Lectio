@@ -253,7 +253,7 @@ def submit_link(access_token: str, subreddit: str, title: str, url: str) -> dict
     """Submit a link post to *subreddit*. Returns the Reddit API response dict."""
     payload = {
         "kind": "link",
-        "sr": subreddit.lstrip("r/").strip(),
+        "sr": subreddit.strip().removeprefix("r/").strip(),
         "title": title[:300],
         "url": url,
         "resubmit": False,

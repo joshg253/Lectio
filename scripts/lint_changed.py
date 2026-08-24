@@ -83,7 +83,7 @@ def main() -> int:
         try:
             rel = str(Path(name).resolve().relative_to(Path(root).resolve()))
         except (ValueError, OSError):
-            rel = name.lstrip("./")
+            rel = name.removeprefix("./")
         if f.get("location", {}).get("row") in touched.get(rel, set()):
             hits.append(f)
     if not hits:

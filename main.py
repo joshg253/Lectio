@@ -25371,7 +25371,7 @@ def reddit_oauth_disconnect():
 async def reddit_submit_route(request: Request):
     """Submit an article link to a subreddit."""
     body = await request.json()
-    subreddit = str(body.get("subreddit", "")).strip().lstrip("r/").strip("/")
+    subreddit = str(body.get("subreddit", "")).strip().removeprefix("r/").strip("/")
     title = str(body.get("title", "")).strip()
     url = str(body.get("url", "")).strip()
     feed_url_param = str(body.get("feed_url", "")).strip()
@@ -30728,7 +30728,7 @@ def _run_on_star_destinations(feed_url: str, entry_id: str) -> None:
                     if not ok:
                         LOGGER.warning("[on-star] quire add failed: %s", err)
 
-        reddit_sub = (get_runtime_setting(SETTING_STAR_SEND_REDDIT_SUBREDDIT) or "").strip().lstrip("r/").strip("/")
+        reddit_sub = (get_runtime_setting(SETTING_STAR_SEND_REDDIT_SUBREDDIT) or "").strip().removeprefix("r/").strip("/")
         if reddit_sub and link:
             reddit_token = get_reddit_user_token()
             if reddit_token:
