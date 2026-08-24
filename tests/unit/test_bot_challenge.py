@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from services.bot_challenge import FeedBlockedError, detect_challenge
+from services.bot_challenge import FeedBlockedError, detect_challenge, detect_challenge_headers
 
 SITEGROUND = (
     b'<html><head><link rel="icon" href="data:;"><meta http-equiv="refresh" '
@@ -80,3 +80,33 @@ def test_the_error_message_is_greppable_and_names_the_vendor():
     err = FeedBlockedError("SiteGround captcha", "https://example.com/feed")
     assert str(err).startswith("bot challenge: ")
     assert "SiteGround captcha" in str(err)
+
+
+# --- header-only challenges: no body to sniff at all ---
+#
+# kcls.org's AWS WAF challenge is HTTP 202 with a 0-byte body — detect_challenge
+# above never gets a chance (empty bodies return None on sight), and the empty
+# response used to fall through as a raw AttributeError crash in reader's own
+# parser instead of a labeled block.
+
+def test_aws_waf_challenge_header_is_detected_with_no_body():
+    assert detect_challenge_headers({"x-amzn-waf-action": "challenge"}) == "AWS WAF challenge"
+
+
+def test_aws_waf_header_match_is_case_insensitive_on_value():
+    assert detect_challenge_headers({"x-amzn-waf-action": "Challenge"}) == "AWS WAF challenge"
+
+
+def test_a_captcha_action_is_not_a_challenge_action():
+    """Only the challenge action blocks the feed outright; other WAF actions
+    (e.g. a CAPTCHA the request already passed) are not this failure."""
+    assert detect_challenge_headers({"x-amzn-waf-action": "captcha"}) is None
+
+
+def test_no_headers_at_all_is_not_a_challenge():
+    assert detect_challenge_headers({}) is None
+    assert detect_challenge_headers(None) is None
+
+
+def test_ordinary_headers_are_not_mistaken_for_a_challenge():
+    assert detect_challenge_headers({"content-type": "application/rss+xml"}) is None

@@ -81,6 +81,16 @@ def _fix_feed_response(session, response, request, **kwargs):
     except Exception:
         return None
 
+    # A header-only challenge (AWS WAF's x-amzn-waf-action, served with a
+    # 0-byte body on kcls.org) has to be checked before the no-body return
+    # below, or an empty challenge response looks identical to a genuine
+    # 304/no-body response and is silently swallowed instead of labeled.
+    _header_challenge = bot_challenge.detect_challenge_headers(response.headers)
+    if _header_challenge:
+        response.raw = io.BytesIO(raw_bytes)
+        response._content = raw_bytes
+        raise bot_challenge.FeedBlockedError(_header_challenge, getattr(request, "url", "") or "")
+
     # 304 Not Modified and other no-body responses — nothing to fix.
     if not raw_bytes:
         response.raw = io.BytesIO(b"")

@@ -106,10 +106,7 @@
           <label class="fld">Maintenance hour (0–23)
             <input type="number" id="adm-maint-hour" min="0" max="23" value="{{ maintenance_hour }}" placeholder="3" />
           </label>
-          <label class="fld">Feed history keep (rows/feed)
-            <input type="number" id="adm-fetch-history-keep" min="1" value="{{ fetch_history_keep }}" placeholder="50" />
-          </label>
-          <label class="fld">Feed history max age (days)
+          <label class="fld" title="How long feed-refresh attempts (success/error, per feed) are kept for diagnosing a feed that's gone quiet. A fixed 5000-row-per-feed ceiling backstops this against a runaway retry bug; you shouldn't need to think about it.">Feed history max age (days)
             <input type="number" id="adm-fetch-history-max-age" min="1" value="{{ fetch_history_max_age_days }}" placeholder="30" />
           </label>
           <label class="fld" title="Deleted-post tombstones stop refreshes from resurrecting purged entries. A tombstone is swept once it is this old AND its entry has left the publisher's last-known feed window (quiet feeds keep serving old posts, so age alone is never trusted). 0 keeps them forever.">Tomb sweeping (days, 0 = never)
@@ -336,7 +333,6 @@
           img_target_bytes: $('adm-img-target-bytes')?.value.trim() || '',
           shared_yt_oauth_client_id: $('adm-yt-oauth-client-id')?.value.trim() || '',
           shared_pinterest_oauth_client_id: $('adm-pinterest-oauth-client-id')?.value.trim() || '',
-          fetch_history_keep: $('adm-fetch-history-keep')?.value.trim() || '',
           fetch_history_max_age_days: $('adm-fetch-history-max-age')?.value.trim() || '',
           tombstone_sweep_days: $('adm-tombstone-sweep')?.value.trim() || '',
           login_max_failures: $('adm-login-max-failures')?.value.trim() || '',

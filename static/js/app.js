@@ -6123,7 +6123,6 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     async function unsubscribeFeedRequest(feedUrl, folderId, opts = {}) {
       const body = new URLSearchParams({ folder_id: folderId, feed_url: feedUrl });
       if (opts.migrateCurationTo) body.set('migrate_curation_to', opts.migrateCurationTo);
-      if (opts.keepEntries) body.set('keep_entries', '1');
       if (opts.restarCurated) body.set('restar_curated', '1');
       if (opts.dropCuration) body.set('drop_curation', '1');
       const resp = await fetch('/feeds/unsubscribe', {
@@ -6233,7 +6232,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         const parts = [];
         if (counts.stars) parts.push(`${counts.stars} starred`);
         if (counts.tagged) parts.push(`${counts.tagged} tagged`);
-        noteEl.textContent = `This feed has ${parts.join(' and ')} item${(counts.stars + counts.tagged) === 1 ? '' : 's'}. They'll be kept and browsable in Saved (default), or move them onto another feed.`;
+        noteEl.textContent = `This feed has ${parts.join(' and ')} item${(counts.stars + counts.tagged) === 1 ? '' : 's'}.`;
         // Filterable typeahead: datalist option label -> feed url. Titles can
         // repeat, so disambiguate duplicate labels with a short host hint.
         targetList.innerHTML = '';
@@ -6254,13 +6253,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           const o = document.createElement('option'); o.value = uniq; targetList.appendChild(o);
         });
         targetSel._labelToUrl = labelToUrl;
-        // "Keep curated posts" is the default when a feed carries curation — it
-        // retains the starred/tagged items (browsable in Saved) instead of losing
-        // tags. The dialog opens clean (no list); "Move items" reveals the picker.
-        const keepRadio = document.getElementById('unsub-migrate-keep');
+        // The modal is reused, so a prior feed's choice (e.g. "drop") could
+        // still be checked. Reset to the default every open: keep the
+        // starred/tagged items in Saved. "Move items" reveals the picker.
         const skipRadio = document.getElementById('unsub-migrate-skip');
-        if (keepRadio) keepRadio.checked = true;
-        if (skipRadio) skipRadio.checked = false;
+        if (skipRadio) skipRadio.checked = true;
         moveRadio.checked = false;
         moveRadio.disabled = candidates.length === 0;
         curationEl.hidden = false;
@@ -6323,7 +6320,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             if (dc.stars) parts.push(`${dc.stars} starred`);
             if (dc.tagged) parts.push(`${dc.tagged} tagged`);
             if (parts.length) {
-              noteEl.textContent = `This feed has ${parts.join(' and ')} item${(dc.stars + dc.tagged) === 1 ? '' : 's'}. They'll be kept and browsable in Saved (default), or move them onto another feed.`;
+              noteEl.textContent = `This feed has ${parts.join(' and ')} item${(dc.stars + dc.tagged) === 1 ? '' : 's'}.`;
             } else {
               noteEl.textContent = 'All curated items have been moved — nothing left to lose.';
             }
@@ -6432,7 +6429,6 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         async function onConfirm() {
           let migrateTo = null;
           let moveSubset = null;
-          const keepEntries = hasCuration && currentChoice() === 'keep';
           const dropCuration = hasCuration && currentChoice() === 'drop';
           // Applies to the keeping choices only. Read before cleanup() hides
           // the modal.
@@ -6448,10 +6444,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           }
           if (hasCuration && currentChoice() === 'move') {
             migrateTo = (targetSel._labelToUrl && targetSel._labelToUrl.get(targetSel.value)) || null;
-            if (!migrateTo) { window.alert('Pick a feed to move the items to, or choose "Just unsubscribe".'); return; }
+            if (!migrateTo) { window.alert('Pick a feed to move the items to, or choose "Remove the feed, keep the stars & tags".'); return; }
             const ids = checkedIds();
             const total = itemsEl?.querySelectorAll('.unsub-migrate-item-check').length || 0;
-            if (!ids.length) { window.alert('Select at least one item to move, or choose "Just unsubscribe".'); return; }
+            if (!ids.length) { window.alert('Select at least one item to move, or choose "Remove the feed, keep the stars & tags".'); return; }
             // Everything checked → the whole-feed migration path (also carries
             // read-state slugs). A subset → batch-move just those first, then
             // plain unsubscribe (unmoved stars get archived as usual).
@@ -6477,7 +6473,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             }
           }
           cleanup();
-          try { await unsubscribeFeedRequest(feedUrl, folderId, { ...opts, migrateCurationTo: migrateTo, keepEntries, restarCurated, dropCuration }); resolve(true); }
+          try { await unsubscribeFeedRequest(feedUrl, folderId, { ...opts, migrateCurationTo: migrateTo, restarCurated, dropCuration }); resolve(true); }
           catch (err) { window.alert(`Unsubscribe failed: ${err}`); resolve(false); }
         }
         function onCancel() { cleanup(); resolve(false); }
@@ -7505,6 +7501,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             ? linkedPostItem.getAttribute('data-post-folder-id')
             : document.querySelector('.entry-pane-title')?.getAttribute('data-post-folder-id'));
           adjustSavedFolderBadge(paneStarFolderId, nextIsSaved ? +1 : -1);
+          const dropFromInbox = !nextIsSaved && isInboxKeptScope() && linkedPostItem instanceof HTMLElement;
+          if (dropFromInbox) linkedPostItem.hidden = true;
 
           try {
             const response = await fetch(entrySaveForm.action, {
@@ -7520,7 +7518,9 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             if (!response.ok) {
               throw new Error(`HTTP ${response.status}`);
             }
+            if (dropFromInbox) linkedPostItem.remove();
           } catch (_error) {
+            if (dropFromInbox) linkedPostItem.hidden = false;
             applyEntryPaneSavedState(!nextIsSaved);
             if (linkedPostItem instanceof HTMLElement) {
               applyPostItemSavedState(linkedPostItem, !nextIsSaved);
@@ -8090,6 +8090,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? +1 : -1);
           const starFolderId = postItem.getAttribute('data-post-folder-id');
           adjustSavedFolderBadge(starFolderId, nextIsSaved ? +1 : -1);
+          const dropFromInbox = !nextIsSaved && isInboxKeptScope();
+          if (dropFromInbox) postItem.hidden = true;
 
           try {
             const response = await fetch(saveForm.action, {
@@ -8105,7 +8107,9 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             if (!response.ok) {
               throw new Error(`HTTP ${response.status}`);
             }
+            if (dropFromInbox) postItem.remove();
           } catch (_error) {
+            if (dropFromInbox) postItem.hidden = false;
             applyPostItemSavedState(postItem, !nextIsSaved);
             if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? -1 : +1);
             adjustSavedFolderBadge(starFolderId, nextIsSaved ? -1 : +1);
@@ -8675,6 +8679,14 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       });
       if (document.visibilityState === 'visible') _start();
     }());
+
+    // The Inbox (star_only=1&kept=starred) filters on the star axis alone —
+    // unlike the general Kept view, a tag does not keep an item there. Removing
+    // the star while viewing it must drop the row, or an unstarred-but-tagged
+    // item sits in the Inbox forever with a stale starred icon.
+    function isInboxKeptScope() {
+      return new URLSearchParams(window.location.search).get('kept') === 'starred';
+    }
 
     function applyPostItemSavedState(postItem, isSaved) {
       if (!postItem) {
@@ -12968,8 +12980,27 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             const phaseLabels = { subscriptions: 'Subscribing feeds…', labels_list: 'Fetching label list…', labels_items: 'Importing labels…', starred: 'Importing starred…' };
             const summary = `${d.subs_added || 0} feeds, ${d.items_tagged || 0} tagged, ${d.items_starred || 0} starred${rl}`;
             if (d.done) {
-              if (apiStatus) apiStatus.textContent = `Done ✓ — ${summary}`;
-              if (apiStart) apiStart.hidden = true;
+              // updated_at is when this run finished — shown so "when did I last
+              // trickle-import" doesn't require checking the DB by hand, and used
+              // to default Since on the next run to pick up where this one left
+              // off, without clobbering a date the user already typed in.
+              let lastRunSuffix = '';
+              const sinceInput = document.getElementById('mig-ino-api-since');
+              if (d.updated_at) {
+                const finished = new Date(d.updated_at);
+                if (!Number.isNaN(finished.getTime())) {
+                  lastRunSuffix = ` · Last completed ${finished.toLocaleString()}`;
+                  if (sinceInput && !sinceInput.value) {
+                    sinceInput.value = finished.toISOString().slice(0, 10);
+                  }
+                }
+              }
+              if (apiStatus) apiStatus.textContent = `Done ✓ — ${summary}${lastRunSuffix}`;
+              // Start stays visible: the backend already reinitializes cleanly on
+              // a repeat call (no reset required), and hiding it here meant the
+              // only way to run another import was Reset — which wipes updated_at,
+              // destroying the Since default this same run just set up.
+              if (apiStart) apiStart.hidden = false;
               if (apiRun) apiRun.hidden = true;
               if (apiReset) apiReset.hidden = false;
             } else if (d.error) {
@@ -12982,6 +13013,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
               if (apiStart) apiStart.hidden = true;
               if (apiRun) apiRun.hidden = false;
               if (apiReset) apiReset.hidden = false;
+              // The local-files import polls itself while running (below); this
+              // path never did, so the status line just sat on whatever phase it
+              // was in when the panel last loaded even while the drip step kept
+              // advancing in the background. Same interval as that path.
+              setTimeout(_migInoRefreshStatus, 3000);
             }
           }
         } catch { /* ignore */ }
@@ -15987,12 +16023,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     }
 
     function getActivePostItem() {
-      const visiblePosts = getVisiblePostItems();
-      if (visiblePosts.length === 0) {
-        return null;
-      }
-      const activePost = document.querySelector('.posts .post-item.active:not(.post-item-hidden):not(.post-item-filtered)');
-      return activePost || visiblePosts[0];
+      // No fallback to the first visible post: this backs keyboard shortcuts
+      // that mutate state (m/f/s/o/b), and acting on an item the user never
+      // selected is exactly how a stray keypress unstars/marks-read the wrong
+      // post. Only navigation (n/p) is allowed to default to the first item.
+      return document.querySelector('.posts .post-item.active:not(.post-item-hidden):not(.post-item-filtered)');
     }
 
     function openPostItemInPane(postItem) {

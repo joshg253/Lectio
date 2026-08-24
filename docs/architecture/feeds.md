@@ -226,6 +226,25 @@ already valid comes through byte-identical.
 feedparser reported "200, 100 entries, looks great" and the feed then refused to
 ingest. When checking whether a feed will work, check with *reader*.
 
+**A feed that's merely malformed doesn't have to fail — reader was throwing
+away recoveries feedparser already made.** feedparser's loose parser is a
+built-in fallback for exactly the "one illegal byte" case above and others
+like it (an unescaped `&`, a mismatched tag) — it kept working the whole time.
+The loss was downstream: `reader`'s `_process_feed` raises `ParseError` on
+*any* `bozo_exception` outside its own two-item survivable whitelist
+(`CharacterEncodingOverride`, `NonXMLContentType`), discarding whatever the
+loose parser recovered along with it. A folder-by-folder audit of the live
+library (2026-08-22) found 13 feeds — one with 368 entries sitting behind a
+single bad token — permanently marked dead by this policy alone, with nothing
+wrong on the source side. `SanitizingFeedparserParser.__call__`
+(`services/reader_sanitize.py`) now calls `_accept_recovered_bozo(url,
+result)` before handing off to `_process_feed`: if the loose parser recovered
+a real `version` and `entries` despite the bozo flag, it clears the flag and
+lets the recovered content through (with a warning logged) instead of raising.
+A bozo feed that recovered *nothing* — an HTML error page swapped in for the
+XML, a dead FeedBurner redirect — still raises exactly as before; the override
+only fires when there's something real to keep.
+
 **Announcing yourself as a crawler invites a fake 404.** Auto-discovery used to
 send `Lectio/1.0 (RSS auto-discovery; +…)`, and filters match on that phrase:
 chickensoft.games returns a fabricated 404 to any UA containing it while serving

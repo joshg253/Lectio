@@ -497,7 +497,6 @@ SETTING_SHARED_REDDIT_CLIENT_ID = "shared_reddit_client_id"
 SETTING_SHARED_REDDIT_CLIENT_SECRET = "shared_reddit_client_secret"
 SETTING_STAR_SEND_REDDIT_SUBREDDIT = "star_send_reddit_subreddit"
 # Instance tuning settings (admin-only, stored in admin's app_settings).
-SETTING_FETCH_HISTORY_KEEP = "fetch_history_keep"
 SETTING_FETCH_HISTORY_MAX_AGE_DAYS = "fetch_history_max_age_days"
 SETTING_TOMBSTONE_SWEEP_DAYS = "tombstone_sweep_days"
 SETTING_LOGIN_MAX_FAILURES = "login_max_failures"
@@ -895,12 +894,14 @@ def _get_shared_credential(key: str) -> str:
     return _get_admin_instance_setting(key)
 
 
-def get_fetch_history_keep() -> int:
-    return int(get_instance_setting(SETTING_FETCH_HISTORY_KEEP) or 50)
-
-
 def get_fetch_history_max_age_days() -> int:
     return int(get_instance_setting(SETTING_FETCH_HISTORY_MAX_AGE_DAYS) or 30)
+
+
+# Fixed per-feed row ceiling for feed_fetch_history — a backstop against a
+# pathologically-retried feed, not a user-facing setting. Normal cadence (even
+# hourly for the full max-age window) stays far under this.
+FETCH_HISTORY_ROW_CEILING = 5000
 
 
 def get_tombstone_sweep_days() -> int:
@@ -1115,7 +1116,15 @@ def get_inoreader_token() -> str:
     try:
         data = inoreader_service.refresh_access_token(cid, secret, refresh)
     except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("[inoreader] token refresh failed; reconnect required: %s", exc)
+        LOGGER.warning("[inoreader] token refresh failed: %s", exc)
+        if "invalid_grant" in str(exc):
+            # Inoreader has permanently rejected this refresh token (not a transient
+            # network/outage failure) — clear it so inoreader_connected() stops
+            # reporting stale "Connected." and the UI offers Connect again.
+            with get_meta_connection() as conn:
+                set_setting(conn, SETTING_INOREADER_ACCESS_TOKEN, "")
+                set_setting(conn, SETTING_INOREADER_REFRESH_TOKEN, "")
+                set_setting(conn, SETTING_INOREADER_TOKEN_EXPIRES_AT, "")
         return ""
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_INOREADER_ACCESS_TOKEN, data["access_token"])
@@ -9999,10 +10008,29 @@ def get_feed_properties(feed_url: str) -> dict:
         feed_obj = reader.get_feed(feed_url, None)
 
         if feed_obj is None:
+            # Not in reader — either unsubscribed (its saves/tags survive in the
+            # starred archive, kept-stars-unsub's whole point) or a genuinely
+            # unknown URL. Only the former gets a minimal, editable response:
+            # real_title + suggested_tags (both meta-DB-only, no reader needed)
+            # so a tagged orphan batch can still offer its suggestion chip —
+            # everything else the modal fetches (health, counts, folder, image
+            # strategy, etc.) has no live-feed meaning and stays absent; the
+            # client already defaults every one of those fields on a falsy value.
+            archived_title = starred_archive_service.get_orphan_feed_title(feed_url)
+            if archived_title is None:
+                return {
+                    "feed_url": feed_url,
+                    "found": False,
+                    "error": "Feed not found.",
+                }
             return {
                 "feed_url": feed_url,
-                "found": False,
-                "error": "Feed not found.",
+                "found": True,
+                "is_orphan": True,
+                "real_title": archived_title or feed_url,
+                "health": "unsubscribed",
+                "health_detail": "This feed was unsubscribed — showing archived saves only.",
+                "suggested_tags": get_feed_pinned_tags(feed_url),
             }
 
         total_posts = 0
@@ -14164,6 +14192,7 @@ def merge_orphan_saved_entries(
     only_feed_url: str | None = None,
     archived: bool | None = None,
     search_terms: list[str] | None = None,
+    kept_scope: str = "kept",
 ) -> list[dict]:
     """Append archive-only saved entries (orphans), then re-sort + clip.
 
@@ -14173,9 +14202,18 @@ def merge_orphan_saved_entries(
     is what made the Archive view show nothing under some sort orders — a single
     archived post sorted to the bottom and fell outside the window.
 
-    Orphans are starred entries whose feed is no longer in any folder; their
-    metadata comes entirely from the starred archive. Rendered alongside live
-    saved entries so unsubscribing a feed doesn't make its saves disappear.
+    Orphans are kept (starred or tagged) entries whose feed is no longer in any
+    folder; their metadata comes entirely from the starred archive. Rendered
+    alongside live saved entries so unsubscribing a feed doesn't make its
+    saves disappear.
+
+    *kept_scope*, forwarded to get_orphan_saved_entries: "starred" (the Inbox)
+    narrows to the star axis alone, same as the live-entry path two lines up
+    from this function's callers. Each returned orphan carries its own
+    is_starred/manual_tags — used below instead of the old hardcoded
+    saved=True, which made a tagged-then-unstarred orphan look identically
+    starred to a real star in the list (disagreeing with the entry pane) and,
+    without this scope, kept it pinned in the Inbox forever.
 
     When *only_feed_url* is given, restrict orphans to that single feed (matched
     canonically) — used when the user clicks the feed link of an orphaned save
@@ -14191,7 +14229,9 @@ def merge_orphan_saved_entries(
         posts = [p for p in posts
                  if ((str(p["feed_url"]), str(p["id"])) in archived_keys) == archived]
 
-    orphans = starred_archive_service.get_orphan_saved_entries(live_feed_urls, search_terms)
+    orphans = starred_archive_service.get_orphan_saved_entries(
+        live_feed_urls, search_terms, kept_scope=kept_scope
+    )
     if archived is not None:
         orphans = [o for o in orphans
                    if ((str(o["feed_url"]), str(o["id"])) in archived_keys) == archived]
@@ -14237,10 +14277,10 @@ def merge_orphan_saved_entries(
                 "thumbnail_url": None,
                 "feed_title": orphan["feed_title"],
                 "feed_icon_url": None,
-                "manual_tags": [],
+                "manual_tags": orphan.get("manual_tags") or [],
                 "kept": True,
                 "read": True,
-                "saved": True,
+                "saved": bool(orphan.get("is_starred")),
                 "post_sort_value": post_iso,
                 "received_sort_value": recv_iso,
                 "saved_sort_value": _sort_value_from_epoch(orphan.get("starred_at")),
@@ -14362,6 +14402,17 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     # before this table existed, or unstarred after the feed was already gone)
     # looked identically "kept" to one you'd actually curated.
     is_kept = is_starred or bool(manual_tags)
+    # Orphans have no reader resource, so there's no feed-provided (publisher)
+    # tags to merge in here (see the manual_tags comment above) — but the
+    # user's own pinned/suggested tags (Feed Properties, meta-DB only) are
+    # exactly as available as they are for a live entry. This was hardcoded to
+    # [] before, so an orphan feed's suggestion chip never showed no matter
+    # what was pinned to it. Same "already applied -> stop suggesting" rule
+    # as the live path (main.entry_pane).
+    _manual_now = {normalize_tag_value(t) for t in manual_tags}
+    feed_tag_suggestions = [
+        t for t in get_feed_pinned_tags(feed_url) if t not in _manual_now
+    ]
 
     return {
         "feed_url": feed_url,
@@ -14387,7 +14438,7 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "kept": is_kept,
         "manual_tags": manual_tags,
         "manual_tags_text": " ".join(manual_tags),
-        "feed_tag_suggestions": [],
+        "feed_tag_suggestions": feed_tag_suggestions,
         "feed_tag_chips_collapsed": FEED_TAG_CHIPS_COLLAPSED,
         "feed_tag_filter_signs": {},
         "author_filter_token": None,
@@ -16561,7 +16612,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                         feed_tag_service.record_entry_tags(
                             str(entry.feed_url), [(str(entry.id), _page_tags)]
                         )
-                        raw_feed_tags = _page_tags[:MAX_FEED_TAG_SUGGESTIONS]
+                        # Re-derive through the dismissal-aware getter rather
+                        # than using _page_tags directly: dismissing every
+                        # suggested tag for a feed makes get_feed_tag_suggestions
+                        # return [] just like "never harvested" does, so without
+                        # this a freshly re-harvested (but dismissed) tag came
+                        # back as a chip on every single open.
+                        raw_feed_tags = get_feed_tag_suggestions(str(entry.feed_url), str(entry.id))
                 else:
                     # feed_url/entry_id let the fetch worker persist harvested
                     # tags immediately (survives restarts/cache eviction);
@@ -19082,9 +19139,10 @@ def _daily_maintenance_for_user() -> None:
     except Exception:
         LOGGER.exception("[maintenance] rule log prune failed")
 
-    # 1b. Bound feed_fetch_history: keep the most recent FEED_FETCH_HISTORY_KEEP
-    # rows per feed and drop anything older than the age cap, so the diagnostic
-    # log can't grow without limit on busy installs.
+    # 1b. Bound feed_fetch_history: drop anything older than the age cap, plus a
+    # fixed per-feed ceiling as a backstop against a pathologically-retried feed
+    # (normal cadence — even hourly for 30 days — stays far under this; it exists
+    # only so a genuine bug can't grow the table without limit).
     try:
         cutoff = time.time() - get_fetch_history_max_age_days() * 86400
         with get_meta_connection() as conn:
@@ -19098,7 +19156,7 @@ def _daily_maintenance_for_user() -> None:
                     ) WHERE rn > ?
                 )
                 """,
-                (get_fetch_history_keep(),),
+                (FETCH_HISTORY_ROW_CEILING,),
             )
             pruned = cur.rowcount
             cur = conn.execute("DELETE FROM feed_fetch_history WHERE fetched_at < ?", (cutoff,))
@@ -20094,6 +20152,7 @@ def resolve_reader_backlog(
                 limit=limit,
                 archived=archived,
                 search_terms=search_terms_from_query(search_query),
+                kept_scope=kept_scope,
             )
             _merged_orphans = True
         except Exception as exc:  # noqa: BLE001
@@ -21472,7 +21531,6 @@ def administration_page(request: Request, msg: str | None = None, error: str | N
             "shared_reddit_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_SECRET)),
             "shared_reddit_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_SECRET, "")),
             # Instance tuning
-            "fetch_history_keep": get_fetch_history_keep(),
             "fetch_history_max_age_days": get_fetch_history_max_age_days(),
         "tombstone_sweep_days": get_tombstone_sweep_days(),
             "login_max_failures": get_login_max_failures(),
@@ -22355,6 +22413,7 @@ def _home_inner(
                 limit=limit,
                 only_feed_url=orphan_only_feed,
                 search_terms=search_terms_from_query(selected_query),
+                kept_scope=("starred" if inbox_view else "kept"),
             )
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("orphan saved entry merge (feed %s) failed: %s", orphan_only_feed, exc)
@@ -22383,6 +22442,7 @@ def _home_inner(
                 sort_by=selected_sort_by,
                 sort_dir=selected_sort_dir,
                 limit=limit,
+                kept_scope=("starred" if inbox_view else "kept"),
             )
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("orphan saved entry merge failed: %s", exc)
@@ -24682,29 +24742,47 @@ def entry_feed_tags_route(
     no feed-tag chips. Waits briefly for the background source-page fetch the
     entry-open queued (whose sink persists harvested tags), then returns the
     normalized suggestions + filter-rule signs so the client can inject the
-    [ + tag ▲ ▼ ] chips into the already-open pane."""
+    [ + tag ▲ ▼ ] chips into the already-open pane.
+
+    An orphan entry (feed unsubscribed) has no reader resource for
+    get_feed_tag_suggestions/get_manual_tags_for_resource to read, and no
+    live page to fetch publisher tags from — but it still has manual tags
+    (orphan_entry_tags) and pinned/suggested tags (feed_display_prefs, same
+    as a live feed). Without this branch, saving a new suggested tag from
+    Feed Properties on an already-open orphan entry called this route (see
+    submitFeedPropSuggestedTags) and got a 404, so the chip never appeared
+    without a full pane reopen — same bug class as _build_orphan_entry_detail
+    previously hardcoding feed_tag_suggestions=[].
+    """
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
-        if entry is None:
-            return JSONResponse({"error": "unknown entry"}, status_code=404)
-        entry_link = str(entry.link or "")
-        manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
+        if entry is not None:
+            entry_link = str(entry.link or "")
+            manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
 
-    raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
-    if not raw_tags and entry_link and url_guard.is_safe_outbound_url(entry_link):
-        # Wait for the fetch queued by the entry-open handler (returns
-        # immediately when it already finished or none is in flight).
-        lead_image_service.wait_for_source_html_fetch(entry_link, timeout=8.0)
+    if entry is None:
+        if starred_archive_service.get_orphan_feed_title(feed_url) is None:
+            return JSONResponse({"error": "unknown entry"}, status_code=404)
+        entry_link = ""
+        manual_tags = _get_orphan_manual_tags(feed_url, entry_id)
+        raw_tags: list[str] = []
+    else:
         raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
-        if not raw_tags:
-            # Fetch finished before the sink existed or raced it — harvest
-            # directly from the cached page as a last resort.
-            cached = lead_image_service.get_cached_source_html(entry_link)
-            if cached is not None:
-                page_tags = feed_tags_service_mod.extract_page_tags(cached[1], entry_link)
-                if page_tags:
-                    feed_tag_service.record_entry_tags(feed_url, [(entry_id, page_tags)])
-                    raw_tags = page_tags[:MAX_FEED_TAG_SUGGESTIONS]
+        if not raw_tags and entry_link and url_guard.is_safe_outbound_url(entry_link):
+            # Wait for the fetch queued by the entry-open handler (returns
+            # immediately when it already finished or none is in flight).
+            lead_image_service.wait_for_source_html_fetch(entry_link, timeout=8.0)
+            raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
+            if not raw_tags:
+                # Fetch finished before the sink existed or raced it — harvest
+                # directly from the cached page as a last resort.
+                cached = lead_image_service.get_cached_source_html(entry_link)
+                if cached is not None:
+                    page_tags = feed_tags_service_mod.extract_page_tags(cached[1], entry_link)
+                    if page_tags:
+                        feed_tag_service.record_entry_tags(feed_url, [(entry_id, page_tags)])
+                        # Re-derive dismissal-aware, same reason as the pane build.
+                        raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
 
     # The user's pinned tags go FIRST — they are the ones being reached for, and
     # a feed that ships 28 tags a post would otherwise bury them past the
@@ -26163,6 +26241,11 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
             _save()
 
     except inoreader_service.QuotaExceeded:
+        # The tracked z1_remaining is stale here — it only updates from a
+        # successful response's headers, and every call since the real quota
+        # ran out has 429'd before reaching that line. Zero it so the status
+        # line stops showing leftover headroom that no longer exists.
+        state["z1_remaining"] = 0
         LOGGER.info("[inoreader] drip paused: quota exhausted")
         _save()
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
@@ -26914,7 +26997,6 @@ def get_all_settings():
         "contacts": contacts,
         "email_to_default": email_to_default,
         "public_url": LECTIO_PUBLIC_URL,
-        "fetch_history_keep": get_fetch_history_keep(),
         "fetch_history_max_age_days": get_fetch_history_max_age_days(),
         "tombstone_sweep_days": get_tombstone_sweep_days(),
         "login_max_failures": get_login_max_failures(),
@@ -26975,7 +27057,7 @@ async def save_all_settings(request: Request):
         SETTING_REDDIT_CLIENT_ID, SETTING_REDDIT_CLIENT_SECRET,
         SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
         SETTING_STAR_SEND_REDDIT_SUBREDDIT,
-        SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
+        SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
         SETTING_TOMBSTONE_SWEEP_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
@@ -26990,7 +27072,7 @@ async def save_all_settings(request: Request):
         SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
-        SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
+        SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
         SETTING_TOMBSTONE_SWEEP_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
@@ -27527,7 +27609,6 @@ def unsubscribe_feed(
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
     migrate_curation_to: str | None = Form(default=None),
-    keep_entries: str = Form(default=""),
     restar_curated: str = Form(default=""),
     drop_curation: str = Form(default=""),
 ):
@@ -27536,7 +27617,6 @@ def unsubscribe_feed(
     star_only_query = build_star_only_query(star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
     read_filter_query_s = build_read_filter_query(read_filter)
-    keep = normalize_star_only(keep_entries)  # reuse the truthy-form parser
 
     ok = True
     message = "Feed unsubscribed."
@@ -27565,37 +27645,19 @@ def unsubscribe_feed(
             ).fetchone()
 
         if not still_used:
-            if keep:
-                # Keep-but-unsubscribe: retain the reader feed + its curated
-                # (starred/tagged) entries so they stay browsable per-feed in the
-                # Saved/Kept view. Just hide it from the tree and stop updates.
+            # When a target feed is given, migrate this feed's tags/stars onto it
+            # (synthesizing entries) instead of archiving the stars — so curation
+            # isn't lost on unsubscribe.
+            _migrate_to = (migrate_curation_to or "").strip() or None
+            if _migrate_to == feed_url:
+                _migrate_to = None  # can't migrate onto itself
+            with get_reader() as reader:
                 with get_meta_connection() as conn:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO kept_feeds (feed_url) VALUES (?)",
-                        (feed_url,),
+                    purge_orphaned_feed(
+                        reader, conn, feed_url,
+                        archive_pending=_migrate_to is None,
+                        migrate_curation_to=_migrate_to,
                     )
-                disable_feed(feed_url)
-                # Flush any pending captures so content survives if the feed is
-                # ever fully removed later.
-                try:
-                    starred_archive_service.force_archive_pending_for_feed(feed_url)
-                except Exception as exc:  # noqa: BLE001
-                    LOGGER.warning("[keep] force-archive failed for %s: %s", feed_url, exc)
-                message = "Feed unsubscribed; curated posts kept."
-            else:
-                # When a target feed is given, migrate this feed's tags/stars onto it
-                # (synthesizing entries) instead of archiving the stars — so curation
-                # isn't lost on unsubscribe.
-                _migrate_to = (migrate_curation_to or "").strip() or None
-                if _migrate_to == feed_url:
-                    _migrate_to = None  # can't migrate onto itself
-                with get_reader() as reader:
-                    with get_meta_connection() as conn:
-                        purge_orphaned_feed(
-                            reader, conn, feed_url,
-                            archive_pending=_migrate_to is None,
-                            migrate_curation_to=_migrate_to,
-                        )
         if dropped:
             message = (
                 "Feed unsubscribed; "
@@ -28297,8 +28359,9 @@ def set_feed_suggested_tags_route(feed_url: str = Form(...), tags: str = Form(""
     already exists for people who want it applied without looking.
     """
     with get_reader() as reader:
-        if reader.get_feed(feed_url, None) is None:
-            return JSONResponse({"ok": False, "error": "Feed not found."}, status_code=404)
+        is_live = reader.get_feed(feed_url, None) is not None
+    if not is_live and starred_archive_service.get_orphan_feed_title(feed_url) is None:
+        return JSONResponse({"ok": False, "error": "Feed not found."}, status_code=404)
     kept = set_feed_pinned_tags(feed_url, tags)
     invalidate_meta_structure_cache()
     return JSONResponse({"ok": True, "tags": kept})
@@ -31019,7 +31082,8 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
 
 
 def _refresh_captured_article_for_current_user(
-    feed_url: str, entry_id: str, mode: str = "readability"
+    feed_url: str, entry_id: str, mode: str = "readability",
+    bump_received: bool | None = None,
 ) -> dict:
     """Re-fetch a Lectio capture that lives on a real feed (post auto-filing),
     with the current tenancy's reader/meta DB.
@@ -31032,7 +31096,9 @@ def _refresh_captured_article_for_current_user(
     live page. The automatic archive fallback below only triggers when the live
     fetch is *refused* (parked page, 404), which leaves out the case that sent
     users to archive.org by hand: a publisher serving a page that passes every
-    guard but is no longer the article — rewritten, truncated, or paywalled."""
+    guard but is no longer the article — rewritten, truncated, or paywalled.
+
+    *bump_received* is forwarded as-is to refresh_captured_article — see there."""
     from_archive: str | None = None
     if mode == CAPTURE_MODE_ARCHIVE:
         from_archive = wayback_snapshot_url(_entry_source_url(feed_url, entry_id) or entry_id)
@@ -31070,6 +31136,7 @@ def _refresh_captured_article_for_current_user(
             extract=extract,
             enqueue_archive=starred_archive_service.enqueue_archive,
             is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
+            bump_received=bump_received,
         )
     if from_archive and result.get("ok"):
         result["from_archive"] = from_archive
@@ -31091,6 +31158,7 @@ def _refresh_captured_article_for_current_user(
                     extract=_from_archive,
                     enqueue_archive=starred_archive_service.enqueue_archive,
                     is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
+                    bump_received=bump_received,
                 )
             if archived_result.get("ok"):
                 archived_result["from_archive"] = snapshot
@@ -31773,7 +31841,13 @@ def _run_refetch_batch(rows: list[tuple[str, str, str]], job: dict) -> None:
             host_last[host] = time.monotonic()
 
             try:
-                result = _refresh_captured_article_for_current_user(feed_u, entry_id, "readability")
+                # False: a bulk backfill across dozens of old articles isn't
+                # "look, this one changed" the way a deliberate single re-fetch
+                # is — bumping every touched saved_at at once used to dump the
+                # whole Inbox's order onto whatever finished last.
+                result = _refresh_captured_article_for_current_user(
+                    feed_u, entry_id, "readability", bump_received=False
+                )
             except Exception:  # noqa: BLE001 — one bad entry must not end the run
                 LOGGER.warning("[refetch-batch] failed for %s", entry_id, exc_info=True)
                 result = {"ok": False}

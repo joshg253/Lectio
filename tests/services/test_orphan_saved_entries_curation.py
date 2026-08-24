@@ -163,3 +163,63 @@ def test_no_search_terms_returns_all_curated_orphans(archive, meta):
     _star(meta, "b")
     out = _svc(archive, meta).get_orphan_saved_entries(live_feed_urls=set(), search_terms=[])
     assert sorted(o["id"] for o in out) == ["a", "b"]
+
+
+def test_row_reports_starred_true_when_starred(archive, meta):
+    _add(archive, "starred-one")
+    _star(meta, "starred-one")
+    out = _svc(archive, meta).get_orphan_saved_entries(live_feed_urls=set())
+    assert out[0]["is_starred"] is True
+    assert out[0]["manual_tags"] == []
+
+
+def test_row_reports_starred_false_and_tags_when_tagged_only(archive, meta):
+    # Previously every orphan row was rendered as saved=True regardless of
+    # this — a tagged-then-unstarred orphan looked identically starred to a
+    # genuinely-starred one in the list, though the entry pane (which reads
+    # real state) disagreed. See main.merge_orphan_saved_entries.
+    _add(archive, "tagged-one")
+    meta.execute(
+        "INSERT INTO orphan_entry_tags (feed_url, entry_id, tag) VALUES (?, ?, ?)",
+        (FEED, "tagged-one", "c++"),
+    )
+    meta.commit()
+    out = _svc(archive, meta).get_orphan_saved_entries(live_feed_urls=set())
+    assert out[0]["is_starred"] is False
+    assert out[0]["manual_tags"] == ["c++"]
+
+
+def test_kept_scope_starred_excludes_tagged_only_orphans(archive, meta):
+    # The Inbox (kept_scope="starred") is the star axis alone, same rule as
+    # the live-entry path — a tag is filing, not a to-do, so a
+    # tagged-but-unstarred orphan must not sit in the Inbox forever.
+    _add(archive, "starred-one")
+    _star(meta, "starred-one")
+    _add(archive, "tagged-one")
+    meta.execute(
+        "INSERT INTO orphan_entry_tags (feed_url, entry_id, tag) VALUES (?, ?, ?)",
+        (FEED, "tagged-one", "c++"),
+    )
+    meta.commit()
+    out = _svc(archive, meta).get_orphan_saved_entries(live_feed_urls=set(), kept_scope="starred")
+    assert [o["id"] for o in out] == ["starred-one"]
+
+
+def test_kept_scope_kept_still_includes_tagged_only_orphans(archive, meta):
+    _add(archive, "tagged-one")
+    meta.execute(
+        "INSERT INTO orphan_entry_tags (feed_url, entry_id, tag) VALUES (?, ?, ?)",
+        (FEED, "tagged-one", "c++"),
+    )
+    meta.commit()
+    out = _svc(archive, meta).get_orphan_saved_entries(live_feed_urls=set(), kept_scope="kept")
+    assert [o["id"] for o in out] == ["tagged-one"]
+
+
+def test_get_orphan_feed_title_none_for_unknown_url(archive, meta):
+    assert _svc(archive, meta).get_orphan_feed_title("https://never.example/feed") is None
+
+
+def test_get_orphan_feed_title_returns_title_for_known_orphan(archive, meta):
+    _add(archive, "any-entry", feed_title="Gone Blog")
+    assert _svc(archive, meta).get_orphan_feed_title(FEED) == "Gone Blog"

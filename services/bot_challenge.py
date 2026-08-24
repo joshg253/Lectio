@@ -41,6 +41,36 @@ _MARKERS: tuple[tuple[str, str], ...] = (
 # document head or an early script/meta tag, and a challenge page is tiny.
 _SNIFF_BYTES = 4096
 
+# Header name -> (expected value substring, label). Checked before the body
+# markers above, and the only thing that can catch a challenge at all when
+# the response body is empty (kcls.org's AWS WAF challenge: HTTP 202,
+# 0-byte body, nothing for the body-sniffer to see — found 2026-08-23 after
+# it surfaced as a raw AttributeError crash in reader's own parser instead of
+# a labeled block). Header names are matched case-insensitively; requests'
+# CaseInsensitiveDict already does that for the lookup itself.
+_HEADER_MARKERS: tuple[tuple[str, str, str], ...] = (
+    ("x-amzn-waf-action", "challenge", "AWS WAF challenge"),
+)
+
+
+def detect_challenge_headers(headers) -> str | None:
+    """Return a vendor label if the response *headers* alone signal a challenge.
+
+    Call this even when the body is empty — that is exactly the case it
+    exists for. ``headers`` is anything supporting ``.get()`` case-
+    insensitively (a ``requests``/``httpx`` response's own headers object).
+    """
+    if not headers:
+        return None
+    for header, value, label in _HEADER_MARKERS:
+        try:
+            got = headers.get(header)
+        except Exception:  # noqa: BLE001 — an odd headers object is not a challenge
+            return None
+        if got and value in got.lower():
+            return label
+    return None
+
 
 def detect_challenge(content_type: str | None, body: bytes | None) -> str | None:
     """Return a vendor label if *body* is an anti-bot challenge, else None.

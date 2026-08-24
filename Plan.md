@@ -11,6 +11,69 @@ measurement/investigation jobs, then scheduled or genuinely low-urgency
 work, then the two standing watch-lists, then the one big multi-session
 project last.
 
+### Ino import resurrects deliberately-unsubscribed feeds
+
+Bit twice in one day (2026-08-23/24). The `subscriptions` phase of
+`_inoreader_drip_step` (`main.py` ~26117) does `reader.add_feed(furl,
+exist_ok=True)` for every feed Ino still lists as subscribed that's missing
+locally — no check for *why* it's missing. First hit: the initial full Ino
+import re-added 396 feeds Josh had already unsubscribed from in Lectio over
+time, all dumped into Uncategorized with no folder (import never touches
+folders at all, a separate gap). Fixed live both times by hand: diff feeds
+added at the sync's exact timestamp against Uncategorized, bulk-unsubscribe
+via `purge_orphaned_feed`. Second hit: starting the recovery re-sync (to pull
+back the stars an accidental mass-F-press wiped, see the entry below) ran the
+same `subscriptions` phase again and resurrected the exact same 394 feeds a
+second time, since nothing recorded that they'd been deliberately removed.
+
+**Fix direction**: `purge_orphaned_feed` has no audit trail today — a feed
+that's gone because it was merged/deduped and a feed that's gone because the
+user unsubscribed it look identical afterward. Add a small table (e.g.
+`declined_feeds(feed_url, declined_at)`) written only on a genuine
+user-initiated unsubscribe (not dedup/merge/format-upgrade paths, which
+already pass `archive_pending=False`/`migrate_curation_to`), and have the
+`subscriptions` phase skip anything in it instead of blindly re-adding. Same
+shape as `dedup_dismissed` for entries — this is the feed-level equivalent.
+Any future "Start" on the Ino import (not just this recovery run) will
+resurrect the same 394 again until this exists.
+
+### Undo unstar (matching the existing undo-mark-read/unread)
+
+Raised 2026-08-23: Josh hit F (star toggle) repeatedly by accident while
+sitting in the Inbox, unstarring ~16 articles with no way to identify which
+ones afterward — unlike mark-read/unread, there's no undo token for a star
+toggle. `apply_star_state`'s unstar path is a hard `DELETE FROM
+saved_entries`, so once it lands there's no trace of which entry it was,
+only that *something* changed (couldn't reconstruct after the fact even from
+server logs — the access log has no request body, and nothing else records
+per-entry star history).
+
+Made worse by two compounding factors this time (worth remembering, not
+necessarily fixing): the Inbox's "unstar removes the row immediately" fix
+(shipped earlier the same day) means each repeat keypress hits a *different*
+entry, not the same one toggling back and forth — `getActivePostItem()`
+falls through to whatever's newest at the top once the active one's gone.
+And a concurrent Ino trickle-import was inserting new stars the entire time,
+so even "what's at the top of the Inbox now" can't stand in for "what was
+there right before the incident."
+
+**Fix direction**: give `/entries/saved` unstar the same short-lived undo
+token pattern `/entries/mark-range-read` already uses (see
+`_run_scheduled_refresh_for_all_users` era mark-read undo, or the
+`/entries/undo-mark-read` route) — keep the just-removed
+`(feed_url, entry_id, saved_at)` around briefly (a toast with an Undo action,
+or a short server-side buffer) rather than committing to a hard delete
+immediately.
+
+**2026-08-23, root cause of the "wrong entry" half fixed**: it happened a
+second time (single stray `F` with nothing open) and `getActivePostItem()`'s
+`|| visiblePosts[0]` fallback was confirmed as the actual culprit — `m`/`f`,`s`/`o`,`b`
+were all silently acting on the first visible post whenever nothing was
+`.active`. Fallback removed; those shortcuts now no-op with no selection.
+Undo-token above is still worth having as defense-in-depth for the case where
+the *wrong selected* item gets hit (fat-fingered key, repeat-press on a list
+that's reordering under you) — this fix only closes the *no* selection case.
+
 ### basslessons.be (FakeFeedz scrape): real bodies, and video/tabs on keep
 
 **BUILT 2026-08-13** as `services/site_content_plugins.py` — a per-site capture
@@ -68,6 +131,34 @@ Standard Ebooks body the same day (the refetch had already overwritten reader's
 own entry content, and only a backup got it back). Per-entry keeps it reversible
 and lets one be checked before the rest.
 
+### Re-fetch: let the user choose which date it lands on
+
+Raised 2026-08-23. `refresh_captured_article` bumps a capture's Received date
+(and `saved_entries.saved_at`, which the Inbox's star-order reads) to now by
+default — right for a deliberate single re-fetch ("something changed, look at
+this"), wrong for a bulk Refetch-All across dozens of old articles, which used
+to dump the whole Inbox's order onto whatever finished last in the batch.
+**Quick fix shipped 2026-08-23**: the batch worker now passes
+`bump_received=False` and leaves every entry's date alone; the single-article
+button is unchanged.
+
+**Not yet built**: a real choice on the re-fetch action(s) — Now / Original
+(saved) date / Pub date — instead of the current hardcoded bump-or-not. The
+`bump_received` parameter now threads cleanly through
+`services/saved_articles.py::refresh_captured_article` →
+`main._refresh_captured_article_for_current_user` → both call sites (single
+button, batch worker), so a picker UI has a real parameter to plug into rather
+than a special case to unwind.
+
+Related gap surfaced in the same conversation: there is no dedicated
+"last fetched/re-fetched at" column — only `entries.published` (the article's
+own date), `entries.first_updated` (Lectio's original ingest time, immutable),
+and `entry_content_edits.edited_at` (frozen at the *first* re-fetch, for the
+Revert button — not updated on later ones). If Refetch-All should ever skip
+entries already re-fetched recently (raised in the same thread — no point
+re-spending a site's bandwidth on articles just fixed minutes ago), that needs
+a new column; nothing today records it.
+
 ### Proxy article-body images through /api/img (main app)
 
 Asked for 2026-08-12. **The retry half shipped 2026-08-12**
@@ -123,8 +214,16 @@ candidate resolves (or at least refusing one whose host is the *site's own* page
 path with an embedded absolute URL) would catch the whole class, not just
 Substack.
 
-**Also unexplained on the same feed:** star and re-fetch do not pull content.
-Not yet diagnosed.
+**"Star and re-fetch do not pull content" — RESOLVED 2026-08-23, not a bug.**
+Re-fetch on this exact entry now runs clean (`ok`, `extracted`) and correctly
+pulls 11.7KB of real page content — it's just that the page *is* a paywall
+promo: this specific post is a paid Substack post ("∙ Paid", "Continue
+reading this post for free... or purchase a paid subscription"), confirmed
+independently by curling the raw page directly. Checked several of her other
+recent posts on the same feed — free, full text, no paywall — so this is one
+occasional paid post, not a feed-wide change. Nothing to fix; there is no
+fuller version of this specific post publicly available to extract. The
+avatar/mangled-URL lead-image bug above is unrelated and still open.
 
 ### Feed known-migrations into discovery, so a 404 is not the end
 
@@ -352,21 +451,6 @@ dismissal — a settings row listing dismissed groups with an un-dismiss button
 would be the natural follow-up if a wrong dismissal ever needs clawing back.
 Not built since it wasn't asked for yet.
 
-### Unsubscribe dialog — the two "keep" options do not read as different
-
-The radio labels are "Keep curated posts (hide the feed but keep its
-starred/tagged items — browse them in Saved)" and "Just unsubscribe (starred
-and tagged posts stay in Saved as offline copies)". Both promise Saved keeps
-your stuff, so nothing on screen says what actually differs: **Keep** retains
-the reader feed and every entry (`kept_feeds` + `disable_feed`), so read state,
-tags and dates survive and resubscribing resumes; **Just unsubscribe** deletes
-the feed and its entries (`purge_orphaned_feed`), leaving starred/tagged posts
-only as force-archived offline snapshots.
-
-Needs a conversation before rewording — Josh raised the idea of replacing the
-radios with checkboxes for *what* to keep (entries? read state? tags? unread?)
-rather than two bundled outcomes. Decide the model first; the copy follows.
-
 ### Utilities: find rules that could be one rule
 
 Marking things read in Deals now takes several rules (Apple products, one set of
@@ -422,6 +506,22 @@ over content plus a join to the archive's asset rows, fine for a few thousand
 items, less so as a sort key on every render) or maintained as a column at
 capture/re-fetch time; and whether the same sort belongs in the Kept view, where
 an unsubscribed feed's retained posts accumulate unseen.
+
+### GIL-contention request stalls — tally
+
+Not fixed, not investigated further yet — just tracking how often it's bad
+enough to notice before deciding whether it's worth the architectural work
+(background refresh and request handling currently share the same
+process/threads, so a request can sit for seconds with nothing itself wrong,
+starved of CPU by a concurrent background refresh doing CPU-bound work —
+parsing, sanitizing). Add a line each time Josh notices one; look for a
+pattern (time of day, request type, cadence) once there are enough to see one.
+
+| Date | Request | Wall time | Notes |
+|---|---|---|---|
+| 2026-08-23 | `GET /?folder_id=23&sort_dir=desc&star_only=1` (5 items) | 6919ms | 6.3s gap between two already-fast, already-logged steps — nothing itself slow |
+| 2026-08-23 | `GET /?folder_id=1&star_only=1&kept=starred&sort_by=starred&sort_dir=desc` (F5 on Saved) | 18664ms | Landed mid-scheduled-refresh — dozens of concurrent `httpx` feed fetches logged in the same window |
+| 2026-08-23 | 4 back-to-back `GET /?folder_id=1&star_only=1&kept=starred` (clicked Saved) | 2114/7882/8684/18192/9303ms | Cluster, not a one-off — same gap signature (list_entries logs fast, posts_block/meta_block absorb the delay) ~5-7 min after a container restart; may correlate with post-restart cold caches/backfill rather than being independent of it |
 
 ### CodeQL board — watch-note
 
@@ -864,44 +964,27 @@ mechanical file split.
    split; treat as its own carefully-tested project.
 
 
-### Inoreader replacement — the migration (start ~Dec 2026)
+### Inoreader replacement — the migration
 
-**Scheduled, not urgent**: renewal is 2027-03-16, so starting around Dec 2026 leaves
-~3 months to validate before the date. Pulling it earlier buys nothing; the plan is
-already paid and won't prorate.
+Started early (2026-08-21/22), ahead of the original "start ~Dec 2026"
+schedule. Folder-by-folder audit done for all 27 folders (method: health
+check + silent-stall check + live Ino comparison via `services/inoreader.py`,
+reusing `get_subscriptions`/`get_stream_contents` — this superseded the
+originally-planned automated comparison report, same result by hand). 26/27
+folders are safe to cut over; YouTube is the one open blocker (silent
+multi-week stalls, root cause not yet found).
 
-The blocker is **bot-blocking**: feeds Inoreader can fetch but Lectio can't.
-Publishers allowlist known aggregators (Inoreader/Feedly) by UA/IP; Lectio fetches
-from the VPS IP with an honest UA and gets 403'd (the 🟢 "blocked" bucket in the
-Failing Feeds filter — isocpp 752, libhunt newsletters, etc.). Good-citizen policy
-forbids spoofing Ino's UA or evading IP blocks; Lectio already auto-escalates to
-browser-UA on refusal (`browser_ua_feeds`), which recovers some 403s but not
-IP/aggregator-only blocks.
+**No fetch-proxy.** Considered pulling feeds Inoreader can reach but Lectio
+can't (bot-walled: isocpp, libhunt newsletters, Project Euler, etc. — about a
+dozen feeds) via Ino's API instead of the origin. Rejected 2026-08-22: it only
+works on a paid Ino account, which defeats the point of dropping Ino. These
+feeds are accepted as permanent losses — same call for the 2 Cloudflare-walled
+Deals feeds (camelcamelcamel, homebrewfinds). Nothing further planned here;
+let the Ino plan lapse 2027-03-16 (annual SaaS rarely prorates; worth asking,
+but plan to ride it out).
 
-Both steps reuse the **existing** `services/inoreader.py` (OAuth +
-`get_subscriptions` + `get_stream_contents`).
-
-**9a — Comparison report** (read-only; start here). Cross-reference Inoreader
-subscriptions vs Lectio feeds and flag three sets:
-
-- **(a) in-Ino-with-recent-items but failing-in-Lectio** = the "Ino can, we can't"
-  risk set. This is also the **triage list that gates Part C pass 2**, produced
-  mechanically instead of by hand, and it names the feeds that need 9b.
-- **(b) in Ino, not in Lectio** — subscriptions never migrated.
-- **(c) in Lectio, not in Ino** — Lectio-only, safe to ignore for the cutover.
-
-Turns "safe to drop Ino?" into a concrete checklist.
-
-**9b — Inoreader as fetch-proxy.** The step that actually lets Ino lapse, and
-legitimate rather than evasion — Ino *is* the subscriber. A per-feed "fetch via
-Inoreader" toggle pulling items from `stream/contents` instead of the origin, for
-the stubborn bot-walled feeds in set (a). Keep Ino connected as a quiet backend, not
-the reader. **Scope depends on how big set (a) turns out to be — run 9a first and let
-the count decide whether this is worth building at all.**
-
-Sequence: connect Ino → comparison report (9a) → triage/replace dead feeds → Tag-as-keep
-Part C pass 2 (Now) → proxy the only-Ino feeds (9b) → let the plan lapse 2027-03-16
-(annual SaaS rarely prorates; worth asking, but plan to ride it out).
+Remaining before Ino can fully lapse: Comics & Art and !NSFW dead-feed
+pruning (mechanical), and the YouTube root-cause dig.
 
 ### Full-content fetch at ingest for body-less feeds
 
@@ -909,10 +992,10 @@ meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
 description/content element at all; older stored entries have bodies, so this
 is upstream). A per-feed "fetch full content from the source page at ingest"
 option (readability pipeline already exists) would fix such feeds generally —
-per-feed opt-in in Feed Properties, capped/throttled like enhancement. Overlaps
-with Inoreader replacement above: some "we can't fetch" feeds get fixed here
-instead of via the Ino proxy, so it's worth revisiting once the comparison
-report sizes set (a).
+per-feed opt-in in Feed Properties, capped/throttled like enhancement. Doesn't
+help the bot-walled feeds above (they're blocked at fetch, before content
+matters) but could recover feeds elsewhere that are body-less rather than
+blocked.
 
 ### Instapaper-alternative: reader-only view for saved/starred items
 

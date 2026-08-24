@@ -101,8 +101,10 @@ short version:
   adapters, conditional GET, per-feed and per-domain backoff, GUID-churn
   suppression, feed compare, duplicate scanning, and unsubscribe that keeps your
   curation. A feed *blocked* by an anti-bot challenge is reported as blocked
-  rather than misfiled as malformed, and one character that XML forbids no
-  longer costs you the whole feed.
+  rather than misfiled as malformed, one character that XML forbids no
+  longer costs you the whole feed, and a feed that's merely malformed
+  elsewhere is still ingested from whatever a lenient parser can recover
+  rather than discarded outright.
 - **Fix a post in place.** Edit its date, title or URL; clean up its body with
   an Aardvark-style element remover; re-fetch its content — undoably, with an
   Internet Archive fallback — one post, or a whole feed or folder at a time.

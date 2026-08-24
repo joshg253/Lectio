@@ -29,6 +29,36 @@ def test_survives_nonxml_contenttype_bozo():
     assert len(entries) == 1
 
 
+def test_accepts_malformed_xml_recovered_by_loose_parser():
+    # A single unescaped '&' in a title is malformed XML (SAXParseException,
+    # not in reader's survivable whitelist), but feedparser's loose parser
+    # recovers a real entry from it anyway. Found in the wild on finji.co
+    # (368 entries lost to this) and 12 other feeds across the library — this
+    # must not raise ParseError.
+    raw = (
+        b'<?xml version="1.0"?>'
+        b'<rss version="2.0"><channel><title>T</title>'
+        b'<item><guid>e1</guid><link>https://x.test/1</link>'
+        b'<title>Bad & unescaped</title><description>hi</description></item>'
+        b'</channel></rss>'
+    )
+    feed, entries = SanitizingFeedparserParser()("https://x.test/feed", io.BytesIO(raw), {})
+    assert len(entries) == 1
+    assert entries[0].title == "Bad & unescaped"
+
+
+def test_still_raises_when_loose_parser_recovers_nothing():
+    # A bozo feed that recovers no usable version/entries (an HTML error page
+    # served instead of XML) must still raise ParseError — the override only
+    # applies when recovery actually produced something.
+    import pytest
+    from reader.exceptions import ParseError
+
+    raw = b"<html><body>not a feed</body></html>"
+    with pytest.raises(ParseError):
+        SanitizingFeedparserParser()("https://x.test/feed", io.BytesIO(raw), {})
+
+
 def _feed(body: str) -> bytes:
     return (
         '<?xml version="1.0"?>'
