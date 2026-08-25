@@ -264,3 +264,26 @@ def test_list_entries_shows_unpremiered_once_live(configured):
         main.upsert_feed_display_pref(conn, YT_FEED, "hide_unpremiered", 1)
     ids = {e["id"] for e in main.list_entries_for_feeds({YT_FEED}, limit=100)}
     assert ids == {"now-live"}
+
+
+def test_starred_filter_shows_unpremiered_despite_hide_unpremiered(configured):
+    # Starring is deliberate "track this" — the Starred filter must show it
+    # regardless of hide_unpremiered, or starring it would defeat the point
+    # of being able to find it again.
+    _seed_live_status("UPCOMING013", "upcoming", "2026-09-20T18:00:00Z")
+    with main.get_reader() as reader:
+        reader.add_feed(YT_FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="starred-premiere", video_id="UPCOMING013", published=OLD)
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="unstarred-premiere", video_id=None, published=OLD)
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, YT_FEED, "hide_unpremiered", 1)
+        conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (YT_FEED, "starred-premiere"))
+        conn.commit()
+
+    # Ordinary (non-Starred) view still hides it.
+    ids_default = {e["id"] for e in main.list_entries_for_feeds({YT_FEED}, limit=100)}
+    assert "starred-premiere" not in ids_default
+
+    # Starred filter shows it anyway.
+    ids_starred = {e["id"] for e in main.list_entries_for_feeds({YT_FEED}, read_filter="starred", limit=100)}
+    assert ids_starred == {"starred-premiere"}

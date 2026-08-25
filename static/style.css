@@ -1906,6 +1906,14 @@ button:hover, .button-link:hover {
   padding: 0.38rem;
 }
 
+.posts.posts-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
+}
+
 .post-item-hidden {
   display: none;
 }
@@ -4396,6 +4404,15 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
 .empty-state-message {
   max-width: 22rem;
   line-height: 1.5;
+}
+
+/* Referenced as `.empty-state-message.muted` here and in _entry_pane.html's
+   "Select a post from the middle pane." placeholder — that combo had no
+   actual rule for `.muted` (only the --muted color *variable* existed
+   elsewhere), so both placeholders rendered in the default text color
+   instead of the intended de-emphasized one. */
+.muted {
+  color: var(--muted);
 }
 
 .inline-form {

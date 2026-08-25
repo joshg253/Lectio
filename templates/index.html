@@ -540,9 +540,9 @@
         {% set tb_sort = (('&sort_by=' ~ selected_sort_by) if selected_sort_by != 'post' else '') ~ (('&sort_dir=' ~ selected_sort_dir) if selected_sort_dir != 'asc' else '') %}
         {% set tb_rf = (('&read_filter=' ~ selected_read_filter) if selected_read_filter != 'all' else '') ~ ('&star_only=1' if selected_star_only else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != selected_read_filter else '') %}
         {% set resume_filter = selected_resume_read_filter if selected_read_filter == 'history' else selected_read_filter %}
-        {% set filter_label = ('Starred · Unread' if selected_star_only else 'Unread') if selected_read_filter == 'unread' else ('Starred' if selected_star_only else ('History' if selected_read_filter == 'history' else 'All')) %}
-        {% set filter_icon = 'star' if selected_star_only else ('mark_email_unread' if selected_read_filter == 'unread' else ('history' if selected_read_filter == 'history' else 'format_list_bulleted')) %}
-        {% set filter_is_active = selected_read_filter == 'unread' or selected_star_only %}
+        {% set filter_label = ('Starred · Unread' if selected_star_only else 'Unread') if selected_read_filter == 'unread' else ('Starred' if (selected_star_only or selected_read_filter == 'starred') else ('History' if selected_read_filter == 'history' else 'All')) %}
+        {% set filter_icon = 'star' if (selected_star_only or selected_read_filter == 'starred') else ('mark_email_unread' if selected_read_filter == 'unread' else ('history' if selected_read_filter == 'history' else 'format_list_bulleted')) %}
+        {% set filter_is_active = selected_read_filter == 'unread' or selected_star_only or selected_read_filter == 'starred' %}
         {% set sort_is_active = selected_sort_by != 'post' or selected_sort_dir != 'desc' %}
         {# 'Star' is why this exists: order-by-star-date reaching the toolbar as
            an unlabelled case is the bug that made it read "Published newest"
@@ -588,6 +588,14 @@
                 {% set _fm_star = '&star_only=1' if selected_star_only else '' %}
                 <a class="menu-item {% if not filter_is_active and selected_read_filter != 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all' ~ _fm_star }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">format_list_bulleted</span> All</a>
                 <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread' ~ _fm_star }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">mark_email_unread</span> Unread</a>
+                {# Feeds-mode only: a peer filter, not a sub-mode of star_only (the
+                   Saved-scope switch) — deliberately never carries star_only along,
+                   so it stays on the Feeds view's own remembered sort rather than
+                   Saved's. Not offered while already in Saved scope, where
+                   everything is star/tag-scoped already. #}
+                {% if not selected_star_only %}
+                <a class="menu-item {% if selected_read_filter == 'starred' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=starred' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">star</span> Starred</a>
+                {% endif %}
                 <hr class="menu-divider" />
                 <a class="menu-item filter-history-item {% if selected_read_filter == 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=history' ~ (('&resume_read_filter=' ~ resume_filter) if resume_filter != 'history' else '') }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">history</span> History</a>
                 {% if tag_rows %}
@@ -794,7 +802,10 @@
         </div>
       </div>
       {% endif %}
-      <div class="posts" data-chunk-size="10">
+      <div class="posts {% if not posts and not selected_home and not is_chunk_delta_fetch %}posts-empty{% endif %}" data-chunk-size="10">
+        {% if not posts and not selected_home and not is_chunk_delta_fetch %}
+        <div class="empty-state-message muted">No posts match this filter.</div>
+        {% endif %}
         {% for post in posts %}
         {% set list_feed_query = '&list_feed_url=' ~ (selected_feed_url | urlencode) if selected_feed_url else '' %}
         {% set tag_query = '&tag=' ~ (selected_tag | urlencode) if selected_tag else '' %}
