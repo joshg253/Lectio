@@ -227,33 +227,42 @@ avatar/mangled-URL lead-image bug above is unrelated and still open.
 
 ### Feed known-migrations into discovery, so a 404 is not the end
 
-**FeedBurner piece shipped 2026-08-25** — see `docs/architecture/feeds.md`
-"Suggesting a replacement for a feed on a known dead-end host". Live-checked
-first: FeedBurner turned out not to redirect at all (the original 2026-08-12
-assumption) — it serves the origin site's own homepage HTML back at the dead
-feed URL, wrong content, no redirect, and the page's own `rel="alternate"`
-just points back at itself. `suggest_feed_migration` reads `rel="canonical"`
-off that page instead to recover the real origin, then runs the existing
-`probe_url` discovery there. Suggestion-only, same "never automatic" call as
-the mergeable-rules feature: a **"Suggest fix" button on FeedBurner rows** in
-the Failing Feeds panel pre-fills the existing (already-verified) Change URL
-field — a human still clicks Save.
+Idea from the 2026-08-12 404 sweep, **not built.** Working through ~40 dead feeds
+by hand, the same handful of *host-level* migrations kept recurring — each one
+mechanical, and each one Lectio could have resolved itself instead of reporting
+"no feed found":
 
-**technet/powershell.com were investigated and deliberately not built.** Of
-the three host-level migrations flagged in the 2026-08-12 sweep, only
-FeedBurner still has live failures (12 feeds, 2026-08-25) — zero subscribed
-feeds are currently failing on `blogs.technet.com` or
-`powershell.com/cs/blogs/*`. Guessing at a path-mapping with no live example to
-verify it against risks exactly the "a discovered feed is not a replacement"
-trap this feature exists to avoid; add a resolver for them if/when a real
-404'd example reappears. Even within FeedBurner, roughly a quarter of the
-current failures have no `rel="canonical"` at all (parked domain, JS-rendered
-SPA) and still need the manual "risky replacement" judgment call.
+| pattern | hits that day |
+|---|---|
+| `blogs.technet.com` / `blogs.technet.microsoft.com` → `devblogs.microsoft.com` | 3 |
+| `feeds.feedburner.com/<name>` → the origin site's own feed | 3 |
+| `powershell.com/cs/blogs/*` → `powershell.org` | 2 |
 
-The older `feed_url_rewrites` table / `_SITE_FEED_REWRITES` machinery this
-item originally pointed at turned out to be a different mechanism entirely
-(entry link/id host rewriting for an author's *existing, still-alive* feed,
-not resubscribing a dead feed to a new one) — not reused here.
+Six of that day's twelve replacements were one of these. The rest (Blogger →
+custom domain, → Substack, → GitHub Pages) are per-site facts that cannot be
+derived and are only worth storing once discovered.
+
+**The machinery already exists — two pieces, doing different jobs:**
+
+- `_SITE_FEED_REWRITES` / `rewrite_known_site_url` in `services/feed_discovery.py`
+  — code-level rewriters applied at *Add Feed* time.
+- The `feed_url_rewrites` table (`feed_url`, `from_host`, `to_host`), which
+  already holds 16 rows including a feedburner→origin rule and a
+  beehiiv→custom-domain move.
+
+**What is missing is the connection**: when a subscribed feed starts 404ing,
+nothing consults either of them. The proposal is that the failure path check
+host-migration rules *before* the feed is declared dead — and, for FeedBurner
+specifically, follow the redirect and autodiscover on the destination, which is
+general rather than per-site.
+
+Worth doing because it compounds: the technet rule alone fixes every remaining
+technet feed at once, and FeedBurner is a graveyard that will keep producing
+these. ⚠ Whatever resolves a candidate must still **verify it parses with
+reader** before switching (see the fetch-failures notes in ARCHITECTURE.md —
+feedparser will happily bless a feed reader then refuses), and must not widen
+scope silently: a category feed replaced by the site firehose is a wrong answer
+that looks like a right one.
 
 ### Redirecting feeds — no way to find them in bulk
 
