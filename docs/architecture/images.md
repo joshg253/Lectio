@@ -578,6 +578,72 @@ What keeps it cheap is the proxy's byte cache, which was already most of the ans
 
 `scripts/refresh_expired_deviantart_images.py` remains as a manual catch-up over the same routine. Note it must use `get_deviantart_user_token()` rather than reading `deviantart_access_token` directly: DA access tokens last an hour, so any batch reading the stored value 401s on almost every run.
 
+## Pinning a list thumbnail before its signed URL dies
+
+The re-sign above closes the loop for the *article* view, but only because
+someone opened the article — that is what makes `/api/img`'s cache hold a
+copy. Measured 2026-08-18: of 22,903 stored wixmp lead-image URLs, only 583
+(2.5%) had ever had bytes land in that cache. The other 97.5% are entries
+nobody has opened, so their **list** thumbnail — which reads the stored URL
+straight out of `entry_lead_images` and never goes through `get_entry_detail`
+— has nothing to fall back on once the token expires. A feed's thumbnails
+stayed broken until each entry was opened once, by hand.
+
+The fix pins bytes proactively, during the enhance pass, while the token is
+still fresh — rather than waiting for a page view to populate the cache.
+`services.lead_images.LeadImageService.store_entry_lead_image` is the single
+choke point every lead-image write goes through (enhance pass, DeviantArt/
+dev.to API seeding, the tuning-strategy preview route), so a sink hooked
+there (`set_thumb_pin_sink`, wired in `main.py` at import time — the same
+shape as `set_page_tag_sink`) sees every candidate exactly once, without
+`services/lead_images.py` importing anything from `main` (the fetch/cache
+code has to live in `main.py`, where `httpx`/`url_guard`/`img_cache` already
+live; services must not import main).
+
+**Detection is host-agnostic.** `_url_is_signed` reuses
+`_IMG_CACHE_VOLATILE_PARAMS` — the same query-param set `_img_cache_key_url`
+already strips — rather than a DeviantArt-specific check, so any future
+signing CDN (S3 presigned URLs, Tapas's `__token__`) gets the same treatment
+for free.
+
+**A separate cache namespace, not the general `/api/img` one.** `/api/img`
+and `/thumb` share one cache key formula (`sha256` of the URL with signing
+params stripped), because both want the *same* bytes at *full* resolution.
+Pinning could have reused that key — `/thumb`'s existing fallback already
+checks it — but the pinned copy is deliberately smaller (~30 KB target,
+`_ENTRY_THUMB_MAX_DIM` = 400px, vs ~121 KB average in the general cache), to
+keep a backfill over tens of thousands of entries cheap. Storing that
+downscaled copy under the *shared* key would mean `/api/img` serves the
+low-res thumbnail as the full article image too. So entry pins get their own
+prefix (`entrythumb:`, keyed by `(feed_url, entry_id)` via
+`_entry_thumb_cache_key` — sha1, not the URL, for the same reason
+`_feed_thumb_cache_key` isn't: re-pinning replaces the copy in place and an
+expiring source URL can't orphan it) and their own serving route
+(`/api/entry-thumb?feed_url=&entry_id=`), exempted from `_evict_img_cache`'s
+TTL sweep exactly like the per-feed pin. `list_entries_for_feeds` substitutes
+that stable URL for the raw signed one whenever a pin already exists for the
+entry being rendered (`_url_is_signed(_thumb) and
+has_pinned_entry_thumbnail(...)`) — a cheap indexed lookup per rendered row,
+not a bulk pre-fetch, because unlike the feed tree a post list is already
+page-bounded.
+
+**Pin once, not every refresh.** The sink is a no-op once a pin exists
+(`has_pinned_entry_thumbnail` gates the fetch) — the enhance pass calls
+`store_entry_lead_image` for an entry every refresh even when nothing
+changed (DeviantArt's wixmp token differs on every fetch even though the
+underlying image doesn't), so without that gate every DeviantArt entry would
+re-fetch its own thumbnail on every pass. This assumes an entry's image
+never changes after publish, true for DeviantArt deviations (the actual
+driving case); a feed that legitimately swaps an entry's image later would
+need its stale pin dropped by hand.
+
+**Go-forward only.** Pinning happens when a lead image is *stored*, so it
+does nothing for the 22,320 already-expired URLs sitting in
+`entry_lead_images` today — those still need the article-view re-sign (or a
+one-time backfill script, not yet built) to recover. What it does prevent is
+the number growing further: every DeviantArt entry ingested from now on gets
+pinned before its token can die unread.
+
 ## Rendering an entry's markup
 
 > Moved from `tenancy.md`'s security list on 2026-08-13.

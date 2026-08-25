@@ -13926,6 +13926,12 @@ def list_entries_for_feeds(
         if _feed_thumb_crop not in _VALID_THUMB_CROPS:
             _feed_thumb_crop = "cover"
         _entry_id = str(getattr(entry, "id", "") or "")
+        # Prefer the pinned copy: a signed lead-image URL (DeviantArt wixmp,
+        # etc.) may have a since-expired token. Only the pinned entries are
+        # substituted — everything else is unchanged, so this is a no-op until
+        # the enhance pass has actually pinned something for this entry.
+        if _thumb and _url_is_signed(_thumb) and has_pinned_entry_thumbnail(feed_url_str, _entry_id):
+            _thumb = f"/api/entry-thumb?feed_url={quote_plus(feed_url_str)}&entry_id={quote_plus(_entry_id)}"
         _entry_crop_override = lead_image_service.get_entry_thumb_crop(feed_url_str, _entry_id)
         _thumb_crop = _entry_crop_override if _entry_crop_override else _feed_thumb_crop
         _smart_ms = _feed_prefs.get("smart_min_scale")
@@ -19523,8 +19529,8 @@ def _evict_img_cache() -> None:
     try:
         with get_img_cache_connection() as conn:
             cur = conn.execute(
-                "DELETE FROM img_cache WHERE last_accessed < ? AND cache_key NOT LIKE ?",
-                (cutoff, _FEED_THUMB_CACHE_PREFIX + "%"),
+                "DELETE FROM img_cache WHERE last_accessed < ? AND cache_key NOT LIKE ? AND cache_key NOT LIKE ?",
+                (cutoff, _FEED_THUMB_CACHE_PREFIX + "%", _ENTRY_THUMB_CACHE_PREFIX + "%"),
             )
             LOGGER.info("[maintenance] img cache: evicted %d entries older than %d days", cur.rowcount, days)
     except Exception:
@@ -23169,6 +23175,16 @@ def thumbnail_proxy(
             return Response(status_code=404)
         return _pinned_thumb_response(pinned_feed)
 
+    # Same reasoning, per-entry: a signed lead-image URL (DeviantArt wixmp, etc.)
+    # that was pinned during the enhance pass. See _pin_entry_thumbnail_bytes.
+    if url.startswith("/api/entry-thumb?"):
+        _qs = parse_qs(urlparse(url).query)
+        pinned_entry_feed = _qs.get("feed_url", [""])[0]
+        pinned_entry_id = _qs.get("entry_id", [""])[0]
+        if not pinned_entry_feed or not pinned_entry_id:
+            return Response(status_code=404)
+        return _pinned_entry_thumb_response(pinned_entry_feed, pinned_entry_id)
+
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return Response(status_code=400)
@@ -24569,6 +24585,113 @@ def api_feed_thumb(feed_url: str = Query(...)):
     """Serve the pinned copy of a feed's chosen thumbnail. Stable URL, so the page never points at a
     signed CDN link that will expire."""
     return _pinned_thumb_response(feed_url)
+
+
+# ---------------------------------------------------------------------------
+# Per-entry lead-image pinning — the signed-URL-rot fix.
+#
+# 120K+ stored lead-image URLs, 22,903 of them DeviantArt wixmp links signed
+# with a short-lived `?token=` JWT; only 2.5% ever had bytes land in the
+# general /api/img cache, because that cache is populated by someone actually
+# opening the article — most list thumbnails never trigger it. The article
+# view has its own fix (_resign_expired_deviantart_url); this is the list-
+# thumbnail one. Same mechanism as _feed_thumb_cache_key above, keyed per
+# entry instead of per feed: pin small (thumbnail-sized, not full-res) bytes
+# the moment a *signed* lead image is discovered, while the token is still
+# fresh, so the list thumbnail never depends on that token again. See
+# docs/architecture/images.md.
+# ---------------------------------------------------------------------------
+
+_ENTRY_THUMB_CACHE_PREFIX = "entrythumb:"
+_ENTRY_THUMB_MAX_DIM = 400
+_ENTRY_THUMB_TARGET_BYTES = 30_000
+
+
+def _entry_thumb_cache_key(feed_url: str, entry_id: str) -> str:
+    """Keyed by (feed_url, entry_id), not by URL, for the same reason as
+    _feed_thumb_cache_key: re-pinning replaces the copy in place and an
+    expiring source URL cannot orphan it."""
+    digest = hashlib.sha1(f"{feed_url}\x1f{entry_id}".encode("utf-8", "replace")).hexdigest()
+    return _ENTRY_THUMB_CACHE_PREFIX + digest
+
+
+def _url_is_signed(url: str) -> bool:
+    """True if the URL carries a query param this app already treats as a
+    volatile signing token (see _IMG_CACHE_VOLATILE_PARAMS) — host-agnostic,
+    so it flags any signing CDN, not just DeviantArt's wixmp."""
+    try:
+        params = parse_qsl(urlparse(url).query, keep_blank_values=True)
+    except ValueError:
+        return False
+    return any(k.lower() in _IMG_CACHE_VOLATILE_PARAMS for k, _ in params)
+
+
+def has_pinned_entry_thumbnail(feed_url: str, entry_id: str) -> bool:
+    try:
+        with get_img_cache_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM img_cache WHERE cache_key = ?",
+                (_entry_thumb_cache_key(feed_url, entry_id),),
+            ).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
+def _pin_entry_thumbnail_bytes(feed_url: str, entry_id: str, image_url: str) -> bool:
+    """Fetch a signed lead-image URL once, while the token is fresh, and store a
+    small (thumbnail-sized, not full-res) copy under a stable per-entry key that
+    doesn't depend on the URL at all. Mirrors _pin_feed_thumbnail_bytes."""
+    try:
+        with httpx.Client(follow_redirects=False, timeout=15.0) as client:
+            resp = url_guard.safe_get(client, image_url, headers={"User-Agent": LECTIO_HONEST_USER_AGENT})
+        resp.raise_for_status()
+        body = resp.content
+        content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if not body or not content_type.startswith("image/"):
+            return False
+        downscaled, new_ct = _maybe_downscale_image(body, _ENTRY_THUMB_MAX_DIM)
+        if new_ct is not None:
+            body, content_type = downscaled, new_ct
+        body, content_type = _maybe_shrink_oversized_image(body, content_type, _ENTRY_THUMB_TARGET_BYTES)
+        _img_cache_store(_entry_thumb_cache_key(feed_url, entry_id), body, content_type)
+        return True
+    except Exception:  # noqa: BLE001 — the raw URL still gets stored/shown; this is only the durable copy
+        LOGGER.info("[entry-thumb] could not pin bytes for %s/%s", feed_url, entry_id, exc_info=True)
+        return False
+
+
+def _pin_entry_thumbnail_if_signed(feed_url: str, entry_id: str, image_url: str) -> None:
+    """Sink wired into lead_image_service.store_entry_lead_image. Cheap no-op
+    once pinned (a plain PK existence check), so calling it on every enhance
+    pass for an already-pinned entry costs one indexed SQLite read."""
+    if not _url_is_signed(image_url) or has_pinned_entry_thumbnail(feed_url, entry_id):
+        return
+    _pin_entry_thumbnail_bytes(feed_url, entry_id, image_url)
+
+
+lead_image_service.set_thumb_pin_sink(_pin_entry_thumbnail_if_signed)
+
+
+def _pinned_entry_thumb_response(feed_url: str, entry_id: str) -> Response:
+    """The one place a pinned entry thumbnail becomes a response — mirrors
+    _pinned_thumb_response so /api/entry-thumb and /thumb cannot drift apart."""
+    hit = _img_cache_get(_entry_thumb_cache_key(feed_url, entry_id))
+    if hit is None:
+        return Response(status_code=404)
+    body, content_type = hit
+    return Response(
+        content=body,
+        media_type=content_type or "image/jpeg",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
+@app.get("/api/entry-thumb")
+def api_entry_thumb(feed_url: str = Query(...), entry_id: str = Query(...)):
+    """Serve the pinned copy of an entry's lead-image thumbnail. Stable URL, so
+    the list never points at a signed CDN link that will expire."""
+    return _pinned_entry_thumb_response(feed_url, entry_id)
 
 
 @app.post("/feeds/thumbnail-url")

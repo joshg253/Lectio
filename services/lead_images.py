@@ -698,6 +698,12 @@ class LeadImageService:
         # background source-HTML fetch — lets main persist article-page tags
         # (feed_tags) the moment the page arrives instead of waiting for a re-open.
         self._page_tag_sink: Callable[[str, str, str, str], None] | None = None
+        # Optional fn(feed_url, entry_id, image_url) invoked whenever a lead
+        # image is stored — lets main pin thumbnail-sized bytes for a signed
+        # CDN URL (DeviantArt wixmp, etc.) while the signature is still fresh,
+        # so the list thumbnail survives token expiry instead of only the
+        # article view (see docs/architecture/images.md).
+        self._thumb_pin_sink: Callable[[str, str, str], None] | None = None
         self._entry_crop_cache: dict[tuple[str, str], str] = {}
         self._webcomic_feeds: set[str] | None = None
         self._plugins = plugins if plugins is not None else DEFAULT_LEAD_IMAGE_PLUGINS
@@ -1227,6 +1233,11 @@ class LeadImageService:
                 )
         except Exception:
             pass
+        if image_url and self._thumb_pin_sink is not None:
+            try:
+                self._thumb_pin_sink(feed_url, entry_id, image_url)
+            except Exception:
+                LOGGER.warning("thumb-pin sink failed for %s/%s", feed_url, entry_id, exc_info=True)
 
     def _write_worker_loop(self) -> None:
         """Drain queued request-path writes, each under its captured tenancy."""
@@ -3989,6 +4000,9 @@ class LeadImageService:
 
     def set_page_tag_sink(self, sink: Callable[[str, str, str, str], None] | None) -> None:
         self._page_tag_sink = sink
+
+    def set_thumb_pin_sink(self, sink: Callable[[str, str, str], None] | None) -> None:
+        self._thumb_pin_sink = sink
 
     def queue_source_html_fetch(
         self,
