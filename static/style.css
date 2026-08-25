@@ -8313,9 +8313,9 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
 
 /* Archive old stars: cutoff chips + the age-spread table that makes the
    headline number checkable before thousands of items move. */
-.archive-old-cutoff { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin: .5rem 0; }
+.archive-old-cutoff, .archive-old-basis { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin: .5rem 0; }
 .archive-old-choices { display: flex; gap: .35rem; flex-wrap: wrap; }
-.archive-old-choice.active { outline: 2px solid currentColor; outline-offset: -2px; }
+.archive-old-choice.active, .archive-old-basis-choice.active { outline: 2px solid currentColor; outline-offset: -2px; }
 .archive-old-table { border-collapse: collapse; margin: .25rem 0 .5rem; }
 .archive-old-table td { padding: .15rem .75rem .15rem 0; }
 .archive-old-table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }

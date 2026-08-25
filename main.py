@@ -30267,26 +30267,68 @@ async def apply_unstar_tagged(request: Request):
     })
 
 
-def _current_archive_old_stars_plan(days: int) -> dict:
-    """Assemble the archive-old-stars plan for the current user. Read-only."""
+def _bulk_reader_published_dates(keys: list[tuple[str, str]]) -> dict[tuple[str, str], datetime | None]:
+    """(feed, id) -> published, read directly from reader's entries table.
+
+    Mirrors the existing raw-connection reads in this module (get_tagged_entry_keys,
+    _sorted_star_key_window) — reader's high-level API has no bulk-by-key lookup."""
+    out: dict[tuple[str, str], datetime | None] = {}
+    if not keys:
+        return out
+    conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+    try:
+        for start in range(0, len(keys), 400):
+            chunk = keys[start:start + 400]
+            placeholders = ",".join("(?,?)" for _ in chunk)
+            params = [v for k in chunk for v in k]
+            for feed, eid, published in conn.execute(
+                f"SELECT feed, id, published FROM entries WHERE (feed, id) IN ({placeholders})",
+                params,
+            ):
+                out[(str(feed), str(eid))] = _parse_stored_dt(published)
+    finally:
+        conn.close()
+    return out
+
+
+def _current_archive_old_stars_plan(days: int, basis: str = "published") -> dict:
+    """Assemble the archive-old-stars plan for the current user. Read-only.
+
+    basis="published" (default): the article's own publish date.
+    basis="saved": saved_entries.saved_at — offered, but unreliable for most
+    rows. The 2026-06 multi-user migration stamped its own run date over
+    years-old Inoreader stars: 6,091 of 10,002 rows carry a saved_at in that
+    one week, only 419 are a genuine Lectio-made star. A 30-day cutoff would
+    sweep those 6,091 in and a 90-day cutoff would protect them, neither for
+    any real reason — hence "published" is the default, not "saved"."""
+    basis = basis if basis in ("published", "saved") else "published"
     with get_meta_connection() as conn:
-        starred_at: dict[tuple[str, str], datetime | None] = {}
-        for feed, eid, when in conn.execute(
-            "SELECT feed_url, entry_id, saved_at FROM saved_entries"
-        ):
-            starred_at[(str(feed), str(eid))] = _parse_stored_dt(when)
-    return archive_old_stars_service.build_archive_plan(
+        rows = conn.execute("SELECT feed_url, entry_id, saved_at FROM saved_entries").fetchall()
+    keys = [(str(f), str(e)) for f, e, _s in rows]
+    if basis == "saved":
+        starred_at: dict[tuple[str, str], datetime | None] = {
+            (str(f), str(e)): _parse_stored_dt(s) for f, e, s in rows
+        }
+    else:
+        starred_at = _bulk_reader_published_dates(keys)
+    plan = archive_old_stars_service.build_archive_plan(
         starred_at, get_archived_saved_keys(), days=days,
     )
+    plan["basis"] = basis
+    return plan
 
 
 @app.get("/saved/archive-old/preview")
-def preview_archive_old_stars(days: int = Query(archive_old_stars_service.DEFAULT_DAYS)):
+def preview_archive_old_stars(
+    days: int = Query(archive_old_stars_service.DEFAULT_DAYS),
+    basis: str = Query("published"),
+):
     """Preview which stars would be archived. Changes nothing."""
-    plan = _current_archive_old_stars_plan(days)
+    plan = _current_archive_old_stars_plan(days, basis)
     return JSONResponse({
         "ok": True,
         "days": plan["days"],
+        "basis": plan["basis"],
         "cutoff": plan["cutoff"],
         "totals": plan["totals"],
         "buckets": plan["buckets"],
@@ -30322,11 +30364,12 @@ async def apply_archive_old_stars(request: Request):
         days = int(body.get("days", archive_old_stars_service.DEFAULT_DAYS))
     except (TypeError, ValueError):
         return JSONResponse({"ok": False, "error": "days must be a number"}, status_code=400)
+    basis = str(body.get("basis", "published"))
 
-    plan = _current_archive_old_stars_plan(days)
+    plan = _current_archive_old_stars_plan(days, basis)
     keys = plan["to_archive"]
     if not keys:
-        return JSONResponse({"ok": True, "archived": 0, "days": days})
+        return JSONResponse({"ok": True, "archived": 0, "days": days, "basis": plan["basis"]})
 
     now_iso = datetime.now(timezone.utc).isoformat()
     with get_meta_connection() as conn:
@@ -30366,10 +30409,10 @@ async def apply_archive_old_stars(request: Request):
 
     # A behind-the-back write leaves the generation-guarded counts stale.
     invalidate_unread_counts_cache()
-    LOGGER.info("[archive-old-stars] archived %d star(s) older than %dd (marked read: %d)",
-                len(keys), days, marked_read)
+    LOGGER.info("[archive-old-stars] archived %d star(s) older than %dd by %s (marked read: %d)",
+                len(keys), days, plan["basis"], marked_read)
     return JSONResponse({
-        "ok": True, "archived": len(keys), "days": days, "marked_read": marked_read,
+        "ok": True, "archived": len(keys), "days": days, "basis": plan["basis"], "marked_read": marked_read,
     })
 
 

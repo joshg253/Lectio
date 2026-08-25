@@ -344,18 +344,16 @@ Delete model — Archive keeps tags/offline capture, Delete releases both) all
 shipped 2026-07-28/29. Full rationale in ARCHITECTURE.md. One piece from
 that work is not yet safe to use:
 
-**⚠ Settings → Feeds → Utilities → Archive old stars — DO NOT RUN YET.**
-The cutoff (7d/30d/90d/6mo/1yr) sorts on `saved_at`, but `saved_at` is not a
-real star date for most rows: 6,091 of 10,002 stars carry a `saved_at` in
-2026-06, which is when multi-user went live and the migration stamped its
-own run date instead of preserving the original — mostly years-old
-Inoreader stars wearing a seven-week-old timestamp. A 30-day cutoff would
-sweep those 6,091 in and a 90-day cutoff would protect them, neither for
-any real reason. **Fix before use: offer the date basis, default to
-publish date** (asks the better question anyway — "articles from 2019 I
-have still never opened"). Only 419 of 10,002 stars have a genuine
-Lectio-made `saved_at`; the rest are either real pre-migration dates
-(3,492) or the migration timestamp (6,091).
+**Settings → Feeds → Utilities → Archive old stars — fixed and safe to use
+2026-08-25.** Was blocked: the cutoff sorted on `saved_at`, but `saved_at` is
+not a real star date for most rows — 6,091 of 10,002 stars carry a `saved_at`
+in 2026-06, when the multi-user migration stamped its own run date instead of
+preserving the original. Fix shipped as a **date basis** choice in the
+Utilities panel: "Publish date" (now the default — asks the better question
+anyway, "articles from 2019 I have still never opened") or "Star date" (kept
+as an option, its unreliability caveat only shown when picked). See
+`docs/architecture/saved.md` "Archive old stars ("Inbox bankruptcy") — the
+saved_at trap" for the full mechanism.
 
 ### Phone polish — shipped 2026-08-11
 

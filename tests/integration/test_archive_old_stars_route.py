@@ -64,10 +64,10 @@ def configured(tmp_path, monkeypatch):
         tenancy._layout = saved
 
 
-def _apply(days: int = 30) -> dict:
+def _apply(days: int = 30, basis: str = "saved") -> dict:
     class _Req:
         async def json(self):
-            return {"days": days}
+            return {"days": days, "basis": basis}
 
     return json.loads(bytes(asyncio.run(main.apply_archive_old_stars(cast(Request, _Req()))).body))
 
@@ -80,7 +80,7 @@ def _starred(eid: str) -> bool:
 
 
 def test_preview_changes_nothing(configured):
-    res = json.loads(bytes(main.preview_archive_old_stars(days=30).body))
+    res = json.loads(bytes(main.preview_archive_old_stars(days=30, basis="saved").body))
 
     assert res["totals"]["to_archive"] == 2      # old, old-tagged
     assert res["totals"]["remaining"] == 1       # fresh
@@ -166,3 +166,100 @@ def test_apply_removes_them_from_the_inbox(configured):
 
     assert {e for _f, e in inbox} == {"fresh"}
     assert archived_count == 2
+
+
+# ---------------------------------------------------------------------------
+# basis="published" (the default) — the fix for the saved_at trap:
+# saved_at is not a real star date for most rows (the 2026-06 multi-user
+# migration stamped its own run date over years-old Inoreader stars), so the
+# default measures age off the article's own publish date instead.
+# ---------------------------------------------------------------------------
+
+PFEED = "https://published.test/feed"
+
+
+@pytest.fixture
+def published_configured(tmp_path, monkeypatch):
+    saved = tenancy._layout
+    main.close_thread_db_pools()
+    tenancy.configure(
+        data_dir=tmp_path,
+        legacy_reader=tmp_path / "reader.sqlite",
+        legacy_meta=tmp_path / "meta.sqlite3",
+        legacy_starred=tmp_path / "starred.sqlite",
+    )
+    main.ensure_meta_schema()
+    monkeypatch.setattr(main.starred_archive_service, "enqueue_removal", lambda f, e: None)
+    monkeypatch.setattr(main.starred_archive_service, "enqueue_archive", lambda f, e: None)
+
+    with main.get_reader() as reader:
+        reader.add_feed(PFEED, allow_invalid_url=True, exist_ok=True)
+        reader.disable_feed_updates(PFEED)
+        reader.add_entry({"feed_url": PFEED, "id": "old-pub", "link": "https://published.test/old-pub",
+                           "published": datetime.now(timezone.utc) - timedelta(days=90)})
+        reader.add_entry({"feed_url": PFEED, "id": "fresh-pub", "link": "https://published.test/fresh-pub",
+                           "published": datetime.now(timezone.utc) - timedelta(days=1)})
+        reader.add_entry({"feed_url": PFEED, "id": "no-pub", "link": "https://published.test/no-pub"})
+    with main.get_meta_connection() as conn:
+        # All three were starred *recently* (migration-stamped or genuine —
+        # doesn't matter here) so a saved-basis run would archive none of
+        # them; only the publish-date basis should tell them apart.
+        for eid in ("old-pub", "fresh-pub", "no-pub"):
+            conn.execute("INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)",
+                         (PFEED, eid, _ago(1)))
+        conn.commit()
+    try:
+        yield
+    finally:
+        main.close_thread_db_pools()
+        tenancy._layout = saved
+
+
+def test_published_basis_is_the_default_when_omitted():
+    """The route's own default (no basis in the query) must be "published",
+    matching the UI's new default — this is the actual fix, not just an
+    option."""
+    import inspect
+    default = inspect.signature(main.preview_archive_old_stars).parameters["basis"].default
+    assert getattr(default, "default", default) == "published"
+
+
+def test_published_basis_ignores_saved_at_and_uses_the_articles_own_date(published_configured):
+    res = json.loads(bytes(main.preview_archive_old_stars(days=30, basis="published").body))
+
+    assert res["basis"] == "published"
+    assert res["totals"]["to_archive"] == 1   # old-pub only; no-pub has no date to go on
+    assert res["totals"]["remaining"] == 2    # fresh-pub, no-pub
+
+
+def test_published_basis_leaves_entries_with_no_published_date_alone(published_configured):
+    """A missing publish date is not evidence of age — same "don't guess"
+    policy the saved-date path already had for a missing saved_at."""
+    class _Req:
+        async def json(self):
+            return {"days": 30, "basis": "published"}
+
+    body = json.loads(bytes(asyncio.run(main.apply_archive_old_stars(cast(Request, _Req()))).body))
+
+    assert main.get_archived_saved_keys() == {(PFEED, "old-pub")}
+    with main.get_meta_connection() as conn:
+        assert conn.execute(
+            "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (PFEED, "no-pub")
+        ).fetchone() is not None
+    assert body["basis"] == "published"
+
+
+def test_saved_basis_still_available_and_sees_a_different_set(published_configured):
+    """The old behavior is preserved as an explicit option — all three rows
+    here were saved 1 day ago, so a 30-day saved-basis cutoff archives none
+    of them, unlike the published-basis result above."""
+    res = json.loads(bytes(main.preview_archive_old_stars(days=30, basis="saved").body))
+
+    assert res["basis"] == "saved"
+    assert res["totals"]["to_archive"] == 0
+
+
+def test_unknown_basis_falls_back_to_published(published_configured):
+    res = json.loads(bytes(main.preview_archive_old_stars(days=30, basis="nonsense").body))
+
+    assert res["basis"] == "published"

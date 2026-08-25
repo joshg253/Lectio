@@ -1840,6 +1840,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     // archiving keeps the tag, the offline copy and pruning-exemption, and each
     // item can be un-archived individually.
     let _aoDays = 30;
+    let _aoBasis = 'published';
     let _aoToken = 0;   // guards against an out-of-order preview reply
 
     const _aoRender = async () => {
@@ -1848,13 +1849,15 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const list = results.querySelector('.archive-old-list');
       const choices = document.getElementById('archive-old-choices');
       const okBtn = document.getElementById('archive-old-ok');
+      const caveat = results.querySelector('.archive-old-caveat');
+      if (caveat) caveat.hidden = _aoBasis !== 'saved';
       const token = ++_aoToken;
       intro.textContent = 'Measuring…';
       okBtn.hidden = true;
       okBtn.disabled = true;
       let data;
       try {
-        const resp = await fetch(`/saved/archive-old/preview?days=${_aoDays}`);
+        const resp = await fetch(`/saved/archive-old/preview?days=${_aoDays}&basis=${_aoBasis}`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         data = await resp.json();
       } catch (err) {
@@ -1878,9 +1881,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       });
 
       const t = data.totals || {};
+      const basisLabel = _aoBasis === 'saved' ? 'starred' : 'published';
       intro.textContent =
         `${(t.to_archive || 0).toLocaleString()} of ${(t.starred || 0).toLocaleString()} ` +
-        `starred article(s) are older than ${data.days} days. ` +
+        `starred article(s) were ${basisLabel} more than ${data.days} days ago. ` +
         `The Inbox would go to ${(t.remaining || 0).toLocaleString()}.`;
 
       // The age spread, so the headline number can actually be checked. A lone
@@ -1920,12 +1924,25 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       _aoRender();
     });
 
+    document.getElementById('archive-old-basis-choices')?.addEventListener('click', (ev) => {
+      const b = ev.target.closest?.('.archive-old-basis-choice');
+      if (!b) return;
+      _aoBasis = b.dataset.basis === 'saved' ? 'saved' : 'published';
+      document.querySelectorAll('.archive-old-basis-choice').forEach((el) => {
+        const active = el === b;
+        el.classList.toggle('active', active);
+        el.setAttribute('aria-pressed', String(active));
+      });
+      _aoRender();
+    });
+
     document.getElementById('archive-old-ok')?.addEventListener('click', async () => {
       const btn = document.getElementById('archive-old-ok');
       const n = Number(btn.dataset.count || 0);
       if (!n) return;
-      if (!confirm(`Archive ${n.toLocaleString()} starred article(s) older than ` +
-                   `${_aoDays} days?\n\nThey leave the Inbox and are marked read. ` +
+      const basisLabel = _aoBasis === 'saved' ? 'starred' : 'published';
+      if (!confirm(`Archive ${n.toLocaleString()} article(s) ${basisLabel} more than ` +
+                   `${_aoDays} days ago?\n\nThey leave the Inbox and are marked read. ` +
                    `Tags, the offline copy and protection from cleanup are all kept, ` +
                    `and any item can be un-archived.`)) return;
       btn.disabled = true;
@@ -1935,7 +1952,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         const resp = await fetch('/saved/archive-old', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ days: _aoDays }),
+          body: JSON.stringify({ days: _aoDays, basis: _aoBasis }),
         });
         data = await resp.json();
         if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
