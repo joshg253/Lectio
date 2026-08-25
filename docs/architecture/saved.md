@@ -565,6 +565,51 @@ the publisher set their own `download` name), and the `/starred-asset/` route vi
 for images/audio/video, which render inline and would only be made un-viewable by
 an attachment disposition.
 
+## Saved/Kept item size: maintained, not computed live
+
+`archived_entry.content_size_bytes` is written once, at archive-completion
+time, rather than derived with `LENGTH()`/`SUM()` on every render — decided
+2026-08-24, so pruning the biggest captures doesn't cost a live join over
+however many thousand kept items exist by then. It is the stored body
+(`source_html_zlib` + `readability_html_zlib` + `content_html_zlib`, the
+compressed capture blobs) plus every linked `archived_asset`'s `byte_size`,
+computed at the very end of `StarredArchiveService._archive_entry` — after
+every `_archive_asset` call for that entry has landed, so the asset-link join
+sees the complete set. `enqueue_archive` (the only path into that worker)
+fires from both a genuine star/tag **and** a re-fetch
+(`refresh_captured_article`), so both halves of "written at capture/re-fetch
+time" fall out of hooking this one place rather than needing two.
+
+An asset is content-addressed (`archived_asset.asset_hash`) and can be shared
+across entries — a site's repeated logo, say. Its full `byte_size` is still
+attributed to every entry that links it: the question this size answers is
+"what does keeping *this* item cost," not "what would deleting only this item
+free," and for that the shared bytes really are part of each entry's weight.
+
+**Go-forward only, same as the DeviantArt pinning fix the same night.**
+Nothing backfills existing archives; the column is `NULL` (not `0`) until an
+entry's next capture or re-fetch. `list_entries_for_feeds` reads it into
+`size_bytes`/`size_display` only when `star_only` is set (Saved and Kept
+views; an ordinary feed list has no use for a third database's worth of
+query on every render) and treats a missing row as "not yet measured," never
+as "measured at zero" — `NULL` sorts as if it were 0, at the small end,
+which is correct either way (nothing is captured for it to weigh).
+
+Two sort-path consequences worth knowing before touching either:
+
+- **The windowed fast path merges from a third database.** A large kept
+  backlog already merges `saved_entries.saved_at` (meta DB) into a
+  reader-DB-only windowing query (`_sorted_star_key_window`) rather than
+  hydrating every key to sort a few thousand entries — `sort_by="size"`
+  follows the exact same shape, merging from the starred-archive DB instead.
+  Extending that function for a third value source is the whole reason it
+  takes a `sort_by` string rather than a bool.
+- **The merged sort value has to sort as a string.** Both the windowed path
+  and the general in-Python sort compare a single shared value column; date
+  strings (ISO-ish) already sort correctly lexically, but a raw byte count
+  does not (`"9000" > "10000"` as strings). Zero-padded to a fixed width
+  (`f"{n:020d}"`) before merging is what keeps it numeric.
+
 ## Editing a post's published date (overrides)
 
 **Edit date…** (`POST /entries/set-date`) fixes garbage publish dates (epoch-0 entries sink to the bottom of every date sort). reader's `EntryData` is ingest-owned with no public setter, and the entry list sorts in SQL on reader's `entries.published` column — so the corrected date is written directly into that column (via `reader._storage.get_db()`), in reader's naive-UTC `YYYY-MM-DD HH:MM:SS` format. A meta-DB override row (`entry_date_overrides`) records the correction, and the refresh service re-pins it after every update batch (`reapply_entry_date_overrides`) in case a refresh re-ingested the feed's original value. Clearing the date deletes the override row only — the stored value stays until the feed next updates the entry.

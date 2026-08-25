@@ -1402,6 +1402,27 @@ class StarredArchiveService:
         source_blob = zlib.compress(source_html.encode("utf-8")) if source_html else None
         readability_blob = zlib.compress(readability_html.encode("utf-8")) if readability_html else None
         content_blob = zlib.compress(content_html.encode("utf-8")) if content_html else None
+        # "Size" for the Saved/Kept sort — the stored body plus its archived
+        # assets, queried now that every _archive_asset call above has landed.
+        # An asset is content-addressed and can be linked from more than one
+        # entry (a shared site logo); attributing its full byte_size to each
+        # entry that links it is deliberate here — it is what this entry
+        # actually costs to keep captured, not what deleting it alone would
+        # free. See Plan.md "Saved: see and sort by item size".
+        content_size_bytes = (
+            len(source_blob or b"") + len(readability_blob or b"") + len(content_blob or b"")
+        )
+        try:
+            with self._archive_conn() as conn:
+                asset_total = conn.execute(
+                    "SELECT COALESCE(SUM(a.byte_size), 0) FROM archived_asset_link l"
+                    " JOIN archived_asset a ON a.asset_hash = l.asset_hash"
+                    " WHERE l.feed_url = ? AND l.entry_id = ?",
+                    (feed_url, entry_id),
+                ).fetchone()[0]
+            content_size_bytes += int(asset_total or 0)
+        except sqlite3.Error as exc:
+            LOGGER.warning("starred archive: asset size lookup failed for %s: %s", entry_id, exc)
         with self._archive_conn() as conn:
             conn.execute(
                 """
@@ -1417,6 +1438,7 @@ class StarredArchiveService:
                        author = ?,
                        published_at = ?,
                        received_at = ?,
+                       content_size_bytes = ?,
                        error = NULL
                  WHERE feed_url = ? AND entry_id = ?
                 """,
@@ -1431,6 +1453,7 @@ class StarredArchiveService:
                     author,
                     published_at,
                     received_at,
+                    content_size_bytes,
                     feed_url,
                     entry_id,
                 ),

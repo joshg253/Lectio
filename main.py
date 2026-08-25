@@ -3232,6 +3232,11 @@ def ensure_starred_archive_schema() -> None:
             ("author", "TEXT"),
             ("published_at", "REAL"),
             ("received_at", "REAL"),
+            # Maintained, not computed live -- written once at archive-completion
+            # time (which capture AND re-fetch both funnel through), not derived
+            # from LENGTH()+join on every render. NULL until the first successful
+            # archive. See Plan.md "Saved: see and sort by item size".
+            ("content_size_bytes", "INTEGER"),
         ):
             if col_name not in existing_cols:
                 conn.execute(f"ALTER TABLE archived_entry ADD COLUMN {col_name} {col_decl}")
@@ -10532,6 +10537,19 @@ def datetime_sort_value(dt: datetime | None) -> float:
         return float("-inf")
 
 
+def _format_size_bytes(n: int) -> str:
+    """Human-readable byte count for the Saved/Kept size column. No Jinja
+    filter for this exists in this app's template environment (only
+    ``urlencode`` is registered), and every other display value here is
+    formatted in Python before it reaches the template, not in it."""
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
 # Many feeds (web comics in particular) omit <pubDate> but encode the date in
 # the entry URL path. Sort breaks badly without it — every undated entry maps
 # to -inf and clusters at one end. This regex catches the common /YYYY/MM/DD/
@@ -10627,7 +10645,9 @@ def normalize_sort_by(sort_by: str | None, *, allow_starred: bool = False) -> st
     was ordered by star date. Reported as the Feed view reverting to "Pub new"
     after switching in and out of e-ink mode.
     """
-    if sort_by in {"post", "received"} or (allow_starred and sort_by == "starred"):
+    # "size" (Saved/Kept item size, decided 2026-08-24) is gated the same way
+    # as "starred" -- both mean something only in a star/kept-scoped view.
+    if sort_by in {"post", "received"} or (allow_starred and sort_by in {"starred", "size"}):
         return sort_by
     return DEFAULT_SORT_BY
 
@@ -13245,8 +13265,9 @@ def _sorted_star_key_window(
     # that arbitrary page. The unchunked case looked fine, which is exactly what
     # made it worth checking the chunked one.
     by_star = sort_by == "starred"
+    by_size = sort_by == "size"
     sort_expr = (
-        "''" if by_star
+        "''" if by_star or by_size
         else "COALESCE(e.published, e.updated, e.first_updated)"
         if sort_by == "post" else "e.first_updated"
     )
@@ -13292,6 +13313,25 @@ def _sorted_star_key_window(
             LOGGER.warning("star date lookup failed, keeping key order: %s", exc)
             _when = {}
         scored = [(f, i, _when.get((f, i), "")) for f, i, _ in scored]
+    elif by_size:
+        # Merge sizes from the starred-archive DB (a third DB from this
+        # function's usual two). Zero-padded to a fixed width so the shared
+        # string sort below still orders numerically. An entry with no
+        # completed archive (never captured, or still pending) has no size
+        # yet — sorts as smallest, which is correct either way: it is not
+        # one of the heavy items this sort exists to surface.
+        try:
+            with archive_conn() as _ac:
+                _size = {
+                    (str(r[0]), str(r[1])): f"{int(r[2] or 0):020d}"
+                    for r in _ac.execute(
+                        "SELECT feed_url, entry_id, content_size_bytes FROM archived_entry"
+                        " WHERE content_size_bytes IS NOT NULL")
+                }
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("archive size lookup failed, keeping key order: %s", exc)
+            _size = {}
+        scored = [(f, i, _size.get((f, i), "00000000000000000000")) for f, i, _ in scored]
     scored.sort(key=lambda t: t[2], reverse=(sort_dir != "asc"))
     return [(f, i) for f, i, _sv in scored[:limit]]
 
@@ -13410,6 +13450,23 @@ def list_entries_for_feeds(
                         read_state_map[(row["feed_url"], row["entry_id"])] = datetime.fromisoformat(str(raw_read_at))
                     except Exception:
                         continue
+
+    # Maintained item size (Saved/Kept only — no display and no sort key uses
+    # it anywhere else, so no reason to pay a third DB's worth of query on
+    # every ordinary feed-list render). NULL/missing means "not archived yet",
+    # not "zero bytes" — see ensure_starred_archive_schema.
+    size_map: dict[tuple[str, str], int] = {}
+    if normalized_star_only:
+        try:
+            with archive_conn() as _ac:
+                size_rows = _ac.execute(
+                    f"SELECT feed_url, entry_id, content_size_bytes FROM archived_entry"
+                    f" WHERE feed_url IN ({placeholders}) AND content_size_bytes IS NOT NULL",
+                    feed_url_values,
+                ).fetchall()
+            size_map = {(row["feed_url"], row["entry_id"]): int(row["content_size_bytes"]) for row in size_rows}
+        except Exception as exc:  # noqa: BLE001 — the view still renders without sizes
+            LOGGER.warning("archive size lookup failed: %s", exc)
 
     # Tag-as-keep: the Saved view is now a unified "Kept" view showing entries
     # that are starred OR manually tagged. Load the tagged keys for the view's
@@ -13699,6 +13756,9 @@ def list_entries_for_feeds(
         elif normalized_sort_by == "starred":
             sort_key = "saved_sort_value"
             sort_desc = normalized_sort_dir == "desc"
+        elif normalized_sort_by == "size":
+            sort_key = "size_sort_value"
+            sort_desc = normalized_sort_dir == "desc"
         else:
             sort_key = "post_sort_value" if normalized_sort_by == "post" else "received_sort_value"
             sort_desc = normalized_sort_dir == "desc"
@@ -13788,6 +13848,10 @@ def list_entries_for_feeds(
                 # unreachable, because entry_effective_date returned `added` and
                 # every `or` below it was dead. See entry_publication_date.
                 sort_value = datetime_sort_value(published_dt)
+            elif sort_key == "size_sort_value":
+                # No completed archive yet is 0, not "unknown" -- there is
+                # nothing captured for it to weigh, which is literally true.
+                sort_value = float(size_map.get((entry.feed_url, entry.id), 0))
             else:
                 sort_value = datetime_sort_value(entry.added)
 
@@ -13814,6 +13878,10 @@ def list_entries_for_feeds(
                     sort_key: sort_value,
                 }
             )
+            if normalized_star_only:
+                # None (not 0) when nothing is archived yet, so the template
+                # can render "—" instead of a misleading "0 B".
+                light_records[-1]["size_bytes"] = size_map.get((entry.feed_url, entry.id))
 
     filter_ms = int((time.perf_counter() - process_start) * 1000)
     # Dedupe + sort + limit on the lightweight records.
@@ -13983,6 +14051,9 @@ def list_entries_for_feeds(
                 "post_display": format_datetime_for_ui(published_dt),
                 "received_display": format_datetime_for_ui(getattr(entry, "added", None)),
                 "read_display": format_datetime_for_ui(read_dt),
+                "size_display": (
+                    _format_size_bytes(_sb) if (_sb := rec.get("size_bytes")) is not None else None
+                ),
                 "duration_seconds": duration_seconds,
                 "duration_display": duration_display,
             }

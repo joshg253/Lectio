@@ -6913,6 +6913,20 @@ mark.highlight-mark {
   white-space: nowrap;
 }
 
+/* Saved/Kept only — maintained size (capture + archived assets), not the
+   source page's weight. See Plan.md "Saved: see and sort by item size". */
+.post-size-badge {
+  display: inline-block;
+  margin-left: 0.5em;
+  padding: 0.05em 0.4em;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
 /* The destructive choice, set apart from the three that keep something. */
 .unsub-migrate-drop-row { color: var(--danger, #c0392b); }
 .unsub-migrate-restar-row { font-size: 0.85rem; margin: 0.6rem 0 0;
