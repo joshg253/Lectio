@@ -3421,6 +3421,28 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # A short-lived undo for /entries/saved's unstar (POST /entries/saved,
+        # saved=0) — the same shape as entry_unread_batch, one row per entry
+        # keyed by a shared timestamp token that IS the undo token, but this
+        # one also keeps the original saved_at so a restored star lands back
+        # in its actual star-order position instead of jumping to "just
+        # starred." Raised 2026-08-23: repeat-pressing the star-toggle key by
+        # accident unstarred ~16 articles with no way to identify which ones
+        # afterward. Deliberately scoped to this one route -- the bulk/
+        # administrative unstar paths (Archive, dedup/merge, unsubscribe) go
+        # through apply_star_state directly and don't write this table, since
+        # an undo toast doesn't make sense for a deliberate bulk action.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entry_unstar_batch (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                unstarred_at TEXT NOT NULL,
+                saved_at TEXT,
+                PRIMARY KEY (feed_url, entry_id)
+            )
+            """
+        )
         # Feed-tag suggestion chips the user has dismissed, per (feed, tag).
         #
         # Manual rather than heuristic on purpose: two automatic rules were tried
@@ -27707,6 +27729,7 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
         "saved_entries",
         "entry_read_state",
         "entry_unread_batch",
+        "entry_unstar_batch",
         "read_history",
         "feed_failure_state",
         "entry_lead_images",
@@ -30953,15 +30976,41 @@ def toggle_entry_saved(
     select_entry: int = Form(default=1),
 ):
     normalized_tag = normalize_tag_value(tag)
+
+    undo_token: str | None = None
+    if not saved:
+        # Capture the pre-delete saved_at (not just "it was starred") so a
+        # short-lived undo restores the entry to its actual star-order
+        # position instead of jumping to "just starred, at the top."
+        with get_meta_connection() as conn:
+            _prior = conn.execute(
+                "SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchone()
+        if _prior is not None:
+            undo_token = datetime.now().isoformat()
+            with get_meta_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO entry_unstar_batch (feed_url, entry_id, unstarred_at, saved_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(feed_url, entry_id) DO UPDATE SET
+                        unstarred_at = excluded.unstarred_at,
+                        saved_at = excluded.saved_at
+                    """,
+                    (feed_url, entry_id, undo_token, _prior["saved_at"]),
+                )
+                conn.commit()
+
     apply_star_state(feed_url, entry_id, bool(saved))
     if saved:
         _maybe_autofetch_on_keep(feed_url, entry_id)
 
     if is_async_action_request(request, "lectio-post-save-toggle"):
-        return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved)})
+        return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved), "undo_token": undo_token})
 
     if is_async_action_request(request, "lectio-entry-save-toggle"):
-        return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved)})
+        return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved), "undo_token": undo_token})
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
@@ -32730,6 +32779,65 @@ def undo_mark_read(read_at: str = Form(...)):
     invalidate_unread_counts_cache()
     LOGGER.info("[undo-mark-read] restored %d of %d entries from batch %s", restored, len(pairs), read_at)
     return JSONResponse({"ok": True, "restored": restored})
+
+
+@app.post("/entries/undo-unstar")
+def undo_unstar(unstarred_at: str = Form(...)):
+    """Undo an accidental unstar (the toast's Undo button on /entries/saved).
+
+    Same shape and window as undo_mark_read/undo_mark_unread: the shared
+    timestamp toggle_entry_saved stamped is the token. Restores the star with
+    its *original* saved_at (recorded alongside the token) rather than a
+    fresh one, so it lands back in its actual star-order position instead of
+    jumping to "just starred." Writes straight to saved_entries rather than
+    going through apply_star_state, so this can't re-fire "on star, also send
+    to..." destinations — those are for a genuine new star, not a restore.
+    """
+    _bad_token = _undo_token_problem(unstarred_at)
+    if _bad_token is not None:
+        return _bad_token
+
+    with get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT feed_url, entry_id, saved_at FROM entry_unstar_batch WHERE unstarred_at = ?",
+            (unstarred_at,),
+        ).fetchone()
+    if row is None:
+        return JSONResponse({"ok": False, "error": "Nothing to undo."}, status_code=404)
+
+    feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
+
+    # An untagged Saved Article husk is hard-deleted on unstar
+    # (apply_star_state -> _hard_delete_entry), not just unstarred — the
+    # entry itself is gone, so restoring the saved_entries row would create
+    # exactly the orphan-star class of bug the orphaned-star sweep exists to
+    # clean up (a row with no matching reader entry). Refuse rather than
+    # dangle.
+    with get_reader() as reader:
+        entry_gone = reader.get_entry((feed_url, entry_id), None) is None
+    if entry_gone:
+        with get_meta_connection() as conn:
+            conn.execute("DELETE FROM entry_unstar_batch WHERE unstarred_at = ?", (unstarred_at,))
+            conn.commit()
+        return JSONResponse(
+            {"ok": False, "error": "That post no longer exists — it was removed when unstarred."},
+            status_code=410,
+        )
+
+    saved_at = row["saved_at"] or datetime.now().isoformat()
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
+            (feed_url, entry_id, saved_at),
+        )
+        conn.execute("DELETE FROM entry_unstar_batch WHERE unstarred_at = ?", (unstarred_at,))
+        conn.commit()
+    try:
+        starred_archive_service.enqueue_archive(feed_url, entry_id)
+    except Exception as exc:  # noqa: BLE001 — the star itself is already restored
+        LOGGER.warning("starred archive re-enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
+    LOGGER.info("[undo-unstar] restored %s/%s from batch %s", feed_url, entry_id, unstarred_at)
+    return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id})
 
 
 @app.post("/entries/mark-newer-than-unread")

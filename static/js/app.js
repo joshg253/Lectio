@@ -7537,6 +7537,12 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
               throw new Error(`HTTP ${response.status}`);
             }
             if (dropFromInbox) linkedPostItem.remove();
+            if (!nextIsSaved) {
+              try {
+                const data = await response.json();
+                if (data && data.undo_token) showUndoUnstarToast(data.undo_token);
+              } catch (_jsonErr) { /* no undo token available — not fatal */ }
+            }
           } catch (_error) {
             if (dropFromInbox) linkedPostItem.hidden = false;
             applyEntryPaneSavedState(!nextIsSaved);
@@ -8126,6 +8132,12 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
               throw new Error(`HTTP ${response.status}`);
             }
             if (dropFromInbox) postItem.remove();
+            if (!nextIsSaved) {
+              try {
+                const data = await response.json();
+                if (data && data.undo_token) showUndoUnstarToast(data.undo_token);
+              } catch (_jsonErr) { /* no undo token available — not fatal */ }
+            }
           } catch (_error) {
             if (dropFromInbox) postItem.hidden = false;
             applyPostItemSavedState(postItem, !nextIsSaved);
@@ -8281,6 +8293,46 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
             body: new URLSearchParams({ unread_at: undoToken }).toString(),
+          });
+          const data = await resp.json();
+          if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+          window.location.reload();
+        } catch (err) {
+          toast.remove();
+          alert('Undo failed: ' + (err.message || err));
+        }
+      });
+      toast.appendChild(btn);
+      document.body.appendChild(toast);
+      window.setTimeout(() => {
+        toast.classList.add('fade-out');
+        window.setTimeout(() => toast.remove(), 500);
+      }, 8000);
+    }
+
+    // Undo toast for an accidental unstar: the server stamps the unstar with
+    // a shared timestamp (entry_unstar_batch) and hands it back as the undo
+    // token, same shape as the mark-read/mark-unread undos above. Raised
+    // 2026-08-23: repeat-pressing the star-toggle key by accident unstarred
+    // ~16 articles with no way to identify which ones afterward.
+    function showUndoUnstarToast(undoToken) {
+      document.getElementById('toast-message')?.remove();
+      const toast = document.createElement('div');
+      toast.id = 'toast-message';
+      toast.className = 'toast-message';
+      toast.textContent = 'Post unstarred. ';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toast-action-btn';
+      btn.textContent = 'Undo';
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const resp = await fetch('/entries/undo-unstar', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+            body: new URLSearchParams({ unstarred_at: undoToken }).toString(),
           });
           const data = await resp.json();
           if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
