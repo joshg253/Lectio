@@ -131,19 +131,33 @@ Standard Ebooks body the same day (the refetch had already overwritten reader's
 own entry content, and only a backup got it back). Per-entry keeps it reversible
 and lets one be checked before the rest.
 
-### Refetch-All has no "already re-fetched recently" skip
+### Re-fetch: let the user choose which date it lands on
 
-Surfaced 2026-08-23 alongside the re-fetch date picker (built 2026-08-24 —
-see `docs/architecture/saved.md` "The re-fetch date picker"). There is no
-dedicated "last fetched/re-fetched at" column — only `entries.published`
-(the article's own date), `entries.first_updated` (Lectio's original ingest
-time, now *not* always immutable: the date picker's "Now"/"Pub date" choices
-deliberately move it), and `entry_content_edits.edited_at` (frozen at the
-*first* re-fetch, for the Revert button — not updated on later ones). If
-Refetch-All should ever skip entries already re-fetched recently — no point
-re-spending a site's bandwidth on articles just fixed minutes ago — that
-needs a new column; nothing today records it. Not scoped further; raised but
-not asked for yet.
+Raised 2026-08-23. `refresh_captured_article` bumps a capture's Received date
+(and `saved_entries.saved_at`, which the Inbox's star-order reads) to now by
+default — right for a deliberate single re-fetch ("something changed, look at
+this"), wrong for a bulk Refetch-All across dozens of old articles, which used
+to dump the whole Inbox's order onto whatever finished last in the batch.
+**Quick fix shipped 2026-08-23**: the batch worker now passes
+`bump_received=False` and leaves every entry's date alone; the single-article
+button is unchanged.
+
+**Not yet built**: a real choice on the re-fetch action(s) — Now / Original
+(saved) date / Pub date — instead of the current hardcoded bump-or-not. The
+`bump_received` parameter now threads cleanly through
+`services/saved_articles.py::refresh_captured_article` →
+`main._refresh_captured_article_for_current_user` → both call sites (single
+button, batch worker), so a picker UI has a real parameter to plug into rather
+than a special case to unwind.
+
+Related gap surfaced in the same conversation: there is no dedicated
+"last fetched/re-fetched at" column — only `entries.published` (the article's
+own date), `entries.first_updated` (Lectio's original ingest time, immutable),
+and `entry_content_edits.edited_at` (frozen at the *first* re-fetch, for the
+Revert button — not updated on later ones). If Refetch-All should ever skip
+entries already re-fetched recently (raised in the same thread — no point
+re-spending a site's bandwidth on articles just fixed minutes ago), that needs
+a new column; nothing today records it.
 
 ### Proxy article-body images through /api/img (main app)
 
@@ -344,16 +358,18 @@ Delete model — Archive keeps tags/offline capture, Delete releases both) all
 shipped 2026-07-28/29. Full rationale in ARCHITECTURE.md. One piece from
 that work is not yet safe to use:
 
-**Settings → Feeds → Utilities → Archive old stars — fixed and safe to use
-2026-08-25.** Was blocked: the cutoff sorted on `saved_at`, but `saved_at` is
-not a real star date for most rows — 6,091 of 10,002 stars carry a `saved_at`
-in 2026-06, when the multi-user migration stamped its own run date instead of
-preserving the original. Fix shipped as a **date basis** choice in the
-Utilities panel: "Publish date" (now the default — asks the better question
-anyway, "articles from 2019 I have still never opened") or "Star date" (kept
-as an option, its unreliability caveat only shown when picked). See
-`docs/architecture/saved.md` "Archive old stars ("Inbox bankruptcy") — the
-saved_at trap" for the full mechanism.
+**⚠ Settings → Feeds → Utilities → Archive old stars — DO NOT RUN YET.**
+The cutoff (7d/30d/90d/6mo/1yr) sorts on `saved_at`, but `saved_at` is not a
+real star date for most rows: 6,091 of 10,002 stars carry a `saved_at` in
+2026-06, which is when multi-user went live and the migration stamped its
+own run date instead of preserving the original — mostly years-old
+Inoreader stars wearing a seven-week-old timestamp. A 30-day cutoff would
+sweep those 6,091 in and a 90-day cutoff would protect them, neither for
+any real reason. **Fix before use: offer the date basis, default to
+publish date** (asks the better question anyway — "articles from 2019 I
+have still never opened"). Only 419 of 10,002 stars have a genuine
+Lectio-made `saved_at`; the rest are either real pre-migration dates
+(3,492) or the migration timestamp (6,091).
 
 ### Phone polish — shipped 2026-08-11
 

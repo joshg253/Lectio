@@ -683,12 +683,12 @@
             <details class="saved-dedup-section saved-dedup-possible-section" open hidden>
               <summary>Possible <span class="saved-dedup-section-count"></span></summary>
               <p class="action-modal-label saved-dedup-possible-intro"></p>
-              <p class="action-modal-hint">Nothing below is preselected — check the copies you want removed.</p>
+              <p class="action-modal-hint">Every copy starts on Keep — switch the ones you want removed to Delete.</p>
               <div class="saved-dedup-possible-list"></div>
             </details>
             <div class="dedup-inline-actions">
-              <button type="button" id="saved-dedup-checkall" class="settings-secondary-btn" hidden title="Probe every group's URLs (throttled, one group at a time) — dead links are flagged and selected for deletion; live and inconclusive copies are left alone">Check all URLs</button>
-              <button type="button" id="saved-dedup-ok" class="danger" hidden>Delete selected copies</button>
+              <button type="button" id="saved-dedup-checkall" class="settings-secondary-btn" hidden title="Probe every group's URLs (throttled, one group at a time) — a confirmed-dead copy is switched to Delete (never the sole copy with real stored content); live and inconclusive copies stay on Keep">Check all URLs</button>
+              <button type="button" id="saved-dedup-ok" class="danger" hidden>Delete copies marked Delete</button>
             </div>
           </div>
           <div id="purge-old-panel" hidden>

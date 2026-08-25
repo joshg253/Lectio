@@ -6155,7 +6155,6 @@ body[data-keyboard-open="1"] .action-modal-panel {
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
-.keep-tag { color: var(--muted); }
 .remove-tag { color: var(--danger, #c0392b); }
 .dedup-suggested-arrow {
   font-size: 0.85rem;
@@ -6356,7 +6355,19 @@ body[data-keyboard-open="1"] .action-modal-panel {
   word-break: break-word;
 }
 a.dedup-url { color: inherit; }
-.saved-dedup-row .dedup-tag { width: 2.6rem; }
+.saved-dedup-toggle { display: flex; flex-shrink: 0; gap: 0.15rem; }
+.saved-dedup-toggle-btn {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.saved-dedup-toggle-keep.active { background: var(--muted); color: var(--bg); border-color: var(--muted); }
+.saved-dedup-toggle-delete.active { background: var(--danger, #c0392b); color: #fff; border-color: var(--danger, #c0392b); }
 .saved-dedup-main { min-width: 0; }
 .saved-dedup-reasons {
   font-size: 0.7rem;
