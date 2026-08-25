@@ -10773,26 +10773,20 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             const origScope = rule.scope, origScopeId = rule.scope_id, origKeyword = rule.keyword;
             const origEnabled = rule.enabled;
             const draft = hlBuildDraft(rule, 'Save', async (updated) => {
-              const addBody = hlRuleToParams({ ...updated, enabled: origEnabled });
-              const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
-              // A rule's identity is (scope, scope_id, keyword). When none of the
-              // three changed there is nothing to remove — INSERT OR REPLACE
-              // overwrites the row in place. Sending both in parallel DESTROYED
-              // the rule: the add landed first and the remove then deleted it, 20
-              // times out of 20 in a local reproduction, with both responses OK so
-              // the UI reported success. A dedup rule hits this every time, since
-              // its match method IS the keyword.
-              const sameIdentity = updated.scope === origScope
-                && String(updated.scope_id || '') === String(origScopeId || '')
-                && updated.keyword === origKeyword;
+              // Single atomic request: /highlights/edit deletes the old
+              // identity (if it changed) and writes the new one in one
+              // transaction server-side, so there's no add/remove race to
+              // sequence client-side any more.
+              const body = hlRuleToParams({ ...updated, enabled: origEnabled });
+              body.set('old_scope', origScope);
+              body.set('old_scope_id', origScopeId);
+              body.set('old_keyword', origKeyword);
               try {
-                if (!sameIdentity) {
-                  const removeBody = new URLSearchParams({ scope: origScope, scope_id: origScopeId, keyword: origKeyword });
-                  const r1 = await post('/highlights/remove', removeBody);   // strictly before the add
-                  if (!r1.ok) throw new Error('failed');
-                }
-                const r2 = await post('/highlights/add', addBody);
-                if (!r2.ok) throw new Error('failed');
+                const resp = await fetch('/highlights/edit', {
+                  method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  credentials: 'same-origin', body: body.toString(),
+                });
+                if (!resp.ok) throw new Error('failed');
                 const idx = hlRules.findIndex(r => r.scope === origScope && r.scope_id === origScopeId && r.keyword === origKeyword);
                 if (idx >= 0) hlRules[idx] = { ...updated, enabled: origEnabled };
                 hlHideDraft();
