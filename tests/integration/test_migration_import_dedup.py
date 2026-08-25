@@ -13,6 +13,7 @@ _canonical_feed_url_lookup / _resolve_feed_url are the shared fix; these tests
 exercise them directly and through _apply_migration_items end to end."""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -115,3 +116,87 @@ def test_migration_tags_land_on_existing_entry_not_a_synthesized_duplicate(confi
         ).fetchone()
     assert row is not None
     assert row["feed_url"] == FEED_STORED_NONCANONICAL
+
+
+# ---------------------------------------------------------------------------
+# declined_feeds: an Ino resync must not resurrect a genuine unsubscribe.
+# See Plan.md "Ino import resurrects deliberately-unsubscribed feeds" —
+# _run_import_loop and _inoreader_drip_step's subscriptions phase both did
+# reader.add_feed(furl, exist_ok=True) for anything Ino still lists as
+# subscribed but reader is missing, with no check for *why* it's missing.
+# ---------------------------------------------------------------------------
+
+DECLINED_FEED = "https://declined.test/feed"
+NEW_FEED = "https://new.test/never-declined"
+
+
+def _decline(feed_url: str) -> None:
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO declined_feeds (feed_url, declined_at) VALUES (?, ?)",
+            (feed_url, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+
+
+def test_local_import_loop_skips_a_declined_feed(configured, tmp_path, monkeypatch):
+    _decline(DECLINED_FEED)
+    items = [
+        {"url": "", "feed_url": DECLINED_FEED, "title": "", "published": None,
+         "feed_title": "", "content": "", "starred": False, "tags": [], "folder": ""},
+        {"url": "", "feed_url": NEW_FEED, "title": "", "published": None,
+         "feed_title": "", "content": "", "starred": False, "tags": [], "folder": ""},
+    ]
+    monkeypatch.setattr(main.inoreader_service, "parse_export_json", lambda data: items)
+    json_path = tmp_path / "export.json"
+    json_path.write_text("{}", encoding="utf-8")
+
+    state: dict = {"subs_added": 0, "items_tagged": 0, "items_starred": 0, "errors": 0}
+    main._run_import_loop([json_path], state, lambda: None)
+
+    with main.get_reader() as reader:
+        urls = {str(f.url) for f in reader.get_feeds()}
+    assert urls == {NEW_FEED}
+    assert state.get("subs_added") == 1
+
+
+def test_drip_step_subscriptions_phase_skips_a_declined_feed(configured, monkeypatch):
+    _decline(DECLINED_FEED)
+    subs = [{"feed_url": DECLINED_FEED}, {"feed_url": NEW_FEED}]
+    monkeypatch.setattr(main, "get_inoreader_token", lambda: "fake-token")
+    monkeypatch.setattr(main.inoreader_service, "get_subscriptions", lambda token: (subs, {}))
+
+    with main.get_meta_connection() as conn:
+        main.set_setting(
+            conn, main.SETTING_INOREADER_IMPORT_STATE,
+            json.dumps({"phase": "subscriptions"}),
+        )
+
+    main._inoreader_drip_step()
+
+    with main.get_reader() as reader:
+        urls = {str(f.url) for f in reader.get_feeds()}
+    assert urls == {NEW_FEED}
+    with main.get_meta_connection() as conn:
+        state = json.loads(main.get_setting(conn, main.SETTING_INOREADER_IMPORT_STATE) or "{}")
+    assert state.get("subs_added") == 1
+    assert state.get("subs_declined_skipped") == 1
+
+
+def test_drip_step_subscriptions_phase_re_adds_when_nothing_declined(configured, monkeypatch):
+    """No declined_feeds rows at all must not change existing add behavior."""
+    subs = [{"feed_url": NEW_FEED}]
+    monkeypatch.setattr(main, "get_inoreader_token", lambda: "fake-token")
+    monkeypatch.setattr(main.inoreader_service, "get_subscriptions", lambda token: (subs, {}))
+
+    with main.get_meta_connection() as conn:
+        main.set_setting(
+            conn, main.SETTING_INOREADER_IMPORT_STATE,
+            json.dumps({"phase": "subscriptions"}),
+        )
+
+    main._inoreader_drip_step()
+
+    with main.get_reader() as reader:
+        urls = {str(f.url) for f in reader.get_feeds()}
+    assert urls == {NEW_FEED}
