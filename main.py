@@ -5134,8 +5134,12 @@ def get_folder_feed_urls(conn: sqlite3.Connection, folder_id: int) -> set[str]:
     # no folder. The home view widens root the same way for display and counts, so
     # folder actions (mark-read/older, refresh) must match — otherwise entries in
     # uncategorized feeds show under All Feeds but can't be marked from there.
+    # The Saved Articles virtual feed (lectio:saved) is excluded here too: unlike
+    # Uncategorized (which keeps it reachable for the Saved sidebar's own
+    # Uncategorized grouping — see the home route), root has no such need, and
+    # it must never show as a subscription — or be actionable — in Feeds mode.
     if folder_id == get_root_folder_id(conn):
-        return get_all_reader_feed_urls()
+        return get_all_reader_feed_urls() - {saved_articles_service.SAVED_FEED_URL}
     descendant_ids = get_descendant_folder_ids(conn, folder_id)
     placeholders = ",".join("?" for _ in descendant_ids)
     rows = conn.execute(
@@ -17624,6 +17628,36 @@ def canonical_feed_url(raw_url: str) -> str:
     return url
 
 
+def _canonical_feed_url_lookup(reader) -> dict[str, str]:
+    """Map canonical_feed_url(existing) -> the actual stored URL, for every feed
+    reader currently holds.
+
+    ``reader.add_feed(canonical_url, exist_ok=True)`` only suppresses the
+    duplicate-feed error for an EXACT existing URL string — it does not treat
+    an equivalent-but-differently-spelled URL (e.g. a trailing slash from
+    before this normalization existed) as the same feed. An importer that
+    canonicalizes an incoming URL and then checks it against a raw
+    ``{f.url for f in reader.get_feeds()}`` set therefore spawns a duplicate
+    feed whenever the stored URL isn't already canonical — this lookup is
+    the fix: check membership/resolve through this instead. (Same bug class
+    OPML import hit — see commit 69e66af and feeds_with_folder above.)
+    """
+    return {canonical_feed_url(str(f.url)): str(f.url) for f in reader.get_feeds()}
+
+
+def _resolve_feed_url(url: str, lookup: dict[str, str]) -> str:
+    """Canonicalize *url*, then resolve it to the URL already stored in reader
+    for the equivalent feed (see _canonical_feed_url_lookup), or return the
+    canonical form unchanged when the feed is genuinely new.
+
+    Callers that go on to look up or synthesize entries for this feed must use
+    the resolved value, not just the canonical one — an entry lookup keyed off
+    a freshly-canonicalized URL silently misses entries stored under the feed's
+    actual (possibly non-canonical) URL and would re-synthesize duplicates."""
+    canonical = canonical_feed_url(url)
+    return lookup.get(canonical, canonical)
+
+
 def _canonicalize_item_feed_urls(items: list[dict]) -> None:
     """Rewrite each item's ``feed_url`` to its canonical form, in place.
 
@@ -19559,6 +19593,7 @@ def _daily_maintenance_loop(stop_event: threading.Event) -> None:
     opportunity. The last-run date is persisted (data-dir marker) so restarts
     don't re-run the same day."""
     last_batch_check_hhmm: str | None = None
+    last_premiere_recheck_at = 0.0
     while not stop_event.wait(30):
         # Flush email batches at their configured batch_time (once per clock
         # minute), per user — email_batch_queue lives in each user's meta DB.
@@ -19571,6 +19606,23 @@ def _daily_maintenance_loop(stop_event: threading.Event) -> None:
                         _check_and_flush_batch_times()
                     except Exception:
                         LOGGER.exception("[maintenance] email batch flush failed for user %r", _uid)
+
+        # Recheck still-"upcoming" YouTube videos hourly, independent of any
+        # feed's own refresh cadence — a channel that refreshes rarely could
+        # otherwise leave a premiere's status stale for hours after it airs.
+        # Fixed interval rather than a clock-hour boundary: "roughly hourly"
+        # is the point, not exactness, and this sidesteps DST/timezone noise.
+        now_mono = time.monotonic()
+        if now_mono - last_premiere_recheck_at >= 3600:
+            last_premiere_recheck_at = now_mono
+            for _uid in _background_user_ids():
+                with tenancy.user_context(_uid):
+                    try:
+                        _checked = youtube_duration_service.refresh_upcoming_videos()
+                        if _checked:
+                            LOGGER.info("[maintenance] rechecked %d upcoming YouTube video(s)", _checked)
+                    except Exception:
+                        LOGGER.exception("[maintenance] YouTube premiere recheck failed for user %r", _uid)
 
         # Daily maintenance: once per day, at or after the configured hour.
         maint_hour = get_maintenance_hour()
@@ -22250,7 +22302,10 @@ def _home_inner(
         _uncat_display_urls = uncategorized_feed_urls - {saved_articles_service.SAVED_FEED_URL}
         folder_feed_urls_by_id = dict(folder_feed_urls_by_id)
         direct_feed_urls_by_folder = dict(direct_feed_urls_by_folder)
-        folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
+        # Unlike Uncategorized (kept inclusive for the Saved sidebar's own
+        # reachability, see below), root has no such need — it must never show
+        # lectio:saved as a subscription in Feeds mode.
+        folder_feed_urls_by_id[root_id] = all_feed_urls | _uncat_display_urls
         folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = uncategorized_feed_urls
         direct_feed_urls_by_folder[UNCATEGORIZED_FOLDER_ID] = sorted(_uncat_display_urls)
         _tick("structure_snapshot")
@@ -25867,13 +25922,13 @@ def _run_import_loop(json_files: list, state: dict, _save) -> None:
         new_feed_urls = {item["feed_url"] for item in items if item["feed_url"]}
         if new_feed_urls:
             with get_reader() as reader:
-                existing = {str(f.url) for f in reader.get_feeds()}
+                existing = _canonical_feed_url_lookup(reader)
                 for furl in new_feed_urls:
                     if furl not in existing:
                         try:
                             reader.add_feed(furl, exist_ok=True)
                             state["subs_added"] = state.get("subs_added", 0) + 1
-                            existing.add(furl)
+                            existing[furl] = furl
                         except Exception:
                             pass
 
@@ -25885,15 +25940,18 @@ def _run_import_loop(json_files: list, state: dict, _save) -> None:
         #   2. Try lookup by link column directly in the reader DB — handles id≠link.
         #   3. If still not found, synthesize and add_entry so tags/stars apply now.
         with get_reader() as reader:
+            existing = _canonical_feed_url_lookup(reader)
             with get_meta_connection() as conn:
                 with sqlite3.connect(reader_db, timeout=10.0) as rconn:
                     rconn.row_factory = sqlite3.Row
                     for item in items:
                         entry_url = item["url"]
-                        # feed_url was canonicalized in place above, so tags/
-                        # stars key off the canonical feed URL and land on the
-                        # (possibly pre-existing) merged feed's entries.
-                        feed_url = item["feed_url"]
+                        # feed_url was canonicalized in place above; resolve it to
+                        # whatever's actually stored in reader for that feed (may
+                        # predate canonicalization) so tags/stars land on the real,
+                        # already-existing entries instead of re-synthesizing them
+                        # under the canonical spelling.
+                        feed_url = _resolve_feed_url(item["feed_url"], existing)
                         if not entry_url or not feed_url:
                             continue
 
@@ -26020,21 +26078,26 @@ async def inoreader_import_json(request: Request, file: UploadFile = File(...)):
     # Subscribe missing feeds
     feed_urls = {item["feed_url"] for item in items if item["feed_url"]}
     with get_reader() as reader:
-        existing = {str(f.url) for f in reader.get_feeds()}
+        existing = _canonical_feed_url_lookup(reader)
         for furl in feed_urls:
             if furl not in existing:
                 try:
                     reader.add_feed(furl, exist_ok=True)
+                    existing[furl] = furl
                     feeds_added += 1
                 except Exception:
                     pass
 
     # Apply stars and tags to entries already in reader
     with get_reader() as reader:
+        existing = _canonical_feed_url_lookup(reader)
         with get_meta_connection() as conn:
             for item in items:
                 entry_url = item["url"]
-                feed_url = item["feed_url"]
+                # Resolve to whatever's actually stored in reader for this feed
+                # (may predate canonicalization) so the lookup below finds the
+                # real, already-existing entry instead of silently missing it.
+                feed_url = _resolve_feed_url(item["feed_url"], existing)
                 if not entry_url or not feed_url:
                     continue
                 # Tag
@@ -26148,13 +26211,13 @@ def _apply_migration_items(items: list[dict], state: dict, save_fn) -> None:
                 feed_folders[furl] = folder
 
     with get_reader() as reader:
-        existing = {str(f.url) for f in reader.get_feeds()}
+        existing = _canonical_feed_url_lookup(reader)
         for furl in all_feed_urls:
             if furl not in existing:
                 try:
                     reader.add_feed(furl, exist_ok=True)
                     state["subs_added"] = state.get("subs_added", 0) + 1
-                    existing.add(furl)
+                    existing[furl] = furl
                 except Exception:
                     pass
 
@@ -26175,12 +26238,16 @@ def _apply_migration_items(items: list[dict], state: dict, save_fn) -> None:
 
     # --- Phase 2: apply tags and stars to articles ---
     with get_reader() as reader:
+        existing = _canonical_feed_url_lookup(reader)
         with get_meta_connection() as conn:
             with sqlite3.connect(reader_db, timeout=10.0) as rconn:
                 rconn.row_factory = sqlite3.Row
                 for item in items:
                     entry_url = item.get("url") or ""
-                    feed_url = item.get("feed_url") or ""
+                    # Resolve to whatever's actually stored in reader for this
+                    # feed (may predate canonicalization) so the lookup below
+                    # finds the real entry instead of re-synthesizing it.
+                    feed_url = _resolve_feed_url(item.get("feed_url") or "", existing)
                     if not entry_url:
                         continue
 
@@ -26283,13 +26350,14 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
             calls_made += 1
             state["z1_remaining"] = inoreader_service.z1_remaining(rl)
             with get_reader() as reader:
-                existing = {str(f.url) for f in reader.get_feeds()}
+                existing = _canonical_feed_url_lookup(reader)
                 added = 0
                 for sub in subs:
                     furl = canonical_feed_url(sub.get("feed_url", ""))
                     if furl and furl not in existing:
                         try:
                             reader.add_feed(furl, exist_ok=True)
+                            existing[furl] = furl
                             added += 1
                         except Exception:
                             pass
@@ -26332,6 +26400,7 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
                 if inoreader_service.label_is_tag(label_name):
                     tag_key = f"{MANUAL_TAG_KEY_PREFIX}{label_name.lower()}"
                     with get_reader() as reader:
+                        existing = _canonical_feed_url_lookup(reader)
                         with sqlite3.connect(reader_db, timeout=10.0) as rconn:
                             rconn.row_factory = sqlite3.Row
                             for item in items:
@@ -26340,7 +26409,7 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
                                 origin = item.get("origin") or {}
                                 raw_stream = origin.get("streamId", "")
                                 feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
-                                feed_url = canonical_feed_url(feed_url)
+                                feed_url = _resolve_feed_url(feed_url, existing)
                                 if not entry_url or not feed_url:
                                     continue
                                 try:
@@ -26373,6 +26442,7 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
             calls_made += 1
             state["z1_remaining"] = inoreader_service.z1_remaining(rl)
             with get_reader() as reader:
+                existing = _canonical_feed_url_lookup(reader)
                 with sqlite3.connect(reader_db, timeout=10.0) as rconn:
                     rconn.row_factory = sqlite3.Row
                     for item in items:
@@ -26381,7 +26451,7 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
                         origin = item.get("origin") or {}
                         raw_stream = origin.get("streamId", "")
                         feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
-                        feed_url = canonical_feed_url(feed_url)
+                        feed_url = _resolve_feed_url(feed_url, existing)
                         if not entry_url or not feed_url:
                             continue
                         try:

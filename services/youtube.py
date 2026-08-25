@@ -101,6 +101,43 @@ class YouTubeDurationService:
 
         return (None, None)
 
+    def refresh_upcoming_videos(self) -> int:
+        """Re-poll every video still cached as "upcoming", regardless of which
+        feed it belongs to or that feed's own refresh cadence.
+
+        fetch_and_store_durations_for_feed only re-checks a video when its
+        feed itself gets refreshed, so a channel that refreshes rarely could
+        leave a premiere's status stale for hours after it actually airs.
+        Meant to run on a short, fixed interval independent of any feed
+        (see main.py's maintenance loop) — cheap, since there are rarely more
+        than a handful of upcoming videos across a whole library at once, and
+        batched the same way (up to 50 ids/call, 1 quota unit per call).
+
+        Returns the number of video ids checked."""
+        with self._get_durations_connection() as conn:
+            video_ids = [
+                str(row["video_id"]) for row in conn.execute(
+                    "SELECT video_id FROM youtube_video_duration WHERE live_broadcast_content = 'upcoming'"
+                )
+            ]
+        if not video_ids:
+            return 0
+        results = self.get_video_durations_batch(video_ids)
+        if not results:
+            # No API key for this tenancy context (or every id failed at
+            # once, e.g. a quota error) — never overwrite existing cached
+            # rows with blanks; skip this tick, a context with a real key
+            # will pick it up on a later one.
+            return 0
+        for vid in video_ids:
+            seconds, display, live_broadcast_content, scheduled_start_time = results.get(
+                vid, (None, None, None, None)
+            )
+            self._cache[vid] = (seconds, display)
+            self._live_cache[vid] = (live_broadcast_content, scheduled_start_time)
+            self._upsert_duration_db(vid, seconds, display, live_broadcast_content, scheduled_start_time)
+        return len(video_ids)
+
     def fetch_and_store_durations_for_feed(self, feed_url: str) -> None:
         if "youtube.com/feeds/videos.xml" not in feed_url:
             return
@@ -142,6 +179,15 @@ class YouTubeDurationService:
         if not to_fetch:
             return
         results = self.get_video_durations_batch(to_fetch)
+        if not results:
+            # No API key for this tenancy context (or every id failed at
+            # once) — never overwrite existing cached rows with blanks. This
+            # matters most for an "upcoming" video: its duration is always
+            # None by design, so unlike a genuinely-unfetched video it never
+            # ages out of to_fetch, and without this guard a background user
+            # with no key would blank its live status/scheduled time on
+            # every feed refresh that touches it.
+            return
         for vid in to_fetch:
             seconds, display, live_broadcast_content, scheduled_start_time = results.get(
                 vid, (None, None, None, None)
