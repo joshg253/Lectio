@@ -3181,6 +3181,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     let contextPostLink = '';
     let contextPostTitle = '';
     let contextPostFolderId = null;
+    // Re-fetch's "Land on:" picker (Now/Original/Pub date) — applies to
+    // whichever of the three re-fetch buttons gets clicked next. Reset to
+    // unset (today's default) each time the menu opens for a post; see
+    // updateRefetchGroupVisibility.
+    let refetchDateChoice = null;
     let contextPostOrphan = false;
     let actionModalSubmitHandler = null;
     let sourceViewActive = false;
@@ -9262,6 +9267,12 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const canRefetch = postCanRefetch();
       setMenuItemVisible(postRestoreOriginalButton, false);
       if (postRefetchGroup) postRefetchGroup.hidden = !canRefetch;
+      // Reset the date-choice picker for the new post — a choice made for
+      // the last post re-fetched must not silently apply to this one.
+      refetchDateChoice = null;
+      for (const btn of document.querySelectorAll('.ctx-refetch-date-opt')) {
+        btn.classList.remove('ctx-refetch-date-opt--active');
+      }
       const feedUrl = contextPostFeedUrl;
       const entryId = contextPostEntryId;
       if (!feedUrl || !entryId) return;
@@ -9336,11 +9347,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       }
       try {
         const mode = modeOverride || (fullPage ? CAPTURE_MODE_FULL : '');
-        const body = new URLSearchParams(
-          mode
-            ? { feed_url: feedUrl, entry_id: entryId, mode }
-            : { feed_url: feedUrl, entry_id: entryId }
-        );
+        const params = { feed_url: feedUrl, entry_id: entryId };
+        if (mode) params.mode = mode;
+        if (refetchDateChoice) params.date_choice = refetchDateChoice;
+        const body = new URLSearchParams(params);
         const resp = await fetch('/articles/refresh-content', { method: 'POST', body });
         const data = await resp.json();
         if (!data.ok) {
@@ -9380,6 +9390,23 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     postRefetchButton?.addEventListener('click', (ev) => runPostRefetch(ev, false));
     postRefetchFullButton?.addEventListener('click', (ev) => runPostRefetch(ev, true));
     postRefetchArchiveButton?.addEventListener('click', (ev) => runPostRefetch(ev, false, CAPTURE_MODE_ARCHIVE));
+
+    // "Land on:" picker — a toggle, not a radio group with a required
+    // choice: clicking the already-active option clears it back to unset
+    // (today's is_capture-conditional default), same "nothing forces a
+    // choice" spirit as the rest of this menu.
+    for (const dateBtn of document.querySelectorAll('.ctx-refetch-date-opt')) {
+      dateBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const choice = dateBtn.dataset.dateChoice;
+        const nowActive = refetchDateChoice === choice ? null : choice;
+        refetchDateChoice = nowActive;
+        for (const btn of document.querySelectorAll('.ctx-refetch-date-opt')) {
+          btn.classList.toggle('ctx-refetch-date-opt--active', btn === dateBtn && nowActive !== null);
+        }
+      });
+    }
 
     postRemoveTagShownButton?.addEventListener('click', async (event) => {
       event.preventDefault();

@@ -131,33 +131,19 @@ Standard Ebooks body the same day (the refetch had already overwritten reader's
 own entry content, and only a backup got it back). Per-entry keeps it reversible
 and lets one be checked before the rest.
 
-### Re-fetch: let the user choose which date it lands on
+### Refetch-All has no "already re-fetched recently" skip
 
-Raised 2026-08-23. `refresh_captured_article` bumps a capture's Received date
-(and `saved_entries.saved_at`, which the Inbox's star-order reads) to now by
-default — right for a deliberate single re-fetch ("something changed, look at
-this"), wrong for a bulk Refetch-All across dozens of old articles, which used
-to dump the whole Inbox's order onto whatever finished last in the batch.
-**Quick fix shipped 2026-08-23**: the batch worker now passes
-`bump_received=False` and leaves every entry's date alone; the single-article
-button is unchanged.
-
-**Not yet built**: a real choice on the re-fetch action(s) — Now / Original
-(saved) date / Pub date — instead of the current hardcoded bump-or-not. The
-`bump_received` parameter now threads cleanly through
-`services/saved_articles.py::refresh_captured_article` →
-`main._refresh_captured_article_for_current_user` → both call sites (single
-button, batch worker), so a picker UI has a real parameter to plug into rather
-than a special case to unwind.
-
-Related gap surfaced in the same conversation: there is no dedicated
-"last fetched/re-fetched at" column — only `entries.published` (the article's
-own date), `entries.first_updated` (Lectio's original ingest time, immutable),
-and `entry_content_edits.edited_at` (frozen at the *first* re-fetch, for the
-Revert button — not updated on later ones). If Refetch-All should ever skip
-entries already re-fetched recently (raised in the same thread — no point
-re-spending a site's bandwidth on articles just fixed minutes ago), that needs
-a new column; nothing today records it.
+Surfaced 2026-08-23 alongside the re-fetch date picker (built 2026-08-24 —
+see `docs/architecture/saved.md` "The re-fetch date picker"). There is no
+dedicated "last fetched/re-fetched at" column — only `entries.published`
+(the article's own date), `entries.first_updated` (Lectio's original ingest
+time, now *not* always immutable: the date picker's "Now"/"Pub date" choices
+deliberately move it), and `entry_content_edits.edited_at` (frozen at the
+*first* re-fetch, for the Revert button — not updated on later ones). If
+Refetch-All should ever skip entries already re-fetched recently — no point
+re-spending a site's bandwidth on articles just fixed minutes ago — that
+needs a new column; nothing today records it. Not scoped further; raised but
+not asked for yet.
 
 ### Proxy article-body images through /api/img (main app)
 

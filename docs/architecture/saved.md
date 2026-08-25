@@ -455,6 +455,62 @@ tag handlers now sync the row from the server's reply (`data.tags`, the normaliz
 and capped set), OR-ing the star back in so clearing the last tag off a starred
 post does not un-keep it.
 
+### The re-fetch date picker: Now / Original / Pub date
+
+Raised 2026-08-23, decided 2026-08-24. `replace_entry_content`'s
+`bump_received` was a binary "surface it at the top" or "leave it alone" —
+right for the two cases that motivated it (a deliberate single re-fetch
+should bump; a bulk Refetch-All across dozens of old articles should not,
+since bumping every touched `saved_at` at once used to dump the whole
+Inbox's order onto whatever finished last), but with no way to say "put it
+where the article's own publish date would sort" instead of either "now" or
+"nowhere new."
+
+`date_choice` (`refresh_captured_article`, threaded down from `POST
+/articles/refresh-content`'s form field) adds that third position and
+overrides `bump_received` outright when set:
+
+- **`"now"`** forces the bump — the button explicitly asking to surface it.
+- **`"original"`** forces no bump — same effect as `bump_received=False`,
+  named for what a person reading the menu sees rather than for the
+  implementation.
+- **`"pub"`** bumps to the entry's own `published` date instead of today.
+  Deliberately still not touching `published` itself — that field moving on
+  a re-fetch is the older, already-fixed bug this whole area exists to
+  avoid (see the "It used to move `published` instead" note above): a
+  re-fetch does not republish the article. What "Pub date" changes is where
+  the **Received** columns (`first_updated`/`recent_sort`/`saved_entries.
+  saved_at`) land, via a new `replace_entry_content(bump_to=...)` — the same
+  columns "now" already moves, just aimed at a different target datetime
+  instead of `datetime.now()`. Falls back to "now" when the entry has no
+  published date to land on.
+- **Unset** (the menu's default — nothing pre-selected, same "nothing pre-
+  checked" convention as the dupe scans) preserves the pre-existing
+  `bump_received=None` behavior exactly: a capture bumps, a feed entry
+  doesn't. Existing callers (the batch Refetch-All worker, which explicitly
+  passes `bump_received=False`) are untouched — `date_choice` is additive,
+  not a replacement for `bump_received`.
+
+**Why `saved_at` needed its own fix alongside this.** The star-order bump
+used raw SQL `CURRENT_TIMESTAMP`, which cannot be pointed at an arbitrary
+date — landing the Received columns on the pub date while `saved_at` still
+jumped to literal now would have reordered the Inbox one way while showing
+"received" dated another. Both now write the same computed `stored_received`
+string.
+
+**UI**: the post context menu's Re-fetch flyout gained a "Land on:" row of
+three toggle buttons above the existing Content/Full page/From Internet
+Archive buttons — pick a date target once, then whichever re-fetch mode is
+clicked uses it. A toggle, not a required radio choice: clicking the already
+-active option clears it back to unset. Reset every time the menu opens for
+a (possibly different) post, in `updateRefetchGroupVisibility` — a choice
+made for the last post re-fetched must not silently carry over.
+
+**Deliberately out of scope**: a per-batch picker for Refetch-All. Its
+`bump_received=False` default is already correct for a bulk backfill and
+Plan.md's ask was specifically about the single-article button ("so a
+picker UI has a real parameter to plug into").
+
 ## Node bulk actions, and what a re-fetch may replace
 
 **Node bulk actions are scoped to the drilled-into view, and Read Mode gets buttons

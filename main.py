@@ -31144,10 +31144,15 @@ async def refresh_saved_article_content(
     feed_url: str = Form(...),
     entry_id: str = Form(...),
     mode: str = Form("readability"),
+    date_choice: str = Form(""),
 ):
     """Re-fetch + re-extract a captured article's content, replacing the stored
     copy and bumping it to the top. Fixes a bad initial capture (e.g. readability
     grabbed a fragment, or a broken import) without deleting and re-adding.
+
+    *date_choice*, one of "now"/"original"/"pub" (blank = today's default:
+    a capture bumps, a feed entry doesn't) — see
+    saved_articles_service.refresh_captured_article.
 
     Works for any Lectio capture, wherever it lives, and always re-fetches the
     entry's current **link** rather than its id. Two bugs made that necessary:
@@ -31166,8 +31171,11 @@ async def refresh_saved_article_content(
 
     The save path is kept only as a fallback for the case it is actually good
     at — a saved URL with no entry behind it yet."""
+    _dc = date_choice if date_choice in {"now", "original", "pub"} else None
+    # positional: feed_url, entry_id, mode, bump_received (unused here — the
+    # date_choice picker is the only knob this route exposes), date_choice.
     result = await run_in_threadpool(
-        _refresh_captured_article_for_current_user, feed_url, entry_id, mode
+        _refresh_captured_article_for_current_user, feed_url, entry_id, mode, None, _dc
     )
     if result.get("ok"):
         return JSONResponse({
@@ -31447,6 +31455,7 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
 def _refresh_captured_article_for_current_user(
     feed_url: str, entry_id: str, mode: str = "readability",
     bump_received: bool | None = None,
+    date_choice: str | None = None,
 ) -> dict:
     """Re-fetch a Lectio capture that lives on a real feed (post auto-filing),
     with the current tenancy's reader/meta DB.
@@ -31461,7 +31470,8 @@ def _refresh_captured_article_for_current_user(
     users to archive.org by hand: a publisher serving a page that passes every
     guard but is no longer the article — rewritten, truncated, or paywalled.
 
-    *bump_received* is forwarded as-is to refresh_captured_article — see there."""
+    *bump_received* and *date_choice* are forwarded as-is to
+    refresh_captured_article — see there."""
     from_archive: str | None = None
     if mode == CAPTURE_MODE_ARCHIVE:
         from_archive = wayback_snapshot_url(_entry_source_url(feed_url, entry_id) or entry_id)
@@ -31500,6 +31510,7 @@ def _refresh_captured_article_for_current_user(
             enqueue_archive=starred_archive_service.enqueue_archive,
             is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
             bump_received=bump_received,
+            date_choice=date_choice,
         )
     if from_archive and result.get("ok"):
         result["from_archive"] = from_archive
@@ -31522,6 +31533,7 @@ def _refresh_captured_article_for_current_user(
                     enqueue_archive=starred_archive_service.enqueue_archive,
                     is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
                     bump_received=bump_received,
+                    date_choice=date_choice,
                 )
             if archived_result.get("ok"):
                 archived_result["from_archive"] = snapshot

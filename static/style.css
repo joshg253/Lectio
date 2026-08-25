@@ -8445,6 +8445,41 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
 .ctx-submenu--left > .ctx-submenu-list { left: auto; right: 100%; }
 .ctx-submenu[open] > .ctx-submenu-summary { background: var(--hover-bg); }
 
+/* Re-fetch's date-choice row: which of the three buttons below it a click
+   applies to, not a button of its own. See Plan.md "Re-fetch: let the user
+   choose which date it lands on". */
+.ctx-refetch-date-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding: 0.3rem 0.5rem 0.1rem;
+}
+.ctx-refetch-date-row {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0 0.35rem 0.35rem;
+  margin-bottom: 0.2rem;
+  border-bottom: 1px solid var(--line);
+}
+.ctx-refetch-date-opt {
+  flex: 1;
+  font-size: 0.74rem;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+.ctx-refetch-date-opt:hover { border-color: var(--fg); }
+.ctx-refetch-date-opt--active {
+  background: var(--accent, #2f6fd0);
+  border-color: var(--accent, #2f6fd0);
+  color: #fff;
+  font-weight: 600;
+}
+
 /* Settings -> Tags. The inventory is a long list, so it scrolls inside its own box
    rather than growing the modal; the counts are right-aligned because the point of
    the table is comparing them between rival spellings. */

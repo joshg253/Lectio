@@ -1972,6 +1972,16 @@
     <details class="ctx-submenu" id="ctx-post-refetch-group" hidden>
       <summary class="context-menu-item ctx-submenu-summary">Re-fetch<span class="ctx-submenu-caret material-symbols-rounded" aria-hidden="true">chevron_right</span></summary>
       <div class="ctx-submenu-list">
+        {# Where the re-fetch lands, not which mode fetches it — applies to
+           all three buttons below. Nothing pre-selected (decided 2026-08-24):
+           unset means today's default (a capture bumps to Now, a feed entry
+           keeps its date), same as before this existed. #}
+        <div class="ctx-refetch-date-label">Land on:</div>
+        <div class="ctx-refetch-date-row" role="radiogroup" aria-label="Where the re-fetched date lands">
+          <button type="button" class="ctx-refetch-date-opt" data-date-choice="now">Now</button>
+          <button type="button" class="ctx-refetch-date-opt" data-date-choice="original">Original</button>
+          <button type="button" class="ctx-refetch-date-opt" data-date-choice="pub" title="The article's own published date">Pub date</button>
+        </div>
         <button type="button" id="ctx-post-refetch" class="context-menu-item" hidden>Content</button>
         {# Whole-page capture instead of readability extraction — for a post
            whose normal re-fetch keeps coming back wrong. #}

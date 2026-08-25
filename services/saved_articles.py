@@ -258,6 +258,7 @@ def replace_entry_content(
     feed_url: str = SAVED_FEED_URL,
     *,
     bump_received: bool = True,
+    bump_to: datetime | None = None,
     pin_content: bool = False,
 ) -> None:
     """Replace a captured article's stored content with a fresh extraction.
@@ -273,13 +274,21 @@ def replace_entry_content(
     article has to update it where it now lives.
 
     *bump_received* surfaces the re-pulled article at the top of the backlog by
-    moving its **Received** date (and saved_at) to now. It used to move
-    ``published`` instead, which was wrong twice over: Pub means the date the
-    article was published, and a re-fetch does not republish it; and under a
-    Pub-oldest sort the bump buried the article at the far end of the list
-    rather than surfacing it. Measured on the live library 2026-07-25: 105
-    entries had lost their real publish dates this way. Received is the honest
-    home for "when this content arrived", and needs no new per-entry field.
+    moving its **Received** date (and saved_at) to *bump_to* (default: now).
+    It used to move ``published`` instead, which was wrong twice over: Pub
+    means the date the article was published, and a re-fetch does not
+    republish it; and under a Pub-oldest sort the bump buried the article at
+    the far end of the list rather than surfacing it. Measured on the live
+    library 2026-07-25: 105 entries had lost their real publish dates this
+    way. Received is the honest home for "when this content arrived", and
+    needs no new per-entry field.
+
+    *bump_to* lets a caller land the Received date somewhere other than "now"
+    — refresh_captured_article's "Pub date" re-fetch choice passes the
+    entry's own published date here, so the item resorts to where it would
+    have landed had Lectio received it back then, without touching
+    ``published`` itself (see above for why that field must not move).
+    Ignored when *bump_received* is False.
 
     Both received columns move together: ``first_updated`` backs ``Entry.added``
     (what the UI shows and the render-path sort reads) and ``recent_sort`` backs
@@ -287,7 +296,7 @@ def replace_entry_content(
     row so a later feed refresh can't clobber the re-fetched content with the
     feed's own thinner copy — set for feed entries, which reader re-ingests (a
     capture's feed never refreshes)."""
-    now = datetime.now(timezone.utc)
+    now = bump_to if bump_to is not None else datetime.now(timezone.utc)
     stored_received = now.strftime("%Y-%m-%d %H:%M:%S")  # reader's naive-UTC format
     content_json = json.dumps([{"value": article_html, "type": "text/html", "language": None}])
     db = reader._storage.get_db()
@@ -333,8 +342,12 @@ def replace_entry_content(
     for attempt in (1, 2):
         try:
             conn.execute(
-                "UPDATE saved_entries SET saved_at = CURRENT_TIMESTAMP WHERE feed_url = ? AND entry_id = ?",
-                (feed_url, entry_id),
+                # stored_received, not SQL's CURRENT_TIMESTAMP: when bump_to is
+                # set (the "Pub date" re-fetch choice), the star-order value
+                # has to land on the same date as the Received columns above,
+                # not always literally now.
+                "UPDATE saved_entries SET saved_at = ? WHERE feed_url = ? AND entry_id = ?",
+                (stored_received, feed_url, entry_id),
             )
             conn.commit()
             break
@@ -377,6 +390,7 @@ def refresh_captured_article(
     enqueue_archive: Callable[[str, str], None] | None = None,
     is_boilerplate_extraction: Callable[[str, str, str], bool] | None = None,
     bump_received: bool | None = None,
+    date_choice: str | None = None,
 ) -> dict:
     """Re-fetch and re-extract a Lectio capture in place, wherever it lives.
 
@@ -385,9 +399,19 @@ def refresh_captured_article(
     a feed entry doesn't). A batch re-fetch passes False explicitly: bulk-
     backfilling old articles isn't "look, something changed" the way a
     deliberate single re-fetch is, and bumping 50 saved_at's at once dumped
-    the whole Inbox's order onto whatever finished last. Kept as a real
-    parameter (not a special case) so a future "Now / Original / Pub date"
-    choice on the re-fetch button has something to plug straight into.
+    the whole Inbox's order onto whatever finished last.
+
+    *date_choice*, when one of ``"now"``/``"original"``/``"pub"``, is the
+    2026-08-23 "Now / Original / Pub date" re-fetch picker and takes
+    precedence over *bump_received* when both are given: ``"now"`` forces the
+    bump, ``"original"`` forces no bump (same effect as ``bump_received=
+    False``, just named for what the button says), and ``"pub"`` bumps to
+    the entry's own ``published`` date instead of now — resorting it to
+    where it would have landed had Lectio received it back then, without
+    touching ``published`` itself (still the wrong field to move — see
+    replace_entry_content). Falls back to ``"now"`` when the entry has no
+    published date to land on. Any other value, or None, is ignored and
+    *bump_received* decides as before.
 
     Replaces ``save_article(refresh_content=True)`` as the re-fetch path, and
     fixes two things that one gets wrong:
@@ -559,13 +583,29 @@ def refresh_captured_article(
         LOGGER.warning("refresh-capture: could not snapshot %s before replacing", entry_id,
                        exc_info=True)
 
+    # date_choice, when given, overrides bump_received entirely — see the
+    # docstring. "pub" needs the entry's own published date; falls back to
+    # "now" (bump_to stays None) when there isn't one.
+    effective_bump_received = is_capture if bump_received is None else bump_received
+    bump_to: datetime | None = None
+    if date_choice == "now":
+        effective_bump_received = True
+    elif date_choice == "original":
+        effective_bump_received = False
+    elif date_choice == "pub":
+        effective_bump_received = True
+        published = getattr(entry, "published", None)
+        if published is not None:
+            bump_to = published if published.tzinfo is not None else published.replace(tzinfo=timezone.utc)
+
     try:
         # A feed entry keeps its date and gets its content pinned against the
         # next refresh; a capture bumps to the top and needs no pin (its feed
         # never refreshes) — unless the caller overrode the bump decision.
         replace_entry_content(
             reader, conn, entry_id, new_title, article_html, feed_url=feed_url,
-            bump_received=is_capture if bump_received is None else bump_received,
+            bump_received=effective_bump_received,
+            bump_to=bump_to,
             pin_content=not is_capture,
         )
     except Exception as exc:  # noqa: BLE001
