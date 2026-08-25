@@ -10887,7 +10887,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         }
         const mergeable = data.mergeable || [];
         const redundant = data.redundant || [];
-        if (mergeable.length === 0 && redundant.length === 0) {
+        const mismatched = data.mismatched || [];
+        if (mergeable.length === 0 && redundant.length === 0 && mismatched.length === 0) {
           section.hidden = true;
           listEl.innerHTML = '';
           return;
@@ -10896,6 +10897,31 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         listEl.innerHTML = '';
 
         const COLOR_HEX = { yellow: '#e6c34d', green: '#5cb85c', blue: '#4a90d9', orange: '#e08a3c', red: '#d9534f', purple: '#9b6bce' };
+
+        // Same identity, but color/delivery/email differ across the group —
+        // merging would have to silently pick a side, so this is shown for
+        // awareness only (no action button). Edit one to match the others,
+        // then it moves up into the mergeable list on its own.
+        mismatched.forEach((group) => {
+          const card = document.createElement('div');
+          card.className = 'hl-suggestion-card';
+          const label = document.createElement('div');
+          label.className = 'hl-suggestion-label';
+          const typeLabel = HL_TYPE_LABELS[group.type] || group.type;
+          label.textContent = `${group.rules.length} ${typeLabel} rules on ${hlScopeLabel(group.scope, group.scope_id)} could be one, but use different settings (color, delivery, or email) — edit them to match first:`;
+          card.appendChild(label);
+          const chips = document.createElement('div');
+          chips.className = 'hl-suggestion-chips';
+          group.rules.forEach((r) => {
+            const chip = document.createElement('span');
+            chip.className = 'hl-suggestion-chip';
+            if (COLOR_HEX[r.color]) chip.style.borderLeftColor = COLOR_HEX[r.color];
+            chip.textContent = r.keyword;
+            chips.appendChild(chip);
+          });
+          card.appendChild(chips);
+          listEl.appendChild(card);
+        });
 
         mergeable.forEach((group) => {
           const card = document.createElement('div');
