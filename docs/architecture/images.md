@@ -294,6 +294,53 @@ separated by spaces. The file was `Windows11Icon.png`, CamelCase, so the
 `image_url = NULL` and stopped re-resolving, so fixing the rule is only half the
 job — the poisoned rows have to be cleared for the entries to recover.
 
+**A third shape, found the same day but not fixed until 2026-08-24:
+site chrome kept because the check that would have caught it never ran.**
+joanwestenberg's own byline avatar became the lead image
+(`/p/nobody-wants-your-newsletter-you`) — two independent bugs, found together:
+
+1. **`_extract_first_image_url_from_html` (the feed-body scanner) never
+   checked alt/class/id text for avatar hints.** `_is_source_image_tag_acceptable`
+   already did — `combined_hint_text` includes `alt`/`title`/`aria-label`/
+   `data-testid`/`class`/`id`, checked against `_AVATAR_HINT_PATTERNS` — but the
+   feed-body scanner only called it `if source_url`, and every one of its six
+   call sites passes no `source_url` (that parameter is for a separately
+   *fetched source page*, which a feed-body scan by definition doesn't have).
+   So the check was live code with no reachable caller — dead by construction,
+   not by regression. The avatar's alt was literally `"JA Westenberg's
+   avatar"`; the URL (a wixmp/Cloudinary-style fetch URL) had no such wording
+   anywhere in it, so the URL-only checks (`_looks_like_avatar_url` et al.)
+   had nothing to catch. Fixed by extracting the hint-text check into
+   `_has_avatar_hint(attrs, resolved_url="")` and calling it unconditionally,
+   early, in the feed-body scanner too — deliberately *not* also enabling
+   `_is_source_image_tag_acceptable`'s other checks (dimension floors, the
+   square-at-small-scale heuristic, banner-shape) for the feed-body path,
+   since those are a bigger, untested behavior change for other feeds whose
+   only available image is genuinely small; the avatar-hint text is the one
+   piece of evidence that's unambiguous no matter which path found the tag.
+
+2. **The avatar's `srcset` mangled the URL before either check ran.**
+   `_parse_srcset_urls_descending` did `srcset.split(",")` — correct for an
+   ordinary srcset, wrong for a CDN URL that embeds its own comma-separated
+   transform parameters ahead of the real path (Substack/Cloudinary "image
+   fetch" URLs: `.../fetch/f_auto,q_auto,fl_progressive:steep/https%3A%2F%2F
+   ...png 2x`). The naive split cut the URL at an internal comma, leaving a
+   fragment (`fl_progressive:steep/https%3A%2F%2Fsubstack-post-media...`)
+   that doesn't start with a scheme, so `urljoin` resolved it as *relative* —
+   producing a URL under the post's own path that 404s. That was the reported
+   symptom (a thumbnail that flickered and failed): the list rendered the
+   mangled URL, the browser failed it, and the fallback swapped in. Fixed by
+   scanning each srcset candidate as one whitespace-delimited token (a URL
+   never contains whitespace, however many commas it has) with only the
+   *descriptor* comma-terminated — the HTML standard's actual "parse a srcset
+   attribute" algorithm, not a plain split. Host-agnostic: covers any CDN with
+   this URL shape, not just Substack's.
+
+Either bug alone would have produced a wrong-but-plausible image; together
+they compounded (a mangled URL AND an unfiltered avatar). Fixing #1 without
+#2 would still store a 404ing URL, just now correctly rejected before it got
+that far — so both were needed to actually resolve the case.
+
 ## Several images in one container are a row — unless they are a comic page
 
 `.entry-content p:has(> img + img)` lays a container's images out as a wrapping

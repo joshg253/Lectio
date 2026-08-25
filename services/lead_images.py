@@ -2354,6 +2354,15 @@ class LeadImageService:
             _alt_title = f"{attrs.get('alt', '')} {attrs.get('title', '')}"
             if _alt_title.strip() and self._AD_ALT_PATTERNS.search(_alt_title):
                 continue
+            # Same avatar-hint check _is_source_image_tag_acceptable applies to a
+            # fetched source page — reachable here too (feed-provided body HTML
+            # has no fetched source page, so source_url is None and that check
+            # below never ran). joanwestenberg's byline avatar had no avatar
+            # wording anywhere in its URL, only in alt="…'s avatar" — checked
+            # here on the tag's own attributes since candidates aren't resolved
+            # to a URL yet at this point in the loop.
+            if self._has_avatar_hint(attrs):
+                continue
             for image_url in self._collect_img_candidate_urls(attrs, source_url=source_url):
                 if not image_url or image_url.startswith("data:"):
                     continue
@@ -2400,28 +2409,71 @@ class LeadImageService:
         return None
 
     def _parse_srcset_urls_descending(self, srcset: str) -> list[str]:
+        """Parse a srcset attribute into URLs ranked by descriptor (widest/densest
+        first).
+
+        Splitting the whole attribute on every comma (the naive approach) breaks
+        on a CDN URL that embeds its own comma-separated transform params before
+        the real path — Cloudinary/Substack "image fetch" URLs look like
+        ``.../fetch/f_auto,q_auto,fl_progressive:steep/https%3A%2F%2F...png 2x``.
+        Found 2026-08-12 (joanwestenberg): naive splitting cut that URL off at
+        ``fl_progressive:steep/...``, which `urljoin` then resolved as *relative*
+        to the entry's own page — producing a URL under the post's own path that
+        404s, and which the avatar heuristics never got a chance to see because
+        the true URL was already destroyed.
+
+        A srcset URL never contains whitespace (unescaped spaces would end it,
+        per the format), so each candidate can be scanned as one whitespace-
+        delimited token — commas and all — with only the *following* descriptor
+        being comma-terminated. This mirrors the HTML standard's "parse a
+        srcset attribute" algorithm (descriptor scanning respects parens, since
+        an `x` descriptor can theoretically carry one)."""
         ranked: list[tuple[float, str]] = []
-        for part in srcset.split(","):
-            token = part.strip()
-            if not token:
-                continue
-            pieces = token.split()
-            if not pieces:
-                continue
-            url = pieces[0].strip()
+        pos, n = 0, len(srcset)
+        while pos < n:
+            while pos < n and (srcset[pos].isspace() or srcset[pos] == ","):
+                pos += 1
+            if pos >= n:
+                break
+            start = pos
+            while pos < n and not srcset[pos].isspace():
+                pos += 1
+            url = srcset[start:pos]
+            stripped = url.rstrip(",")
+            if stripped != url:
+                # Trailing comma(s) right after the URL: no descriptor.
+                url = stripped
+                descriptor = ""
+            else:
+                while pos < n and srcset[pos].isspace():
+                    pos += 1
+                desc_start = pos
+                depth = 0
+                while pos < n:
+                    c = srcset[pos]
+                    if c == "(":
+                        depth += 1
+                    elif c == ")":
+                        depth = max(0, depth - 1)
+                    elif c == "," and depth == 0:
+                        break
+                    pos += 1
+                descriptor = srcset[desc_start:pos].strip()
+                if pos < n and srcset[pos] == ",":
+                    pos += 1
             if not url:
                 continue
             score = 0.0
-            if len(pieces) > 1:
-                descriptor = pieces[1].strip().lower()
-                if descriptor.endswith("w"):
+            if descriptor:
+                token = descriptor.split()[0].lower() if descriptor.split() else ""
+                if token.endswith("w"):
                     try:
-                        score = float(descriptor[:-1])
+                        score = float(token[:-1])
                     except ValueError:
                         score = 0.0
-                elif descriptor.endswith("x"):
+                elif token.endswith("x"):
                     try:
-                        score = float(descriptor[:-1]) * 1000.0
+                        score = float(token[:-1]) * 1000.0
                     except ValueError:
                         score = 0.0
             ranked.append((score, url))
@@ -2508,7 +2560,14 @@ class LeadImageService:
             return None
         return value if value > 0 else None
 
-    def _is_source_image_tag_acceptable(self, attrs: dict[str, str], resolved_url: str) -> bool:
+    def _has_avatar_hint(self, attrs: dict[str, str], resolved_url: str = "") -> bool:
+        """True if class/id/alt/title/aria-label/data-testid (or the resolved
+        URL) flags this tag as an avatar/headshot. The signal that matters most
+        here is textual (a byline avatar's URL rarely says "avatar" — see the
+        joanwestenberg case, alt="X's avatar" on a plain wixmp/Cloudinary fetch
+        URL with no such words in it), so this checks the tag's own attributes,
+        not just the URL path (`_looks_like_avatar_url` is the URL-only check,
+        applied separately per candidate once resolved)."""
         combined_hint_text = " ".join(
             [
                 attrs.get("class", ""),
@@ -2520,7 +2579,10 @@ class LeadImageService:
                 resolved_url,
             ]
         )
-        if self._AVATAR_HINT_PATTERNS.search(combined_hint_text):
+        return bool(self._AVATAR_HINT_PATTERNS.search(combined_hint_text))
+
+    def _is_source_image_tag_acceptable(self, attrs: dict[str, str], resolved_url: str) -> bool:
+        if self._has_avatar_hint(attrs, resolved_url):
             return False
 
         # Inline decorative images identified by CSS class:
