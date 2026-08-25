@@ -20862,10 +20862,16 @@ def _read_mode_sort_options(current: str, href_for: Callable[[str], str],
 
 def _read_mode_scope_tabs(current_scope: str) -> list[dict]:
     """The Saved / Feeds switcher shown at the top of the Read Mode tree so you
-    can flip between the two scopes without leaving Read Mode."""
+    can flip between the two scopes without leaving Read Mode.
+
+    Saved's href carries a harmless ``home=1`` (ignored by the route) rather
+    than being bare ``/read`` — same trick as the main app's wordmark
+    (``/?home=1``): the resume-restore script only redirects a *bare* URL, so
+    this is the one link that reliably reaches the true landing instead of
+    bouncing back into whatever was last read."""
     return [
         {"label": "Feeds", "glyph": "☰", "href": "/read?scope=feeds", "active": current_scope == "feeds"},
-        {"label": "Saved", "glyph": "★", "href": "/read", "active": current_scope == "saved"},
+        {"label": "Saved", "glyph": "★", "href": "/read?home=1", "active": current_scope == "saved"},
     ]
 
 

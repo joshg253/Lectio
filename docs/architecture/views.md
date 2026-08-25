@@ -173,8 +173,12 @@ Scroll is re-applied after two animation frames plus a short delay: the article
 pane's height depends on images and the chunked list grows as it reveals, so a
 `scrollTop` set too early clamps against a shorter document.
 
-Read Mode does not participate — its own navigation model, and no Back guard
-either (see Plan.md).
+Read Mode has its own resume, shipped 2026-08-25 (`templates/read_mode.html`)
+— a separate `lectio-read-last-position` key, deliberately not shared with
+this one: reusing this key would have let the two surfaces redirect into each
+other. No scroll offset (plain page navigation, not this pane model), and the
+"Saved" scope tab carries a harmless `?home=1` as its own escape hatch, same
+trick as the wordmark above. Still no Back guard (see Plan.md).
 
 ### Pull down in an article for Reader view
 
