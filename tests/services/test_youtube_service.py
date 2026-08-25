@@ -39,6 +39,8 @@ def _make_db_conn(db_path: Path):
             video_id TEXT PRIMARY KEY,
             duration_seconds INTEGER,
             duration_display TEXT,
+            live_broadcast_content TEXT,
+            scheduled_start_time TEXT,
             fetched_at TEXT
         )
         """
@@ -102,7 +104,7 @@ def test_fetch_and_store_durations_for_feed_persists_missing_video(tmp_path: Pat
     )
 
     monkeypatch.setattr(service, "get_video_durations_batch",
-                        lambda ids: {vid: (360, "6:00") for vid in ids})
+                        lambda ids: {vid: (360, "6:00", None, None) for vid in ids})
 
     service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=test")
 
@@ -149,9 +151,68 @@ def test_get_video_durations_batch_parses_multiple(tmp_path: Path, monkeypatch):
     out = service.get_video_durations_batch(["AAAAAAAAAAA", "BBBBBBBBBBB", "CCCCCCCCCCC"])
     # One batched call carried all three ids (1 quota unit, not 3).
     assert captured["ids"] == "AAAAAAAAAAA,BBBBBBBBBBB,CCCCCCCCCCC"
-    assert out["AAAAAAAAAAA"] == (3723, "1:02:03")
-    assert out["BBBBBBBBBBB"] == (45, "0:45")
-    assert "CCCCCCCCCCC" not in out  # absent → caller stores (None, None)
+    assert out["AAAAAAAAAAA"] == (3723, "1:02:03", None, None)
+    assert out["BBBBBBBBBBB"] == (45, "0:45", None, None)
+    assert "CCCCCCCCCCC" not in out  # absent → caller stores (None, None, None, None)
+
+
+def test_get_video_durations_batch_parses_upcoming_premiere(tmp_path: Path, monkeypatch):
+    import httpx
+
+    db_path = tmp_path / "yt.sqlite"
+    service = YouTubeDurationService(
+        get_durations_connection=lambda: _make_db_conn(db_path),
+        get_reader=lambda: _ReaderCtx(_FakeReader([])),
+        user_agent="LectioTest/1.0",
+        api_key_provider=lambda: "fake-key",
+    )
+
+    class _Resp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self):
+            return {"items": [
+                {
+                    "id": "UPCOMINGVID",
+                    "snippet": {"liveBroadcastContent": "upcoming"},
+                    "contentDetails": {},
+                    "liveStreamingDetails": {"scheduledStartTime": "2026-09-20T18:00:00Z"},
+                },
+            ]}
+
+    monkeypatch.setattr(httpx, "get", lambda url, params=None, timeout=None: _Resp())
+    out = service.get_video_durations_batch(["UPCOMINGVID"])
+    assert out["UPCOMINGVID"] == (None, None, "upcoming", "2026-09-20T18:00:00Z")
+
+
+def test_upcoming_premiere_status_is_cached_and_retrievable(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "yt.sqlite"
+    entries = [_FakeEntry("https://www.youtube.com/watch?v=UPCOMINGVID")]
+
+    def get_meta_connection():
+        return _make_db_conn(db_path)
+
+    service = YouTubeDurationService(
+        get_durations_connection=get_meta_connection,
+        get_reader=lambda: _ReaderCtx(_FakeReader(entries)),
+        user_agent="LectioTest/1.0",
+    )
+    monkeypatch.setattr(
+        service, "get_video_durations_batch",
+        lambda ids: {v: (None, None, "upcoming", "2026-09-20T18:00:00Z") for v in ids},
+    )
+    service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=t")
+
+    assert service.get_cached_live_status("UPCOMINGVID") == ("upcoming", "2026-09-20T18:00:00Z")
+
+    # A fresh instance (simulating the next process/refresh) must recover the
+    # same status from the DB, not just from the warm in-memory cache.
+    service2 = YouTubeDurationService(
+        get_durations_connection=get_meta_connection,
+        get_reader=lambda: _ReaderCtx(_FakeReader(entries)),
+        user_agent="LectioTest/1.0",
+    )
+    assert service2.get_cached_live_status("UPCOMINGVID") == ("upcoming", "2026-09-20T18:00:00Z")
 
 
 def test_stale_negative_is_retried_and_self_heals(tmp_path: Path, monkeypatch):
@@ -177,7 +238,7 @@ def test_stale_negative_is_retried_and_self_heals(tmp_path: Path, monkeypatch):
         get_reader=lambda: _ReaderCtx(_FakeReader(entries)),
         user_agent="LectioTest/1.0",
     )
-    monkeypatch.setattr(service, "get_video_durations_batch", lambda ids: {v: (95, "1:35") for v in ids})
+    monkeypatch.setattr(service, "get_video_durations_batch", lambda ids: {v: (95, "1:35", None, None) for v in ids})
     service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=t")
     assert service.cache["ABCDEFGHIJK"] == (95, "1:35")
 

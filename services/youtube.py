@@ -42,6 +42,10 @@ class YouTubeDurationService:
         self._get_reader = get_reader
         self._user_agent = user_agent
         self._cache = cache if cache is not None else {}
+        # video_id -> (liveBroadcastContent, scheduledStartTime), fetched from the
+        # same videos.list call as duration. "upcoming" means the video hasn't
+        # premiered yet.
+        self._live_cache: dict[str, tuple[str | None, str | None]] = {}
         # Resolves the API key per call — in multi mode this returns the current
         # user's key (with env fallback); None falls back to the env var.
         self._api_key_provider = api_key_provider
@@ -55,10 +59,13 @@ class YouTubeDurationService:
     def warm_cache_from_db(self) -> None:
         with self._get_durations_connection() as conn:
             rows = conn.execute(
-                "SELECT video_id, duration_seconds, duration_display FROM youtube_video_duration"
+                "SELECT video_id, duration_seconds, duration_display,"
+                " live_broadcast_content, scheduled_start_time FROM youtube_video_duration"
             ).fetchall()
         for row in rows:
-            self._cache[str(row["video_id"])] = (row["duration_seconds"], row["duration_display"])
+            video_id = str(row["video_id"])
+            self._cache[video_id] = (row["duration_seconds"], row["duration_display"])
+            self._live_cache[video_id] = (row["live_broadcast_content"], row["scheduled_start_time"])
 
     def extract_video_id(self, link: str) -> str | None:
         match = self._YT_VID_PATTERN.search(link)
@@ -74,6 +81,22 @@ class YouTubeDurationService:
         db_value = self._get_duration_db(video_id)
         if db_value is not None:
             self._cache[video_id] = db_value
+            return db_value
+
+        return (None, None)
+
+    def get_cached_live_status(self, video_id: str) -> tuple[str | None, str | None]:
+        """Return (liveBroadcastContent, scheduledStartTime) for a video id.
+
+        liveBroadcastContent is "upcoming" (scheduled, not yet aired), "live"
+        (streaming now), or "none"/None (a normal, already-published video)."""
+        cached = self._live_cache.get(video_id)
+        if cached is not None:
+            return cached
+
+        db_value = self._get_live_status_db(video_id)
+        if db_value is not None:
+            self._live_cache[video_id] = db_value
             return db_value
 
         return (None, None)
@@ -120,14 +143,22 @@ class YouTubeDurationService:
             return
         results = self.get_video_durations_batch(to_fetch)
         for vid in to_fetch:
-            res = results.get(vid, (None, None))
-            self._cache[vid] = res
-            self._upsert_duration_db(vid, res[0], res[1])
+            seconds, display, live_broadcast_content, scheduled_start_time = results.get(
+                vid, (None, None, None, None)
+            )
+            self._cache[vid] = (seconds, display)
+            self._live_cache[vid] = (live_broadcast_content, scheduled_start_time)
+            self._upsert_duration_db(vid, seconds, display, live_broadcast_content, scheduled_start_time)
 
-    def get_video_durations_batch(self, video_ids: list[str]) -> dict[str, tuple[int | None, str | None]]:
-        """Fetch durations for many videos with videos.list (up to 50 ids/call, 1
-        quota unit per call). Ids the API returns no item for map to (None, None)."""
-        out: dict[str, tuple[int | None, str | None]] = {}
+    def get_video_durations_batch(
+        self, video_ids: list[str]
+    ) -> dict[str, tuple[int | None, str | None, str | None, str | None]]:
+        """Fetch durations + live/premiere status for many videos with videos.list
+        (up to 50 ids/call, 1 quota unit per call — snippet and liveStreamingDetails
+        ride along for free on the same call as contentDetails). Each value is
+        (duration_seconds, duration_display, live_broadcast_content, scheduled_start_time).
+        Ids the API returns no item for are absent from the result."""
+        out: dict[str, tuple[int | None, str | None, str | None, str | None]] = {}
         api_key = self._api_key_provider() if self._api_key_provider else os.getenv("YOUTUBE_API_KEY")
         if not api_key:
             return out
@@ -136,7 +167,11 @@ class YouTubeDurationService:
             try:
                 response = httpx.get(
                     "https://www.googleapis.com/youtube/v3/videos",
-                    params={"part": "contentDetails", "id": ",".join(chunk), "key": api_key},
+                    params={
+                        "part": "snippet,contentDetails,liveStreamingDetails",
+                        "id": ",".join(chunk),
+                        "key": api_key,
+                    },
                     timeout=10.0,
                 )
                 response.raise_for_status()
@@ -149,8 +184,15 @@ class YouTubeDurationService:
                     vid = item.get("id")
                     duration_iso = (item.get("contentDetails") or {}).get("duration")
                     seconds = self._parse_iso8601_duration_to_seconds(duration_iso) if duration_iso else None
+                    live_broadcast_content = (item.get("snippet") or {}).get("liveBroadcastContent")
+                    scheduled_start_time = (item.get("liveStreamingDetails") or {}).get("scheduledStartTime")
                     if vid:
-                        out[vid] = (seconds, self._format_seconds_hms(seconds))
+                        out[vid] = (
+                            seconds,
+                            self._format_seconds_hms(seconds),
+                            live_broadcast_content,
+                            scheduled_start_time,
+                        )
             except Exception:
                 # A failed chunk (timeout/quota) just yields no entries for those ids;
                 # they stay absent and are retried next refresh.
@@ -238,23 +280,39 @@ class YouTubeDurationService:
         age = (_dt.datetime.now(_dt.timezone.utc) - when).total_seconds()
         return age >= self._NEGATIVE_RETRY_SECONDS
 
+    def _get_live_status_db(self, video_id: str) -> tuple[str | None, str | None] | None:
+        with self._get_durations_connection() as conn:
+            row = conn.execute(
+                "SELECT live_broadcast_content, scheduled_start_time"
+                " FROM youtube_video_duration WHERE video_id = ?",
+                (video_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return (row["live_broadcast_content"], row["scheduled_start_time"])
+
     def _upsert_duration_db(
         self,
         video_id: str,
         duration_seconds: int | None,
         duration_display: str | None,
+        live_broadcast_content: str | None = None,
+        scheduled_start_time: str | None = None,
     ) -> None:
         with self._get_durations_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO youtube_video_duration (video_id, duration_seconds, duration_display, fetched_at)
-                VALUES (?, ?, ?, datetime('now'))
+                INSERT INTO youtube_video_duration
+                    (video_id, duration_seconds, duration_display, live_broadcast_content, scheduled_start_time, fetched_at)
+                VALUES (?, ?, ?, ?, ?, datetime('now'))
                 ON CONFLICT(video_id) DO UPDATE SET
                     duration_seconds = excluded.duration_seconds,
                     duration_display = excluded.duration_display,
+                    live_broadcast_content = excluded.live_broadcast_content,
+                    scheduled_start_time = excluded.scheduled_start_time,
                     fetched_at = excluded.fetched_at
                 """,
-                (video_id, duration_seconds, duration_display),
+                (video_id, duration_seconds, duration_display, live_broadcast_content, scheduled_start_time),
             )
 
     @staticmethod
