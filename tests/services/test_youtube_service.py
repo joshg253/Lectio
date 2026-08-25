@@ -270,3 +270,120 @@ def test_fresh_negative_is_not_refetched(tmp_path: Path, monkeypatch):
     service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=t")
     assert calls == []  # fresh negative respected
     assert service.cache["ABCDEFGHIJK"] == (None, None)
+
+
+def test_no_api_key_does_not_blank_an_upcoming_videos_live_status(tmp_path: Path, monkeypatch):
+    # An "upcoming" video's duration is always None by design, so — unlike a
+    # genuinely-unfetched video — it never ages out of to_fetch. A background
+    # user with no API key must not be able to blank its live status on every
+    # feed refresh that touches it.
+    db_path = tmp_path / "yt.sqlite"
+    entries = [_FakeEntry("https://www.youtube.com/watch?v=UPCOMING001")]
+
+    def get_meta_connection():
+        return _make_db_conn(db_path)
+
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO youtube_video_duration"
+            "(video_id, duration_seconds, duration_display, live_broadcast_content, scheduled_start_time, fetched_at)"
+            " VALUES (?, NULL, NULL, 'upcoming', '2026-09-20T18:00:00Z', datetime('now', '-1 day'))",
+            ("UPCOMING001",),
+        )
+
+    service = YouTubeDurationService(
+        get_durations_connection=get_meta_connection,
+        get_reader=lambda: _ReaderCtx(_FakeReader(entries)),
+        user_agent="LectioTest/1.0",
+        # No api_key_provider and no env var → get_video_durations_batch
+        # returns {} for this "user".
+    )
+    service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=t")
+
+    with get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT live_broadcast_content, scheduled_start_time FROM youtube_video_duration WHERE video_id = ?",
+            ("UPCOMING001",),
+        ).fetchone()
+    assert row["live_broadcast_content"] == "upcoming"
+    assert row["scheduled_start_time"] == "2026-09-20T18:00:00Z"
+
+
+def test_refresh_upcoming_videos_updates_only_upcoming_rows(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "yt.sqlite"
+
+    def get_meta_connection():
+        return _make_db_conn(db_path)
+
+    with get_meta_connection() as conn:
+        conn.executemany(
+            "INSERT INTO youtube_video_duration"
+            "(video_id, duration_seconds, duration_display, live_broadcast_content, scheduled_start_time, fetched_at)"
+            " VALUES (?, ?, ?, ?, ?, datetime('now'))",
+            [
+                ("UPCOMING002", None, None, "upcoming", "2026-09-20T18:00:00Z"),
+                ("AIREDVIDEO01", 600, "10:00", None, None),
+            ],
+        )
+
+    service = YouTubeDurationService(
+        get_durations_connection=get_meta_connection,
+        get_reader=lambda: _ReaderCtx(_FakeReader([])),
+        user_agent="LectioTest/1.0",
+        api_key_provider=lambda: "fake-key",
+    )
+    monkeypatch.setattr(
+        service, "get_video_durations_batch",
+        lambda ids: {v: (720, "12:00", "live", None) for v in ids},
+    )
+
+    checked = service.refresh_upcoming_videos()
+
+    assert checked == 1  # only the upcoming row was queried/updated
+    assert service.get_cached_live_status("UPCOMING002") == ("live", None)
+    assert service.get_cached_duration("UPCOMING002") == (720, "12:00")
+    # The already-aired video was never touched.
+    assert service.get_cached_duration("AIREDVIDEO01") == (600, "10:00")
+
+
+def test_refresh_upcoming_videos_no_key_does_not_blank_rows(tmp_path: Path):
+    db_path = tmp_path / "yt.sqlite"
+
+    def get_meta_connection():
+        return _make_db_conn(db_path)
+
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO youtube_video_duration"
+            "(video_id, duration_seconds, duration_display, live_broadcast_content, scheduled_start_time, fetched_at)"
+            " VALUES (?, NULL, NULL, 'upcoming', '2026-09-20T18:00:00Z', datetime('now'))",
+            ("UPCOMING003",),
+        )
+
+    service = YouTubeDurationService(
+        get_durations_connection=get_meta_connection,
+        get_reader=lambda: _ReaderCtx(_FakeReader([])),
+        user_agent="LectioTest/1.0",
+        # No key → get_video_durations_batch returns {}.
+    )
+    checked = service.refresh_upcoming_videos()
+
+    assert checked == 0
+    with get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT live_broadcast_content, scheduled_start_time FROM youtube_video_duration WHERE video_id = ?",
+            ("UPCOMING003",),
+        ).fetchone()
+    assert row["live_broadcast_content"] == "upcoming"
+    assert row["scheduled_start_time"] == "2026-09-20T18:00:00Z"
+
+
+def test_refresh_upcoming_videos_no_rows_is_a_noop(tmp_path: Path):
+    db_path = tmp_path / "yt.sqlite"
+    service = YouTubeDurationService(
+        get_durations_connection=lambda: _make_db_conn(db_path),
+        get_reader=lambda: _ReaderCtx(_FakeReader([])),
+        user_agent="LectioTest/1.0",
+        api_key_provider=lambda: "fake-key",
+    )
+    assert service.refresh_upcoming_videos() == 0
