@@ -82,3 +82,43 @@ def test_real_folder_resolution_unaffected(monkeypatch):
 def test_sentinel_is_negative():
     # Must never collide with a real (positive, SQLite-assigned) folder id.
     assert main.UNCATEGORIZED_FOLDER_ID < 0
+
+
+def test_root_excludes_saved_articles_feed(monkeypatch):
+    """lectio:saved is a real reader feed (backs the Saved/Kept view) but must
+    never show as a subscription — or be actionable — in Feeds mode. Root
+    ("All Feeds") widens to every reader feed for orphan reachability, so it
+    has to explicitly carve this one back out."""
+    conn = _meta_conn_with_folders()
+    monkeypatch.setattr(
+        main,
+        "get_all_reader_feed_urls",
+        lambda: {
+            "https://a.example/feed",
+            "https://b.example/feed",
+            "https://c.example/feed",
+            main.saved_articles_service.SAVED_FEED_URL,
+        },
+    )
+    root_id = main.get_root_folder_id(conn)
+    urls = main.get_folder_feed_urls(conn, root_id)
+    assert main.saved_articles_service.SAVED_FEED_URL not in urls
+    assert urls == {"https://a.example/feed", "https://b.example/feed", "https://c.example/feed"}
+
+
+def test_uncategorized_still_includes_saved_articles_feed(monkeypatch):
+    """Unlike root, Uncategorized deliberately stays inclusive of lectio:saved
+    — the Saved sidebar's own Uncategorized grouping needs to reach its
+    entries through it. Only display code (main._home_inner's
+    _uncat_display_urls) scrubs it out for Feeds-mode presentation."""
+    conn = _meta_conn_with_folders()
+    monkeypatch.setattr(
+        main,
+        "get_all_reader_feed_urls",
+        lambda: {
+            "https://c.example/feed",
+            main.saved_articles_service.SAVED_FEED_URL,
+        },
+    )
+    urls = main.get_folder_feed_urls(conn, main.UNCATEGORIZED_FOLDER_ID)
+    assert urls == {"https://c.example/feed", main.saved_articles_service.SAVED_FEED_URL}

@@ -291,7 +291,18 @@ actions (mark-read / refresh) and it's excluded from move-target lists; the
 `get_folder_feed_urls` resolver special-cases the sentinel so those actions still
 work. The root "All Feeds" folder resolves to *every* reader feed (not just
 foldered ones), so orphans and their unread counts are always reachable from the
-top of the tree.
+top of the tree — with one deliberate exception: the Saved Articles virtual
+feed (`lectio:saved`). It's a real, orphaned reader feed (backs the Saved/Kept
+view), so both root's and Uncategorized's naive "every reader feed" widening
+pick it up. Uncategorized keeps it in its *view* set on purpose — the Saved
+sidebar's own Uncategorized grouping needs to reach its entries through it —
+but scrubs it from the *display* set (feed list, unread badge, row presence)
+so it never shows as a subscription in Feeds mode. Root has no equivalent
+reachability need, so it excludes `lectio:saved` outright, in both
+`get_folder_feed_urls` and the home route's tree snapshot (found 2026-08-24:
+root's widening had no exclusion at all, so `lectio:saved` was selectable as
+`list_feed_url` from "All Feeds," surfacing the whole saved-articles backlog
+as if it were an ordinary feed).
 
 The root is treated as equivalent to Uncategorized for feed placement: both
 `add_feed_to_folder` and `move_feed_to_folder` store a feed folderless (no
