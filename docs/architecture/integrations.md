@@ -97,6 +97,45 @@ The split deliberately does **not** imply a word boundary: measured across the
 live library, 4 plain rules match only *inside* words and would stop matching
 entirely. A term containing a literal comma needs regex mode.
 
+**Rules that could be one rule** (`find_mergeable_rule_groups`,
+`merge_highlight_rule_group`, `GET /highlights/suggestions`,
+`POST /highlights/merge-group`). A keyword was one term until comma lists
+landed above, so multiple single-keyword rules sharing everything else
+accumulated from before that existed. The identity that makes rules
+mergeable is `(type, scope, scope_id, search_in, is_regex)` — two rules
+differing only in `keyword` collapse into one, joined as a comma list (plain)
+or `(a)|(b)` alternation (regex). Scoped to exactly `highlight` and
+`mark_as_read` (`_MERGEABLE_RULE_TYPES`): `deduplicate`'s keyword is a
+match-method enum, `tag_filter`'s is a +/-tag spec (already merged by its own
+`_merge_tag_filter_specs`, folded on add rather than offered as a suggestion),
+and the optional-keyword action types (`youtube_playlist`, `instapaper`,
+`quire`, `save_article`) aren't confirmed to share the same OR-of-terms
+semantics when non-blank.
+
+**A same-identity group is not automatically the same rule.** Two rules can
+share type/scope/search_in/is_regex and still mean different things —
+measured live 2026-08-19: a folder-9 `highlight` group mixed `blue` and
+`green`, a global group mixed `blue` and `orange`. Merging would have to pick
+a side silently. `_MERGE_IDENTITY_FIELDS` (`color`, `delivery`, `email_to`,
+`batch_time`, `batch_count`, `cc_me`) extends the grouping key so a group with
+any of those differing is reported as `mismatched`, not `mergeable` — visible
+so the mismatch isn't a mystery, but never merged onto one side's setting.
+Suggestion-with-preview, never automatic (decided 2026-08-24): nothing merges
+without a click, matching how the duplicate-feed scans already behave.
+
+`merge_highlight_rule_group` re-derives the current matching rows from the
+identity tuple rather than trusting a client-supplied row list, so a stale
+preview (a rule removed or edited since the page loaded) fails closed —
+returns `None` (409 at the route) instead of merging the wrong things.
+
+**A feed rule already covered by a folder rule** (`find_redundant_feed_rules`)
+is the secondary case: a feed-scoped rule whose keyword set is a full subset
+of a same-type folder rule's on a folder the feed belongs to does nothing —
+the folder rule already catches everything it would. Plain rules only (a
+regex's language isn't decidable as a subset this way). Flagged for removal
+via the existing `/highlights/remove`, not a new endpoint — removing one rule
+was already a solved problem.
+
   It's a **general** automation rule (any feed/folder scope, via the shared
   `highlight_keywords` table + after-refresh pass), not YT-folder-bound, because a
   YouTube video can be embedded in any feed's article and an entry can carry several.

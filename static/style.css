@@ -7146,6 +7146,38 @@ mark.highlight-mark {
   padding-top: 0.1rem;
 }
 
+/* "Rules that could be one rule" / redundant-feed-rule advisory. Same
+   left-border card shape as .dedup-title-group, so a suggestion reads as the
+   same kind of thing as a dupe-scan group, not a new UI language. */
+.hl-suggestions {
+  margin: 0.4rem 0 0.8rem;
+}
+.hl-suggestion-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  border-left: 2px solid var(--line, #ddd);
+  padding-left: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+.hl-suggestion-label {
+  font-size: 0.82rem;
+  color: var(--fg);
+}
+.hl-suggestion-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.hl-suggestion-chip {
+  font-size: 0.78rem;
+  padding: 0.12rem 0.5rem;
+  border-radius: 3px;
+  border-left: 3px solid var(--border, #d0d0d0);
+  background: var(--surface, #eee);
+  color: var(--fg);
+}
+
 /* Rule-type filter row. Sits between the Rules/History tabs and the list, so it
    reads as a second level rather than competing with them: chips, not tabs. */
 .hl-type-filter {
