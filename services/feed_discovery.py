@@ -672,6 +672,60 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
     return {"status": "none", "feeds": [], "message": "No RSS/Atom feed found at this URL."}
 
 
+# Hosts known to serve the origin site's own homepage back at the feed URL
+# (wrong content-type, no redirect) once a feed dies, rather than 404ing —
+# so probing the feed URL itself just finds a circular <link rel="alternate">
+# pointing at itself. The origin is recoverable from the page's own
+# <link rel="canonical">, which FeedBurner's passthrough leaves untouched.
+_DEAD_END_FEED_HOSTS = {"feeds.feedburner.com", "feeds2.feedburner.com"}
+
+
+def is_known_dead_end_host(feed_url: str) -> bool:
+    """Whether suggest_feed_migration has any chance of finding a candidate for
+    this feed — lets a UI gate the "Suggest fix" affordance to feeds it's
+    actually worth probing."""
+    return (urlparse(feed_url).hostname or "").lower() in _DEAD_END_FEED_HOSTS
+
+
+def suggest_feed_migration(feed_url: str, *, timeout: float = 10.0) -> dict:
+    """Find a live replacement for a feed hosted on a known dead-end service.
+
+    Currently FeedBurner only. Reads the origin site's URL out of the page
+    FeedBurner now serves (its <link rel="canonical">), then runs normal
+    discovery there — reusing probe_url so the candidate is verified the same
+    way Change Feed URL already verifies one, not just guessed at.
+
+    Returns the same shape as probe_url: {"status", "feeds", "message"}.
+    A candidate is only present when "feeds" is non-empty; every other field
+    combination means "no suggestion," not an error the caller must branch on.
+    """
+    host = (urlparse(feed_url).hostname or "").lower()
+    if host not in _DEAD_END_FEED_HOSTS:
+        return {"status": "none", "feeds": [], "message": "No known migration for this feed's host."}
+    try:
+        resp, _escalated = _get_with_escalation(feed_url, timeout=timeout)
+    except url_guard.UnsafeURLError:
+        return {"status": "blocked", "feeds": [], "message": "That address is not allowed."}
+    except Exception:
+        return {"status": "error", "feeds": [], "message": "Could not reach the feed URL."}
+    if resp is None or not resp.is_success:
+        return {"status": "error", "feeds": [], "message": "Could not reach the feed URL."}
+
+    canonical: str | None = None
+    for m in _LINK_RE.finditer(resp.text[:200_000]):
+        attrs = _parse_attrs(m.group(1))
+        if attrs.get("rel", "").strip().lower() == "canonical" and attrs.get("href", "").strip():
+            canonical = urljoin(str(resp.url), attrs["href"].strip())
+            break
+    if not canonical:
+        return {"status": "none", "feeds": [],
+                "message": "No canonical link on the page FeedBurner is serving — nothing to follow."}
+    canonical_host = (urlparse(canonical).hostname or "").lower()
+    if not canonical_host or canonical_host in _DEAD_END_FEED_HOSTS:
+        return {"status": "none", "feeds": [], "message": "The canonical link doesn't lead off FeedBurner."}
+    return probe_url(canonical, timeout=timeout)
+
+
 def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
     """Return RSS/Atom feed URLs reachable from url. See discover_feed_urls_ex."""
     return discover_feed_urls_ex(url, timeout=timeout)[0]

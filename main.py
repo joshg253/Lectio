@@ -94,6 +94,7 @@ from services import url_guard
 from services.webhooks import WEBHOOK_VALID_FORMATS, build_webhook_batch_payload, build_webhook_payload, send_webhook
 from services.users import UserExistsError, UserStore
 from services.email import send_article_email, send_digest_email
+from services import feed_discovery
 from services.feed_discovery import discover_feed_urls_ex
 from services.feed_refresh import FeedRefreshService
 from services.lead_images import LeadImageService, upgrade_image_size_param
@@ -22489,6 +22490,7 @@ def _home_inner(
         pf_url = cast(str, problematic_feed["feed_url"])
         problematic_feed["feed_title"] = feed_title_map.get(pf_url, pf_url)
         problematic_feed["needs_replacement"] = pf_url in _needs_replacement_urls
+        problematic_feed["can_suggest_migration"] = feed_discovery.is_known_dead_end_host(pf_url)
         pf_last_failure_at = problematic_feed.get("last_failure_at")
         if not isinstance(pf_last_failure_at, (int, float)):
             continue
@@ -24037,6 +24039,20 @@ def delete_scraped_feed_route(
 @app.get("/feeds/properties")
 def feed_properties(feed_url: str):
     return JSONResponse(get_feed_properties(feed_url))
+
+
+@app.get("/feeds/suggest-migration")
+def suggest_feed_migration_route(feed_url: str):
+    """A one-click "Suggest fix" for a failing feed on a known dead-end host
+    (currently FeedBurner). Never applies anything — the caller pre-fills the
+    Change URL field with the candidate and the existing verified flow there
+    takes it from there."""
+    result = feed_discovery.suggest_feed_migration(feed_url)
+    feeds = result.get("feeds") or []
+    if not feeds:
+        return JSONResponse({"ok": False, "message": result.get("message") or "No suggestion found."})
+    candidate = feeds[0]
+    return JSONResponse({"ok": True, "candidate_url": candidate["url"], "candidate_title": candidate.get("title")})
 
 
 @app.post("/devto-feeds/{feed_id}/config")

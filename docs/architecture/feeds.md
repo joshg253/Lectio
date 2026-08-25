@@ -657,6 +657,36 @@ to October 2024. A real month beats a precise-looking lie.
   singly) — a polite-client measure, feeds to other hosts interleave at full speed.
 
 
+## Suggesting a replacement for a feed on a known dead-end host
+
+FeedBurner has stopped 404ing dead feeds; it now serves the origin site's own
+homepage HTML back at the feed URL (right content-type-looking header, wrong
+content, no redirect). Probing the feed URL itself is useless — the page's own
+`<link rel="alternate">` just points back at the same dead FeedBurner address.
+
+`feed_discovery.suggest_feed_migration` instead reads the page's `<link
+rel="canonical">` (FeedBurner's passthrough leaves it untouched) to recover the
+real origin domain, then runs the same `probe_url` discovery Add Feed and
+Change URL already use to find that origin's real, currently-live feed. It
+never applies anything — the Failing Feeds panel's "Suggest fix" button
+(`GET /feeds/suggest-migration`, gated by `is_known_dead_end_host` so it only
+appears on FeedBurner rows) opens Feed Properties with the candidate pre-filled
+into the existing Change URL field, so the same verified, user-confirmed flow
+applies it.
+
+**Live-checked 2026-08-25, not every FeedBurner failure is this recoverable**:
+of ~12 currently-failing `feeds.feedburner.com` subscriptions, roughly a
+quarter had no `rel="canonical"` at all (an expired, parked domain; a
+JS-rendered SPA with no server-side link tags) — those still need the manual
+"risky replacement" judgment call the Failing Feeds panel already supports.
+`blogs.technet.com` and `powershell.com/cs/blogs/*`, the other two host
+migrations flagged in Plan.md's 2026-08-12 sweep, were **not** built into this:
+zero feeds on either host are currently failing, and guessing at a path-mapping
+with no live example to verify against risks exactly the "a discovered feed is
+not a replacement" trap this same feature is designed to avoid. Add a resolver
+for them if/when a real 404'd example reappears.
+
+
 ## Tag aliases
 
 Publishers disagree about the same subject, so one topic arrives under several spellings and filtering on one silently misses the rest. The live library carried `c++` (4,965 uses) beside `cpp` (223), and `c#` (606) beside `csharp` (152).
