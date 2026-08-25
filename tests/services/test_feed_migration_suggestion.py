@@ -107,6 +107,34 @@ class TestSuggestFeedMigration:
         assert result["status"] == "feed"
         assert result["feeds"] == [{"url": "https://johnresig.com/feed/", "title": "RSS"}]
 
+    def test_origin_still_advertising_the_same_dead_feedburner_url_is_not_a_suggestion(self):
+        """The real live case (johnresig.com, 2026-08-25): the origin's own
+        <link rel="alternate"> still names its old FeedBurner address, which
+        probe_url has no way of knowing is the very address we're escaping.
+        That must not come back as "found a candidate" — it's the same URL
+        the caller already knows is broken."""
+        fb_html = '<link rel="canonical" href="https://johnresig.com/" />'
+        origin_html = (
+            f'<link rel="alternate" type="application/rss+xml" href="{FEEDBURNER}" title="RSS" />'
+            + ("x" * 512)
+        )
+
+        def fake_get(url, **_kwargs):
+            if url == FEEDBURNER:
+                return _mock_response(FEEDBURNER, "text/xml", fb_html)
+            if url == "https://johnresig.com/":
+                return _mock_response("https://johnresig.com/", "text/html", origin_html)
+            raise AssertionError(f"unexpected GET {url}")
+
+        def fake_head(url, **_kwargs):
+            return _mock_response(str(url), "application/rss+xml")
+
+        with patch("services.feed_discovery._guarded_get", side_effect=fake_get):
+            with patch("services.feed_discovery._guarded_head", side_effect=fake_head):
+                result = suggest_feed_migration(FEEDBURNER)
+        assert result["status"] == "none"
+        assert result["feeds"] == []
+
     def test_canonical_origin_with_no_live_feed_yields_no_suggestion(self):
         fb_html = '<link rel="canonical" href="https://dead-origin.example/" />'
         origin_html = "<html><body>Nothing here</body></html>" + ("x" * 512)

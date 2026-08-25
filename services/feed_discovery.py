@@ -723,7 +723,22 @@ def suggest_feed_migration(feed_url: str, *, timeout: float = 10.0) -> dict:
     canonical_host = (urlparse(canonical).hostname or "").lower()
     if not canonical_host or canonical_host in _DEAD_END_FEED_HOSTS:
         return {"status": "none", "feeds": [], "message": "The canonical link doesn't lead off FeedBurner."}
-    return probe_url(canonical, timeout=timeout)
+    result = probe_url(canonical, timeout=timeout)
+
+    # The origin's own page often still advertises its old FeedBurner address
+    # as its feed (a WordPress <link rel="alternate"> nobody has touched in
+    # years) — probe_url has no reason to know that address is the very one
+    # this function was called to escape, so it comes back looking "live."
+    # Drop candidates that are just the dead-end host in disguise; if that
+    # was the only thing found, this origin has no other recoverable feed.
+    live_feeds = [
+        f for f in (result.get("feeds") or [])
+        if (urlparse(f["url"]).hostname or "").lower() not in _DEAD_END_FEED_HOSTS
+    ]
+    if not live_feeds:
+        return {"status": "none", "feeds": [],
+                "message": "The origin site only advertises its old FeedBurner address."}
+    return {**result, "status": "feed" if len(live_feeds) == 1 else "feeds", "feeds": live_feeds}
 
 
 def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
