@@ -27674,9 +27674,9 @@ async def youtube_playlist_add_batch_route(request: Request):
             # rather than hiding real progress behind an error.
             mark_yt_quota_exhausted()
             break
-        except Exception:  # noqa: BLE001 — one bad video must not sink the batch
+        except Exception as exc:  # noqa: BLE001 — one bad video must not sink the batch
             failed += 1
-            LOGGER.warning("[yt-playlist-batch] failed to add %s to %s", video_id, playlist_id)
+            LOGGER.warning("[yt-playlist-batch] failed to add %s to %s: %s", video_id, playlist_id, exc)
 
     msg = f"Added {added}."
     if duplicate:
@@ -32620,9 +32620,9 @@ def add_manual_tags_to_entries_batch_route(
             existing_tags = get_manual_tags_for_entry(feed_url, entry_id)
             set_manual_tags_for_entry(feed_url, entry_id, _merge_manual_tags(existing_tags, tags_text))
             tagged += 1
-        except Exception:  # noqa: BLE001 — one bad entry must not sink the batch
+        except Exception as exc:  # noqa: BLE001 — one bad entry must not sink the batch
             failed += 1
-            LOGGER.warning("[tags-batch] failed to tag %s in %s", entry_id, feed_url)
+            LOGGER.warning("[tags-batch] failed to tag %s in %s: %s", entry_id, feed_url, exc)
 
     msg = f"Tagged {tagged} post{'s' if tagged != 1 else ''}."
     if failed:
@@ -32669,9 +32669,9 @@ def mark_entries_read_batch_route(entries: str = Form(...)):
                 reader.mark_entry_as_read((feed_url, entry_id))
                 to_sync.append((feed_url, entry_id))
                 marked += 1
-            except Exception:  # noqa: BLE001 — one bad entry must not sink the batch
+            except Exception as exc:  # noqa: BLE001 — one bad entry must not sink the batch
                 failed += 1
-                LOGGER.warning("[read-batch] failed to mark read %s in %s", entry_id, feed_url)
+                LOGGER.warning("[read-batch] failed to mark read %s in %s: %s", entry_id, feed_url, exc)
 
     if to_sync:
         when = datetime.now().isoformat()
