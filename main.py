@@ -24610,8 +24610,12 @@ _ENTRY_THUMB_TARGET_BYTES = 30_000
 def _entry_thumb_cache_key(feed_url: str, entry_id: str) -> str:
     """Keyed by (feed_url, entry_id), not by URL, for the same reason as
     _feed_thumb_cache_key: re-pinning replaces the copy in place and an
-    expiring source URL cannot orphan it."""
-    digest = hashlib.sha1(f"{feed_url}\x1f{entry_id}".encode("utf-8", "replace")).hexdigest()
+    expiring source URL cannot orphan it. sha256, not sha1 — CodeQL's
+    py/weak-sensitive-data-hashing flags sha1 whenever a hashed value
+    includes something matching an "id" pattern, even here where entry_id is
+    a public feed-entry identifier, not a credential; this is just a cache
+    key, so sha256 costs nothing and ends the false-positive noise."""
+    digest = hashlib.sha256(f"{feed_url}\x1f{entry_id}".encode("utf-8", "replace")).hexdigest()
     return _ENTRY_THUMB_CACHE_PREFIX + digest
 
 

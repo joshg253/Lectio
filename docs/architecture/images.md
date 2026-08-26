@@ -663,7 +663,9 @@ keep a backfill over tens of thousands of entries cheap. Storing that
 downscaled copy under the *shared* key would mean `/api/img` serves the
 low-res thumbnail as the full article image too. So entry pins get their own
 prefix (`entrythumb:`, keyed by `(feed_url, entry_id)` via
-`_entry_thumb_cache_key` — sha1, not the URL, for the same reason
+`_entry_thumb_cache_key` — sha256 (a CodeQL false positive on sha1 here,
+since entry_id is a public feed-entry id, not a credential — not worth
+arguing when sha256 is free), not the URL, for the same reason
 `_feed_thumb_cache_key` isn't: re-pinning replaces the copy in place and an
 expiring source URL can't orphan it) and their own serving route
 (`/api/entry-thumb?feed_url=&entry_id=`), exempted from `_evict_img_cache`'s
