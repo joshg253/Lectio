@@ -1948,6 +1948,9 @@
 
   <div id="post-context-menu" class="context-menu" hidden>
     <button type="button" id="ctx-post-mark-read" class="context-menu-item">Mark as read</button>
+    {# Bulk-only sibling of ctx-post-mark-read: always marks read (no unread
+       toggle — a mixed-selection toggle has no single obvious direction). #}
+    <button type="button" id="ctx-post-mark-read-bulk" class="context-menu-item" hidden>Mark as read</button>
     <button type="button" id="ctx-post-mark-feed-read" class="context-menu-item" hidden>Mark Feed as Read</button>
     <button type="button" id="ctx-post-open-in-feeds" class="context-menu-item" hidden>Open in Feeds</button>
     <button type="button" id="ctx-post-mark-above-read" class="context-menu-item">Read above</button>

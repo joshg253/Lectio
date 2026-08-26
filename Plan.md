@@ -462,9 +462,22 @@ collapses the context menu to bulk-safe items only:
 - **Add tag…** — works for any post, single or bulk, via new
   `POST /entries/tags-batch` (mirrors `/entries/move-to-feed-batch`'s
   JSON-array-of-pairs shape). Always appends, never replaces.
+- **Mark as read** — bulk-only sibling of the per-post toggle; always marks
+  read (no unread direction for a mixed selection). New `/entries/read-batch`,
+  same shape, skips already-read entries and unpremiered YouTube videos
+  (mirrors "Read above/below"'s guard), bumps the unread-count generation.
 
 Both single-right-click and bulk right-click populate the same
 `contextSelectedPosts` array, so the menu items work uniformly for 1 or N.
+
+Fixed same day: `selectedPosts` is keyed by (feedUrl, entryId), not DOM nodes,
+so it survived a whole-pane navigation swap and kept accumulating across
+folder/feed switches — 1 real selection plus 14 stale ones from earlier
+browsing showed as "Add tag to 15 posts". Now cleared on every scope-pane
+replace (not on chunk-delta paging, which is the same view). This was also
+the likely cause of "Add to Playlist" not showing for an all-YouTube
+selection — a stale non-YouTube post silently failed the `every post has a
+video_id` check.
 
 ### Article list date separators (Today, Yesterday, ...) — SHIPPED 2026-08-25
 

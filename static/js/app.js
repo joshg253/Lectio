@@ -3036,6 +3036,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     const unsubscribeFolderIdInput = document.getElementById('context-unsubscribe-folder-id');
     const unsubscribeFeedUrlInput = document.getElementById('context-unsubscribe-feed-url');
     const postMarkReadButton = document.getElementById('ctx-post-mark-read');
+    const postMarkReadBulkButton = document.getElementById('ctx-post-mark-read-bulk');
     const postMarkFeedReadButton = document.getElementById('ctx-post-mark-feed-read');
     const postOpenInFeedsButton = document.getElementById('ctx-post-open-in-feeds');
     const postMarkAboveReadButton = document.getElementById('ctx-post-mark-above-read');
@@ -3811,6 +3812,12 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         bindEntryPaneInteractions();
         bindEntryTagInteractions();
         bindPostListInteractions();
+        // A whole-pane swap means every .post-item just got replaced by fresh,
+        // unchecked rows — but selectedPosts is keyed by (feedUrl, entryId), not
+        // DOM nodes, so it survives the swap and silently keeps growing across
+        // navigations unless cleared here. Chunk-delta loads (more of the SAME
+        // view) skip this branch entirely, so paging never loses a selection.
+        clearPostSelection();
         if (typeof applyHighlights === 'function') applyHighlights();
         if (typeof window.bindSwipeGestures === 'function') {
           window.bindSwipeGestures();
@@ -8118,6 +8125,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               // contextPost* row and would silently apply to just one of them.
               contextSelectedPosts = Array.from(selectedPosts.values());
               setMenuItemVisible(postMarkReadButton, false);
+              if (postMarkReadBulkButton) {
+                postMarkReadBulkButton.textContent = `Mark ${contextSelectedPosts.length} posts as read`;
+              }
+              setMenuItemVisible(postMarkReadBulkButton, true);
               setMenuItemVisible(postCopyUrlButton, false);
               setMenuItemVisible(postMarkFeedReadButton, false);
               setMenuItemVisible(postOpenInFeedsButton, false);
@@ -8165,6 +8176,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               if (postMarkReadButton) {
                 postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
               }
+              setMenuItemVisible(postMarkReadButton, true);
+              setMenuItemVisible(postMarkReadBulkButton, false);
               setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
               setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
               setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
@@ -8837,6 +8850,34 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       }
     }
 
+    // Same tail as applyBulkReadState (badge/favicon sync) but driven by a
+    // specific set of {feedUrl, entryId} — the multi-select bulk action, which
+    // can span several feeds and specific entries rather than one feed swept
+    // by age.
+    function applyReadStateToSelection(entries) {
+      const deltaByFeed = {};
+      let totalChanged = 0;
+      for (const e of entries) {
+        const el = document.querySelector(
+          `.post-item[data-post-feed-url="${CSS.escape(e.feedUrl)}"][data-post-entry-id="${CSS.escape(e.entryId)}"]`
+        );
+        if (!el) continue;
+        if (applyPostItemReadState(el, true)) {
+          deltaByFeed[e.feedUrl] = (deltaByFeed[e.feedUrl] || 0) + 1;
+          totalChanged++;
+        }
+      }
+      for (const [fu, delta] of Object.entries(deltaByFeed)) {
+        adjustSidebarUnreadCount(fu, -delta);
+      }
+      if (totalChanged > 0) {
+        const fallbackBase = getUnreadCountFallback();
+        const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
+        appUnreadCount = Math.max(0, current - totalChanged);
+        updateDynamicFavicon();
+      }
+    }
+
     async function submitMarkReadAsync(form, feedUrlFilter, maxAgeDays) {
       // Optimistic: dim only the posts that will actually be marked on the server.
       applyBulkReadState(feedUrlFilter || null, maxAgeDays ?? null);
@@ -9411,6 +9452,30 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         ? (contextPostTitle ? `Add a tag to “${contextPostTitle}”.` : 'Add a tag to this post.')
         : `Add a tag to ${entries.length} posts.`;
       openBulkTagModal(entries, bodyText);
+    });
+
+    postMarkReadBulkButton?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const entries = contextSelectedPosts;
+      hideAllContextMenus();
+      if (!entries.length) return;
+      try {
+        const body = new URLSearchParams({
+          entries: JSON.stringify(entries.map((e) => [e.feedUrl, e.entryId])),
+        });
+        const resp = await fetch('/entries/read-batch', { method: 'POST', body });
+        const data = await resp.json();
+        if (data.ok) {
+          showToastMessage(data.message || 'Marked as read.');
+          applyReadStateToSelection(entries);
+          deselectPosts(entries);
+        } else {
+          showToastMessage(data.error || 'Mark as read failed.');
+        }
+      } catch (_) {
+        showToastMessage('Mark as read failed — network error.');
+      }
     });
 
     postMoveToFeedButton?.addEventListener('click', (event) => {

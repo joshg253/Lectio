@@ -32559,6 +32559,68 @@ def add_manual_tags_to_entries_batch_route(
     return JSONResponse({"ok": True, "tagged": tagged, "failed": failed, "message": msg})
 
 
+@app.post("/entries/read-batch")
+def mark_entries_read_batch_route(entries: str = Form(...)):
+    """Mark a batch of entries read — the post list's multi-selection bulk action.
+
+    ``entries`` is a JSON array of ``[feed_url, entry_id]`` pairs, same shape as
+    ``/entries/move-to-feed-batch`` and ``/entries/tags-batch``. Always marks
+    read (never toggles to unread) — same one-directional intent as the
+    per-post "Mark as read" item this sits beside in the bulk menu.
+    """
+    try:
+        pairs = json.loads(entries)
+        assert isinstance(pairs, list)
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": "Bad entries payload."}, status_code=400)
+    if len(pairs) > _MOVE_BATCH_CAP:
+        return JSONResponse(
+            {"ok": False, "error": f"Too many entries (max {_MOVE_BATCH_CAP} per action)."},
+            status_code=400,
+        )
+
+    marked = failed = 0
+    to_sync: list[tuple[str, str]] = []
+    with get_reader() as reader:
+        for pair in pairs:
+            if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
+                failed += 1
+                continue
+            feed_url, entry_id = str(pair[0]).strip(), str(pair[1])
+            try:
+                entry = reader.get_entry((feed_url, entry_id), None)
+                if entry is not None and entry.read:
+                    continue  # already read — leave read_history/read_state alone
+                # A premiere that hasn't aired yet shouldn't be swallowed by a
+                # blanket bulk mark-read, same guard as "Read above/below".
+                if _youtube_unpremiered_video_id(feed_url, getattr(entry, "link", None)) is not None:
+                    continue
+                reader.mark_entry_as_read((feed_url, entry_id))
+                to_sync.append((feed_url, entry_id))
+                marked += 1
+            except Exception:  # noqa: BLE001 — one bad entry must not sink the batch
+                failed += 1
+                LOGGER.warning("[read-batch] failed to mark read %s in %s", entry_id, feed_url)
+
+    if to_sync:
+        when = datetime.now().isoformat()
+        with get_meta_connection() as conn:
+            conn.executemany(
+                """
+                INSERT INTO entry_read_state (feed_url, entry_id, read_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at
+                """,
+                [(fu, eid, when) for fu, eid in to_sync],
+            )
+        invalidate_unread_counts_cache()
+
+    msg = f"Marked {marked} post{'s' if marked != 1 else ''} as read."
+    if failed:
+        msg += f" {failed} failed."
+    return JSONResponse({"ok": True, "marked": marked, "failed": failed, "message": msg})
+
+
 def _scope_starred_keys(
     folder_id: int | None, list_feed_url: str | None, tag: str | None
 ) -> list[tuple[str, str]]:
