@@ -363,6 +363,9 @@
                     <button type="button" class="problem-feed-link" data-problem-feed-properties data-feed-url="{{ row.feed_url }}" title="{{ row.feed_url }}">{{ row.feed_title }}</button>
                     <div class="problem-feed-actions">
                       <a class="problem-feed-action" href="{{ row.feed_url }}" target="_blank" rel="noopener noreferrer" title="Open feed URL"><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
+                      {% if row.can_suggest_migration %}
+                      <button type="button" class="problem-feed-action" data-problem-feed-suggest-migration data-feed-url="{{ row.feed_url }}" title="Suggest a replacement feed URL" aria-label="Suggest a replacement feed URL"><span class="material-symbols-rounded" aria-hidden="true">auto_fix_high</span></button>
+                      {% endif %}
                       <button type="button" class="problem-feed-action problem-feed-action-ack" data-problem-feed-ack data-feed-url="{{ row.feed_url }}" title="Working — they're just blocking us (mute; stays on ~daily retry)" aria-label="Mute — feed is fine"><span class="material-symbols-rounded" aria-hidden="true">check_circle</span></button>
                       <button type="button" class="problem-feed-action" data-problem-feed-mark-dead data-feed-url="{{ row.feed_url }}" title="Dead — needs a replacement (stop fetching; keep saved/tagged posts)" aria-label="Dead — needs replacement"><span class="material-symbols-rounded" aria-hidden="true">heart_broken</span></button>
                       <button type="button" class="problem-feed-action problem-feed-action-danger" data-problem-feed-unsubscribe data-feed-url="{{ row.feed_url }}" data-folder-id="{{ row.folder_id or selected_folder_id }}" title="Unsubscribe" aria-label="Unsubscribe"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>

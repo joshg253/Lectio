@@ -94,6 +94,7 @@ from services import url_guard
 from services.webhooks import WEBHOOK_VALID_FORMATS, build_webhook_batch_payload, build_webhook_payload, send_webhook
 from services.users import UserExistsError, UserStore
 from services.email import send_article_email, send_digest_email
+from services import feed_discovery
 from services.feed_discovery import discover_feed_urls_ex
 from services.feed_refresh import FeedRefreshService
 from services.lead_images import LeadImageService, upgrade_image_size_param
@@ -3493,6 +3494,22 @@ def ensure_meta_schema() -> None:
             CREATE TABLE IF NOT EXISTS dedup_dismissed (
                 dismiss_key TEXT PRIMARY KEY,
                 dismissed_at TEXT NOT NULL
+            )
+            """
+        )
+        # The feed-level equivalent of dedup_dismissed: a genuine user-initiated
+        # unsubscribe, so an Inoreader resync's subscriptions phase (which blindly
+        # re-adds anything Ino still lists as subscribed but reader is missing)
+        # can tell "deliberately removed" apart from "gone for some other reason"
+        # instead of resurrecting it. Written only from the actual unsubscribe
+        # paths -- not dedup/merge/format-upgrade (curation already migrates
+        # there) and not the YouTube-sync auto-removal callback (that one should
+        # stay free to re-add a channel the user re-subscribes to on YouTube).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS declined_feeds (
+                feed_url TEXT PRIMARY KEY,
+                declined_at TEXT NOT NULL
             )
             """
         )
@@ -18788,7 +18805,12 @@ def delete_folder(
                         purge_orphaned_feed(reader, conn, feed_url, archive_pending=True)
                     except Exception:
                         continue
+                    conn.execute(
+                        "INSERT OR REPLACE INTO declined_feeds (feed_url, declined_at) VALUES (?, ?)",
+                        (feed_url, datetime.now().isoformat()),
+                    )
                     removed_feed_count += 1
+                conn.commit()
 
     invalidate_meta_structure_cache()
     return (len(descendant_ids), removed_feed_count, 0)
@@ -22468,6 +22490,7 @@ def _home_inner(
         pf_url = cast(str, problematic_feed["feed_url"])
         problematic_feed["feed_title"] = feed_title_map.get(pf_url, pf_url)
         problematic_feed["needs_replacement"] = pf_url in _needs_replacement_urls
+        problematic_feed["can_suggest_migration"] = feed_discovery.is_known_dead_end_host(pf_url)
         pf_last_failure_at = problematic_feed.get("last_failure_at")
         if not isinstance(pf_last_failure_at, (int, float)):
             continue
@@ -24016,6 +24039,20 @@ def delete_scraped_feed_route(
 @app.get("/feeds/properties")
 def feed_properties(feed_url: str):
     return JSONResponse(get_feed_properties(feed_url))
+
+
+@app.get("/feeds/suggest-migration")
+def suggest_feed_migration_route(feed_url: str):
+    """A one-click "Suggest fix" for a failing feed on a known dead-end host
+    (currently FeedBurner). Never applies anything — the caller pre-fills the
+    Change URL field with the candidate and the existing verified flow there
+    takes it from there."""
+    result = feed_discovery.suggest_feed_migration(feed_url)
+    feeds = result.get("feeds") or []
+    if not feeds:
+        return JSONResponse({"ok": False, "message": result.get("message") or "No suggestion found."})
+    candidate = feeds[0]
+    return JSONResponse({"ok": True, "candidate_url": candidate["url"], "candidate_title": candidate.get("title")})
 
 
 @app.post("/devto-feeds/{feed_id}/config")
@@ -25921,16 +25958,19 @@ def _run_import_loop(json_files: list, state: dict, _save) -> None:
 
         new_feed_urls = {item["feed_url"] for item in items if item["feed_url"]}
         if new_feed_urls:
+            with get_meta_connection() as conn:
+                declined = {r[0] for r in conn.execute("SELECT feed_url FROM declined_feeds")}
             with get_reader() as reader:
                 existing = _canonical_feed_url_lookup(reader)
                 for furl in new_feed_urls:
-                    if furl not in existing:
-                        try:
-                            reader.add_feed(furl, exist_ok=True)
-                            state["subs_added"] = state.get("subs_added", 0) + 1
-                            existing[furl] = furl
-                        except Exception:
-                            pass
+                    if furl in existing or furl in declined:
+                        continue
+                    try:
+                        reader.add_feed(furl, exist_ok=True)
+                        state["subs_added"] = state.get("subs_added", 0) + 1
+                        existing[furl] = furl
+                    except Exception:
+                        pass
 
         # Apply stars and tags, inserting the entry into the reader if not yet fetched.
         # Reader entries use the feed's <guid>/<id> element as their ID, which often
@@ -26349,19 +26389,27 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
             subs, rl = inoreader_service.get_subscriptions(token)
             calls_made += 1
             state["z1_remaining"] = inoreader_service.z1_remaining(rl)
+            with get_meta_connection() as conn:
+                declined = {r[0] for r in conn.execute("SELECT feed_url FROM declined_feeds")}
             with get_reader() as reader:
                 existing = _canonical_feed_url_lookup(reader)
                 added = 0
+                skipped_declined = 0
                 for sub in subs:
                     furl = canonical_feed_url(sub.get("feed_url", ""))
-                    if furl and furl not in existing:
-                        try:
-                            reader.add_feed(furl, exist_ok=True)
-                            existing[furl] = furl
-                            added += 1
-                        except Exception:
-                            pass
+                    if not furl or furl in existing:
+                        continue
+                    if furl in declined:
+                        skipped_declined += 1
+                        continue
+                    try:
+                        reader.add_feed(furl, exist_ok=True)
+                        existing[furl] = furl
+                        added += 1
+                    except Exception:
+                        pass
             state["subs_added"] = state.get("subs_added", 0) + added
+            state["subs_declined_skipped"] = state.get("subs_declined_skipped", 0) + skipped_declined
             state["phase"] = "labels_list"
             _save()
 
@@ -27893,6 +27941,11 @@ def unsubscribe_feed(
                         archive_pending=_migrate_to is None,
                         migrate_curation_to=_migrate_to,
                     )
+                    conn.execute(
+                        "INSERT OR REPLACE INTO declined_feeds (feed_url, declined_at) VALUES (?, ?)",
+                        (feed_url, datetime.now().isoformat()),
+                    )
+                    conn.commit()
         if dropped:
             message = (
                 "Feed unsubscribed; "
@@ -30705,7 +30758,12 @@ def bulk_feed_action(
                     still_used = conn.execute("SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (u,)).fetchone()
                     if not still_used:
                         purge_orphaned_feed(reader, conn, u, archive_pending=True)
+                        conn.execute(
+                            "INSERT OR REPLACE INTO declined_feeds (feed_url, declined_at) VALUES (?, ?)",
+                            (u, datetime.now().isoformat()),
+                        )
                     count += 1
+                conn.commit()
             invalidate_meta_structure_cache()
         else:
             return JSONResponse({"ok": False, "error": f"Unknown action: {action}"}, status_code=400)

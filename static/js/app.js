@@ -13830,6 +13830,35 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         return;
       }
 
+      const suggestMigrationTrigger = event.target.closest('[data-problem-feed-suggest-migration]');
+      if (suggestMigrationTrigger) {
+        event.preventDefault();
+        const url = suggestMigrationTrigger.getAttribute('data-feed-url');
+        if (!url) return;
+        suggestMigrationTrigger.disabled = true;
+        fetch(`/feeds/suggest-migration?feed_url=${encodeURIComponent(url)}`, { credentials: 'same-origin' })
+          .then((r) => r.json())
+          .then(async (json) => {
+            if (!json.ok) {
+              alert(json.message || 'No replacement found for this feed.');
+              return;
+            }
+            await openFeedPropertiesModal(url);
+            feedPropChangeUrlBtn?.click();
+            if (feedPropChangeUrlInput) {
+              feedPropChangeUrlInput.value = json.candidate_url;
+              feedPropChangeUrlInput.focus();
+              feedPropChangeUrlInput.select();
+            }
+            if (feedPropChangeUrlStatus) {
+              feedPropChangeUrlStatus.textContent = 'Suggested — review before saving.';
+            }
+          })
+          .catch(() => alert('Could not check for a replacement.'))
+          .finally(() => { suggestMigrationTrigger.disabled = false; });
+        return;
+      }
+
       const ackTrigger = event.target.closest('[data-problem-feed-ack]');
       if (ackTrigger) {
         event.preventDefault();

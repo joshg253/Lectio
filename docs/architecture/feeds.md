@@ -516,6 +516,34 @@ The service is initialized only when `LECTIO_PUBLIC_URL` is set; all integration
 
 **Feed removal lifecycle:** `purge_orphaned_feed(reader, conn, feed_url, *, archive_pending, rescue_to)` is the single canonical sequence run whenever a feed leaves the system (confirmed orphaned — no remaining `folder_feeds` rows). Steps in order: (1) force-archive pending saved/starred entries; (2) rescue unread entries into a kept/canonical feed; (3) dispatch the delete via the appropriate path (DeviantArt rendered feed → `deviantart_service.delete_deviantart_feed`; dev.to rendered feed → `devto_service.delete_devto_feed`; scraped/FakeFeedz feed → `scraper_service.delete_scraped_feed`; plain feed → `reader.delete_feed`); (4) WebSub unsubscribe. Callers set `archive_pending=False` when entries survive under a kept URL (dedup, format-upgrade), and pass `rescue_to` to migrate unread state. The helper takes an already-open `reader` and `conn` so callers control the `with` scope and context-manager nesting is never doubled.
 
+**Declined feeds — a genuine unsubscribe must not come back on the next Ino
+sync.** `_inoreader_drip_step`'s subscriptions phase and the local-file Ino
+importer (`_run_import_loop`) both `reader.add_feed(furl, exist_ok=True)` for
+every feed Ino still lists as subscribed that's missing locally — with no
+check for *why* it's missing. Bit twice in one day (2026-08-23/24): an initial
+full import, then a later recovery re-sync, each re-added the same ~394 feeds
+Josh had deliberately unsubscribed from over time. The `declined_feeds
+(feed_url TEXT PRIMARY KEY, declined_at TEXT)` table (`main.py`,
+`ensure_meta_schema`) closes this — the feed-level equivalent of
+`dedup_dismissed` for entries (below). It is written (`INSERT OR REPLACE`,
+so a re-decline refreshes the timestamp) only from the three call sites that
+represent a genuine user decision: the `/feeds/unsubscribe` route, `bulk_feed_action`'s
+`unsubscribe` action, and `delete_folder(feed_action="unsub")`. Both Ino
+import paths load the set once per subscriptions-phase run and skip any
+`furl` present in it instead of re-adding.
+
+Two call sites deliberately do **not** record a decline: `purge_orphaned_feed`
+calls from the dedup/merge/format-upgrade paths (`archive_pending=False`,
+`migrate_curation_to` set — the content survives under the surviving feed, so
+nothing was declined), and `remove_feed_from_folder`, which is only ever
+invoked as the YouTube-sync auto-removal callback when a channel drops off the
+subscribed list on YouTube's own side — recording a decline there would stop
+Lectio re-adding a channel the user re-subscribes to on YouTube later. The
+generic multi-integration importer (`_apply_migration_items`, shared by
+Miniflux/FreshRSS/TTRSS) is out of scope for the same reason `declined_feeds`
+itself is Ino-specific: those imports are a distinct decision context, not a
+resync of a subscription list Lectio itself once held.
+
 **Folder deletion:** `delete_folder(folder_id, feed_action, move_to_folder_id)` deletes a folder and its descendants. When the folder holds feeds the UI prompts for their fate: `feed_action="unsub"` (default) purges feeds that end up orphaned via `purge_orphaned_feed`; `feed_action="move"` reassigns every affected feed to `move_to_folder_id` without unsubscribing. A target of `UNCATEGORIZED_FOLDER_ID` (or the root folder) leaves feeds folderless (Uncategorized). Returns `(deleted_folder_count, unsubscribed_count, moved_count)`. The empty-folder case skips the prompt (simple confirm).
 
 **Push indicator:** `get_push_active_feed_urls()` queries `websub_subscriptions` for `verified=1 AND hub_url IS NOT NULL` in one pass and returns a `set[str]`; the index route threads this into the template context so both the sidebar feed tree and Settings → Feeds can render the ⚡ glyph without per-feed queries.
@@ -627,6 +655,36 @@ to October 2024. A real month beats a precise-looking lie.
   (`_HIGH_FANOUT_PACE_SECONDS`) so a big serial burst isn't throttled into
   spurious 404s (YouTube 404s a ~700-request burst though each feed is fine
   singly) — a polite-client measure, feeds to other hosts interleave at full speed.
+
+
+## Suggesting a replacement for a feed on a known dead-end host
+
+FeedBurner has stopped 404ing dead feeds; it now serves the origin site's own
+homepage HTML back at the feed URL (right content-type-looking header, wrong
+content, no redirect). Probing the feed URL itself is useless — the page's own
+`<link rel="alternate">` just points back at the same dead FeedBurner address.
+
+`feed_discovery.suggest_feed_migration` instead reads the page's `<link
+rel="canonical">` (FeedBurner's passthrough leaves it untouched) to recover the
+real origin domain, then runs the same `probe_url` discovery Add Feed and
+Change URL already use to find that origin's real, currently-live feed. It
+never applies anything — the Failing Feeds panel's "Suggest fix" button
+(`GET /feeds/suggest-migration`, gated by `is_known_dead_end_host` so it only
+appears on FeedBurner rows) opens Feed Properties with the candidate pre-filled
+into the existing Change URL field, so the same verified, user-confirmed flow
+applies it.
+
+**Live-checked 2026-08-25, not every FeedBurner failure is this recoverable**:
+of ~12 currently-failing `feeds.feedburner.com` subscriptions, roughly a
+quarter had no `rel="canonical"` at all (an expired, parked domain; a
+JS-rendered SPA with no server-side link tags) — those still need the manual
+"risky replacement" judgment call the Failing Feeds panel already supports.
+`blogs.technet.com` and `powershell.com/cs/blogs/*`, the other two host
+migrations flagged in Plan.md's 2026-08-12 sweep, were **not** built into this:
+zero feeds on either host are currently failing, and guessing at a path-mapping
+with no live example to verify against risks exactly the "a discovered feed is
+not a replacement" trap this same feature is designed to avoid. Add a resolver
+for them if/when a real 404'd example reappears.
 
 
 ## Tag aliases

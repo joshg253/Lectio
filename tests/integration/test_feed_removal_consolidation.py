@@ -296,6 +296,45 @@ class TestUnsubscribeRoute:
             feeds = list(reader.get_feeds())
         assert any(str(f.url) == FEED for f in feeds)
 
+    def test_unsubscribe_route_records_a_decline(self, env, monkeypatch):
+        """A genuine /feeds/unsubscribe must be remembered, so a later Ino resync
+        does not resurrect it (see Plan.md "Ino import resurrects
+        deliberately-unsubscribed feeds")."""
+        monkeypatch.setattr(main, "websub_service", MagicMock())
+        monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
+        monkeypatch.setattr(main, "AUTH_ENABLED", False)
+        _add_feed_to_folder(FEED, _root_folder_id())
+
+        client, token = _csrf_client()
+        r = client.post("/feeds/unsubscribe", data={
+            "_csrf": token,
+            "folder_id": str(_root_folder_id()), "feed_url": FEED,
+        })
+        assert r.status_code != 403
+
+        with main.get_meta_connection() as conn:
+            row = conn.execute(
+                "SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)
+            ).fetchone()
+        assert row is not None
+
+    def test_unsubscribe_via_remove_feed_from_folder_does_not_record_a_decline(self, env, monkeypatch):
+        """remove_feed_from_folder is only ever called as the YouTube-sync
+        auto-removal callback (a channel dropped off the subscribed list on
+        YouTube's side) -- not a "the user declined this feed" signal. Recording
+        a decline here would stop Lectio re-adding a channel the user
+        re-subscribes to on YouTube later."""
+        fid = _make_child_folder("YtSyncRemoved")
+        _add_feed_to_folder(FEED, fid)
+        monkeypatch.setattr(main, "websub_service", MagicMock())
+        monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
+        main.remove_feed_from_folder(FEED, fid)
+        with main.get_meta_connection() as conn:
+            row = conn.execute(
+                "SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)
+            ).fetchone()
+        assert row is None
+
 
 # ---------------------------------------------------------------------------
 # get_folder_feed_urls — root ("All Feeds") must include uncategorized feeds
@@ -396,6 +435,51 @@ class TestDeleteFolder:
         with pytest.raises(ValueError):
             main.delete_folder(fid, feed_action="move", move_to_folder_id=fid)
 
+    def test_delete_folder_unsub_records_a_decline(self, env, monkeypatch):
+        """Deleting a folder with feed_action="unsub" orphans and unsubscribes
+        its feeds -- a genuine decline, same as the unsubscribe route."""
+        fid = _make_child_folder("ToDeleteDecline")
+        _add_feed_to_folder(FEED, fid)
+        monkeypatch.setattr(main, "websub_service", MagicMock())
+        monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
+        main.delete_folder(fid)
+        with main.get_meta_connection() as conn:
+            row = conn.execute(
+                "SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)
+            ).fetchone()
+        assert row is not None
+
+    def test_delete_folder_move_does_not_record_a_decline(self, env, monkeypatch):
+        """Moving a folder's feeds elsewhere keeps the subscription -- not a decline."""
+        fid = _make_child_folder("MoveFromDecline")
+        target = _make_child_folder("MoveToDecline")
+        _add_feed_to_folder(FEED, fid)
+        monkeypatch.setattr(main, "websub_service", MagicMock())
+        main.delete_folder(fid, feed_action="move", move_to_folder_id=target)
+        with main.get_meta_connection() as conn:
+            row = conn.execute(
+                "SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)
+            ).fetchone()
+        assert row is None
+
+
+# ---------------------------------------------------------------------------
+# Site E — bulk_feed_action's "unsubscribe" branch (Settings → Feeds toolbar)
+# ---------------------------------------------------------------------------
+
+class TestBulkUnsubscribeDecline:
+    def test_bulk_unsubscribe_records_a_decline(self, env, monkeypatch):
+        fid = _make_child_folder("BulkUnsub")
+        _add_feed_to_folder(FEED, fid)
+        monkeypatch.setattr(main, "websub_service", MagicMock())
+        monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
+        main.bulk_feed_action(_NO_REQUEST, action="unsubscribe", feed_urls=FEED)
+        with main.get_meta_connection() as conn:
+            row = conn.execute(
+                "SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)
+            ).fetchone()
+        assert row is not None
+
 
 # ---------------------------------------------------------------------------
 # Site D — dedup/upgrade's purge_orphaned_feed call pattern (same-folder,
@@ -428,6 +512,29 @@ class TestDeduplicateWebSub:
             with main.get_meta_connection() as conn:
                 main.purge_orphaned_feed(reader, conn, FEED2, archive_pending=False, rescue_to=FEED)
         ws_mock.unsubscribe.assert_called_once_with(FEED2, tenancy.DEFAULT_USER_ID)
+
+    def test_dedup_purge_does_not_record_a_decline(self, env, monkeypatch):
+        """A dedup/merge consolidation is not a user "I don't want this feed"
+        decision -- the content survives under the surviving feed -- so it must
+        not populate declined_feeds. Only the unsubscribe route/delete_folder(
+        feed_action="unsub")/bulk unsubscribe do."""
+        fid = _make_child_folder("Dedup1b")
+        self._setup_same_folder_dup(fid)
+        monkeypatch.setattr(main, "websub_service", MagicMock())
+        monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
+        with main.get_meta_connection() as conn:
+            conn.execute(
+                "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
+                (fid, FEED2),
+            )
+        with main.get_reader() as reader:
+            with main.get_meta_connection() as conn:
+                main.purge_orphaned_feed(reader, conn, FEED2, archive_pending=False, rescue_to=FEED)
+        with main.get_meta_connection() as conn:
+            row = conn.execute(
+                "SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED2,)
+            ).fetchone()
+        assert row is None
 
     def test_dedup_does_not_archive_pending_for_removed_url(self, env, monkeypatch):
         """archive_pending=False means force_archive is NOT called on dedup removal."""
