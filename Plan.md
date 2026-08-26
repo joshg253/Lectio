@@ -458,9 +458,17 @@ Client-side `applyPostDateDividers()` in `static/js/app.js`, hooked into the
 one `applyVisibleWindow()` call site that all four re-render triggers already
 funnel through. `post`/`received` sorts only; suppressed for `starred`/`size`.
 A group whose posts are all chunk-hidden or filtered-out hides its own
-divider. Not yet confirmed live in a browser — verified by call-graph tracing
-and a Python-mirrored simulation of the bucketing/label logic (no
-Chromium/Node available in the build sandbox).
+divider.
+
+First deploy showed zero dividers ever: `container` (`.posts`) is also what
+the chunk-reveal `MutationObserver` watches with `childList: true`, and
+rebuilding dividers on every call is itself a childList mutation — the
+observer's own re-render retriggered the rebuild, forever, landing wherever
+that spin got interrupted (0 dividers, as seen). Fixed by diffing against
+what's already in the DOM (`data-divider-key` + `nextElementSibling` per
+group) and only writing when it actually differs, so the observer-triggered
+re-run is a no-op and the loop terminates after one round. Rebuilt
+2026-08-26, pending Josh confirming it live.
 
 Scoping notes below kept for context on why this was one hook, not four:
 

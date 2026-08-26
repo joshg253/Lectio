@@ -15176,45 +15176,66 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     // it avoids a second class of "did the divider set get stale" bugs.
     function applyPostDateDividers(container, items) {
       if (!container) return;
-      container.querySelectorAll('.post-date-divider').forEach((el) => el.remove());
 
       const sortBy = window.CURRENT_SORT_BY || 'post';
-      if (sortBy !== 'post' && sortBy !== 'received') return;
+      if (sortBy !== 'post' && sortBy !== 'received') {
+        container.querySelectorAll('.post-date-divider').forEach((el) => el.remove());
+        return;
+      }
 
       const isoAttr = sortBy === 'received' ? 'data-received-iso' : 'data-post-iso';
       const today = new Date();
       let lastKey = null;
-      let currentGroup = null;
-      const groups = [];
+      const groups = []; // { key, label, items: [] }
 
       for (const item of items) {
         const raw = (item.getAttribute(isoAttr) || '').trim();
         const date = raw ? new Date(raw) : null;
         if (!date || Number.isNaN(date.getTime())) {
-          currentGroup?.items.push(item);
+          groups[groups.length - 1]?.items.push(item);
           continue;
         }
         const key = postDateDividerKey(date);
         if (key !== lastKey) {
-          const divider = document.createElement('div');
-          divider.className = 'post-date-divider';
-          divider.textContent = postDateDividerLabel(date, today);
-          item.parentNode.insertBefore(divider, item);
-          currentGroup = { divider, items: [] };
-          groups.push(currentGroup);
+          groups.push({ key, label: postDateDividerLabel(date, today), items: [] });
           lastKey = key;
         }
-        currentGroup.items.push(item);
+        groups[groups.length - 1].items.push(item);
+      }
+
+      // `container` is also the node a MutationObserver watches (childList) to
+      // drive re-chunking, and rebuilding the dividers is itself a childList
+      // change. Writing unconditionally every call re-triggers that observer,
+      // which calls back in here, which writes again — forever. Comparing
+      // against what's already there and only touching the DOM on a real
+      // change makes the observer-triggered re-run a no-op, so the loop
+      // terminates after one round instead of spinning.
+      const existing = Array.from(container.querySelectorAll('.post-date-divider'));
+      const alreadyCorrect =
+        existing.length === groups.length &&
+        groups.every((group, i) => existing[i].dataset.dividerKey === group.key && existing[i].nextElementSibling === group.items[0]);
+
+      let dividers = existing;
+      if (!alreadyCorrect) {
+        existing.forEach((el) => el.remove());
+        dividers = groups.map((group) => {
+          const divider = document.createElement('div');
+          divider.className = 'post-date-divider';
+          divider.dataset.dividerKey = group.key;
+          divider.textContent = group.label;
+          group.items[0].parentNode.insertBefore(divider, group.items[0]);
+          return divider;
+        });
       }
 
       // A group that's entirely chunk-hidden or filtered-out would otherwise
       // leave its header floating over nothing.
-      for (const group of groups) {
+      groups.forEach((group, i) => {
         const anyVisible = group.items.some(
           (item) => !item.classList.contains('post-item-hidden') && !item.classList.contains('post-item-filtered')
         );
-        group.divider.hidden = !anyVisible;
-      }
+        dividers[i].hidden = !anyVisible;
+      });
     }
 
     let postsContainer = null;
