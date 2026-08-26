@@ -8032,10 +8032,6 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       }
     }
 
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && selectedPosts.size) clearPostSelection();
-    });
-
     function bindPostListInteractions() {
       for (const postMainLink of document.querySelectorAll('.post-main-link')) {
         if (postMainLink.dataset.boundClick) {
@@ -17747,8 +17743,15 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         return;
       }
 
-      // Fall-through: close context menus
-      hideAllContextMenus();
+      // Fall-through: close an open context menu, or if none is open, clear
+      // the post multi-select as a last resort. Order matters here — closing
+      // a menu that's open over a large selection must not also drop the
+      // selection in the same keypress; that takes a second, separate Escape.
+      if (document.querySelector('.context-menu:not([hidden])')) {
+        hideAllContextMenus();
+      } else if (selectedPosts.size) {
+        clearPostSelection();
+      }
     });
 
     window.addEventListener('keydown', (event) => {

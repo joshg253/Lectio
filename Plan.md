@@ -453,9 +453,14 @@ discipline. Validation and response-shape logic factored out of
 Checkbox-based multi-select on the post list (`.post-select-check` per row,
 persistent across normal reading — opening a post checks its own box too —
 AND across bulk actions, which chain (add to a playlist, then Mark as read,
-on the same selection) rather than clearing it. Only Escape or navigating to
-a different view clears it. Right-clicking a selected post collapses the
-context menu to bulk-safe items only:
+on the same selection) rather than clearing it. Escape (in the global
+Escape-key priority chain — modal, tags panel, search row, THEN context
+menu/selection) closes an open context menu first and only clears the
+selection on a second, separate press with no menu open — the first version
+cleared both in the same keypress via its own standalone listener, wiping a
+22-item selection just to dismiss the menu. Navigating to a different view
+also clears it. Right-clicking a selected post collapses the context menu to
+bulk-safe items only:
 
 - **Add to YouTube Playlist…** — shown when every selected post is a YouTube
   video (`data-post-video-id`, extracted server-side same as the `[duration]`
