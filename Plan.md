@@ -452,13 +452,17 @@ discipline. Validation and response-shape logic factored out of
 
 Idea 2026-08-24, not scoped. Select multiple posts in a YouTube feed and add them all to a playlist in one action.
 
-### Article list date separators (Today, Yesterday, ...)
+### Article list date separators (Today, Yesterday, ...) — SHIPPED 2026-08-25
 
-Idea 2026-08-24, not scoped. Group the article list with date-header separators.
+Client-side `applyPostDateDividers()` in `static/js/app.js`, hooked into the
+one `applyVisibleWindow()` call site that all four re-render triggers already
+funnel through. `post`/`received` sorts only; suppressed for `starred`/`size`.
+A group whose posts are all chunk-hidden or filtered-out hides its own
+divider. Not yet confirmed live in a browser — verified by call-graph tracing
+and a Python-mirrored simulation of the bucketing/label logic (no
+Chromium/Node available in the build sandbox).
 
-**Scoped 2026-08-25, deliberately not built yet — more integration surface
-than it looks.** Investigated the actual rendering pipeline before writing
-any code:
+Scoping notes below kept for context on why this was one hook, not four:
 
 - Every `.post-item` is in the DOM from first paint; `post-timestamp`/
   `received-timestamp` already ride as `data-post-iso`/`data-received-iso` on
