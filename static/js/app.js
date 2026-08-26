@@ -1130,33 +1130,34 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     // ── Saved Articles duplicate scan ──────────────────────────────────────
     const SAVED_DEDUP_GROUP_CAP = 200;
 
-    // Nothing is ever pre-checked: a scan result is a claim, not evidence, and
-    // a pre-armed "Check All" beside it turns one stray click into a bulk
-    // delete. Selection is armed only by a URL probe (see _sdApplySelection).
-    // `showKeeper` just labels the copy the keep-order would keep.
-    const savedDedupGroupHtml = (g, showKeeper) => {
-      const rows = g.entries.map((e, i) => {
-        const keeper = showKeeper && i === 0;
+    // Every copy defaults to Keep — deleting is something you switch a copy
+    // TO, never a starting state, so a click-through with nothing reviewed
+    // can never delete anything. Check URLs is the only thing that switches a
+    // copy to Delete on its own (confirmed-dead evidence only, see
+    // _sdApplySelection); everything else is a manual click.
+    const savedDedupGroupHtml = (g) => {
+      const rows = g.entries.map((e) => {
         const badges =
           `<span class="saved-dedup-badge${e.read ? '' : ' saved-dedup-badge--unread'}">${e.read ? 'read' : 'unread'}</span>` +
           (e.has_content ? '' : '<span class="saved-dedup-badge">no content</span>');
         const date = e.published ? `<span class="saved-dedup-date">${_mfEscape(String(e.published).slice(0, 10))}</span>` : '';
-        return `<label class="dedup-pair-row saved-dedup-row">` +
-          `<input type="checkbox" class="saved-dedup-check" data-entry-id="${_mfEscape(e.entry_id)}"` +
-          ` data-has-content="${e.has_content ? '1' : '0'}">` +
-          `<span class="dedup-tag${keeper ? ' keep-tag' : ''}">${keeper ? 'keep' : ''}</span>` +
+        return `<div class="dedup-pair-row saved-dedup-row" data-entry-id="${_mfEscape(e.entry_id)}" data-has-content="${e.has_content ? '1' : '0'}" data-action="keep">` +
+          `<span class="saved-dedup-toggle" role="group" aria-label="Keep or delete this copy">` +
+          `<button type="button" class="saved-dedup-toggle-btn saved-dedup-toggle-keep active" data-toggle="keep" aria-pressed="true" title="Keep this copy">✓ Keep</button>` +
+          `<button type="button" class="saved-dedup-toggle-btn saved-dedup-toggle-delete" data-toggle="delete" aria-pressed="false" title="Delete this copy">✗ Delete</button>` +
+          `</span>` +
           `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(e.title || e.link)}</span>` +
           `<button type="button" class="saved-dedup-title-edit" title="Edit this copy's title">✎</button>` +
           ` <span class="saved-dedup-row-badges">${badges}</span>${date}` +
           `<br><a class="dedup-url" href="${_mfEscape(e.link)}" target="_blank" rel="noopener noreferrer">${_mfEscape(e.link)}</a></span>` +
-          `</label>`;
+          `</div>`;
       }).join('');
       const reasons = (g.reasons || []).join(', ');
       return `<div class="dedup-pair saved-dedup-group">` +
         `<div class="saved-dedup-group-head">` +
         `<span class="saved-dedup-reasons">${_mfEscape(reasons)}</span>` +
         `<span class="saved-dedup-group-btns">` +
-        `<button type="button" class="saved-dedup-check-urls-btn" title="Probe each copy's URL — dead links are flagged and selected for deletion; live and inconclusive copies are left alone">Check URLs</button>` +
+        `<button type="button" class="saved-dedup-check-urls-btn" title="Probe each copy's URL — a confirmed-dead copy is switched to Delete (never the sole copy with real stored content); live and inconclusive copies stay on Keep">Check URLs</button>` +
         `<button type="button" class="saved-dedup-compare-btn" title="Show the stored text of each copy side by side">Compare</button>` +
         `</span></div>` +
         rows + `</div>`;
@@ -1173,8 +1174,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       } else if (r.soft_dead) {
         // 200, but the site redirected an article URL onto a section index —
         // the page is gone and the server won't say so. Advisory only: this is
-        // a URL-shape guess, and _sdApplySelection arms on `dead` alone, so it
-        // never pre-checks a delete.
+        // a URL-shape guess, and _sdApplySelection only switches a copy to
+        // Delete on confirmed-dead (`dead`) evidence, never on this alone.
         b.classList.add('saved-dedup-badge--soft-dead');
         b.textContent = 'probably gone';
         b.title = `Redirected to ${r.final_url} — the article URL no longer resolves to an article`;
@@ -1188,35 +1189,29 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       return b;
     };
 
-    // Arm the group's selection from probe evidence: a copy is selected only
-    // when its URL came back dead (404/410). Everything else — alive,
-    // bot-walled, timed out, never checked — stays unselected, so an
-    // inconclusive probe can never queue a delete.
-    //
-    // Two groups deliberately select nothing: one where *every* copy is dead
-    // (link rot, not duplication — deleting all of them loses the article
-    // entirely), and the sole copy that still has stored content, which stays
-    // selectable only by hand even when its URL is gone.
-    // The possible tier never auto-arms at all; it is too weak a signal.
+    const _sdSetRowAction = (row, action) => {
+      row.dataset.action = action;
+      row.querySelector('.saved-dedup-toggle-keep')?.classList.toggle('active', action === 'keep');
+      row.querySelector('.saved-dedup-toggle-keep')?.setAttribute('aria-pressed', String(action === 'keep'));
+      row.querySelector('.saved-dedup-toggle-delete')?.classList.toggle('active', action === 'delete');
+      row.querySelector('.saved-dedup-toggle-delete')?.setAttribute('aria-pressed', String(action === 'delete'));
+    };
+
+    // Switch a copy to Delete only on confirmed-dead evidence (404/410).
+    // Everything else — alive, bot-walled, timed out, never checked — stays
+    // on Keep, so an inconclusive probe can never switch anything to Delete.
+    // The sole copy that still has stored content is never switched even
+    // when its URL is gone: losing the only copy with the actual article
+    // text is worse than keeping an extra dead link around.
     const _sdApplySelection = (group, byId) => {
       if (!group.closest('.saved-dedup-confirmed-list')) return;
-      const info = [...group.querySelectorAll('.saved-dedup-row')].map(row => {
-        const cb = row.querySelector('.saved-dedup-check');
-        return { row, cb, dead: !!(byId.get(cb.dataset.entryId) || {}).dead,
-                 hasContent: cb.dataset.hasContent === '1' };
-      });
-      const allDead = info.every(i => i.dead);
+      const info = [...group.querySelectorAll('.saved-dedup-row')].map(row => ({
+        row, dead: !!(byId.get(row.dataset.entryId) || {}).dead,
+        hasContent: row.dataset.hasContent === '1',
+      }));
       const withContent = info.filter(i => i.hasContent);
       const soleContent = withContent.length === 1 ? withContent[0] : null;
-      for (const i of info) i.cb.checked = i.dead && !allDead && i !== soleContent;
-      // The keep tag always names the first copy that will actually survive.
-      const keeper = info.find(i => !i.cb.checked);
-      for (const i of info) {
-        const tag = i.row.querySelector('.dedup-tag');
-        if (!tag) continue;
-        tag.textContent = i === keeper ? 'keep' : '';
-        tag.classList.toggle('keep-tag', i === keeper);
-      }
+      for (const i of info) _sdSetRowAction(i.row, (i.dead && i !== soleContent) ? 'delete' : 'keep');
     };
 
     // Inline title repair. Saved titles drift when a publisher renames a post,
@@ -1228,7 +1223,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const main = btn.closest('.saved-dedup-main');
       const span = main?.querySelector('.saved-dedup-title');
       if (!span || main.querySelector('.saved-dedup-title-input')) return;
-      const entryId = btn.closest('.saved-dedup-row').querySelector('.saved-dedup-check').dataset.entryId;
+      const entryId = btn.closest('.saved-dedup-row').dataset.entryId;
       const original = span.textContent;
 
       const input = document.createElement('input');
@@ -1279,12 +1274,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         else if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
       });
       input.addEventListener('blur', save);
-      // The row is a <label>; keep clicks off the group's checkbox.
-      input.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); });
     };
 
     const _sdCheckGroupUrls = async (group) => {
-      const ids = [...group.querySelectorAll('.saved-dedup-check')].map(cb => cb.dataset.entryId);
+      const ids = [...group.querySelectorAll('.saved-dedup-row')].map(row => row.dataset.entryId);
       const resp = await fetch('/saved/duplicates/check-urls', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1294,8 +1287,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const data = await resp.json();
       const byId = new Map((data.results || []).map(r => [r.entry_id, r]));
       for (const row of group.querySelectorAll('.saved-dedup-row')) {
-        const cb = row.querySelector('.saved-dedup-check');
-        const r = byId.get(cb.dataset.entryId);
+        const r = byId.get(row.dataset.entryId);
         row.querySelector('.saved-dedup-url-badge')?.remove();
         if (r) row.querySelector('.saved-dedup-row-badges').appendChild(_sdUrlBadge(r));
       }
@@ -1314,9 +1306,14 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     document.getElementById('saved-dedup-results')?.addEventListener('click', async (ev) => {
       const titleBtn = ev.target.closest('.saved-dedup-title-edit');
       if (titleBtn) {
-        ev.preventDefault();      // inside a <label> — don't toggle the checkbox
-        ev.stopPropagation();
+        ev.preventDefault();
         _sdEditTitle(titleBtn);
+        return;
+      }
+      const toggleBtn = ev.target.closest('.saved-dedup-toggle-btn');
+      if (toggleBtn) {
+        const row = toggleBtn.closest('.saved-dedup-row');
+        if (row) _sdSetRowAction(row, toggleBtn.dataset.toggle);
         return;
       }
       const checkBtn = ev.target.closest('.saved-dedup-check-urls-btn');
@@ -1339,7 +1336,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const group = btn.closest('.saved-dedup-group');
       const existing = group.querySelector('.saved-dedup-compare');
       if (existing) { existing.remove(); btn.textContent = 'Compare'; return; }
-      const ids = [...group.querySelectorAll('.saved-dedup-check')].map(cb => cb.dataset.entryId);
+      const ids = [...group.querySelectorAll('.saved-dedup-row')].map(row => row.dataset.entryId);
       btn.disabled = true;
       let data;
       try {
@@ -1370,8 +1367,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       group.appendChild(pane);
     });
 
-    const savedDedupListHtml = (groups, showKeeper) =>
-      groups.slice(0, SAVED_DEDUP_GROUP_CAP).map(g => savedDedupGroupHtml(g, showKeeper)).join('') +
+    const savedDedupListHtml = (groups) =>
+      groups.slice(0, SAVED_DEDUP_GROUP_CAP).map(g => savedDedupGroupHtml(g)).join('') +
       (groups.length > SAVED_DEDUP_GROUP_CAP
         ? `<p class="muted">Showing the first ${SAVED_DEDUP_GROUP_CAP} of ${groups.length} groups — re-run the scan after deleting these.</p>`
         : '');
@@ -1410,11 +1407,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       }
       okBtn.hidden = false;
       if (checkAllBtn) checkAllBtn.hidden = false;
-      intro.textContent = `Scanned ${data.scanned} saved articles — nothing is selected yet. "keep" marks the copy the scan would keep (has content, then https, then oldest); run Check URLs to select copies whose links are dead.`;
+      intro.textContent = `Scanned ${data.scanned} saved articles — every copy starts on Keep. Switch the ones to remove to Delete by hand, or run Check URLs to switch confirmed-dead copies for you.`;
       if (confirmed.length > 0) {
         confirmedSection.hidden = false;
         confirmedSection.querySelector('.saved-dedup-section-count').textContent = `(${confirmed.length})`;
-        confirmedList.innerHTML = savedDedupListHtml(confirmed, true);
+        confirmedList.innerHTML = savedDedupListHtml(confirmed);
       } else {
         confirmedSection.hidden = true;
         confirmedList.innerHTML = '';
@@ -1424,7 +1421,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         possibleSection.querySelector('.saved-dedup-section-count').textContent = `(${possible.length})`;
         possibleSection.querySelector('.saved-dedup-possible-intro').textContent =
           'Same title or same extracted content under different URLs:';
-        possibleList.innerHTML = savedDedupListHtml(possible, false);
+        possibleList.innerHTML = savedDedupListHtml(possible);
       } else {
         possibleSection.hidden = true;
       }
@@ -1840,6 +1837,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     // archiving keeps the tag, the offline copy and pruning-exemption, and each
     // item can be un-archived individually.
     let _aoDays = 30;
+    let _aoBasis = 'published';
     let _aoToken = 0;   // guards against an out-of-order preview reply
 
     const _aoRender = async () => {
@@ -1848,13 +1846,15 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const list = results.querySelector('.archive-old-list');
       const choices = document.getElementById('archive-old-choices');
       const okBtn = document.getElementById('archive-old-ok');
+      const caveat = results.querySelector('.archive-old-caveat');
+      if (caveat) caveat.hidden = _aoBasis !== 'saved';
       const token = ++_aoToken;
       intro.textContent = 'Measuring…';
       okBtn.hidden = true;
       okBtn.disabled = true;
       let data;
       try {
-        const resp = await fetch(`/saved/archive-old/preview?days=${_aoDays}`);
+        const resp = await fetch(`/saved/archive-old/preview?days=${_aoDays}&basis=${_aoBasis}`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         data = await resp.json();
       } catch (err) {
@@ -1878,9 +1878,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       });
 
       const t = data.totals || {};
+      const basisLabel = _aoBasis === 'saved' ? 'starred' : 'published';
       intro.textContent =
         `${(t.to_archive || 0).toLocaleString()} of ${(t.starred || 0).toLocaleString()} ` +
-        `starred article(s) are older than ${data.days} days. ` +
+        `starred article(s) were ${basisLabel} more than ${data.days} days ago. ` +
         `The Inbox would go to ${(t.remaining || 0).toLocaleString()}.`;
 
       // The age spread, so the headline number can actually be checked. A lone
@@ -1920,12 +1921,25 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       _aoRender();
     });
 
+    document.getElementById('archive-old-basis-choices')?.addEventListener('click', (ev) => {
+      const b = ev.target.closest?.('.archive-old-basis-choice');
+      if (!b) return;
+      _aoBasis = b.dataset.basis === 'saved' ? 'saved' : 'published';
+      document.querySelectorAll('.archive-old-basis-choice').forEach((el) => {
+        const active = el === b;
+        el.classList.toggle('active', active);
+        el.setAttribute('aria-pressed', String(active));
+      });
+      _aoRender();
+    });
+
     document.getElementById('archive-old-ok')?.addEventListener('click', async () => {
       const btn = document.getElementById('archive-old-ok');
       const n = Number(btn.dataset.count || 0);
       if (!n) return;
-      if (!confirm(`Archive ${n.toLocaleString()} starred article(s) older than ` +
-                   `${_aoDays} days?\n\nThey leave the Inbox and are marked read. ` +
+      const basisLabel = _aoBasis === 'saved' ? 'starred' : 'published';
+      if (!confirm(`Archive ${n.toLocaleString()} article(s) ${basisLabel} more than ` +
+                   `${_aoDays} days ago?\n\nThey leave the Inbox and are marked read. ` +
                    `Tags, the offline copy and protection from cleanup are all kept, ` +
                    `and any item can be un-archived.`)) return;
       btn.disabled = true;
@@ -1935,7 +1949,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         const resp = await fetch('/saved/archive-old', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ days: _aoDays }),
+          body: JSON.stringify({ days: _aoDays, basis: _aoBasis }),
         });
         data = await resp.json();
         if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
@@ -2039,9 +2053,21 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
 
     document.getElementById('saved-dedup-ok')?.addEventListener('click', async () => {
       const results = document.getElementById('saved-dedup-results');
-      const ids = [...results.querySelectorAll('.saved-dedup-check:checked')].map(cb => cb.dataset.entryId);
-      if (ids.length === 0) { alert('Nothing selected.'); return; }
-      if (!confirm(`Permanently delete ${ids.length} saved article(s)? This cannot be undone.`)) return;
+      // A group only contributes its Delete-marked rows if at least one row
+      // in that same group is still on Keep — a group where every copy got
+      // switched to Delete is left alone entirely rather than wiping the
+      // whole thing out, the same guard a stray click-through would need.
+      const ids = [...results.querySelectorAll('.saved-dedup-group')].flatMap((group) => {
+        const rows = [...group.querySelectorAll('.saved-dedup-row')];
+        const toDelete = rows.filter(r => r.dataset.action === 'delete');
+        if (toDelete.length === 0 || toDelete.length === rows.length) return [];
+        return toDelete.map(r => r.dataset.entryId);
+      });
+      if (ids.length === 0) {
+        alert('Nothing to delete — switch at least one copy to Delete in a group that still has a copy on Keep.');
+        return;
+      }
+      if (!confirm(`Permanently delete ${ids.length} saved article(s) marked Delete? This cannot be undone.`)) return;
       let data;
       try {
         const resp = await fetch('/saved/deduplicate', {
@@ -3181,6 +3207,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     let contextPostLink = '';
     let contextPostTitle = '';
     let contextPostFolderId = null;
+    // Re-fetch's "Land on:" picker (Now/Original/Pub date) — applies to
+    // whichever of the three re-fetch buttons gets clicked next. Reset to
+    // unset (today's default) each time the menu opens for a post; see
+    // updateRefetchGroupVisibility.
+    let refetchDateChoice = null;
     let contextPostOrphan = false;
     let actionModalSubmitHandler = null;
     let sourceViewActive = false;
@@ -7537,6 +7568,12 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
               throw new Error(`HTTP ${response.status}`);
             }
             if (dropFromInbox) linkedPostItem.remove();
+            if (!nextIsSaved) {
+              try {
+                const data = await response.json();
+                if (data && data.undo_token) showUndoUnstarToast(data.undo_token);
+              } catch (_jsonErr) { /* no undo token available — not fatal */ }
+            }
           } catch (_error) {
             if (dropFromInbox) linkedPostItem.hidden = false;
             applyEntryPaneSavedState(!nextIsSaved);
@@ -8126,6 +8163,12 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
               throw new Error(`HTTP ${response.status}`);
             }
             if (dropFromInbox) postItem.remove();
+            if (!nextIsSaved) {
+              try {
+                const data = await response.json();
+                if (data && data.undo_token) showUndoUnstarToast(data.undo_token);
+              } catch (_jsonErr) { /* no undo token available — not fatal */ }
+            }
           } catch (_error) {
             if (dropFromInbox) postItem.hidden = false;
             applyPostItemSavedState(postItem, !nextIsSaved);
@@ -8281,6 +8324,46 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
             body: new URLSearchParams({ unread_at: undoToken }).toString(),
+          });
+          const data = await resp.json();
+          if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+          window.location.reload();
+        } catch (err) {
+          toast.remove();
+          alert('Undo failed: ' + (err.message || err));
+        }
+      });
+      toast.appendChild(btn);
+      document.body.appendChild(toast);
+      window.setTimeout(() => {
+        toast.classList.add('fade-out');
+        window.setTimeout(() => toast.remove(), 500);
+      }, 8000);
+    }
+
+    // Undo toast for an accidental unstar: the server stamps the unstar with
+    // a shared timestamp (entry_unstar_batch) and hands it back as the undo
+    // token, same shape as the mark-read/mark-unread undos above. Raised
+    // 2026-08-23: repeat-pressing the star-toggle key by accident unstarred
+    // ~16 articles with no way to identify which ones afterward.
+    function showUndoUnstarToast(undoToken) {
+      document.getElementById('toast-message')?.remove();
+      const toast = document.createElement('div');
+      toast.id = 'toast-message';
+      toast.className = 'toast-message';
+      toast.textContent = 'Post unstarred. ';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toast-action-btn';
+      btn.textContent = 'Undo';
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const resp = await fetch('/entries/undo-unstar', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+            body: new URLSearchParams({ unstarred_at: undoToken }).toString(),
           });
           const data = await resp.json();
           if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
@@ -9210,6 +9293,12 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const canRefetch = postCanRefetch();
       setMenuItemVisible(postRestoreOriginalButton, false);
       if (postRefetchGroup) postRefetchGroup.hidden = !canRefetch;
+      // Reset the date-choice picker for the new post — a choice made for
+      // the last post re-fetched must not silently apply to this one.
+      refetchDateChoice = null;
+      for (const btn of document.querySelectorAll('.ctx-refetch-date-opt')) {
+        btn.classList.remove('ctx-refetch-date-opt--active');
+      }
       const feedUrl = contextPostFeedUrl;
       const entryId = contextPostEntryId;
       if (!feedUrl || !entryId) return;
@@ -9284,11 +9373,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       }
       try {
         const mode = modeOverride || (fullPage ? CAPTURE_MODE_FULL : '');
-        const body = new URLSearchParams(
-          mode
-            ? { feed_url: feedUrl, entry_id: entryId, mode }
-            : { feed_url: feedUrl, entry_id: entryId }
-        );
+        const params = { feed_url: feedUrl, entry_id: entryId };
+        if (mode) params.mode = mode;
+        if (refetchDateChoice) params.date_choice = refetchDateChoice;
+        const body = new URLSearchParams(params);
         const resp = await fetch('/articles/refresh-content', { method: 'POST', body });
         const data = await resp.json();
         if (!data.ok) {
@@ -9328,6 +9416,23 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     postRefetchButton?.addEventListener('click', (ev) => runPostRefetch(ev, false));
     postRefetchFullButton?.addEventListener('click', (ev) => runPostRefetch(ev, true));
     postRefetchArchiveButton?.addEventListener('click', (ev) => runPostRefetch(ev, false, CAPTURE_MODE_ARCHIVE));
+
+    // "Land on:" picker — a toggle, not a radio group with a required
+    // choice: clicking the already-active option clears it back to unset
+    // (today's is_capture-conditional default), same "nothing forces a
+    // choice" spirit as the rest of this menu.
+    for (const dateBtn of document.querySelectorAll('.ctx-refetch-date-opt')) {
+      dateBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const choice = dateBtn.dataset.dateChoice;
+        const nowActive = refetchDateChoice === choice ? null : choice;
+        refetchDateChoice = nowActive;
+        for (const btn of document.querySelectorAll('.ctx-refetch-date-opt')) {
+          btn.classList.toggle('ctx-refetch-date-opt--active', btn === dateBtn && nowActive !== null);
+        }
+      });
+    }
 
     postRemoveTagShownButton?.addEventListener('click', async (event) => {
       event.preventDefault();

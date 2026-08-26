@@ -455,6 +455,62 @@ tag handlers now sync the row from the server's reply (`data.tags`, the normaliz
 and capped set), OR-ing the star back in so clearing the last tag off a starred
 post does not un-keep it.
 
+### The re-fetch date picker: Now / Original / Pub date
+
+Raised 2026-08-23, decided 2026-08-24. `replace_entry_content`'s
+`bump_received` was a binary "surface it at the top" or "leave it alone" —
+right for the two cases that motivated it (a deliberate single re-fetch
+should bump; a bulk Refetch-All across dozens of old articles should not,
+since bumping every touched `saved_at` at once used to dump the whole
+Inbox's order onto whatever finished last), but with no way to say "put it
+where the article's own publish date would sort" instead of either "now" or
+"nowhere new."
+
+`date_choice` (`refresh_captured_article`, threaded down from `POST
+/articles/refresh-content`'s form field) adds that third position and
+overrides `bump_received` outright when set:
+
+- **`"now"`** forces the bump — the button explicitly asking to surface it.
+- **`"original"`** forces no bump — same effect as `bump_received=False`,
+  named for what a person reading the menu sees rather than for the
+  implementation.
+- **`"pub"`** bumps to the entry's own `published` date instead of today.
+  Deliberately still not touching `published` itself — that field moving on
+  a re-fetch is the older, already-fixed bug this whole area exists to
+  avoid (see the "It used to move `published` instead" note above): a
+  re-fetch does not republish the article. What "Pub date" changes is where
+  the **Received** columns (`first_updated`/`recent_sort`/`saved_entries.
+  saved_at`) land, via a new `replace_entry_content(bump_to=...)` — the same
+  columns "now" already moves, just aimed at a different target datetime
+  instead of `datetime.now()`. Falls back to "now" when the entry has no
+  published date to land on.
+- **Unset** (the menu's default — nothing pre-selected, same "nothing pre-
+  checked" convention as the dupe scans) preserves the pre-existing
+  `bump_received=None` behavior exactly: a capture bumps, a feed entry
+  doesn't. Existing callers (the batch Refetch-All worker, which explicitly
+  passes `bump_received=False`) are untouched — `date_choice` is additive,
+  not a replacement for `bump_received`.
+
+**Why `saved_at` needed its own fix alongside this.** The star-order bump
+used raw SQL `CURRENT_TIMESTAMP`, which cannot be pointed at an arbitrary
+date — landing the Received columns on the pub date while `saved_at` still
+jumped to literal now would have reordered the Inbox one way while showing
+"received" dated another. Both now write the same computed `stored_received`
+string.
+
+**UI**: the post context menu's Re-fetch flyout gained a "Land on:" row of
+three toggle buttons above the existing Content/Full page/From Internet
+Archive buttons — pick a date target once, then whichever re-fetch mode is
+clicked uses it. A toggle, not a required radio choice: clicking the already
+-active option clears it back to unset. Reset every time the menu opens for
+a (possibly different) post, in `updateRefetchGroupVisibility` — a choice
+made for the last post re-fetched must not silently carry over.
+
+**Deliberately out of scope**: a per-batch picker for Refetch-All. Its
+`bump_received=False` default is already correct for a bulk backfill and
+Plan.md's ask was specifically about the single-article button ("so a
+picker UI has a real parameter to plug into").
+
 ## Node bulk actions, and what a re-fetch may replace
 
 **Node bulk actions are scoped to the drilled-into view, and Read Mode gets buttons
@@ -565,6 +621,51 @@ the publisher set their own `download` name), and the `/starred-asset/` route vi
 for images/audio/video, which render inline and would only be made un-viewable by
 an attachment disposition.
 
+## Saved/Kept item size: maintained, not computed live
+
+`archived_entry.content_size_bytes` is written once, at archive-completion
+time, rather than derived with `LENGTH()`/`SUM()` on every render — decided
+2026-08-24, so pruning the biggest captures doesn't cost a live join over
+however many thousand kept items exist by then. It is the stored body
+(`source_html_zlib` + `readability_html_zlib` + `content_html_zlib`, the
+compressed capture blobs) plus every linked `archived_asset`'s `byte_size`,
+computed at the very end of `StarredArchiveService._archive_entry` — after
+every `_archive_asset` call for that entry has landed, so the asset-link join
+sees the complete set. `enqueue_archive` (the only path into that worker)
+fires from both a genuine star/tag **and** a re-fetch
+(`refresh_captured_article`), so both halves of "written at capture/re-fetch
+time" fall out of hooking this one place rather than needing two.
+
+An asset is content-addressed (`archived_asset.asset_hash`) and can be shared
+across entries — a site's repeated logo, say. Its full `byte_size` is still
+attributed to every entry that links it: the question this size answers is
+"what does keeping *this* item cost," not "what would deleting only this item
+free," and for that the shared bytes really are part of each entry's weight.
+
+**Go-forward only, same as the DeviantArt pinning fix the same night.**
+Nothing backfills existing archives; the column is `NULL` (not `0`) until an
+entry's next capture or re-fetch. `list_entries_for_feeds` reads it into
+`size_bytes`/`size_display` only when `star_only` is set (Saved and Kept
+views; an ordinary feed list has no use for a third database's worth of
+query on every render) and treats a missing row as "not yet measured," never
+as "measured at zero" — `NULL` sorts as if it were 0, at the small end,
+which is correct either way (nothing is captured for it to weigh).
+
+Two sort-path consequences worth knowing before touching either:
+
+- **The windowed fast path merges from a third database.** A large kept
+  backlog already merges `saved_entries.saved_at` (meta DB) into a
+  reader-DB-only windowing query (`_sorted_star_key_window`) rather than
+  hydrating every key to sort a few thousand entries — `sort_by="size"`
+  follows the exact same shape, merging from the starred-archive DB instead.
+  Extending that function for a third value source is the whole reason it
+  takes a `sort_by` string rather than a bool.
+- **The merged sort value has to sort as a string.** Both the windowed path
+  and the general in-Python sort compare a single shared value column; date
+  strings (ISO-ish) already sort correctly lexically, but a raw byte count
+  does not (`"9000" > "10000"` as strings). Zero-padded to a fixed width
+  (`f"{n:020d}"`) before merging is what keeps it numeric.
+
 ## Editing a post's published date (overrides)
 
 **Edit date…** (`POST /entries/set-date`) fixes garbage publish dates (epoch-0 entries sink to the bottom of every date sort). reader's `EntryData` is ingest-owned with no public setter, and the entry list sorts in SQL on reader's `entries.published` column — so the corrected date is written directly into that column (via `reader._storage.get_db()`), in reader's naive-UTC `YYYY-MM-DD HH:MM:SS` format. A meta-DB override row (`entry_date_overrides`) records the correction, and the refresh service re-pins it after every update batch (`reapply_entry_date_overrides`) in case a refresh re-ingested the feed's original value. Clearing the date deletes the override row only — the stored value stays until the feed next updates the entry.
@@ -594,3 +695,11 @@ Matching is two-tier because the rendered tree and the stored tree are not guara
 Saving or reverting re-renders **only the article pane**, via `window.lectioReloadEntryPane` (app.js's `loadEntryPaneWithoutFullRefresh`, exposed for this). The sibling edit routes (title/date/URL) full-reload because what they change is *in the list*; a body edit is not, so a reload would rebuild the list and move the reader's place in it for no reason. The loader's post-swap `centerActivePostInView` keeps the open post where it was; measured on a 30-post list, the list's scroll position is unchanged across a cleanup save. A pane fetch that fails still falls back to a full reload — `/entries/pane` requires `folder_id`, so a URL lacking it (a hand-typed link) degrades rather than breaking.
 
 Deferred: promoting a recorded removal into a per-feed rule. That rule belongs at render time inside `_apply_feed_content_cleanups`, *not* as a bulk rewrite of stored bodies — feed-wide it would touch hundreds of entries irreversibly, and the render-time form covers old and new posts alike and can be switched off.
+
+## Archive old stars ("Inbox bankruptcy") — the saved_at trap
+
+Settings → Feeds → Utilities → **Archive old stars** clears the Inbox of stars from long enough ago that they are, by any honest reading, not something still being gotten to. `services/archive_old_stars.py` is a pure decision function; `main.py`'s `_current_archive_old_stars_plan` supplies the dates and does every write.
+
+**Why it shipped with a "DO NOT RUN YET" in Plan.md, and what fixed it.** The cutoff originally sorted only on `saved_entries.saved_at`, which is not a real star date for most rows: the 2026-06 multi-user migration stamped its own run date over years-old Inoreader stars. Measured on the live library, 6,091 of 10,002 stars carry a `saved_at` in that one week; only 419 are a genuine Lectio-made star, the rest (3,492) predate it honestly. A 30-day cutoff would have swept the 6,091 migration-stamped rows in and a 90-day cutoff would have protected them — neither for any date-related reason.
+
+The fix (2026-08-25) is a **date basis**, not a smarter cutoff: `basis="published"` (the default, in both `GET /saved/archive-old/preview` and `POST /saved/archive-old`) measures age off the article's own `entries.published`, read directly from reader's DB (`_bulk_reader_published_dates`, same raw-connection-read pattern as `get_tagged_entry_keys`/`_sorted_star_key_window` — reader's high-level API has no bulk-by-key lookup). `basis="saved"` is kept as an explicit option for anyone who genuinely wants star-date bankruptcy, with its unreliability caveat shown in the UI only when picked. An entry with no date under the chosen basis is left alone rather than guessed at — the same policy `build_archive_plan` already applied to a missing `saved_at`.

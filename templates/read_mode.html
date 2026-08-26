@@ -5,6 +5,37 @@
   <title>Read Mode — Lectio</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
+  <script>
+    // Resume where you left off — Read Mode's own, separate from the main
+    // app's (a different localStorage key: the two surfaces should not
+    // redirect into each other, only remember their own last spot). Plain
+    // page navigation here, not the main app's pane state, so there is no
+    // scroll offset to restore — the URL alone is the position.
+    (function () {
+      var KEY = 'lectio-read-last-position';
+      var MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+      try {
+        var raw = window.localStorage.getItem(KEY);
+        if (raw && window.location.pathname === '/read' && !window.location.search) {
+          var saved = JSON.parse(raw);
+          if (saved && saved.url && saved.ts && Date.now() - saved.ts <= MAX_AGE_MS) {
+            var target = new URL(saved.url, window.location.origin);
+            if (target.origin === window.location.origin && target.search) {
+              window.location.replace(target.href);
+            }
+          }
+        }
+      } catch (e) { /* resume is a convenience; never block Read Mode */ }
+      try {
+        if (window.location.pathname === '/read' && window.location.search) {
+          window.localStorage.setItem(KEY, JSON.stringify({
+            url: window.location.pathname + window.location.search,
+            ts: Date.now(),
+          }));
+        }
+      } catch (e) { /* private mode, or quota */ }
+    })();
+  </script>
   <link rel="stylesheet" href="/static/reader.css?v={{ static_asset_version }}">
 </head>
 <body class="rm-body">

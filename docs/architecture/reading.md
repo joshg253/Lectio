@@ -136,6 +136,28 @@ is parsed, not string-sorted — `' '` sorts before `'T'`. **That order must not
 follow you out:** `resume_sort` stows the order you entered with and restores it,
 same shape as `resume_read_filter`.
 
+**Undo unstar** (`entry_unstar_batch`, `POST /entries/undo-unstar`) is why
+`saved_at` matters again on the way back in. Raised 2026-08-23: repeat-pressing
+the star-toggle key by accident unstarred ~16 articles with no way to identify
+which ones afterward — `apply_star_state`'s unstar path is a hard `DELETE FROM
+saved_entries`, so nothing survived to reconstruct from. `POST /entries/saved`
+(`saved=0`) now stamps the row it's about to delete with a shared timestamp
+token in `entry_unstar_batch`, keeping the *original* `saved_at` alongside it —
+same shape as the mark-read/mark-unread undo already had (`entry_read_state`/
+`entry_unread_batch`, 15-minute window, `_undo_token_problem`), but restoring
+into `saved_at`'s actual sort order matters here specifically because of the
+"opens most-recently-starred" rule above: undoing into "just starred, at the
+top" would silently reorder the Inbox for every other undo too. Deliberately
+scoped to this one route — the bulk/administrative unstar paths (Archive,
+dedup/merge, unsubscribe) call `apply_star_state` directly and don't write
+this table, since an undo toast doesn't make sense for a deliberate bulk
+action. One more guard `undo_mark_read` doesn't need: an untagged Saved
+Article husk is *hard-deleted*, not just unstarred
+(`saved_articles_service.is_saved_articles_feed` branch), so the undo route
+checks the entry still exists in `reader` before restoring the star — otherwise
+it would recreate exactly the orphan-star class of bug the orphaned-star sweep
+exists to clean up (a `saved_entries` row with no matching entry).
+
 ### Prefetch warms the next article's images, not its page
 
 The e-ink flash on advance is mostly image decode, and the reader page is

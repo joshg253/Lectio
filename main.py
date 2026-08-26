@@ -3233,6 +3233,11 @@ def ensure_starred_archive_schema() -> None:
             ("author", "TEXT"),
             ("published_at", "REAL"),
             ("received_at", "REAL"),
+            # Maintained, not computed live -- written once at archive-completion
+            # time (which capture AND re-fetch both funnel through), not derived
+            # from LENGTH()+join on every render. NULL until the first successful
+            # archive. See Plan.md "Saved: see and sort by item size".
+            ("content_size_bytes", "INTEGER"),
         ):
             if col_name not in existing_cols:
                 conn.execute(f"ALTER TABLE archived_entry ADD COLUMN {col_name} {col_decl}")
@@ -3419,6 +3424,28 @@ def ensure_meta_schema() -> None:
                 entry_id TEXT NOT NULL,
                 saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY(feed_url, entry_id)
+            )
+            """
+        )
+        # A short-lived undo for /entries/saved's unstar (POST /entries/saved,
+        # saved=0) — the same shape as entry_unread_batch, one row per entry
+        # keyed by a shared timestamp token that IS the undo token, but this
+        # one also keeps the original saved_at so a restored star lands back
+        # in its actual star-order position instead of jumping to "just
+        # starred." Raised 2026-08-23: repeat-pressing the star-toggle key by
+        # accident unstarred ~16 articles with no way to identify which ones
+        # afterward. Deliberately scoped to this one route -- the bulk/
+        # administrative unstar paths (Archive, dedup/merge, unsubscribe) go
+        # through apply_star_state directly and don't write this table, since
+        # an undo toast doesn't make sense for a deliberate bulk action.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entry_unstar_batch (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                unstarred_at TEXT NOT NULL,
+                saved_at TEXT,
+                PRIMARY KEY (feed_url, entry_id)
             )
             """
         )
@@ -10714,6 +10741,19 @@ def datetime_sort_value(dt: datetime | None) -> float:
         return float("-inf")
 
 
+def _format_size_bytes(n: int) -> str:
+    """Human-readable byte count for the Saved/Kept size column. No Jinja
+    filter for this exists in this app's template environment (only
+    ``urlencode`` is registered), and every other display value here is
+    formatted in Python before it reaches the template, not in it."""
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
 # Many feeds (web comics in particular) omit <pubDate> but encode the date in
 # the entry URL path. Sort breaks badly without it — every undated entry maps
 # to -inf and clusters at one end. This regex catches the common /YYYY/MM/DD/
@@ -10809,7 +10849,9 @@ def normalize_sort_by(sort_by: str | None, *, allow_starred: bool = False) -> st
     was ordered by star date. Reported as the Feed view reverting to "Pub new"
     after switching in and out of e-ink mode.
     """
-    if sort_by in {"post", "received"} or (allow_starred and sort_by == "starred"):
+    # "size" (Saved/Kept item size, decided 2026-08-24) is gated the same way
+    # as "starred" -- both mean something only in a star/kept-scoped view.
+    if sort_by in {"post", "received"} or (allow_starred and sort_by in {"starred", "size"}):
         return sort_by
     return DEFAULT_SORT_BY
 
@@ -13427,8 +13469,9 @@ def _sorted_star_key_window(
     # that arbitrary page. The unchunked case looked fine, which is exactly what
     # made it worth checking the chunked one.
     by_star = sort_by == "starred"
+    by_size = sort_by == "size"
     sort_expr = (
-        "''" if by_star
+        "''" if by_star or by_size
         else "COALESCE(e.published, e.updated, e.first_updated)"
         if sort_by == "post" else "e.first_updated"
     )
@@ -13474,6 +13517,25 @@ def _sorted_star_key_window(
             LOGGER.warning("star date lookup failed, keeping key order: %s", exc)
             _when = {}
         scored = [(f, i, _when.get((f, i), "")) for f, i, _ in scored]
+    elif by_size:
+        # Merge sizes from the starred-archive DB (a third DB from this
+        # function's usual two). Zero-padded to a fixed width so the shared
+        # string sort below still orders numerically. An entry with no
+        # completed archive (never captured, or still pending) has no size
+        # yet — sorts as smallest, which is correct either way: it is not
+        # one of the heavy items this sort exists to surface.
+        try:
+            with archive_conn() as _ac:
+                _size = {
+                    (str(r[0]), str(r[1])): f"{int(r[2] or 0):020d}"
+                    for r in _ac.execute(
+                        "SELECT feed_url, entry_id, content_size_bytes FROM archived_entry"
+                        " WHERE content_size_bytes IS NOT NULL")
+                }
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("archive size lookup failed, keeping key order: %s", exc)
+            _size = {}
+        scored = [(f, i, _size.get((f, i), "00000000000000000000")) for f, i, _ in scored]
     scored.sort(key=lambda t: t[2], reverse=(sort_dir != "asc"))
     return [(f, i) for f, i, _sv in scored[:limit]]
 
@@ -13592,6 +13654,23 @@ def list_entries_for_feeds(
                         read_state_map[(row["feed_url"], row["entry_id"])] = datetime.fromisoformat(str(raw_read_at))
                     except Exception:
                         continue
+
+    # Maintained item size (Saved/Kept only — no display and no sort key uses
+    # it anywhere else, so no reason to pay a third DB's worth of query on
+    # every ordinary feed-list render). NULL/missing means "not archived yet",
+    # not "zero bytes" — see ensure_starred_archive_schema.
+    size_map: dict[tuple[str, str], int] = {}
+    if normalized_star_only:
+        try:
+            with archive_conn() as _ac:
+                size_rows = _ac.execute(
+                    f"SELECT feed_url, entry_id, content_size_bytes FROM archived_entry"
+                    f" WHERE feed_url IN ({placeholders}) AND content_size_bytes IS NOT NULL",
+                    feed_url_values,
+                ).fetchall()
+            size_map = {(row["feed_url"], row["entry_id"]): int(row["content_size_bytes"]) for row in size_rows}
+        except Exception as exc:  # noqa: BLE001 — the view still renders without sizes
+            LOGGER.warning("archive size lookup failed: %s", exc)
 
     # Tag-as-keep: the Saved view is now a unified "Kept" view showing entries
     # that are starred OR manually tagged. Load the tagged keys for the view's
@@ -13881,6 +13960,9 @@ def list_entries_for_feeds(
         elif normalized_sort_by == "starred":
             sort_key = "saved_sort_value"
             sort_desc = normalized_sort_dir == "desc"
+        elif normalized_sort_by == "size":
+            sort_key = "size_sort_value"
+            sort_desc = normalized_sort_dir == "desc"
         else:
             sort_key = "post_sort_value" if normalized_sort_by == "post" else "received_sort_value"
             sort_desc = normalized_sort_dir == "desc"
@@ -13970,6 +14052,10 @@ def list_entries_for_feeds(
                 # unreachable, because entry_effective_date returned `added` and
                 # every `or` below it was dead. See entry_publication_date.
                 sort_value = datetime_sort_value(published_dt)
+            elif sort_key == "size_sort_value":
+                # No completed archive yet is 0, not "unknown" -- there is
+                # nothing captured for it to weigh, which is literally true.
+                sort_value = float(size_map.get((entry.feed_url, entry.id), 0))
             else:
                 sort_value = datetime_sort_value(entry.added)
 
@@ -13996,6 +14082,10 @@ def list_entries_for_feeds(
                     sort_key: sort_value,
                 }
             )
+            if normalized_star_only:
+                # None (not 0) when nothing is archived yet, so the template
+                # can render "—" instead of a misleading "0 B".
+                light_records[-1]["size_bytes"] = size_map.get((entry.feed_url, entry.id))
 
     filter_ms = int((time.perf_counter() - process_start) * 1000)
     # Dedupe + sort + limit on the lightweight records.
@@ -14171,6 +14261,9 @@ def list_entries_for_feeds(
                 "post_display": format_datetime_for_ui(published_dt),
                 "received_display": format_datetime_for_ui(getattr(entry, "added", None)),
                 "read_display": format_datetime_for_ui(read_dt),
+                "size_display": (
+                    _format_size_bytes(_sb) if (_sb := rec.get("size_bytes")) is not None else None
+                ),
                 "duration_seconds": duration_seconds,
                 "duration_display": duration_display,
             }
@@ -20984,10 +21077,16 @@ def _read_mode_sort_options(current: str, href_for: Callable[[str], str],
 
 def _read_mode_scope_tabs(current_scope: str) -> list[dict]:
     """The Saved / Feeds switcher shown at the top of the Read Mode tree so you
-    can flip between the two scopes without leaving Read Mode."""
+    can flip between the two scopes without leaving Read Mode.
+
+    Saved's href carries a harmless ``home=1`` (ignored by the route) rather
+    than being bare ``/read`` — same trick as the main app's wordmark
+    (``/?home=1``): the resume-restore script only redirects a *bare* URL, so
+    this is the one link that reliably reaches the true landing instead of
+    bouncing back into whatever was last read."""
     return [
         {"label": "Feeds", "glyph": "☰", "href": "/read?scope=feeds", "active": current_scope == "feeds"},
-        {"label": "Saved", "glyph": "★", "href": "/read", "active": current_scope == "saved"},
+        {"label": "Saved", "glyph": "★", "href": "/read?home=1", "active": current_scope == "saved"},
     ]
 
 
@@ -28201,6 +28300,7 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
         "saved_entries",
         "entry_read_state",
         "entry_unread_batch",
+        "entry_unstar_batch",
         "read_history",
         "feed_failure_state",
         "entry_lead_images",
@@ -30672,26 +30772,68 @@ async def apply_unstar_tagged(request: Request):
     })
 
 
-def _current_archive_old_stars_plan(days: int) -> dict:
-    """Assemble the archive-old-stars plan for the current user. Read-only."""
+def _bulk_reader_published_dates(keys: list[tuple[str, str]]) -> dict[tuple[str, str], datetime | None]:
+    """(feed, id) -> published, read directly from reader's entries table.
+
+    Mirrors the existing raw-connection reads in this module (get_tagged_entry_keys,
+    _sorted_star_key_window) — reader's high-level API has no bulk-by-key lookup."""
+    out: dict[tuple[str, str], datetime | None] = {}
+    if not keys:
+        return out
+    conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+    try:
+        for start in range(0, len(keys), 400):
+            chunk = keys[start:start + 400]
+            placeholders = ",".join("(?,?)" for _ in chunk)
+            params = [v for k in chunk for v in k]
+            for feed, eid, published in conn.execute(
+                f"SELECT feed, id, published FROM entries WHERE (feed, id) IN ({placeholders})",
+                params,
+            ):
+                out[(str(feed), str(eid))] = _parse_stored_dt(published)
+    finally:
+        conn.close()
+    return out
+
+
+def _current_archive_old_stars_plan(days: int, basis: str = "published") -> dict:
+    """Assemble the archive-old-stars plan for the current user. Read-only.
+
+    basis="published" (default): the article's own publish date.
+    basis="saved": saved_entries.saved_at — offered, but unreliable for most
+    rows. The 2026-06 multi-user migration stamped its own run date over
+    years-old Inoreader stars: 6,091 of 10,002 rows carry a saved_at in that
+    one week, only 419 are a genuine Lectio-made star. A 30-day cutoff would
+    sweep those 6,091 in and a 90-day cutoff would protect them, neither for
+    any real reason — hence "published" is the default, not "saved"."""
+    basis = basis if basis in ("published", "saved") else "published"
     with get_meta_connection() as conn:
-        starred_at: dict[tuple[str, str], datetime | None] = {}
-        for feed, eid, when in conn.execute(
-            "SELECT feed_url, entry_id, saved_at FROM saved_entries"
-        ):
-            starred_at[(str(feed), str(eid))] = _parse_stored_dt(when)
-    return archive_old_stars_service.build_archive_plan(
+        rows = conn.execute("SELECT feed_url, entry_id, saved_at FROM saved_entries").fetchall()
+    keys = [(str(f), str(e)) for f, e, _s in rows]
+    if basis == "saved":
+        starred_at: dict[tuple[str, str], datetime | None] = {
+            (str(f), str(e)): _parse_stored_dt(s) for f, e, s in rows
+        }
+    else:
+        starred_at = _bulk_reader_published_dates(keys)
+    plan = archive_old_stars_service.build_archive_plan(
         starred_at, get_archived_saved_keys(), days=days,
     )
+    plan["basis"] = basis
+    return plan
 
 
 @app.get("/saved/archive-old/preview")
-def preview_archive_old_stars(days: int = Query(archive_old_stars_service.DEFAULT_DAYS)):
+def preview_archive_old_stars(
+    days: int = Query(archive_old_stars_service.DEFAULT_DAYS),
+    basis: str = Query("published"),
+):
     """Preview which stars would be archived. Changes nothing."""
-    plan = _current_archive_old_stars_plan(days)
+    plan = _current_archive_old_stars_plan(days, basis)
     return JSONResponse({
         "ok": True,
         "days": plan["days"],
+        "basis": plan["basis"],
         "cutoff": plan["cutoff"],
         "totals": plan["totals"],
         "buckets": plan["buckets"],
@@ -30727,11 +30869,12 @@ async def apply_archive_old_stars(request: Request):
         days = int(body.get("days", archive_old_stars_service.DEFAULT_DAYS))
     except (TypeError, ValueError):
         return JSONResponse({"ok": False, "error": "days must be a number"}, status_code=400)
+    basis = str(body.get("basis", "published"))
 
-    plan = _current_archive_old_stars_plan(days)
+    plan = _current_archive_old_stars_plan(days, basis)
     keys = plan["to_archive"]
     if not keys:
-        return JSONResponse({"ok": True, "archived": 0, "days": days})
+        return JSONResponse({"ok": True, "archived": 0, "days": days, "basis": plan["basis"]})
 
     now_iso = datetime.now(timezone.utc).isoformat()
     with get_meta_connection() as conn:
@@ -30771,10 +30914,10 @@ async def apply_archive_old_stars(request: Request):
 
     # A behind-the-back write leaves the generation-guarded counts stale.
     invalidate_unread_counts_cache()
-    LOGGER.info("[archive-old-stars] archived %d star(s) older than %dd (marked read: %d)",
-                len(keys), days, marked_read)
+    LOGGER.info("[archive-old-stars] archived %d star(s) older than %dd by %s (marked read: %d)",
+                len(keys), days, plan["basis"], marked_read)
     return JSONResponse({
-        "ok": True, "archived": len(keys), "days": days, "marked_read": marked_read,
+        "ok": True, "archived": len(keys), "days": days, "basis": plan["basis"], "marked_read": marked_read,
     })
 
 
@@ -31457,15 +31600,41 @@ def toggle_entry_saved(
     select_entry: int = Form(default=1),
 ):
     normalized_tag = normalize_tag_value(tag)
+
+    undo_token: str | None = None
+    if not saved:
+        # Capture the pre-delete saved_at (not just "it was starred") so a
+        # short-lived undo restores the entry to its actual star-order
+        # position instead of jumping to "just starred, at the top."
+        with get_meta_connection() as conn:
+            _prior = conn.execute(
+                "SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchone()
+        if _prior is not None:
+            undo_token = datetime.now().isoformat()
+            with get_meta_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO entry_unstar_batch (feed_url, entry_id, unstarred_at, saved_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(feed_url, entry_id) DO UPDATE SET
+                        unstarred_at = excluded.unstarred_at,
+                        saved_at = excluded.saved_at
+                    """,
+                    (feed_url, entry_id, undo_token, _prior["saved_at"]),
+                )
+                conn.commit()
+
     apply_star_state(feed_url, entry_id, bool(saved))
     if saved:
         _maybe_autofetch_on_keep(feed_url, entry_id)
 
     if is_async_action_request(request, "lectio-post-save-toggle"):
-        return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved)})
+        return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved), "undo_token": undo_token})
 
     if is_async_action_request(request, "lectio-entry-save-toggle"):
-        return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved)})
+        return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved), "undo_token": undo_token})
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
@@ -31528,10 +31697,15 @@ async def refresh_saved_article_content(
     feed_url: str = Form(...),
     entry_id: str = Form(...),
     mode: str = Form("readability"),
+    date_choice: str = Form(""),
 ):
     """Re-fetch + re-extract a captured article's content, replacing the stored
     copy and bumping it to the top. Fixes a bad initial capture (e.g. readability
     grabbed a fragment, or a broken import) without deleting and re-adding.
+
+    *date_choice*, one of "now"/"original"/"pub" (blank = today's default:
+    a capture bumps, a feed entry doesn't) — see
+    saved_articles_service.refresh_captured_article.
 
     Works for any Lectio capture, wherever it lives, and always re-fetches the
     entry's current **link** rather than its id. Two bugs made that necessary:
@@ -31550,8 +31724,11 @@ async def refresh_saved_article_content(
 
     The save path is kept only as a fallback for the case it is actually good
     at — a saved URL with no entry behind it yet."""
+    _dc = date_choice if date_choice in {"now", "original", "pub"} else None
+    # positional: feed_url, entry_id, mode, bump_received (unused here — the
+    # date_choice picker is the only knob this route exposes), date_choice.
     result = await run_in_threadpool(
-        _refresh_captured_article_for_current_user, feed_url, entry_id, mode
+        _refresh_captured_article_for_current_user, feed_url, entry_id, mode, None, _dc
     )
     if result.get("ok"):
         return JSONResponse({
@@ -31831,6 +32008,7 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
 def _refresh_captured_article_for_current_user(
     feed_url: str, entry_id: str, mode: str = "readability",
     bump_received: bool | None = None,
+    date_choice: str | None = None,
 ) -> dict:
     """Re-fetch a Lectio capture that lives on a real feed (post auto-filing),
     with the current tenancy's reader/meta DB.
@@ -31845,7 +32023,8 @@ def _refresh_captured_article_for_current_user(
     users to archive.org by hand: a publisher serving a page that passes every
     guard but is no longer the article — rewritten, truncated, or paywalled.
 
-    *bump_received* is forwarded as-is to refresh_captured_article — see there."""
+    *bump_received* and *date_choice* are forwarded as-is to
+    refresh_captured_article — see there."""
     from_archive: str | None = None
     if mode == CAPTURE_MODE_ARCHIVE:
         from_archive = wayback_snapshot_url(_entry_source_url(feed_url, entry_id) or entry_id)
@@ -31884,6 +32063,7 @@ def _refresh_captured_article_for_current_user(
             enqueue_archive=starred_archive_service.enqueue_archive,
             is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
             bump_received=bump_received,
+            date_choice=date_choice,
         )
     if from_archive and result.get("ok"):
         result["from_archive"] = from_archive
@@ -31906,6 +32086,7 @@ def _refresh_captured_article_for_current_user(
                     enqueue_archive=starred_archive_service.enqueue_archive,
                     is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
                     bump_received=bump_received,
+                    date_choice=date_choice,
                 )
             if archived_result.get("ok"):
                 archived_result["from_archive"] = snapshot
@@ -33234,6 +33415,65 @@ def undo_mark_read(read_at: str = Form(...)):
     invalidate_unread_counts_cache()
     LOGGER.info("[undo-mark-read] restored %d of %d entries from batch %s", restored, len(pairs), read_at)
     return JSONResponse({"ok": True, "restored": restored})
+
+
+@app.post("/entries/undo-unstar")
+def undo_unstar(unstarred_at: str = Form(...)):
+    """Undo an accidental unstar (the toast's Undo button on /entries/saved).
+
+    Same shape and window as undo_mark_read/undo_mark_unread: the shared
+    timestamp toggle_entry_saved stamped is the token. Restores the star with
+    its *original* saved_at (recorded alongside the token) rather than a
+    fresh one, so it lands back in its actual star-order position instead of
+    jumping to "just starred." Writes straight to saved_entries rather than
+    going through apply_star_state, so this can't re-fire "on star, also send
+    to..." destinations — those are for a genuine new star, not a restore.
+    """
+    _bad_token = _undo_token_problem(unstarred_at)
+    if _bad_token is not None:
+        return _bad_token
+
+    with get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT feed_url, entry_id, saved_at FROM entry_unstar_batch WHERE unstarred_at = ?",
+            (unstarred_at,),
+        ).fetchone()
+    if row is None:
+        return JSONResponse({"ok": False, "error": "Nothing to undo."}, status_code=404)
+
+    feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
+
+    # An untagged Saved Article husk is hard-deleted on unstar
+    # (apply_star_state -> _hard_delete_entry), not just unstarred — the
+    # entry itself is gone, so restoring the saved_entries row would create
+    # exactly the orphan-star class of bug the orphaned-star sweep exists to
+    # clean up (a row with no matching reader entry). Refuse rather than
+    # dangle.
+    with get_reader() as reader:
+        entry_gone = reader.get_entry((feed_url, entry_id), None) is None
+    if entry_gone:
+        with get_meta_connection() as conn:
+            conn.execute("DELETE FROM entry_unstar_batch WHERE unstarred_at = ?", (unstarred_at,))
+            conn.commit()
+        return JSONResponse(
+            {"ok": False, "error": "That post no longer exists — it was removed when unstarred."},
+            status_code=410,
+        )
+
+    saved_at = row["saved_at"] or datetime.now().isoformat()
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
+            (feed_url, entry_id, saved_at),
+        )
+        conn.execute("DELETE FROM entry_unstar_batch WHERE unstarred_at = ?", (unstarred_at,))
+        conn.commit()
+    try:
+        starred_archive_service.enqueue_archive(feed_url, entry_id)
+    except Exception as exc:  # noqa: BLE001 — the star itself is already restored
+        LOGGER.warning("starred archive re-enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
+    LOGGER.info("[undo-unstar] restored %s/%s from batch %s", feed_url, entry_id, unstarred_at)
+    return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id})
 
 
 @app.post("/entries/mark-newer-than-unread")

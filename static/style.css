@@ -6155,7 +6155,6 @@ body[data-keyboard-open="1"] .action-modal-panel {
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
-.keep-tag { color: var(--muted); }
 .remove-tag { color: var(--danger, #c0392b); }
 .dedup-suggested-arrow {
   font-size: 0.85rem;
@@ -6356,7 +6355,19 @@ body[data-keyboard-open="1"] .action-modal-panel {
   word-break: break-word;
 }
 a.dedup-url { color: inherit; }
-.saved-dedup-row .dedup-tag { width: 2.6rem; }
+.saved-dedup-toggle { display: flex; flex-shrink: 0; gap: 0.15rem; }
+.saved-dedup-toggle-btn {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.saved-dedup-toggle-keep.active { background: var(--muted); color: var(--bg); border-color: var(--muted); }
+.saved-dedup-toggle-delete.active { background: var(--danger, #c0392b); color: #fff; border-color: var(--danger, #c0392b); }
 .saved-dedup-main { min-width: 0; }
 .saved-dedup-reasons {
   font-size: 0.7rem;
@@ -6910,6 +6921,20 @@ mark.highlight-mark {
   font-size: 0.85em;
   font-style: italic;
   color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Saved/Kept only — maintained size (capture + archived assets), not the
+   source page's weight. See Plan.md "Saved: see and sort by item size". */
+.post-size-badge {
+  display: inline-block;
+  margin-left: 0.5em;
+  padding: 0.05em 0.4em;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 3px;
   white-space: nowrap;
 }
 
@@ -8331,9 +8356,9 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
 
 /* Archive old stars: cutoff chips + the age-spread table that makes the
    headline number checkable before thousands of items move. */
-.archive-old-cutoff { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin: .5rem 0; }
+.archive-old-cutoff, .archive-old-basis { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin: .5rem 0; }
 .archive-old-choices { display: flex; gap: .35rem; flex-wrap: wrap; }
-.archive-old-choice.active { outline: 2px solid currentColor; outline-offset: -2px; }
+.archive-old-choice.active, .archive-old-basis-choice.active { outline: 2px solid currentColor; outline-offset: -2px; }
 .archive-old-table { border-collapse: collapse; margin: .25rem 0 .5rem; }
 .archive-old-table td { padding: .15rem .75rem .15rem 0; }
 .archive-old-table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
@@ -8462,6 +8487,41 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
 }
 .ctx-submenu--left > .ctx-submenu-list { left: auto; right: 100%; }
 .ctx-submenu[open] > .ctx-submenu-summary { background: var(--hover-bg); }
+
+/* Re-fetch's date-choice row: which of the three buttons below it a click
+   applies to, not a button of its own. See Plan.md "Re-fetch: let the user
+   choose which date it lands on". */
+.ctx-refetch-date-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding: 0.3rem 0.5rem 0.1rem;
+}
+.ctx-refetch-date-row {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0 0.35rem 0.35rem;
+  margin-bottom: 0.2rem;
+  border-bottom: 1px solid var(--line);
+}
+.ctx-refetch-date-opt {
+  flex: 1;
+  font-size: 0.74rem;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+.ctx-refetch-date-opt:hover { border-color: var(--fg); }
+.ctx-refetch-date-opt--active {
+  background: var(--accent, #2f6fd0);
+  border-color: var(--accent, #2f6fd0);
+  color: #fff;
+  font-weight: 600;
+}
 
 /* Settings -> Tags. The inventory is a long list, so it scrolls inside its own box
    rather than growing the modal; the counts are right-aligned because the point of

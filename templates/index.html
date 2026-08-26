@@ -547,8 +547,8 @@
         {# 'Star' is why this exists: order-by-star-date reaching the toolbar as
            an unlabelled case is the bug that made it read "Published newest"
            over a differently-ordered list. #}
-        {% set sort_by_label = 'Pub' if selected_sort_by == 'post' else ('Star' if selected_sort_by == 'starred' else 'Rec') %}
-        {% set sort_dir_label = 'new' if selected_sort_dir == 'desc' else 'old' %}
+        {% set sort_by_label = 'Pub' if selected_sort_by == 'post' else ('Star' if selected_sort_by == 'starred' else ('Size' if selected_sort_by == 'size' else 'Rec')) %}
+        {% set sort_dir_label = ('big' if selected_sort_dir == 'desc' else 'small') if selected_sort_by == 'size' else ('new' if selected_sort_dir == 'desc' else 'old') %}
         <div class="toolbar-row-main">
           {# Phone only; CSS hides both at desktop widths. Two different jobs, so
              two different controls rather than one that changes meaning:
@@ -636,6 +636,10 @@
                 {% if selected_star_only %}
                 <a class="menu-item {% if selected_sort_by == 'starred' and selected_sort_dir == 'desc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=starred&sort_dir=desc' ~ tb_rf }}">Recently starred</a>
                 <a class="menu-item {% if selected_sort_by == 'starred' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=starred&sort_dir=asc' ~ tb_rf }}">Longest starred</a>
+                {# Maintained at capture/re-fetch time, not computed live — see
+                   Plan.md "Saved: see and sort by item size". #}
+                <a class="menu-item {% if selected_sort_by == 'size' and selected_sort_dir == 'desc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=size&sort_dir=desc' ~ tb_rf }}">Biggest first</a>
+                <a class="menu-item {% if selected_sort_by == 'size' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=size&sort_dir=asc' ~ tb_rf }}">Smallest first</a>
                 {% endif %}
               </div>
             </details>
@@ -881,6 +885,9 @@
                       href="/?folder_id={{ post_feed_folder_id }}&list_feed_url={{ post.feed_url | urlencode }}{{ sort_query }}{{ read_filter_query }}"
                     >{{ post.feed_title }}</a>{% if post.feed_url in unsubscribed_feed_urls %}<span class="feed-unsubscribed-tag" title="No longer subscribed — this is a kept copy">(unsubscribed)</span>{% endif %}
                   </span>
+                  {% if selected_star_only and post.size_display %}
+                  <span class="post-size-badge" title="Captured content + archived assets">{{ post.size_display }}</span>
+                  {% endif %}
                 </div>
               </div>
               <div class="post-actions-row">
@@ -1965,6 +1972,16 @@
     <details class="ctx-submenu" id="ctx-post-refetch-group" hidden>
       <summary class="context-menu-item ctx-submenu-summary">Re-fetch<span class="ctx-submenu-caret material-symbols-rounded" aria-hidden="true">chevron_right</span></summary>
       <div class="ctx-submenu-list">
+        {# Where the re-fetch lands, not which mode fetches it — applies to
+           all three buttons below. Nothing pre-selected (decided 2026-08-24):
+           unset means today's default (a capture bumps to Now, a feed entry
+           keeps its date), same as before this existed. #}
+        <div class="ctx-refetch-date-label">Land on:</div>
+        <div class="ctx-refetch-date-row" role="radiogroup" aria-label="Where the re-fetched date lands">
+          <button type="button" class="ctx-refetch-date-opt" data-date-choice="now">Now</button>
+          <button type="button" class="ctx-refetch-date-opt" data-date-choice="original">Original</button>
+          <button type="button" class="ctx-refetch-date-opt" data-date-choice="pub" title="The article's own published date">Pub date</button>
+        </div>
         <button type="button" id="ctx-post-refetch" class="context-menu-item" hidden>Content</button>
         {# Whole-page capture instead of readability extraction — for a post
            whose normal re-fetch keeps coming back wrong. #}

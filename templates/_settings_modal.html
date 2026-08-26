@@ -694,12 +694,12 @@
             <details class="saved-dedup-section saved-dedup-possible-section" open hidden>
               <summary>Possible <span class="saved-dedup-section-count"></span></summary>
               <p class="action-modal-label saved-dedup-possible-intro"></p>
-              <p class="action-modal-hint">Nothing below is preselected — check the copies you want removed.</p>
+              <p class="action-modal-hint">Every copy starts on Keep — switch the ones you want removed to Delete.</p>
               <div class="saved-dedup-possible-list"></div>
             </details>
             <div class="dedup-inline-actions">
-              <button type="button" id="saved-dedup-checkall" class="settings-secondary-btn" hidden title="Probe every group's URLs (throttled, one group at a time) — dead links are flagged and selected for deletion; live and inconclusive copies are left alone">Check all URLs</button>
-              <button type="button" id="saved-dedup-ok" class="danger" hidden>Delete selected copies</button>
+              <button type="button" id="saved-dedup-checkall" class="settings-secondary-btn" hidden title="Probe every group's URLs (throttled, one group at a time) — a confirmed-dead copy is switched to Delete (never the sole copy with real stored content); live and inconclusive copies stay on Keep">Check all URLs</button>
+              <button type="button" id="saved-dedup-ok" class="danger" hidden>Delete copies marked Delete</button>
             </div>
           </div>
           <div id="purge-old-panel" hidden>
@@ -753,7 +753,14 @@
           <div id="archive-old-results" hidden>
             <p class="action-modal-label archive-old-intro"></p>
             <p class="action-modal-hint">A star means <em>to-do</em>. Anything starred long ago is not something you are still getting to, so this archives it: it leaves the Inbox and is marked read, while its tags, its offline copy and its protection from cleanup all stay. Un-archive any item to put it back.</p>
-            <p class="action-modal-hint archive-old-caveat"><strong>Check the age spread before running this.</strong> The age is the date the star was made, and that date was rewritten for everything carried over by an import or migration — so a large cluster in one month usually means &ldquo;when the data moved&rdquo;, not when you starred it.</p>
+            <p class="action-modal-hint archive-old-caveat" hidden><strong>Check the age spread before running this.</strong> The star date was rewritten for everything carried over by an import or migration — so a large cluster in one month usually means &ldquo;when the data moved&rdquo;, not when you starred it.</p>
+            <div class="archive-old-basis">
+              <span class="action-modal-label">Age by</span>
+              <span id="archive-old-basis-choices" class="archive-old-choices">
+                <button type="button" class="settings-secondary-btn archive-old-basis-choice active" data-basis="published" aria-pressed="true" title="How long ago the article was published">Publish date</button>
+                <button type="button" class="settings-secondary-btn archive-old-basis-choice" data-basis="saved" aria-pressed="false" title="How long ago it was starred — unreliable for anything carried over by an import or migration">Star date</button>
+              </span>
+            </div>
             <div class="archive-old-cutoff">
               <span class="action-modal-label">Archive stars older than</span>
               <span id="archive-old-choices" class="archive-old-choices"></span>
