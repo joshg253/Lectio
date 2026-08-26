@@ -2417,3 +2417,106 @@ def test_feed_media_thumbnails_fetch_is_bounded_and_never_hands_feedparser_a_url
     assert seen_follow_redirects and all(fr is False for fr in seen_follow_redirects), (
         "the feed fetch must disable httpx redirect following so url_guard checks each hop"
     )
+
+
+# ---------------------------------------------------------------------------
+# joanwestenberg (2026-08-12/24): an avatar with a Cloudinary/Substack-style
+# comma-heavy srcset became the lead image, with a URL mangled by naive
+# comma-splitting. Two independent bugs, reproduced together and separately.
+# ---------------------------------------------------------------------------
+
+_JW_AVATAR_SRCSET = (
+    "https://substackcdn.com/image/fetch/$s_!SJtr!,w_36,h_36,c_fill,f_auto,q_auto:good,"
+    "fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com"
+    "%2Fpublic%2Fimages%2F54836094-23db-4ca4-a3c3-cb767307db3e_2000x2000.png 1x, "
+    "https://substackcdn.com/image/fetch/$s_!SJtr!,w_72,h_72,c_fill,f_auto,q_auto:good,"
+    "fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com"
+    "%2Fpublic%2Fimages%2F54836094-23db-4ca4-a3c3-cb767307db3e_2000x2000.png 2x, "
+    "https://substackcdn.com/image/fetch/$s_!SJtr!,w_108,h_108,c_fill,f_auto,q_auto:good,"
+    "fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com"
+    "%2Fpublic%2Fimages%2F54836094-23db-4ca4-a3c3-cb767307db3e_2000x2000.png 3x"
+)
+_JW_AVATAR_URL_1X = (
+    "https://substackcdn.com/image/fetch/$s_!SJtr!,w_36,h_36,c_fill,f_auto,q_auto:good,"
+    "fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com"
+    "%2Fpublic%2Fimages%2F54836094-23db-4ca4-a3c3-cb767307db3e_2000x2000.png"
+)
+_JW_REAL_IMAGE = (
+    "https://images.unsplash.com/photo-1517816428104-797678c7cf0c"
+    "?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080"
+)
+_JW_BODY_HTML = (
+    f'<img alt="JA Westenberg\'s avatar" class="img-OACg1c pencraft pc-reset" '
+    f'height="36" src="{_JW_AVATAR_URL_1X}" srcset="{_JW_AVATAR_SRCSET}">'
+    f'<p>Some newsletter musings.</p>'
+    f'<img alt="orange megaphone on orange wall" class="sizing-normal" height="720" '
+    f'src="{_JW_REAL_IMAGE}" width="1080">'
+)
+
+
+def test_srcset_with_embedded_commas_parsed_as_full_urls(tmp_path: Path):
+    """A Cloudinary/Substack "image fetch" URL embeds its own comma-separated
+    transform params before the real path -- naive comma-splitting of the
+    whole srcset attribute cut such a URL off mid-path. A srcset URL never
+    contains whitespace, so each candidate must be scanned as one
+    whitespace-delimited token, not split on every comma."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+
+    urls = service._parse_srcset_urls_descending(_JW_AVATAR_SRCSET)
+
+    assert len(urls) == 3
+    assert all(u.startswith("https://substackcdn.com/image/fetch/") for u in urls)
+    assert all("fl_progressive:steep/https%3A%2F%2Fsubstack-post-media" in u for u in urls)
+    # Ranked by descriptor descending: 3x (w_108) first.
+    assert "w_108" in urls[0]
+    assert "w_72" in urls[1]
+    assert "w_36" in urls[2]
+
+
+def test_srcset_naive_split_would_have_produced_the_mangled_fragment():
+    """Documents the exact failure mode: what the old `srcset.split(",")`
+    produced for the 1x candidate, which is the fragment that got urljoin'd
+    onto the entry's own page path and reported as a 404 thumbnail flicker."""
+    naive_first_fragment = _JW_AVATAR_SRCSET.split(",")[0]
+    assert naive_first_fragment == "https://substackcdn.com/image/fetch/$s_!SJtr!"
+
+
+def test_avatar_alt_text_rejected_in_feed_body_scan(tmp_path: Path):
+    """The bug: source_url is None for feed-provided body HTML (there is no
+    fetched source page), so the avatar-hint check gated behind `source_url`
+    never ran, and only the URL-path heuristic applied -- which has nothing to
+    match here (no "avatar"/"profile"/etc. anywhere in the wixmp/Cloudinary
+    URL, only in the alt text)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+
+    result = service._extract_first_image_url_from_html(
+        _JW_BODY_HTML, "https://www.joanwestenberg.com/p/nobody-wants-your-newsletter-you"
+    )
+
+    assert result == _JW_REAL_IMAGE
+
+
+def test_avatar_hint_checked_even_without_a_source_url(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    avatar_attrs = {"alt": "JA Westenberg's avatar", "class": "pencraft pc-reset", "height": "36"}
+    assert service._has_avatar_hint(avatar_attrs) is True
+    real_attrs = {"alt": "orange megaphone on orange wall", "class": "sizing-normal", "height": "720"}
+    assert service._has_avatar_hint(real_attrs) is False
+
+
+def test_joanwestenberg_end_to_end_picks_the_real_content_image(tmp_path: Path):
+    """Both fixes together, through the real entry-resolution path
+    (extract_entry_thumbnail_url -> _extract_entry_thumbnail_url_inner ->
+    _extract_first_image_url_from_html on the feed-provided content HTML,
+    the exact path this entry resolved through)."""
+    entry = _FakeEntry(
+        feed_url="https://www.joanwestenberg.com/feed",
+        entry_id="https://www.joanwestenberg.com/p/nobody-wants-your-newsletter-you",
+        link="https://www.joanwestenberg.com/p/nobody-wants-your-newsletter-you",
+        content_html=_JW_BODY_HTML,
+    )
+    service = _build_service(tmp_path / "meta.sqlite", [entry])
+
+    thumb = service.extract_entry_thumbnail_url(entry)
+
+    assert thumb == _JW_REAL_IMAGE
