@@ -5,298 +5,114 @@ explains why the code looks the way it does, in ARCHITECTURE.md.
 
 ## Now
 
-Roughly ordered: quick/concrete fixes first, then cheap UX wins, then items
-that need a decision or go-ahead from Josh before they can move, then
-measurement/investigation jobs, then scheduled or genuinely low-urgency
-work, then the two standing watch-lists, then the one big multi-session
-project last.
+Roughly ordered: recurring/active pain first, then concrete bugs, then
+items already scoped and decided so they're ready whenever picked up, then
+measurement/investigation jobs, then low-urgency work and the two standing
+watch-lists last. Re-prioritized 2026-08-24: items shipped since the last
+pass moved to git history (rationale stays in ARCHITECTURE.md where it's
+not already there); items with no trigger condition met yet moved to Later.
 
-### Ino import resurrects deliberately-unsubscribed feeds
+### YouTube's RSS feed endpoint is currently 404ing this server's IP — 689 of 705 feeds broken
 
-Bit twice in one day (2026-08-23/24). The `subscriptions` phase of
-`_inoreader_drip_step` (`main.py` ~26117) does `reader.add_feed(furl,
-exist_ok=True)` for every feed Ino still lists as subscribed that's missing
-locally — no check for *why* it's missing. First hit: the initial full Ino
-import re-added 396 feeds Josh had already unsubscribed from in Lectio over
-time, all dumped into Uncategorized with no folder (import never touches
-folders at all, a separate gap). Fixed live both times by hand: diff feeds
-added at the sync's exact timestamp against Uncategorized, bulk-unsubscribe
-via `purge_orphaned_feed`. Second hit: starting the recovery re-sync (to pull
-back the stars an accidental mass-F-press wiped, see the entry below) ran the
-same `subscriptions` phase again and resurrected the exact same 394 feeds a
-second time, since nothing recorded that they'd been deliberately removed.
+Found 2026-08-24 while characterizing the "73 unparseable" failing-feeds
+bucket below — this is a bigger, more urgent finding than what that job was
+looking for, so it goes first. **Not a code bug and not fixed** — this needs
+Josh's read on whether/how to act, not a live change made while he's asleep.
 
-**Fix direction**: `purge_orphaned_feed` has no audit trail today — a feed
-that's gone because it was merged/deduped and a feed that's gone because the
-user unsubscribed it look identical afterward. Add a small table (e.g.
-`declined_feeds(feed_url, declined_at)`) written only on a genuine
-user-initiated unsubscribe (not dedup/merge/format-upgrade paths, which
-already pass `archive_pending=False`/`migrate_curation_to`), and have the
-`subscriptions` phase skip anything in it instead of blindly re-adding. Same
-shape as `dedup_dismissed` for entries — this is the feed-level equivalent.
-Any future "Start" on the Ino import (not just this recovery run) will
-resurrect the same 394 again until this exists.
+**What's happening, confirmed live:** `feed_failure_state` shows 834 failing
+feeds against the reader's 2,279 subscriptions (`consecutive_failures > 0`,
+checked against currently-subscribed feed_urls to exclude stale rows — only
+6 of 834 are stale). 693 of those 834 are youtube.com feeds, and 689 of
+those 693 currently show `last_error` = "HTTP 404" — **97.7% of all 705
+subscribed YouTube feeds.** All 689 share the *exact same* `last_failure_at`
+in one of two clusters (23:19:08 and 23:50:08 on 2026-08-24), meaning one
+refresh pass, not independent per-channel decay. `last_success_at` on a
+sample was 18:23–19:17 the same day — these were fetching fine a few hours
+earlier.
 
-### Undo unstar (matching the existing undo-mark-read/unread)
+**Confirmed it is not real channel deletions.** Curled
+`youtube.com/feeds/videos.xml?channel_id=UC-lHJZR3Gqxm24_Vd_AJ5Yw` (PewDiePie
+— about as alive as a channel gets) directly from the container: **404**,
+Google's own error page. `youtube.com/` itself and `google.com` both load
+fine (200) from the same container at the same time, and a non-YouTube feed
+(hnrss.org) fetches normally — so this is not a general network problem, and
+not a real "resource not found." It reads as YouTube's feed endpoint
+specifically blocking or rate-limiting this server's outbound IP and
+answering with 404 instead of 429, which is unusual but not unheard of for
+anti-scraping.
 
-Raised 2026-08-23: Josh hit F (star toggle) repeatedly by accident while
-sitting in the Inbox, unstarring ~16 articles with no way to identify which
-ones afterward — unlike mark-read/unread, there's no undo token for a star
-toggle. `apply_star_state`'s unstar path is a hard `DELETE FROM
-saved_entries`, so once it lands there's no trace of which entry it was,
-only that *something* changed (couldn't reconstruct after the fact even from
-server logs — the access log has no request body, and nothing else records
-per-entry star history).
+**⚠ Correction made while writing this up: the obvious "no fix ever shipped"
+theory is wrong.** `services/feed_refresh.py` already has exactly the fix
+this symptom calls for — high-fanout exemption (hosts with ≥8 feeds in a
+batch, i.e. youtube.com, are exempt from domain-level backoff) plus pacing
+(`_HIGH_FANOUT_PACE_SECONDS = 0.7`, ~8 minutes for a full ~700-feed YouTube
+pass), with a comment that already names this *exact* symptom: "YouTube RSS
+returns spurious 404s to a ~700-feed burst even though each feed is fine
+one-at-a-time." This shipped 2026-07-12/13. So the question isn't "why was
+this never fixed" — it's "why did a real fix apparently fail to prevent a
+real recurrence."
 
-Made worse by two compounding factors this time (worth remembering, not
-necessarily fixing): the Inbox's "unstar removes the row immediately" fix
-(shipped earlier the same day) means each repeat keypress hits a *different*
-entry, not the same one toggling back and forth — `getActivePostItem()`
-falls through to whatever's newest at the top once the active one's gone.
-And a concurrent Ino trickle-import was inserting new stars the entire time,
-so even "what's at the top of the Inbox now" can't stand in for "what was
-there right before the incident."
+**Most likely explanation, not confirmed:** tonight's session did seven
+other rebuild-and-redeploy cycles over roughly 90 minutes, each one
+restarting the container (and with it, the scheduled-refresh background
+thread) outright. The "this folder is due" timestamp is written to the
+per-user meta DB *before* the paced fetch loop runs, not after — so a
+restart mid-pass doesn't cause the same folder to be immediately re-selected
+as due, but it does mean a courteously-paced fetch loop can be cut off
+mid-flight, mid-connection, with no graceful close. If the YouTube folder's
+own 30-minute cadence happened to come due more than once inside that
+90-minute window (plausible — that's three cadence cycles), each attempt
+could have been interrupted the same way, several times, in a short span.
+Whether *that* pattern (repeated aborted bursts, not one clean burst) is
+what actually trips YouTube's rate limiting is a real unknown — flagged as
+the leading theory, not a conclusion. Restarting this often for routine
+deploys is itself unusual; a normal work session doesn't rebuild seven times
+in 90 minutes.
 
-**Fix direction**: give `/entries/saved` unstar the same short-lived undo
-token pattern `/entries/mark-range-read` already uses (see
-`_run_scheduled_refresh_for_all_users` era mark-read undo, or the
-`/entries/undo-mark-read` route) — keep the just-removed
-`(feed_url, entry_id, saved_at)` around briefly (a toast with an Undo action,
-or a short server-side buffer) rather than committing to a hard delete
-immediately.
+**Deliberately not touched tonight:** no change to `feed_refresh.py`'s
+backoff/pacing logic (the existing fix is doing what it was designed to do;
+guessing at a further change without being able to reproduce the failure
+risks solving the wrong problem), and no bulk action on the 689 individual
+feeds (disabling or pausing several hundred subscriptions is exactly the
+kind of bulk, live-data action that needs a go-ahead first, and might not
+even be the right move if this clears on its own).
 
-**2026-08-23, root cause of the "wrong entry" half fixed**: it happened a
-second time (single stray `F` with nothing open) and `getActivePostItem()`'s
-`|| visiblePosts[0]` fallback was confirmed as the actual culprit — `m`/`f`,`s`/`o`,`b`
-were all silently acting on the first visible post whenever nothing was
-`.active`. Fallback removed; those shortcuts now no-op with no selection.
-Undo-token above is still worth having as defense-in-depth for the case where
-the *wrong selected* item gets hit (fat-fingered key, repeat-press on a list
-that's reordering under you) — this fix only closes the *no* selection case.
+**Open questions for next time this is picked up:**
+- Does it self-clear, and on what timescale — check `consecutive_failures`/
+  `last_error` on a sample of these feeds again later; if `last_success_at`
+  has moved forward, it cleared on its own.
+- If it recurs on a session with zero restarts, the "repeated interrupted
+  bursts" theory above is wrong and something else is going on — worth
+  checking `domain_failure_state` and a fresh `last_failure_at` cluster
+  the same way this was found.
+- If the restart theory holds up, the actionable lesson is process
+  discipline (batch deploys, don't rebuild mid-session repeatedly) rather
+  than a code change — but confirm before treating that as the fix.
 
-### basslessons.be (FakeFeedz scrape): real bodies, and video/tabs on keep
+**Josh's read (2026-08-25 morning): not pursuing further.** Matches what he
+already sees day-to-day — individual YouTube channels 404 intermittently even
+opened directly in a browser, temporarily. His guess is the diagnostic
+probing itself (repeated live curls against the RSS endpoint during this
+investigation) contributed to the block, on top of that normal flakiness. His
+overall take: YouTube-in-Lectio was already working well enough before this,
+and he's mid-migration off Inoreader (unrelated feeds — currently working
+through a backlog of saved-photos wallpapers, not a YouTube-specific step) so
+this isn't blocking anything. No code change requested; closing the
+investigation here rather than probing YouTube further.
 
-**BUILT 2026-08-13** as `services/site_content_plugins.py` — a per-site capture
-adapter with two hooks (`prefers_full_page`, `extra_embed_html`), documented in
-`docs/architecture/saved.md`. Both fire per entry, on Re-fetch and on the
-star/tag auto-fetch.
+### Refetch-All has no "already re-fetched recently" skip
 
-⚠ **One premise below was wrong.** "Ordinary readability/full-page extraction
-reaches them" holds only for **full-page**: on the real page readability keeps
-**1 of the 6** sheet scans and scores the cookie banner above the rest. Since
-readability is the default capture mode, the site has to opt into full-page —
-which is what `prefers_full_page` is for. Guarded by a real-page fixture
-(`tests/fixtures/basslessons_transcription.html`), because synthetic markup does
-not reproduce readability's scoring.
-
-**DONE 2026-08-13**, confirmed by Josh. All 12 unread entries re-fetched
-(`scripts/refetch_scope.py --feed … --unread --apply`); each holds the credits,
-every sheet scan and the video. Reading the real captures found two things the
-spec missed: full-page keeps nodes the page never shows (the consent banner is
-`display: none` and led every article), and this site builds all its chrome from
-plain divs, so the `<nav>`/`<header>` removal never saw the login strip, pager,
-donation pitch or comment form. Hence `strip_selectors`. The ~24 already-read
-entries were left alone.
-
-The original investigation, kept because it documents the site:
-
-**Today:** the scraped feed (`file:///data/scraped-feeds/c9d2ca59-….xml`, 36
-entries) stores title + link only — `summary` and `content` are both empty. What
-renders as the "body" is the lead image (the first music page) with alt/title
-text under it.
-
-**Wanted:** (a) the article body should be the linked page's real content, and
-(b) on tag/star, capture the embedded YouTube video and all the tab images.
-
-**(a) The tab images are easy.** They sit in the raw HTML in
-`div.transImgBorders` — for `transcriptions.php?i=1211` that is
-`/partituren/1211-1.png` … `-6.png`, six sheet-music pages, plus the surrounding
-text. Ordinary readability/full-page extraction reaches them.
-
-**(b) The video needs one extra call.** It is NOT in the HTML — the page ships an
-empty `div.videoMask` ("Searching far and wide for the video") and fills it with
-JS. The resolver is reachable server-side, no auth, no JS:
-
-    POST https://basslessons.be/ajax/a_transcriptionVideo.php
-    trans_id=<the ?i= value from the entry link>
-    → {"status":"success","message":"<iframe … youtube-nocookie.com/embed/fxoeU3vzdEw …>"}
-
-So the adapter derives `trans_id` from the link, makes one POST, and injects the
-returned iframe. `youtube-nocookie.com` must be on the embed host allowlist for
-the sanitizer to keep it.
-
-⚠ **Do this as a per-entry re-fetch, not a bulk rewrite of the feed.** Replacing
-36 stored bodies in one pass is the same irreversible content change that lost a
-Standard Ebooks body the same day (the refetch had already overwritten reader's
-own entry content, and only a backup got it back). Per-entry keeps it reversible
-and lets one be checked before the rest.
-
-### Re-fetch: let the user choose which date it lands on
-
-Raised 2026-08-23. `refresh_captured_article` bumps a capture's Received date
-(and `saved_entries.saved_at`, which the Inbox's star-order reads) to now by
-default — right for a deliberate single re-fetch ("something changed, look at
-this"), wrong for a bulk Refetch-All across dozens of old articles, which used
-to dump the whole Inbox's order onto whatever finished last in the batch.
-**Quick fix shipped 2026-08-23**: the batch worker now passes
-`bump_received=False` and leaves every entry's date alone; the single-article
-button is unchanged.
-
-**Not yet built**: a real choice on the re-fetch action(s) — Now / Original
-(saved) date / Pub date — instead of the current hardcoded bump-or-not. The
-`bump_received` parameter now threads cleanly through
-`services/saved_articles.py::refresh_captured_article` →
-`main._refresh_captured_article_for_current_user` → both call sites (single
-button, batch worker), so a picker UI has a real parameter to plug into rather
-than a special case to unwind.
-
-Related gap surfaced in the same conversation: there is no dedicated
-"last fetched/re-fetched at" column — only `entries.published` (the article's
-own date), `entries.first_updated` (Lectio's original ingest time, immutable),
-and `entry_content_edits.edited_at` (frozen at the *first* re-fetch, for the
-Revert button — not updated on later ones). If Refetch-All should ever skip
-entries already re-fetched recently (raised in the same thread — no point
-re-spending a site's bandwidth on articles just fixed minutes ago), that needs
-a new column; nothing today records it.
-
-### Proxy article-body images through /api/img (main app)
-
-Asked for 2026-08-12. **The retry half shipped 2026-08-12**
-(`add_img_proxy_fallback`): a body image that fails to load now swaps its `src`
-for `/api/img?u=…` and only gives up if that fails too — the same `onerror` the
-hero has always carried. That closed the SonarSource case below.
-
-**Preemptive proxying shipped 2026-08-20**, behind a default-OFF per-user
-toggle (`proxy_body_images`, Settings → Account → Appearance). When on,
-`get_entry_detail` routes every remote `<img src>` in the article pane through
-`/api/img` and drops `srcset`, using the same rewrite Read Mode always ran
-(shared now as `proxy_all_body_images`, renamed from `proxy_reader_images`);
-only the named-host hotlink rewrite is skipped as redundant — the onerror
-fallback still runs even when proxying is on, since it's what hides an image
-that's dead at the source rather than leaving a broken-image icon (a real bug
-in the first cut of this, caught and fixed the same day — see
-`docs/architecture/images.md`, "A body image that fails has to be able to try
-again"). **Confirmed working by Josh 2026-08-20** against the live library, no
-image regressions. Article loads can feel a touch slower on a not-yet-cached
-image (one extra server-side fetch to a possibly-distant host before the
-browser gets anything), expected and not measured further since it reads as
-normal VPS-distance latency, not a regression.
-
-Three things that buys, in order of how much they matter:
-
-- **Content blockers stop breaking articles.** sonarsource.com images are served
-  from `assets-eu-01.kc-usercontent.com`; the HTML is correct and the image loads
-  fine in a clean browser (verified, 1473x331), but a blocker that filters that
-  CDN host leaves the article looking empty with nothing in the logs. Same-origin
-  URLs are immune.
-- **The image cache starts covering article bodies**, which today it does not.
-- **No silent `http://`-on-`https://` upgrade dependency**, which only works
-  because browsers quietly fix it and does not work offline.
-
-### joanwestenberg: an avatar became the lead image, with a URL that cannot load
-
-Found 2026-08-12, **not fixed.** Two faults in one entry
-(`/p/nobody-wants-your-newsletter-you`):
-
-- **The chosen image is the author's avatar** — its stored alt is literally
-  "JA Westenberg's avatar". The avatar heuristics never saw it, so whichever path
-  resolved this one is not consulting alt text the way the inline scan does. This
-  is the same shape as the `Site Icon` miss fixed the same day: the signal was
-  right there in the alt attribute and nothing looked at it.
-- **The stored URL is mangled and 404s**:
-  `https://www.joanwestenberg.com/p/fl_progressive:steep/https%3A%2F%2Fsubstack-post-media…`
-  — a Substack CDN URL that was relative-joined onto the post path instead of
-  being used absolute. **That unloadable URL is the reported thumbnail flicker**:
-  the list renders it, the browser fails it, and the fallback swaps in.
-
-A lead image that cannot be fetched should not be storable — validating a
-candidate resolves (or at least refusing one whose host is the *site's own* page
-path with an embedded absolute URL) would catch the whole class, not just
-Substack.
-
-**"Star and re-fetch do not pull content" — RESOLVED 2026-08-23, not a bug.**
-Re-fetch on this exact entry now runs clean (`ok`, `extracted`) and correctly
-pulls 11.7KB of real page content — it's just that the page *is* a paywall
-promo: this specific post is a paid Substack post ("∙ Paid", "Continue
-reading this post for free... or purchase a paid subscription"), confirmed
-independently by curling the raw page directly. Checked several of her other
-recent posts on the same feed — free, full text, no paywall — so this is one
-occasional paid post, not a feed-wide change. Nothing to fix; there is no
-fuller version of this specific post publicly available to extract. The
-avatar/mangled-URL lead-image bug above is unrelated and still open.
-
-### Feed known-migrations into discovery, so a 404 is not the end
-
-Idea from the 2026-08-12 404 sweep, **not built.** Working through ~40 dead feeds
-by hand, the same handful of *host-level* migrations kept recurring — each one
-mechanical, and each one Lectio could have resolved itself instead of reporting
-"no feed found":
-
-| pattern | hits that day |
-|---|---|
-| `blogs.technet.com` / `blogs.technet.microsoft.com` → `devblogs.microsoft.com` | 3 |
-| `feeds.feedburner.com/<name>` → the origin site's own feed | 3 |
-| `powershell.com/cs/blogs/*` → `powershell.org` | 2 |
-
-Six of that day's twelve replacements were one of these. The rest (Blogger →
-custom domain, → Substack, → GitHub Pages) are per-site facts that cannot be
-derived and are only worth storing once discovered.
-
-**The machinery already exists — two pieces, doing different jobs:**
-
-- `_SITE_FEED_REWRITES` / `rewrite_known_site_url` in `services/feed_discovery.py`
-  — code-level rewriters applied at *Add Feed* time.
-- The `feed_url_rewrites` table (`feed_url`, `from_host`, `to_host`), which
-  already holds 16 rows including a feedburner→origin rule and a
-  beehiiv→custom-domain move.
-
-**What is missing is the connection**: when a subscribed feed starts 404ing,
-nothing consults either of them. The proposal is that the failure path check
-host-migration rules *before* the feed is declared dead — and, for FeedBurner
-specifically, follow the redirect and autodiscover on the destination, which is
-general rather than per-site.
-
-Worth doing because it compounds: the technet rule alone fixes every remaining
-technet feed at once, and FeedBurner is a graveyard that will keep producing
-these. ⚠ Whatever resolves a candidate must still **verify it parses with
-reader** before switching (see the fetch-failures notes in ARCHITECTURE.md —
-feedparser will happily bless a feed reader then refuses), and must not widen
-scope silently: a category feed replaced by the site firehose is a wrong answer
-that looks like a right one.
-
-### Redirecting feeds — no way to find them in bulk
-
-Idea 2026-08-14, **not built.** Josh keeps subscriptions on the URL the
-publisher actually serves and checks feeds on sites by hand to spot moves.
-Nothing helps him: there is no report of redirecting feeds, and the refresh path
-does not record that a fetch *was* redirected — it follows the hop and moves on.
-2,281 http(s) feeds to check by hand.
-
-Why it is worth more than tidiness: a feed reached through a 301 costs two
-requests per poll forever, and it dies silently the day the publisher retires
-the redirect (which they do once a migration finishes). The stored URL also
-feeds the Change-URL field, the dupe scan and discovery, so a forwarder makes
-all three describe somewhere the posts do not come from.
-
-Shape: mirror `scripts/probe_dead_feeds.py` — HEAD each feed, follow redirects,
-report where the final URL differs, `--apply` through `POST /feeds/change-url`,
-which already migrates reader, every meta table, the `feed_url_rewrites` host
-alias and entry ids on the old host. Read-only and paced by default, like the
-dead-feed probe.
-
-Two distinctions the report has to make, or applying it does damage:
-
-- **301 vs 302.** A temporary redirect must not be applied.
-- **Moved vs replaced.** A hop that lands on a *different* feed (a site-wide
-  firehose, a FeedBurner default) is not the same feed at a new address — the
-  same "a discovered feed is not a replacement" trap the 404 sweep hit, where 8
-  of 23 candidates were the site firehose standing in for a section feed.
-
-Worked example (lerner.co.il, 2026-08-14): `lerner.co.il/blog/feed/` 301s to
-`lernerpython.com/blog/feed/`. Applying it migrated 55 entries and re-homed the
-19 whose ids still used the old host. Note it fixed nothing visible — the
-symptom that prompted it (old posts arriving daily) was the publisher
-re-importing its archive under the new domain, and continued afterwards.
+Surfaced 2026-08-23 alongside the re-fetch date picker (built 2026-08-24 —
+see `docs/architecture/saved.md` "The re-fetch date picker"). There is no
+dedicated "last fetched/re-fetched at" column — only `entries.published`
+(the article's own date), `entries.first_updated` (Lectio's original ingest
+time, now *not* always immutable: the date picker's "Now"/"Pub date" choices
+deliberately move it), and `entry_content_edits.edited_at` (frozen at the
+*first* re-fetch, for the Revert button — not updated on later ones). If
+Refetch-All should ever skip entries already re-fetched recently — no point
+re-spending a site's bandwidth on articles just fixed minutes ago — that
+needs a new column; nothing today records it. Not scoped further; raised but
+not asked for yet.
 
 ### Failing feeds — re-measured 2026-08-12, with work applied
 
@@ -340,172 +156,183 @@ markjames) are unsubscribed — one healthy row each now, all fetching. The 46
 nonsense (87 rows, mostly `no such feed`). And `feed_failure_state` holds a row
 per feed, so filter `consecutive_failures > 0` or you count all 2596.
 
-**Still open:**
+**Re-measured 2026-08-24 — the "unparseable" job, done, but overtaken by a
+bigger finding.** 834 failing feeds now (was 176 on 2026-08-13), almost
+entirely explained by one thing: **689 of those are the YouTube mass-404**
+documented in its own item at the top of this file ("YouTube's RSS feed
+endpoint is currently 404ing…") — not a data-quality problem, a live
+incident. Excluding that cluster, the remaining 145 are stable and close to
+the 2026-08-13 numbers, now with a clean mutually-exclusive breakdown
+(verified: sums exactly to 145):
 
-- **73 unparseable** — the biggest bucket and never characterized. Next job here.
-- **10 risky replacements** above — each is a judgement call about scope, not a
-  mechanical fix.
-- **3 remaining 404s** — ocw.mit.edu newcourses-6, blog.hipmunk.com (43 and 23
-  consecutive failures), and a bsky.app profile RSS.
+| failure (YouTube-404 excluded) | count |
+|---|---|
+| genuinely unparseable ("could not be parsed as a valid RSS/Atom document") | 50 |
+| DNS lookup failed | 21 |
+| bot challenge | 17 |
+| conn/other (non-DNS, non-timeout) | 16 |
+| 403 | 9 |
+| timeout | 9 |
+| 5xx | 7 |
+| unknown feed type | 4 |
+| non-YouTube HTTP 404 | 4 |
+| 401 | 2 |
+| 429 | 2 |
+| redirect loop | 1 |
+| feedparser crash | 1 |
+| other (below) | 2 |
 
-### Finish the Instapaper clone (Read Mode follow-ups)
+**The "50 genuinely unparseable" bucket is per-site judgement calls** (a
+publisher changed CMS and broke their own feed XML, moved to a platform that
+serves HTML at the old feed URL, etc.) — the same shape as the 404 work
+already done above, not mechanical. Not triaged individual-by-individual
+this pass; worth the same `scripts/probe_dead_feeds.py`-style treatment if
+picked up, watching for the same "a discovered feed is not a replacement"
+trap. The 401/429 pairs and the 403/5xx buckets are likewise untriaged —
+some may be soft-blocked bot detection rather than genuinely dead, same
+caveat as the bot-challenge bucket.
+
+**One-offs worth a look, all small and mechanical:**
+- **`grcnews@ino.to`** is a malformed `feed_url` — not a URL at all, just an
+  Inoreader-internal-looking identifier — subscribed 2026-08-24 21:02,
+  during that day's Ino recovery re-sync. One bad row from
+  `_inoreader_drip_step`'s subscriptions phase; `sub.get("feed_url", "")`
+  apparently returned something non-URL-shaped for this one subscription
+  and nothing rejected it. Fix direction: validate the shape (has a
+  scheme) before `reader.add_feed`, or at minimum before writing to
+  `declined_feeds`/subscribing. Single row, low urgency, but a real gap —
+  worth revisiting with the Ino subscriptions-phase code already open.
+- **4× `unknown feed type`** at codeproject.com (`WebServicesRSS.aspx?cat=2`
+  and `cat=3`) and one each at retropie.org.uk and blog.lastpass.com —
+  feedparser can't identify the format at all, distinct from "malformed
+  XML." Worth a raw curl each to see what's actually being served before
+  assuming they're dead.
+- **1 real feedparser crash**, not a remote issue: `feeds.feedburner.com/
+  LinuxMintGuide` throws `AttributeError: object has no attribute 'version'`
+  inside feedparser itself while parsing. Reproducible, worth a minimal
+  repro + upstream/local workaround if this feed matters.
+- **1 redirect loop** (themadfermentationist.com, >30 redirects), and the
+  2nd "other" row: **`steviesnacks.com`**, a feed with an entry missing both
+  id and a usable link fallback.
+
+**Still open from 2026-08-13, unchanged:**
+- **10 risky replacements** — each a judgement call about scope, not a
+  mechanical fix (see "widening"/"collision" above).
+- **3 remaining pre-existing 404s** — ocw.mit.edu newcourses-6,
+  blog.hipmunk.com, a bsky.app profile RSS. Now a rounding error next to
+  the YouTube cluster, but still real and still open.
+
+### Feed known-migrations into discovery, so a 404 is not the end
+
+**FeedBurner piece shipped 2026-08-25** — see `docs/architecture/feeds.md`
+"Suggesting a replacement for a feed on a known dead-end host". Live-checked
+first: FeedBurner turned out not to redirect at all (the original 2026-08-12
+assumption) — it serves the origin site's own homepage HTML back at the dead
+feed URL, wrong content, no redirect, and the page's own `rel="alternate"`
+just points back at itself. `suggest_feed_migration` reads `rel="canonical"`
+off that page instead to recover the real origin, then runs the existing
+`probe_url` discovery there. Suggestion-only, same "never automatic" call as
+the mergeable-rules feature: a **"Suggest fix" button on FeedBurner rows** in
+the Failing Feeds panel pre-fills the existing (already-verified) Change URL
+field — a human still clicks Save.
+
+**technet/powershell.com were investigated and deliberately not built.** Of
+the three host-level migrations flagged in the 2026-08-12 sweep, only
+FeedBurner still has live failures (12 feeds, 2026-08-25) — zero subscribed
+feeds are currently failing on `blogs.technet.com` or
+`powershell.com/cs/blogs/*`. Guessing at a path-mapping with no live example to
+verify it against risks exactly the "a discovered feed is not a replacement"
+trap this feature exists to avoid; add a resolver for them if/when a real
+404'd example reappears. Even within FeedBurner, roughly a quarter of the
+current failures have no `rel="canonical"` at all (parked domain, JS-rendered
+SPA) and still need the manual "risky replacement" judgment call.
+
+The older `feed_url_rewrites` table / `_SITE_FEED_REWRITES` machinery this
+item originally pointed at turned out to be a different mechanism entirely
+(entry link/id host rewriting for an author's *existing, still-alive* feed,
+not resubscribing a dead feed to a new one) — not reused here.
+
+### Redirecting feeds — no way to find them in bulk
+
+**Scanner built and run 2026-08-25** — `scripts/find_redirecting_feeds.py`,
+mirroring `scripts/probe_dead_feeds.py`'s shape (read-only by default, paced,
+honest UA). Swept all 2,264 currently-subscribed http(s) feeds:
+
+| verdict | count |
+|---|---|
+| direct (no redirect) | 1,938 |
+| **candidate** (301 all the way, verified same feed) | **128** |
+| temporary (a 302+ hop somewhere in the chain) | 26 |
+| redirects elsewhere (rejected — see below) | 17 |
+| redirects to dead/non-feed | 5 |
+| errors (unreachable, mostly Tumblr) | 150 |
+
+**Not applied.** 128 verified candidates is a real batch, worth Josh's own
+`--apply` run rather than something to fire unilaterally — `--apply` reuses
+`change_feed_url_route` (force=0) so its own independent verification and full
+meta-table migration still run per feed; this script only picks *which* URLs
+are worth offering it. Raw results: `/data/redirecting_feeds_20260825.json`
+(inside the container).
+
+**The "moved vs replaced" guard worked in practice**, not just in theory: of
+the 17 "redirects elsewhere" rejections, at least one (`rowenathebarbarian.com`)
+would have been a bad swap if applied blindly — the redirect target parses as
+a feed but has zero entries, caught by `_looks_like_same_feed`'s host-match
+check before ever reaching "candidate."
+
+Why it is worth more than tidiness: a feed reached through a 301 costs two
+requests per poll forever, and it dies silently the day the publisher retires
+the redirect (which they do once a migration finishes). The stored URL also
+feeds the Change-URL field, the dupe scan and discovery, so a forwarder makes
+all three describe somewhere the posts do not come from.
+
+Worked example (lerner.co.il, 2026-08-14): `lerner.co.il/blog/feed/` 301s to
+`lernerpython.com/blog/feed/`. Applying it migrated 55 entries and re-homed the
+19 whose ids still used the old host. Note it fixed nothing visible — the
+symptom that prompted it (old posts arriving daily) was the publisher
+re-importing its archive under the new domain, and continued afterwards.
+
+### Finish the Instapaper clone (Read Mode follow-ups) — DONE 2026-08-25
 
 The read-later app (Save any article, Saved sidebar view, Read Mode at
 `GET /read`) and its deferred finishing touches (archived-aware counts,
 mark-read-after-last-page, image prefetch, dates/sort/Archive-button
 readability, Delete/Archive working on tag-kept items, and the Archive vs.
 Delete model — Archive keeps tags/offline capture, Delete releases both) all
-shipped 2026-07-28/29. Full rationale in ARCHITECTURE.md. One piece from
-that work is not yet safe to use:
+shipped 2026-07-28/29. Full rationale in ARCHITECTURE.md. The one piece from
+that work that wasn't yet safe to use:
 
-**⚠ Settings → Feeds → Utilities → Archive old stars — DO NOT RUN YET.**
-The cutoff (7d/30d/90d/6mo/1yr) sorts on `saved_at`, but `saved_at` is not a
-real star date for most rows: 6,091 of 10,002 stars carry a `saved_at` in
-2026-06, which is when multi-user went live and the migration stamped its
-own run date instead of preserving the original — mostly years-old
-Inoreader stars wearing a seven-week-old timestamp. A 30-day cutoff would
-sweep those 6,091 in and a 90-day cutoff would protect them, neither for
-any real reason. **Fix before use: offer the date basis, default to
-publish date** (asks the better question anyway — "articles from 2019 I
-have still never opened"). Only 419 of 10,002 stars have a genuine
-Lectio-made `saved_at`; the rest are either real pre-migration dates
-(3,492) or the migration timestamp (6,091).
+**Settings → Feeds → Utilities → Archive old stars — fixed and safe to use
+2026-08-25.** Was blocked: the cutoff sorted on `saved_at`, but `saved_at` is
+not a real star date for most rows — 6,091 of 10,002 stars carry a `saved_at`
+in 2026-06, when the multi-user migration stamped its own run date instead of
+preserving the original. Fix shipped as a **date basis** choice in the
+Utilities panel: "Publish date" (now the default — asks the better question
+anyway, "articles from 2019 I have still never opened") or "Star date" (kept
+as an option, its unreliability caveat only shown when picked). See
+`docs/architecture/saved.md` "Archive old stars ("Inbox bankruptcy") — the
+saved_at trap" for the full mechanism.
 
-### Phone polish — shipped 2026-08-11
+### Read Mode: resume + Back guard
 
-Pull-down toggles Reader view, Back walks article → feed → folder → drawer, and
-the Global Note no longer opens under the drawer. Rationale in
-`docs/architecture/views.md`.
+Carried over from the 2026-08-11 phone-polish work (full rationale for that
+work is in `docs/architecture/views.md`, which notes this gap and points
+back here). Read Mode (`GET /read`) never got either of the phone-nav fixes
+the main app has:
 
-Standing decisions, so they are not re-litigated:
-
-- **Back leaving the app is accepted, not fought.** A WebAPK install passes every
-  installability check and *still* exits, because Android exits any app at its
-  root. Resume-on-open is the answer. **Do not spend more time preventing the
-  exit** — if resume misses a case, extend what is saved.
-- **The Back guard is best-effort by browser design.** Chrome's history
-  intervention skips entries pushed without user activation, and headless does
-  not apply it, so no browser test can prove the guard. If it is hit while
-  *installed*, the next lead is whether standalone mode changes the intervention
-  — do not just add more spares.
-- **Read Mode has no resume and no Back guard.** Resume is cheap (same
-  localStorage key, different restore target). The guard is not: `/read` has no
-  drawer for Back to land on, and a Back that visibly does nothing is worse than
-  one that exits — give Read Mode a collapsible tree first.
-
-### One stored image per entry, but three feeds want two
-
-Found 2026-08-13, **not built.** Three comic feeds want a different image in the
-list than in the article, and Lectio stores **one** URL per entry — the list crop
-is *derived* from it on the render path, network-free by contract. That works
-only when the crop's URL is derivable:
-
-| feed | article | list | derivable? |
-|---|---|---|---|
-| Penny Arcade | `/comics/x.jpg` | `/comics/panels/x-p1.jpg` | yes — plugin |
-| dresdencodak | `dc_minis_N.jpg` | `dc_minis_N_thumbnail.jpg` | yes, for DC Minis only |
-| mahonoir | `03-10.jpg` | og `0310thumb.png` | **no** (`03-12.jpg` → `12thumb.png`) |
-
-mahonoir needed no code in the end — the publisher ships a purpose-made preview
-card as a media thumbnail, so `media_rss` (manually locked) picks it up. But that
-was luck, and the Tuning panel shows a *better* og:image for those posts that
-nothing can select while another strategy supplies the lead.
-
-The general fix is a second stored URL plus a per-feed "thumbnail source"
-setting (auto / same as article / og:image / media). That is a meta-DB column, so
-it needs the startup per-user migration or existing tenants 500. Worth doing when
-a fourth feed wants it; not before.
-
-**Check what the feed already provides before writing a plugin** — two of three
-needed derivation, one needed only the right strategy.
-
-### Signed image URLs rot, and the cache is not catching them
-
-**Measured 2026-08-18.** Of 120,302 stored lead-image URLs, 22,903 are DeviantArt wixmp links signed with a `?token=` JWT, and **only 583 (2.5%) have bytes in the image cache**. Everything else signed is 75 rows. A spot-checked entry: wixmp host, no cached bytes, live fetch HTTP 400. Unrecoverable from the stored URL. This decays continuously — every new DeviantArt entry starts a timer.
-
-`_IMG_CACHE_VOLATILE_PARAMS` strips the token from the *cache key*, which is sound but does far less than its comment claimed: the bytes still have to have been fetched once while the token was valid, and to have survived `last_accessed` eviction since. For a feed not opened within the token's lifetime that race is lost every time. (Comment corrected 2026-08-18.)
-
-**Stop the bleeding: pin thumbnail-sized bytes during the enhance pass**, while the token is fresh. About 25 KB each against the ~121 KB average currently in the cache, and host-agnostic, so it covers any future signing CDN rather than DeviantArt alone. Same pinning mechanism as the per-feed thumbnail (`_feed_thumb_cache_key`, exempt from eviction) — that one is keyed per feed; this wants keying per entry. Does nothing for what has already expired.
-
-**Re-signing already exists on the article path** — `_resign_expired_deviantart_url` re-signs a dead wixmp token when an entry is opened, and skips the API call when the image proxy already holds the bytes. So the gap is narrower than the raw 2.5% suggests: opening a DeviantArt post repairs it. What is NOT covered is the LIST thumbnail, which reads the stored URL out of `entry_lead_images` and never goes through that path, so a feed's thumbnails stay broken until each entry is opened one at a time. Either re-sign on the list path too, or make pinning moot by storing the bytes. Every one of the 22,884 DA entries stores the deviation UUID as its entry id, so a paced backfill is possible if it turns out to be wanted — but fix the list path before building one.
-
-⚠ **The article-path re-sign had its own bug, found and fixed 2026-08-20.** It only re-signed a token whose JWT carried a readable `exp` claim in the past; a token with no `exp` claim at all was treated as permanent and never checked. That assumption is false — a spot-checked live entry (a GIF) had no `exp` and was already dead (wixmp: `400 image is invalid`), and a feed-wide check found **22,597 of 22,884 stored wixmp tokens carry no `exp` claim**, all previously trusted blind. Fixed by adding `_wixmp_url_is_live`: when `exp` is unreadable, one direct HEAD at the image host (not the DeviantArt API — no rate-limit cost) decides whether to trust the URL or fall through to a real re-sign. Still article-path only — the list-thumbnail gap above is unchanged.
-
-Build the pinning first: self-contained, no API budget, no pacing to get right, and it turns the backfill into a one-time cleanup instead of a permanent crutch.
-
-### og_scrape feeds with no og:image at all
-
-Found in the 2026-08-13 lead-image sweep, **no action taken.** Of 585
-auto-detected `og_scrape` feeds, **162 entries' source pages carry no `og:image`**
-— they fall back to a body image, which is correct for them. Not broken, but
-that bucket is where any future "odd body image was picked" report will come
-from, so it is worth knowing it exists before re-diagnosing from scratch.
-
-### "Not dupes" dismissal — no un-dismiss UI yet
-
-Shipped 2026-08-10: `POST /feeds/duplicates/dismiss` records a group's exact
-feed-URL set in `dedup_dismissed`, and every completed `/feeds/combine` also
-auto-dismisses (survivor + sources), so a group never silently reappears
-after a real decision. There is deliberately no surface to *view or undo* a
-dismissal — a settings row listing dismissed groups with an un-dismiss button
-would be the natural follow-up if a wrong dismissal ever needs clawing back.
-Not built since it wasn't asked for yet.
-
-### Utilities: find rules that could be one rule
-
-Marking things read in Deals now takes several rules (Apple products, one set of
-stores, …) because a keyword was one term until comma lists landed. Nothing
-surfaces that they are mergeable, so they accumulate.
-
-Measured 2026-08-19 on the live library: **5 rules could collapse** — 3 global
-`highlight` + 3 `highlight` on folder 9 + 2 `mark_as_read` on folder 8, each
-group already sharing type, scope, `search_in` and the regex flag. That last
-pair is regex, so merging means `(a)|(b)`, not a comma join.
-
-Rules for merging: same type + same scope + same `search_in` + same regex flag →
-offer to join the keywords (comma list when plain, alternation when regex). A
-folder rule and a feed rule are **not** merged — different scopes are the point.
-But a feed rule whose scope sits inside a folder that already has a same-type
-rule whose keyword covers it is **redundant** and should be flagged for removal.
-(Zero of those today, so it is the secondary case.)
-
-Josh: "maybe they should?" — wants to discuss whether redundant-feed-rule
-removal is automatic or a suggestion. Suggestion-with-preview is the safer
-default, and matches how the dupe scans already behave (nothing pre-checked).
-
-### Rule editing has no atomic endpoint
-
-Editing a rule is a client-side remove-then-add against `/highlights/remove` and
-`/highlights/add`, because there is no update route. Sending both at once
-destroyed the rule whenever the identity `(scope, scope_id, keyword)` had not
-changed — the add landed first and the remove deleted it, 20 times out of 20 in
-a local reproduction, with both responses OK so the UI reported success. Josh
-lost a Deals dedup rule to it on 2026-08-20 (a dedup rule hits this on every
-edit, since its match method IS the keyword).
-
-Fixed on the client 2026-08-20: skip the remove when the identity is unchanged
-(`INSERT OR REPLACE` overwrites in place), and await it before the add when it
-did change. That closes the hole, but the real shape is a single `POST
-/highlights/edit` doing both in one transaction — worth building the next time
-this area is open, since any future caller can re-introduce the same race.
-
-### Saved: see and sort by item size, to clear the big ones first
-
-Saved articles carry captured content (and, for archived ones, offline copies in
-the starred-archive DB), so a handful of heavyweight captures can dominate the
-store while hundreds of small ones are irrelevant. Nothing surfaces per-item
-size, so pruning is guesswork.
-
-Wanted: a size column in the Saved view, sortable descending, so the worst
-offenders are the first thing on screen. Size means the stored body plus its
-archived assets, not the source page's weight — the two diverge sharply for a
-full-page capture with images.
-
-Open questions before building: whether the number is computed live (a LENGTH()
-over content plus a join to the archive's asset rows, fine for a few thousand
-items, less so as a sort key on every render) or maintained as a column at
-capture/re-fetch time; and whether the same sort belongs in the Kept view, where
-an unsubscribed feed's retained posts accumulate unseen.
+- **Resume — shipped 2026-08-25.** Turned out "same localStorage key" would
+  have made the two surfaces redirect into each other (leaving the main app
+  at `/` could bounce you into Read Mode and back) — deliberately used a
+  *separate* key instead (`lectio-read-last-position`) so each surface only
+  remembers its own last spot. No scroll offset to restore, unlike the main
+  app: Read Mode is plain page navigation, so the URL alone is the position.
+  The "Saved" scope tab now carries a harmless `?home=1` (same trick as the
+  main app's wordmark) so there's still a reliable way to reach the true
+  landing instead of bouncing back into whatever was last read.
+- **No Back guard**, and this one is not cheap — `/read` has no drawer for
+  Back to land on, and a Back that visibly does nothing is worse than one
+  that exits the app. Give Read Mode a collapsible tree first, then add the
+  guard.
 
 ### GIL-contention request stalls — tally
 
@@ -552,6 +379,108 @@ excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 ## Later
 
 *Moved down from Now on 2026-08-13: real, but not what is next.*
+
+*Moved down from Now on 2026-08-24: deliberately deferred, no trigger condition met yet.*
+
+### One stored image per entry, but three feeds want two
+
+Found 2026-08-13, **not built.** Three comic feeds want a different image in the
+list than in the article, and Lectio stores **one** URL per entry — the list crop
+is *derived* from it on the render path, network-free by contract. That works
+only when the crop's URL is derivable:
+
+| feed | article | list | derivable? |
+|---|---|---|---|
+| Penny Arcade | `/comics/x.jpg` | `/comics/panels/x-p1.jpg` | yes — plugin |
+| dresdencodak | `dc_minis_N.jpg` | `dc_minis_N_thumbnail.jpg` | yes, for DC Minis only |
+| mahonoir | `03-10.jpg` | og `0310thumb.png` | **no** (`03-12.jpg` → `12thumb.png`) |
+
+mahonoir needed no code in the end — the publisher ships a purpose-made preview
+card as a media thumbnail, so `media_rss` (manually locked) picks it up. But that
+was luck, and the Tuning panel shows a *better* og:image for those posts that
+nothing can select while another strategy supplies the lead.
+
+The general fix is a second stored URL plus a per-feed "thumbnail source"
+setting (auto / same as article / og:image / media). That is a meta-DB column, so
+it needs the startup per-user migration or existing tenants 500. Worth doing when
+a fourth feed wants it; not before.
+
+**Check what the feed already provides before writing a plugin** — two of three
+needed derivation, one needed only the right strategy.
+
+### og_scrape feeds with no og:image at all
+
+Found in the 2026-08-13 lead-image sweep, **no action taken.** Of 585
+auto-detected `og_scrape` feeds, **162 entries' source pages carry no `og:image`**
+— they fall back to a body image, which is correct for them. Not broken, but
+that bucket is where any future "odd body image was picked" report will come
+from, so it is worth knowing it exists before re-diagnosing from scratch.
+
+### "Not dupes" dismissal — no un-dismiss UI yet
+
+Shipped 2026-08-10: `POST /feeds/duplicates/dismiss` records a group's exact
+feed-URL set in `dedup_dismissed`, and every completed `/feeds/combine` also
+auto-dismisses (survivor + sources), so a group never silently reappears
+after a real decision. There is deliberately no surface to *view or undo* a
+dismissal — a settings row listing dismissed groups with an un-dismiss button
+would be the natural follow-up if a wrong dismissal ever needs clawing back.
+Not built since it wasn't asked for yet.
+
+### Rule editing has no atomic endpoint — DONE 2026-08-25
+
+Editing a rule was a client-side remove-then-add against `/highlights/remove`
+and `/highlights/add`. Sending both at once destroyed the rule whenever the
+identity `(scope, scope_id, keyword)` had not changed — the add landed first
+and the remove deleted it, 20 times out of 20 in a local reproduction, with
+both responses OK so the UI reported success. Josh lost a Deals dedup rule to
+it on 2026-08-20 (a dedup rule hits this on every edit, since its match
+method IS the keyword). Client-side sequencing closed the hole the same day.
+
+**Built the real fix**: a single `POST /highlights/edit` doing the delete
+(only if the identity changed) and the write in one transaction server-side,
+so no future caller can reintroduce the race regardless of sequencing
+discipline. Validation and response-shape logic factored out of
+`add_highlight_route` into shared helpers so `/add` and `/edit` can't drift.
+
+### YouTube: multi-select → add to playlist
+
+Idea 2026-08-24, not scoped. Select multiple posts in a YouTube feed and add them all to a playlist in one action.
+
+### Article list date separators (Today, Yesterday, ...)
+
+Idea 2026-08-24, not scoped. Group the article list with date-header separators.
+
+**Scoped 2026-08-25, deliberately not built yet — more integration surface
+than it looks.** Investigated the actual rendering pipeline before writing
+any code:
+
+- Every `.post-item` is in the DOM from first paint; `post-timestamp`/
+  `received-timestamp` already ride as `data-post-iso`/`data-received-iso` on
+  each row's `<time>` (`applyRelativeTimestamps` already reads these), so no
+  new server data is needed for the two universally-available sorts (`post`,
+  `received`).
+- **Chunking hides rows via a CSS class (`post-item-hidden`), it does not
+  remove them** — `setupPostChunks`' `applyVisibleWindow`/`revealNextChunk`
+  reveal more of what is already in the DOM, then fetch a server-side
+  "chunk delta" and *append* more rows once the loaded set is exhausted. A
+  separator's own visibility has to track whether anything under it (until
+  the next separator) is currently visible, and has to be recomputed after
+  every chunk reveal and every server-appended chunk delta, not just once.
+- **The live filter (`postsFilterActive`) bypasses the chunk window
+  entirely** and hides/shows rows independently — same recompute problem
+  again, on a third trigger.
+- **A sort/scope change replaces the whole `.posts` container** via the
+  pane-swap fragment fetch, so separator injection has to re-run after that
+  too, not just at initial page load.
+- `sort_by=starred`/`size` (Saved/Kept-scoped) either aren't uniformly
+  chronological (`size`) or don't currently expose a per-row date attribute
+  (`starred`) — the honest scope for a first version is `post`/`received`
+  sorts only, separators suppressed for the other two.
+
+Four re-render triggers to hook (initial paint, chunk reveal, filter
+apply/clear, pane-swap reload) is real integration work, not a one-file
+change — worth a short plan before touching code, per the usual bar for
+multi-file behavior changes.
 
 ### Single-user mode does not exist anymore — retire DEFAULT_USER
 
@@ -986,6 +915,18 @@ but plan to ride it out).
 Remaining before Ino can fully lapse: Comics & Art and !NSFW dead-feed
 pruning (mechanical), and the YouTube root-cause dig.
 
+**Separate gap, noticed alongside the resurrection bug (2026-08-23/24, not
+built): the import never assigns folders.** Any feed the `subscriptions`
+phase adds — first import or later resync — lands in Uncategorized
+regardless of what folder/label it had on Ino's side. `get_subscriptions`
+returns each sub's `categories` (Ino's label list); `get_tags`/labels_items
+already models the label→folder relationship for the *tagging* phase, so
+the same mapping could place a newly-subscribed feed into a matching folder
+(creating it if needed, same as `_get_or_create_folder_by_name` does for the
+generic migration applier) instead of dumping it folderless. Low urgency —
+mechanical once picked up, and `declined_feeds` (above) already stops the
+bigger problem of the same feeds reappearing on every resync.
+
 ### Full-content fetch at ingest for body-less feeds
 
 meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
@@ -1045,6 +986,29 @@ entries covering 34 of 543 artists" reads like a coverage cap. It is not — onl
 posted since the Watch feed was created were missing from it, and its intake rate
 matches the observed posting rate. **Check whether a number is a limit or just
 the size of the active set before concluding anything from it.**
+
+### Backfill already-expired signed lead-image thumbnails
+
+**BUILT 2026-08-24: the go-forward half.** Per-entry lead-image pinning
+(`_pin_entry_thumbnail_bytes`, sink wired into
+`lead_image_service.store_entry_lead_image`) now stores a small stable-URL
+copy of any *signed* lead image (host-agnostic via `_IMG_CACHE_VOLATILE_PARAMS`,
+not just DeviantArt) the moment it's discovered, while the token is still
+fresh — closing the list-thumbnail gap for every entry ingested from now on.
+Full design in `docs/architecture/images.md` ("Pinning a list thumbnail
+before its signed URL dies").
+
+**Not built: the backfill.** Pinning only fires on write, so it does nothing
+for the ~22,300 already-expired wixmp URLs sitting in `entry_lead_images`
+today — their list thumbnails stay broken until a re-fetch/re-enhance
+happens to touch them. Every DA entry stores the deviation UUID as its entry
+id, so a paced script (`refetch_batch.run_paced`, [[good-web-citizen]]) that
+re-signs each dead URL via the DeviantArt API (same call
+`_resign_expired_deviantart_url` makes on article-open) and feeds the fresh
+URL through `store_entry_lead_image` — which pins it as a side effect, no
+separate pinning call needed — would turn this into a one-time cleanup.
+Low urgency: the number stops growing either way, and opening a post already
+repairs it via the article-view re-sign.
 
 ### DeviantArt watchlist sync — remaining follow-up
 
@@ -1203,6 +1167,26 @@ no build step) into a Lectio-branded extension. Motivations, in value order:
 
 Keep the wire protocol unchanged (`/api/bookmarklet/save`) so the stock
 extension keeps working too.
+
+### Saved-dedup checkbox direction inverted from feed-combine — fixed 2026-08-25
+
+Josh reported almost deleting good saved articles: the feed-dedup Combine flow
+picks which one to **keep** (a radio, "survivor"), but the saved-articles dupe
+scan's checkboxes marked copies for **deletion** — checking a box meant the
+opposite of what the muscle memory from the other flow suggested. The tooltip
+even said so ("dead links are flagged and selected for deletion") but that's
+not where anyone's eyes are when clicking through a list fast.
+
+**Fix: every copy now defaults to Keep**, with an explicit ✓ Keep / ✗ Delete
+toggle per row instead of a bare checkbox — no direction to misremember, since
+the two buttons are labeled. Check URLs still auto-switches confirmed-dead
+copies to Delete (never the sole copy with real stored content), everything
+else stays manual. New safety property that didn't exist before either
+direction: **a group where every copy got switched to Delete is skipped
+entirely** rather than deleting the whole group — the group-level equivalent
+of the per-row protections that already existed. `saved_dedup_workflow`
+(memory) has the wider dupe-scan history; this only touched the selection UI,
+not the scan/matching logic.
 
 ### Saved-articles dupe scan follow-ups (deferred)
 
