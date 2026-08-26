@@ -27618,6 +27618,77 @@ async def youtube_playlist_add_route(request: Request):
     return JSONResponse({"ok": True, "playlist_id": playlist_id})
 
 
+@app.post("/api/youtube/playlists/add-batch")
+async def youtube_playlist_add_batch_route(request: Request):
+    """Add several videos to a playlist (or a new one) in one request.
+
+    Body: {video_ids: [str, ...], playlist_id?, new_title?} — the post list's
+    multi-selection bulk "Add to YouTube Playlist…" action. Checks the
+    playlist's existing contents first and skips any video already in it
+    (see list_playlist_video_ids) rather than letting the insert create a
+    silent duplicate.
+    """
+    body = await request.json()
+    video_ids = body.get("video_ids")
+    if not isinstance(video_ids, list) or not video_ids:
+        return JSONResponse({"ok": False, "error": "video_ids required"}, status_code=400)
+    video_ids = [str(v).strip() for v in video_ids if str(v).strip()]
+    if len(video_ids) > _MOVE_BATCH_CAP:
+        return JSONResponse(
+            {"ok": False, "error": f"Too many videos (max {_MOVE_BATCH_CAP} per action)."},
+            status_code=400,
+        )
+    playlist_id = (body.get("playlist_id") or "").strip()
+    new_title = (body.get("new_title") or "").strip()
+    if not playlist_id and not new_title:
+        return JSONResponse({"ok": False, "error": "playlist_id or new_title required"}, status_code=400)
+
+    token = get_youtube_oauth_token()
+    if not token:
+        return JSONResponse({"ok": False, "error": "not_connected"}, status_code=401)
+
+    try:
+        if not playlist_id:
+            created = youtube_oauth_service.create_playlist(token, new_title)
+            playlist_id = created["id"]
+            existing: set[str] = set()  # brand-new playlist — nothing to dedupe against
+        else:
+            existing = youtube_oauth_service.list_playlist_video_ids(token, playlist_id)
+    except youtube_oauth_service.QuotaExceeded:
+        mark_yt_quota_exhausted()
+        return JSONResponse({"ok": False, "error": "quota"}, status_code=429)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+
+    added = duplicate = failed = 0
+    for video_id in video_ids:
+        if video_id in existing:
+            duplicate += 1
+            continue
+        try:
+            youtube_oauth_service.add_video_to_playlist(token, playlist_id, video_id)
+            existing.add(video_id)  # guards against a dupe within this same batch too
+            added += 1
+        except youtube_oauth_service.QuotaExceeded:
+            # Stop burning calls once quota's gone; report what succeeded so far
+            # rather than hiding real progress behind an error.
+            mark_yt_quota_exhausted()
+            break
+        except Exception:  # noqa: BLE001 — one bad video must not sink the batch
+            failed += 1
+            LOGGER.warning("[yt-playlist-batch] failed to add %s to %s", video_id, playlist_id)
+
+    msg = f"Added {added}."
+    if duplicate:
+        msg += f" {duplicate} already in the playlist."
+    if failed:
+        msg += f" {failed} failed."
+    return JSONResponse({
+        "ok": True, "playlist_id": playlist_id,
+        "added": added, "duplicate": duplicate, "failed": failed, "message": msg,
+    })
+
+
 @app.post("/deviantart/disconnect")
 def deviantart_disconnect():
     with get_meta_connection() as conn:

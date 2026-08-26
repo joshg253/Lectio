@@ -459,8 +459,10 @@ context menu to bulk-safe items only:
 
 - **Add to YouTube Playlist…** — shown when every selected post is a YouTube
   video (`data-post-video-id`, extracted server-side same as the `[duration]`
-  prefix). Loops client-side over the existing single-video
-  `/api/youtube/playlists/add`, capped at 25/batch (50 quota units/call).
+  prefix). One request to new `/api/youtube/playlists/add-batch`, capped at
+  25/batch (50 quota units/insert) — checks the playlist's existing contents
+  first (~1 unit/50 items) and skips anything already there, since the API
+  happily inserts the same video twice and removing one copy removes both.
 - **Add tag…** — works for any post, single or bulk, via new
   `POST /entries/tags-batch` (mirrors `/entries/move-to-feed-batch`'s
   JSON-array-of-pairs shape). Always appends, never replaces.

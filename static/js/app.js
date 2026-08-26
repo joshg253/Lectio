@@ -3935,26 +3935,37 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     const YT_PLAYLIST_BULK_ADD_CAP = 25;
 
     async function _ytBulkAddToPlaylist(posts, choice) {
-      let playlistId = choice.playlistId || '';
       const targets = posts.slice(0, YT_PLAYLIST_BULK_ADD_CAP);
-      const succeeded = [];
-      let failed = 0;
-      for (const post of targets) {
-        try {
-          const result = await _ytAddToPlaylist(post.videoId, playlistId ? { playlistId } : { newTitle: choice.newTitle });
-          // First call may create the playlist — reuse it for the rest instead
-          // of creating a new one per video.
-          if (!playlistId && result.playlist_id) playlistId = result.playlist_id;
-          succeeded.push(post);
-        } catch (e) {
-          failed++;
-        }
-      }
       const skipped = posts.length - targets.length;
-      let msg = `Added ${succeeded.length} to ${choice.title}.`;
-      if (failed) msg += ` ${failed} failed.`;
-      if (skipped) msg += ` ${skipped} skipped (batch limit ${YT_PLAYLIST_BULK_ADD_CAP}).`;
-      showToastMessage(msg);
+      try {
+        // One request does the whole batch server-side — it checks the
+        // playlist's existing contents first and skips anything already in
+        // it, since the API happily inserts (and later un-removes, both at
+        // once) a duplicate rather than rejecting one.
+        const resp = await fetch('/api/youtube/playlists/add-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            video_ids: targets.map((p) => p.videoId),
+            playlist_id: choice.playlistId || '',
+            new_title: choice.newTitle || '',
+          }),
+        });
+        const d = await resp.json().catch(() => ({}));
+        if (!resp.ok || !d.ok) {
+          const err = d.error || `HTTP ${resp.status}`;
+          if (err === 'quota') throw new Error('Daily YouTube quota reached — try again tomorrow or add it on youtube.com.');
+          if (err === 'not_connected') throw new Error('YouTube account not connected.');
+          throw new Error(err);
+        }
+        if (choice.newTitle) _ytPlaylistsCache = null;  // new playlist changes the list — invalidate
+        let msg = d.message || `Added ${d.added ?? 0} to ${choice.title}.`;
+        if (skipped) msg += ` ${skipped} skipped (batch limit ${YT_PLAYLIST_BULK_ADD_CAP}).`;
+        showToastMessage(msg);
+      } catch (e) {
+        showToastMessage(e.message || 'Add to playlist failed.');
+      }
       // Selection is left as-is (not cleared/deselected) — bulk actions chain,
       // e.g. add to a playlist, then Mark as read on the same selection.
     }
