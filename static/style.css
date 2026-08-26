@@ -1929,6 +1929,19 @@ button:hover, .button-link:hover {
   height: 1px;
 }
 
+.post-date-divider {
+  padding: 0.5rem 0.25rem 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.post-date-divider[hidden] {
+  display: none;
+}
+
 .posts-toolbar {
   display: flex;
   flex-direction: column;

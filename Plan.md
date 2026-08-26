@@ -452,13 +452,32 @@ discipline. Validation and response-shape logic factored out of
 
 Idea 2026-08-24, not scoped. Select multiple posts in a YouTube feed and add them all to a playlist in one action.
 
-### Article list date separators (Today, Yesterday, ...)
+### Article list date separators (Today, Yesterday, ...) — SHIPPED 2026-08-25
 
-Idea 2026-08-24, not scoped. Group the article list with date-header separators.
+Client-side `applyPostDateDividers()` in `static/js/app.js`, hooked into the
+one `applyVisibleWindow()` call site that all four re-render triggers already
+funnel through. `post`/`received` sorts only; suppressed for `starred`/`size`.
+A group whose posts are all chunk-hidden or filtered-out hides its own
+divider.
 
-**Scoped 2026-08-25, deliberately not built yet — more integration surface
-than it looks.** Investigated the actual rendering pipeline before writing
-any code:
+First deploy showed zero dividers, ever. Two bugs, found in this order:
+
+- The real cause: code read `data-post-iso`/`data-received-iso` off
+  `.post-item` itself, but those live on a nested `<time>` child — the exact
+  trap an existing comment on `applyBulkReadState` already flagged, missed on
+  the first pass. Every item's timestamp came back empty, so no group ever
+  formed. Fixed by querying `item.querySelector('time[data-post-iso]')` first.
+- A second, latent bug found and fixed while chasing the first: `container`
+  (`.posts`) is also what the chunk-reveal `MutationObserver` watches with
+  `childList: true`, and rebuilding dividers unconditionally on every call is
+  itself a childList mutation — the observer's own re-render would have
+  retriggered the rebuild forever the moment the first bug stopped masking it.
+  Fixed by diffing against what's already in the DOM (`data-divider-key` +
+  `nextElementSibling` per group) and only writing when it actually differs.
+
+Confirmed working live by Josh 2026-08-26.
+
+Scoping notes below kept for context on why this was one hook, not four:
 
 - Every `.post-item` is in the DOM from first paint; `post-timestamp`/
   `received-timestamp` already ride as `data-post-iso`/`data-received-iso` on

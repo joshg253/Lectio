@@ -71,6 +71,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       day: 'numeric',
       year: 'numeric',
     });
+    // Post-list date dividers only, not the relative timestamps above.
+    const localTimeFormatterWeekday = new Intl.DateTimeFormat(undefined, {
+      weekday: 'long',
+    });
     // Phone article header: the long form ("Tue, July 28, 2026 at 5:00 PM") is
     // most of a line on a 390px screen. Numeric date + time in the user's own
     // locale, so this is mm/dd/yyyy here and dd/mm/yyyy where that is the norm.
@@ -15142,6 +15146,101 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       disableFeedForm.submit();
     });
 
+    // Date dividers only make sense for the two chronological sorts — starred
+    // order isn't uniformly time-based and size order isn't time-based at all
+    // (Plan.md, "Article list date separators").
+    function postDateDividerKey(date) {
+      return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+    }
+
+    function postDateDividerLabel(date, today) {
+      const startOfDay = (d) => {
+        const c = new Date(d);
+        c.setHours(0, 0, 0, 0);
+        return c;
+      };
+      const diffDays = Math.round((startOfDay(today) - startOfDay(date)) / 86400000);
+      if (diffDays === 0) return 'Today';
+      if (diffDays === 1) return 'Yesterday';
+      if (diffDays > 1 && diffDays < 7) return localTimeFormatterWeekday.format(date);
+      const isCurrentYear = date.getFullYear() === today.getFullYear();
+      return isCurrentYear
+        ? localTimeFormatterShort.format(date)
+        : localTimeFormatterShortWithYear.format(date);
+    }
+
+    // Called after every reveal/filter/pane-swap that can change which
+    // `.post-item`s are in the DOM or visible (see applyVisibleWindow, the one
+    // place this is invoked from). Full teardown/rebuild each time rather than
+    // diffing — the item counts involved are chunk-sized, so it's cheap, and
+    // it avoids a second class of "did the divider set get stale" bugs.
+    function applyPostDateDividers(container, items) {
+      if (!container) return;
+
+      const sortBy = window.CURRENT_SORT_BY || 'post';
+      if (sortBy !== 'post' && sortBy !== 'received') {
+        container.querySelectorAll('.post-date-divider').forEach((el) => el.remove());
+        return;
+      }
+
+      const isoAttr = sortBy === 'received' ? 'data-received-iso' : 'data-post-iso';
+      const today = new Date();
+      let lastKey = null;
+      const groups = []; // { key, label, items: [] }
+
+      for (const item of items) {
+        // Timestamps live on the child <time> element, not on post-item itself
+        // (see applyBulkReadState above for the same lookup).
+        const timeEl = item.querySelector('time[data-post-iso]');
+        const raw = (timeEl?.getAttribute(isoAttr) || '').trim();
+        const date = raw ? new Date(raw) : null;
+        if (!date || Number.isNaN(date.getTime())) {
+          groups[groups.length - 1]?.items.push(item);
+          continue;
+        }
+        const key = postDateDividerKey(date);
+        if (key !== lastKey) {
+          groups.push({ key, label: postDateDividerLabel(date, today), items: [] });
+          lastKey = key;
+        }
+        groups[groups.length - 1].items.push(item);
+      }
+
+      // `container` is also the node a MutationObserver watches (childList) to
+      // drive re-chunking, and rebuilding the dividers is itself a childList
+      // change. Writing unconditionally every call re-triggers that observer,
+      // which calls back in here, which writes again — forever. Comparing
+      // against what's already there and only touching the DOM on a real
+      // change makes the observer-triggered re-run a no-op, so the loop
+      // terminates after one round instead of spinning.
+      const existing = Array.from(container.querySelectorAll('.post-date-divider'));
+      const alreadyCorrect =
+        existing.length === groups.length &&
+        groups.every((group, i) => existing[i].dataset.dividerKey === group.key && existing[i].nextElementSibling === group.items[0]);
+
+      let dividers = existing;
+      if (!alreadyCorrect) {
+        existing.forEach((el) => el.remove());
+        dividers = groups.map((group) => {
+          const divider = document.createElement('div');
+          divider.className = 'post-date-divider';
+          divider.dataset.dividerKey = group.key;
+          divider.textContent = group.label;
+          group.items[0].parentNode.insertBefore(divider, group.items[0]);
+          return divider;
+        });
+      }
+
+      // A group that's entirely chunk-hidden or filtered-out would otherwise
+      // leave its header floating over nothing.
+      groups.forEach((group, i) => {
+        const anyVisible = group.items.some(
+          (item) => !item.classList.contains('post-item-hidden') && !item.classList.contains('post-item-filtered')
+        );
+        dividers[i].hidden = !anyVisible;
+      });
+    }
+
     let postsContainer = null;
     let postsChunkSentinel = null;
     let postsChunkLoading = false;
@@ -15182,17 +15281,18 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         // list, which reads as the filter finding nothing.
         if (window.postsFilterActive) {
           items.forEach((item) => item.classList.remove('post-item-hidden'));
-          return;
+        } else {
+          const boundedVisibleCount = Math.min(Math.max(visibleCount, chunkSize), items.length || chunkSize);
+          visibleCount = boundedVisibleCount;
+          items.forEach((item, index) => {
+            if (index < visibleCount) {
+              item.classList.remove('post-item-hidden');
+            } else {
+              item.classList.add('post-item-hidden');
+            }
+          });
         }
-        const boundedVisibleCount = Math.min(Math.max(visibleCount, chunkSize), items.length || chunkSize);
-        visibleCount = boundedVisibleCount;
-        items.forEach((item, index) => {
-          if (index < visibleCount) {
-            item.classList.remove('post-item-hidden');
-          } else {
-            item.classList.add('post-item-hidden');
-          }
-        });
+        applyPostDateDividers(postsContainer, items);
       }
 
       // Swiping through articles hits the end of the VISIBLE window long before

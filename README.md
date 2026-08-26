@@ -49,7 +49,8 @@ The full tour — every feature, organized by area — is on the
 short version:
 
 - **Triage first.** Three-pane reader, keyboard nav everywhere, context menus,
-  bulk mark-as-read that updates in place, per-view remembered sort, and a
+  bulk mark-as-read that updates in place, per-view remembered sort, date
+  dividers in the post list when sorted by published/received date, and a
   layout that collapses to two panes on a tablet and one on a phone.
 - **Picks up where you left off.** Close the tab, press Back once too often, or
   swipe the app away — reopening Lectio returns you to the same article, scrolled
