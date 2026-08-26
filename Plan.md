@@ -352,8 +352,14 @@ pattern (time of day, request type, cadence) once there are enough to see one.
 
 ### CodeQL board — watch-note
 
-Board is at zero open alerts as of 2026-08-13 (PR #200 cleared a `py/redos` in
-the lead-image opener and a substring assertion in a test; alert 191,
+Board is at zero open alerts as of 2026-08-26 (PR #241 fixed a
+`py/weak-sensitive-data-hashing` on `_entry_thumb_cache_key`'s sha1 — CodeQL
+flags a hash whenever the input matches an "id" pattern, even here where
+`entry_id` is a public feed-entry id, not a credential, and the hash is a
+cache key, not a security control. Fixed rather than dismissed: sha256 costs
+nothing and ends the noise, cheaper than arguing false-positive each time.
+Before that, board was at zero as of 2026-08-13: PR #200 cleared a `py/redos`
+in the lead-image opener and a substring assertion in a test; alert 191,
 `py/url-redirection`, was dismissed as the same false positive as 145/148/177-179.
 Before that, PR #190 closed 4× `py/polynomial-redos` + 1× `py/stack-trace-exposure`).
 
