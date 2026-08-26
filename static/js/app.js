@@ -7991,14 +7991,19 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     try { applyPortraitImageCap(document.querySelector('.pane-entry')); } catch (e) {}
 
     // --- Post multi-select (checkboxes) -----------------------------------
-    // Persistent across normal reading AND across bulk actions: checking a
-    // box, opening a post (which checks its own box), or running a bulk
-    // action (Add tag, Add to Playlist, Mark as read) never clears anyone's
-    // checkbox — actions are meant to chain (add to a playlist, then mark
-    // read, on the same selection). Only an explicit uncheck, Escape, or
-    // navigating to a different view (loadScopePanesWithoutFullRefresh's
-    // whole-pane-replace branch) clears it. Keyed by feedUrl+entryId since
-    // entry ids are only unique within a feed.
+    // The checkbox is the only thing that ADDS to the selection — checking
+    // one never clears anyone else's. An ordinary click that opens a post
+    // (not its checkbox) is normal browsing, not selection-building: it
+    // replaces the selection with just that post (see selectOnlyPost).
+    // Running a bulk action (Add tag, Add to Playlist, Mark as read) never
+    // clears the selection either — actions are meant to chain (add to a
+    // playlist, then mark read, on the same selection). Only an explicit
+    // uncheck, Escape (see the global Escape-key priority chain — it closes
+    // an open context menu first, only clears selection on a second press
+    // with no menu open), or navigating to a different view
+    // (loadScopePanesWithoutFullRefresh's whole-pane-replace branch) clears
+    // it. Keyed by feedUrl+entryId since entry ids are only unique within a
+    // feed.
     const selectedPosts = new Map();
 
     function postSelectionKey(feedUrl, entryId) {
@@ -8032,6 +8037,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       }
     }
 
+    // Opening a post via an ordinary click (not its checkbox) is normal
+    // browsing, not building a selection — it replaces whatever was selected
+    // rather than adding to it. Only the checkbox itself accumulates.
+    function selectOnlyPost(postItem) {
+      clearPostSelection();
+      setPostSelected(postItem, true);
+    }
+
     function bindPostListInteractions() {
       for (const postMainLink of document.querySelectorAll('.post-main-link')) {
         if (postMainLink.dataset.boundClick) {
@@ -8044,7 +8057,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           }
           event.preventDefault();
           const postItem = postMainLink.closest('.post-item');
-          if (postItem) setPostSelected(postItem, true);
+          if (postItem) selectOnlyPost(postItem);
           loadEntryPaneWithoutFullRefresh(postMainLink.href);
         });
         postMainLink.addEventListener('auxclick', (event) => {
@@ -8085,7 +8098,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             }
             const link = postItem.querySelector('.post-main-link');
             if (link) {
-              setPostSelected(postItem, true);
+              selectOnlyPost(postItem);
               loadEntryPaneWithoutFullRefresh(link.href);
             }
           });

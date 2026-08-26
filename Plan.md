@@ -450,10 +450,14 @@ discipline. Validation and response-shape logic factored out of
 
 ### Post list multi-select → bulk actions — SHIPPED 2026-08-26
 
-Checkbox-based multi-select on the post list (`.post-select-check` per row,
-persistent across normal reading — opening a post checks its own box too —
-AND across bulk actions, which chain (add to a playlist, then Mark as read,
-on the same selection) rather than clearing it. Escape (in the global
+Checkbox-based multi-select on the post list (`.post-select-check` per row).
+Only the checkbox itself adds to the selection — an ordinary click that opens
+a post is normal browsing, not selection-building, and replaces the
+selection with just that post (`selectOnlyPost`; an earlier version had it
+add to the selection instead, which read as "useful, but not what I
+expect"). Selection persists across bulk actions, which chain (add to a
+playlist, then Mark as read, on the same selection) rather than clearing it.
+Escape (in the global
 Escape-key priority chain — modal, tags panel, search row, THEN context
 menu/selection) closes an open context menu first and only clears the
 selection on a second, separate press with no menu open — the first version
