@@ -475,7 +475,7 @@ First deploy showed zero dividers, ever. Two bugs, found in this order:
   Fixed by diffing against what's already in the DOM (`data-divider-key` +
   `nextElementSibling` per group) and only writing when it actually differs.
 
-Rebuilt 2026-08-26, pending Josh confirming it live.
+Confirmed working live by Josh 2026-08-26.
 
 Scoping notes below kept for context on why this was one hook, not four:
 
