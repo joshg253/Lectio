@@ -460,15 +460,22 @@ funnel through. `post`/`received` sorts only; suppressed for `starred`/`size`.
 A group whose posts are all chunk-hidden or filtered-out hides its own
 divider.
 
-First deploy showed zero dividers ever: `container` (`.posts`) is also what
-the chunk-reveal `MutationObserver` watches with `childList: true`, and
-rebuilding dividers on every call is itself a childList mutation — the
-observer's own re-render retriggered the rebuild, forever, landing wherever
-that spin got interrupted (0 dividers, as seen). Fixed by diffing against
-what's already in the DOM (`data-divider-key` + `nextElementSibling` per
-group) and only writing when it actually differs, so the observer-triggered
-re-run is a no-op and the loop terminates after one round. Rebuilt
-2026-08-26, pending Josh confirming it live.
+First deploy showed zero dividers, ever. Two bugs, found in this order:
+
+- The real cause: code read `data-post-iso`/`data-received-iso` off
+  `.post-item` itself, but those live on a nested `<time>` child — the exact
+  trap an existing comment on `applyBulkReadState` already flagged, missed on
+  the first pass. Every item's timestamp came back empty, so no group ever
+  formed. Fixed by querying `item.querySelector('time[data-post-iso]')` first.
+- A second, latent bug found and fixed while chasing the first: `container`
+  (`.posts`) is also what the chunk-reveal `MutationObserver` watches with
+  `childList: true`, and rebuilding dividers unconditionally on every call is
+  itself a childList mutation — the observer's own re-render would have
+  retriggered the rebuild forever the moment the first bug stopped masking it.
+  Fixed by diffing against what's already in the DOM (`data-divider-key` +
+  `nextElementSibling` per group) and only writing when it actually differs.
+
+Rebuilt 2026-08-26, pending Josh confirming it live.
 
 Scoping notes below kept for context on why this was one hook, not four:
 

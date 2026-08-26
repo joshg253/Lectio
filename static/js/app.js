@@ -15189,7 +15189,10 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       const groups = []; // { key, label, items: [] }
 
       for (const item of items) {
-        const raw = (item.getAttribute(isoAttr) || '').trim();
+        // Timestamps live on the child <time> element, not on post-item itself
+        // (see applyBulkReadState above for the same lookup).
+        const timeEl = item.querySelector('time[data-post-iso]');
+        const raw = (timeEl?.getAttribute(isoAttr) || '').trim();
         const date = raw ? new Date(raw) : null;
         if (!date || Number.isNaN(date.getTime())) {
           groups[groups.length - 1]?.items.push(item);
