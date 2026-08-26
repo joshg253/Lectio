@@ -451,9 +451,11 @@ discipline. Validation and response-shape logic factored out of
 ### Post list multi-select → bulk actions — SHIPPED 2026-08-26
 
 Checkbox-based multi-select on the post list (`.post-select-check` per row,
-persistent across normal reading — opening a post checks its own box too;
-Escape or a completed bulk action clears it). Right-clicking a selected post
-collapses the context menu to bulk-safe items only:
+persistent across normal reading — opening a post checks its own box too —
+AND across bulk actions, which chain (add to a playlist, then Mark as read,
+on the same selection) rather than clearing it. Only Escape or navigating to
+a different view clears it. Right-clicking a selected post collapses the
+context menu to bulk-safe items only:
 
 - **Add to YouTube Playlist…** — shown when every selected post is a YouTube
   video (`data-post-video-id`, extracted server-side same as the `[duration]`

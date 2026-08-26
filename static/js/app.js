@@ -3955,9 +3955,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       if (failed) msg += ` ${failed} failed.`;
       if (skipped) msg += ` ${skipped} skipped (batch limit ${YT_PLAYLIST_BULK_ADD_CAP}).`;
       showToastMessage(msg);
-      // Only drop the ones that actually made it — a failure stays selected
-      // so retrying the action doesn't require reselecting from scratch.
-      deselectPosts(succeeded);
+      // Selection is left as-is (not cleared/deselected) — bulk actions chain,
+      // e.g. add to a playlist, then Mark as read on the same selection.
     }
 
     let _ytBulkPickerMenu = null;
@@ -7981,10 +7980,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     try { applyPortraitImageCap(document.querySelector('.pane-entry')); } catch (e) {}
 
     // --- Post multi-select (checkboxes) -----------------------------------
-    // Persistent across normal reading: checking a box, or opening a post
-    // (which checks its own box), never clears anyone else's — only an
-    // explicit uncheck, a completed bulk action, or Escape does. Keyed by
-    // feedUrl+entryId since entry ids are only unique within a feed.
+    // Persistent across normal reading AND across bulk actions: checking a
+    // box, opening a post (which checks its own box), or running a bulk
+    // action (Add tag, Add to Playlist, Mark as read) never clears anyone's
+    // checkbox — actions are meant to chain (add to a playlist, then mark
+    // read, on the same selection). Only an explicit uncheck, Escape, or
+    // navigating to a different view (loadScopePanesWithoutFullRefresh's
+    // whole-pane-replace branch) clears it. Keyed by feedUrl+entryId since
+    // entry ids are only unique within a feed.
     const selectedPosts = new Map();
 
     function postSelectionKey(feedUrl, entryId) {
@@ -8012,24 +8015,6 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       if (!selectedPosts.size) return;
       selectedPosts.clear();
       for (const el of document.querySelectorAll('.post-item.multi-selected')) {
-        el.classList.remove('multi-selected');
-        const checkbox = el.querySelector('.post-select-check');
-        if (checkbox) checkbox.checked = false;
-      }
-    }
-
-    // Drop just `entries` out of the selection after a bulk action completes
-    // — not clearPostSelection()'s whole-map clear, which would also wipe an
-    // unrelated selection still in progress when the acted-on post(s) came
-    // from an ordinary (non-bulk) right-click instead of the checkbox set.
-    function deselectPosts(entries) {
-      for (const e of entries) {
-        const key = postSelectionKey(e.feedUrl, e.entryId);
-        if (!selectedPosts.delete(key)) continue;
-        const el = document.querySelector(
-          `.post-item[data-post-feed-url="${CSS.escape(e.feedUrl)}"][data-post-entry-id="${CSS.escape(e.entryId)}"]`
-        );
-        if (!el) continue;
         el.classList.remove('multi-selected');
         const checkbox = el.querySelector('.post-select-check');
         if (checkbox) checkbox.checked = false;
@@ -9425,7 +9410,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           if (data.ok) {
             modal.setAttribute('hidden', '');
             showToastMessage(data.message || 'Tags added.');
-            deselectPosts(entries);
+            // Selection is left as-is — bulk actions chain (tag, then mark read).
           } else {
             showToastMessage(data.error || 'Add tag failed.');
             confirmBtn.disabled = false;
@@ -9469,7 +9454,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         if (data.ok) {
           showToastMessage(data.message || 'Marked as read.');
           applyReadStateToSelection(entries);
-          deselectPosts(entries);
+          // Selection is left as-is — bulk actions chain (e.g. add to a
+          // playlist, then Mark as read on the same selection).
         } else {
           showToastMessage(data.error || 'Mark as read failed.');
         }
