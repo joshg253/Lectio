@@ -623,6 +623,14 @@
           <div id="hl-rule-type-filter" class="hl-type-filter" role="tablist" aria-label="Filter rules by type"></div>
           <div id="hl-rules-list" class="hl-rules-list"></div>
           <button type="button" id="hl-add-rule-btn" class="hl-add-rule-btn">+ Add Rule</button>
+          {# Suggestion-with-preview, never automatic (decided 2026-08-24) —
+             see Plan.md "Utilities: find rules that could be one rule". Hidden
+             until hlLoadSuggestions() finds something; nothing here is ever
+             pre-checked or applied without a click. #}
+          <div id="hl-suggestions" class="hl-suggestions" hidden>
+            <div class="hl-section-label">Suggestions</div>
+            <div id="hl-suggestions-list"></div>
+          </div>
         </div>
         <div id="hl-tab-history" class="hl-tab-panel" hidden>
           <div id="hl-history-list" class="hl-history-list"><p class="hl-empty">Loading…</p></div>

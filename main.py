@@ -4772,6 +4772,193 @@ def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# Types whose `keyword` column is a plain search term (comma-list = OR of
+# terms, already how a single rule's multi-keyword list works) rather than
+# something else entirely -- deduplicate's is a match-method enum,
+# tag_filter's is a +/-tag spec (merged by its own _merge_tag_filter_specs),
+# youtube_playlist/instapaper/quire/save_article's is optional and its
+# semantics for the merge/action types aren't confirmed. Scoped to exactly
+# the two types the 2026-08-19 measurement found real mergeable groups in --
+# see Plan.md "Utilities: find rules that could be one rule".
+_MERGEABLE_RULE_TYPES = frozenset({"highlight", "mark_as_read"})
+
+# Fields (besides scope/scope_id/type/search_in/is_regex/keyword) that change
+# a rule's *behavior*, not just its keyword list. Two rules that differ here
+# are NOT silently collapsed into one — see find_mergeable_rule_groups.
+_MERGE_IDENTITY_FIELDS = ("color", "delivery", "email_to", "batch_time", "batch_count", "cc_me")
+
+
+def find_mergeable_rule_groups(conn: sqlite3.Connection) -> tuple[list[dict], list[dict]]:
+    """Groups of 2+ rules that share type/scope/scope_id/search_in/is_regex
+    (and every other behavior-affecting field) but differ only in keyword --
+    collapsible into one rule with a joined keyword list. A keyword was one
+    term until comma lists landed, so these accumulated from a time when one
+    rule per term was the only way to add a second.
+
+    Rules whose group-mates carry a *different* color/delivery/email setting
+    are excluded from the group entirely (not silently merged with one side's
+    settings winning) -- flagged separately in ``mismatched`` so the caller
+    can still show *why* nothing was offered for them.
+    """
+    rows = conn.execute(
+        "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
+        " email_to, batch_time, batch_count, cc_me, sort_order"
+        " FROM highlight_keywords WHERE type IN ('highlight', 'mark_as_read')"
+        " ORDER BY sort_order ASC, rowid ASC"
+    ).fetchall()
+    by_identity: dict[tuple, list[dict]] = {}
+    for r in rows:
+        key = (r["type"], r["scope"], r["scope_id"], r["search_in"], bool(r["is_regex"]))
+        by_identity.setdefault(key, []).append(dict(r))
+
+    groups = []
+    mismatched = []
+    for key, group_rows in by_identity.items():
+        if len(group_rows) < 2:
+            continue
+        rule_type, scope, scope_id, search_in, is_regex = key
+        settings_keys = {tuple(r[f] for f in _MERGE_IDENTITY_FIELDS) for r in group_rows}
+        entry = {
+            "type": rule_type, "scope": scope, "scope_id": scope_id,
+            "search_in": search_in, "is_regex": is_regex, "rules": group_rows,
+        }
+        if len(settings_keys) > 1:
+            mismatched.append(entry)
+        else:
+            groups.append(entry)
+    return groups, mismatched
+
+
+def merge_highlight_rule_group(
+    conn: sqlite3.Connection, rule_type: str, scope: str, scope_id: str, search_in: str, is_regex: bool,
+) -> dict | None:
+    """Collapse every rule sharing (type, scope, scope_id, search_in, is_regex)
+    into one, joining their keywords (comma list, or regex alternation when
+    is_regex). Re-derives the current matching rows rather than trusting a
+    caller-supplied list, so a stale preview can't merge the wrong rows.
+
+    Refuses (returns None) when fewer than 2 rows match, or when they carry
+    different color/delivery/email settings -- see find_mergeable_rule_groups;
+    merging must never silently pick a side on a behavior-affecting field.
+    """
+    if rule_type not in _MERGEABLE_RULE_TYPES:
+        return None
+    rows = conn.execute(
+        "SELECT rowid, * FROM highlight_keywords"
+        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND is_regex = ?"
+        " ORDER BY sort_order ASC, rowid ASC",
+        (rule_type, scope, scope_id, search_in, 1 if is_regex else 0),
+    ).fetchall()
+    if len(rows) < 2:
+        return None
+    rows = [dict(r) for r in rows]
+    if len({tuple(r[f] for f in _MERGE_IDENTITY_FIELDS) for r in rows}) > 1:
+        return None
+
+    template = rows[0]
+    seen_kw: list[str] = []
+    for r in rows:
+        kw = str(r["keyword"] or "").strip()
+        if kw and kw not in seen_kw:
+            seen_kw.append(kw)
+    if is_regex:
+        merged_keyword = "|".join(f"({kw})" for kw in seen_kw)
+    else:
+        # Flatten to the individual-keyword level too, so merging a rule that
+        # is already itself a comma list doesn't produce a repeated term.
+        flat: list[str] = []
+        seen_lower: set[str] = set()
+        for kw in seen_kw:
+            for part in kw.split(","):
+                part = part.strip()
+                if part and part.lower() not in seen_lower:
+                    seen_lower.add(part.lower())
+                    flat.append(part)
+        merged_keyword = ", ".join(flat)
+
+    min_sort_order = min(int(r["sort_order"] or 0) for r in rows)
+    conn.execute(
+        "DELETE FROM highlight_keywords"
+        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND is_regex = ?",
+        (rule_type, scope, scope_id, search_in, 1 if is_regex else 0),
+    )
+    add_highlight_keyword(
+        conn, scope, scope_id, merged_keyword, template["color"], is_regex,
+        rule_type, search_in, template["delivery"], template["email_to"],
+        template["batch_time"], template["batch_count"], bool(template["cc_me"]),
+        template["enabled"], template["dedup_window_hours"], template["exclude_scope_ids"],
+        template["dedup_fuzzy_pct"], template["dedup_min_title_words"],
+        template["webhook_url"], template["webhook_format"], bool(template["webhook_batch"]),
+        template["yt_playlist_id"], template["yt_playlist_title"], bool(template["yt_include_shorts"]),
+        bool(template["yt_mark_read"]), template["yt_min_minutes"], template["yt_max_minutes"],
+    )
+    conn.execute(
+        "UPDATE highlight_keywords SET sort_order = ?"
+        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND is_regex = ? AND keyword = ?",
+        (min_sort_order, rule_type, scope, scope_id, search_in, 1 if is_regex else 0, merged_keyword),
+    )
+    return {
+        "type": rule_type, "scope": scope, "scope_id": scope_id, "search_in": search_in,
+        "is_regex": is_regex, "keyword": merged_keyword, "merged_count": len(rows),
+    }
+
+
+def _split_plain_keywords(raw: str) -> set[str]:
+    return {kw.strip().lower() for kw in (raw or "").split(",") if kw.strip()}
+
+
+def find_redundant_feed_rules(conn: sqlite3.Connection) -> list[dict]:
+    """Feed-scoped rules already fully covered by a same-type, same-search_in
+    folder rule on a folder the feed belongs to -- the folder rule already
+    catches everything the feed rule would, so the feed rule does nothing.
+
+    Plain (non-regex) rules only: whether one regex's language is a subset of
+    another's isn't decidable this way, so a regex rule is never flagged.
+    """
+    feed_rows = conn.execute(
+        "SELECT scope_id AS feed_url, keyword, type, search_in FROM highlight_keywords"
+        " WHERE scope = 'feed' AND is_regex = 0 AND type IN ('highlight', 'mark_as_read')"
+    ).fetchall()
+    if not feed_rows:
+        return []
+    folder_rows = conn.execute(
+        "SELECT scope_id AS folder_id, keyword, type, search_in FROM highlight_keywords"
+        " WHERE scope = 'folder' AND is_regex = 0 AND type IN ('highlight', 'mark_as_read')"
+    ).fetchall()
+    if not folder_rows:
+        return []
+    folder_keywords: dict[tuple, set[str]] = {}
+    for r in folder_rows:
+        key = (r["type"], r["search_in"], str(r["folder_id"]))
+        folder_keywords.setdefault(key, set()).update(_split_plain_keywords(r["keyword"]))
+
+    feed_urls = {str(r["feed_url"]) for r in feed_rows}
+    placeholders = ",".join("?" for _ in feed_urls)
+    folder_membership = conn.execute(
+        f"SELECT feed_url, folder_id FROM folder_feeds WHERE feed_url IN ({placeholders})",
+        list(feed_urls),
+    ).fetchall()
+    feed_folder_ids: dict[str, set[int]] = {}
+    for r in folder_membership:
+        feed_folder_ids.setdefault(str(r["feed_url"]), set()).add(int(r["folder_id"]))
+
+    redundant = []
+    for r in feed_rows:
+        feed_url = str(r["feed_url"])
+        feed_kws = _split_plain_keywords(r["keyword"])
+        if not feed_kws:
+            continue
+        for folder_id in feed_folder_ids.get(feed_url, set()):
+            covering = folder_keywords.get((r["type"], r["search_in"], str(folder_id)))
+            if covering and feed_kws.issubset(covering):
+                redundant.append({
+                    "feed_url": feed_url, "keyword": r["keyword"], "type": r["type"],
+                    "search_in": r["search_in"], "covering_folder_id": folder_id,
+                })
+                break
+    return redundant
+
+
 def _merge_tag_filter_specs(conn: sqlite3.Connection, feed_url: str, incoming: str) -> str | None:
     """Fold *incoming* into the feed's existing tag_filter spec, and drop the
     now-redundant rows. Returns the merged spec, or None when there is nothing to
@@ -24861,6 +25048,115 @@ def get_highlights_route():
     return JSONResponse({"ok": True, "keywords": rows})
 
 
+@app.get("/highlights/suggestions")
+def get_highlight_suggestions_route():
+    """Rules that could be one rule (Settings → Automation → Rules), plus feed
+    rules already redundant under a covering folder rule. Suggestion-with-
+    preview, never automatic — see Plan.md "Utilities: find rules that could
+    be one rule"."""
+    with get_meta_connection() as conn:
+        mergeable, mismatched = find_mergeable_rule_groups(conn)
+        redundant = find_redundant_feed_rules(conn)
+    return JSONResponse({"ok": True, "mergeable": mergeable, "mismatched": mismatched, "redundant": redundant})
+
+
+@app.post("/highlights/merge-group")
+def merge_highlight_group_route(
+    type: str = Form(...),
+    scope: str = Form(...),
+    scope_id: str = Form(""),
+    search_in: str = Form("title"),
+    is_regex: int = Form(0),
+):
+    with get_meta_connection() as conn:
+        result = merge_highlight_rule_group(conn, type, scope, scope_id, search_in, bool(is_regex))
+    if result is None:
+        return JSONResponse(
+            {"ok": False, "error": "Nothing to merge — the group changed since this was suggested."},
+            status_code=409,
+        )
+    return JSONResponse({"ok": True, **result})
+
+
+def _validate_highlight_rule(scope: str, scope_id: str, keyword: str, rule_type: str,
+                             yt_playlist_id: str, webhook_url: str, webhook_format: str) -> str | None:
+    """Shared by /highlights/add and /highlights/edit — an error message, or
+    None if the rule is valid. One copy so a new rule type's validation can't
+    drift between the two routes. *keyword* and *webhook_url* are expected
+    already stripped."""
+    if scope not in _HIGHLIGHT_VALID_SCOPES:
+        return "invalid scope"
+    if rule_type == "deduplicate":
+        if keyword not in _DEDUP_VALID_MATCH_METHODS:
+            return "invalid match method for deduplicate rule"
+        if scope == "feed":
+            return "deduplicate needs at least two feeds — select multiple feeds or a folder"
+        if scope == "feeds" and len(parse_feeds_scope_id(scope_id)) < 2:
+            return "deduplicate needs at least two feeds selected"
+    elif rule_type == "youtube_playlist":
+        # Keyword is optional for this rule (empty = add every new video in scope).
+        if not yt_playlist_id.strip():
+            return "a target playlist is required"
+        if not youtube_oauth_connected():
+            return "connect a YouTube account first"
+    elif rule_type == "instapaper":
+        # Keyword is optional (blank = save every new entry in scope).
+        if not is_instapaper_configured():
+            return "configure Instapaper first"
+    elif rule_type == "quire":
+        # Keyword is optional (blank = add every new entry in scope).
+        if not is_quire_connected():
+            return "connect Quire first"
+        if not quire_project_oid():
+            return "pick a Quire destination project in Settings first"
+    elif rule_type == "save_article":
+        # Keyword is optional (blank = star every new entry in scope), matching
+        # the other save-out rules (instapaper/quire/youtube_playlist).
+        pass
+    elif rule_type == "tag_filter":
+        # keyword holds the +include/-exclude spec; it must yield >=1 valid tag.
+        _req, _good, _exc = parse_tag_filter_spec(keyword)
+        if not _req and not _good and not _exc:
+            return "at least one tag is required (e.g. +python, -rust)"
+    else:
+        if not keyword:
+            return "keyword is required"
+    if rule_type == "webhook":
+        if not webhook_url or not url_guard.is_safe_outbound_url(webhook_url):
+            return "a valid public webhook URL is required"
+        if webhook_format not in WEBHOOK_VALID_FORMATS:
+            return "invalid webhook format"
+    return None
+
+
+def _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, search_in,
+                             delivery, email_to, batch_time, batch_count, cc_me, enabled,
+                             dedup_window_hours, exclude_scope_ids, dedup_fuzzy_pct,
+                             dedup_min_title_words, webhook_url, webhook_format, webhook_batch,
+                             yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,
+                             yt_min_minutes, yt_max_minutes) -> JSONResponse:
+    """Shared by /highlights/add and /highlights/edit — the saved rule, in the
+    shape the client's rule list expects. *keyword* and *webhook_url* are
+    expected already stripped."""
+    return JSONResponse({"ok": True, "scope": scope, "scope_id": scope_id, "keyword": keyword,
+                         "color": color, "is_regex": bool(is_regex), "type": type,
+                         "search_in": search_in, "delivery": delivery,
+                         "email_to": email_to, "batch_time": batch_time, "batch_count": batch_count,
+                         "cc_me": bool(cc_me), "enabled": bool(enabled),
+                         "dedup_window_hours": dedup_window_hours,
+                         "dedup_fuzzy_pct": _clamp_fuzzy_pct(dedup_fuzzy_pct),
+                         "dedup_min_title_words": _clamp_min_title_words(dedup_min_title_words),
+                         "exclude_scope_ids": exclude_scope_ids.strip(),
+                         "webhook_url": webhook_url, "webhook_format": webhook_format,
+                         "webhook_batch": bool(webhook_batch),
+                         "yt_playlist_id": yt_playlist_id.strip(),
+                         "yt_playlist_title": yt_playlist_title.strip(),
+                         "yt_include_shorts": bool(yt_include_shorts),
+                         "yt_mark_read": bool(yt_mark_read),
+                         "yt_min_minutes": max(0, int(yt_min_minutes or 0)),
+                         "yt_max_minutes": max(0, int(yt_max_minutes or 0))})
+
+
 @app.post("/highlights/add")
 def add_highlight_route(
     scope: str = Form(...),
@@ -24893,49 +25189,10 @@ def add_highlight_route(
     yt_max_minutes: int = Form(0),
 ):
     keyword = keyword.strip()
-    if scope not in _HIGHLIGHT_VALID_SCOPES:
-        return JSONResponse({"error": "invalid scope"}, status_code=400)
-    if type == "deduplicate":
-        if keyword not in _DEDUP_VALID_MATCH_METHODS:
-            return JSONResponse({"error": "invalid match method for deduplicate rule"}, status_code=400)
-        if scope == "feed":
-            return JSONResponse({"error": "deduplicate needs at least two feeds — select multiple feeds or a folder"}, status_code=400)
-        if scope == "feeds" and len(parse_feeds_scope_id(scope_id)) < 2:
-            return JSONResponse({"error": "deduplicate needs at least two feeds selected"}, status_code=400)
-    elif type == "youtube_playlist":
-        # Keyword is optional for this rule (empty = add every new video in scope).
-        if not yt_playlist_id.strip():
-            return JSONResponse({"error": "a target playlist is required"}, status_code=400)
-        if not youtube_oauth_connected():
-            return JSONResponse({"error": "connect a YouTube account first"}, status_code=400)
-    elif type == "instapaper":
-        # Keyword is optional (blank = save every new entry in scope).
-        if not is_instapaper_configured():
-            return JSONResponse({"error": "configure Instapaper first"}, status_code=400)
-    elif type == "quire":
-        # Keyword is optional (blank = add every new entry in scope).
-        if not is_quire_connected():
-            return JSONResponse({"error": "connect Quire first"}, status_code=400)
-        if not quire_project_oid():
-            return JSONResponse({"error": "pick a Quire destination project in Settings first"}, status_code=400)
-    elif type == "save_article":
-        # Keyword is optional (blank = star every new entry in scope), matching
-        # the other save-out rules (instapaper/quire/youtube_playlist).
-        pass
-    elif type == "tag_filter":
-        # keyword holds the +include/-exclude spec; it must yield >=1 valid tag.
-        _req, _good, _exc = parse_tag_filter_spec(keyword)
-        if not _req and not _good and not _exc:
-            return JSONResponse({"error": "at least one tag is required (e.g. +python, -rust)"}, status_code=400)
-    else:
-        if not keyword:
-            return JSONResponse({"error": "keyword is required"}, status_code=400)
-    if type == "webhook":
-        webhook_url = webhook_url.strip()
-        if not webhook_url or not url_guard.is_safe_outbound_url(webhook_url):
-            return JSONResponse({"error": "a valid public webhook URL is required"}, status_code=400)
-        if webhook_format not in WEBHOOK_VALID_FORMATS:
-            return JSONResponse({"error": "invalid webhook format"}, status_code=400)
+    webhook_url = webhook_url.strip()
+    err = _validate_highlight_rule(scope, scope_id, keyword, type, yt_playlist_id, webhook_url, webhook_format)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
     with get_meta_connection() as conn:
         add_highlight_keyword(conn, scope, scope_id, keyword, color, bool(is_regex),
                               type, search_in, delivery, email_to, batch_time, batch_count,
@@ -24946,23 +25203,85 @@ def add_highlight_route(
                               yt_playlist_id, yt_playlist_title,
                               bool(yt_include_shorts), bool(yt_mark_read),
                               yt_min_minutes, yt_max_minutes)
-    return JSONResponse({"ok": True, "scope": scope, "scope_id": scope_id, "keyword": keyword,
-                         "color": color, "is_regex": bool(is_regex), "type": type,
-                         "search_in": search_in, "delivery": delivery,
-                         "email_to": email_to, "batch_time": batch_time, "batch_count": batch_count,
-                         "cc_me": bool(cc_me), "enabled": bool(enabled),
-                         "dedup_window_hours": dedup_window_hours,
-                         "dedup_fuzzy_pct": _clamp_fuzzy_pct(dedup_fuzzy_pct),
-                         "dedup_min_title_words": _clamp_min_title_words(dedup_min_title_words),
-                         "exclude_scope_ids": exclude_scope_ids.strip(),
-                         "webhook_url": webhook_url.strip(), "webhook_format": webhook_format,
-                         "webhook_batch": bool(webhook_batch),
-                         "yt_playlist_id": yt_playlist_id.strip(),
-                         "yt_playlist_title": yt_playlist_title.strip(),
-                         "yt_include_shorts": bool(yt_include_shorts),
-                         "yt_mark_read": bool(yt_mark_read),
-                         "yt_min_minutes": max(0, int(yt_min_minutes or 0)),
-                         "yt_max_minutes": max(0, int(yt_max_minutes or 0))})
+    return _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, search_in,
+                                    delivery, email_to, batch_time, batch_count, cc_me, enabled,
+                                    dedup_window_hours, exclude_scope_ids, dedup_fuzzy_pct,
+                                    dedup_min_title_words, webhook_url, webhook_format, webhook_batch,
+                                    yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,
+                                    yt_min_minutes, yt_max_minutes)
+
+
+@app.post("/highlights/edit")
+def edit_highlight_route(
+    old_scope: str = Form(...),
+    old_scope_id: str = Form(""),
+    old_keyword: str = Form(""),
+    scope: str = Form(...),
+    scope_id: str = Form(""),
+    keyword: str = Form(""),
+    color: str = Form("yellow"),
+    is_regex: int = Form(0),
+    type: str = Form("highlight"),
+    search_in: str = Form("title"),
+    delivery: str = Form("immediately"),
+    email_to: str = Form(""),
+    batch_time: str = Form(""),
+    batch_count: int = Form(0),
+    cc_me: int = Form(0),
+    enabled: int = Form(0),
+    dedup_window_hours: int = Form(168),
+    exclude_scope_ids: str = Form(""),
+    dedup_fuzzy_pct: int = Form(_DEDUP_FUZZY_PCT_DEFAULT),
+    dedup_min_title_words: int = Form(_DEDUP_MIN_TITLE_WORDS),
+    webhook_url: str = Form(""),
+    webhook_format: str = Form("generic"),
+    webhook_batch: int = Form(0),
+    yt_playlist_id: str = Form(""),
+    yt_playlist_title: str = Form(""),
+    yt_include_shorts: int = Form(0),
+    yt_mark_read: int = Form(1),
+    yt_min_minutes: int = Form(0),
+    yt_max_minutes: int = Form(0),
+):
+    """Atomic counterpart to the client's remove-then-add edit flow.
+
+    A rule's identity is (scope, scope_id, keyword). Editing used to be two
+    separate requests against /highlights/remove and /highlights/add; when the
+    identity was unchanged there was nothing to remove (INSERT OR REPLACE
+    overwrites in place), but sending both anyway raced the add against the
+    remove — the add landed first and the remove then deleted it, 20 times out
+    of 20 in a local reproduction, both responses OK so the UI reported
+    success. Josh lost a Deals dedup rule to this 2026-08-20 (a dedup rule
+    hits it on every edit, since its match method IS the keyword). Client-side
+    sequencing (await the remove before the add, skip it entirely when the
+    identity didn't change) closed the hole the same day; this closes it
+    structurally, in one transaction, so no future caller can reopen it."""
+    keyword = keyword.strip()
+    old_keyword = old_keyword.strip()
+    webhook_url = webhook_url.strip()
+    err = _validate_highlight_rule(scope, scope_id, keyword, type, yt_playlist_id, webhook_url, webhook_format)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    with get_meta_connection() as conn:
+        same_identity = (scope == old_scope and str(scope_id or "") == str(old_scope_id or "")
+                         and keyword == old_keyword)
+        if not same_identity:
+            remove_highlight_keyword(conn, old_scope, old_scope_id, old_keyword)
+        add_highlight_keyword(conn, scope, scope_id, keyword, color, bool(is_regex),
+                              type, search_in, delivery, email_to, batch_time, batch_count,
+                              bool(cc_me), enabled, dedup_window_hours, exclude_scope_ids,
+                              _clamp_fuzzy_pct(dedup_fuzzy_pct),
+                              _clamp_min_title_words(dedup_min_title_words),
+                              webhook_url, webhook_format, bool(webhook_batch),
+                              yt_playlist_id, yt_playlist_title,
+                              bool(yt_include_shorts), bool(yt_mark_read),
+                              yt_min_minutes, yt_max_minutes)
+    return _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, search_in,
+                                    delivery, email_to, batch_time, batch_count, cc_me, enabled,
+                                    dedup_window_hours, exclude_scope_ids, dedup_fuzzy_pct,
+                                    dedup_min_title_words, webhook_url, webhook_format, webhook_batch,
+                                    yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,
+                                    yt_min_minutes, yt_max_minutes)
 
 
 @app.post("/highlights/remove")

@@ -10355,6 +10355,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           listEl.appendChild(empty);
           restoreScroll();
           hlRevealDraftIfPending();
+          hlLoadSuggestions();
           return;
         }
         const TYPE_ORDER = HL_TYPE_ORDER;
@@ -10772,26 +10773,20 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             const origScope = rule.scope, origScopeId = rule.scope_id, origKeyword = rule.keyword;
             const origEnabled = rule.enabled;
             const draft = hlBuildDraft(rule, 'Save', async (updated) => {
-              const addBody = hlRuleToParams({ ...updated, enabled: origEnabled });
-              const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
-              // A rule's identity is (scope, scope_id, keyword). When none of the
-              // three changed there is nothing to remove — INSERT OR REPLACE
-              // overwrites the row in place. Sending both in parallel DESTROYED
-              // the rule: the add landed first and the remove then deleted it, 20
-              // times out of 20 in a local reproduction, with both responses OK so
-              // the UI reported success. A dedup rule hits this every time, since
-              // its match method IS the keyword.
-              const sameIdentity = updated.scope === origScope
-                && String(updated.scope_id || '') === String(origScopeId || '')
-                && updated.keyword === origKeyword;
+              // Single atomic request: /highlights/edit deletes the old
+              // identity (if it changed) and writes the new one in one
+              // transaction server-side, so there's no add/remove race to
+              // sequence client-side any more.
+              const body = hlRuleToParams({ ...updated, enabled: origEnabled });
+              body.set('old_scope', origScope);
+              body.set('old_scope_id', origScopeId);
+              body.set('old_keyword', origKeyword);
               try {
-                if (!sameIdentity) {
-                  const removeBody = new URLSearchParams({ scope: origScope, scope_id: origScopeId, keyword: origKeyword });
-                  const r1 = await post('/highlights/remove', removeBody);   // strictly before the add
-                  if (!r1.ok) throw new Error('failed');
-                }
-                const r2 = await post('/highlights/add', addBody);
-                if (!r2.ok) throw new Error('failed');
+                const resp = await fetch('/highlights/edit', {
+                  method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  credentials: 'same-origin', body: body.toString(),
+                });
+                if (!resp.ok) throw new Error('failed');
                 const idx = hlRules.findIndex(r => r.scope === origScope && r.scope_id === origScopeId && r.keyword === origKeyword);
                 if (idx >= 0) hlRules[idx] = { ...updated, enabled: origEnabled };
                 hlHideDraft();
@@ -10847,6 +10842,158 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         } // end TYPE_ORDER loop
         restoreScroll();
         hlRevealDraftIfPending();
+        hlLoadSuggestions();
+      }
+
+      // hlRules is normally a one-time server-rendered snapshot (window.HIGHLIGHT_RULES);
+      // every other mutation hand-splices it to match. A merge deletes N rows and
+      // inserts a different one (a new identity), and a redundant-rule removal is a
+      // one-off delete keyed by the *server's* covering-folder answer — a full
+      // refetch is simpler and safer than replicating either transformation
+      // client-side. hlRules is const but still mutable in place.
+      async function _hlRefetchAndRender() {
+        try {
+          const resp = await fetch('/highlights', { credentials: 'same-origin' });
+          const data = await resp.json();
+          hlRules.length = 0;
+          hlRules.push(...(data.keywords || []));
+        } catch { /* fall through and render with whatever hlRules already has */ }
+        hlRenderRules();
+      }
+
+      // "Rules that could be one rule" — a keyword was one term until comma
+      // lists landed, so multiple single-keyword rules on the same
+      // (type, scope, scope_id, search_in, is_regex) accumulated where one
+      // multi-keyword rule would now do. Advisory: refetched after every
+      // rules re-render so it can't go stale, but nothing here ever applies
+      // without an explicit click (decided 2026-08-24, matches the dupe
+      // scans' nothing-pre-checked convention).
+      async function hlLoadSuggestions() {
+        const section = document.getElementById('hl-suggestions');
+        const listEl = document.getElementById('hl-suggestions-list');
+        if (!section || !listEl) return;
+        let data;
+        try {
+          const resp = await fetch('/highlights/suggestions', { credentials: 'same-origin' });
+          data = await resp.json();
+        } catch {
+          return; // non-fatal — the suggestions panel just stays as it was
+        }
+        const mergeable = data.mergeable || [];
+        const redundant = data.redundant || [];
+        const mismatched = data.mismatched || [];
+        if (mergeable.length === 0 && redundant.length === 0 && mismatched.length === 0) {
+          section.hidden = true;
+          listEl.innerHTML = '';
+          return;
+        }
+        section.hidden = false;
+        listEl.innerHTML = '';
+
+        const COLOR_HEX = { yellow: '#e6c34d', green: '#5cb85c', blue: '#4a90d9', orange: '#e08a3c', red: '#d9534f', purple: '#9b6bce' };
+
+        // Same identity, but color/delivery/email differ across the group —
+        // merging would have to silently pick a side, so this is shown for
+        // awareness only (no action button). Edit one to match the others,
+        // then it moves up into the mergeable list on its own.
+        mismatched.forEach((group) => {
+          const card = document.createElement('div');
+          card.className = 'hl-suggestion-card';
+          const label = document.createElement('div');
+          label.className = 'hl-suggestion-label';
+          const typeLabel = HL_TYPE_LABELS[group.type] || group.type;
+          label.textContent = `${group.rules.length} ${typeLabel} rules on ${hlScopeLabel(group.scope, group.scope_id)} could be one, but use different settings (color, delivery, or email) — edit them to match first:`;
+          card.appendChild(label);
+          const chips = document.createElement('div');
+          chips.className = 'hl-suggestion-chips';
+          group.rules.forEach((r) => {
+            const chip = document.createElement('span');
+            chip.className = 'hl-suggestion-chip';
+            if (COLOR_HEX[r.color]) chip.style.borderLeftColor = COLOR_HEX[r.color];
+            chip.textContent = r.keyword;
+            chips.appendChild(chip);
+          });
+          card.appendChild(chips);
+          listEl.appendChild(card);
+        });
+
+        mergeable.forEach((group) => {
+          const card = document.createElement('div');
+          card.className = 'hl-suggestion-card';
+          const label = document.createElement('div');
+          label.className = 'hl-suggestion-label';
+          const typeLabel = HL_TYPE_LABELS[group.type] || group.type;
+          label.textContent = `${group.rules.length} ${typeLabel} rules on ${hlScopeLabel(group.scope, group.scope_id)} could be one:`;
+          card.appendChild(label);
+          const chips = document.createElement('div');
+          chips.className = 'hl-suggestion-chips';
+          group.rules.forEach((r) => {
+            const chip = document.createElement('span');
+            chip.className = 'hl-suggestion-chip';
+            if (COLOR_HEX[r.color]) chip.style.borderLeftColor = COLOR_HEX[r.color];
+            chip.textContent = r.keyword;
+            chips.appendChild(chip);
+          });
+          card.appendChild(chips);
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'settings-secondary-btn';
+          btn.textContent = 'Merge into one rule';
+          btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try {
+              const resp = await fetch('/highlights/merge-group', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                credentials: 'same-origin',
+                body: new URLSearchParams({
+                  type: group.type, scope: group.scope, scope_id: group.scope_id || '',
+                  search_in: group.search_in, is_regex: group.is_regex ? '1' : '0',
+                }).toString(),
+              });
+              const result = await resp.json();
+              if (!resp.ok || !result.ok) throw new Error(result.error || `HTTP ${resp.status}`);
+              await _hlRefetchAndRender();
+            } catch (err) {
+              btn.disabled = false;
+              window.alert('Merge failed: ' + (err.message || err));
+            }
+          });
+          card.appendChild(btn);
+          listEl.appendChild(card);
+        });
+
+        redundant.forEach((r) => {
+          const card = document.createElement('div');
+          card.className = 'hl-suggestion-card';
+          const label = document.createElement('div');
+          label.className = 'hl-suggestion-label';
+          const typeLabel = HL_TYPE_LABELS[r.type] || r.type;
+          label.textContent = `${typeLabel} rule "${r.keyword}" on ${hlScopeLabel('feed', r.feed_url)} is already covered by the ${hlScopeLabel('folder', String(r.covering_folder_id))} folder rule:`;
+          card.appendChild(label);
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'settings-secondary-btn';
+          btn.textContent = 'Remove redundant rule';
+          btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try {
+              const resp = await fetch('/highlights/remove', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                credentials: 'same-origin',
+                body: new URLSearchParams({ scope: 'feed', scope_id: r.feed_url, keyword: r.keyword }).toString(),
+              });
+              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+              await _hlRefetchAndRender();
+            } catch (err) {
+              btn.disabled = false;
+              window.alert('Remove failed: ' + (err.message || err));
+            }
+          });
+          card.appendChild(btn);
+          listEl.appendChild(card);
+        });
       }
 
       function hlRenderDedupGroups(panel, groups, maxShown) {
