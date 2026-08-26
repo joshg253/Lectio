@@ -14153,12 +14153,14 @@ def list_entries_for_feeds(
 
         duration_seconds = None
         duration_display = None
+        video_id = None
         try:
             entry_feed_url = getattr(entry, "feed_url", None)
             entry_link = getattr(entry, "link", None)
             if isinstance(entry_feed_url, str) and "youtube.com/feeds/videos.xml" in entry_feed_url and entry_link:
                 vid = youtube_duration_service.extract_video_id(entry_link)
                 if vid:
+                    video_id = vid
                     premiere_prefix = _youtube_premiere_prefix(vid)
                     if premiere_prefix:
                         title_text = f"[{premiere_prefix}] {title_text}"
@@ -14171,6 +14173,7 @@ def list_entries_for_feeds(
         except Exception:
             duration_seconds = None
             duration_display = None
+            video_id = None
 
         manual_tags = cast(list[str], rec.pop("_manual_tags"))
 
@@ -14266,6 +14269,7 @@ def list_entries_for_feeds(
                 ),
                 "duration_seconds": duration_seconds,
                 "duration_display": duration_display,
+                "video_id": video_id,
             }
         )
         entries.append(rec)
@@ -32434,6 +32438,26 @@ async def api_bookmarklet_save(request: Request):
                         headers=_BOOKMARKLET_CORS_HEADERS)
 
 
+def _merge_manual_tags(existing_tags: list[str], added_raw_tags: str) -> str:
+    """Append newly-typed tags onto an entry's existing manual tags.
+
+    Shared by the single-entry append path and the bulk tag-add route — both
+    need the same normalize/dedupe/cap-at-``MAX_MANUAL_TAGS`` rule.
+    """
+    appended_tags = parse_manual_hashtags(added_raw_tags)
+    merged_tags: list[str] = []
+    seen: set[str] = set()
+    for _tok in existing_tags + appended_tags:
+        normalized = normalize_tag_value(_tok)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged_tags.append(normalized)
+        if len(merged_tags) >= MAX_MANUAL_TAGS:
+            break
+    return " ".join(merged_tags)
+
+
 @app.post("/entries/tags")
 def set_entry_manual_tags(
     request: Request,
@@ -32453,18 +32477,7 @@ def set_entry_manual_tags(
 ):
     if append_mode:
         existing_tags = get_manual_tags_for_entry(feed_url, entry_id)
-        appended_tags = parse_manual_hashtags(tags_text)
-        merged_tags: list[str] = []
-        seen: set[str] = set()
-        for _tok in existing_tags + appended_tags:
-            normalized = normalize_tag_value(_tok)
-            if not normalized or normalized in seen:
-                continue
-            seen.add(normalized)
-            merged_tags.append(normalized)
-            if len(merged_tags) >= MAX_MANUAL_TAGS:
-                break
-        tags = set_manual_tags_for_entry(feed_url, entry_id, " ".join(merged_tags))
+        tags = set_manual_tags_for_entry(feed_url, entry_id, _merge_manual_tags(existing_tags, tags_text))
     else:
         tags = set_manual_tags_for_entry(feed_url, entry_id, tags_text)
     normalized_tag = normalize_tag_value(tag)  # `tag` = the active tag filter, not the loop var
@@ -32497,6 +32510,53 @@ def set_entry_manual_tags(
         ),
         status_code=303,
     )
+
+
+@app.post("/entries/tags-batch")
+def add_manual_tags_to_entries_batch_route(
+    entries: str = Form(...),
+    tags_text: str = Form(...),
+):
+    """Append a tag (or tags) onto a batch of entries' manual tags.
+
+    ``entries`` is a JSON array of ``[feed_url, entry_id]`` pairs (the post
+    list's multi-selection) — same shape as ``/entries/move-to-feed-batch``.
+    Always appends, never replaces: unlike the single-entry route this has no
+    ``append_mode`` switch, since a bulk add must never blank out tags a
+    different selected post already had.
+    """
+    try:
+        pairs = json.loads(entries)
+        assert isinstance(pairs, list)
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": "Bad entries payload."}, status_code=400)
+    if len(pairs) > _MOVE_BATCH_CAP:
+        return JSONResponse(
+            {"ok": False, "error": f"Too many entries (max {_MOVE_BATCH_CAP} per action)."},
+            status_code=400,
+        )
+    added_tokens = parse_manual_hashtags(tags_text)
+    if not added_tokens:
+        return JSONResponse({"ok": False, "error": "No valid tags."}, status_code=400)
+
+    tagged = failed = 0
+    for pair in pairs:
+        if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
+            failed += 1
+            continue
+        feed_url, entry_id = str(pair[0]).strip(), str(pair[1])
+        try:
+            existing_tags = get_manual_tags_for_entry(feed_url, entry_id)
+            set_manual_tags_for_entry(feed_url, entry_id, _merge_manual_tags(existing_tags, tags_text))
+            tagged += 1
+        except Exception:  # noqa: BLE001 — one bad entry must not sink the batch
+            failed += 1
+            LOGGER.warning("[tags-batch] failed to tag %s in %s", entry_id, feed_url)
+
+    msg = f"Tagged {tagged} post{'s' if tagged != 1 else ''}."
+    if failed:
+        msg += f" {failed} failed."
+    return JSONResponse({"ok": True, "tagged": tagged, "failed": failed, "message": msg})
 
 
 def _scope_starred_keys(

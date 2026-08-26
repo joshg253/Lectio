@@ -11,6 +11,9 @@ const CAPTURE_MODE_FULL = 'full';
 // Re-fetch the Internet Archive's snapshot rather than the live page. Same
 // reason as above for keeping the spelling in one place: main.CAPTURE_MODE_ARCHIVE.
 const CAPTURE_MODE_ARCHIVE = 'archive';
+// Mirrors the server's TAG_VALUE_PATTERN (main.py): letters, digits, and - _ + . #.
+// Shared by the entry-pane tag form and the bulk "Add tag" modal.
+const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // Only web-ish schemes may reach an href/src. Entry and feed URLs are
     // feed-controlled: a `javascript:` URL assigned to an anchor's href would
     // run in our origin the moment the user clicks it. The server already
@@ -3050,6 +3053,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     const postRefetchFullButton = document.getElementById('ctx-post-refetch-full');
     const postRefetchArchiveButton = document.getElementById('ctx-post-refetch-archive');
     const postRestoreOriginalButton = document.getElementById('ctx-post-restore-original');
+    const postAddToPlaylistButton = document.getElementById('ctx-post-add-to-playlist');
+    const postAddTagButton = document.getElementById('ctx-post-add-tag');
     const postRefetchGroup = document.getElementById('ctx-post-refetch-group');
     // Both re-fetch items appear on ANY post with a link. Read at call time, so
     // it picks up whichever post the menu was opened on.
@@ -3217,6 +3222,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     // updateRefetchGroupVisibility.
     let refetchDateChoice = null;
     let contextPostOrphan = false;
+    // Which posts a bulk action (right now: only "Add to YouTube Playlist…")
+    // applies to. Set to a single-item array from the contextPost* fields for
+    // an ordinary right-click, or to the full checkbox selection when the
+    // right-clicked row is part of one. See bindPostListInteractions().
+    let contextSelectedPosts = [];
     let actionModalSubmitHandler = null;
     let sourceViewActive = false;
     let sourceLoadTimeoutId = null;
@@ -3873,7 +3883,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       return d;
     }
 
-    async function _ytOpenPicker(videoId, menu, statusEl) {
+    // Renders the playlist list into `menu`; hands the chosen target to
+    // `onPick({playlistId, title} | {newTitle, title})` and hides the menu
+    // rather than adding to a video itself, so callers can add one video
+    // (the embed toolbar) or loop over several (bulk context-menu action).
+    async function _ytOpenPicker(menu, onPick) {
       menu.innerHTML = '<div class="lectio-yt-pl-loading">Loading playlists…</div>';
       const data = await _ytFetchPlaylists();
       if (!data.connected) {
@@ -3890,13 +3904,9 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         item.type = 'button';
         item.className = 'lectio-yt-pl-item';
         item.textContent = pl.title + (pl.count != null ? ` (${pl.count})` : '');
-        item.addEventListener('click', async () => {
-          statusEl.textContent = 'Adding…';
+        item.addEventListener('click', () => {
           menu.hidden = true;
-          try {
-            await _ytAddToPlaylist(videoId, { playlistId: pl.id });
-            statusEl.textContent = `Added to ${pl.title}.`;
-          } catch (e) { statusEl.textContent = e.message; }
+          onPick({ playlistId: pl.id, title: pl.title });
         });
         menu.appendChild(item);
       });
@@ -3904,18 +3914,75 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       newItem.type = 'button';
       newItem.className = 'lectio-yt-pl-item lectio-yt-pl-new';
       newItem.textContent = 'New playlist…';
-      newItem.addEventListener('click', async () => {
+      newItem.addEventListener('click', () => {
         const title = window.prompt('New playlist name:');
         if (!title) return;
-        statusEl.textContent = 'Creating…';
         menu.hidden = true;
-        try {
-          await _ytAddToPlaylist(videoId, { newTitle: title.trim() });
-          statusEl.textContent = `Added to ${title.trim()}.`;
-        } catch (e) { statusEl.textContent = e.message; }
+        onPick({ newTitle: title.trim(), title: title.trim() });
       });
       menu.appendChild(newItem);
     }
+
+    // playlistItems.insert costs 50 quota units/call, same reason the
+    // server-side auto-playlist rule caps itself at 25/run (main.py).
+    const YT_PLAYLIST_BULK_ADD_CAP = 25;
+
+    async function _ytBulkAddToPlaylist(posts, choice) {
+      let playlistId = choice.playlistId || '';
+      const targets = posts.slice(0, YT_PLAYLIST_BULK_ADD_CAP);
+      const succeeded = [];
+      let failed = 0;
+      for (const post of targets) {
+        try {
+          const result = await _ytAddToPlaylist(post.videoId, playlistId ? { playlistId } : { newTitle: choice.newTitle });
+          // First call may create the playlist — reuse it for the rest instead
+          // of creating a new one per video.
+          if (!playlistId && result.playlist_id) playlistId = result.playlist_id;
+          succeeded.push(post);
+        } catch (e) {
+          failed++;
+        }
+      }
+      const skipped = posts.length - targets.length;
+      let msg = `Added ${succeeded.length} to ${choice.title}.`;
+      if (failed) msg += ` ${failed} failed.`;
+      if (skipped) msg += ` ${skipped} skipped (batch limit ${YT_PLAYLIST_BULK_ADD_CAP}).`;
+      showToastMessage(msg);
+      // Only drop the ones that actually made it — a failure stays selected
+      // so retrying the action doesn't require reselecting from scratch.
+      deselectPosts(succeeded);
+    }
+
+    let _ytBulkPickerMenu = null;
+    function _ytBulkPickerBuild() {
+      if (_ytBulkPickerMenu) return _ytBulkPickerMenu;
+      _ytBulkPickerMenu = document.createElement('div');
+      _ytBulkPickerMenu.className = 'lectio-yt-pl-menu';
+      _ytBulkPickerMenu.hidden = true;
+      document.body.appendChild(_ytBulkPickerMenu);
+      document.addEventListener('click', (e) => {
+        if (!_ytBulkPickerMenu.hidden && !_ytBulkPickerMenu.contains(e.target)) {
+          _ytBulkPickerMenu.hidden = true;
+        }
+      });
+      return _ytBulkPickerMenu;
+    }
+
+    postAddToPlaylistButton?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const posts = contextSelectedPosts.filter((p) => p.videoId);
+      const clickX = event.clientX;
+      const clickY = event.clientY;
+      hideAllContextMenus();
+      if (!posts.length) return;
+      const menu = _ytBulkPickerBuild();
+      await _ytOpenPicker(menu, (choice) => {
+        _ytBulkAddToPlaylist(posts, choice);
+      });
+      positionMenuInViewport(menu, clickX, clickY);
+      menu.removeAttribute('hidden');
+    });
 
     // Cap portrait (taller-than-wide) article images to the configured width so
     // tall images (e.g. Standard Ebooks book covers) don't render huge; wide
@@ -3985,7 +4052,13 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           if (!menu.hidden) { menu.hidden = true; return; }
           menu.hidden = false;
           positionMenu();
-          await _ytOpenPicker(videoId, menu, status);
+          await _ytOpenPicker(menu, async (choice) => {
+            status.textContent = choice.newTitle ? 'Creating…' : 'Adding…';
+            try {
+              await _ytAddToPlaylist(videoId, { playlistId: choice.playlistId || '', newTitle: choice.newTitle || '' });
+              status.textContent = `Added to ${choice.title}.`;
+            } catch (e) { status.textContent = e.message; }
+          });
           positionMenu();  // re-place after content sets its height
         });
         // Close on outside click; close on scroll/resize (fixed menu would drift).
@@ -7900,6 +7973,66 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
     try { if (_ytAccountFeaturesEnabled) enhanceYoutubeEmbeds(document.querySelector('.pane-entry')); } catch (e) {}
     try { applyPortraitImageCap(document.querySelector('.pane-entry')); } catch (e) {}
 
+    // --- Post multi-select (checkboxes) -----------------------------------
+    // Persistent across normal reading: checking a box, or opening a post
+    // (which checks its own box), never clears anyone else's — only an
+    // explicit uncheck, a completed bulk action, or Escape does. Keyed by
+    // feedUrl+entryId since entry ids are only unique within a feed.
+    const selectedPosts = new Map();
+
+    function postSelectionKey(feedUrl, entryId) {
+      return `${feedUrl} ${entryId}`;
+    }
+
+    function setPostSelected(postItem, selected) {
+      const feedUrl = postItem.getAttribute('data-post-feed-url');
+      const entryId = postItem.getAttribute('data-post-entry-id');
+      if (!feedUrl || !entryId) return;
+      const key = postSelectionKey(feedUrl, entryId);
+      const checkbox = postItem.querySelector('.post-select-check');
+      if (selected) {
+        selectedPosts.set(key, { feedUrl, entryId, videoId: postItem.getAttribute('data-post-video-id') || '' });
+        postItem.classList.add('multi-selected');
+        if (checkbox) checkbox.checked = true;
+      } else {
+        selectedPosts.delete(key);
+        postItem.classList.remove('multi-selected');
+        if (checkbox) checkbox.checked = false;
+      }
+    }
+
+    function clearPostSelection() {
+      if (!selectedPosts.size) return;
+      selectedPosts.clear();
+      for (const el of document.querySelectorAll('.post-item.multi-selected')) {
+        el.classList.remove('multi-selected');
+        const checkbox = el.querySelector('.post-select-check');
+        if (checkbox) checkbox.checked = false;
+      }
+    }
+
+    // Drop just `entries` out of the selection after a bulk action completes
+    // — not clearPostSelection()'s whole-map clear, which would also wipe an
+    // unrelated selection still in progress when the acted-on post(s) came
+    // from an ordinary (non-bulk) right-click instead of the checkbox set.
+    function deselectPosts(entries) {
+      for (const e of entries) {
+        const key = postSelectionKey(e.feedUrl, e.entryId);
+        if (!selectedPosts.delete(key)) continue;
+        const el = document.querySelector(
+          `.post-item[data-post-feed-url="${CSS.escape(e.feedUrl)}"][data-post-entry-id="${CSS.escape(e.entryId)}"]`
+        );
+        if (!el) continue;
+        el.classList.remove('multi-selected');
+        const checkbox = el.querySelector('.post-select-check');
+        if (checkbox) checkbox.checked = false;
+      }
+    }
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && selectedPosts.size) clearPostSelection();
+    });
+
     function bindPostListInteractions() {
       for (const postMainLink of document.querySelectorAll('.post-main-link')) {
         if (postMainLink.dataset.boundClick) {
@@ -7911,6 +8044,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             return;
           }
           event.preventDefault();
+          const postItem = postMainLink.closest('.post-item');
+          if (postItem) setPostSelected(postItem, true);
           loadEntryPaneWithoutFullRefresh(postMainLink.href);
         });
         postMainLink.addEventListener('auxclick', (event) => {
@@ -7925,7 +8060,7 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         if (!postItem.dataset.boundTileClick) {
           postItem.dataset.boundTileClick = '1';
           postItem.addEventListener('click', (event) => {
-            if (event.target.closest('.post-save-toggle-form, .post-read-toggle-form')) {
+            if (event.target.closest('.post-save-toggle-form, .post-read-toggle-form, .post-select-check')) {
               return;
             }
             if (event.target.closest('.post-feed')) {
@@ -7951,8 +8086,17 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             }
             const link = postItem.querySelector('.post-main-link');
             if (link) {
+              setPostSelected(postItem, true);
               loadEntryPaneWithoutFullRefresh(link.href);
             }
+          });
+        }
+
+        if (!postItem.dataset.boundCheckbox) {
+          postItem.dataset.boundCheckbox = '1';
+          const checkbox = postItem.querySelector('.post-select-check');
+          checkbox?.addEventListener('change', () => {
+            setPostSelected(postItem, checkbox.checked);
           });
         }
 
@@ -7964,48 +8108,99 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             }
             event.preventDefault();
             event.stopPropagation();
-            contextPostFeedUrl = postItem.getAttribute('data-post-feed-url');
-            contextPostEntryId = postItem.getAttribute('data-post-entry-id');
-            contextPostRead = postItem.getAttribute('data-post-read') === '1';
-            contextPostCaptured = postItem.getAttribute('data-post-captured') === '1';
-            contextPostSaved = postItem.getAttribute('data-post-saved') === '1';
-            contextPostKept = postItem.getAttribute('data-post-kept') === '1';
-            contextPostLink = postItem.getAttribute('data-post-link') || '';
-            contextPostTitle = postItem.getAttribute('data-post-title') || '';
-            contextPostFolderId = postItem.getAttribute('data-post-folder-id') || null;
-            contextPostOrphan = postItem.getAttribute('data-post-orphan') === '1';
-            if (postMarkReadButton) {
-              postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
-            }
-            setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
-            setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
-            setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
-            setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
-            setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-            setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-            setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-            setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-            setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-            setMenuItemVisible(postRefetchButton, postCanRefetch());
-            setMenuItemVisible(postRefetchFullButton, postCanRefetch());
-            setMenuItemVisible(postRefetchArchiveButton, postCanRefetch());
-            updateRefetchGroupVisibility();
-            setMenuItemVisible(postMoveVisibleButton, true);
-            // "Remove this tag from all shown": only in the Saved view filtered
-            // by a tag. Scoped server-side to the folder+tag, so it clears the
-            // whole filtered set, not just the paginated window on screen.
-            {
-              const _p = new URLSearchParams(window.location.search);
-              const _tag = (_p.get('tag') || '').trim();
-              const _show = _p.get('star_only') === '1' && !!_tag && !!(_p.get('folder_id'));
-              if (postRemoveTagShownButton && _show) {
-                postRemoveTagShownButton.textContent = `Remove tag “${_tag}” from all shown`;
+            const rowFeedUrl = postItem.getAttribute('data-post-feed-url');
+            const rowEntryId = postItem.getAttribute('data-post-entry-id');
+            const isBulk = selectedPosts.size >= 2 && selectedPosts.has(postSelectionKey(rowFeedUrl, rowEntryId));
+
+            if (isBulk) {
+              // A bulk right-click only offers actions safe to run on every
+              // selected post at once — everything below acts on the single
+              // contextPost* row and would silently apply to just one of them.
+              contextSelectedPosts = Array.from(selectedPosts.values());
+              setMenuItemVisible(postMarkReadButton, false);
+              setMenuItemVisible(postCopyUrlButton, false);
+              setMenuItemVisible(postMarkFeedReadButton, false);
+              setMenuItemVisible(postOpenInFeedsButton, false);
+              setMenuItemVisible(postAutomationButton, false);
+              setMenuItemVisible(postMoveToFeedButton, false);
+              setMenuItemVisible(postDeleteButton, false);
+              setMenuItemVisible(postEditDateButton, false);
+              setMenuItemVisible(postEditTitleButton, false);
+              setMenuItemVisible(postEditLinkButton, false);
+              setMenuItemVisible(postRefetchButton, false);
+              setMenuItemVisible(postRefetchFullButton, false);
+              setMenuItemVisible(postRefetchArchiveButton, false);
+              setMenuItemVisible(postRestoreOriginalButton, false);
+              if (postRefetchGroup) postRefetchGroup.hidden = true;
+              const editGroup = document.getElementById('ctx-post-edit-group');
+              if (editGroup) editGroup.hidden = true;
+              setMenuItemVisible(postMoveVisibleButton, false);
+              setMenuItemVisible(postRemoveTagShownButton, false);
+              setMenuItemVisible(postMarkAboveReadButton, false);
+              setMenuItemVisible(postMarkBelowReadButton, false);
+              setMenuItemVisible(postClearImgCacheButton, false);
+
+              const allYoutube = contextSelectedPosts.every((p) => Boolean(p.videoId));
+              if (postAddToPlaylistButton) {
+                postAddToPlaylistButton.textContent = `Add ${contextSelectedPosts.length} to YouTube Playlist…`;
               }
-              setMenuItemVisible(postRemoveTagShownButton, _show);
+              setMenuItemVisible(postAddToPlaylistButton, allYoutube);
+              if (postAddTagButton) postAddTagButton.textContent = `Add tag to ${contextSelectedPosts.length} posts…`;
+              setMenuItemVisible(postAddTagButton, true);
+            } else {
+              contextPostFeedUrl = rowFeedUrl;
+              contextPostEntryId = rowEntryId;
+              contextPostRead = postItem.getAttribute('data-post-read') === '1';
+              contextPostCaptured = postItem.getAttribute('data-post-captured') === '1';
+              contextPostSaved = postItem.getAttribute('data-post-saved') === '1';
+              contextPostKept = postItem.getAttribute('data-post-kept') === '1';
+              contextPostLink = postItem.getAttribute('data-post-link') || '';
+              contextPostTitle = postItem.getAttribute('data-post-title') || '';
+              contextPostFolderId = postItem.getAttribute('data-post-folder-id') || null;
+              contextPostOrphan = postItem.getAttribute('data-post-orphan') === '1';
+              const videoId = postItem.getAttribute('data-post-video-id') || '';
+              contextSelectedPosts = contextPostFeedUrl && contextPostEntryId
+                ? [{ feedUrl: contextPostFeedUrl, entryId: contextPostEntryId, videoId }]
+                : [];
+              if (postMarkReadButton) {
+                postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
+              }
+              setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
+              setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
+              setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
+              setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
+              setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+              setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+              setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+              setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+              setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+              setMenuItemVisible(postRefetchButton, postCanRefetch());
+              setMenuItemVisible(postRefetchFullButton, postCanRefetch());
+              setMenuItemVisible(postRefetchArchiveButton, postCanRefetch());
+              updateRefetchGroupVisibility();
+              const editGroup = document.getElementById('ctx-post-edit-group');
+              if (editGroup) editGroup.hidden = false;
+              setMenuItemVisible(postMoveVisibleButton, true);
+              // "Remove this tag from all shown": only in the Saved view filtered
+              // by a tag. Scoped server-side to the folder+tag, so it clears the
+              // whole filtered set, not just the paginated window on screen.
+              {
+                const _p = new URLSearchParams(window.location.search);
+                const _tag = (_p.get('tag') || '').trim();
+                const _show = _p.get('star_only') === '1' && !!_tag && !!(_p.get('folder_id'));
+                if (postRemoveTagShownButton && _show) {
+                  postRemoveTagShownButton.textContent = `Remove tag “${_tag}” from all shown`;
+                }
+                setMenuItemVisible(postRemoveTagShownButton, _show);
+              }
+              setMenuItemVisible(postMarkAboveReadButton, true);
+              setMenuItemVisible(postMarkBelowReadButton, true);
+              setMenuItemVisible(postClearImgCacheButton, true);
+              if (postAddToPlaylistButton) postAddToPlaylistButton.textContent = 'Add to YouTube Playlist…';
+              setMenuItemVisible(postAddToPlaylistButton, Boolean(videoId));
+              if (postAddTagButton) postAddTagButton.textContent = 'Add tag…';
+              setMenuItemVisible(postAddTagButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             }
-            setMenuItemVisible(postMarkAboveReadButton, true);
-            setMenuItemVisible(postMarkBelowReadButton, true);
-            setMenuItemVisible(postClearImgCacheButton, true);
             showPostContextMenu(event);
           });
         }
@@ -9141,6 +9336,82 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       modal.removeAttribute('hidden');
       targetSel.focus();
     }
+
+    // Shared driver for the bulk tag-add modal. `entries` is a list of
+    // {feedUrl, entryId}; always appends (server merges with each entry's own
+    // existing tags), so this is safe to run on a mixed-tag selection.
+    function openBulkTagModal(entries, bodyText) {
+      if (!entries.length) return;
+      const modal = document.getElementById('bulk-tag-modal');
+      const bodyEl = document.getElementById('bulk-tag-body');
+      const input = document.getElementById('bulk-tag-input');
+      const confirmBtn = document.getElementById('bulk-tag-confirm');
+      if (!modal || !(input instanceof HTMLInputElement) || !confirmBtn) return;
+
+      bodyEl.textContent = bodyText;
+      input.value = '';
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Add tag';
+
+      const updateConfirmState = () => {
+        confirmBtn.disabled = tokenizeTags(input.value).length === 0;
+      };
+      input.oninput = updateConfirmState;
+      updateConfirmState();
+
+      input.onkeydown = (event) => {
+        if (event.key === 'Enter' && !confirmBtn.disabled) confirmBtn.click();
+      };
+
+      confirmBtn.onclick = async () => {
+        const tokens = tokenizeTags(input.value);
+        if (!tokens.length) return;
+        const invalid = tokens.filter((t) => !TAG_VALID_RE.test(t));
+        if (invalid.length) {
+          showToastMessage('Tags may only contain letters, numbers, and: - _ + . #');
+          input.select();
+          return;
+        }
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Adding…';
+        try {
+          const body = new URLSearchParams({
+            entries: JSON.stringify(entries.map((e) => [e.feedUrl, e.entryId])),
+            tags_text: tokens.join(' '),
+          });
+          const resp = await fetch('/entries/tags-batch', { method: 'POST', body });
+          const data = await resp.json();
+          if (data.ok) {
+            modal.setAttribute('hidden', '');
+            showToastMessage(data.message || 'Tags added.');
+            deselectPosts(entries);
+          } else {
+            showToastMessage(data.error || 'Add tag failed.');
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Add tag';
+          }
+        } catch (_) {
+          showToastMessage('Add tag failed — network error.');
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = 'Add tag';
+        }
+      };
+
+      modal.removeAttribute('hidden');
+      input.focus();
+    }
+
+    postAddTagButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const entries = contextSelectedPosts;
+      hideAllContextMenus();
+      if (!entries.length) return;
+      const bodyText = entries.length === 1
+        ? (contextPostTitle ? `Add a tag to “${contextPostTitle}”.` : 'Add a tag to this post.')
+        : `Add a tag to ${entries.length} posts.`;
+      openBulkTagModal(entries, bodyText);
+    });
 
     postMoveToFeedButton?.addEventListener('click', (event) => {
       event.preventDefault();
@@ -16104,8 +16375,6 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
             return;
           }
 
-          // Validate against server's TAG_VALUE_PATTERN: letters, digits, _ - + . #
-          const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           const invalidTokens = addedTokens.filter(t => !TAG_VALID_RE.test(t));
           if (invalidTokens.length > 0 || (rawInput && addedTokens.length === 0)) {
             showToastMessage('Tags may only contain letters, numbers, and: - _ + . #');

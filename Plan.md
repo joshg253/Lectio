@@ -448,9 +448,23 @@ so no future caller can reintroduce the race regardless of sequencing
 discipline. Validation and response-shape logic factored out of
 `add_highlight_route` into shared helpers so `/add` and `/edit` can't drift.
 
-### YouTube: multi-select → add to playlist
+### Post list multi-select → bulk actions — SHIPPED 2026-08-26
 
-Idea 2026-08-24, not scoped. Select multiple posts in a YouTube feed and add them all to a playlist in one action.
+Checkbox-based multi-select on the post list (`.post-select-check` per row,
+persistent across normal reading — opening a post checks its own box too;
+Escape or a completed bulk action clears it). Right-clicking a selected post
+collapses the context menu to bulk-safe items only:
+
+- **Add to YouTube Playlist…** — shown when every selected post is a YouTube
+  video (`data-post-video-id`, extracted server-side same as the `[duration]`
+  prefix). Loops client-side over the existing single-video
+  `/api/youtube/playlists/add`, capped at 25/batch (50 quota units/call).
+- **Add tag…** — works for any post, single or bulk, via new
+  `POST /entries/tags-batch` (mirrors `/entries/move-to-feed-batch`'s
+  JSON-array-of-pairs shape). Always appends, never replaces.
+
+Both single-right-click and bulk right-click populate the same
+`contextSelectedPosts` array, so the menu items work uniformly for 1 or N.
 
 ### Article list date separators (Today, Yesterday, ...) — SHIPPED 2026-08-25
 
