@@ -20,7 +20,15 @@ mode it meant clicking into Uncategorized showed the whole saved-articles
 backlog mixed in with the real orphan feeds' posts, while the badge (correctly
 counting only the real orphans) read far lower than what the list showed.
 Saved mode's own reachability is preserved by extending the existing
-star_only-gated root re-inclusion in _home_inner to cover Uncategorized too."""
+star_only-gated root re-inclusion in _home_inner to cover Uncategorized too.
+
+Found 2026-08-28 (Sourcery, reviewing the Uncategorized fix above):
+`resolve_reader_backlog` (Read Mode's backlog resolver, GET /read) doesn't
+read `get_folder_feed_urls`/`_home_inner`'s feed sets at all — it independently
+rebuilds its own root/Uncategorized widening from raw `all_reader_feed_urls`,
+so it needed the identical exclusion (and the identical star_only-gated
+re-inclusion) applied a third time, or Feeds-mode Read Mode over Uncategorized
+still surfaced the whole saved-articles backlog."""
 from __future__ import annotations
 
 import pytest
@@ -121,3 +129,33 @@ def test_saved_mode_uncategorized_still_reaches_saved_feed(configured):
     resp = _client().get(f"/?folder_id={main.UNCATEGORIZED_FOLDER_ID}&star_only=1")
     assert resp.status_code == 200
     assert "A saved article" in resp.text
+
+
+def test_reader_backlog_feeds_mode_uncategorized_excludes_saved_feed(configured):
+    posts = main.resolve_reader_backlog(
+        folder_id=main.UNCATEGORIZED_FOLDER_ID, list_feed_url=None,
+        read_filter="unread", star_only=False, tag=None,
+        sort_by="post", sort_dir="desc", search_query=None,
+    )
+    assert {p["feed_url"] for p in posts} == {ORPHAN_FEED}
+
+
+def test_reader_backlog_feeds_mode_root_excludes_saved_feed(configured):
+    posts = main.resolve_reader_backlog(
+        folder_id=None, list_feed_url=None,
+        read_filter="unread", star_only=False, tag=None,
+        sort_by="post", sort_dir="desc", search_query=None,
+    )
+    assert saved_articles_service.SAVED_FEED_URL not in {p["feed_url"] for p in posts}
+    assert ORPHAN_FEED in {p["feed_url"] for p in posts}
+
+
+def test_reader_backlog_saved_mode_uncategorized_still_reaches_saved_feed(configured):
+    """Same reachability guarantee as the Feeds-mode page route above, exercised
+    directly against the resolver Read Mode actually calls."""
+    posts = main.resolve_reader_backlog(
+        folder_id=main.UNCATEGORIZED_FOLDER_ID, list_feed_url=None,
+        read_filter="all", star_only=True, tag=None,
+        sort_by="post", sort_dir="desc", search_query=None,
+    )
+    assert saved_articles_service.SAVED_FEED_URL in {p["feed_url"] for p in posts}

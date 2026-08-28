@@ -20614,8 +20614,17 @@ def resolve_reader_backlog(
     root_id = cast(int, snapshot["root_id"])
     folder_feed_urls_by_id = dict(cast("dict[int, set[str]]", snapshot["folder_feed_urls_by_id"]))
     all_reader_feed_urls = get_all_reader_feed_urls()
-    folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
-    folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = all_reader_feed_urls - all_feed_urls
+    # lectio:saved is a real reader feed (backs the Saved/Kept view) but must
+    # never be reachable as an ordinary Feeds-mode subscription — same
+    # exclusion get_folder_feed_urls and _home_inner apply. Found 2026-08-28:
+    # this resolver independently rebuilds its own root/Uncategorized feed
+    # sets rather than reading get_folder_feed_urls's, so it needs its own copy
+    # of the exclusion, or Feeds-mode Read Mode over Uncategorized surfaced the
+    # whole saved-articles backlog.
+    folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls) - {saved_articles_service.SAVED_FEED_URL}
+    folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = (
+        all_reader_feed_urls - all_feed_urls - {saved_articles_service.SAVED_FEED_URL}
+    )
 
     selected_folder_id = folder_id or root_id
     if list_feed_url:
@@ -20624,6 +20633,12 @@ def resolve_reader_backlog(
         # Stars are deliberate curation: keep a disabled feed's saved items
         # visible (the saved badges/counts include them).
         entry_feed_urls = set(folder_feed_urls_by_id.get(selected_folder_id, set()))
+        if selected_folder_id in (root_id, UNCATEGORIZED_FOLDER_ID):
+            # Saved mode's own reachability into lectio:saved — same
+            # star_only-gated re-inclusion _home_inner uses. It's an orphan
+            # feed like any other, so it belongs at Saved's root and in its
+            # Uncategorized grouping, just never as a browsable subscription.
+            entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
     else:
         entry_feed_urls = set(folder_feed_urls_by_id.get(selected_folder_id, set())) - disabled_feed_urls
 
