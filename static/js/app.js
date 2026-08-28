@@ -9058,8 +9058,13 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
           opt.addEventListener('mousedown', (e) => {
             e.preventDefault();
             inputEl.value = label;
-            resultsEl.hidden = true;
+            // dispatchEvent runs listeners synchronously, including this
+            // module's own renderMatches (bound to 'input' below) — which
+            // would re-render the single now-matching result and set
+            // resultsEl.hidden back to false. Hide *after* dispatching so
+            // this assignment is the one that wins.
             inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+            resultsEl.hidden = true;
           });
           resultsEl.appendChild(opt);
         });
