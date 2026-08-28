@@ -5358,9 +5358,13 @@ def get_direct_feed_urls_by_folder(conn: sqlite3.Connection) -> dict[int, list[s
 def get_folder_feed_urls(conn: sqlite3.Connection, folder_id: int) -> set[str]:
     # The virtual "Uncategorized" folder has no folder_feeds rows; its members are
     # every reader feed not in any folder. Resolving it here lets all folder
-    # actions (mark-read, refresh, …) operate on it uniformly.
+    # actions (mark-read, refresh, …) operate on it uniformly. The Saved
+    # Articles virtual feed is excluded here too — it must never be
+    # actionable (mark-read/refresh/moved) as if it were an ordinary
+    # unfoldered feed; the Saved sidebar's own reachability need is served
+    # elsewhere (_home_inner's snapshot dict), not through this resolver.
     if folder_id == UNCATEGORIZED_FOLDER_ID:
-        return get_all_reader_feed_urls() - get_all_feed_urls(conn)
+        return get_all_reader_feed_urls() - get_all_feed_urls(conn) - {saved_articles_service.SAVED_FEED_URL}
     # "All Feeds" (root) covers every reader feed, including orphans that live in
     # no folder. The home view widens root the same way for display and counts, so
     # folder actions (mark-read/older, refresh) must match — otherwise entries in
@@ -20614,8 +20618,17 @@ def resolve_reader_backlog(
     root_id = cast(int, snapshot["root_id"])
     folder_feed_urls_by_id = dict(cast("dict[int, set[str]]", snapshot["folder_feed_urls_by_id"]))
     all_reader_feed_urls = get_all_reader_feed_urls()
-    folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
-    folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = all_reader_feed_urls - all_feed_urls
+    # lectio:saved is a real reader feed (backs the Saved/Kept view) but must
+    # never be reachable as an ordinary Feeds-mode subscription — same
+    # exclusion get_folder_feed_urls and _home_inner apply. Found 2026-08-28:
+    # this resolver independently rebuilds its own root/Uncategorized feed
+    # sets rather than reading get_folder_feed_urls's, so it needs its own copy
+    # of the exclusion, or Feeds-mode Read Mode over Uncategorized surfaced the
+    # whole saved-articles backlog.
+    folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls) - {saved_articles_service.SAVED_FEED_URL}
+    folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = (
+        all_reader_feed_urls - all_feed_urls - {saved_articles_service.SAVED_FEED_URL}
+    )
 
     selected_folder_id = folder_id or root_id
     if list_feed_url:
@@ -20624,6 +20637,12 @@ def resolve_reader_backlog(
         # Stars are deliberate curation: keep a disabled feed's saved items
         # visible (the saved badges/counts include them).
         entry_feed_urls = set(folder_feed_urls_by_id.get(selected_folder_id, set()))
+        if selected_folder_id in (root_id, UNCATEGORIZED_FOLDER_ID):
+            # Saved mode's own reachability into lectio:saved — same
+            # star_only-gated re-inclusion _home_inner uses. It's an orphan
+            # feed like any other, so it belongs at Saved's root and in its
+            # Uncategorized grouping, just never as a browsable subscription.
+            entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
     else:
         entry_feed_urls = set(folder_feed_urls_by_id.get(selected_folder_id, set())) - disabled_feed_urls
 
@@ -22613,18 +22632,18 @@ def _home_inner(
         all_reader_feed_urls = get_all_reader_feed_urls()
         uncategorized_feed_urls = all_reader_feed_urls - all_feed_urls
         # The local Saved Articles feed is surfaced by the Saved sidebar view,
-        # not as a subscription: it stays in the Uncategorized VIEW set (the
-        # Saved sublist's Uncategorized folder must reach its entries) but out
-        # of the feeds-tree DISPLAY set (feed list, unread badge, row
-        # presence), so it never shows as a subscription in Feeds mode.
+        # not as a subscription: it must never show — or be browsable — as a
+        # feed in Feeds mode, root or Uncategorized alike. Its reachability
+        # from the Saved sidebar's OWN "Uncategorized" grouping is served
+        # below by the star_only-gated re-inclusion (mirroring root), not by
+        # keeping it in this shared dict — that leaked it into a plain Feeds
+        # browse of Uncategorized, showing its whole backlog as if it were an
+        # ordinary orphan feed's entries (found 2026-08-27).
         _uncat_display_urls = uncategorized_feed_urls - {saved_articles_service.SAVED_FEED_URL}
         folder_feed_urls_by_id = dict(folder_feed_urls_by_id)
         direct_feed_urls_by_folder = dict(direct_feed_urls_by_folder)
-        # Unlike Uncategorized (kept inclusive for the Saved sidebar's own
-        # reachability, see below), root has no such need — it must never show
-        # lectio:saved as a subscription in Feeds mode.
         folder_feed_urls_by_id[root_id] = all_feed_urls | _uncat_display_urls
-        folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = uncategorized_feed_urls
+        folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = _uncat_display_urls
         direct_feed_urls_by_folder[UNCATEGORIZED_FOLDER_ID] = sorted(_uncat_display_urls)
         _tick("structure_snapshot")
 
@@ -22887,12 +22906,16 @@ def _home_inner(
     # title showed correctly in the article header (read from reader) and stale in
     # the list, and the thumbnail appeared on open and vanished on return.
     #
-    # ONLY at the root, and only when no feed is selected: belonging to no folder
-    # means it belongs to the whole-library view, not to every folder. Adding it
-    # unconditionally put saved articles in every folder's list.
+    # ONLY at the root or Uncategorized, and only when no feed is selected:
+    # belonging to no folder means it belongs to the whole-library view and
+    # the unfoldered subset — same as any other orphan feed — not to every
+    # folder. Adding it unconditionally put saved articles in every folder's
+    # list; only gating on root left it unreachable from Saved's own
+    # Uncategorized grouping once Uncategorized's shared feed-set (used by
+    # both modes) stopped including it by default (2026-08-27).
     if selected_star_only:
         entry_feed_urls = entry_feed_urls | get_kept_feed_urls()
-        if selected_folder_id == root_id and not selected_feed_url:
+        if selected_folder_id in (root_id, UNCATEGORIZED_FOLDER_ID) and not selected_feed_url:
             entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
     posts = list_entries_for_feeds(
         entry_feed_urls,

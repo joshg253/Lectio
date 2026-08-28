@@ -106,11 +106,14 @@ def test_root_excludes_saved_articles_feed(monkeypatch):
     assert urls == {"https://a.example/feed", "https://b.example/feed", "https://c.example/feed"}
 
 
-def test_uncategorized_still_includes_saved_articles_feed(monkeypatch):
-    """Unlike root, Uncategorized deliberately stays inclusive of lectio:saved
-    — the Saved sidebar's own Uncategorized grouping needs to reach its
-    entries through it. Only display code (main._home_inner's
-    _uncat_display_urls) scrubs it out for Feeds-mode presentation."""
+def test_uncategorized_excludes_saved_articles_feed(monkeypatch):
+    """Like root, Uncategorized excludes lectio:saved from this resolver — it
+    must never be actionable (mark-read/refresh/moved) as an ordinary
+    unfoldered feed. Found 2026-08-27: this used to stay inclusive "for the
+    Saved sidebar's own Uncategorized grouping," but that leaked the whole
+    saved-articles backlog into a plain Feeds-mode browse of Uncategorized.
+    The Saved sidebar's own reachability is served instead by a star_only-gated
+    re-inclusion in _home_inner, not by this general-purpose resolver."""
     conn = _meta_conn_with_folders()
     monkeypatch.setattr(
         main,
@@ -121,4 +124,4 @@ def test_uncategorized_still_includes_saved_articles_feed(monkeypatch):
         },
     )
     urls = main.get_folder_feed_urls(conn, main.UNCATEGORIZED_FOLDER_ID)
-    assert urls == {"https://c.example/feed", main.saved_articles_service.SAVED_FEED_URL}
+    assert urls == {"https://c.example/feed"}
