@@ -838,11 +838,13 @@
           {# Orphan archives (feed fully unsubscribed) have no home in the Feeds
              tree at all — "Open in Feeds" would land on an empty page. #}
           data-post-orphan="{{ 1 if post.is_orphan_archive else 0 }}"
+          data-post-video-id="{{ post.video_id or '' }}"
           data-thumb-crop="{{ post.thumb_crop or 'cover' }}"
           data-thumb-strategy="{{ post.thumb_strategy or '' }}"
           data-smart-ms="{{ post.smart_min_scale or '' }}"
           data-fill-zoom="{{ post.fill_zoom or '' }}"
         >
+          <input type="checkbox" class="post-select-check" aria-label="Select post" tabindex="-1" />
           {% set _is_data_thumb = post.thumbnail_url and post.thumbnail_url.startswith('data:') %}
           <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %} crop-{{ post.thumb_crop or 'cover' }}"
             {% if post.thumb_crop == 'smart' and post.thumbnail_url and not _is_data_thumb %}style="background-image:url('/thumb?url={{ post.thumbnail_url | urlencode }}&crop=cover')"{% endif %}>
@@ -1946,11 +1948,19 @@
 
   <div id="post-context-menu" class="context-menu" hidden>
     <button type="button" id="ctx-post-mark-read" class="context-menu-item">Mark as read</button>
+    {# Bulk-only sibling of ctx-post-mark-read: always marks read (no unread
+       toggle — a mixed-selection toggle has no single obvious direction). #}
+    <button type="button" id="ctx-post-mark-read-bulk" class="context-menu-item" hidden>Mark as read</button>
     <button type="button" id="ctx-post-mark-feed-read" class="context-menu-item" hidden>Mark Feed as Read</button>
     <button type="button" id="ctx-post-open-in-feeds" class="context-menu-item" hidden>Open in Feeds</button>
     <button type="button" id="ctx-post-mark-above-read" class="context-menu-item">Read above</button>
     <button type="button" id="ctx-post-mark-below-read" class="context-menu-item">Read below</button>
     <button type="button" id="ctx-post-copy-url" class="context-menu-item">Copy URL</button>
+    {# Shown only when every post in play (the right-clicked one, or the whole
+       multi-selection) has a video_id — see contextSelectedPosts in app.js. #}
+    <button type="button" id="ctx-post-add-to-playlist" class="context-menu-item" hidden>Add to YouTube Playlist…</button>
+    {# Works on any post — the right-clicked one, or the whole multi-selection. #}
+    <button type="button" id="ctx-post-add-tag" class="context-menu-item" hidden>Add tag…</button>
     <button type="button" id="ctx-post-move-to-feed" class="context-menu-item">Move to feed…</button>
     {# "shown", not "visible": this moves everything matching the active filters,
        including rows scroll-chunking has not painted yet. #}

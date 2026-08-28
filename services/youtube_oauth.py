@@ -137,6 +137,40 @@ def list_playlists(access_token: str) -> list[dict]:
     return out
 
 
+def list_playlist_video_ids(access_token: str, playlist_id: str) -> set[str]:
+    """Return every video id already in ``playlist_id``.
+
+    Costs ~1 quota unit per page of up to 50 items — cheap insurance against
+    the 50-unit cost of an insert that would just duplicate an existing entry.
+    The API happily accepts the same video twice, and removing one copy later
+    removes both, so a bulk add checks first rather than relying on the API to
+    reject a dupe (it doesn't).
+    """
+    out: set[str] = set()
+    page_token = ""
+    with httpx.Client(timeout=_TIMEOUT, headers=_auth_headers(access_token)) as client:
+        while True:
+            params = {
+                "part": "contentDetails",
+                "playlistId": playlist_id,
+                "maxResults": 50,
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            resp = client.get(f"{_API_BASE}/playlistItems", params=params)
+            _raise_for_quota(resp, "playlistItems.list")
+            _bill(1)
+            data = resp.json()
+            for item in data.get("items", []):
+                vid = (item.get("contentDetails") or {}).get("videoId")
+                if vid:
+                    out.add(vid)
+            page_token = data.get("nextPageToken", "")
+            if not page_token:
+                break
+    return out
+
+
 def add_video_to_playlist(access_token: str, playlist_id: str, video_id: str) -> dict:
     """Insert ``video_id`` into ``playlist_id``. Costs 50 quota units."""
     body = {

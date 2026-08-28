@@ -2580,6 +2580,28 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   margin-bottom: 0;
 }
 
+.post-select-check {
+  position: absolute;
+  top: 0.4rem;
+  left: 0.4rem;
+  z-index: 2;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+}
+
+.post-item.multi-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.post-item.multi-selected .post-item-card {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
 .post-item-card {
   position: relative;
   z-index: 1;
@@ -2656,6 +2678,14 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
 
 .post-title-row {
   min-width: 0;
+}
+
+/* .post-thumbnail.is-empty is display:none (no wasted gutter on a text-only
+   post), which left .post-select-check — absolutely positioned to float over
+   the thumbnail's top-left corner — with nothing to float over: the title's
+   first line started flush at the post's left edge, right under it. */
+.post-item:has(> .post-thumbnail.is-empty) .post-title-row {
+  padding-left: 1.6rem;
 }
 
 .post-content {

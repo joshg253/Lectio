@@ -448,9 +448,49 @@ so no future caller can reintroduce the race regardless of sequencing
 discipline. Validation and response-shape logic factored out of
 `add_highlight_route` into shared helpers so `/add` and `/edit` can't drift.
 
-### YouTube: multi-select → add to playlist
+### Post list multi-select → bulk actions — SHIPPED 2026-08-26
 
-Idea 2026-08-24, not scoped. Select multiple posts in a YouTube feed and add them all to a playlist in one action.
+Checkbox-based multi-select on the post list (`.post-select-check` per row).
+Only the checkbox itself adds to the selection — an ordinary click that opens
+a post is normal browsing, not selection-building, and replaces the
+selection with just that post (`selectOnlyPost`; an earlier version had it
+add to the selection instead, which read as "useful, but not what I
+expect"). Selection persists across bulk actions, which chain (add to a
+playlist, then Mark as read, on the same selection) rather than clearing it.
+Escape (in the global
+Escape-key priority chain — modal, tags panel, search row, THEN context
+menu/selection) closes an open context menu first and only clears the
+selection on a second, separate press with no menu open — the first version
+cleared both in the same keypress via its own standalone listener, wiping a
+22-item selection just to dismiss the menu. Navigating to a different view
+also clears it. Right-clicking a selected post collapses the context menu to
+bulk-safe items only:
+
+- **Add to YouTube Playlist…** — shown when every selected post is a YouTube
+  video (`data-post-video-id`, extracted server-side same as the `[duration]`
+  prefix). One request to new `/api/youtube/playlists/add-batch`, capped at
+  25/batch (50 quota units/insert) — checks the playlist's existing contents
+  first (~1 unit/50 items) and skips anything already there, since the API
+  happily inserts the same video twice and removing one copy removes both.
+- **Add tag…** — works for any post, single or bulk, via new
+  `POST /entries/tags-batch` (mirrors `/entries/move-to-feed-batch`'s
+  JSON-array-of-pairs shape). Always appends, never replaces.
+- **Mark as read** — bulk-only sibling of the per-post toggle; always marks
+  read (no unread direction for a mixed selection). New `/entries/read-batch`,
+  same shape, skips already-read entries and unpremiered YouTube videos
+  (mirrors "Read above/below"'s guard), bumps the unread-count generation.
+
+Both single-right-click and bulk right-click populate the same
+`contextSelectedPosts` array, so the menu items work uniformly for 1 or N.
+
+Fixed same day: `selectedPosts` is keyed by (feedUrl, entryId), not DOM nodes,
+so it survived a whole-pane navigation swap and kept accumulating across
+folder/feed switches — 1 real selection plus 14 stale ones from earlier
+browsing showed as "Add tag to 15 posts". Now cleared on every scope-pane
+replace (not on chunk-delta paging, which is the same view). This was also
+the likely cause of "Add to Playlist" not showing for an all-YouTube
+selection — a stale non-YouTube post silently failed the `every post has a
+video_id` check.
 
 ### Article list date separators (Today, Yesterday, ...) — SHIPPED 2026-08-25
 
