@@ -13,8 +13,8 @@
         <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-skip" value="skip" checked /> Remove the feed, keep the stars &amp; tags (offline copies stay in Saved)</label>
         <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-move" value="move" /> Remove the feed, move the stars &amp; tags to another feed:</label>
         <div id="unsub-migrate-move-panel" hidden>
-          <input id="unsub-migrate-target" class="action-modal-input" list="unsub-migrate-candidates" placeholder="Type to search feeds…" autocomplete="off" />
-          <datalist id="unsub-migrate-candidates"></datalist>
+          <input id="unsub-migrate-target" class="action-modal-input" placeholder="Type to search feeds…" autocomplete="off" />
+          <div id="unsub-migrate-candidates" class="feed-typeahead-results" hidden></div>
           <label class="action-modal-label unsub-migrate-select-all-row"><input type="checkbox" id="unsub-migrate-select-all" checked /> Select all</label>
           <div id="unsub-migrate-items" class="unsub-migrate-items"></div>
         </div>
@@ -45,8 +45,8 @@
       </div>
       <p id="move-entry-body" class="action-modal-hint"></p>
       <label class="action-modal-label" for="move-entry-target">Target feed</label>
-      <input id="move-entry-target" class="action-modal-input" list="move-entry-candidates" placeholder="Type to search feeds…" autocomplete="off" />
-      <datalist id="move-entry-candidates"></datalist>
+      <input id="move-entry-target" class="action-modal-input" placeholder="Type to search feeds…" autocomplete="off" />
+      <div id="move-entry-candidates" class="feed-typeahead-results" hidden></div>
       <p class="action-modal-hint">Carries the entry's star, tags, and read state. The copy left in this feed is marked read.</p>
       <div class="action-modal-actions">
         <button type="button" class="action-modal-cancel" data-close-modal="move-entry-modal">Cancel</button>

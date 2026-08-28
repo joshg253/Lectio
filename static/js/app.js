@@ -6274,26 +6274,8 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         if (counts.stars) parts.push(`${counts.stars} starred`);
         if (counts.tagged) parts.push(`${counts.tagged} tagged`);
         noteEl.textContent = `This feed has ${parts.join(' and ')} item${(counts.stars + counts.tagged) === 1 ? '' : 's'}.`;
-        // Filterable typeahead: datalist option label -> feed url. Titles can
-        // repeat, so disambiguate duplicate labels with a short host hint.
-        targetList.innerHTML = '';
         targetSel.value = '';
-        const labelToUrl = new Map();
-        const labelSeen = new Map();
-        candidates.forEach(c => {
-          let label = c.title || c.url;
-          if (labelSeen.has(label)) {
-            let host = c.url; try { host = new URL(c.url).host; } catch (_) {}
-            label = `${label} (${host})`;
-          }
-          // Still collide? append a counter so every option is selectable.
-          let uniq = label, n = 2;
-          while (labelToUrl.has(uniq)) { uniq = `${label} #${n++}`; }
-          labelSeen.set(c.title || c.url, true);
-          labelToUrl.set(uniq, c.url);
-          const o = document.createElement('option'); o.value = uniq; targetList.appendChild(o);
-        });
-        targetSel._labelToUrl = labelToUrl;
+        setupFeedPickerTypeahead(targetSel, targetList, candidates);
         // The modal is reused, so a prior feed's choice (e.g. "drop") could
         // still be checked. Reset to the default every open: keep the
         // starred/tagged items in Saved. "Move items" reveals the picker.
@@ -9038,6 +9020,68 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
       });
     });
 
+    // Feed-picker typeahead: filters `candidates` ([{title, url}, …] from
+    // /feeds/curation-count) as you type into `resultsEl`. Replaces the old
+    // <input list=…><datalist> combo — at thousands of feeds, mobile browsers
+    // render that as a non-scrollable native picker that can cover the
+    // screen and cut off matches you can't reach. Sets inputEl._labelToUrl
+    // (Map label -> url); existing callers read that contract unchanged.
+    function setupFeedPickerTypeahead(inputEl, resultsEl, candidates) {
+      const labelToUrl = new Map();
+      const labelSeen = new Map();
+      candidates.forEach(c => {
+        let label = c.title || c.url;
+        if (labelSeen.has(label)) {
+          let host = c.url; try { host = new URL(c.url).host; } catch (_) {}
+          label = `${label} (${host})`;
+        }
+        // Still collide? append a counter so every option stays selectable.
+        let uniq = label, n = 2;
+        while (labelToUrl.has(uniq)) { uniq = `${label} #${n++}`; }
+        labelSeen.set(c.title || c.url, true);
+        labelToUrl.set(uniq, c.url);
+      });
+      inputEl._labelToUrl = labelToUrl;
+      const labels = [...labelToUrl.keys()];
+
+      function renderMatches() {
+        const q = inputEl.value.trim().toLowerCase();
+        const matches = (q ? labels.filter(l => l.toLowerCase().includes(q)) : labels).slice(0, 200);
+        resultsEl.innerHTML = '';
+        if (!matches.length) { resultsEl.hidden = true; return; }
+        matches.forEach(label => {
+          const opt = document.createElement('button');
+          opt.type = 'button';
+          opt.className = 'feed-typeahead-option';
+          opt.textContent = label;
+          // mousedown (not click) fires before the input's blur hides the list.
+          opt.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            inputEl.value = label;
+            resultsEl.hidden = true;
+            inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+          });
+          resultsEl.appendChild(opt);
+        });
+        resultsEl.hidden = false;
+      }
+
+      // These inputs are singleton elements reused across modal reopens —
+      // drop the previous open's listeners first or they'd pile up.
+      inputEl._typeaheadCleanup?.();
+      const onBlur = () => { setTimeout(() => { resultsEl.hidden = true; }, 150); };
+      inputEl.addEventListener('input', renderMatches);
+      inputEl.addEventListener('focus', renderMatches);
+      inputEl.addEventListener('blur', onBlur);
+      inputEl._typeaheadCleanup = () => {
+        inputEl.removeEventListener('input', renderMatches);
+        inputEl.removeEventListener('focus', renderMatches);
+        inputEl.removeEventListener('blur', onBlur);
+      };
+      resultsEl.hidden = true;
+      resultsEl.innerHTML = '';
+    }
+
     // Shared driver for the move-to-feed modal. `entries` is a list of
     // {feedUrl, entryId}; one entry uses the single endpoint, more uses the
     // batch endpoint. `bodyText` describes what's being moved.
@@ -9069,24 +9113,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
         const d = await r.json();
         candidates = d.candidates || [];
       } catch (_) { /* picker just stays empty */ }
-      const labelToUrl = new Map();
-      const labelSeen = new Map();
-      candidates.forEach(c => {
-        let label = c.title || c.url;
-        if (labelSeen.has(label)) {
-          let host = c.url; try { host = new URL(c.url).host; } catch (_) {}
-          label = `${label} (${host})`;
-        }
-        let uniq = label, n = 2;
-        while (labelToUrl.has(uniq)) { uniq = `${label} #${n++}`; }
-        labelSeen.set(c.title || c.url, true);
-        labelToUrl.set(uniq, c.url);
-        const o = document.createElement('option'); o.value = uniq; targetList.appendChild(o);
-      });
-      targetSel.oninput = () => { confirmBtn.disabled = !labelToUrl.has(targetSel.value); };
+      setupFeedPickerTypeahead(targetSel, targetList, candidates);
+      targetSel.oninput = () => { confirmBtn.disabled = !targetSel._labelToUrl.has(targetSel.value); };
 
       confirmBtn.onclick = async () => {
-        const targetUrl = labelToUrl.get(targetSel.value);
+        const targetUrl = targetSel._labelToUrl.get(targetSel.value);
         if (!targetUrl) return;
         confirmBtn.disabled = true;
         confirmBtn.textContent = 'Moving…';

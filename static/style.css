@@ -4923,6 +4923,43 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 #unsub-migrate-curation .action-modal-input { margin-top: 0.25rem; }
 
+/* Feed-picker typeahead dropdown (move-to-feed, unsubscribe-migration
+   pickers). In-flow rather than absolutely positioned so it never overlaps
+   or gets clipped on a phone — it just pushes the rest of the modal down,
+   and .action-modal-panel already scrolls if that grows past the viewport. */
+.feed-typeahead-results {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 0.35rem;
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field-elevated-bg);
+}
+
+.feed-typeahead-results[hidden] {
+  display: none;
+}
+
+.feed-typeahead-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.5rem 0.65rem;
+  border: none;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.feed-typeahead-option:hover,
+.feed-typeahead-option:focus-visible {
+  background: var(--hover-bg);
+}
+
 .action-modal-label-hint {
   font-weight: normal;
   opacity: 0.75;
