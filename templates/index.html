@@ -803,6 +803,13 @@
                   aria-label="Clear filter" hidden>
             <span class="material-symbols-rounded" aria-hidden="true">close</span>
           </button>
+          {# Resolves the whole current view + filter server-side, same as
+             "Move all shown to feed…" — selects everything matching, not
+             just what scroll-chunking has rendered so far. #}
+          <button type="button" id="posts-select-all" class="posts-filter-clear"
+                  title="Select all posts in this view" aria-label="Select all posts in this view">
+            <span class="material-symbols-rounded" aria-hidden="true">select_all</span>
+          </button>
         </div>
       </div>
       {% endif %}

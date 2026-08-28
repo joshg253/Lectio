@@ -8027,6 +8027,26 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       }
     }
 
+    // Like setPostSelected, but from server-provided data rather than an
+    // existing DOM row — for Select All, which resolves the whole view
+    // server-side (like "Move all shown to feed…") and so can include rows
+    // scroll-chunking or paging hasn't rendered yet. Updates the row visually
+    // too when one happens to already be in the DOM.
+    function setSelectedFromData(feedUrl, entryId, videoId) {
+      if (!feedUrl || !entryId) return;
+      const key = postSelectionKey(feedUrl, entryId);
+      selectedPosts.set(key, { feedUrl, entryId, videoId: videoId || '' });
+      const esc = (window.CSS && CSS.escape) ? (s) => CSS.escape(s) : (s) => s;
+      const row = document.querySelector(
+        `.posts .post-item[data-post-feed-url="${esc(feedUrl)}"][data-post-entry-id="${esc(entryId)}"]`
+      );
+      if (row) {
+        row.classList.add('multi-selected');
+        const checkbox = row.querySelector('.post-select-check');
+        if (checkbox) checkbox.checked = true;
+      }
+    }
+
     function clearPostSelection() {
       if (!selectedPosts.size) return;
       selectedPosts.clear();
@@ -8110,6 +8130,15 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           checkbox?.addEventListener('change', () => {
             setPostSelected(postItem, checkbox.checked);
           });
+          // Select All can populate selectedPosts for rows not yet in the
+          // DOM (scroll-chunking, or a later chunk-delta fetch) — reflect
+          // that here the first time each row actually gets rendered/bound.
+          const _rowFeedUrl = postItem.getAttribute('data-post-feed-url');
+          const _rowEntryId = postItem.getAttribute('data-post-entry-id');
+          if (_rowFeedUrl && _rowEntryId && selectedPosts.has(postSelectionKey(_rowFeedUrl, _rowEntryId))) {
+            postItem.classList.add('multi-selected');
+            if (checkbox) checkbox.checked = true;
+          }
         }
 
         if (!postItem.dataset.boundContextMenu) {
@@ -15839,6 +15868,29 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         box.value = '';
         applyPostsFilter();
         box.focus();
+      });
+      // Resolves the whole current view + filter server-side — same
+      // machinery as "Move all shown to feed…" — so it selects everything
+      // matching, not just what scroll-chunking has rendered so far. Rows
+      // not yet in the DOM get synced when they render (see
+      // bindPostListInteractions's boundCheckbox setup).
+      document.getElementById('posts-select-all')?.addEventListener('click', async () => {
+        const predicate = currentViewParams();
+        predicate.set('filter_term', box.value.trim());
+        try {
+          const resp = await fetch('/entries/select-all-visible', { method: 'POST', body: new URLSearchParams(predicate) });
+          const data = await resp.json();
+          if (!data.ok) {
+            showToastMessage(data.error || 'Could not select all.');
+            return;
+          }
+          for (const e of data.entries) {
+            setSelectedFromData(e.feedUrl, e.entryId, e.videoId);
+          }
+          showToastMessage(data.count ? `Selected ${data.count} post${data.count === 1 ? '' : 's'}.` : 'Nothing to select.');
+        } catch (_) {
+          showToastMessage('Select all failed — network error.');
+        }
       });
     }
 
