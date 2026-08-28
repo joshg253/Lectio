@@ -433,6 +433,28 @@ signature of those two paths disagreeing.**
 The URL/title inference tiers are not reproducible in SQL and only apply to
 entries this expression already treats as undated.
 
+## `list_entries_for_feeds(..., enrich=False)`: Read Above/Below don't need phase 2
+
+`list_entries_for_feeds` is two phases: phase 1 builds cheap "light" records
+(filter, sort, dedupe); phase 2 enriches the clipped top-N with thumbnails,
+tags, per-feed display prefs, and YouTube duration/premiere-prefix lookups.
+Phase 2 is the expensive part, and it scales with the *view* size, not the
+range being acted on.
+
+`mark_entries_range_read` (Read Above / Read Below) calls
+`list_entries_for_feeds` twice just to resolve which entries fall on the
+anchor's side of a large unread view, then only reads `feed_url`, `id`,
+`link`, and `read` off the result. On an 8,472-entry "All Feeds" unread view
+it was paying for phase 2 on all of them — ~3.9s of ~10.4s total — for fields
+it never used.
+
+`enrich: bool = True` on `list_entries_for_feeds` lets a caller skip phase 2
+entirely and get back light records instead (still filtered, sorted,
+deduped — just missing the enriched fields). Both call sites in
+`mark_entries_range_read` pass `enrich=False`. Any caller that reads
+`feed_title` or another enrichment-phase field (e.g. `_resolve_view_posts`,
+used by "Move all shown to feed…" and Select All) must keep the default on.
+
 ## Moved here from saved.md
 
 **One layout owner, three modes.** The inline shell in `index.html` resolves
