@@ -8138,7 +8138,12 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               setMenuItemVisible(postMarkFeedReadButton, false);
               setMenuItemVisible(postOpenInFeedsButton, false);
               setMenuItemVisible(postAutomationButton, false);
-              setMenuItemVisible(postMoveToFeedButton, false);
+              // Works on any post — including a lectio:saved (Saved Articles)
+              // source, which _move_entry_to_feed already handles specially
+              // (hard-deletes the saved-source row and re-keys its archive
+              // capture once the content lands on the target feed).
+              if (postMoveToFeedButton) postMoveToFeedButton.textContent = `Move ${contextSelectedPosts.length} to feed…`;
+              setMenuItemVisible(postMoveToFeedButton, true);
               setMenuItemVisible(postDeleteButton, false);
               setMenuItemVisible(postEditDateButton, false);
               setMenuItemVisible(postEditTitleButton, false);
@@ -8187,6 +8192,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
               setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
               setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
+              if (postMoveToFeedButton) postMoveToFeedButton.textContent = 'Move to feed…';
               setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
               setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
               setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
@@ -9487,15 +9493,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     postMoveToFeedButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const feedUrl = contextPostFeedUrl;
-      const entryId = contextPostEntryId;
+      const entries = contextSelectedPosts;
       const title = contextPostTitle;
       hideAllContextMenus();
-      if (!feedUrl || !entryId) return;
-      openMoveToFeedModal(
-        [{ feedUrl, entryId }],
-        title ? `Move “${title}” to another feed.` : 'Move this entry to another feed.'
-      );
+      if (!entries.length) return;
+      const bodyText = entries.length === 1
+        ? (title ? `Move “${title}” to another feed.` : 'Move this entry to another feed.')
+        : `Move ${entries.length} posts to another feed.`;
+      openMoveToFeedModal(entries, bodyText);
     });
 
     postEditDateButton?.addEventListener('click', (event) => {

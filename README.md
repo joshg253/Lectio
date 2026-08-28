@@ -53,8 +53,10 @@ short version:
   dividers in the post list when sorted by published/received date, and a
   layout that collapses to two panes on a tablet and one on a phone. Checkbox
   multi-select on the post list — opening a post checks its own box too — for
-  bulk actions: add a tag to several posts at once, or add several YouTube
-  videos to a playlist in one go.
+  bulk actions: add a tag to several posts at once, add several YouTube
+  videos to a playlist in one go, or move several to a different feed —
+  including out of Saved Articles onto a real subscription once you've found
+  its feed.
 - **Picks up where you left off.** Close the tab, press Back once too often, or
   swipe the app away — reopening Lectio returns you to the same article, scrolled
   to the same place. It also installs to your home screen as a standalone app via
