@@ -34428,6 +34428,7 @@ def email_entry(
     entry_id: str = Form(...),
     to_addr: str = Form(...),
     cc_me: bool = Form(False),
+    full_text: bool = Form(False),
 ):
     if not is_email_configured():
         return JSONResponse({"ok": False, "error": "Email not configured."}, status_code=503)
@@ -34461,10 +34462,23 @@ def email_entry(
     link = entry.link or ""
     feed_title = (entry.feed.title if entry.feed else None) or ""
 
-    # Prefer the summary; fall back to the full content. Entities are decoded
-    # here because the mail builder escapes again — see plain_text_excerpt.
-    raw = entry.summary or (entry.content[0].value if entry.content else "")
-    excerpt = html_sanitize.plain_text_excerpt(raw)
+    # Entities are decoded here because the mail builder escapes again — see
+    # plain_text_excerpt/plain_text_full.
+    excerpt_html = None
+    if full_text:
+        # Full text wants the article body, not the (often much shorter) feed
+        # summary — opposite preference order from the snippet case below.
+        raw = (entry.content[0].value if entry.content else "") or entry.summary or ""
+        excerpt = html_sanitize.plain_text_full(raw)
+        # The HTML part renders the sanitized article body directly — real
+        # paragraphs/bold/links/lists, not the plain-text wall above (that's
+        # only the text-part fallback). Same allowlist chokepoint the entry
+        # pane itself renders with, so the email matches what's on screen.
+        if raw:
+            excerpt_html = _sanitize_html_allowlist(raw)
+    else:
+        raw = entry.summary or (entry.content[0].value if entry.content else "")
+        excerpt = html_sanitize.plain_text_excerpt(raw)
 
     ok, error = send_article_email(
         api_key=get_resend_api_key(),
@@ -34476,6 +34490,7 @@ def email_entry(
         excerpt=excerpt,
         cc_addr=cc_addr,
         reply_to=reply_to,
+        excerpt_html=excerpt_html,
     )
     if ok:
         msg = f"Sent to {to_addr}" + (f" (Cc {cc_addr})" if cc_addr else "")

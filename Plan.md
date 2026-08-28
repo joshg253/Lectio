@@ -5,6 +5,94 @@ explains why the code looks the way it does, in ARCHITECTURE.md.
 
 ## Now
 
+### Phone unsub dialog behind the folder drawer / email full-text / footer link — DONE 2026-08-28
+
+Three small fixes shipped together:
+
+- **Unsubscribe confirmation painted behind the phone folder drawer.**
+  `#unsub-migrate-modal` was `z-index: 90` (`static/style.css`) but the phone
+  folder drawer (`.pane-folders` in single-pane layout) is `z-index: 300` —
+  same bug class the `.context-menu` comment already documented (that one was
+  bumped to 340 when a long-press context menu had the identical problem;
+  this modal never got the same treatment). Bumped to `310`.
+- **Email Article can now send the full article instead of a snippet.** New
+  unchecked-by-default "Include full article text instead of a snippet"
+  checkbox on the Email Article dialog (`templates/_action_modals.html`,
+  `#email-article-full-text`, `name="full_text"`), reset on every modal open
+  (it's a reused DOM node, same reason `cc_me` was already reset — an earlier
+  version of this fix skipped that and the box stayed checked across opens).
+  When checked, the `/entries/email` route (`main.py`) prefers `entry.content`
+  over `entry.summary`. First cut sent a stripped-plain-text version of the
+  whole article and just looked like a wall of unformatted text — fixed by
+  reusing `_sanitize_html_allowlist` (the same allowlist chokepoint the entry
+  pane itself renders with) to build a real HTML body (`excerpt_html` in
+  `services/email.send_article_email`/`_build_html`), so the email actually
+  gets paragraphs, bold/italic, links and lists. `html_sanitize.plain_text_full`
+  (no truncation, real block-level boundaries become paragraph breaks via a
+  sentinel so pretty-printed feed HTML's incidental newlines don't also
+  become breaks) is kept as the plain-text part's fallback, for mail clients
+  that don't render HTML.
+- **"Shared via Lectio" footer linked to the wrong repo.** `services/email.py`
+  hardcoded `https://github.com/lectio/lectio`; fixed to
+  `https://github.com/joshg253/Lectio` ([[github-repo]]), matching the URL
+  used everywhere else (e.g. the honest User-Agent strings). The digest email
+  footer has no link at all, so it was unaffected.
+- **Email body was too narrow and clipped wide images instead of shrinking
+  them.** `.wrapper` clips overflow rather than scrolling it, so a full-text
+  article image (feed HTML usually ships explicit `width`/`height`
+  attributes) had its right edge cut off instead of wrapping. Bumped
+  `.wrapper` from 600px to 680px and added `.excerpt img, .excerpt iframe {
+  max-width: 100%; height: auto; }` in both `_build_html` and
+  `_build_digest_html`.
+
+Tests added: `tests/unit/test_html_sanitize.py` (`plain_text_full`),
+`tests/services/test_email_service.py` (multi-paragraph `_build_html`, the
+image-shrink rule, wrapper width), `tests/integration/test_email_route.py`
+(`full_text` on/off, and the no-content fallback to summary).
+
+**Follow-up idea, not built:** "Include full article text" only pulls what's
+already stored (`entry.content`/`entry.summary`) — for a feed that ships a
+thin stub body, that's still a thin email even with the checkbox on, while
+Readability Mode (the existing extraction used for Save/re-fetch) can pull
+the real article from the same feeds. Worth wiring the checkbox to run that
+extraction live when the stored body is thin, rather than only reformatting
+whatever's already there. Not scoped — needs a real example of a thin-stub
+feed to test against first.
+
+### Bulk "Add tag…" had no typeahead — DONE 2026-08-28
+
+`openBulkTagModal`'s `#bulk-tag-input` never called `attachTagAutocomplete`,
+the shared widget the per-entry tag field already used — so multi-select →
+right-click → Add tag offered no suggestions while typing. One-line fix:
+wired the same widget in, matching the per-entry tagging grammar (space-
+separated, no auto-apply-on-choose since several tags can be typed before
+clicking Add tag). Confirmed working live 2026-08-28.
+
+### Feed Properties "Suggested tags" was a raw space-joined text field — DONE 2026-08-28
+
+Converted to chips, matching the entry pane's tag display everywhere else:
+current tags render as removable chips (`.entry-tag-chip`/`.entry-tag-remove`,
+same look as a post's manual tags), and the text input is now scratch space
+for typing new ones to add rather than an editable copy of the whole
+space-joined list. Clicking a chip's × immediately saves the reduced set
+(`saveFeedPropSuggestedTags`); typing + Add/Enter merges new tokens into the
+existing set and saves. Backend (`POST /feeds/suggested-tags`, full-replace
+semantics) is unchanged — this was purely the editing UI. × is always visible
+here (not hover-revealed like the entry pane) since Settings is a
+deliberate-click surface, not the dense per-post row. Picking a typeahead
+suggestion saves immediately (`applyOnChoose: submitFeedPropSuggestedTags`,
+same "picking IS the decision" reasoning as the entry-pane tag field) — Add
+is now only needed for a hand-typed tag that didn't come from a suggestion.
+
+**Also found and fixed, pre-existing (not caused by the chip change):** the
+`attachTagAutocomplete` call here read `window.lectioTagNames`, but
+`lectioTagNames` is a top-level `let` — unlike `var`, that does *not* become a
+`window` property in a classic script, so the lookup was always `undefined`
+and every suggestion list was silently empty. Chips rendered fine (unrelated
+code path) but no typeahead ever showed. Fixed to reference the binding
+directly, matching the other two `attachTagAutocomplete` callers
+(entry-pane tags, bulk "Add tag…").
+
 Roughly ordered: recurring/active pain first, then concrete bugs, then
 items already scoped and decided so they're ready whenever picked up, then
 measurement/investigation jobs, then low-urgency work and the two standing
@@ -387,6 +475,14 @@ excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 *Moved down from Now on 2026-08-13: real, but not what is next.*
 
 *Moved down from Now on 2026-08-24: deliberately deferred, no trigger condition met yet.*
+
+### Add OIDC login
+
+Not scoped. Current auth (`services/users.py`, `/login` at `main.py:21999`)
+is username/password only — no SSO/OIDC exists today. Architecture-level
+addition (new login flow, session handling alongside the existing one,
+tenancy binding from an OIDC subject to a Lectio `user_id`, first-login
+provisioning) — wants a real plan before code, not attempted yet.
 
 ### Two suspect SQL clauses found while building the light-entry fetch path (2026-08-28)
 

@@ -523,6 +523,28 @@ _NON_RESOLVABLE_SCHEMES = ("data:", "mailto:", "javascript:", "tel:", "blob:", "
 
 
 _TAG_RE = re.compile(r"<[^>]+>")
+_BLOCK_BREAK_RE = re.compile(r"</(p|div|li|h[1-6]|blockquote|tr)>|<br\s*/?>", re.IGNORECASE)
+_PARA_SENTINEL = "\x00"
+
+
+def plain_text_full(html_text: str | None) -> str:
+    """Body HTML -> full plain text, paragraph breaks kept, nothing truncated.
+
+    Unlike plain_text_excerpt, real block-level boundaries become paragraph
+    breaks instead of single spaces — collapsing a whole article to one run-on
+    line the way the excerpt does is unreadable at full length. A sentinel
+    marks those boundaries before tags are stripped so that incidental raw
+    newlines in the source (pretty-printed feed HTML uses them purely for
+    indentation) get collapsed as ordinary whitespace instead of also turning
+    into spurious paragraph breaks.
+    """
+    if not html_text:
+        return ""
+    text = _BLOCK_BREAK_RE.sub(_PARA_SENTINEL, html_text)
+    text = _TAG_RE.sub(" ", text)
+    text = html_stdlib.unescape(text)
+    paragraphs = [" ".join(para.split()) for para in text.split(_PARA_SENTINEL)]
+    return "\n\n".join(p for p in paragraphs if p)
 
 
 def plain_text_excerpt(html_text: str | None, limit: int = 300) -> str:

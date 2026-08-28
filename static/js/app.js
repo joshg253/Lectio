@@ -2585,6 +2585,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       if (contactSel instanceof HTMLSelectElement) contactSel.value = '';
       const ccMe = document.getElementById('email-article-cc-me');
       if (ccMe instanceof HTMLInputElement) ccMe.checked = false;
+      // The modal is reused across articles, so a box ticked for the last one
+      // would otherwise carry over silently — reset every open, same as Cc me.
+      const fullText = document.getElementById('email-article-full-text');
+      if (fullText instanceof HTMLInputElement) fullText.checked = false;
       if (modal) modal.removeAttribute('hidden');
     });
 
@@ -5002,28 +5006,64 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // Tags pinned to a feed, offered as chips on every one of its posts. Kept
     // beside the alias editor because it is the same shape of control: a small
     // free-text field on the feed, saved on its own.
-    function renderFeedPropSuggestedTags(feedUrl, tags) {
-      const input = document.getElementById('feed-prop-suggested-tags-input');
-      const save = document.getElementById('feed-prop-suggested-tags-save');
-      const status = document.getElementById('feed-prop-suggested-tags-status');
-      if (!input || !save) return;
-      input.value = (tags || []).join(' ');
-      save.dataset.feedUrl = feedUrl || '';
-      if (status) status.textContent = '';
-      if (typeof window.attachTagAutocomplete === 'function') {
-        window.attachTagAutocomplete(input, () => window.lectioTagNames || []);
+    //
+    // Current tags render as removable chips (same look as an entry's manual
+    // tags — .entry-tag-chip/.entry-tag-remove); the text input is only for
+    // typing new ones to add. Mirrors the entry-pane tag form's split between
+    // "chips are the display of what's saved" and "the input is scratch space
+    // for what's being added" rather than one editable space-joined string.
+    let feedPropSuggestedTagsFeedUrl = '';
+
+    function paintFeedPropSuggestedTagChips(tags) {
+      const chipRow = document.getElementById('feed-prop-suggested-tags-chips');
+      if (!chipRow) return;
+      const list = tags || [];
+      chipRow.dataset.tags = list.join(' ');
+      chipRow.textContent = '';
+      for (const tag of list) {
+        const wrap = document.createElement('span');
+        wrap.className = 'entry-tag-chip-wrap';
+        const chip = document.createElement('span');
+        chip.className = 'entry-tag-chip manual';
+        chip.textContent = '#' + tag;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'entry-tag-remove';
+        remove.textContent = '×';
+        remove.title = `Remove #${tag} from this feed's suggestions`;
+        remove.setAttribute('aria-label', remove.title);
+        remove.dataset.suggestedTagRemove = tag;
+        wrap.append(chip, remove);
+        chipRow.appendChild(wrap);
       }
     }
 
-    async function submitFeedPropSuggestedTags() {
+    function renderFeedPropSuggestedTags(feedUrl, tags) {
       const input = document.getElementById('feed-prop-suggested-tags-input');
-      const save = document.getElementById('feed-prop-suggested-tags-save');
       const status = document.getElementById('feed-prop-suggested-tags-status');
-      const feedUrl = save?.dataset.feedUrl || '';
-      if (!feedUrl || !input) return;
+      if (!input) return;
+      feedPropSuggestedTagsFeedUrl = feedUrl || '';
+      input.value = '';
+      if (status) status.textContent = '';
+      paintFeedPropSuggestedTagChips(tags);
+      // lectioTagNames is a top-level `let`, so it is NOT a window property
+      // (unlike `var`) — window.lectioTagNames is always undefined here,
+      // which silently emptied every suggestion list. Reference the binding
+      // directly, same as the other two attachTagAutocomplete callers.
+      attachTagAutocomplete(input, () => lectioTagNames || [], {
+        // Picking a suggestion IS the decision — same reasoning as the
+        // entry-pane tag field. Add stays for typing a tag by hand.
+        applyOnChoose: () => submitFeedPropSuggestedTags(),
+      });
+    }
+
+    async function saveFeedPropSuggestedTags(tags) {
+      const status = document.getElementById('feed-prop-suggested-tags-status');
+      const feedUrl = feedPropSuggestedTagsFeedUrl;
+      if (!feedUrl) return;
       if (status) status.textContent = 'Saving…';
       try {
-        const body = new URLSearchParams({ feed_url: feedUrl, tags: input.value });
+        const body = new URLSearchParams({ feed_url: feedUrl, tags: tags.join(' ') });
         const resp = await fetch('/feeds/suggested-tags', {
           method: 'POST', body, credentials: 'same-origin',
         });
@@ -5043,9 +5083,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           if (status) status.textContent = json.error || 'Could not save.';
           return;
         }
-        // Echo back what was KEPT — tags are normalized on write, so the field
-        // should show what will actually be offered rather than what was typed.
-        input.value = (json.tags || []).join(' ');
+        // Repaint from what was KEPT — tags are normalized on write, so the
+        // chips should show what will actually be offered, not what was typed.
+        paintFeedPropSuggestedTagChips(json.tags || []);
         if (status) status.textContent = json.tags.length ? 'Saved.' : 'Cleared.';
         // The open entry's chips were built from the old set.
         const form = document.getElementById('entry-tags-form');
@@ -5056,6 +5096,43 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         if (status) status.textContent = `Error: ${err.message}`;
       }
     }
+
+    async function submitFeedPropSuggestedTags() {
+      const input = document.getElementById('feed-prop-suggested-tags-input');
+      const chipRow = document.getElementById('feed-prop-suggested-tags-chips');
+      if (!input || !chipRow) return;
+      const added = tokenizeTags(input.value);
+      if (!added.length) {
+        input.focus();
+        return;
+      }
+      const invalid = added.filter((t) => !TAG_VALID_RE.test(t));
+      if (invalid.length) {
+        showToastMessage('Tags may only contain letters, numbers, and: - _ + . #');
+        input.select();
+        return;
+      }
+      const existing = tokenizeTags(chipRow.dataset.tags || '');
+      const merged = [];
+      const seen = new Set();
+      for (const t of [...existing, ...added]) {
+        if (seen.has(t)) continue;
+        seen.add(t);
+        merged.push(t);
+      }
+      input.value = '';
+      await saveFeedPropSuggestedTags(merged);
+    }
+
+    document.getElementById('feed-prop-suggested-tags-chips')?.addEventListener('click', (event) => {
+      const btn = event.target instanceof Element ? event.target.closest('[data-suggested-tag-remove]') : null;
+      if (!btn) return;
+      const chipRow = document.getElementById('feed-prop-suggested-tags-chips');
+      const tag = btn.getAttribute('data-suggested-tag-remove') || '';
+      if (!chipRow || !tag) return;
+      const reduced = tokenizeTags(chipRow.dataset.tags || '').filter((t) => t !== tag);
+      saveFeedPropSuggestedTags(reduced);
+    });
 
     function renderFeedPropAliases(feedUrl, rewrites) {
       const list = document.getElementById('feed-prop-alias-list');
@@ -9469,6 +9546,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       input.value = '';
       confirmBtn.disabled = true;
       confirmBtn.textContent = 'Add tag';
+      attachTagAutocomplete(input, () => lectioTagNames, {});
 
       const updateConfirmState = () => {
         confirmBtn.disabled = tokenizeTags(input.value).length === 0;
@@ -16337,11 +16415,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // Shared, token-aware tag autocomplete: suggests from getTags() as you type
     // the current token, keyboard-navigable. Idempotent per input (data-tag-ac).
     //
-    // Two callers, two token grammars, ONE control — the second caller is why
+    // Three callers, two token grammars, ONE control — the rule form is why
     // the separator and the sign prefix are options rather than literals:
     //
     //   per-entry tagging  space-separated, an optional '#', tags from the
     //                      user's own library;
+    //   bulk "Add tag…"    same grammar as per-entry tagging — several tags
+    //                      can be typed before Add tag is clicked, so unlike
+    //                      per-entry there is no applyOnChoose;
     //   rule form          comma-separated (so multi-word tags can be typed
     //                      as-is), each token optionally signed -/+/++, tags
     //                      from what ingest actually captured for the scope.
