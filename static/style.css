@@ -2680,6 +2680,14 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   min-width: 0;
 }
 
+/* .post-thumbnail.is-empty is display:none (no wasted gutter on a text-only
+   post), which left .post-select-check — absolutely positioned to float over
+   the thumbnail's top-left corner — with nothing to float over: the title's
+   first line started flush at the post's left edge, right under it. */
+.post-item:has(> .post-thumbnail.is-empty) .post-title-row {
+  padding-left: 1.6rem;
+}
+
 .post-content {
   flex: 0 1 auto;
   min-width: 0;
