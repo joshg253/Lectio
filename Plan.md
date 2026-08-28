@@ -388,6 +388,23 @@ excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 
 *Moved down from Now on 2026-08-24: deliberately deferred, no trigger condition met yet.*
 
+### Two suspect SQL clauses found while building the light-entry fetch path (2026-08-28)
+
+Not fixed — found by inspection while adding `_light_entries_from_sql`
+(docs/architecture/views.md), not reproduced as a live bug yet.
+
+- The `>32-feed` ASC/DESC branches' `read_sql` uses `read IS NOT NULL` for
+  the "read-only" case. reader stores `read` as always 0/1 (`entry_factory`:
+  `read == 1`, no None-handling like `important` gets), so that clause likely
+  matches unread rows too — a `history` view over many feeds could pull a
+  polluted window. `_light_entries_from_sql` uses the correct `entries.read`
+  / `NOT entries.read` instead; the existing branches weren't touched.
+- Same DESC branch sorts `sort_by="received"` by `recent_sort`, but the
+  light-record loop's actual Python sort key for "received" is
+  `entry.added` (`first_updated`) — a different column. Instance of the
+  `_ENTRY_SORT_SQL` disagreement class documented above it in the same file.
+  `_light_entries_from_sql` uses `first_updated` to match.
+
 ### One stored image per entry, but three feeds want two
 
 Found 2026-08-13, **not built.** Three comic feeds want a different image in the

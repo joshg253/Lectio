@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager, closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Annotated, Callable, Iterable, Iterator, Literal, Sequence, cast, overload
+from typing import Annotated, Any, Callable, Iterable, Iterator, Literal, Sequence, cast, overload
 from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlencode, urljoin, urlparse, urlsplit, urlunparse, urlunsplit
 
 import feedparser
@@ -13544,6 +13544,157 @@ def _sorted_star_key_window(
     return [(f, i) for f, i, _sv in scored[:limit]]
 
 
+@dataclass(frozen=True, slots=True)
+class _LightEnclosure:
+    href: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _LightEntry:
+    """Minimal stand-in for a `reader.Entry`, built straight from a SQL row —
+    only the fields `list_entries_for_feeds`'s light-record loop reads.
+    `_light_entries_from_sql` uses this to skip reader's own per-row
+    hydration for enrich=False callers, where none of what hydration builds
+    (Content/Author objects, a `feeds` join) ever gets used. See
+    docs/architecture/views.md.
+
+    No `feed` attribute on purpose: the enrichment phase checks `hasattr(entry,
+    "feed")`, and if that ever ran against a leaked shim it must fail loudly
+    (AttributeError) rather than silently render wrong data — the same reason
+    fields only the search/tag/site-filter branches read (feed_resolved_title,
+    summary, authors_str, resource_id) are also omitted: those branches are
+    excluded from the gate that makes `_light_entries_from_sql` run at all, so
+    reaching them here is a gating bug, and should surface as one."""
+    feed_url: str
+    id: str
+    title: str | None
+    link: str | None
+    published: datetime | None
+    updated: datetime | None
+    added: datetime | None
+    read: bool
+    read_modified: datetime | None
+    added_by: str
+    enclosures: tuple[_LightEnclosure, ...] = ()
+
+
+def _reader_ts(value: str | None) -> datetime | None:
+    """Parse a reader-DB timestamp column the same way reader's own
+    `convert_timestamp` does: naive-UTC `isoformat(" ")`, tagged UTC on read."""
+    if not value:
+        return None
+    return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+
+
+def _enclosures_for_keys(
+    conn: sqlite3.Connection, keys: list[tuple[str, str]]
+) -> dict[tuple[str, str], tuple[_LightEnclosure, ...]]:
+    """Enclosures for specific (feed, id) keys, parsed from reader's stored
+    JSON. Used only to back-fill link-less entries (Buzzsprout podcast feeds
+    ship no <link>, only an audio enclosure — see `_derived_entry_link`); a
+    second narrow query for just those rows beats widening every row's SELECT
+    with a variable-length JSON column nothing else needs."""
+    result: dict[tuple[str, str], tuple[_LightEnclosure, ...]] = {}
+    for i in range(0, len(keys), 450):
+        chunk = keys[i:i + 450]
+        values = ",".join("(?,?)" for _ in chunk)
+        params = [v for pair in chunk for v in pair]
+        rows = conn.execute(
+            f"SELECT feed, id, enclosures FROM entries WHERE (feed, id) IN (VALUES {values})",
+            params,
+        ).fetchall()
+        for row in rows:
+            if not row["enclosures"]:
+                continue
+            try:
+                items = json.loads(row["enclosures"])
+            except Exception:  # noqa: BLE001
+                continue
+            result[(str(row["feed"]), str(row["id"]))] = tuple(
+                _LightEnclosure(href=d.get("href")) for d in items
+            )
+    return result
+
+
+def _light_entries_from_sql(
+    feed_urls: set[str],
+    *,
+    reader_read_filter: bool | None,
+    sort_by: str,
+    sort_dir: str,
+    limit: int,
+) -> list[_LightEntry] | None:
+    """Fetch `list_entries_for_feeds`' light_records straight from SQL instead
+    of through reader.get_entries()/get_entry(), for enrich=False callers with
+    no tag filter, search, star_only, archived filter, or history sort (see
+    the gate at this function's one call site). reader's own hydration
+    JSON-decodes content/enclosures/author and joins against `feeds` per row —
+    all irrelevant work for a caller that only wants
+    feed_url/id/title/link/dates/read.
+
+    Measured live: a feed whose entries carry heavy embedded content took
+    ~1ms/entry to hydrate this way (7s for 7,153 entries, in a folder whose
+    "Read Above" fallback — anchored on an already-read entry, so it has to
+    scan the whole folder, not just the unread slice — took 9s total). This
+    path is the fix for that: no Entry object is ever built.
+
+    Returns None on any error so the caller falls back to the hydrated path —
+    same "degrade, never break" contract as `_sorted_star_key_window`."""
+    sort_col = _ENTRY_SORT_SQL if sort_by == "post" else "first_updated"
+    read_clause = {
+        True: " AND entries.read = 1",
+        False: " AND (entries.read IS NULL OR entries.read != 1)",
+    }.get(reader_read_filter, "")
+    order = "ASC" if sort_dir == "asc" else "DESC"
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            feed_list = list(feed_urls)
+            rows: list[sqlite3.Row] = []
+            for i in range(0, len(feed_list), 999):
+                chunk = feed_list[i:i + 999]
+                placeholders = ",".join("?" for _ in chunk)
+                rows.extend(conn.execute(
+                    f"SELECT feed, id, title, link, published, updated, first_updated,"
+                    f" read, read_modified, added_by, {sort_col} AS sort_val"
+                    f" FROM entries WHERE feed IN ({placeholders}){read_clause}"
+                    f" ORDER BY {sort_col} {order} LIMIT ?",
+                    [*chunk, limit],
+                ).fetchall())
+            # Harmless no-op for the (near-universal) single-chunk case; needed
+            # for >999 feeds, whose per-chunk LIMITs must be re-applied globally
+            # after merging — same reasoning as the existing ASC/DESC SQL paths.
+            rows.sort(key=lambda r: r["sort_val"] or "", reverse=(order == "DESC"))
+            rows = rows[:limit]
+
+            linkless_keys = [(str(r["feed"]), str(r["id"])) for r in rows if not r["link"]]
+            enclosures_by_key = _enclosures_for_keys(conn, linkless_keys) if linkless_keys else {}
+
+            entries = [
+                _LightEntry(
+                    feed_url=str(row["feed"]),
+                    id=str(row["id"]),
+                    title=row["title"],
+                    link=row["link"],
+                    published=_reader_ts(row["published"]),
+                    updated=_reader_ts(row["updated"]),
+                    added=_reader_ts(row["first_updated"]),
+                    read=row["read"] == 1,
+                    read_modified=_reader_ts(row["read_modified"]),
+                    added_by=row["added_by"] or "",
+                    enclosures=enclosures_by_key.get((str(row["feed"]), str(row["id"])), ()),
+                )
+                for row in rows
+            ]
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("light entry fetch failed, falling back to hydration: %s", exc)
+        return None
+    return entries
+
+
 def _entry_link_site_host(entry) -> str:
     """The bare host of an entry's link — no userinfo/port, leading www. folded."""
     net = urlparse(str(getattr(entry, "link", "") or "")).netloc.split("@")[-1].split(":")[0].lower()
@@ -13583,6 +13734,7 @@ def list_entries_for_feeds(
     search_query: str | None = None,
     kept_scope: str = "kept",
     archived: bool | None = None,
+    enrich: bool = True,
 ) -> list[dict]:
     entries: list[dict] = []
     if not feed_urls:
@@ -13730,7 +13882,7 @@ def list_entries_for_feeds(
             finally:
                 _sm_conn.close()
 
-        all_feed_entries = []
+        all_feed_entries: list[Any] = []
         fetch_limit = max(1, int(limit))
         need_all = bool(search_terms or site_hosts or normalized_sort_dir == "asc")
         # When a manual tag is selected, push the filter into reader's native
@@ -13745,7 +13897,37 @@ def list_entries_for_feeds(
         )
         PER_FEED_QUERY_THRESHOLD = 32
 
-        if history_fast_keys:
+        # enrich=False callers (Read Above/Below, "move visible to feed") only
+        # ever read feed_url/id/title/link/dates/read off the fetched entries —
+        # see the light-record loop below. For that shape, skip reader's own
+        # per-row hydration (JSON-decoding content/enclosures/author, a `feeds`
+        # join) entirely and build light_records' rows straight from SQL.
+        # Scoped to exactly the cases the light-record loop doesn't need
+        # search/tag/site/star/archive/history handling for — those still take
+        # the slower paths below, unchanged. See _light_entries_from_sql.
+        light_fast: list[_LightEntry] | None = None
+        if (
+            not enrich
+            and not history_fast_keys
+            and not normalized_star_only
+            and not search_terms
+            and not site_hosts
+            and not tag_filter
+            and archived is None
+            and normalized_sort_by in ("post", "received")
+            and normalized_read_filter in ("all", "unread", "starred")
+        ):
+            light_fast = _light_entries_from_sql(
+                feed_urls,
+                reader_read_filter=reader_read_filter,
+                sort_by=normalized_sort_by,
+                sort_dir=normalized_sort_dir,
+                limit=fetch_limit,
+            )
+
+        if light_fast is not None:
+            all_feed_entries = light_fast
+        elif history_fast_keys:
             # Fast history path: fetch each entry by primary key (indexed lookup)
             # instead of scanning all read entries. N small lookups vs. one huge scan.
             for furl, eid in history_fast_keys:
@@ -13985,7 +14167,9 @@ def list_entries_for_feeds(
             is_saved = (entry.feed_url, entry.id) in saved_entries_set
             manual_tags_for_record: list[str] = []
             if normalized_selected_tag:
-                manual_tags_for_record = get_manual_tags_for_resource(reader, entry.resource_id)
+                # Only reached when tag_filter is set, which excludes this
+                # entry ever being a _LightEntry shim — see the fast-path gate.
+                manual_tags_for_record = get_manual_tags_for_resource(reader, entry.resource_id)  # ty: ignore[unresolved-attribute]
                 if normalized_selected_tag not in manual_tags_for_record:
                     continue
             # Kept view keeps anything starred OR tagged (the unified keep axis).
@@ -14028,13 +14212,15 @@ def list_entries_for_feeds(
                     continue
             title_text = _display_title(entry) or entry.title
             if search_terms:
+                # Only reached when search_terms is set, which excludes this
+                # entry ever being a _LightEntry shim — see the fast-path gate.
                 search_haystack = " ".join(
                     [
                         str(title_text or ""),
-                        str(entry.feed_resolved_title or entry.feed_url or ""),
+                        str(entry.feed_resolved_title or entry.feed_url or ""),  # ty: ignore[unresolved-attribute]
                         str(entry.link or ""),
                         str(getattr(entry, "authors_str", None) or ""),
-                        str(entry.summary or ""),
+                        str(entry.summary or ""),  # ty: ignore[unresolved-attribute]
                     ]
                 ).lower()
                 if not all(term in search_haystack for term in search_terms):
@@ -14106,6 +14292,23 @@ def list_entries_for_feeds(
     light_records = passthrough + list(best_by_key.values())
     light_records.sort(key=lambda item: item[sort_key], reverse=sort_desc)
     light_records = light_records[:limit]
+
+    if not enrich:
+        # Callers that only need feed_url/id/read/link — resolving an anchor's
+        # position for "Read above/below", say — pay for thumbnails, tags,
+        # feed display prefs and premiere-prefix computation on every entry in
+        # the whole scope otherwise. Measured on the live library: 8,472-entry
+        # "All Feeds" unread view, phase 2 alone was ~3.9s of a ~10.4s total
+        # that this caller never uses any of.
+        no_enrich_ms = int((time.perf_counter() - process_start) * 1000)
+        LOGGER.info(
+            "[perf] list_entries: entries_processed=%d process_ms=%d (enrich skipped)",
+            len(light_records), no_enrich_ms,
+        )
+        return [
+            {k: v for k, v in rec.items() if not k.startswith("_") and k != sort_key}
+            for rec in light_records
+        ]
 
     enrich_start = time.perf_counter()
     # Which of the VISIBLE rows carry a manual tag: one query over the clipped
@@ -33403,6 +33606,11 @@ def mark_entries_range_read(
         read_filter=normalized_read_filter,
         star_only=normalized_star_only,
         selected_tag=normalized_tag,
+        # Only feed_url/id/read/link are used below (anchor matching, the
+        # premiere guard) — skip thumbnails/tags/display-prefs/duration for
+        # every entry in scope. On a big view this is most of the cost: an
+        # 8,472-entry "All Feeds" unread resolve dropped from ~10.4s to ~6.5s.
+        enrich=False,
     )
 
     anchor_index = next(
@@ -33422,6 +33630,7 @@ def mark_entries_range_read(
             read_filter="all",
             star_only=normalized_star_only,
             selected_tag=normalized_tag,
+            enrich=False,
         )
         anchor_index = next(
             (index for index, post in enumerate(posts) if post["feed_url"] == feed_url and post["id"] == entry_id),

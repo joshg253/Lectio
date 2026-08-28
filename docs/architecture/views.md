@@ -444,6 +444,80 @@ signature of those two paths disagreeing.**
 The URL/title inference tiers are not reproducible in SQL and only apply to
 entries this expression already treats as undated.
 
+## `list_entries_for_feeds(..., enrich=False)`: Read Above/Below don't need phase 2
+
+`list_entries_for_feeds` is two phases: phase 1 builds cheap "light" records
+(filter, sort, dedupe); phase 2 enriches the clipped top-N with thumbnails,
+tags, per-feed display prefs, and YouTube duration/premiere-prefix lookups.
+Phase 2 is the expensive part, and it scales with the *view* size, not the
+range being acted on.
+
+`mark_entries_range_read` (Read Above / Read Below) calls
+`list_entries_for_feeds` twice just to resolve which entries fall on the
+anchor's side of a large unread view, then only reads `feed_url`, `id`,
+`link`, and `read` off the result. On an 8,472-entry "All Feeds" unread view
+it was paying for phase 2 on all of them — ~3.9s of ~10.4s total — for fields
+it never used.
+
+`enrich: bool = True` on `list_entries_for_feeds` lets a caller skip phase 2
+entirely and get back light records instead (still filtered, sorted,
+deduped — just missing the enriched fields). Both call sites in
+`mark_entries_range_read` pass `enrich=False`. Any caller that reads
+`feed_title` or another enrichment-phase field (e.g. `_resolve_view_posts`,
+used by "Move all shown to feed…" and Select All) must keep the default on.
+
+## `_light_entries_from_sql`: enrich=False skips entry hydration too, not just phase 2
+
+`enrich=False` alone didn't fix Read Above/Below's fallback: when the anchor
+entry isn't in a fresh unread-only fetch (the ordinary case of opening an
+entry — marking it read — then choosing Read Above on it), the fallback
+re-fetches with `read_filter="all"` to see the whole folder's history. That
+fetch phase, not phase 2, is what's expensive there. Even the >32-feed SQL
+fast path (`_ENTRY_SORT_SQL` above) still calls `reader.get_entry()` per
+matched row — a full `Entry` hydration (JSON-decoding content/enclosures/
+author, building `Content`/`Enclosure`/`Author` objects, a `feeds` join) —
+which costs whatever that entry's stored content costs to decode, not just a
+fixed per-row fee. Measured live: a feed whose entries carried heavy embedded
+content took ~1ms/entry to hydrate this way — 7s for 7,153 entries, in a
+17-feed folder (under the 32-feed threshold, so no LIMIT even applied — the
+per-feed branch has none) whose Read-Above fallback took 9s total.
+
+`_light_entries_from_sql` fetches only the ~9 raw columns the light-record
+loop actually reads (`feed_url`/`id`/`title`/`link`/`published`/`updated`/
+`first_updated`/`read`/`read_modified`/`added_by`) and wraps them in a
+`_LightEntry` shim — no `Entry` object, no JSON decode, no `feeds` join. The
+shim feeds the *same* light-record loop unchanged, so correctness is "does
+the shim's dozen attributes match the real Entry's," not a second
+record-building path to keep in sync. It reuses `_ENTRY_SORT_SQL` for
+`sort_by="post"` — same reasoning as the section above, this is exactly the
+sort-key-disagreement class of bug if it didn't.
+
+Gated to exactly what the light-record loop's simple path needs: `enrich=False`,
+no tag filter, no search, not star_only, no archived filter, sort_by in
+`{post, received}`, read_filter in `{all, unread, starred}`. Tag/search/star/
+history/archived views keep using the existing (slower but field-complete)
+paths — `_LightEntry` deliberately omits `resource_id`/`feed_resolved_title`/
+`summary`/`authors_str`/a `feed` attribute, so if the gate is ever loosened by
+mistake, reaching one of those fields raises `AttributeError` immediately
+instead of silently rendering wrong data. Falls back to the hydrated path on
+any SQL error, same "degrade, never break" contract as `_sorted_star_key_window`.
+
+Link-less entries (Buzzsprout podcast feeds ship no `<link>`, only an audio
+enclosure `_derived_entry_link` recovers a page URL from) are rare enough that
+widening every row's `SELECT` with a variable-length `enclosures` JSON column
+would cost more than it saves — instead, rows with a falsy `link` get one
+narrow follow-up query for just their enclosures.
+
+**Known tradeoff, not a new one:** like the existing >32-feed SQL branches,
+the SQL `ORDER BY` uses the simple `_ENTRY_SORT_SQL` expression while the
+light-record loop's actual sort key is the richer `entry_effective_date`
+(URL/title-inferred fallbacks included) — the SQL order only decides which
+rows a *bounded* `LIMIT` keeps, and the loop's own stable sort afterward
+fixes up the final order regardless. `mark_entries_range_read`'s calls use
+`_RANGE_READ_LIMIT` (effectively unbounded), so this never drops a row in
+practice today; a future `enrich=False` caller with a small `limit` should be
+aware the same approximation applies here as it already does above threshold.
+
 ## Moved here from saved.md
 
 **One layout owner, three modes.** The inline shell in `index.html` resolves
