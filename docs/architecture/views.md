@@ -212,11 +212,18 @@ fragment templates served by dedicated GET endpoints, and the page ships a
 small container `<div data-lazy-src="…">` that client JS fills on first open.
 
 Current fragments:
-- `/settings/feeds/panel/{folders,stale}` (`_settings_feeds_folders.html`,
-  `_settings_feeds_stale.html`): the Settings → Feeds folders table (a hidden
-  row per feed, including disabled) and the Stale view (every active feed
-  ranked by last-post age), fetched on first open of the Feeds tab / Stale
-  view.
+- `/settings/feeds/panel/{folders,stale,failing}` (`_settings_feeds_folders.html`,
+  `_settings_feeds_stale.html`, `_settings_feeds_failing.html`): the
+  Settings → Feeds folders table (a hidden row per feed, including disabled),
+  the Stale view (every active feed ranked by last-post age), and the Failing
+  view (up to `LECTIO_FAILING_FEEDS_LIMIT`, default 500, failing/acked/
+  needs-replacement feeds), fetched on first open of the Feeds tab / that
+  view. Found 2026-08-27: `failing`/`acked`/`needs_replacement` were still
+  inlined after folders/stale had already been moved to this pattern — ~500
+  rows of buttons/icons/title-attrs, ~1.4MB of the settings modal alone on
+  the live library. The tab-bar's failing-count badge stays server-rendered
+  from `problematic_feeds` (already in the page context, cheap to filter —
+  the cost is markup, not the list); only the row markup itself is lazy.
 - `/tree/folder-feeds/{folder_id}` (`_tree_folder_feeds.html`): one sidebar
   folder's feed `<li>` rows, fetched on first expand. Only the selected
   folder inlines its rows (the active-feed highlight and auto-expand must

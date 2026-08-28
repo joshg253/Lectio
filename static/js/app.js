@@ -14367,7 +14367,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           panel.hidden = panel.getAttribute('data-feeds-panel') !== view;
         });
         if (view === 'stale') void window._loadLazySettingsPanel?.(document.getElementById('settings-stale-lazy'));
-        if (view === 'failing') void markProblematicFeedsViewed();
+        if (view === 'failing') {
+          window._loadLazySettingsPanel?.(document.getElementById('settings-failing-lazy'))?.then(() => setupFailingFeedFilter());
+          void markProblematicFeedsViewed();
+        }
       });
     });
 
