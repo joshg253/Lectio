@@ -823,6 +823,27 @@ Also corrected while chasing this: refresh is **not** a thread pool. It calls
 `reader.update_feed()` sequentially in one background thread, so the contention
 is one CPU-hungry thread, not many.
 
+### Read Above/Below still slow right after a refresh touches the same feeds
+
+`_light_entries_from_sql` (2026-08-28, docs/architecture/views.md) fixed the
+entry-hydration cost — reading the "Deals" folder's full history (17 feeds,
+~10.7k entries) dropped from 8.4s to 0.4-1.0s in a settled DB. But a real
+mark-range-read minutes later on the same folder measured `fetch_ms=4301`
+(~5s total) instead. Diagnosed, not fixed: a refresh cycle had just written to
+that folder's feeds (slickdeals: `modified=16`) ~3 minutes earlier, and
+reading through a WAL file still holding recent writes costs more than
+reading a checkpointed one. Same shape as the home-route item above —
+concurrent-with-refresh reads pay a tax the isolated benchmark doesn't show.
+Ruled out as a cause: the mark-as-read write loop itself (117 individual
+`reader.mark_entry_as_read` calls) — measured at 38ms total, not the
+bottleneck.
+
+The lead, if picked up: whether reader's WAL checkpoint behavior can be made
+more proactive after a refresh pass, so reads shortly after don't inherit an
+un-checkpointed WAL. Bigger and riskier than the fetch-path fix — it's a
+pragma/timing change affecting every read/write in the app, not just this one
+path, so it needs its own measurement pass before touching anything.
+
 ### Parked, deliberately
 
 Genuinely nothing to do here until one of these recurs or a lead turns up —
