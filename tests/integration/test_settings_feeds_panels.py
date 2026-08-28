@@ -1,9 +1,16 @@
 """Lazy Settings → Feeds panels.
 
-The folders table and stale list render a row per feed — megabytes of hidden
-markup at thousands of feeds — so the home page must ship lazy containers
-instead of inlining them, and /settings/feeds/panel/{folders,stale} must serve
-markup equivalent to what index.html used to inline.
+The folders table, stale list, and failing-feeds list each render a row per
+feed — megabytes of hidden markup at thousands of feeds — so the home page
+must ship lazy containers instead of inlining them, and
+/settings/feeds/panel/{folders,stale,failing} must serve markup equivalent to
+what index.html used to inline.
+
+Found 2026-08-27: failing_feeds/acked_feeds/needs_replacement_feeds were the
+one heavy Feeds-tab panel still inlined on every page load — up to 500 rows
+(LECTIO_FAILING_FEEDS_LIMIT) of buttons/icons/title-attrs, ~1.4MB of the
+settings modal's page weight — while folders/stale had already been made
+lazy. Moved to this same on-demand pattern.
 """
 from __future__ import annotations
 
@@ -47,7 +54,13 @@ def configured(tmp_path, monkeypatch):
             "INSERT INTO folder_feeds (feed_url, folder_id) VALUES (?, ?)",
             (FEED, folder_id),
         )
+        conn.execute(
+            "INSERT INTO feed_failure_state (feed_url, consecutive_failures, last_error, last_failure_at) "
+            "VALUES (?, ?, ?, ?)",
+            (FEED, 3, "403 Forbidden", 1.0),
+        )
     main.invalidate_meta_structure_cache()
+    main.invalidate_problematic_feeds_cache()
     try:
         yield folder_id
     finally:
@@ -69,11 +82,15 @@ def test_home_page_does_not_inline_heavy_panels(configured):
     assert '<table class="settings-folders-table">' not in body
     assert '<tr class="settings-feed-row' not in body
     assert "feeds-stale-intro" in body  # panel shell is still there
+    assert '<li class="problem-feed-item"' not in body
+    assert "403 Forbidden" not in body
     # …their lazy containers must.
     assert 'id="settings-folders-lazy"' in body
     assert 'data-lazy-src="/settings/feeds/panel/folders"' in body
     assert 'id="settings-stale-lazy"' in body
     assert 'data-lazy-src="/settings/feeds/panel/stale"' in body
+    assert 'id="settings-failing-lazy"' in body
+    assert 'data-lazy-src="/settings/feeds/panel/failing"' in body
 
 
 def test_app_js_is_external_not_inline(configured):
@@ -111,6 +128,16 @@ def test_stale_panel_fragment_lists_active_feeds(configured):
     assert "problem-feed-list" in body
     assert f'data-feed-url="{FEED}"' in body
     assert "PanelFolder" in body
+
+
+def test_failing_panel_fragment_lists_failing_feeds(configured):
+    resp = _client().get("/settings/feeds/panel/failing")
+    assert resp.status_code == 200
+    assert resp.headers["cache-control"] == "no-store"
+    body = resp.text
+    assert f'data-feed-url="{FEED}"' in body
+    assert "403 Forbidden" in body
+    assert 'id="problematic-feeds-modal"' in body
 
 
 def test_unknown_panel_is_404(configured):

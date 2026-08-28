@@ -33681,13 +33681,14 @@ def mark_problematic_feeds_viewed(request: Request):
 def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response:
     """HTML fragments for the heavyweight Settings → Feeds panels.
 
-    The folders table and the stale list render a row per feed — megabytes of
-    (mostly hidden) markup at thousands of feeds — so index.html ships lazy
-    containers instead and the client fetches these on first open of the
-    Feeds tab / Stale view. Markup matches what index.html used to inline;
-    all row interactions are event-delegated, so injection needs no JS hooks.
+    The folders table, the stale list, and the failing-feeds list each render
+    a row per feed — megabytes of (mostly hidden) markup at thousands of
+    feeds — so index.html ships lazy containers instead and the client
+    fetches these on first open of the Feeds tab / Stale view / Failing view.
+    Markup matches what index.html used to inline; all row interactions are
+    event-delegated, so injection needs no JS hooks.
     """
-    if panel_name not in {"folders", "stale"}:
+    if panel_name not in {"folders", "stale", "failing"}:
         return Response(status_code=404)
     with get_meta_connection() as conn:
         snapshot = get_meta_structure_snapshot(conn)
@@ -33750,6 +33751,30 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
             # Unsubscribe fallback target for unfoldered feeds. The inline
             # panel used the currently-selected folder; a fragment has no
             # selection, so fall back to the root ("All Feeds") folder.
+            "selected_folder_id": root_id,
+        })
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+    if panel_name == "failing":
+        # Same feed_title/needs_replacement/can_suggest_migration augmentation
+        # _home_inner applies before splitting problematic_feeds into the
+        # three category lists — up to LECTIO_FAILING_FEEDS_LIMIT (default
+        # 500) rows of markup, so this is the one served on demand instead of
+        # inline with the page.
+        needs_replacement_urls = get_feeds_needing_replacement()
+        for pf in problematic_feeds:
+            pf_url = cast(str, pf["feed_url"])
+            pf["feed_title"] = feed_title_map.get(pf_url, pf_url)
+            pf["needs_replacement"] = pf_url in needs_replacement_urls
+            pf["can_suggest_migration"] = feed_discovery.is_known_dead_end_host(pf_url)
+        needs_replacement_feeds = [pf for pf in problematic_feeds if pf["needs_replacement"]]
+        active_problem_feeds = [pf for pf in problematic_feeds if not pf["needs_replacement"]]
+        failing_feeds = [pf for pf in active_problem_feeds if not pf.get("acknowledged_at")]
+        acked_feeds = [pf for pf in active_problem_feeds if pf.get("acknowledged_at")]
+        html = templates.env.get_template("_settings_feeds_failing.html").render({
+            "failing_feeds": failing_feeds,
+            "acked_feeds": acked_feeds,
+            "needs_replacement_feeds": needs_replacement_feeds,
             "selected_folder_id": root_id,
         })
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
