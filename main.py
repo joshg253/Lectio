@@ -29675,6 +29675,50 @@ def _resolve_view_posts(
     )
 
 
+@app.post("/entries/select-all-visible")
+def select_all_visible_entries_route(
+    folder_id: int = Form(...),
+    list_feed_url: str | None = Form(default=None),
+    tag: str | None = Form(default=None),
+    sort_by: str | None = Form(default=None),
+    sort_dir: str | None = Form(default=None),
+    read_filter: str | None = Form(default=None),
+    star_only: str | None = Form(default=None),
+    q: str | None = Form(default=None),
+    kept: str | None = Form(default=None),
+    filter_term: str = Form(default=""),
+):
+    """Resolve every entry matching the current view + filter, for the post
+    list's Select All button.
+
+    Same whole-view resolution move-visible-to-feed uses (_resolve_view_posts
+    + _view_filter_predicate) — unclipped and independent of scroll-chunking
+    — but returns the entries themselves rather than moving or counting them,
+    so the client can populate the multi-select for rows not yet rendered."""
+    try:
+        posts = _resolve_view_posts(
+            folder_id=folder_id,
+            list_feed_url=list_feed_url,
+            tag=tag,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            read_filter=read_filter,
+            star_only=star_only,
+            search_query=q,
+            inbox_view=(kept or "").strip().lower() == "starred",
+        )
+    except Exception:  # noqa: BLE001 — details stay in the log, not the response
+        LOGGER.exception("[select-all] could not resolve the view")
+        return JSONResponse({"ok": False, "error": "Could not read the current view."}, status_code=502)
+
+    matches_filter = _view_filter_predicate(filter_term)
+    entries = [
+        {"feedUrl": str(p["feed_url"]), "entryId": str(p["id"]), "videoId": str(p.get("video_id") or "")}
+        for p in posts if matches_filter(p)
+    ]
+    return JSONResponse({"ok": True, "entries": entries, "count": len(entries)})
+
+
 @app.post("/entries/move-visible-to-feed")
 def move_visible_entries_to_feed_route(
     target_url: str = Form(default=""),
