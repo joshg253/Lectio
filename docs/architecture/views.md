@@ -298,15 +298,26 @@ foldered ones), so orphans and their unread counts are always reachable from the
 top of the tree — with one deliberate exception: the Saved Articles virtual
 feed (`lectio:saved`). It's a real, orphaned reader feed (backs the Saved/Kept
 view), so both root's and Uncategorized's naive "every reader feed" widening
-pick it up. Uncategorized keeps it in its *view* set on purpose — the Saved
-sidebar's own Uncategorized grouping needs to reach its entries through it —
-but scrubs it from the *display* set (feed list, unread badge, row presence)
-so it never shows as a subscription in Feeds mode. Root has no equivalent
-reachability need, so it excludes `lectio:saved` outright, in both
-`get_folder_feed_urls` and the home route's tree snapshot (found 2026-08-24:
-root's widening had no exclusion at all, so `lectio:saved` was selectable as
-`list_feed_url` from "All Feeds," surfacing the whole saved-articles backlog
-as if it were an ordinary feed).
+pick it up — and both exclude it outright, in `get_folder_feed_urls`, in
+`_home_inner`'s shared `folder_feed_urls_by_id` snapshot (which backs both the
+tree's display AND the entry-fetch scope when you actually browse into either
+folder), and from tree display specifically. It must never show — or be
+browsable, or actionable via mark-read/refresh — as a subscription in Feeds
+mode, root or Uncategorized alike.
+
+Saved mode's own "Uncategorized" grouping still needs to reach `lectio:saved`'s
+entries — it's an orphan feed same as any other, and belongs in the unfoldered
+subset of the Saved view same as it belongs at Saved's root. That reachability
+is served by a `star_only`-gated re-inclusion in `_home_inner`
+(`selected_folder_id in (root_id, UNCATEGORIZED_FOLDER_ID) and not selected_feed_url`),
+not by leaving the shared feed-set inclusive — leaving it inclusive was the
+original 2026-08-24 root fix's approach for Uncategorized (reasoning: "the
+Saved sidebar's own Uncategorized grouping needs to reach its entries through
+it"), but that meant a plain Feeds-mode browse of Uncategorized showed the
+whole saved-articles backlog mixed into the real orphan feeds' posts, while
+the tree badge (built from a separately-scrubbed display set) read far lower
+than what the list actually showed — reported 2026-08-27 as "badge says 5,
+but there are tons of unread/starred items in there."
 
 The root is treated as equivalent to Uncategorized for feed placement: both
 `add_feed_to_folder` and `move_feed_to_folder` store a feed folderless (no
