@@ -58,7 +58,9 @@ short version:
   star or unstar several at once (with the same short undo window as a
   single unstar), add several YouTube videos to a playlist in one go, or move
   several to a different feed — including out of Saved Articles onto a real
-  subscription once you've found its feed.
+  subscription once you've found its feed. Each row also carries its own tag
+  icon beside the star, filled when the post is tagged, opening the same Add
+  Tag dialog (which shows the post's current tags) for a one-off add.
 - **Picks up where you left off.** Close the tab, press Back once too often, or
   swipe the app away — reopening Lectio returns you to the same article, scrolled
   to the same place. It also installs to your home screen as a standalone app via

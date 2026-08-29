@@ -62,6 +62,10 @@
         <button type="button" class="modal-close" data-close-modal="bulk-tag-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
       </div>
       <p id="bulk-tag-body" class="action-modal-hint"></p>
+      <div id="bulk-tag-existing" class="bulk-tag-existing" hidden>
+        <span class="action-modal-label">Current tags</span>
+        <div id="bulk-tag-existing-chips" class="bulk-tag-existing-chips"></div>
+      </div>
       <label class="action-modal-label" for="bulk-tag-input">Tags</label>
       <input id="bulk-tag-input" class="action-modal-input" placeholder="tag1 tag2…" autocomplete="off" />
       <p class="action-modal-hint">Added to each post's existing tags — nothing already there is replaced.</p>
