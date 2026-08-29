@@ -55,10 +55,10 @@ short version:
   multi-select on the post list — opening a post checks its own box too, and
   Select All grabs the whole current view (filters and all, not just what's
   scrolled into view) — for bulk actions: add a tag to several posts at once,
-  add several YouTube videos to a playlist in one go, or move several to a
-  different feed — including out of Saved Articles onto a real subscription
-  once you've found
-  its feed.
+  star or unstar several at once (with the same short undo window as a
+  single unstar), add several YouTube videos to a playlist in one go, or move
+  several to a different feed — including out of Saved Articles onto a real
+  subscription once you've found its feed.
 - **Picks up where you left off.** Close the tab, press Back once too often, or
   swipe the app away — reopening Lectio returns you to the same article, scrolled
   to the same place. It also installs to your home screen as a standalone app via

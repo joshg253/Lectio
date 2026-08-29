@@ -522,9 +522,40 @@ unstarred entry has no star to remove, and unstarring is not how a tag is droppe
 
 `POST /saved/unstar-scope` recomputes the set server-side and goes through
 `apply_star_state` **per entry** rather than issuing one bulk `DELETE`. That is not
-fastidiousness: the unstar path releases the offline capture and hard-deletes a
+fastidiousness: the unstar path releases the offline capture and (eventually —
+see "A husk's deletion is deferred to the undo window" below) removes a
 `lectio:saved` husk once no keep signal remains, and a bulk delete skips both,
 leaving orphaned captures and invisible husks.
+
+### A husk's deletion is deferred to the undo window
+
+**Changed 2026-08-28, alongside bulk Add/Remove star in the multi-select
+context menu.** `apply_star_state` used to hard-delete an untagged
+`lectio:saved` husk the instant it was unstarred. That raced the undo
+token the caller may have just written (the single-post toggle always does;
+the new bulk star/unstar action does too): the star row could be restored by
+Undo, but the entry it pointed to was already gone, so Undo silently lied for
+exactly the case this matters most for — bulk-unstarring a pile of articles
+in the Saved view by mistake.
+
+The hard-delete now happens in nightly maintenance instead
+(`_sweep_husked_saved_articles`), which only removes a husk once no
+`entry_unstar_batch` row for it is still inside the undo window (reusing
+`_undo_token_problem`, the same window check `/entries/undo-unstar` uses). A
+husk with no such row at all — not every unstar path writes one — is swept
+immediately, same as one whose window has simply expired. `undo_unstar`
+itself was also fixed to restore *every* row sharing a token instead of
+`.fetchone()`-ing just the first: `entry_unstar_batch`'s schema always
+supported several entries under one shared timestamp, but nothing had
+actually written more than one until the bulk action existed.
+
+Net effect: a husk now lives for up to one undo window (currently 15
+minutes) plus however long until the next nightly maintenance run, not
+"until the next server restart" — it is genuinely deleted, just not
+synchronously with the unstar that triggered it. Anything that assumes an
+unstarred, untagged `lectio:saved` entry is *already* gone right after
+`apply_star_state` returns is now wrong; check `reader.get_entry(...)`, don't
+assume.
 
 Read Mode has no right-click, and long-press there offers only text selection — so
 the actions render as visible buttons in the browse header, plain forms in the same
