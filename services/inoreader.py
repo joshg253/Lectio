@@ -233,6 +233,21 @@ def label_is_tag(label_name: str) -> bool:
     return label_name == label_name.lower()
 
 
+def folder_name_from_categories(categories: list[dict] | None) -> str | None:
+    """First folder-shaped (Title Case) label on a subscription's categories.
+
+    A subscription's `categories` mixes both label kinds indiscriminately, so
+    this skips lowercase (article-tag-shaped) ones the same way label_is_tag
+    does for the tagging phase. Returns None if the subscription carries no
+    folder-shaped label at all (import leaves it Uncategorized, same as
+    subscribing it by hand with no folder chosen)."""
+    for cat in categories or []:
+        name = label_name_from_tag_id(cat.get("id", ""))
+        if name and not label_is_tag(name):
+            return name
+    return None
+
+
 # ---------------------------------------------------------------------------
 # JSON file import (Path B — no API calls needed)
 # ---------------------------------------------------------------------------

@@ -1876,6 +1876,9 @@
     <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
     <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
     <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+    {% if selected_query %}
+    <input type="hidden" name="q" value="{{ selected_query }}" />
+    {% endif %}
   </form>
 
   <form id="context-move-feed-form" method="post" action="/feeds/move" hidden>
