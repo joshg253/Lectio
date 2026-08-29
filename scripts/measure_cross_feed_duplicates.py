@@ -40,7 +40,11 @@ def _is_homepage_link(link: str) -> bool:
     scan."""
     try:
         from urllib.parse import urlparse
-        return urlparse(link).path in ("", "/")
+        # romhacking.net's actual path is "//" (a feed-generator artifact,
+        # base path + trailing slash concatenated) -- strip("/") == "" catches
+        # that along with the plain "" and "/" cases a naive equality check
+        # would miss.
+        return urlparse(link).path.strip("/") == ""
     except ValueError:
         return True
 
