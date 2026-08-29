@@ -796,6 +796,7 @@
             type="search"
             placeholder="Filter this view…"
             aria-label="Filter the posts in this view by title, link, or feed"
+            title="Also matches video duration, e.g. &lt;2:00, &gt;=1h, &lt;90s (posts with no duration are excluded)"
             autocomplete="off"
           />
           <span id="posts-filter-count" class="posts-filter-count" hidden></span>
@@ -803,6 +804,11 @@
                   aria-label="Clear filter" hidden>
             <span class="material-symbols-rounded" aria-hidden="true">close</span>
           </button>
+          {# Shown only while the multi-select checkbox selection is non-empty.
+             Click clears the selection — same reflex as the filter's own
+             clear button beside it. #}
+          <button type="button" id="posts-selection-count" class="posts-filter-count posts-selection-count"
+                  title="Click to clear selection" hidden></button>
           {# Resolves the whole current view + filter server-side, same as
              "Move all shown to feed…" — selects everything matching, not
              just what scroll-chunking has rendered so far. #}
@@ -846,6 +852,9 @@
              tree at all — "Open in Feeds" would land on an empty page. #}
           data-post-orphan="{{ 1 if post.is_orphan_archive else 0 }}"
           data-post-video-id="{{ post.video_id or '' }}"
+          {# 0 is a legitimate (if unlikely) duration, so "is not none" rather
+             than "or ''" — the latter would also blank out a real zero. #}
+          data-post-duration-seconds="{{ post.duration_seconds if post.duration_seconds is not none else '' }}"
           data-thumb-crop="{{ post.thumb_crop or 'cover' }}"
           data-thumb-strategy="{{ post.thumb_strategy or '' }}"
           data-smart-ms="{{ post.smart_min_scale or '' }}"
