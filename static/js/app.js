@@ -3041,6 +3041,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     const unsubscribeFeedUrlInput = document.getElementById('context-unsubscribe-feed-url');
     const postMarkReadButton = document.getElementById('ctx-post-mark-read');
     const postMarkReadBulkButton = document.getElementById('ctx-post-mark-read-bulk');
+    const postStarBulkButton = document.getElementById('ctx-post-star-bulk');
+    const postUnstarBulkButton = document.getElementById('ctx-post-unstar-bulk');
     const postMarkFeedReadButton = document.getElementById('ctx-post-mark-feed-read');
     const postOpenInFeedsButton = document.getElementById('ctx-post-open-in-feeds');
     const postMarkAboveReadButton = document.getElementById('ctx-post-mark-above-read');
@@ -8256,6 +8258,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               setMenuItemVisible(postAddToPlaylistButton, allYoutube);
               if (postAddTagButton) postAddTagButton.textContent = `Add tag to ${contextSelectedPosts.length} posts…`;
               setMenuItemVisible(postAddTagButton, true);
+              if (postStarBulkButton) postStarBulkButton.textContent = `Add star to ${contextSelectedPosts.length} posts`;
+              setMenuItemVisible(postStarBulkButton, true);
+              if (postUnstarBulkButton) postUnstarBulkButton.textContent = `Remove star from ${contextSelectedPosts.length} posts`;
+              setMenuItemVisible(postUnstarBulkButton, true);
             } else {
               contextPostFeedUrl = rowFeedUrl;
               contextPostEntryId = rowEntryId;
@@ -8276,6 +8282,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               }
               setMenuItemVisible(postMarkReadButton, true);
               setMenuItemVisible(postMarkReadBulkButton, false);
+              setMenuItemVisible(postStarBulkButton, false);
+              setMenuItemVisible(postUnstarBulkButton, false);
               setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
               setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
               setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
@@ -8657,12 +8665,12 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // token, same shape as the mark-read/mark-unread undos above. Raised
     // 2026-08-23: repeat-pressing the star-toggle key by accident unstarred
     // ~16 articles with no way to identify which ones afterward.
-    function showUndoUnstarToast(undoToken) {
+    function showUndoUnstarToast(undoToken, count) {
       document.getElementById('toast-message')?.remove();
       const toast = document.createElement('div');
       toast.id = 'toast-message';
       toast.className = 'toast-message';
-      toast.textContent = 'Post unstarred. ';
+      toast.textContent = count && count > 1 ? `${count} posts unstarred. ` : 'Post unstarred. ';
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'toast-action-btn';
@@ -8975,6 +8983,32 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         appUnreadCount = Math.max(0, current - totalChanged);
         updateDynamicFavicon();
       }
+    }
+
+    // Bulk counterpart of the single-post star toggle's optimistic update —
+    // same badge bookkeeping, just looped over a selection instead of one
+    // .post-save-toggle-form submit. Inbox-drop (unstarring in the Saved/Kept
+    // view removes the row) is left to the caller, two-phase, same as the
+    // single-post handler: hide optimistically, then either .remove() once
+    // the server confirms or un-hide if the request failed.
+    function applyStarStateToSelection(entries, isSaved) {
+      const dropFromInbox = !isSaved && isInboxKeptScope();
+      const dropped = [];
+      for (const e of entries) {
+        const postItem = document.querySelector(
+          `.post-item[data-post-feed-url="${CSS.escape(e.feedUrl)}"][data-post-entry-id="${CSS.escape(e.entryId)}"]`
+        );
+        if (!postItem) continue;
+        if (!applyPostItemSavedState(postItem, isSaved)) continue;
+        const starredUnread = postItem.getAttribute('data-post-read') === '0';
+        if (starredUnread) adjustSavedUnreadBadge(isSaved ? +1 : -1);
+        adjustSavedFolderBadge(postItem.getAttribute('data-post-folder-id'), isSaved ? +1 : -1);
+        if (dropFromInbox) {
+          postItem.hidden = true;
+          dropped.push(postItem);
+        }
+      }
+      return dropped;
     }
 
     async function submitMarkReadAsync(form, feedUrlFilter, maxAgeDays) {
@@ -9631,6 +9665,50 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       } catch (_) {
         showToastMessage('Mark as read failed — network error.');
       }
+    });
+
+    async function _bulkSetStarred(isSaved) {
+      const entries = contextSelectedPosts;
+      hideAllContextMenus();
+      if (!entries.length) return;
+      const dropped = applyStarStateToSelection(entries, isSaved);
+      try {
+        const body = new URLSearchParams({
+          entries: JSON.stringify(entries.map((e) => [e.feedUrl, e.entryId])),
+          saved: isSaved ? '1' : '0',
+        });
+        const resp = await fetch('/entries/star-batch', { method: 'POST', body });
+        const data = await resp.json();
+        if (data.ok) {
+          for (const el of dropped) el.remove();
+          if (!isSaved && data.undo_token) {
+            showUndoUnstarToast(data.undo_token, data.changed);
+          } else {
+            showToastMessage(data.message || (isSaved ? 'Starred.' : 'Unstarred.'));
+          }
+          // Selection is left as-is — bulk actions chain.
+        } else {
+          for (const el of dropped) el.hidden = false;
+          applyStarStateToSelection(entries, !isSaved);  // roll back the optimistic flip
+          showToastMessage(data.error || (isSaved ? 'Add star failed.' : 'Remove star failed.'));
+        }
+      } catch (_) {
+        for (const el of dropped) el.hidden = false;
+        applyStarStateToSelection(entries, !isSaved);
+        showToastMessage((isSaved ? 'Add star' : 'Remove star') + ' failed — network error.');
+      }
+    }
+
+    postStarBulkButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void _bulkSetStarred(true);
+    });
+
+    postUnstarBulkButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void _bulkSetStarred(false);
     });
 
     postMoveToFeedButton?.addEventListener('click', (event) => {

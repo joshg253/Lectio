@@ -49,6 +49,22 @@ def _insert_run(conn, run_at: str, entry_id: str) -> None:
     conn.commit()
 
 
+def test_nightly_maintenance_sweeps_husked_saved_articles(configured):
+    """The husk sweep (test_unstar_husk_cleanup.py exercises it directly) is
+    actually wired into the real nightly maintenance run, not just callable
+    on its own."""
+    saved = main.saved_articles_service.SAVED_FEED_URL
+    with main.get_reader() as reader:
+        reader.add_feed(saved, allow_invalid_url=True, exist_ok=True)
+        reader.add_entry({"feed_url": saved, "id": "husk", "link": "husk", "title": "Husk"})
+    # No entry_unstar_batch row at all -- unprotected, swept on first run.
+
+    main._daily_maintenance_for_user()
+
+    with main.get_reader() as reader:
+        assert reader.get_entry((saved, "husk"), None) is None
+
+
 def test_prune_drops_old_keeps_recent(configured):
     conn = main.get_meta_connection()
     old = (datetime.now() - timedelta(days=200)).isoformat()

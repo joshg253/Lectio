@@ -1,10 +1,16 @@
-"""Unstarring a Saved Article that nothing else keeps removes it, instead of
-leaving a husk (an unstarred, untagged entry) in the lectio:saved read-later
-feed. A tag still keeping it, or a plain feed entry, is left alone.
+"""Unstarring a Saved Article that nothing else keeps eventually removes it,
+instead of leaving a husk (an unstarred, untagged entry) in the lectio:saved
+read-later feed forever. A tag still keeping it, or a plain feed entry, is
+left alone.
+
+The deletion itself is deferred to the nightly maintenance sweep
+(_sweep_husked_saved_articles), not done inline by the unstar toggle —
+see apply_star_state's docstring. Doing it inline would delete the entry a
+just-issued undo token still promises to restore, making the undo toast lie.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -72,16 +78,48 @@ def _unstar(entry_id, feed=SAVED):
         )
 
 
-def test_unstarring_an_untagged_saved_article_deletes_it(tenant):
+def test_unstarring_an_untagged_saved_article_is_swept_after_its_undo_window(tenant):
     eid = "https://example.com/read-me"
     _add_saved(SAVED, eid)
-    _unstar(eid)
-    with main.get_reader() as reader:
-        assert reader.get_entry((SAVED, eid), None) is None   # husk removed, not left behind
+    r = _unstar(eid)
+    token = r.json()["undo_token"]
+    assert token
+
     with main.get_meta_connection() as conn:
         assert conn.execute(
             "SELECT COUNT(*) FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (SAVED, eid)
         ).fetchone()[0] == 0
+
+    # Right after unstarring, the live undo token still protects it.
+    assert main._sweep_husked_saved_articles() == 0
+    with main.get_reader() as reader:
+        assert reader.get_entry((SAVED, eid), None) is not None
+
+    # Once its undo window has passed, the sweep hard-deletes it.
+    stale = (datetime.now() - timedelta(minutes=30)).isoformat()
+    with main.get_meta_connection() as conn:
+        conn.execute("UPDATE entry_unstar_batch SET unstarred_at = ? WHERE feed_url = ? AND entry_id = ?",
+                     (stale, SAVED, eid))
+        conn.commit()
+    assert main._sweep_husked_saved_articles() == 1
+    with main.get_reader() as reader:
+        assert reader.get_entry((SAVED, eid), None) is None   # husk removed, not left behind
+    with main.get_meta_connection() as conn:
+        assert not conn.execute("SELECT 1 FROM entry_unstar_batch WHERE feed_url = ? AND entry_id = ?",
+                                 (SAVED, eid)).fetchone()
+
+
+def test_sweep_deletes_a_husk_with_no_unstar_batch_row_at_all(tenant):
+    """Not every path that unstars writes an undo token (only the routes that
+    offer one do) -- a husk with no protecting row at all is swept
+    immediately, same as one whose window has simply expired."""
+    eid = "https://example.com/no-token"
+    _add_saved(SAVED, eid)
+    main.apply_star_state(SAVED, eid, False)  # bypasses the route, no undo token written
+
+    assert main._sweep_husked_saved_articles() == 1
+    with main.get_reader() as reader:
+        assert reader.get_entry((SAVED, eid), None) is None
 
 
 def test_unstarring_a_tagged_saved_article_keeps_it(tenant):
