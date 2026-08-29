@@ -8619,7 +8619,8 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
    The list is absolutely positioned rather than expanded in place so the parent
    menu keeps its size — a menu that grows under the cursor moves the item you
    were aiming at. JS adds .ctx-submenu--left when opening right would run off
-   the viewport. */
+   the viewport, and .ctx-submenu--up when opening down would run off the
+   bottom (anchors the flyout's bottom to the trigger row instead of its top). */
 .ctx-submenu { position: relative; }
 .ctx-submenu-summary {
   display: flex;
@@ -8646,6 +8647,7 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
   box-shadow: var(--shadow, 0 8px 20px rgba(0, 0, 0, 0.35));
 }
 .ctx-submenu--left > .ctx-submenu-list { left: auto; right: 100%; }
+.ctx-submenu--up > .ctx-submenu-list { top: auto; bottom: 0; }
 .ctx-submenu[open] > .ctx-submenu-summary { background: var(--hover-bg); }
 
 /* Re-fetch's date-choice row: which of the three buttons below it a click
