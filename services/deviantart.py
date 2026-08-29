@@ -277,31 +277,57 @@ def fetch_watch_feed(access_token: str, limit: int = _MAX_ENTRIES_PER_FEED) -> l
 _METADATA_BATCH = 50  # /deviation/metadata accepts up to 50 ids per call
 
 
-def fetch_deviation_tags(client_id: str, client_secret: str, deviation_ids: list[str],
-                         access_token: str = "") -> dict[str, list[str]]:
-    """Batch /deviation/metadata lookups → {deviationid: [tag_name, ...]}.
+def _fetch_deviation_metadata(client_id: str, client_secret: str, deviation_ids: list[str],
+                              access_token: str = "") -> list[dict]:
+    """Batch /deviation/metadata lookups, raw — one API call per 50 ids.
 
-    Browse/gallery responses don't include deviation tags; metadata does, at one
-    API call per 50 ids — callers should pass only ids that still need tags."""
+    Shared by the tags and author backfills, which each need a different field
+    off the same per-deviation object."""
     if not deviation_ids:
-        return {}
+        return []
     token = access_token or _get_token(client_id, client_secret)
     headers = {"User-Agent": _USER_AGENT, "Authorization": f"Bearer {token}"}
-    out: dict[str, list[str]] = {}
+    out: list[dict] = []
     for i in range(0, len(deviation_ids), _METADATA_BATCH):
         batch = deviation_ids[i:i + _METADATA_BATCH]
         resp = _request("GET", f"{_API_BASE}/deviation/metadata", headers=headers,
                         params={"deviationids[]": batch, "mature_content": "true"})
         if resp.status_code != 200:
             raise RuntimeError(f"metadata fetch failed: HTTP {resp.status_code}: {resp.text[:200]}")
-        for m in resp.json().get("metadata") or []:
-            devid = m.get("deviationid")
-            if devid:
-                out[str(devid)] = [
-                    str(t.get("tag_name"))
-                    for t in (m.get("tags") or [])
-                    if isinstance(t, dict) and t.get("tag_name")
-                ]
+        out.extend(resp.json().get("metadata") or [])
+    return out
+
+
+def fetch_deviation_tags(client_id: str, client_secret: str, deviation_ids: list[str],
+                         access_token: str = "") -> dict[str, list[str]]:
+    """Batch /deviation/metadata lookups → {deviationid: [tag_name, ...]}.
+
+    Browse/gallery responses don't include deviation tags; metadata does, at one
+    API call per 50 ids — callers should pass only ids that still need tags."""
+    out: dict[str, list[str]] = {}
+    for m in _fetch_deviation_metadata(client_id, client_secret, deviation_ids, access_token=access_token):
+        devid = m.get("deviationid")
+        if devid:
+            out[str(devid)] = [
+                str(t.get("tag_name"))
+                for t in (m.get("tags") or [])
+                if isinstance(t, dict) and t.get("tag_name")
+            ]
+    return out
+
+
+def fetch_deviation_authors(client_id: str, client_secret: str, deviation_ids: list[str],
+                           access_token: str = "") -> dict[str, str]:
+    """Batch /deviation/metadata lookups → {deviationid: artist username}.
+
+    Same endpoint and cost as fetch_deviation_tags — used for entries stored
+    before the ``author`` column existed, whose row never got one at insert."""
+    out: dict[str, str] = {}
+    for m in _fetch_deviation_metadata(client_id, client_secret, deviation_ids, access_token=access_token):
+        devid = m.get("deviationid")
+        username = (m.get("author") or {}).get("username")
+        if devid and username:
+            out[str(devid)] = str(username)
     return out
 
 
@@ -346,6 +372,47 @@ def fetch_and_store_missing_tags(conn: sqlite3.Connection, feed_id: str, client_
     return tagged
 
 
+def fetch_and_store_missing_authors(conn: sqlite3.Connection, feed_id: str, client_id: str,
+                                    client_secret: str, access_token: str = "",
+                                    max_lookups: int = _METADATA_BATCH) -> int:
+    """Backfill ``author`` for entries stored before that column existed.
+
+    Same shape and cost as fetch_and_store_missing_tags — one metadata call per
+    refresh, newest entries first — since new entries already get their author
+    at insert time (_deviation_to_entry) and never land here. Marks
+    author_fetched_at even on a miss, so an entry the API never attributes
+    isn't re-looked-up forever. Returns how many entries got an author.
+    """
+    rows = conn.execute(
+        "SELECT deviationid FROM deviantart_entries"
+        " WHERE deviantart_feed_id = ? AND (author IS NULL OR author = '') AND author_fetched_at IS NULL"
+        " ORDER BY published_at DESC LIMIT ?",
+        (feed_id, max_lookups),
+    ).fetchall()
+    ids = [str(r["deviationid"]) for r in rows]
+    if not ids:
+        return 0
+    try:
+        author_map = fetch_deviation_authors(client_id, client_secret, ids, access_token=access_token)
+    except DeviantArtRateLimited:
+        LOGGER.info("[deviantart] metadata authors rate-limited for feed %s; will retry next cycle", feed_id)
+        return 0
+    except Exception:
+        LOGGER.exception("[deviantart] metadata authors fetch failed for feed %s", feed_id)
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    filled = 0
+    for devid in ids:
+        author = author_map.get(devid) or ""
+        conn.execute(
+            "UPDATE deviantart_entries SET author = ?, author_fetched_at = ?"
+            " WHERE deviantart_feed_id = ? AND deviationid = ?",
+            (author, now, feed_id, devid),
+        )
+        filled += 1 if author else 0
+    return filled
+
+
 def _deviation_to_entry(d: dict) -> dict | None:
     """Normalize a DA deviation object to our entry shape, or None to skip."""
     devid = d.get("deviationid")
@@ -386,6 +453,7 @@ def _deviation_to_entry(d: dict) -> dict | None:
         "is_mature": bool(d.get("is_mature")),
         "image_src": img or "",
         "tags": tags,
+        "author": author,
     }
 
 
@@ -399,12 +467,18 @@ def _item_xml(e: dict) -> str:
         pub = f"<pubDate>{_format_rfc2822(dt)}</pubDate>"
     except Exception:
         pub = ""
+    author = e.get("author") or ""
+    author_xml = f"      <author>{_esc(str(author))}</author>\n" if author else ""
     return (
         "    <item>\n"
         f"      <title><![CDATA[{e['title']}]]></title>\n"
         f"      <link>{_esc(str(e['entry_url']))}</link>\n"
         f"      <guid isPermaLink=\"false\">{_esc(str(e['id']))}</guid>\n"
         f"      {pub}\n"
+        f"{author_xml}"
+        # Plain (non-email) text — feedparser resolves this straight into
+        # entry.authors_str, same generic field the "by <author>" header
+        # already reads for every other feed.
         f"      <description><![CDATA[{e.get('content') or ''}]]></description>\n"
         # <category> per tag: ingest captures these into entry_feed_tags
         # (suggestion chips) via the sanitizing parser's tag sink.
@@ -448,7 +522,8 @@ def _write_feed_file(conn: sqlite3.Connection, feed_id: str) -> None:
     entries = [
         {"id": r["deviationid"], "title": r["title"], "entry_url": r["entry_url"],
          "content": r["content"], "published_at": r["published_at"],
-         "tags": [t for t in str(r["tags"] or "").split(",") if t]}
+         "tags": [t for t in str(r["tags"] or "").split(",") if t],
+         "author": r["author"]}
         for r in rows
     ]
     xml = _generate_rss_xml(str(row["feed_title"]), _gallery_page_url(str(row["username"])), entries)
@@ -472,9 +547,12 @@ def _upsert_entries(conn: sqlite3.Connection, feed_id: str, deviations: list[dic
         tags_csv = ",".join(e.get("tags") or [])
         cur = conn.execute(
             "INSERT OR IGNORE INTO deviantart_entries"
-            " (id, deviantart_feed_id, deviationid, title, entry_url, content, published_at, tags)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), feed_id, e["id"], e["title"], e["entry_url"], e["content"], e["published_at"], tags_csv),
+            " (id, deviantart_feed_id, deviationid, title, entry_url, content, published_at, tags, author)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(uuid.uuid4()), feed_id, e["id"], e["title"], e["entry_url"],
+                e["content"], e["published_at"], tags_csv, e.get("author") or "",
+            ),
         )
         added += cur.rowcount
         if cur.rowcount == 0 and tags_csv:
@@ -587,6 +665,9 @@ def refresh_deviantart_feed_by_id(conn: sqlite3.Connection, feed_id: str, client
     # call max). Deliberately refresh-only — the bulk watchlist sync's
     # create_deviantart_feed path skips it so adding N artists stays N calls.
     fetch_and_store_missing_tags(conn, feed_id, client_id, client_secret, access_token=access_token)
+    # Same one-call-per-refresh backfill, for entries stored before the author
+    # column existed.
+    fetch_and_store_missing_authors(conn, feed_id, client_id, client_secret, access_token=access_token)
     conn.execute(
         "UPDATE deviantart_feeds SET last_synced_at = ? WHERE id = ?",
         (datetime.now(timezone.utc).isoformat(), feed_id),

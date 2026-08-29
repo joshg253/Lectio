@@ -4384,6 +4384,17 @@ def ensure_meta_schema() -> None:
         except Exception:
             pass
         try:
+            conn.execute("ALTER TABLE deviantart_entries ADD COLUMN author TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        # Set even when the metadata lookup came back with no author (mirrors
+        # tags_fetched_at above), so an entry the API never attributes isn't
+        # re-looked-up on every refresh forever.
+        try:
+            conn.execute("ALTER TABLE deviantart_entries ADD COLUMN author_fetched_at TEXT")
+        except Exception:
+            pass
+        try:
             conn.execute("ALTER TABLE deviantart_feeds ADD COLUMN source TEXT NOT NULL DEFAULT 'gallery'")
         except Exception:
             pass

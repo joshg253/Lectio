@@ -67,6 +67,7 @@ def test_deviation_to_entry_embeds_image():
     assert e["title"] == "My <Art>"
     assert "images/x.jpg" in e["content"] and "<img" in e["content"]
     assert e["published_at"].startswith("2023-11-14")
+    assert e["author"] == "x"
 
 
 def test_deviation_to_entry_falls_back_to_thumb():
@@ -243,6 +244,7 @@ def _da_conn_with_feeds(feed_ids):
     conn.execute(
         "CREATE TABLE deviantart_entries (id TEXT PRIMARY KEY, deviantart_feed_id TEXT,"
         " deviationid TEXT, title TEXT, entry_url TEXT, content TEXT, published_at TEXT, tags TEXT NOT NULL DEFAULT '',"
+        " author TEXT NOT NULL DEFAULT '',"
         " UNIQUE(deviantart_feed_id, deviationid))"
     )
     for fid in feed_ids:
@@ -397,6 +399,27 @@ def test_item_xml_emits_category_per_tag():
     assert "<category>fantasy</category>" in da._item_xml(e)
 
 
+def test_item_xml_emits_author_when_present():
+    e = {"id": "d1", "title": "T", "entry_url": "https://da/x", "content": "",
+         "published_at": "2026-07-01T00:00:00+00:00", "author": "someartist"}
+    assert "<author>someartist</author>" in da._item_xml(e)
+
+
+def test_item_xml_omits_author_when_absent():
+    e = {"id": "d1", "title": "T", "entry_url": "https://da/x", "content": "",
+         "published_at": "2026-07-01T00:00:00+00:00"}
+    assert "<author>" not in da._item_xml(e)
+
+
+def test_upsert_entries_persists_author():
+    conn = _da_conn_with_feeds(["FID"])
+    devs = [{"deviationid": "D1", "url": "https://da/p1", "title": "t1",
+             "published_time": "1700000000", "author": {"username": "someartist"}}]
+    da._upsert_entries(conn, "FID", devs)
+    row = conn.execute("SELECT author FROM deviantart_entries WHERE deviationid = 'D1'").fetchone()
+    assert row["author"] == "someartist"
+
+
 # --- deviation tags via /deviation/metadata ---
 
 def test_fetch_deviation_tags_batches_and_maps():
@@ -428,6 +451,7 @@ def _tags_conn():
         id TEXT PRIMARY KEY, deviantart_feed_id TEXT, deviationid TEXT,
         title TEXT, entry_url TEXT, content TEXT, published_at TEXT,
         tags TEXT NOT NULL DEFAULT '', tags_fetched_at TEXT,
+        author TEXT NOT NULL DEFAULT '', author_fetched_at TEXT,
         UNIQUE(deviantart_feed_id, deviationid))""")
     for i in range(3):
         conn.execute(
@@ -452,6 +476,52 @@ def test_fetch_and_store_missing_tags_updates_rows_and_marks_checked():
     with patch.object(da, "fetch_deviation_tags", return_value={}) as second:
         assert da.fetch_and_store_missing_tags(conn, "f1", "cid", "sec") == 0
     second.assert_not_called()
+
+
+def test_fetch_deviation_authors_batches_and_maps():
+    ids = [f"d{i}" for i in range(60)]
+    def meta(batch):
+        return {"metadata": [
+            {"deviationid": d, "author": {"username": f"artist-{d}"}} for d in batch
+        ]}
+    responses = [
+        (200, {"access_token": "T", "expires_in": 3600}),
+        (200, meta(ids[:50])),
+        (200, meta(ids[50:])),
+    ]
+    client = _mock_client(responses)
+    with patch("httpx.Client", return_value=client):
+        out = da.fetch_deviation_authors("cid", "sec", ids)
+    assert len(out) == 60
+    assert out["d0"] == "artist-d0"
+
+
+def test_fetch_and_store_missing_authors_updates_rows_and_marks_checked():
+    conn = _tags_conn()
+    with patch.object(da, "fetch_deviation_authors",
+                      return_value={"d2": "artist2", "d1": ""}) as fetched:
+        filled = da.fetch_and_store_missing_authors(conn, "f1", "cid", "sec")
+    fetched.assert_called_once()
+    assert filled == 1
+    rows = {r["deviationid"]: r for r in conn.execute("SELECT * FROM deviantart_entries")}
+    assert rows["d2"]["author"] == "artist2"
+    # A miss still marks author_fetched_at, so it isn't re-looked-up forever.
+    assert rows["d1"]["author"] == "" and rows["d1"]["author_fetched_at"]
+    assert rows["d0"]["author_fetched_at"]
+    # Second pass: nothing left to look up.
+    with patch.object(da, "fetch_deviation_authors", return_value={}) as second:
+        assert da.fetch_and_store_missing_authors(conn, "f1", "cid", "sec") == 0
+    second.assert_not_called()
+
+
+def test_fetch_and_store_missing_authors_skips_entries_that_already_have_one():
+    conn = _tags_conn()
+    conn.execute("UPDATE deviantart_entries SET author = 'existing' WHERE deviationid = 'd0'")
+    with patch.object(da, "fetch_deviation_authors", return_value={"d1": "a1", "d2": "a2"}) as fetched:
+        da.fetch_and_store_missing_authors(conn, "f1", "cid", "sec")
+    fetched.assert_called_once_with("cid", "sec", ["d2", "d1"], access_token="")
+    row = conn.execute("SELECT author FROM deviantart_entries WHERE deviationid = 'd0'").fetchone()
+    assert row["author"] == "existing"
 
 
 def test_fetch_and_store_missing_tags_survives_rate_limit():
