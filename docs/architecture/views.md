@@ -525,6 +525,16 @@ fixes up the final order regardless. `mark_entries_range_read`'s calls use
 practice today; a future `enrich=False` caller with a small `limit` should be
 aware the same approximation applies here as it already does above threshold.
 
+**Fixed 2026-08-28:** the >32-feed ASC/DESC branches' own `read_sql` used
+`read IS NOT NULL` for the "read-only" case — always true, since reader's
+`read` column is 0/1, never NULL — so a `history` view's SQL `LIMIT` window
+could fill with unread rows before the Python `is_read` filter dropped them,
+losing real entries rather than just misordering them (unlike the
+`_ENTRY_SORT_SQL` approximation above, this one *does* drop rows in
+practice). The DESC branch's `received` sort also used `recent_sort` instead
+of `first_updated`, disagreeing with the light-record loop's own sort key.
+Both now match `_light_entries_from_sql`.
+
 ## Moved here from saved.md
 
 **One layout owner, three modes.** The inline shell in `index.html` resolves
