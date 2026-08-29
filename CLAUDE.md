@@ -1,10 +1,12 @@
 # Lectio
 
-Self-hosted feed reader, triage, and workflow app with optional multi-user support.
+Self-hosted feed reader, triage, and workflow app. Auth is always on; per-user isolation runs through a storage-layer tenancy resolver (see `docs/architecture/tenancy.md`).
 
 ## Core rules
 - Do not change code until you are at least 95% confident about what should be built; ask follow-up questions until then.
 - Be concise. Avoid filler. Do not expand beyond the task unless asked.
+- Default to short, plain answers: no headers/bullets for a single fact, no restating a file's contents back, no "summary of what I did" after a small edit — the diff speaks for itself.
+- Keep any "here's what I'm about to do" note to one short sentence; skip the end-of-turn recap unless the change is multi-file or non-obvious.
 - For multi-file or behavior-changing work, present a short plan before editing.
 - Prefer existing `reader` capabilities over custom code.
 - Do not duplicate behavior the `reader` library already provides.
@@ -20,13 +22,13 @@ Self-hosted feed reader, triage, and workflow app with optional multi-user suppo
 - Use `uv` for scripts, tests, and tooling.
 
 ## Model guidance
-- Prefer Haiku for mechanical, well-scoped tasks: search, simple edits, boilerplate, straightforward tests, formatting, docs, and other low-judgment work.
-- Prefer Sonnet for normal implementation, refactors, tests, docs, routine debugging, and most execution after the plan is clear.
-- Prefer Opus for architecture, ambiguous requirements, deep debugging, design tradeoffs, and planning multi-step changes.
-- Use lower effort for mechanical or well-scoped execution; use higher effort only when the task still requires real reasoning.
-- If a task starts in Haiku and needs broader codebase reasoning, switch to Sonnet.
-- If a task starts in Sonnet and becomes ambiguous, architectural, or cross-cutting, stop and recommend switching to Opus for planning before continuing.
-- After Opus produces a clear plan, Sonnet should usually execute it; Haiku can handle narrow follow-up edits.
+- The main session defaults to Sonnet at default effort. Talk to it directly for normal implementation, refactors, tests, docs, and routine debugging — don't ask the user to switch models for a single hard step in an otherwise normal task.
+- Switching the main session's model via `/model` resends the whole conversation history to the new model and invalidates the prompt cache — expensive on a long thread, especially switching *up*. Reserve it for a durable shift in what the *rest of the session* needs (the conversation is pivoting into real architecture/design work, or a long mechanical stretch is starting fresh). State the recommendation in one line and wait; don't flag it lightly.
+- For any self-contained sub-task, delegate to a subagent via the Agent tool and always pass an explicit `model` — it inherits Sonnet from the parent otherwise, which defeats the point:
+  - `model: "haiku"`, low effort — mechanical, well-scoped work: search, simple edits, boilerplate, straightforward tests, formatting, docs.
+  - `model: "sonnet"` (or omit) — normal implementation-sized sub-tasks that don't need the main thread's full context.
+  - `model: "opus"` — architecture, ambiguous requirements, deep debugging, design tradeoffs, multi-step planning. Have it return a plan; execute that plan on the main Sonnet thread or hand it to a Sonnet/Haiku subagent, don't switch the main thread down to it.
+- A subagent's context is whatever prompt you write it, not the accumulated thread — that's what makes delegation cheap regardless of the main session's model. Brief it like a colleague with no memory of this conversation (see the Agent tool's own guidance on writing prompts).
 
 ## Docs
 - Update `README.md` for user-visible behavior changes or feature changes.
