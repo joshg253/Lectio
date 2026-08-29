@@ -14017,7 +14017,7 @@ def list_entries_for_feeds(
             # so only the target folder's entries are scanned (avoids returning the
             # globally-oldest rows from unrelated feeds). For >999 feeds fall back to
             # a buffer-based global scan.
-            read_sql = {None: "", True: " AND read IS NOT NULL", False: " AND (read IS NULL OR read != 1)"}
+            read_sql = {None: "", True: " AND read = 1", False: " AND (read IS NULL OR read != 1)"}
             read_clause = read_sql.get(reader_read_filter, "")
             try:
                 _rconn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
@@ -14070,10 +14070,11 @@ def list_entries_for_feeds(
             # DESC (newest-first) with many feeds: same SQL-batch approach as the
             # ASC path. Avoids a Python-side global scan of every entry in the DB.
             # "post" sort uses the entry publish date; "received" uses the time
-            # reader first observed the entry (recent_sort).
-            read_sql = {None: "", True: " AND read IS NOT NULL", False: " AND (read IS NULL OR read != 1)"}
+            # reader first observed the entry (first_updated), matching the
+            # light-record loop's Python sort key for "received".
+            read_sql = {None: "", True: " AND read = 1", False: " AND (read IS NULL OR read != 1)"}
             read_clause = read_sql.get(reader_read_filter, "")
-            sort_col = "recent_sort" if normalized_sort_by == "received" else _ENTRY_SORT_SQL
+            sort_col = "first_updated" if normalized_sort_by == "received" else _ENTRY_SORT_SQL
             try:
                 _rconn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
                 _rconn.row_factory = sqlite3.Row

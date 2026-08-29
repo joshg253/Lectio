@@ -127,7 +127,7 @@ def _few_urls() -> set[str]:
 
 @pytest.mark.parametrize("feed_urls_fn", [_few_urls, _all_urls], ids=["few-feeds-path", "sql-fallback-path"])
 @pytest.mark.parametrize("sort_by,sort_dir", [("post", "asc"), ("post", "desc"), ("received", "desc")])
-@pytest.mark.parametrize("read_filter", ["all", "unread", "starred"])
+@pytest.mark.parametrize("read_filter", ["all", "unread", "history", "starred"])
 def test_fast_path_matches_hydrated_fallback(seeded, monkeypatch, feed_urls_fn, sort_by, sort_dir, read_filter):
     urls = feed_urls_fn()
     fast = main.list_entries_for_feeds(
@@ -246,3 +246,20 @@ def test_read_filter_unread_excludes_read_entry(seeded):
         _few_urls(), limit=1000, sort_by="post", sort_dir="asc", read_filter="unread", enrich=False,
     )
     assert "read-entry" not in {p["id"] for p in posts}
+
+
+def test_read_filter_history_does_not_pollute_the_limit_window(seeded, monkeypatch):
+    """`read_filter="history"` on >32 feeds falls through to the old DESC SQL
+    branch. That branch's `read IS NOT NULL` clause is a no-op (reader's
+    `read` column is always 0/1, never NULL), so the SQL LIMIT window used to
+    fill with the newest unread fillers (dated 2029, after every seeded date
+    here) before a later Python-level `is_read` check discarded them — the
+    one genuinely read entry never got fetched at all because it never made
+    it into a small LIMIT window ("a `history` view over many feeds could
+    pull a polluted window", per Plan.md). limit=5 makes that window smaller
+    than the 40 unread fillers, so the bug drops the result to []."""
+    monkeypatch.setattr(main, "_light_entries_from_sql", lambda *a, **k: None)
+    posts = main.list_entries_for_feeds(
+        _all_urls(), limit=5, sort_by="post", sort_dir="desc", read_filter="history", enrich=False,
+    )
+    assert [p["id"] for p in posts] == ["read-entry"]
