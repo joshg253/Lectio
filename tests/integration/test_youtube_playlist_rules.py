@@ -35,9 +35,16 @@ def env(tmp_path, monkeypatch):
     main.ensure_meta_schema()
     # A connected account by default; tests can override.
     monkeypatch.setattr(main, "get_youtube_oauth_token", lambda: "tok")
+    # The app-settings cache is a process-wide dict keyed by user id, so a
+    # setting written in one test (e.g. the auto-add watermark) leaks into
+    # the next test's fresh tmp_path DB otherwise.
+    with main._app_settings_cache_lock:
+        main._app_settings_cache.clear()
     try:
         yield
     finally:
+        with main._app_settings_cache_lock:
+            main._app_settings_cache.clear()
         _reset_pools()
         tenancy._layout = saved
 
@@ -291,3 +298,99 @@ def test_quota_exceeded_releases_claim_for_retry(env, monkeypatch):
     # Entry not marked read since nothing was added.
     with main.get_reader() as reader:
         assert reader.get_entry((FEED, "e1")).read in (False, None)
+
+
+# ---------------------------------------------------------------------------
+# The "added since when" cutoff is a persisted watermark, not a fixed
+# "now minus 15 minutes" window — see SETTING_YT_PLAYLIST_AUTO_LAST_CHECK.
+# A fixed window silently and permanently drops an entry ingested earlier
+# than the window relative to whenever this function happens to run (once
+# per scheduled refresh *batch*, which can take far longer than a short
+# fixed window for a large batch); confirmed live 2026-08-28 that most of
+# one channel's qualifying videos over a week were never actually added.
+# ---------------------------------------------------------------------------
+
+def _backdate_entry(minutes_ago: float, feed=FEED, entry_id="e1") -> None:
+    import sqlite3
+
+    ts = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=minutes_ago)).strftime("%Y-%m-%d %H:%M:%S.%f")
+    with sqlite3.connect(str(tenancy.reader_db_path())) as conn:
+        conn.execute(
+            "UPDATE entries SET first_updated = ?, first_updated_epoch = ? WHERE feed = ? AND id = ?",
+            (ts, ts, feed, entry_id),
+        )
+        conn.commit()
+
+
+def _last_check_setting():
+    with main.get_meta_connection() as conn:
+        return main.get_setting(conn, main.SETTING_YT_PLAYLIST_AUTO_LAST_CHECK)
+
+
+def test_watermark_is_persisted_after_a_run(env, monkeypatch):
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda *a: None)
+    _add_entry()
+    _add_rule()
+    assert _last_check_setting() is None
+
+    before = dt.datetime.now(dt.timezone.utc)
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    after = dt.datetime.now(dt.timezone.utc)
+
+    stamped = dt.datetime.fromisoformat(_last_check_setting())
+    assert before <= stamped <= after
+
+
+def test_persisted_watermark_catches_what_a_fixed_window_would_have_missed(env, monkeypatch):
+    """A batch that took 20+ minutes to reach this feed used to lose the
+    video forever. With a watermark from 30 minutes ago (last run), a video
+    added 20 minutes ago is still well within the checked range."""
+    calls = []
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    _add_entry()
+    _backdate_entry(20)
+    _add_rule()
+    with main.get_meta_connection() as conn:
+        main.set_setting(
+            conn, main.SETTING_YT_PLAYLIST_AUTO_LAST_CHECK,
+            (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=30)).isoformat(),
+        )
+
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+
+    assert calls == [VID]
+
+
+def test_entry_older_than_the_watermark_is_not_reprocessed(env, monkeypatch):
+    """The watermark still excludes genuinely old entries -- it's a real
+    cutoff, not "check everything every time"."""
+    calls = []
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    _add_entry()
+    _backdate_entry(10)
+    _add_rule()
+    with main.get_meta_connection() as conn:
+        main.set_setting(
+            conn, main.SETTING_YT_PLAYLIST_AUTO_LAST_CHECK,
+            (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=5)).isoformat(),
+        )
+
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+
+    assert calls == []
+
+
+def test_first_run_with_no_watermark_uses_the_fifteen_minute_default(env, monkeypatch):
+    """No persisted watermark yet (a fresh install, or before this fix
+    shipped) falls back to the original fixed window -- it must not suddenly
+    bulk-add every matching video ever ingested the first time it runs."""
+    calls = []
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    _add_entry()
+    _backdate_entry(20)
+    _add_rule()
+    assert _last_check_setting() is None
+
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+
+    assert calls == []

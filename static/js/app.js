@@ -3994,24 +3994,22 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       menu.appendChild(newItem);
     }
 
-    // playlistItems.insert costs 50 quota units/call, same reason the
-    // server-side auto-playlist rule caps itself at 25/run (main.py).
-    const YT_PLAYLIST_BULK_ADD_CAP = 25;
-
     async function _ytBulkAddToPlaylist(posts, choice) {
-      const targets = posts.slice(0, YT_PLAYLIST_BULK_ADD_CAP);
-      const skipped = posts.length - targets.length;
       try {
         // One request does the whole batch server-side — it checks the
         // playlist's existing contents first and skips anything already in
         // it, since the API happily inserts (and later un-removes, both at
-        // once) a duplicate rather than rejecting one.
+        // once) a duplicate rather than rejecting one. The server caps at
+        // _MOVE_BATCH_CAP (500) and stops gracefully on quota exhaustion,
+        // reporting partial progress — no separate client-side cap needed;
+        // this used to borrow the *automated* per-refresh rule's 25/run
+        // quota-safety cap, which doesn't apply to a one-off manual action.
         const resp = await fetch('/api/youtube/playlists/add-batch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'same-origin',
           body: JSON.stringify({
-            video_ids: targets.map((p) => p.videoId),
+            video_ids: posts.map((p) => p.videoId),
             playlist_id: choice.playlistId || '',
             new_title: choice.newTitle || '',
           }),
@@ -4024,9 +4022,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           throw new Error(err);
         }
         if (choice.newTitle) _ytPlaylistsCache = null;  // new playlist changes the list — invalidate
-        let msg = d.message || `Added ${d.added ?? 0} to ${choice.title}.`;
-        if (skipped) msg += ` ${skipped} skipped (batch limit ${YT_PLAYLIST_BULK_ADD_CAP}).`;
-        showToastMessage(msg);
+        showToastMessage(d.message || `Added ${d.added ?? 0} to ${choice.title}.`);
       } catch (e) {
         showToastMessage(e.message || 'Add to playlist failed.');
       }

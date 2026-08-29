@@ -425,6 +425,9 @@ SETTING_YT_HIDE_UNPREMIERED_GLOBAL = "yt_hide_unpremiered_global"
 # a setting in case a higher quota is granted.
 SETTING_YT_QUOTA_CAP = "yt_quota_cap"
 YT_QUOTA_DEFAULT_CAP = 10000
+# Watermark for the auto-add-to-playlist rule's "what's new since I last
+# checked" scan — see _run_youtube_playlist_rules_after_refresh.
+SETTING_YT_PLAYLIST_AUTO_LAST_CHECK = "yt_playlist_auto_last_check"
 # "On star, also send to…" — per-user destinations fired when an article is starred.
 SETTING_STAR_SEND_INSTAPAPER = "star_send_instapaper"   # "1"/"0"
 SETTING_STAR_SEND_YT_PLAYLIST = "star_send_yt_playlist"  # playlist id ("" = off)
@@ -8432,7 +8435,35 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
     try:
         from datetime import timedelta
         from datetime import timezone as _tz
-        cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
+
+        # Cutoff is a persisted watermark — "everything added since the last
+        # time this ran" — not a fixed "now minus N minutes" window. A fixed
+        # window silently and PERMANENTLY drops any entry ingested earlier
+        # than the window relative to whenever this function happens to run:
+        # it's called once after a whole scheduled refresh batch completes,
+        # and a large batch (hundreds of feeds, paced) can easily take longer
+        # than a short fixed window — the entry's `added` timestamp never
+        # moves, so a missed entry is missed forever, not retried next run.
+        # Confirmed live 2026-08-28: only ~1-in-7 of one channel's qualifying
+        # videos over a week had actually been added, the rest silently lost
+        # to exactly this gap. Captured BEFORE the loop (not after) so the
+        # next run's watermark can't itself open a gap while this run works.
+        run_started_at = datetime.now(_tz.utc)
+        with get_meta_connection() as conn:
+            last_check_raw = get_setting(conn, SETTING_YT_PLAYLIST_AUTO_LAST_CHECK)
+        cutoff = None
+        if last_check_raw:
+            try:
+                cutoff = datetime.fromisoformat(last_check_raw)
+                if cutoff.tzinfo is None:
+                    cutoff = cutoff.replace(tzinfo=_tz.utc)
+            except (ValueError, TypeError):
+                cutoff = None
+        if cutoff is None:
+            # First run ever (or a corrupt watermark) — the original fixed
+            # window, so this doesn't suddenly bulk-add a backlog of every
+            # matching video ever ingested.
+            cutoff = run_started_at - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
             all_rules = get_highlight_keywords(conn)
@@ -8584,6 +8615,14 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
                     _log_auto_run(conn, now_str, "youtube_playlist", scope, scope_id, keyword, {
                         "count": len(run_entries), "entries": run_entries,
                     })
+
+        # Advance the watermark to when THIS run started, not to "now" —
+        # captured up front so a slow run can't itself open a gap. A per-rule
+        # quota exhaustion doesn't affect this: entries that failed to add
+        # already had their dedup claim rolled back above, so they retry via
+        # the dedup guard regardless of where the time watermark sits next.
+        with get_meta_connection() as conn:
+            set_setting(conn, SETTING_YT_PLAYLIST_AUTO_LAST_CHECK, run_started_at.isoformat())
     except Exception:
         LOGGER.exception("[yt-playlist-auto] error in _run_youtube_playlist_rules_after_refresh")
 
