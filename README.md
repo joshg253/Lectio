@@ -108,7 +108,8 @@ short version:
 - **Feed management that expects the real web.** Resilient auto-discovery,
   Page Feeds for feedless sites — which read each post's own publish date rather
   than stamping the whole backlog with the scrape time — dev.to and DeviantArt
-  adapters, conditional GET, per-feed and per-domain backoff, GUID-churn
+  adapters (DA posts show the artist in the header, same as any other feed's
+  author), conditional GET, per-feed and per-domain backoff, GUID-churn
   suppression, feed compare, duplicate scanning, and unsubscribe that keeps your
   curation. A feed *blocked* by an anti-bot challenge is reported as blocked
   rather than misfiled as malformed, one character that XML forbids no
