@@ -23419,10 +23419,15 @@ def _home_inner(
         "selected_folder_id": selected_folder_id,
         # Labels the phone's "up to the folder" control when the list is scoped
         # to one feed, so the button says where it goes instead of "Folders".
-        "selected_folder_name": next(
+        "selected_folder_name": (_selected_folder_name_ := next(
             (str(row["name"]) for row in folder_rows if cast(int, row["id"]) == selected_folder_id),
             "",
-        ),
+        )),
+        # Gates duration-syntax parsing in "Filter this view" (app.js) to the
+        # one folder it's meaningful in, without depending on the Settings
+        # modal's lazily-fetched /settings/all data ever having loaded —
+        # rendered directly so it's correct on first paint.
+        "is_yt_folder": _selected_folder_name_ == get_yt_folder_name(),
         "selected_feed_url": selected_feed_url,
         "selected_tag": selected_tag,
         "selected_query": selected_query,
@@ -29978,7 +29983,51 @@ def move_entries_to_feed_batch_route(
 _MOVE_VISIBLE_LIMIT = 1_000_000
 
 
-def _view_filter_predicate(term: str | None):
+_DURATION_FILTER_RE = re.compile(r"^(<=|>=|<|>)(.+)$")
+
+
+def _parse_duration_filter_seconds(text: str) -> float | None:
+    """Parse "2:00", "1:02:03", "2m", "120s", "1h", or a bare "2" (minutes) —
+    mirrors the client-side parser in app.js's postsFilterMatches exactly, so
+    "move the N shown" (or Select All) resolves to the same set the filter
+    box is showing, same reasoning as the title/link/feed_title match below.
+    """
+    m = re.match(r"^(\d+):(\d{2}):(\d{2})$", text)
+    if m:
+        return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+    m = re.match(r"^(\d+):(\d{2})$", text)
+    if m:
+        return int(m.group(1)) * 60 + int(m.group(2))
+    m = re.match(r"^(\d+(?:\.\d+)?)\s*([hms])$", text)
+    if m:
+        n = float(m.group(1))
+        unit = m.group(2)
+        return n * 3600 if unit == "h" else (n * 60 if unit == "m" else n)
+    m = re.match(r"^(\d+(?:\.\d+)?)$", text)
+    if m:
+        return float(m.group(1)) * 60
+    return None
+
+
+def _parse_duration_filter(term: str) -> tuple[str, float] | None:
+    m = _DURATION_FILTER_RE.match(term)
+    if not m:
+        return None
+    seconds = _parse_duration_filter_seconds(m.group(2).strip())
+    if seconds is None:
+        return None
+    return m.group(1), seconds
+
+
+def _folder_is_yt_folder(folder_id: int | None) -> bool:
+    if folder_id is None:
+        return False
+    with get_meta_connection() as conn:
+        row = conn.execute("SELECT name FROM folders WHERE id = ?", (folder_id,)).fetchone()
+    return bool(row) and str(row["name"]) == get_yt_folder_name()
+
+
+def _view_filter_predicate(term: str | None, *, folder_id: int | None = None):
     """The posts list's "Filter this view" box, resolved server-side.
 
     Matches the same three fields the browser-side filter matches — post title,
@@ -29989,10 +30038,35 @@ def _view_filter_predicate(term: str | None):
     Deliberately narrower than ``search_query``, which also spans summary and
     authors: a filter narrows what is already in front of you, a search changes
     what is fetched.
+
+    Duration syntax ("<2:00" etc.) is recognized only when *folder_id* is the
+    configured YouTube folder — same gate as the client, so a title that
+    happens to look like duration syntax elsewhere still text-matches.
     """
     needle = (term or "").strip().lower()
     if not needle:
         return lambda post: True
+
+    if _folder_is_yt_folder(folder_id):
+        duration = _parse_duration_filter(needle)
+        if duration is not None:
+            op, seconds = duration
+
+            def _matches_duration(post: dict) -> bool:
+                dur = post.get("duration_seconds")
+                if dur is None:
+                    return False
+                if op == "<":
+                    return dur < seconds
+                if op == "<=":
+                    return dur <= seconds
+                if op == ">":
+                    return dur > seconds
+                if op == ">=":
+                    return dur >= seconds
+                return False
+
+            return _matches_duration
 
     def _matches(post: dict) -> bool:
         return any(
@@ -30098,7 +30172,7 @@ def select_all_visible_entries_route(
         LOGGER.exception("[select-all] could not resolve the view")
         return JSONResponse({"ok": False, "error": "Could not read the current view."}, status_code=502)
 
-    matches_filter = _view_filter_predicate(filter_term)
+    matches_filter = _view_filter_predicate(filter_term, folder_id=folder_id)
     entries = [
         {"feedUrl": str(p["feed_url"]), "entryId": str(p["id"]), "videoId": str(p.get("video_id") or "")}
         for p in posts if matches_filter(p)
@@ -30154,7 +30228,7 @@ def move_visible_entries_to_feed_route(
         LOGGER.exception("[move-entry] could not resolve the view for a move to %s", target)
         return JSONResponse({"ok": False, "error": "Could not read the current view."}, status_code=502)
 
-    matches_filter = _view_filter_predicate(filter_term)
+    matches_filter = _view_filter_predicate(filter_term, folder_id=folder_id)
     matches = [p for p in posts if matches_filter(p)]
 
     if is_dry_run:

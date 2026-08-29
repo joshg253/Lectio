@@ -172,6 +172,68 @@ def test_video_id_is_included_for_youtube_entries(tenant):
     assert data["entries"][0]["videoId"] == "ABCDEFGHIJK"
 
 
+def _add_yt_folder():
+    """A folder literally named the configured YouTube folder (default
+    "YouTube Subscriptions") — the gate for duration-syntax filtering."""
+    with main.get_meta_connection() as conn:
+        root_id = main.get_root_folder_id(conn)
+        cur = conn.execute(
+            "INSERT INTO folders (name, parent_id) VALUES (?, ?)",
+            (main.get_yt_folder_name(), root_id),
+        )
+        return cur.lastrowid
+
+
+def test_duration_filter_narrows_within_the_yt_folder(tenant, monkeypatch):
+    yt_feed = "https://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv"
+    folder_id = _add_yt_folder()
+    with main.get_meta_connection() as conn:
+        conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (folder_id, yt_feed))
+    _add_feed(yt_feed)
+    _add_entries(yt_feed, [
+        ("short", "Short one", "https://www.youtube.com/watch?v=shortVID001"),
+        ("long", "Long one", "https://www.youtube.com/watch?v=longVID0001"),
+    ])
+    monkeypatch.setattr(
+        main.youtube_duration_service, "get_cached_duration",
+        lambda vid: {"shortVID001": (90, "1:30"), "longVID0001": (5400, "1:30:00")}.get(vid, (None, None)),
+    )
+
+    with TestClient(_app()) as client:
+        data = _post(client, folder_id=folder_id, filter_term="<2:00")
+
+    assert data["count"] == 1
+    assert {e["entryId"] for e in data["entries"]} == {"short"}
+
+
+def test_duration_filter_excludes_posts_with_no_duration(tenant, monkeypatch):
+    yt_feed = "https://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv"
+    folder_id = _add_yt_folder()
+    with main.get_meta_connection() as conn:
+        conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (folder_id, yt_feed))
+    _add_feed(yt_feed)
+    _add_entries(yt_feed, [("unknown", "No duration cached", "https://www.youtube.com/watch?v=unknownVID1")])
+    monkeypatch.setattr(main.youtube_duration_service, "get_cached_duration", lambda vid: (None, None))
+
+    with TestClient(_app()) as client:
+        data = _post(client, folder_id=folder_id, filter_term="<2:00")
+
+    assert data["count"] == 0
+
+
+def test_duration_syntax_is_a_literal_text_search_outside_the_yt_folder(tenant):
+    """Same shape as duration syntax, but this folder isn't the configured
+    YouTube one — falls back to an ordinary (here, non-matching) substring
+    search rather than being misread as an empty-result duration filter."""
+    _add_feed(FEED)
+    _add_entries(FEED, [("post-1", "Ordinary title", "https://blog.example.com/a")])
+
+    with TestClient(_app()) as client:
+        data = _post(client, filter_term="<2:00")
+
+    assert data["count"] == 0
+
+
 def test_empty_view_returns_no_entries(tenant):
     # A feed foldered elsewhere just to initialize reader's schema — Uncategorized
     # itself has no feeds in scope.

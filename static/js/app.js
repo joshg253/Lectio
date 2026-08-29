@@ -8127,6 +8127,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // feed.
     const selectedPosts = new Map();
 
+    function updateSelectionCounter() {
+      const el = document.getElementById('posts-selection-count');
+      if (!el) return;
+      const n = selectedPosts.size;
+      el.hidden = n === 0;
+      el.textContent = n === 1 ? '1 selected' : `${n} selected`;
+    }
+
     function postSelectionKey(feedUrl, entryId) {
       return `${feedUrl} ${entryId}`;
     }
@@ -8146,6 +8154,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         postItem.classList.remove('multi-selected');
         if (checkbox) checkbox.checked = false;
       }
+      updateSelectionCounter();
     }
 
     // Like setPostSelected, but from server-provided data rather than an
@@ -8171,6 +8180,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     function clearPostSelection() {
       if (!selectedPosts.size) return;
       selectedPosts.clear();
+      updateSelectionCounter();
       for (const el of document.querySelectorAll('.post-item.multi-selected')) {
         el.classList.remove('multi-selected');
         const checkbox = el.querySelector('.post-select-check');
@@ -16074,8 +16084,62 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       return (box?.value || '').trim().toLowerCase();
     }
 
-    function postsFilterMatches(item, term) {
+    // Duration syntax for the same filter box: "<2:00", ">=1:30:00", "<2m",
+    // "<120s", or a bare "<2" (minutes, matching how a person would actually
+    // type "under 2 minutes"). Only recognized posts (YouTube videos with a
+    // cached length) participate — a post with no duration at all is
+    // excluded outright, not treated as "unknown, so let it through", so
+    // e.g. "<2:00" reliably narrows a mixed folder down to short videos only.
+    //
+    // Gated to the configured YouTube folder (Settings → YouTube) so a title
+    // that happens to contain something shaped like "<2:00" (a timestamp
+    // callout, say) still text-matches normally everywhere else, instead of
+    // being misread as an empty-result duration filter. Read from a data
+    // attribute rendered server-side (main.py's is_yt_folder) rather than
+    // the Settings modal's /settings/all fetch, which only happens lazily
+    // when someone opens Settings — this has to be correct on first paint.
+    function _isYouTubeFolderActive() {
+      return document.querySelector('.posts-filter-row')?.getAttribute('data-yt-folder') === '1';
+    }
+
+    function _parseDurationToSeconds(text) {
+      let m = text.match(/^(\d+):(\d{2}):(\d{2})$/);
+      if (m) return (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
+      m = text.match(/^(\d+):(\d{2})$/);
+      if (m) return (+m[1]) * 60 + (+m[2]);
+      m = text.match(/^(\d+(?:\.\d+)?)\s*([hms])$/);
+      if (m) {
+        const n = parseFloat(m[1]);
+        return m[2] === 'h' ? n * 3600 : (m[2] === 'm' ? n * 60 : n);
+      }
+      m = text.match(/^(\d+(?:\.\d+)?)$/);
+      if (m) return parseFloat(m[1]) * 60; // bare number = minutes
+      return null;
+    }
+
+    function _parseDurationFilter(term) {
+      const m = term.match(/^(<=|>=|<|>)(.+)$/);
+      if (!m) return null;
+      const seconds = _parseDurationToSeconds(m[2].trim());
+      if (seconds === null) return null;
+      return { op: m[1], seconds };
+    }
+
+    function postsFilterMatches(item, term, isYtFolder) {
       if (!term) return true;
+      const durationFilter = isYtFolder ? _parseDurationFilter(term) : null;
+      if (durationFilter) {
+        const raw = item.getAttribute('data-post-duration-seconds');
+        if (!raw) return false; // no duration at all -- excluded, not "unknown"
+        const secs = Number(raw);
+        switch (durationFilter.op) {
+          case '<': return secs < durationFilter.seconds;
+          case '<=': return secs <= durationFilter.seconds;
+          case '>': return secs > durationFilter.seconds;
+          case '>=': return secs >= durationFilter.seconds;
+          default: return false;
+        }
+      }
       const title = item.getAttribute('data-post-title') || '';
       const link = item.getAttribute('data-post-link') || '';
       // The feed name is already text in the row; re-emitting it as an
@@ -16091,11 +16155,12 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       if (!list) return;
       const term = postsFilterTerm();
       window.postsFilterActive = !!term;
+      const isYtFolder = _isYouTubeFolderActive();
 
       let shown = 0;
       const items = Array.from(list.querySelectorAll('.post-item'));
       for (const item of items) {
-        const match = postsFilterMatches(item, term);
+        const match = postsFilterMatches(item, term, isYtFolder);
         item.classList.toggle('post-item-filtered', !match);
         if (match) shown += 1;
       }
@@ -16140,6 +16205,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         applyPostsFilter();
         box.focus();
       });
+      document.getElementById('posts-selection-count')?.addEventListener('click', () => {
+        clearPostSelection();
+      });
       // Resolves the whole current view + filter server-side — same
       // machinery as "Move all shown to feed…" — so it selects everything
       // matching, not just what scroll-chunking has rendered so far. Rows
@@ -16158,6 +16226,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           for (const e of data.entries) {
             setSelectedFromData(e.feedUrl, e.entryId, e.videoId);
           }
+          updateSelectionCounter();
           showToastMessage(data.count ? `Selected ${data.count} post${data.count === 1 ? '' : 's'}.` : 'Nothing to select.');
         } catch (_) {
           showToastMessage('Select all failed — network error.');

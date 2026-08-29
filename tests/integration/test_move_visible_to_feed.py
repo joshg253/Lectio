@@ -163,6 +163,36 @@ def test_filter_term_matches_the_source_feed_name(tenant):
     assert _entry_ids_in(DST) == {"keep-1"}
 
 
+def test_duration_filter_narrows_within_the_yt_folder(tenant, monkeypatch):
+    """Same _view_filter_predicate the select-all-visible tests cover in
+    full (test_select_all_visible.py) -- this just confirms the wiring
+    (folder_id threaded through) also works on this sibling route."""
+    yt_feed = "https://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv"
+    with main.get_meta_connection() as conn:
+        root_id = main.get_root_folder_id(conn)
+        cur = conn.execute(
+            "INSERT INTO folders (name, parent_id) VALUES (?, ?)", (main.get_yt_folder_name(), root_id)
+        )
+        folder_id = cur.lastrowid
+        conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (folder_id, yt_feed))
+    _add_feed(yt_feed)
+    _add_feed(DST)
+    _add_entries(yt_feed, [
+        ("short", "Short one", "https://www.youtube.com/watch?v=shortVID001"),
+        ("long", "Long one", "https://www.youtube.com/watch?v=longVID0001"),
+    ])
+    monkeypatch.setattr(
+        main.youtube_duration_service, "get_cached_duration",
+        lambda vid: {"shortVID001": (90, "1:30"), "longVID0001": (5400, "1:30:00")}.get(vid, (None, None)),
+    )
+
+    with TestClient(_app()) as client:
+        data = _post(client, folder_id=folder_id, filter_term="<2:00")
+
+    assert data["moved"] == 1
+    assert _entry_ids_in(DST) == {"short"}
+
+
 def test_posts_already_in_the_target_are_skipped_not_failed(tenant):
     """A whole-view move naturally includes the target's own posts."""
     _add_feed(FEED)
