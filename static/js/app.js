@@ -8432,6 +8432,28 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         });
       }
 
+      for (const tagButton of document.querySelectorAll('.post-tag-toggle')) {
+        if (tagButton.dataset.boundClick) {
+          continue;
+        }
+        tagButton.dataset.boundClick = '1';
+        tagButton.addEventListener('mousedown', (event) => {
+          event.stopPropagation();
+        });
+        tagButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const postItem = tagButton.closest('.post-item');
+          if (!postItem) return;
+          const feedUrl = postItem.getAttribute('data-post-feed-url') || '';
+          const entryId = postItem.getAttribute('data-post-entry-id') || '';
+          if (!feedUrl || !entryId) return;
+          const title = postItem.getAttribute('data-post-title') || '';
+          const bodyText = title ? `Add a tag to "${title}".` : 'Add a tag to this post.';
+          openBulkTagModal([{ feedUrl, entryId }], bodyText);
+        });
+      }
+
       for (const readForm of document.querySelectorAll('.post-read-toggle-form')) {
         if (readForm.dataset.boundAsyncSubmit) {
           continue;
@@ -9286,6 +9308,18 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       postItem.setAttribute('data-post-kept', kept ? '1' : '0');
     }
 
+    // Drives the postlist tag icon's filled/outline state — distinct from
+    // data-post-kept above, which also counts a star.
+    function applyPostItemHasTagsState(feedUrl, entryId, hasTags) {
+      if (!feedUrl || !entryId) return;
+      const esc = (v) => (window.CSS && CSS.escape ? CSS.escape(v) : v);
+      const postItem = document.querySelector(
+        `.post-item[data-post-feed-url="${esc(feedUrl)}"][data-post-entry-id="${esc(entryId)}"]`
+      );
+      if (!postItem) return;
+      postItem.setAttribute('data-post-has-tags', hasTags ? '1' : '0');
+    }
+
     /* Read the entry the tag form is bound to, and sync the row from the
      * server's reply. `data.tags` is authoritative — it is the normalized,
      * capped set the server actually stored, not what was typed. */
@@ -9644,6 +9678,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       const bodyEl = document.getElementById('bulk-tag-body');
       const input = document.getElementById('bulk-tag-input');
       const confirmBtn = document.getElementById('bulk-tag-confirm');
+      const existingWrap = document.getElementById('bulk-tag-existing');
+      const existingChips = document.getElementById('bulk-tag-existing-chips');
       if (!modal || !(input instanceof HTMLInputElement) || !confirmBtn) return;
 
       bodyEl.textContent = bodyText;
@@ -9651,6 +9687,30 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       confirmBtn.disabled = true;
       confirmBtn.textContent = 'Add tag';
       attachTagAutocomplete(input, () => lectioTagNames, {});
+
+      // Only shown for a single post — a mixed bulk selection has no one set
+      // of "current tags" worth displaying.
+      if (existingWrap && existingChips) {
+        existingWrap.hidden = true;
+        existingChips.replaceChildren();
+        if (entries.length === 1) {
+          const { feedUrl, entryId } = entries[0];
+          fetch(`/entries/manual-tags?feed_url=${encodeURIComponent(feedUrl)}&entry_id=${encodeURIComponent(entryId)}`)
+            .then((resp) => resp.json())
+            .then((data) => {
+              const tags = Array.isArray(data?.tags) ? data.tags : [];
+              if (!tags.length) return;
+              existingChips.replaceChildren(...tags.map((tag) => {
+                const span = document.createElement('span');
+                span.className = 'entry-tag-link';
+                span.textContent = `#${tag}`;
+                return span;
+              }));
+              existingWrap.hidden = false;
+            })
+            .catch(() => {});
+        }
+      }
 
       const updateConfirmState = () => {
         confirmBtn.disabled = tokenizeTags(input.value).length === 0;
@@ -9683,6 +9743,13 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           if (data.ok) {
             modal.setAttribute('hidden', '');
             showToastMessage(data.message || 'Tags added.');
+            // This route only ever appends, so every touched entry now has at
+            // least one tag — sync the tag icon (and kept, same as the
+            // single-entry /entries/tags path already does via syncKeptFromTagResponse).
+            for (const e of entries) {
+              applyPostItemHasTagsState(e.feedUrl, e.entryId, true);
+              applyPostItemKeptState(e.feedUrl, e.entryId, true);
+            }
             // Selection is left as-is — bulk actions chain (tag, then mark read).
           } else {
             showToastMessage(data.error || 'Add tag failed.');

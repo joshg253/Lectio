@@ -14491,6 +14491,10 @@ def list_entries_for_feeds(
                 "feed_title": getattr(entry, "feed_resolved_title", None) or feed_url_str,
                 "feed_icon_url": get_favicon_url(feed_url_str, _rewrite_url_host(feed_site_map.get(feed_url_str), _host_aliases)),
                 "manual_tags": manual_tags,
+                # Whether this row itself carries any manual tag (distinct from
+                # "kept" below, which also counts a star) — drives the postlist
+                # tag icon's filled/outline state.
+                "has_tags": (feed_url_str, _entry_id) in _visible_tagged,
                 # Starred OR tagged. Drives the re-fetch menu, which must not key
                 # on manual_tags (populated only under a tag filter) nor on the
                 # star alone — tag-as-keep made a tag a keep signal everywhere.
@@ -33064,6 +33068,17 @@ def _merge_manual_tags(existing_tags: list[str], added_raw_tags: str) -> str:
         if len(merged_tags) >= MAX_MANUAL_TAGS:
             break
     return " ".join(merged_tags)
+
+
+@app.get("/entries/manual-tags")
+def get_entry_manual_tags_route(
+    feed_url: str = Query(...),
+    entry_id: str = Query(...),
+):
+    """Current manual tags for one entry — used to populate the Add Tag
+    dialog when it's opened for a single post, so it shows what's already
+    there instead of just a blank append box."""
+    return JSONResponse({"tags": get_manual_tags_for_entry(feed_url, entry_id)})
 
 
 @app.post("/entries/tags")

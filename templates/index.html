@@ -844,6 +844,7 @@
              a tagged-but-unstarred post shows in the Saved view while having no
              way to re-fetch its content. 14,695 items on the live library. #}
           data-post-kept="{{ 1 if post.kept else 0 }}"
+          data-post-has-tags="{{ 1 if post.has_tags else 0 }}"
           data-post-captured="{{ 1 if post.captured else 0 }}"
           data-post-link="{{ post.link or '' }}"
           data-post-title="{{ post.title or '' }}"
@@ -929,6 +930,14 @@
                   {% endif %}
                 </time>
                 <div class="post-meta-actions">
+                    <button
+                      type="button"
+                      class="post-tag-toggle"
+                      title="Add tag"
+                      aria-label="Add tag"
+                    >
+                      <span class="post-tag-indicator material-symbols-rounded" aria-hidden="true">sell</span>
+                    </button>
                     <form method="post" action="/entries/saved" class="post-save-toggle-form">
                       <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
                       <input type="hidden" name="feed_url" value="{{ post.feed_url }}" />
