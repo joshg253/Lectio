@@ -15940,13 +15940,12 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // Gated to the configured YouTube folder (Settings → YouTube) so a title
     // that happens to contain something shaped like "<2:00" (a timestamp
     // callout, say) still text-matches normally everywhere else, instead of
-    // being misread as an empty-result duration filter.
+    // being misread as an empty-result duration filter. Read from a data
+    // attribute rendered server-side (main.py's is_yt_folder) rather than
+    // the Settings modal's /settings/all fetch, which only happens lazily
+    // when someone opens Settings — this has to be correct on first paint.
     function _isYouTubeFolderActive() {
-      const folderId = new URL(window.location.href).searchParams.get('folder_id') || '1';
-      const row = document.querySelector(`.tree [data-folder-id="${CSS.escape(folderId)}"][data-folder-name]`);
-      const name = row?.getAttribute('data-folder-name') || '';
-      const ytName = (typeof settingsData !== 'undefined' && settingsData?.yt_folder_name) || '';
-      return !!ytName && name === ytName;
+      return document.querySelector('.posts-filter-row')?.getAttribute('data-yt-folder') === '1';
     }
 
     function _parseDurationToSeconds(text) {

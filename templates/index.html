@@ -788,7 +788,7 @@
            already on screen, instantly, so the result can be acted on as a set.
            The bulk action it feeds resolves server-side against the same
            predicate — see /entries/move-visible-to-feed. #}
-        <div class="posts-filter-row">
+        <div class="posts-filter-row" data-yt-folder="{{ 1 if is_yt_folder else 0 }}">
           <span class="material-symbols-rounded posts-filter-icon" aria-hidden="true">filter_alt</span>
           <input
             id="posts-filter-input"

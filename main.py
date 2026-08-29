@@ -23312,10 +23312,15 @@ def _home_inner(
         "selected_folder_id": selected_folder_id,
         # Labels the phone's "up to the folder" control when the list is scoped
         # to one feed, so the button says where it goes instead of "Folders".
-        "selected_folder_name": next(
+        "selected_folder_name": (_selected_folder_name_ := next(
             (str(row["name"]) for row in folder_rows if cast(int, row["id"]) == selected_folder_id),
             "",
-        ),
+        )),
+        # Gates duration-syntax parsing in "Filter this view" (app.js) to the
+        # one folder it's meaningful in, without depending on the Settings
+        # modal's lazily-fetched /settings/all data ever having loaded —
+        # rendered directly so it's correct on first paint.
+        "is_yt_folder": _selected_folder_name_ == get_yt_folder_name(),
         "selected_feed_url": selected_feed_url,
         "selected_tag": selected_tag,
         "selected_query": selected_query,
