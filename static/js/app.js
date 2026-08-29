@@ -738,6 +738,25 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       }).join('');
     }
 
+    // Dismissed-groups list: same visual row shape as _renderDedupGroups
+    // (URL link + folder names) but no Compare/checkbox machinery, and one
+    // Un-dismiss action instead of Compare + "Not dupes".
+    function _renderDismissedGroups(groups) {
+      return groups.map((g) => {
+        const groupUrls = g.feeds.map(f => f.feed_url).join('\n');
+        return `<div class="dedup-title-group" data-dismiss-key="${_mfEscape(g.dismiss_key)}" data-group-urls="${_mfEscape(groupUrls)}">` +
+          g.feeds.map(f => {
+            const folderNames = (f.folders || []).map(fo => fo.name).join(', ') || 'Uncategorized';
+            return `<div class="dedup-pair-row" data-feed-url="${_mfEscape(f.feed_url)}">` +
+              `<a class="dedup-url" href="${_mfEscape(f.feed_url)}" target="_blank" rel="noopener noreferrer" data-feed-properties-url="${_mfEscape(f.feed_url)}" title="Click to open Feed Properties, middle-click to open the feed">${_mfEscape(f.feed_url)}</a>` +
+              ` <span class="saved-dedup-date">${_mfEscape(folderNames)}</span></div>`;
+          }).join('') +
+          `<div class="dedup-group-actions">` +
+          `<button type="button" class="settings-secondary-btn dedup-undismiss-btn" title="Let this group be suggested again">Un-dismiss</button>` +
+          `</div></div>`;
+      }).join('');
+    }
+
     document.getElementById('dedup-feeds-btn')?.addEventListener('click', async () => {
       hideOtherUtilityResults('dedup-inline-results');
       const resp = await fetch('/feeds/duplicates');
@@ -747,6 +766,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       const upgradable = data.upgradable || [];
       const titleGroups = data.title_groups || [];
       const queryPairs = data.query_pairs || [];
+      const dismissedGroups = data.dismissed_groups || [];
       const results = document.getElementById('dedup-inline-results');
       const intro = results.querySelector('.dedup-modal-intro');
       const sameSection = results.querySelector('.dedup-same-section');
@@ -759,6 +779,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       const queryList = document.getElementById('dedup-query-list');
       const titleSection = results.querySelector('.dedup-title-section');
       const titleList = document.getElementById('dedup-title-list');
+      const dismissedSection = results.querySelector('.dedup-dismissed-section');
+      const dismissedList = document.getElementById('dedup-dismissed-list');
 
       results.hidden = false;
       const hasAnything = sameFolder.length > 0 || crossFolder.length > 0 || upgradable.length > 0 || queryPairs.length > 0 || titleGroups.length > 0;
@@ -870,6 +892,15 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         upgradeSection.hidden = true;
         upgradeList.innerHTML = '';
       }
+
+      if (dismissedGroups.length > 0) {
+        dismissedSection.hidden = false;
+        dismissedSection.querySelector('.saved-dedup-section-count').textContent = `(${dismissedGroups.length})`;
+        dismissedList.innerHTML = _renderDismissedGroups(dismissedGroups);
+      } else {
+        dismissedSection.hidden = true;
+        dismissedList.innerHTML = '';
+      }
     });
 
     // Every dedup tier (same-folder, cross-folder, query-differing, same-title)
@@ -900,6 +931,33 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     });
 
     document.getElementById('dedup-inline-results')?.addEventListener('click', async (e) => {
+      const undismissBtn = e.target.closest('.dedup-undismiss-btn');
+      if (undismissBtn) {
+        const group = undismissBtn.closest('.dedup-title-group');
+        const section = group.closest('.saved-dedup-section');
+        const dismissKey = group.dataset.dismissKey;
+        undismissBtn.disabled = true;
+        try {
+          const r = await fetch('/feeds/duplicates/undismiss', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ dismiss_key: dismissKey }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!data.ok) { alert(data.message || 'Could not un-dismiss.'); undismissBtn.disabled = false; return; }
+          group.remove();
+          const countEl = section?.querySelector('.saved-dedup-section-count');
+          const remaining = section?.querySelectorAll('.dedup-title-group').length ?? 0;
+          if (countEl) countEl.textContent = `(${remaining})`;
+          if (remaining === 0 && section) section.hidden = true;
+        } catch (err) {
+          alert('Could not un-dismiss: ' + err);
+          undismissBtn.disabled = false;
+        }
+        return;
+      }
+
       const notDupeBtn = e.target.closest('.dedup-not-dupe-btn');
       if (notDupeBtn) {
         const group = notDupeBtn.closest('.dedup-compare-group');
@@ -13666,6 +13724,22 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       document.getElementById('sett-da-disconnect')?.addEventListener('click', async () => {
         await fetch('/deviantart/disconnect', { method: 'POST', credentials: 'same-origin' });
         loadSettingsData();
+      });
+      document.getElementById('sett-da-unsubscribe-unwatched')?.addEventListener('click', async (event) => {
+        const btn = event.target;
+        const status = document.getElementById('sett-da-unsubscribe-unwatched-status');
+        btn.disabled = true;
+        if (status) status.textContent = 'Unsubscribing…';
+        try {
+          const resp = await fetch('/deviantart/unsubscribe-unwatched', { method: 'POST', credentials: 'same-origin' });
+          const d = await resp.json();
+          if (status) status.textContent = d.ok ? `Unsubscribed ${d.count}.` : (d.error || 'Failed.');
+          loadSettingsData();
+        } catch (err) {
+          if (status) status.textContent = `Error: ${err.message || err}`;
+        } finally {
+          btn.disabled = false;
+        }
       });
       document.getElementById('sett-yt-oauth-disconnect')?.addEventListener('click', async () => {
         await fetch('/integrations/youtube/oauth/disconnect', { method: 'POST', credentials: 'same-origin' });
