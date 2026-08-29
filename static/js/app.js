@@ -15964,7 +15964,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     }
 
     function _parseDurationFilter(term) {
-      const m = term.match(/^(<=|>=|<|>)\s*(.+)$/);
+      const m = term.match(/^(<=|>=|<|>)(.+)$/);
       if (!m) return null;
       const seconds = _parseDurationToSeconds(m[2].trim());
       if (seconds === null) return null;

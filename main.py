@@ -29822,7 +29822,7 @@ def move_entries_to_feed_batch_route(
 _MOVE_VISIBLE_LIMIT = 1_000_000
 
 
-_DURATION_FILTER_RE = re.compile(r"^(<=|>=|<|>)\s*(.+)$")
+_DURATION_FILTER_RE = re.compile(r"^(<=|>=|<|>)(.+)$")
 
 
 def _parse_duration_filter_seconds(text: str) -> float | None:
