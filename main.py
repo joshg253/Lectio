@@ -18037,6 +18037,17 @@ _DOMAIN_ALIASES: dict[str, str] = {
 }
 
 
+def assume_https_if_schemeless(url: str) -> str:
+    """A pasted `www.example.com` or `example.com/feed` (no `://` at all) is
+    assumed https — the common case, and the alternative is rejecting a paste
+    a user would expect to just work. Shared by Add Feed's discovery route and
+    Change URL, which both accept the same kind of paste; the add-feed
+    dialog's own JS does the equivalent client-side (`normalizeInput`), with a
+    hostname-shape check the server side doesn't need since a garbage result
+    just fails to resolve to a feed downstream."""
+    return "https://" + url if url and "://" not in url else url
+
+
 def normalize_feed_url(feed_url: str) -> str:
     """Normalize a feed URL for consistent storage and deduplication.
 
@@ -24005,11 +24016,9 @@ def starred_asset(asset_hash: str) -> Response:
 @app.get("/feeds/discover")
 def discover_feed_route(url: str = Query(...)):
     from services.feed_discovery import probe_url as _probe_url
-    url = url.strip()
-    if url and "://" not in url:
-        # Schemeless paste (www.example.com) — assume https rather than letting
-        # the SSRF guard reject it with a misleading "private target" message.
-        url = "https://" + url
+    # Schemeless paste, assumed https — otherwise the SSRF guard rejects it
+    # with a misleading "private target" message instead of actually probing it.
+    url = assume_https_if_schemeless(url.strip())
     return JSONResponse(_probe_url(url))
 
 
@@ -28516,9 +28525,7 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
     feed we want) the resolved feed URL is used. A URL that doesn't validate
     returns needs_confirm so the UI can offer 'Change anyway' — feeds behind
     auth or bot-walls that Lectio can't fetch are still allowed on override."""
-    new_url = new_url.strip()
-    if new_url and "://" not in new_url:
-        new_url = "https://" + new_url  # schemeless paste, like Add Feed
+    new_url = assume_https_if_schemeless(new_url.strip())
     parsed = urlparse(new_url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return JSONResponse({"ok": False, "error": "Invalid URL — must be http or https."}, status_code=400)
