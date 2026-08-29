@@ -122,6 +122,22 @@ excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 
 *Moved down from Now on 2026-08-24: deliberately deferred, no trigger condition met yet.*
 
+### youtube_playlist_added dedup key is a text snapshot of the rule, not a stable id
+
+Found 2026-08-29 while investigating missed/duplicate playlist adds. The
+`youtube_playlist_added` guard's primary key is `(scope, scope_id, keyword,
+entry_id, video_id)` — `scope_id` is the rule's raw feed list (or folder id)
+as a string, not a stable rule id. Editing a rule's scope (adding/removing a
+feed) changes that string, silently orphaning every prior dedup row for that
+rule: already-added videos look "unclaimed" again, and the next matching run
+would re-submit them — `playlistItems.insert` isn't idempotent, so that's a
+duplicate in the real playlist, not just noise. `scripts/backfill_missed_youtube_playlist_adds.py`
+works around this by checking live playlist contents instead of trusting the
+local table. A real fix needs a stable `rule_id` column on `highlight_keywords`
+(none exists today — rules are identified by the scope/scope_id/keyword
+tuple everywhere) and a migration of `youtube_playlist_added` to key off it.
+Not attempted — bigger than this session's fix, and only bites on a scope edit.
+
 ### Add OIDC login
 
 Not scoped. Current auth (`services/users.py`, `/login` at `main.py:21999`)
