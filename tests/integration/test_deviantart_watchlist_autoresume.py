@@ -5,11 +5,18 @@ run two syncs for the same user at once, and reports subscribed artists that
 are no longer watched (reconcile is report-only — no auto-unsubscribe)."""
 from __future__ import annotations
 
+import json
+from typing import cast
+from unittest.mock import MagicMock
+
 import pytest
+from fastapi import Request
 
 import main
 from services import deviantart as deviantart_service
 from services import tenancy
+
+_NO_REQUEST = cast(Request, None)
 
 
 @pytest.fixture
@@ -68,7 +75,6 @@ def test_failed_adds_are_recorded_as_profile_link_detail(configured):
     assert result["failed_artists"] == [{"username": "bob", "error": "not found"}]
     # The structured detail is persisted for the Settings UI to render as links.
     # (Read the DB directly — the fixture stubs get_runtime_setting to "me".)
-    import json
     with main.get_meta_connection() as conn:
         detail_raw = main.get_setting(conn, main.SETTING_DEVIANTART_SYNC_DETAIL)
         assert detail_raw is not None
@@ -267,3 +273,115 @@ def test_recheck_keeps_still_deactivated(configured):
 
     assert reactivated == 0
     assert _da_deactivated_rows() == ["stillgone"]
+
+
+# ---------------------------------------------------------------------------
+# "Unsubscribe all unwatched" — the batch version of the reconcile report.
+# ---------------------------------------------------------------------------
+
+def _add_da_artist_feed(username: str, folder_id: int | None = None) -> str:
+    feed_id = f"fid-{username}"
+    feed_url = deviantart_service.feed_file_url(feed_id)
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO deviantart_feeds (id, username, feed_title, created_at) VALUES (?, ?, ?, 'now')",
+            (feed_id, username, username),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+            (folder_id or main.get_root_folder_id(conn), feed_url),
+        )
+        conn.commit()
+    with main.get_reader() as reader:
+        reader.add_feed(feed_url, exist_ok=True)
+    return feed_url
+
+
+def _set_unwatched(usernames: list[str]) -> None:
+    with main.get_meta_connection() as conn:
+        main.set_setting(
+            conn, main.SETTING_DEVIANTART_SYNC_DETAIL,
+            json.dumps({"failed": [], "unwatched": [{"username": u} for u in usernames]}),
+        )
+
+
+def _real_get_runtime_setting(key: str, env_fallback: str = "") -> str:
+    """The `configured` fixture stubs get_runtime_setting to a fixed "me" for
+    every key (it only cares about the DeviantArt username lookup elsewhere),
+    which breaks _load_da_sync_detail's real read of
+    SETTING_DEVIANTART_SYNC_DETAIL. Restore the real cache-backed behavior for
+    these tests, which need that read to actually work."""
+    with main.get_meta_connection() as conn:
+        val = main.get_setting(conn, key)
+    return val if val is not None else env_fallback
+
+
+def test_unsubscribe_unwatched_removes_the_feed_and_the_report_entry(configured, monkeypatch):
+    monkeypatch.setattr(main, "get_runtime_setting", _real_get_runtime_setting)
+    monkeypatch.setattr(main, "websub_service", None)
+    monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
+    monkeypatch.setattr(deviantart_service, "delete_deviantart_feed", MagicMock())
+    feed_url = _add_da_artist_feed("zoe")
+    _set_unwatched(["zoe"])
+
+    result = main.deviantart_unsubscribe_unwatched_route(_NO_REQUEST)
+
+    assert json.loads(result.body) == {"ok": True, "count": 1}
+    with main.get_meta_connection() as conn:
+        row = conn.execute("SELECT 1 FROM folder_feeds WHERE feed_url = ?", (feed_url,)).fetchone()
+        detail = json.loads(main.get_setting(conn, main.SETTING_DEVIANTART_SYNC_DETAIL) or "{}")
+    assert row is None
+    assert detail["unwatched"] == []
+
+
+def test_unsubscribe_unwatched_leaves_other_artists_alone(configured, monkeypatch):
+    monkeypatch.setattr(main, "get_runtime_setting", _real_get_runtime_setting)
+    monkeypatch.setattr(main, "websub_service", None)
+    monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
+    monkeypatch.setattr(deviantart_service, "delete_deviantart_feed", MagicMock())
+    _add_da_artist_feed("zoe")
+    kept_url = _add_da_artist_feed("alice")  # still watched -- not in the report
+    _set_unwatched(["zoe"])
+
+    main.deviantart_unsubscribe_unwatched_route(_NO_REQUEST)
+
+    with main.get_meta_connection() as conn:
+        row = conn.execute("SELECT 1 FROM folder_feeds WHERE feed_url = ?", (kept_url,)).fetchone()
+    assert row is not None
+
+
+def test_unsubscribe_unwatched_never_touches_the_watch_feed(configured, monkeypatch):
+    monkeypatch.setattr(main, "get_runtime_setting", _real_get_runtime_setting)
+    """A username lookup must exclude source='watch' -- that row's username is
+    the synthetic 'deviantsyouwatch' placeholder, not a real artist, and would
+    never legitimately appear in the unwatched report, but the query itself
+    must not be able to match it even if it somehow did."""
+    monkeypatch.setattr(main, "websub_service", None)
+    monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
+    watch_url = deviantart_service.feed_file_url("watch-feed")
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO deviantart_feeds (id, username, feed_title, source, created_at)"
+            " VALUES ('watch-feed', 'deviantsyouwatch', 'DeviantArt — Watching', 'watch', 'now')"
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+            (main.get_root_folder_id(conn), watch_url),
+        )
+        conn.commit()
+    with main.get_reader() as reader:
+        reader.add_feed(watch_url, exist_ok=True)
+    _set_unwatched(["deviantsyouwatch"])
+
+    result = main.deviantart_unsubscribe_unwatched_route(_NO_REQUEST)
+
+    assert json.loads(result.body) == {"ok": True, "count": 0}
+    with main.get_meta_connection() as conn:
+        row = conn.execute("SELECT 1 FROM folder_feeds WHERE feed_url = ?", (watch_url,)).fetchone()
+    assert row is not None
+
+
+def test_unsubscribe_unwatched_no_op_when_nothing_reported(configured):
+    configured.setattr(main, "get_runtime_setting", _real_get_runtime_setting)
+    result = main.deviantart_unsubscribe_unwatched_route(_NO_REQUEST)
+    assert json.loads(result.body) == {"ok": True, "count": 0}

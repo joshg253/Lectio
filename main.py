@@ -27962,6 +27962,45 @@ def deviantart_sync_watchlist_route():
     return JSONResponse({"started": True})
 
 
+@app.post("/deviantart/unsubscribe-unwatched")
+def deviantart_unsubscribe_unwatched_route(request: Request):
+    """Unsubscribe every artist the sync currently reports as "subscribed but
+    no longer watched" — kept manual and opt-in (the sync itself never removes
+    anything, see sync_deviantart_watchlist's reconcile step) but this button
+    is the batch version of doing it by hand, one Feed Properties at a time."""
+    detail = _load_da_sync_detail()
+    usernames = [str(u.get("username") or "").strip() for u in detail.get("unwatched", [])]
+    usernames = [u for u in usernames if u]
+    if not usernames:
+        return JSONResponse({"ok": True, "count": 0})
+
+    with get_meta_connection() as conn:
+        placeholders = ",".join("?" for _ in usernames)
+        rows = conn.execute(
+            f"SELECT id, username FROM deviantart_feeds WHERE username IN ({placeholders})"
+            " AND COALESCE(source, 'gallery') != 'watch'",
+            usernames,
+        ).fetchall()
+    feed_urls = [deviantart_service.feed_file_url(str(r["id"])) for r in rows]
+    resolved_usernames = {str(r["username"]) for r in rows}
+
+    if feed_urls:
+        result = bulk_feed_action(request, action="unsubscribe", feed_urls="\n".join(feed_urls))
+        if not json.loads(result.body).get("ok"):
+            return result
+
+    # Drop the now-unsubscribed artists from the report; anything that
+    # couldn't be resolved to a feed (already gone some other way) along
+    # with any that arrived after the button was clicked stays listed.
+    detail["unwatched"] = [
+        u for u in detail.get("unwatched", [])
+        if str(u.get("username") or "").strip() not in resolved_usernames
+    ]
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_DEVIANTART_SYNC_DETAIL, json.dumps(detail))
+    return JSONResponse({"ok": True, "count": len(feed_urls)})
+
+
 @app.post("/deviantart/push-watchlist")
 def deviantart_push_watchlist_route():
     result = push_galleries_to_deviantart_watchlist()

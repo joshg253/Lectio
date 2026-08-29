@@ -13725,6 +13725,22 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         await fetch('/deviantart/disconnect', { method: 'POST', credentials: 'same-origin' });
         loadSettingsData();
       });
+      document.getElementById('sett-da-unsubscribe-unwatched')?.addEventListener('click', async (event) => {
+        const btn = event.target;
+        const status = document.getElementById('sett-da-unsubscribe-unwatched-status');
+        btn.disabled = true;
+        if (status) status.textContent = 'Unsubscribing…';
+        try {
+          const resp = await fetch('/deviantart/unsubscribe-unwatched', { method: 'POST', credentials: 'same-origin' });
+          const d = await resp.json();
+          if (status) status.textContent = d.ok ? `Unsubscribed ${d.count}.` : (d.error || 'Failed.');
+          loadSettingsData();
+        } catch (err) {
+          if (status) status.textContent = `Error: ${err.message || err}`;
+        } finally {
+          btn.disabled = false;
+        }
+      });
       document.getElementById('sett-yt-oauth-disconnect')?.addEventListener('click', async () => {
         await fetch('/integrations/youtube/oauth/disconnect', { method: 'POST', credentials: 'same-origin' });
         loadSettingsData();
