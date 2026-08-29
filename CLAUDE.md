@@ -8,6 +8,11 @@ Self-hosted feed reader, triage, and workflow app. Auth is always on; per-user i
 - Default to short, plain answers: no headers/bullets for a single fact, no restating a file's contents back, no "summary of what I did" after a small edit — the diff speaks for itself.
 - Keep any "here's what I'm about to do" note to one short sentence; skip the end-of-turn recap unless the change is multi-file or non-obvious.
 - For multi-file or behavior-changing work, present a short plan before editing.
+- When work surfaces adjacent bugs, cleanup opportunities, or ideas beyond the task: fix true
+  blockers (needed for the task to work correctly/safely) and small opportunistic fixes (same
+  code path, low-risk, independently understandable, ≤~15 min); everything else is a follow-up —
+  note it in `Plan.md` rather than folding it into the current change. At the end of the task,
+  report what was requested, what was additionally fixed, and what was deferred.
 - Prefer existing `reader` capabilities over custom code.
 - Do not duplicate behavior the `reader` library already provides.
 - Preserve the architecture split:
