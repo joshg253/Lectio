@@ -9956,15 +9956,22 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       } catch (e) { /* a missing Restore is not worth an error */ }
     }
 
-    // Flip a flyout to the left when opening right would run off screen.
+    // Flip a flyout to the left/up when opening right/down would run off screen.
     for (const submenu of document.querySelectorAll('.ctx-submenu')) {
       submenu.addEventListener('toggle', () => {
-        if (!submenu.open) { submenu.classList.remove('ctx-submenu--left'); return; }
+        if (!submenu.open) {
+          submenu.classList.remove('ctx-submenu--left', 'ctx-submenu--up');
+          return;
+        }
         const list = submenu.querySelector('.ctx-submenu-list');
         if (!list) return;
-        submenu.classList.remove('ctx-submenu--left');
-        if (list.getBoundingClientRect().right > window.innerWidth - 8) {
+        submenu.classList.remove('ctx-submenu--left', 'ctx-submenu--up');
+        const rect = list.getBoundingClientRect();
+        if (rect.right > window.innerWidth - 8) {
           submenu.classList.add('ctx-submenu--left');
+        }
+        if (rect.bottom > window.innerHeight - 8) {
+          submenu.classList.add('ctx-submenu--up');
         }
       });
       // One flyout at a time, and never leave one open for the next post.
