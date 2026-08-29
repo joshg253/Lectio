@@ -80,6 +80,36 @@ def test_read_above_marks_everything_before_the_anchor(tenant):
     assert not _read_state(order[3]) and not _read_state(order[4]) and not _read_state(order[5])
 
 
+def test_read_above_respects_the_active_search(tenant):
+    """A search narrows what's on screen, so "above" must only walk the
+    search results — not fall back to the unsearched list and mark posts
+    the user never saw as part of this view."""
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        reader.disable_feed_updates(FEED)
+        titles = ["Post Zero", "Apple One", "Post Two", "Apple Three", "Post Four", "Apple Five"]
+        for i, title in enumerate(titles):
+            reader.add_entry({
+                "feed_url": FEED, "id": f"{FEED}post-{i:03d}", "link": f"{FEED}post-{i:03d}",
+                "title": title,
+                "published": datetime(2021, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=i),
+            })
+    order = [f"{FEED}post-{i:03d}" for i in range(6)]
+    anchor = order[3]  # "Apple Three"
+    with TestClient(_app()) as client:
+        r = client.post("/entries/mark-range-read", data={
+            "folder_id": str(UNCAT), "feed_url": FEED, "entry_id": anchor,
+            "direction": "above", "q": "Apple",
+        }, headers={"X-Requested-With": "lectio-post-range-read"})
+    assert r.status_code == 200
+    # "Apple One" is above the anchor within the search results: read.
+    assert _read_state(order[1])
+    # "Post Zero" and "Post Two" don't match the search and never appeared
+    # in this view, even though they sit before the anchor unsearched.
+    assert not _read_state(order[0])
+    assert not _read_state(order[2])
+
+
 def test_anchor_past_the_default_page_is_still_found(tenant):
     # More than the old 250 cap; the anchor sits well past it. Before the fix the
     # route only saw the first 250 posts and reported "not in the current view".

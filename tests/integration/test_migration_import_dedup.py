@@ -200,3 +200,68 @@ def test_drip_step_subscriptions_phase_re_adds_when_nothing_declined(configured,
     with main.get_reader() as reader:
         urls = {str(f.url) for f in reader.get_feeds()}
     assert urls == {NEW_FEED}
+
+
+def test_drip_step_subscriptions_phase_places_new_feed_in_its_ino_folder(configured, monkeypatch):
+    """A newly-added feed with a Title-Case (folder-shaped) category lands in
+    that folder instead of Uncategorized. The lowercase category on the same
+    subscription is an article tag, not a folder, and must be ignored."""
+    subs = [{
+        "feed_url": NEW_FEED,
+        "categories": [
+            {"id": "user/-/label/lessons"},
+            {"id": "user/-/label/Comics & Art"},
+        ],
+    }]
+    monkeypatch.setattr(main, "get_inoreader_token", lambda: "fake-token")
+    monkeypatch.setattr(main.inoreader_service, "get_subscriptions", lambda token: (subs, {}))
+
+    with main.get_meta_connection() as conn:
+        main.set_setting(
+            conn, main.SETTING_INOREADER_IMPORT_STATE,
+            json.dumps({"phase": "subscriptions"}),
+        )
+
+    main._inoreader_drip_step()
+
+    with main.get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT f.name FROM folder_feeds ff JOIN folders f ON f.id = ff.folder_id"
+            " WHERE ff.feed_url = ?",
+            (NEW_FEED,),
+        ).fetchone()
+    assert row is not None and row[0] == "Comics & Art"
+
+
+def test_drip_step_subscriptions_phase_does_not_refolder_an_existing_feed(configured, monkeypatch):
+    """Re-syncing a feed Lectio already has must not move it — Josh may have
+    deliberately relocated it since the first import."""
+    with main.get_reader() as reader:
+        reader.add_feed(NEW_FEED, exist_ok=True)
+    with main.get_meta_connection() as conn:
+        other_folder_id = main._get_or_create_folder_by_name(conn, "Somewhere Else")
+        conn.execute(
+            "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+            (other_folder_id, NEW_FEED),
+        )
+        conn.commit()
+
+    subs = [{"feed_url": NEW_FEED, "categories": [{"id": "user/-/label/Comics & Art"}]}]
+    monkeypatch.setattr(main, "get_inoreader_token", lambda: "fake-token")
+    monkeypatch.setattr(main.inoreader_service, "get_subscriptions", lambda token: (subs, {}))
+
+    with main.get_meta_connection() as conn:
+        main.set_setting(
+            conn, main.SETTING_INOREADER_IMPORT_STATE,
+            json.dumps({"phase": "subscriptions"}),
+        )
+
+    main._inoreader_drip_step()
+
+    with main.get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT f.name FROM folder_feeds ff JOIN folders f ON f.id = ff.folder_id"
+            " WHERE ff.feed_url = ?",
+            (NEW_FEED,),
+        ).fetchone()
+    assert row is not None and row[0] == "Somewhere Else"

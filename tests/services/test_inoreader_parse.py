@@ -38,6 +38,29 @@ def test_published_none_when_no_dates():
     assert rec["published"] is None
 
 
+def test_folder_name_from_categories_picks_title_case_label():
+    name = inoreader.folder_name_from_categories([{"id": "user/-/label/Comics & Art"}])
+    assert name == "Comics & Art"
+
+
+def test_folder_name_from_categories_ignores_lowercase_tag_label():
+    name = inoreader.folder_name_from_categories([{"id": "user/-/label/lessons"}])
+    assert name is None
+
+
+def test_folder_name_from_categories_skips_tags_to_find_the_folder():
+    name = inoreader.folder_name_from_categories([
+        {"id": "user/-/label/lessons"},
+        {"id": "user/-/label/Comics & Art"},
+    ])
+    assert name == "Comics & Art"
+
+
+def test_folder_name_from_categories_none_when_empty():
+    assert inoreader.folder_name_from_categories([]) is None
+    assert inoreader.folder_name_from_categories(None) is None
+
+
 def test_prefers_non_redirector_link():
     """FeedBurner-era items carry the dead feedproxy URL in one link slot and
     the real article URL in the other — pick whichever isn't a redirector."""

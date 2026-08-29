@@ -27167,6 +27167,7 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
             state["z1_remaining"] = inoreader_service.z1_remaining(rl)
             with get_meta_connection() as conn:
                 declined = {r[0] for r in conn.execute("SELECT feed_url FROM declined_feeds")}
+            feed_folders: dict[str, str] = {}
             with get_reader() as reader:
                 existing = _canonical_feed_url_lookup(reader)
                 added = 0
@@ -27182,8 +27183,26 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
                         reader.add_feed(furl, exist_ok=True)
                         existing[furl] = furl
                         added += 1
+                        folder_name = inoreader_service.folder_name_from_categories(sub.get("categories"))
+                        if folder_name:
+                            feed_folders[furl] = folder_name
                     except Exception:
                         pass
+            # Only newly-added feeds get foldered — an already-subscribed feed
+            # may have been moved deliberately since it was first imported, and
+            # a resync must not silently reset that.
+            if feed_folders:
+                with get_meta_connection() as conn:
+                    for furl, folder_name in feed_folders.items():
+                        try:
+                            folder_id = _get_or_create_folder_by_name(conn, folder_name)
+                            conn.execute(
+                                "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                                (folder_id, furl),
+                            )
+                        except Exception:
+                            pass
+                invalidate_meta_structure_cache()
             state["subs_added"] = state.get("subs_added", 0) + added
             state["subs_declined_skipped"] = state.get("subs_declined_skipped", 0) + skipped_declined
             state["phase"] = "labels_list"
@@ -33584,12 +33603,19 @@ def mark_entries_range_read(
     read_filter: str | None = Form(default=None),
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
+    q: str | None = Form(default=None),
 ):
     normalized_sort_by = normalize_sort_by(sort_by)
     normalized_sort_dir = normalize_sort_dir(sort_dir)
     normalized_read_filter = normalize_read_filter(read_filter)
     normalized_star_only = normalize_star_only(star_only)
     normalized_tag = normalize_tag_value(tag)
+    normalized_query = normalize_search_query(q)
+    # Search always spans All, exactly as the home route (and
+    # _resolve_view_posts) widen it — otherwise the anchor is resolved
+    # against a narrower set than the search results actually on screen.
+    if normalized_query and normalized_read_filter in {"all", "unread"}:
+        normalized_read_filter = "all"
 
     with get_meta_connection() as conn:
         feed_urls = get_folder_feed_urls(conn, folder_id)
@@ -33607,6 +33633,7 @@ def mark_entries_range_read(
         read_filter=normalized_read_filter,
         star_only=normalized_star_only,
         selected_tag=normalized_tag,
+        search_query=normalized_query,
         # Only feed_url/id/read/link are used below (anchor matching, the
         # premiere guard) — skip thumbnails/tags/display-prefs/duration for
         # every entry in scope. On a big view this is most of the cost: an
@@ -33631,6 +33658,7 @@ def mark_entries_range_read(
             read_filter="all",
             star_only=normalized_star_only,
             selected_tag=normalized_tag,
+            search_query=normalized_query,
             enrich=False,
         )
         anchor_index = next(
