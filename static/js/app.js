@@ -4421,6 +4421,12 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       }
       hideContextMenu();
       hideRootContextMenu();
+      // A flyout (Refetch, Edit) left open from a previous right-click has no
+      // other reset point — closing OTHER flyouts when one opens (below) only
+      // ever handles siblings, never a fresh menu open for a different post.
+      for (const submenu of postContextMenu.querySelectorAll('.ctx-submenu[open]')) {
+        submenu.open = false;
+      }
       positionMenuInViewport(postContextMenu, event.clientX, event.clientY);
       postContextMenu.removeAttribute('hidden');
     }
