@@ -31,6 +31,47 @@ def test_build_html_no_feed_title_omits_meta():
     assert 'class="meta"' not in html
 
 
+def test_build_html_renders_multiple_paragraphs_for_full_text():
+    html = _build_html("Title", "Feed", "https://example.com/", "First para.\n\nSecond para.")
+    assert html.count('<p class="excerpt">') == 2
+    assert '<p class="excerpt">First para.</p>' in html
+    assert '<p class="excerpt">Second para.</p>' in html
+
+
+def test_build_html_uses_excerpt_html_unescaped_when_given():
+    """excerpt_html is pre-sanitized article HTML — embedded as-is, not
+    escaped-and-wrapped like the plain excerpt path."""
+    out = _build_html(
+        "Title", "Feed", "https://example.com/",
+        "fallback plain text, should not appear",
+        excerpt_html="<p>Real <b>formatted</b> body with a <a href=\"https://x.com\">link</a>.</p>",
+    )
+    assert '<div class="excerpt"><p>Real <b>formatted</b> body' in out
+    assert 'href="https://x.com"' in out
+    assert "fallback plain text" not in out
+
+
+def test_build_html_falls_back_to_plain_excerpt_when_no_html_given():
+    out = _build_html("Title", "Feed", "https://example.com/", "Plain snippet.", excerpt_html=None)
+    assert '<p class="excerpt">Plain snippet.</p>' in out
+    assert '<div class="excerpt">' not in out
+
+
+def test_build_html_shrinks_oversized_images_instead_of_clipping():
+    """.wrapper clips overflow rather than scrolling it, so a wide article
+    image needs its own max-width or its right edge gets cut off."""
+    out = _build_html(
+        "Title", "Feed", "https://example.com/", "",
+        excerpt_html='<p><img src="https://example.com/wide.jpg" width="1200" height="800"></p>',
+    )
+    assert ".excerpt img" in out and "max-width: 100%" in out
+
+
+def test_build_html_wrapper_is_wider_than_the_old_600px():
+    out = _build_html("Title", "Feed", "https://example.com/", "Text.")
+    assert "max-width: 600px" not in out
+
+
 def test_build_text_contains_all_fields():
     text = _build_text("My Title", "My Feed", "https://example.com/", "Excerpt here.")
     assert "My Title" in text
@@ -74,6 +115,36 @@ def test_send_article_email_calls_resend(monkeypatch):
     assert calls[0]["subject"] == "Hello"
     assert "Hello" in calls[0]["html"]
     assert "Hello" in calls[0]["text"]
+
+
+def test_send_article_email_html_part_uses_excerpt_html(monkeypatch):
+    calls = []
+
+    class FakeEmails:
+        @staticmethod
+        def send(payload):
+            calls.append(payload)
+
+    import resend as _resend
+    monkeypatch.setattr(_resend, "Emails", FakeEmails)
+
+    ok, err = send_article_email(
+        api_key="re_test",
+        from_addr="from@example.com",
+        to_addr="to@example.com",
+        title="Hello",
+        feed_title="My Feed",
+        link="https://example.com/hello",
+        excerpt="Plain text fallback.",
+        excerpt_html="<p>Rich <em>body</em>.</p>",
+    )
+
+    assert ok is True
+    assert err is None
+    assert "<p>Rich <em>body</em>.</p>" in calls[0]["html"]
+    # The text part is unaffected — always the plain excerpt, never the HTML.
+    assert "Plain text fallback." in calls[0]["text"]
+    assert "<em>" not in calls[0]["text"]
 
 
 def test_send_article_email_returns_error_on_exception(monkeypatch):

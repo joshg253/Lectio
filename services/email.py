@@ -6,15 +6,22 @@ import html
 import textwrap
 
 
-def _build_html(title: str, feed_title: str, link: str, excerpt: str) -> str:
+def _build_html(title: str, feed_title: str, link: str, excerpt: str, excerpt_html: str | None = None) -> str:
     safe_title = html.escape(title or "(untitled)")
     safe_feed = html.escape(feed_title or "")
     safe_link = html.escape(link or "")
-    safe_excerpt = html.escape(excerpt or "")
 
-    excerpt_block = (
-        f'<p class="excerpt">{safe_excerpt}</p>' if safe_excerpt else ""
-    )
+    # excerpt_html is pre-sanitized article HTML (the full-text case) and is
+    # trusted as-is — the same allowlist output already rendered unescaped in
+    # the app's own entry pane. Plain excerpt still needs escaping + manual
+    # paragraph splitting, since it is unstructured stripped text.
+    if excerpt_html:
+        excerpt_block = f'<div class="excerpt">{excerpt_html}</div>'
+    else:
+        safe_excerpt = html.escape(excerpt or "")
+        excerpt_block = "".join(
+            f'<p class="excerpt">{para}</p>' for para in safe_excerpt.split("\n\n") if para
+        )
     feed_line = (
         f'<span class="meta">from <strong>{safe_feed}</strong></span>' if safe_feed else ""
     )
@@ -33,7 +40,7 @@ def _build_html(title: str, feed_title: str, link: str, excerpt: str) -> str:
             color: #1a1a1a;
           }}
           .wrapper {{
-            max-width: 600px;
+            max-width: 680px;
             margin: 32px auto;
             background: #ffffff;
             border-radius: 6px;
@@ -92,6 +99,14 @@ def _build_html(title: str, feed_title: str, link: str, excerpt: str) -> str:
             color: #333;
             margin: 0 0 20px;
           }}
+          /* .wrapper clips overflow rather than scrolling it, so a full-width
+             article image (feed HTML ships explicit width/height attributes
+             more often than not) got its right edge cut off instead of
+             wrapping. Shrink to the column instead. */
+          .excerpt img, .excerpt iframe {{
+            max-width: 100%;
+            height: auto;
+          }}
           .cta {{
             display: inline-block;
             margin: 4px 0 28px;
@@ -127,7 +142,7 @@ def _build_html(title: str, feed_title: str, link: str, excerpt: str) -> str:
             <a class="cta" href="{safe_link}">Read article →</a>
           </div>
           <div class="footer">
-            Shared via <a href="https://github.com/lectio/lectio" style="color:#aaa">Lectio</a>
+            Shared via <a href="https://github.com/joshg253/Lectio" style="color:#aaa">Lectio</a>
           </div>
         </div>
         </body>
@@ -165,7 +180,7 @@ def _build_digest_html(articles: list[dict]) -> str:
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
           body {{ margin:0; padding:0; background:#f5f4f0; font-family:Georgia,'Times New Roman',serif; color:#1a1a1a; }}
-          .wrapper {{ max-width:600px; margin:32px auto; background:#fff; border-radius:6px;
+          .wrapper {{ max-width:680px; margin:32px auto; background:#fff; border-radius:6px;
             overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.10); }}
           .header {{ background:#1a1a1a; padding:18px 28px; }}
           .wordmark {{ color:#f5f4f0; font-family:Georgia,serif; font-size:22px; font-weight:normal; letter-spacing:.04em; margin:0; }}
@@ -237,8 +252,15 @@ def send_article_email(
     excerpt: str,
     cc_addr: str | None = None,
     reply_to: str | None = None,
+    excerpt_html: str | None = None,
 ) -> tuple[bool, str | None]:
-    """Send a share email. Returns (ok, error_message)."""
+    """Send a share email. Returns (ok, error_message).
+
+    excerpt is always plain text, used for the text part and as the HTML
+    part's fallback. excerpt_html, when given, is pre-sanitized article HTML
+    (the full-text case) and is what the HTML part actually renders — real
+    paragraphs/links/lists instead of one escaped blob.
+    """
     import resend
 
     resend.api_key = api_key
@@ -247,7 +269,7 @@ def send_article_email(
         "from": from_addr,
         "to": [to_addr],
         "subject": subject,
-        "html": _build_html(title, feed_title, link, excerpt),
+        "html": _build_html(title, feed_title, link, excerpt, excerpt_html),
         "text": _build_text(title, feed_title, link, excerpt),
     }
     if cc_addr:

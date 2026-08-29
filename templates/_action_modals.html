@@ -210,6 +210,10 @@
           Cc me ({{ profile_email }}) so replies come back to a thread
         </label>
         {% endif %}
+        <label class="action-modal-checkbox">
+          <input type="checkbox" id="email-article-full-text" name="full_text" value="1" />
+          Include full article text instead of a snippet
+        </label>
         <div class="action-modal-actions">
           <button type="button" class="action-modal-cancel" data-close-modal="email-article-modal">Cancel</button>
           <button id="email-article-send" type="submit">Send</button>

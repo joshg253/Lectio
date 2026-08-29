@@ -4883,9 +4883,11 @@ body.resizing {
    modal (and elsewhere) while that modal stays open. All .action-modal share
    z-index: 80, so DOM order would otherwise paint Feed Properties (later in the
    DOM) over this warning. Bump it so the nested confirmation always sits on top
-   of whatever launched it. */
+   of whatever launched it — and, since it's also reachable via a long-press on
+   a feed in the phone folder drawer (z-index: 300, see .pane-folders above),
+   above that too, or it painted behind the drawer it was opened from. */
 #unsub-migrate-modal {
-  z-index: 90;
+  z-index: 310;
 }
 
 .action-modal-panel {
@@ -6955,6 +6957,21 @@ mark.highlight-mark {
   box-shadow: 0 0 0 1px var(--field-focus-ring);
 }
 .feed-prop-inline-status { font-size: 0.78rem; color: var(--danger, #c0392b); }
+
+/* Feed Properties -> "Suggested tags": reuses the entry pane's tag-chip look
+   (.entry-tag-chip/.entry-tag-remove) so a feed's saved suggestions read the
+   same as a post's manual tags. Settings is a deliberate-click surface, not
+   the dense per-post row the entry pane is, so the × is always visible here
+   rather than hover-revealed. */
+#feed-prop-suggested-tags-chips {
+  margin-bottom: 0.35rem;
+}
+#feed-prop-suggested-tags-chips:empty {
+  display: none;
+}
+#feed-prop-suggested-tags-chips .entry-tag-remove {
+  opacity: 1;
+}
 
 /* Feed Properties -> "Other domains": declared domain migrations. */
 .feed-prop-alias-list { margin: 0 0 0.3rem; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 0.2rem; }

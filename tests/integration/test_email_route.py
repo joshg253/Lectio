@@ -50,7 +50,7 @@ def test_entry_not_found_returns_404(monkeypatch):
     assert r.status_code == 404
 
 
-def _make_entry(title="Test Article", link="https://example.com/article", feed_title="My Feed", summary="Some summary text."):
+def _make_entry(title="Test Article", link="https://example.com/article", feed_title="My Feed", summary="Some summary text.", content=None):
     class _Feed:
         pass
     feed = _Feed()
@@ -63,8 +63,21 @@ def _make_entry(title="Test Article", link="https://example.com/article", feed_t
     e.link = link  # ty: ignore[unresolved-attribute]
     e.feed = feed  # ty: ignore[unresolved-attribute]
     e.summary = summary  # ty: ignore[unresolved-attribute]
-    e.content = None  # ty: ignore[unresolved-attribute]
+    e.content = content  # ty: ignore[unresolved-attribute]
     return e
+
+
+def _capture_excerpt(monkeypatch):
+    """Stub send_article_email, returning a dict that records the excerpt(s) sent."""
+    captured: dict = {}
+
+    def _send(**kw):
+        captured["excerpt"] = kw.get("excerpt")
+        captured["excerpt_html"] = kw.get("excerpt_html")
+        return (True, None)
+
+    monkeypatch.setattr(main, "send_article_email", _send)
+    return captured
 
 
 def test_successful_send_returns_ok(monkeypatch):
@@ -135,6 +148,48 @@ def test_cc_me_skips_self_cc_but_sets_reply_to(monkeypatch):
     assert r.status_code == 200
     assert captured["cc_addr"] is None
     assert captured["reply_to"] == "me@example.com"
+
+
+def test_full_text_unchecked_sends_summary_only(monkeypatch):
+    class _Content:
+        value = "<p>Full body.</p><p>Second paragraph.</p>"
+    app = _build_app(monkeypatch, configured=True, entry=_make_entry(summary="Short summary.", content=[_Content()]))
+    captured = _capture_excerpt(monkeypatch)
+    with TestClient(app) as client:
+        r = client.post("/entries/email", data={"feed_url": "x", "entry_id": "1", "to_addr": "a@b.com"})
+    assert r.status_code == 200
+    assert captured["excerpt"] == "Short summary."
+    assert captured["excerpt_html"] is None
+
+
+def test_full_text_checked_sends_full_body_with_paragraphs(monkeypatch):
+    class _Content:
+        value = "<p>Full body.</p><p>Second paragraph.</p>"
+    app = _build_app(monkeypatch, configured=True, entry=_make_entry(summary="Short summary.", content=[_Content()]))
+    captured = _capture_excerpt(monkeypatch)
+    with TestClient(app) as client:
+        r = client.post("/entries/email", data={
+            "feed_url": "x", "entry_id": "1", "to_addr": "a@b.com", "full_text": "1",
+        })
+    assert r.status_code == 200
+    # Plain-text part: flattened, paragraph breaks kept for the text-only fallback.
+    assert captured["excerpt"] == "Full body.\n\nSecond paragraph."
+    # HTML part: real sanitized markup, not flattened — this is what fixes the
+    # "just unformatted text" complaint, since the HTML part is what most
+    # clients actually render.
+    assert "<p>Full body.</p>" in captured["excerpt_html"]
+    assert "<p>Second paragraph.</p>" in captured["excerpt_html"]
+
+
+def test_full_text_checked_falls_back_to_summary_with_no_content(monkeypatch):
+    app = _build_app(monkeypatch, configured=True, entry=_make_entry(summary="Only a summary.", content=None))
+    captured = _capture_excerpt(monkeypatch)
+    with TestClient(app) as client:
+        r = client.post("/entries/email", data={
+            "feed_url": "x", "entry_id": "1", "to_addr": "a@b.com", "full_text": "1",
+        })
+    assert r.status_code == 200
+    assert captured["excerpt"] == "Only a summary."
 
 
 def test_send_failure_returns_500(monkeypatch):

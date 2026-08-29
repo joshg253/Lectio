@@ -325,3 +325,35 @@ def test_excerpt_truncates_with_an_ellipsis():
 def test_excerpt_of_nothing_is_empty():
     assert H.plain_text_excerpt("") == ""
     assert H.plain_text_excerpt(None) == ""
+
+
+# --- plain-text full body (email "include full article") ---------------------
+
+
+def test_full_text_keeps_paragraph_breaks():
+    body = "<p>First paragraph.</p><p>Second paragraph.</p>"
+    out = H.plain_text_full(body)
+    assert out == "First paragraph.\n\nSecond paragraph."
+
+
+def test_full_text_treats_br_as_a_break():
+    out = H.plain_text_full("Line one<br>Line two")
+    assert out == "Line one\n\nLine two"
+
+
+def test_full_text_does_not_truncate():
+    body = "<p>" + "word " * 200 + "</p>"
+    out = H.plain_text_full(body)
+    assert "…" not in out
+    assert out.count("word") == 200
+
+
+def test_full_text_decodes_entities_and_drops_markup():
+    body = "<div>\n  a  <b>b</b>\n\n  <img src=x>  c &amp; d\n</div>"
+    out = H.plain_text_full(body)
+    assert out == "a b c & d"
+
+
+def test_full_text_of_nothing_is_empty():
+    assert H.plain_text_full("") == ""
+    assert H.plain_text_full(None) == ""
