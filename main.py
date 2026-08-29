@@ -14561,10 +14561,12 @@ def apply_star_state(feed_url: str, entry_id: str, saved: bool) -> None:
     *implemented* as an unstar, and re-implementing the capture/husk handling
     beside it is how the two drift apart.
 
-    Unstarring releases the offline capture and hard-deletes a Saved Articles
-    husk **only when no keep signal remains** — see ``entry_has_keep_signal``.
-    Callers that are about to archive must therefore write the archived row
-    *first*, or this will tear down the contents Archive means to keep.
+    Unstarring releases the offline capture when no keep signal remains — see
+    ``entry_has_keep_signal``. Callers that are about to archive must
+    therefore write the archived row *first*, or this will tear down the
+    contents Archive means to keep. A resulting Saved Articles husk (no star,
+    no tag) is NOT hard-deleted here — see ``_sweep_husked_saved_articles``,
+    which does that later so an in-window undo isn't lied to.
     """
     newly_starred = False
     with get_meta_connection() as conn:
@@ -14603,18 +14605,62 @@ def apply_star_state(feed_url: str, entry_id: str, saved: bool) -> None:
             # delete the contents Archive exists to preserve.
             starred_archive_service.enqueue_removal(feed_url, entry_id)
             # A Saved Article that is now neither starred nor tagged is a husk —
-            # the read-later pile should hold only kept items. It's user-added
-            # and deletable, so remove it outright rather than leaving invisible
-            # cruft (which the host-review view would surface). Mirrors the
-            # source cleanup Move already does; a tag keeping it is handled above.
-            if saved_articles_service.is_saved_articles_feed(feed_url):
-                with get_reader() as reader:
-                    entry = reader.get_entry((feed_url, entry_id), None)
-                    if entry is not None:
-                        _hard_delete_entry(reader, feed_url, entry_id, entry)
-                invalidate_unread_counts_cache()
+            # the read-later pile should hold only kept items, and it's
+            # user-added, so it CAN be removed outright rather than left as
+            # invisible cruft. But not from here, and not immediately: this
+            # function has no idea whether its caller just wrote an undo token
+            # for this unstar (the single-post toggle and the bulk star/unstar
+            # action both do), and hard-deleting out from under an in-window
+            # undo would make the undo toast lie — the star could be restored
+            # but the entry it pointed to would already be gone. The nightly
+            # maintenance sweep does the actual deletion, after confirming no
+            # entry_unstar_batch row for it is still inside the undo window.
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("starred archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
+
+
+def _sweep_husked_saved_articles() -> int:
+    """Hard-delete lectio:saved entries left behind by apply_star_state
+    deferring their own deletion (see that function's docstring): a husk
+    (unstarred, untagged, unarchived) whose entry_unstar_batch row — if any —
+    is no longer inside the undo window. Run from nightly maintenance, not
+    from the unstar path itself, which is the whole point: it gives an
+    accidental bulk unstar in Saved a real window to undo before the entry
+    is actually gone, not just the star row. Returns the number deleted.
+    """
+    saved_url = saved_articles_service.SAVED_FEED_URL
+    deleted = 0
+    with get_reader() as reader:
+        try:
+            candidate_ids = [str(e.id) for e in reader.get_entries(feed=saved_url)]
+        except Exception:  # noqa: BLE001 — no lectio:saved feed yet, nothing to sweep
+            return 0
+        for entry_id in candidate_ids:
+            if entry_has_keep_signal(saved_url, entry_id, starred=_entry_is_starred(saved_url, entry_id)):
+                continue
+            with get_meta_connection() as conn:
+                row = conn.execute(
+                    "SELECT unstarred_at FROM entry_unstar_batch WHERE feed_url = ? AND entry_id = ?",
+                    (saved_url, entry_id),
+                ).fetchone()
+            if row is not None and _undo_token_problem(row["unstarred_at"]) is None:
+                continue  # a live undo token still protects this one
+            entry = reader.get_entry((saved_url, entry_id), None)
+            if entry is None:
+                continue
+            try:
+                _hard_delete_entry(reader, saved_url, entry_id, entry)
+                deleted += 1
+            except Exception:  # noqa: BLE001 — one bad entry must not sink the sweep
+                LOGGER.exception("[maintenance] husk sweep: failed to delete %s", entry_id)
+                continue
+            with get_meta_connection() as conn:
+                conn.execute("DELETE FROM entry_unstar_batch WHERE feed_url = ? AND entry_id = ?",
+                             (saved_url, entry_id))
+                conn.commit()
+    if deleted:
+        invalidate_unread_counts_cache()
+    return deleted
 
 
 def restar_curated_entries(feed_url: str) -> int:
@@ -19929,6 +19975,16 @@ def _daily_maintenance_for_user() -> None:
                         swept, sweep_days)
     except Exception:
         LOGGER.exception("[maintenance] tombstone sweep failed")
+
+    # 1e. Hard-delete Saved Article husks apply_star_state deliberately left
+    # behind (unstarred+untagged, but only once their undo window — if any —
+    # has passed). See _sweep_husked_saved_articles.
+    try:
+        husked = _sweep_husked_saved_articles()
+        if husked:
+            LOGGER.info("[maintenance] husk sweep: hard-deleted %d Saved Article husk(s)", husked)
+    except Exception:
+        LOGGER.exception("[maintenance] husk sweep failed")
 
     # 2. Purge orphaned meta DB rows (feeds that no longer exist in the reader).
     try:
@@ -33060,6 +33116,88 @@ def mark_entries_read_batch_route(entries: str = Form(...)):
     return JSONResponse({"ok": True, "marked": marked, "failed": failed, "message": msg})
 
 
+@app.post("/entries/star-batch")
+def star_entries_batch_route(entries: str = Form(...), saved: int = Form(...)):
+    """Add or remove the star on a batch of entries — the post list's
+    multi-selection bulk action. ``entries`` is a JSON array of
+    ``[feed_url, entry_id]`` pairs, same shape as ``/entries/read-batch``.
+
+    Unlike bulk mark-as-read (always one-directional), both add and remove
+    are common triage actions for stars — this route serves "Add star to N
+    posts" and "Remove star from N posts" behind one `saved` flag rather than
+    two near-duplicate handlers.
+
+    Removing collects an undo batch under one shared token
+    (``entry_unstar_batch``, the same mechanism the single-post unstar toggle
+    already uses) — unstarring an untagged Saved Article hard-deletes it
+    (``apply_star_state`` -> ``_hard_delete_entry``), so an accidental bulk
+    unstar needs the same rescue the single-post one already has.
+    """
+    try:
+        pairs = json.loads(entries)
+        assert isinstance(pairs, list)
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": "Bad entries payload."}, status_code=400)
+    if len(pairs) > _MOVE_BATCH_CAP:
+        return JSONResponse(
+            {"ok": False, "error": f"Too many entries (max {_MOVE_BATCH_CAP} per action)."},
+            status_code=400,
+        )
+
+    want_saved = bool(saved)
+    undo_token = datetime.now().isoformat() if not want_saved else None
+    changed = failed = 0
+
+    for pair in pairs:
+        if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
+            failed += 1
+            continue
+        feed_url, entry_id = str(pair[0]).strip(), str(pair[1])
+        try:
+            with get_meta_connection() as conn:
+                prior = conn.execute(
+                    "SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                ).fetchone()
+            already = prior is not None
+            if already == want_saved:
+                continue  # already in the desired state — nothing to do
+
+            if not want_saved:
+                # Same shape as the single-post toggle's undo capture: record
+                # the real saved_at (not just "it was starred") so undo
+                # restores the actual star-order position.
+                with get_meta_connection() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO entry_unstar_batch (feed_url, entry_id, unstarred_at, saved_at)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(feed_url, entry_id) DO UPDATE SET
+                            unstarred_at = excluded.unstarred_at,
+                            saved_at = excluded.saved_at
+                        """,
+                        (feed_url, entry_id, undo_token, prior["saved_at"]),
+                    )
+                    conn.commit()
+
+            apply_star_state(feed_url, entry_id, want_saved)
+            if want_saved:
+                _maybe_autofetch_on_keep(feed_url, entry_id)
+            changed += 1
+        except Exception as exc:  # noqa: BLE001 — one bad entry must not sink the batch
+            failed += 1
+            LOGGER.warning("[star-batch] failed to set saved=%s for %s in %s: %s", want_saved, entry_id, feed_url, exc)
+
+    verb = "Starred" if want_saved else "Unstarred"
+    msg = f"{verb} {changed} post{'s' if changed != 1 else ''}."
+    if failed:
+        msg += f" {failed} failed."
+    resp = {"ok": True, "changed": changed, "failed": failed, "message": msg}
+    if undo_token and changed:
+        resp["undo_token"] = undo_token
+    return JSONResponse(resp)
+
+
 def _scope_starred_keys(
     folder_id: int | None, list_feed_url: str | None, tag: str | None
 ) -> list[tuple[str, str]]:
@@ -33995,61 +34133,74 @@ def undo_mark_read(read_at: str = Form(...)):
 
 @app.post("/entries/undo-unstar")
 def undo_unstar(unstarred_at: str = Form(...)):
-    """Undo an accidental unstar (the toast's Undo button on /entries/saved).
+    """Undo an accidental unstar (the toast's Undo button on /entries/saved,
+    single-post or bulk — entry_unstar_batch's schema always supported N rows
+    sharing one token, this route just didn't loop until the bulk star/unstar
+    action gave it a real multi-row caller).
 
     Same shape and window as undo_mark_read/undo_mark_unread: the shared
-    timestamp toggle_entry_saved stamped is the token. Restores the star with
-    its *original* saved_at (recorded alongside the token) rather than a
-    fresh one, so it lands back in its actual star-order position instead of
-    jumping to "just starred." Writes straight to saved_entries rather than
-    going through apply_star_state, so this can't re-fire "on star, also send
-    to..." destinations — those are for a genuine new star, not a restore.
+    timestamp toggle_entry_saved (or the batch route) stamped is the token.
+    Restores each star with its *original* saved_at (recorded alongside the
+    token) rather than a fresh one, so it lands back in its actual star-order
+    position instead of jumping to "just starred." Writes straight to
+    saved_entries rather than going through apply_star_state, so this can't
+    re-fire "on star, also send to..." destinations — those are for a genuine
+    new star, not a restore.
     """
     _bad_token = _undo_token_problem(unstarred_at)
     if _bad_token is not None:
         return _bad_token
 
     with get_meta_connection() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             "SELECT feed_url, entry_id, saved_at FROM entry_unstar_batch WHERE unstarred_at = ?",
             (unstarred_at,),
-        ).fetchone()
-    if row is None:
+        ).fetchall()
+    if not rows:
         return JSONResponse({"ok": False, "error": "Nothing to undo."}, status_code=404)
 
-    feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
-
-    # An untagged Saved Article husk is hard-deleted on unstar
-    # (apply_star_state -> _hard_delete_entry), not just unstarred — the
-    # entry itself is gone, so restoring the saved_entries row would create
-    # exactly the orphan-star class of bug the orphaned-star sweep exists to
-    # clean up (a row with no matching reader entry). Refuse rather than
-    # dangle.
+    restored = 0
+    gone = 0
     with get_reader() as reader:
-        entry_gone = reader.get_entry((feed_url, entry_id), None) is None
-    if entry_gone:
-        with get_meta_connection() as conn:
-            conn.execute("DELETE FROM entry_unstar_batch WHERE unstarred_at = ?", (unstarred_at,))
-            conn.commit()
+        for row in rows:
+            feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
+            # An untagged Saved Article husk is hard-deleted on unstar
+            # (apply_star_state -> _hard_delete_entry), not just unstarred —
+            # the entry itself is gone, so restoring the saved_entries row
+            # would create exactly the orphan-star class of bug the
+            # orphaned-star sweep exists to clean up (a row with no matching
+            # reader entry). Refuse that one rather than dangle; the rest of
+            # the batch still restores.
+            if reader.get_entry((feed_url, entry_id), None) is None:
+                gone += 1
+                with get_meta_connection() as conn:
+                    conn.execute("DELETE FROM entry_unstar_batch WHERE feed_url = ? AND entry_id = ?",
+                                 (feed_url, entry_id))
+                    conn.commit()
+                continue
+
+            saved_at = row["saved_at"] or datetime.now().isoformat()
+            with get_meta_connection() as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
+                    (feed_url, entry_id, saved_at),
+                )
+                conn.execute("DELETE FROM entry_unstar_batch WHERE feed_url = ? AND entry_id = ?",
+                             (feed_url, entry_id))
+                conn.commit()
+            try:
+                starred_archive_service.enqueue_archive(feed_url, entry_id)
+            except Exception as exc:  # noqa: BLE001 — the star itself is already restored
+                LOGGER.warning("starred archive re-enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
+            restored += 1
+
+    LOGGER.info("[undo-unstar] restored %d/%d from batch %s", restored, len(rows), unstarred_at)
+    if restored == 0:
         return JSONResponse(
-            {"ok": False, "error": "That post no longer exists — it was removed when unstarred."},
+            {"ok": False, "error": "Those posts no longer exist — they were removed when unstarred."},
             status_code=410,
         )
-
-    saved_at = row["saved_at"] or datetime.now().isoformat()
-    with get_meta_connection() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
-            (feed_url, entry_id, saved_at),
-        )
-        conn.execute("DELETE FROM entry_unstar_batch WHERE unstarred_at = ?", (unstarred_at,))
-        conn.commit()
-    try:
-        starred_archive_service.enqueue_archive(feed_url, entry_id)
-    except Exception as exc:  # noqa: BLE001 — the star itself is already restored
-        LOGGER.warning("starred archive re-enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
-    LOGGER.info("[undo-unstar] restored %s/%s from batch %s", feed_url, entry_id, unstarred_at)
-    return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id})
+    return JSONResponse({"ok": True, "restored": restored, "gone": gone})
 
 
 @app.post("/entries/mark-newer-than-unread")

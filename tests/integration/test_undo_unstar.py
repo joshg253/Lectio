@@ -114,7 +114,7 @@ def test_unstar_returns_an_undo_token_and_undo_restores_the_star(tenant):
 
         r2 = client.post("/entries/undo-unstar", data={"unstarred_at": token})
         assert r2.status_code == 200
-        assert r2.json() == {"ok": True, "feed_url": FEED, "entry_id": "e1"}
+        assert r2.json() == {"ok": True, "restored": 1, "gone": 0}
 
     with main.get_meta_connection() as conn:
         row = conn.execute(
@@ -205,18 +205,22 @@ def test_undo_bad_and_unknown_tokens(tenant):
 
 
 def test_undo_refuses_to_resurrect_a_hard_deleted_saved_article_husk(tenant):
-    """An untagged Saved Article husk is hard-deleted on unstar
-    (test_unstar_husk_cleanup.py) -- the entry itself is gone, not just its
-    star, so undo has nothing left to restore the star onto. It must refuse
-    rather than create a dangling saved_entries row for a nonexistent entry
-    (the exact orphan-star class of bug the orphaned-star sweep exists for)."""
+    """A Saved Article husk's actual deletion is deferred to the nightly sweep
+    (test_unstar_husk_cleanup.py), so it's still there right after unstarring
+    -- but it can still be gone by the time Undo is clicked some other way
+    (e.g. moved to a real feed in the meantime, which hard-deletes the
+    lectio:saved side same as the husk sweep does). Undo must refuse rather
+    than create a dangling saved_entries row for a nonexistent entry (the
+    exact orphan-star class of bug the orphaned-star sweep exists for)."""
     _add_entry(SAVED, "husk-1", disable_updates=False)
     _star(SAVED, "husk-1")
 
     with TestClient(_app()) as client:
         token = _unstar(client, "husk-1", feed=SAVED).json()["undo_token"]
+
         with main.get_reader() as reader:
-            assert reader.get_entry((SAVED, "husk-1"), None) is None  # confirms the husk is gone
+            entry = reader.get_entry((SAVED, "husk-1"))
+            main._hard_delete_entry(reader, SAVED, "husk-1", entry)  # simulates some other removal path
 
         r = client.post("/entries/undo-unstar", data={"unstarred_at": token})
         assert r.status_code == 410

@@ -1961,6 +1961,12 @@
     {# Bulk-only sibling of ctx-post-mark-read: always marks read (no unread
        toggle — a mixed-selection toggle has no single obvious direction). #}
     <button type="button" id="ctx-post-mark-read-bulk" class="context-menu-item" hidden>Mark as read</button>
+    {# Bulk-only, both directions shown regardless of the selection's mixed
+       star state — unlike mark-as-read, add and remove are equally common
+       triage actions here (the Saved view especially), so there's no one
+       "obvious direction" to collapse to. #}
+    <button type="button" id="ctx-post-star-bulk" class="context-menu-item" hidden>Add star</button>
+    <button type="button" id="ctx-post-unstar-bulk" class="context-menu-item" hidden>Remove star</button>
     <button type="button" id="ctx-post-mark-feed-read" class="context-menu-item" hidden>Mark Feed as Read</button>
     <button type="button" id="ctx-post-open-in-feeds" class="context-menu-item" hidden>Open in Feeds</button>
     <button type="button" id="ctx-post-mark-above-read" class="context-menu-item">Read above</button>
