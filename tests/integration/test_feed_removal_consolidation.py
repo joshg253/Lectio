@@ -1313,6 +1313,45 @@ class TestDedupDismissal:
         result = self._dismiss(["https://example.test/feed"])
         assert result.status_code == 400
 
+    def _undismiss(self, dismiss_key):
+        import asyncio
+
+        class _FakeRequest:
+            async def json(self):
+                return {"dismiss_key": dismiss_key}
+
+        return asyncio.run(main.undismiss_feed_duplicate(cast(Request, _FakeRequest())))
+
+    def test_dismissed_group_appears_in_dismissed_groups(self, env):
+        fid = _make_child_folder("Comics")
+        _add_feed_to_folder("https://example.test/feed", fid)
+        _add_feed_to_folder("https://example.test/feed/", fid)
+        self._dismiss(["https://example.test/feed", "https://example.test/feed/"])
+        groups = self._duplicates()["dismissed_groups"]
+        assert len(groups) == 1
+        urls = {f["feed_url"] for f in groups[0]["feeds"]}
+        assert urls == {"https://example.test/feed", "https://example.test/feed/"}
+
+    def test_undismiss_lets_the_group_be_suggested_again(self, env):
+        import json
+        fid = _make_child_folder("Comics")
+        _add_feed_to_folder("https://example.test/feed", fid)
+        _add_feed_to_folder("https://example.test/feed/", fid)
+        self._dismiss(["https://example.test/feed", "https://example.test/feed/"])
+        assert self._duplicates()["same_folder"] == []
+        key = self._duplicates()["dismissed_groups"][0]["dismiss_key"]
+
+        result = self._undismiss(key)
+        assert json.loads(result.body)["ok"] is True
+
+        after = self._duplicates()
+        assert len(after["same_folder"]) == 1
+        assert after["dismissed_groups"] == []
+
+    def test_undismiss_requires_a_key(self, env):
+        result = self._undismiss("")
+        assert result.status_code == 400
+
 
 class TestCombineAutoDismisses:
     """A completed /feeds/combine always records a dismissal for the exact

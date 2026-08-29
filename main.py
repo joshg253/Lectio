@@ -30391,11 +30391,43 @@ def get_feed_duplicates():
             ) not in dismissed
         ]
 
+    # Dismissed groups, for the settings panel's "Dismissed as not dupes" list
+    # (un-dismiss undo) — dismiss_key IS the group's feed URLs, \x1f-joined
+    # (see _dedup_dismiss_key), so no separate storage is needed to display it.
+    with get_meta_connection() as conn:
+        dismissed_rows = conn.execute(
+            "SELECT dismiss_key, dismissed_at FROM dedup_dismissed ORDER BY dismissed_at DESC"
+        ).fetchall()
+    dismissed_groups = [
+        {
+            "dismiss_key": key,
+            "dismissed_at": dismissed_at,
+            "feeds": [
+                {"feed_url": u, "folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(u, [])]}
+                for u in key.split("\x1f")
+            ],
+        }
+        for key, dismissed_at in dismissed_rows
+    ]
+
     return JSONResponse({
         "same_folder": same_folder, "cross_folder": cross_folder,
         "upgradable": upgradable, "title_groups": title_groups,
-        "query_pairs": query_pairs,
+        "query_pairs": query_pairs, "dismissed_groups": dismissed_groups,
     })
+
+
+@app.post("/feeds/duplicates/undismiss")
+async def undismiss_feed_duplicate(request: Request):
+    """Undo a "Not dupes" dismissal so the group can be suggested again."""
+    body = await request.json()
+    key = str(body.get("dismiss_key") or "").strip()
+    if not key:
+        return JSONResponse({"ok": False, "message": "Missing dismiss_key."}, status_code=400)
+    with get_meta_connection() as conn:
+        conn.execute("DELETE FROM dedup_dismissed WHERE dismiss_key = ?", (key,))
+        conn.commit()
+    return JSONResponse({"ok": True})
 
 
 @app.post("/feeds/duplicates/dismiss")
