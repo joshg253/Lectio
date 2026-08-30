@@ -47,6 +47,12 @@ Remaining:
   `"proxied"` flag in Feed Properties/Failing Feeds like `"browser_ua"`
   today. `_resolve_proxy_for_fetch` in main.py already has the `as_needed`
   branch stubbed (returns None, same as off).
+- **Second backend, later**: Josh is wiring Tailscale (exits on his home IP)
+  as a further fallback behind gluetun — presumably for sites that block VPN
+  ranges but not residential IPs. Not scoped — current schema is one URL/one
+  mode; a real fallback chain would need `SETTING_PROXY_URL` to become an
+  ordered list, which `_resolve_proxy_for_fetch`/the request hook don't
+  support yet. Mentioned 2026-08-29, still just "working on it" on his end.
 - New `proxy_feeds` table needs to land in `ensure_meta_schema` so the
   startup per-user migration backfills existing tenants.
 
