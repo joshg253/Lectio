@@ -47,12 +47,31 @@ Remaining:
   `"proxied"` flag in Feed Properties/Failing Feeds like `"browser_ua"`
   today. `_resolve_proxy_for_fetch` in main.py already has the `as_needed`
   branch stubbed (returns None, same as off).
-- **Second backend, later**: Josh is wiring Tailscale (exits on his home IP)
-  as a further fallback behind gluetun — presumably for sites that block VPN
-  ranges but not residential IPs. Not scoped — current schema is one URL/one
-  mode; a real fallback chain would need `SETTING_PROXY_URL` to become an
-  ordered list, which `_resolve_proxy_for_fetch`/the request hook don't
-  support yet. Mentioned 2026-08-29, still just "working on it" on his end.
+- **Second backend, later**: a Tailscale container is live on the same
+  `proxy` network — `socks5h://tailscale:1080` (preferred, tunnels DNS too)
+  or `http://tailscale:8888` as fallback, no auth (internal-only). Same
+  client wiring as gluetun (`requests[socks]`/`httpx[socks]`).
+
+  Not a drop-in second URL — it's a different trust tier, not just another
+  endpoint. gluetun/Windscribe exits on a disposable-ish shared NAT IP;
+  Tailscale exits on Josh's actual home Comcast IP, traceable to his house.
+  Good fit: basic geoblocking / simple per-IP rate limiting, where that's an
+  acceptable IP to burn. Bad fit: anything sketchy/untrusted, or a site
+  aggressive enough to escalate (abuse reports, IP blocklisting) — that
+  lands on his real connection, not a burner exit. So a per-feed (or at
+  least per-instance-policy) choice of *which* backend is eligible is
+  necessary, not optional — as_needed can't just blindly try tailscale for
+  every blocked feed.
+
+  Also less reliable than gluetun: it's Josh's home mediaserver, which per
+  his own outage history blips every couple months and occasionally goes
+  down for days. Any code using it must treat a proxy-unreachable failure as
+  "fall through to direct," never as a hard failure of the fetch.
+
+  Current schema is one URL/one mode — doesn't support multiple backends or
+  a trust-tier concept yet. `_resolve_proxy_for_fetch`/the request hook
+  would need real design work before this is pluggable. Not scoped;
+  captured 2026-08-29/30 so the details aren't lost before that design pass.
 - New `proxy_feeds` table needs to land in `ensure_meta_schema` so the
   startup per-user migration backfills existing tenants.
 
