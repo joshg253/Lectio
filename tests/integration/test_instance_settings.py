@@ -147,12 +147,43 @@ def test_resolve_proxy_for_fetch_always_mode_with_no_url_configured(configured):
     assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") is None
 
 
-def test_resolve_proxy_for_fetch_as_needed_not_wired_yet(configured):
-    """as_needed escalation is a follow-on PR (Plan.md) — for now it must
-    behave exactly like off, never silently proxy everything."""
+def test_resolve_proxy_for_fetch_as_needed_only_proxies_flagged_feeds(configured):
+    """as_needed must never proxy everything like always does — only feeds
+    explicitly flagged by _flag_proxy_feed_on_still_blocked."""
     _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
     _set_admin_setting(main.SETTING_PROXY_URL, "socks5h://gluetun:1080")
     assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") is None
+    with tenancy.user_context(ADMIN_ID):
+        with main.get_meta_connection() as conn:
+            main.flag_proxy_feed(conn, "https://example.test/feed")
+    main._invalidate_proxy_feeds_cache()
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") == "socks5h://gluetun:1080"
+    # An unrelated feed stays direct even though this one is flagged.
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://other.test/feed") is None
+
+
+def test_flag_proxy_feed_on_still_blocked_is_noop_off_mode(configured):
+    _set_admin_setting(main.SETTING_PROXY_MODE, "off")
+    assert main._flag_proxy_feed_on_still_blocked("https://example.test/feed") is False
+    with main.get_meta_connection() as conn:
+        assert main.get_proxy_feed_urls(conn) == set()
+
+
+def test_flag_proxy_feed_on_still_blocked_is_noop_always_mode(configured):
+    """always mode doesn't need per-feed tracking — every fetch is already
+    proxied, so flagging would just be dead state."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "always")
+    assert main._flag_proxy_feed_on_still_blocked("https://example.test/feed") is False
+    with main.get_meta_connection() as conn:
+        assert main.get_proxy_feed_urls(conn) == set()
+
+
+def test_flag_proxy_feed_on_still_blocked_flags_in_as_needed_mode(configured):
+    _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
+    assert main._flag_proxy_feed_on_still_blocked("https://example.test/feed") is True
+    assert main._flag_proxy_feed_on_still_blocked("https://example.test/feed") is False  # already flagged
+    with main.get_meta_connection() as conn:
+        assert main.get_proxy_feed_urls(conn) == {"https://example.test/feed"}
 
 
 def test_resolve_proxy_for_fetch_respects_per_user_override(configured):

@@ -28,33 +28,49 @@ adding `pysocks` as a dependency for `socks5h://` support. Verified end-to-end a
 target (raised `SOCKSHTTPConnectionPool`, proving it actually routed through PySocks). Scoped to feed fetches only — the separate
 httpx-based image/readability fetches (`/api/img`, save-article rendering) are not proxied; a follow-up if that's ever wanted.
 
-Remaining:
-- **as_needed escalation**: mirror the `browser_ua_feeds` mechanism (`services/feed_refresh.py`'s `on_fetch_refused` + `reader_api.py`'s
-  request hook, both already generalized to accept a `proxy_resolver`) with a sibling `proxy_feeds` table. Escalate to proxy only after a
-  feed is already browser-UA-flagged and still hits `_is_fetch_refusal` or `bot_challenge.FeedBlockedError` — flag, retry once same-cycle,
-  surface a `"proxied"` flag in Feed Properties/Failing Feeds like `"browser_ua"` today. `_resolve_proxy_for_fetch` in main.py already has
-  the `as_needed` branch stubbed (returns None, same as off).
-- **Multi-backend escalation chain, later.** Beyond gluetun, Josh is wiring in more backends — the intent is an ordered chain, not a
-  free-for-all pick of "which backend for which feed," each tier tried only after the one before it has actually failed. Order as of
-  2026-08-30 (still being rethought live, treat as current-best-guess not final): direct → browser-UA (existing) → headless browser →
-  gluetun/Windscribe Pro proxy (a VPS/datacenter exit, still not Josh's own identity) → Tailscale (his home IP) as the *final* fallback.
-  Rationale for headless before gluetun: a JS-execution challenge is a different problem from IP reputation and doesn't need a proxy hop to
-  solve, so it's cheap to try before spending an IP escalation. Current schema (one URL/one mode) supports none of this yet —
-  `_resolve_proxy_for_fetch`/the request hook need real design work before it's pluggable. Not scoped. Per-backend notes so nothing gets
-  lost before that design pass:
-  - **Headless browser** (tried before gluetun): for feeds/pages blocked by a real JS-executing challenge (e.g. Cloudflare's JS challenge)
-    that neither a spoofed browser UA nor a different exit IP gets past, since those never actually run the page's JS. No connection details
-    yet — capture them here (endpoint, protocol: raw CDP vs. a REST wrapper like Browserless, auth) once available.
-  - **Tailscale** (final fallback): `socks5h://tailscale:1080` (preferred, tunnels DNS too) or `http://tailscale:8888`, same `proxy` Docker
-    network, no auth (internal-only), same client wiring as gluetun (`requests[socks]`/`httpx[socks]`). Different trust tier, not just
-    another endpoint: gluetun/Windscribe exits on a disposable-ish shared VPS/datacenter NAT IP; Tailscale exits on Josh's actual home
-    Comcast IP, traceable to his house — fine for basic geoblocking/rate-limiting, wrong for anything sketchy/untrusted or a site aggressive
-    enough to escalate (abuse reports, IP blocklisting) since that lands on his real connection — his actual home internet, which he still
-    needs to use day to day, not a throwaway. Being the *last* resort in the chain is itself most of the answer to "which feeds should this
-    apply to" — it only gets used once every earlier tier has already failed. Also less reliable than gluetun (his home mediaserver blips
-    every couple months, occasionally days-long) — any code using it must fall through to direct on proxy-unreachable, never hard-fail the
-    fetch.
-- New `proxy_feeds` table needs to land in `ensure_meta_schema` so the startup per-user migration backfills existing tenants.
+`as_needed` escalation **shipped** (2026-08-30): a sibling `proxy_feeds` table + `_flag_proxy_feed_on_still_blocked` mirror the
+`browser_ua_feeds` mechanism exactly, in `ensure_meta_schema` (backfills existing tenants via the startup per-user migration). The
+trigger in `services/feed_refresh.py` (`_is_refusal_or_challenge`) was deliberately widened beyond the existing `_is_fetch_refusal`
+(403/415/429/503/timeout) to also recognize `bot_challenge.FeedBlockedError` (walking the exception's `__cause__` chain, since reader
+wraps it in a `ParseError`) — a small, intentional change to existing browser-UA escalation too, needed so a Cloudflare-challenge feed
+gets a browser-UA attempt at all before proxy is even considered. Escalates to proxy only once browser-UA has already been in play for
+that feed (either flagged this cycle and its retry also failed, or was already flagged from an earlier cycle) and it's still failing —
+flag, retry once same-cycle. `"proxied"` surfaced in Feed Properties alongside `"browser_ua"`. Mode-gated:
+`_flag_proxy_feed_on_still_blocked` is a no-op outside as_needed (off never wants it, always doesn't need per-feed tracking). **Not
+done**: no manual override UI (Feed
+Properties has Force/Reset buttons for browser_ua; proxy_feeds has no equivalent yet) — small follow-up if wanted, mirrors that exact
+pattern (`/feeds/browser-ua` route + `feed-prop-browser-ua-*` elements in `_feed_properties_modal.html`/`app.js`).
+
+**Multi-backend escalation chain, later.** Final infra handoff 2026-08-30 — all three backends are live now, and Josh has explicitly
+left the chain order/wiring to whoever builds it ("Lectio's dev decides when/how to chain them"), so treat the order below as a working
+default, not a spec:
+
+| tier | how | notes |
+|---|---|---|
+| Direct | Lectio's normal fetch | fastest, zero exposure |
+| Windscribe (gluetun) | `socks5h://gluetun:1080` or `http://gluetun:8888` | disposable third-party IP, no personal exposure |
+| Browserless (headless) | `POST http://browserless:3000/content?token=<shared secret>`, body `{"url": "..."}` | real headless Chrome, clears JS challenges, slower, still no personal exposure (uses the direct VPS IP unless later stacked with a proxy) |
+| Tailscale | `socks5h://tailscale:1080` or `http://tailscale:8888` | genuine home residential IP, real exposure cost — last resort |
+
+The Browserless token is a live secret — it is NOT recorded here (this file is git-tracked); it belongs in `.env` as something like
+`LECTIO_BROWSERLESS_TOKEN` once actually wired up, same as every other credential in this codebase.
+
+Working-default order (Josh's last stated reasoning, 2026-08-30, before the "dev decides" handoff): direct → browser-UA (existing) →
+Browserless (headless) → Windscribe/gluetun → Tailscale (final fallback). Rationale for headless before gluetun: a JS-execution
+challenge is a different problem from IP reputation and doesn't need a proxy hop to solve, so it's cheap to try before spending an IP
+escalation. Browserless can also be *stacked* with a proxy later (headless fetch routed through gluetun or Tailscale) for a combined
+JS-execution + different-exit-IP escalation — not just a strict single-tier chain.
+
+Trust-tier note (Tailscale): a different trust tier from gluetun, not just another endpoint — gluetun/Windscribe exits on a
+disposable-ish shared VPS/datacenter NAT IP; Tailscale exits on Josh's actual home Comcast IP, traceable to his house — fine for basic
+geoblocking/rate-limiting, wrong for anything sketchy/untrusted or a site aggressive enough to escalate (abuse reports, IP blocklisting)
+since that lands on his real connection, which he still needs to use day to day. Being the *last* resort in the chain is itself most of
+the answer to "which feeds should this apply to." Also less reliable than gluetun (his home mediaserver blips every couple months,
+occasionally days-long) — any code using it must fall through to direct/an earlier tier on proxy-unreachable, never hard-fail the fetch.
+
+Current schema (one URL/one mode) supports none of this yet — `_resolve_proxy_for_fetch`/the request hook need real design work
+(multiple backends, no fixed "which backend for which feed" policy needed since order + failure does that job) before it's pluggable.
+Not scoped.
 
 ### Refetch-All has no "already re-fetched recently" skip
 

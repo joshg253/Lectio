@@ -3952,6 +3952,20 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # as_needed proxy escalation: a feed lands here only after browser-UA
+        # was already in play (flagged this cycle or earlier) and the fetch
+        # still failed — see _flag_proxy_feed_on_still_blocked. Mode-gated:
+        # only as_needed users ever get a feed flagged here (off never wants
+        # it, always doesn't need per-feed tracking).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS proxy_feeds (
+                feed_url TEXT PRIMARY KEY,
+                flagged_at TEXT NOT NULL DEFAULT (datetime('now')),
+                reason TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS feed_display_prefs (
@@ -5659,6 +5673,34 @@ def flag_browser_ua_feed(conn: sqlite3.Connection, feed_url: str, reason: str = 
 
 def unflag_browser_ua_feed(conn: sqlite3.Connection, feed_url: str) -> None:
     conn.execute("DELETE FROM browser_ua_feeds WHERE feed_url = ?", (feed_url.strip(),))
+
+
+def get_proxy_feed_urls(conn: sqlite3.Connection) -> set[str]:
+    """Feeds whose fetch should route through the outbound proxy in as_needed mode.
+
+    A feed lands here only after browser-UA was already in play (flagged this
+    cycle or earlier) and the fetch still failed — see
+    `_flag_proxy_feed_on_still_blocked`. The request hook in services.reader_api
+    consults this set so the next fetch escalates. Irrelevant in off/always
+    mode — those never consult it."""
+    rows = conn.execute("SELECT feed_url FROM proxy_feeds").fetchall()
+    return {str(r["feed_url"]) for r in rows}
+
+
+def flag_proxy_feed(conn: sqlite3.Connection, feed_url: str, reason: str = "") -> bool:
+    """Mark a feed for as-needed proxy escalation. Returns True if newly flagged."""
+    feed_url = feed_url.strip()
+    if not feed_url:
+        return False
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO proxy_feeds (feed_url, reason) VALUES (?, ?)",
+        (feed_url, reason[:200]),
+    )
+    return cur.rowcount > 0
+
+
+def unflag_proxy_feed(conn: sqlite3.Connection, feed_url: str) -> None:
+    conn.execute("DELETE FROM proxy_feeds WHERE feed_url = ?", (feed_url.strip(),))
 
 
 def disable_feed(feed_url: str) -> None:
@@ -8937,16 +8979,71 @@ def _flag_browser_ua_on_refusal(feed_url: str) -> bool:
     return newly
 
 
+# Per-user cache of as-needed-proxy-flagged feed URLs — same shape as the
+# browser-UA cache above, consulted by the same request-hook mechanism.
+_proxy_feeds_cache: dict[str, set[str]] = {}
+_proxy_feeds_cache_at: dict[str, float] = {}
+_proxy_feeds_cache_lock = threading.Lock()
+_PROXY_FEEDS_CACHE_TTL = 30.0
+
+
+def _proxy_feeds_for(uid: str) -> set[str]:
+    now = time.monotonic()
+    with _proxy_feeds_cache_lock:
+        cached = _proxy_feeds_cache.get(uid)
+        if cached is not None and (now - _proxy_feeds_cache_at.get(uid, 0.0)) < _PROXY_FEEDS_CACHE_TTL:
+            return cached
+    try:
+        with tenancy.user_context(uid):
+            with get_meta_connection() as conn:
+                feeds = get_proxy_feed_urls(conn)
+    except Exception:
+        feeds = set()
+    with _proxy_feeds_cache_lock:
+        _proxy_feeds_cache[uid] = feeds
+        _proxy_feeds_cache_at[uid] = now
+    return feeds
+
+
+def _invalidate_proxy_feeds_cache() -> None:
+    with _proxy_feeds_cache_lock:
+        _proxy_feeds_cache.clear()
+        _proxy_feeds_cache_at.clear()
+
+
+def _flag_proxy_feed_on_still_blocked(feed_url: str) -> bool:
+    """Flag a feed for as-needed proxy escalation after browser-UA was already
+    in play and the fetch still failed, and invalidate the cache so an
+    immediate retry routes through the proxy. Mode-gated: only as_needed users
+    ever get flagged here (off never wants it, always doesn't need per-feed
+    tracking) — checked in the current (ambient) tenancy context, same as the
+    scheduler's other per-user callbacks. Returns True if newly flagged."""
+    if get_proxy_mode() != "as_needed":
+        return False
+    try:
+        with get_meta_connection() as conn:
+            newly = flag_proxy_feed(conn, feed_url, reason="still blocked after browser-UA")
+    except Exception:
+        return False
+    if newly:
+        _invalidate_proxy_feeds_cache()
+        LOGGER.info("[refresh] flagged %s for as-needed proxy escalation", feed_url)
+    return newly
+
+
 def _resolve_proxy_for_fetch(uid: str, feed_url: str) -> str | None:
     """Proxy URL to fetch feed_url through for user uid, or None for direct.
 
     "always" routes every fetch through the configured proxy. "as_needed"
-    (only escalating feeds the honest+browser-UA fetch was still refused on)
-    is not wired yet — see Plan.md. "off" (the default) never proxies."""
+    only escalates feeds already flagged by _flag_proxy_feed_on_still_blocked
+    (browser-UA was already in play and still failed). "off" (the default)
+    never proxies."""
     try:
         with tenancy.user_context(uid):
             mode = get_proxy_mode()
             if mode == "always":
+                return get_proxy_url() or None
+            if mode == "as_needed" and feed_url in _proxy_feeds_for(uid):
                 return get_proxy_url() or None
             return None
     except Exception:
@@ -10645,6 +10742,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "devto_feed_id": _devto_id,
             "devto": devto_service.get_feed_config(_pc, _devto_id) if _devto_id else None,
             "browser_ua": feed_url in get_browser_ua_feed_urls(_pc),
+            "proxied": feed_url in get_proxy_feed_urls(_pc),
             # Declared domain migrations for this feed. Rendered as the "Other
             # domains" list under Website, which is the only way to see them —
             # they otherwise act invisibly at ingest and in the global dedupe
@@ -12279,6 +12377,7 @@ feed_refresh_service = FeedRefreshService(
     failed_feed_backoff_base_seconds=FAILED_FEED_BACKOFF_BASE_SECONDS,
     failed_feed_backoff_max_seconds=FAILED_FEED_BACKOFF_MAX_SECONDS,
     on_fetch_refused=_flag_browser_ua_on_refusal,
+    on_fetch_still_blocked=_flag_proxy_feed_on_still_blocked,
     progress_hook=_note_scheduler_progress,
 )
 
