@@ -25,6 +25,7 @@ Self-hosted feed reader, triage, and workflow app. Auth is always on; per-user i
 - Favor workflows that reduce feed triage friction: bulk actions, fast reading flows, reliable tagging/filtering, predictable refresh behavior, and strong keyboard-first interactions.
 - Prefer plugin/adapter-style extensions over hardwired branching when adding non-native behavior.
 - Use `uv` for scripts, tests, and tooling.
+- Line wrapping: commit messages get no line breaks at all — one long line per paragraph, let the terminal/GitHub wrap it. Everything else (code, comments, docstrings, `Plan.md`, docs, PR bodies) wraps at 140 columns, matching ruff's `line-length = 140`. No formatter runs (`ruff format` is off), so this is a hand convention, not enforced — don't reflow existing text piecemeal, only new/edited paragraphs.
 
 ## Model guidance
 - The main session defaults to Sonnet at default effort. Talk to it directly for normal implementation, refactors, tests, docs, and routine debugging — don't ask the user to switch models for a single hard step in an otherwise normal task.
