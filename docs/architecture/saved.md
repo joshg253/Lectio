@@ -506,10 +506,23 @@ clicked uses it. A toggle, not a required radio choice: clicking the already
 a (possibly different) post, in `updateRefetchGroupVisibility` — a choice
 made for the last post re-fetched must not silently carry over.
 
-**Deliberately out of scope**: a per-batch picker for Refetch-All. Its
-`bump_received=False` default is already correct for a bulk backfill and
-Plan.md's ask was specifically about the single-article button ("so a
-picker UI has a real parameter to plug into").
+**Extended to the batch picker** (2026-08-30, raised as "shouldn't Refetch-All
+have one too?"): the folder/feed context menu's "Re-fetch all articles…" grew
+the same three-button Land-on row, its own `refetchScopeDateChoice` variable
+rather than sharing the post menu's `refetchDateChoice` — that one resets to
+unset every time the *per-post* menu opens (deliberately, so a choice made for
+one post can't silently carry to the next), and sharing it would let opening
+either menu wipe out a choice made in the other.
+
+`date_choice` still overrides `bump_received=False` exactly as above, and
+still per-article — "original"/"pub" land each article on its own date,
+`"now"` (deliberately, since it's an explicit ask, not the incidental
+side-effect the `False` default exists to prevent) bumps the whole batch.
+Threaded through `POST /saved/refetch-scope`'s JSON body → `_refetch_begin`
+→ the job dict → `_run_refetch_batch`'s call to
+`_refresh_captured_article_for_current_user`, and into the queue entry too
+(`{"date_choice": ...}`) so a scope queued behind a running batch keeps its
+own choice rather than inheriting whatever's running when it finally starts.
 
 ## Node bulk actions, and what a re-fetch may replace
 

@@ -33993,6 +33993,11 @@ async def start_refetch_scope(request: Request):
     if folder_id is None and not list_feed_url:
         return JSONResponse({"ok": False, "error": "Pick a feed or a folder."}, status_code=400)
     folder_id = int(folder_id) if folder_id is not None else None
+    # Same "now"/"original"/"pub" picker as the single-article re-fetch (see
+    # refresh_content_route) — applied per article, so "original"/"pub" land
+    # each one on its own date, only "now" is uniform across the batch.
+    date_choice = body.get("date_choice")
+    date_choice = date_choice if date_choice in {"now", "original", "pub"} else None
 
     rows = _scope_refetchable(folder_id, list_feed_url)
     if not rows:
@@ -34011,11 +34016,11 @@ async def start_refetch_scope(request: Request):
                                     status_code=409)
             queue.append({"folder_id": folder_id, "list_feed_url": list_feed_url,
                           "label": label, "count": len(rows),
-                          "estimate_seconds": estimate})
+                          "estimate_seconds": estimate, "date_choice": date_choice})
             return JSONResponse({"ok": True, "queued": True, "position": len(queue),
                                  "total": len(rows), "estimate_seconds": estimate,
                                  "label": label})
-        _refetch_begin(job, label, rows, estimate)
+        _refetch_begin(job, label, rows, estimate, date_choice=date_choice)
 
     uid = tenancy.current_user_id()
     threading.Thread(
@@ -34026,12 +34031,12 @@ async def start_refetch_scope(request: Request):
                          "estimate_seconds": estimate, "label": label})
 
 
-def _refetch_begin(job: dict, label: str, rows: list, estimate: int) -> None:
+def _refetch_begin(job: dict, label: str, rows: list, estimate: int, date_choice: str | None = None) -> None:
     job.update({
         "running": True, "cancel": False, "done": 0, "total": len(rows),
         "ok": 0, "archive": 0, "refused": 0, "dead": 0, "failed": 0, "skipped": 0,
         "scope": label, "started_at": time.time(), "finished_at": None,
-        "estimate_seconds": estimate,
+        "estimate_seconds": estimate, "date_choice": date_choice,
     })
     job.setdefault("queue", [])
     job.setdefault("history", [])
@@ -34061,12 +34066,19 @@ def _refetch_worker(rows: list[tuple[str, str, str]], job: dict) -> None:
         if not rows:
             continue
         with _refetch_jobs_lock:
-            _refetch_begin(job, nxt["label"], rows, nxt["estimate_seconds"])
+            _refetch_begin(job, nxt["label"], rows, nxt["estimate_seconds"], date_choice=nxt.get("date_choice"))
 
 
 def _run_refetch_batch(rows: list[tuple[str, str, str]], job: dict) -> None:
     host_failures: dict[str, int] = {}
     host_last: dict[str, float] = {}
+    # Same "now"/"original"/"pub" picker as the single-article re-fetch, applied
+    # per article below. "now" deliberately overrides bump_received=False (see
+    # the call below) — that default exists to stop a routine backfill from
+    # dumping the whole Inbox's order onto whatever finished last, but an
+    # explicit "Now" pick is exactly asking for that, not an accidental side
+    # effect of one.
+    date_choice = job.get("date_choice")
     try:
         for feed_u, entry_id, link in rows:
             if job.get("cancel"):
@@ -34088,7 +34100,7 @@ def _run_refetch_batch(rows: list[tuple[str, str, str]], job: dict) -> None:
                 # is — bumping every touched saved_at at once used to dump the
                 # whole Inbox's order onto whatever finished last.
                 result = _refresh_captured_article_for_current_user(
-                    feed_u, entry_id, "readability", bump_received=False
+                    feed_u, entry_id, "readability", bump_received=False, date_choice=date_choice
                 )
             except Exception:  # noqa: BLE001 — one bad entry must not end the run
                 LOGGER.warning("[refetch-batch] failed for %s", entry_id, exc_info=True)

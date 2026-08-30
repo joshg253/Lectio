@@ -1991,6 +1991,18 @@
     <button type="button" id="ctx-disable-feed" class="context-menu-item" hidden>Disable Feed</button>
     <button type="button" id="ctx-unsubscribe-feed" class="context-menu-item danger" hidden>Unsubscribe</button>
     <button type="button" id="ctx-delete-folder" class="context-menu-item danger" hidden>Delete Folder</button>
+    {# Same picker as the per-post Re-fetch menu, applied to every article in
+       the batch: "Original"/"Pub date" land each one on its own date, only
+       "Now" is uniform across the whole scope. A separate class/variable from
+       the per-post one (ctx-scope-refetch-date-opt / refetchScopeDateChoice)
+       — sharing state would let opening one menu silently reset the other's
+       choice, and nothing here should be pre-selected either. #}
+    <div class="ctx-refetch-date-label" id="ctx-scope-refetch-date-label" hidden>Land on:</div>
+    <div class="ctx-refetch-date-row" id="ctx-scope-refetch-date-row" role="radiogroup" aria-label="Where each re-fetched article's date lands" hidden>
+      <button type="button" class="ctx-refetch-date-opt ctx-scope-refetch-date-opt" data-date-choice="now">Now</button>
+      <button type="button" class="ctx-refetch-date-opt ctx-scope-refetch-date-opt" data-date-choice="original">Original</button>
+      <button type="button" class="ctx-refetch-date-opt ctx-scope-refetch-date-opt" data-date-choice="pub" title="Each article's own published date">Pub date</button>
+    </div>
     <button type="button" id="ctx-refetch-scope" class="context-menu-item" hidden>Re-fetch all articles…</button>
     <button type="button" id="ctx-folder-remove-stars" class="context-menu-item danger" hidden>Remove all stars in folder</button>
     <button type="button" id="ctx-folder-remove-tags" class="context-menu-item danger" hidden>Remove all tags in folder</button>

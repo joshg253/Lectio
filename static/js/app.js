@@ -3290,6 +3290,29 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // unset (today's default) each time the menu opens for a post; see
     // updateRefetchGroupVisibility.
     let refetchDateChoice = null;
+    // Same idea, for "Re-fetch all articles…" — a separate variable rather than
+    // sharing refetchDateChoice, since that resets to unset every time the PER-
+    // POST menu opens (deliberately — a choice made for one post must not
+    // silently apply to the next), and this one needs its own independent
+    // per-open reset instead; see the setMenuItemVisible(refetchScopeButton, …)
+    // call sites.
+    let refetchScopeDateChoice = null;
+
+    // Shows/hides the scope Land-on picker alongside the Re-fetch-all button
+    // itself, and — same "nothing pre-selected" rule as everywhere else in
+    // this menu — resets any previous choice back to unset each time the
+    // folder/feed menu opens for a (possibly different) target.
+    function resetRefetchScopeDatePicker(visible) {
+      const label = document.getElementById('ctx-scope-refetch-date-label');
+      const row = document.getElementById('ctx-scope-refetch-date-row');
+      if (label) label.hidden = !visible;
+      if (row) row.hidden = !visible;
+      refetchScopeDateChoice = null;
+      for (const btn of document.querySelectorAll('.ctx-scope-refetch-date-opt')) {
+        btn.classList.remove('ctx-refetch-date-opt--active');
+      }
+    }
+
     let contextPostOrphan = false;
     // Which posts a bulk action (right now: only "Add to YouTube Playlist…")
     // applies to. Set to a single-item array from the contextPost* fields for
@@ -7517,6 +7540,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           // Batch re-fetch only replaces content Lectio is KEEPING, so it is a
           // Saved-view action too — in the Feeds view the scope would be empty.
           setMenuItemVisible(refetchScopeButton, inSaved);
+          resetRefetchScopeDatePicker(inSaved);
           labelRefetchScopeButton();
         }
         setMenuItemVisible(disableFeedButton, false);
@@ -7589,7 +7613,11 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         setMenuItemVisible(deleteFolderButton, false);
         setMenuItemVisible(youtubeSyncButton, false);
         setMenuItemVisible(disableFeedButton, true);
-        setMenuItemVisible(refetchScopeButton, !!document.querySelector('nav.tree.saved-mode'));
+        {
+          const inSaved = !!document.querySelector('nav.tree.saved-mode');
+          setMenuItemVisible(refetchScopeButton, inSaved);
+          resetRefetchScopeDatePicker(inSaved);
+        }
         labelRefetchScopeButton();
         updateFolderSubmenuOptions();
         hideFolderSubmenu();
@@ -7638,7 +7666,11 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       setMenuItemVisible(deleteFolderButton, false);
       setMenuItemVisible(youtubeSyncButton, false);
       setMenuItemVisible(disableFeedButton, true);
-      setMenuItemVisible(refetchScopeButton, !!document.querySelector('nav.tree.saved-mode'));
+      {
+        const inSaved = !!document.querySelector('nav.tree.saved-mode');
+        setMenuItemVisible(refetchScopeButton, inSaved);
+        resetRefetchScopeDatePicker(inSaved);
+      }
       labelRefetchScopeButton();
       updateFolderSubmenuOptions();
       hideFolderSubmenu();
@@ -10126,7 +10158,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       // Reset the date-choice picker for the new post — a choice made for
       // the last post re-fetched must not silently apply to this one.
       refetchDateChoice = null;
-      for (const btn of document.querySelectorAll('.ctx-refetch-date-opt')) {
+      for (const btn of document.querySelectorAll('.ctx-refetch-date-opt:not(.ctx-scope-refetch-date-opt)')) {
         btn.classList.remove('ctx-refetch-date-opt--active');
       }
       const feedUrl = contextPostFeedUrl;
@@ -10258,14 +10290,30 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // choice: clicking the already-active option clears it back to unset
     // (today's is_capture-conditional default), same "nothing forces a
     // choice" spirit as the rest of this menu.
-    for (const dateBtn of document.querySelectorAll('.ctx-refetch-date-opt')) {
+    for (const dateBtn of document.querySelectorAll('.ctx-refetch-date-opt:not(.ctx-scope-refetch-date-opt)')) {
       dateBtn.addEventListener('click', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
         const choice = dateBtn.dataset.dateChoice;
         const nowActive = refetchDateChoice === choice ? null : choice;
         refetchDateChoice = nowActive;
-        for (const btn of document.querySelectorAll('.ctx-refetch-date-opt')) {
+        for (const btn of document.querySelectorAll('.ctx-refetch-date-opt:not(.ctx-scope-refetch-date-opt)')) {
+          btn.classList.toggle('ctx-refetch-date-opt--active', btn === dateBtn && nowActive !== null);
+        }
+      });
+    }
+
+    // Same toggle behavior, for "Re-fetch all articles…" — see
+    // refetchScopeDateChoice's own declaration for why this is a separate
+    // variable/loop rather than sharing the one above.
+    for (const dateBtn of document.querySelectorAll('.ctx-scope-refetch-date-opt')) {
+      dateBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const choice = dateBtn.dataset.dateChoice;
+        const nowActive = refetchScopeDateChoice === choice ? null : choice;
+        refetchScopeDateChoice = nowActive;
+        for (const btn of document.querySelectorAll('.ctx-scope-refetch-date-opt')) {
           btn.classList.toggle('ctx-refetch-date-opt--active', btn === dateBtn && nowActive !== null);
         }
       });
@@ -15925,11 +15973,13 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       const waiting = preview.busy
         ? `\n\nA batch is already running${preview.queued ? ` with ${preview.queued} queued behind it` : ''}, so this one will be queued and start when that finishes.`
         : '';
+      const landOnLabel = { now: 'Now', original: 'Original', pub: "each article's own published date" }[refetchScopeDateChoice];
+      const landOn = landOnLabel ? `\n\nLanding on: ${landOnLabel}.` : '';
       const ok = window.confirm(
         `Re-fetch ${preview.count} kept article${preview.count === 1 ? '' : 's'} in ` +
         `${params.label}, across ${preview.hosts} site${preview.hosts === 1 ? '' : 's'}?\n\n` +
         `This is paced to be polite and will take ${humanDuration(preview.estimate_seconds)}. ` +
-        `It runs in the background — you can keep using Lectio.${waiting}\n\n` +
+        `It runs in the background — you can keep using Lectio.${waiting}${landOn}\n\n` +
         `Each article's current copy is snapshotted first, so any result can be reverted, ` +
         `and a page that is plainly a different article is refused rather than written.`);
       if (!ok) return;
@@ -15938,7 +15988,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ folder_id: params.folder_id ?? null,
-                                 list_feed_url: params.list_feed_url || null }),
+                                 list_feed_url: params.list_feed_url || null,
+                                 date_choice: refetchScopeDateChoice }),
         });
         const data = await resp.json();
         if (!data.ok) {
