@@ -472,6 +472,50 @@ def test_update_feeds_skips_when_backoff_not_elapsed(tmp_path: Path):
     assert lead_calls == ["https://example.com/skip.xml"]
 
 
+def test_update_feeds_bypass_backoff_fetches_anyway(tmp_path: Path):
+    """A deliberate single-feed refresh (bypass_backoff=True) must actually
+    fetch a feed still inside its backoff window, not silently no-op like the
+    scheduler's own calls do."""
+    db_path = tmp_path / "meta.sqlite"
+    reader = _FakeReader()
+    service = _build_service(db_path, reader, [], [])
+
+    with _make_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO feed_failure_state(feed_url, consecutive_failures, next_retry_at, last_error) VALUES (?, ?, ?, ?)",
+            ("https://example.com/skip.xml", 3, time.time() + 3600, "some error"),
+        )
+
+    service.update_feeds(["https://example.com/skip.xml"], bypass_backoff=True)
+
+    assert reader.updated == ["https://example.com/skip.xml"]
+
+
+def test_update_feeds_bypass_backoff_still_honors_reader_update_after(tmp_path: Path):
+    """bypass_backoff skips our own feed/domain backoff, but not reader's own
+    update_after (Retry-After/Cache-Control) — that's the server's own
+    instruction, not just Lectio's pacing."""
+    db_path = tmp_path / "meta.sqlite"
+
+    class _UpdateAfterReader(_FakeReader):
+        def get_feed(self, feed_url: str, _default=None):
+            class _F:
+                update_after = _UpdateAfterTs()
+                last_updated = 1.0
+            return _F()
+
+    class _UpdateAfterTs:
+        def timestamp(self) -> float:
+            return time.time() + 3600
+
+    reader = _UpdateAfterReader()
+    service = _build_service(db_path, reader, [], [])
+
+    service.update_feeds(["https://example.com/retry-after.xml"], bypass_backoff=True)
+
+    assert reader.updated == []
+
+
 def test_get_problematic_feeds_formats_retry_display(tmp_path: Path):
     db_path = tmp_path / "meta.sqlite"
     reader = _FakeReader()

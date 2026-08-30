@@ -32147,7 +32147,10 @@ def refresh_feed(
     if feed_id:
         with get_meta_connection() as conn:
             scraper_service.refresh_scraped_feed_by_id(conn, feed_id)
-    feed_refresh_service.update_feeds([feed_url], enhance=False)
+    # A deliberate click on one feed must actually attempt a fetch, not silently
+    # no-op behind a backoff window the user has no visibility into — see
+    # FeedRefreshService.update_feeds' bypass_backoff docstring.
+    feed_refresh_service.update_feeds([feed_url], enhance=False, bypass_backoff=True)
     _run_automation_after_refresh({feed_url})
     invalidate_unread_counts_cache()
     _spawn_feed_enhancement([feed_url])

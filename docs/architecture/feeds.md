@@ -655,6 +655,17 @@ to October 2024. A real month beats a precise-looking lie.
   (`_HIGH_FANOUT_PACE_SECONDS`) so a big serial burst isn't throttled into
   spurious 404s (YouTube 404s a ~700-request burst though each feed is fine
   singly) — a polite-client measure, feeds to other hosts interleave at full speed.
+- **`bypass_backoff`** (`FeedRefreshService.update_feeds`) — skips the feed- and
+  domain-level backoff checks above, but not reader's own `update_after`
+  (Retry-After/Cache-Control, a real instruction from the site). Wired only into
+  the single-feed manual `/refresh/feed` route: a deliberate click on one feed is
+  a single polite request, the same reasoning already used for a never-updated
+  feed's first fetch. The scheduler and the bulk `/refresh/folder` route stay on
+  the default (respect backoff) — bypassing a whole folder's backoff in one click
+  would hit every backed-off feed on it at once, a different blast radius.
+  Without this, a feed that recovered *after* its last failed attempt stayed
+  reported as failing — and Refresh silently did nothing — for up to the 24h
+  backoff cap.
 
 
 ## Suggesting a replacement for a feed on a known dead-end host

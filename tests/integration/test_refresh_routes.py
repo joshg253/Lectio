@@ -90,9 +90,10 @@ def test_refresh_feed_route_success_updates_single_feed(monkeypatch):
 
     monkeypatch.setattr(main, "check_and_mark_manual_refresh", lambda: 0)
 
-    def _capture_update_feeds(feed_urls: Iterable[str], *, enhance: bool = True) -> None:
+    def _capture_update_feeds(feed_urls: Iterable[str], *, enhance: bool = True, bypass_backoff: bool = False) -> None:
         captured["feed_urls"] = list(feed_urls)
         captured["enhance"] = enhance
+        captured["bypass_backoff"] = bypass_backoff
 
     monkeypatch.setattr(main.feed_refresh_service, "update_feeds", _capture_update_feeds)
     monkeypatch.setattr(main, "invalidate_unread_counts_cache", lambda: captured.__setitem__("invalidated", True))
@@ -112,6 +113,9 @@ def test_refresh_feed_route_success_updates_single_feed(monkeypatch):
     assert response.status_code == 303
     assert captured["feed_urls"] == ["https://feed.example/rss.xml"]
     assert captured["enhance"] is False
+    # A deliberate single-feed refresh must bypass its own backoff window, unlike
+    # the scheduler's and the bulk folder route's calls — see update_feeds' docstring.
+    assert captured["bypass_backoff"] is True
     assert captured["invalidated"] is True
     assert captured["enhanced"] == ["https://feed.example/rss.xml"]
     assert "message=Feed+refresh+complete." in response.headers["location"]

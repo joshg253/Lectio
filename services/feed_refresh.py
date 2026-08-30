@@ -326,7 +326,15 @@ class FeedRefreshService:
         except Exception:
             self._logger.debug("[refresh] fetch-history insert failed for %s", feed_url, exc_info=True)
 
-    def update_feeds(self, feed_urls: Iterable[str], *, enhance: bool = True) -> None:
+    def update_feeds(self, feed_urls: Iterable[str], *, enhance: bool = True, bypass_backoff: bool = False) -> None:
+        """*bypass_backoff* skips the feed- and domain-level backoff checks (not
+        reader's own update_after, which reflects the server's own Retry-After/
+        Cache-Control — a real instruction from the site, not just our pacing).
+        For a deliberate single-feed manual refresh only: the same "one request
+        is still polite" reasoning already applied to a never-updated feed's
+        first fetch, not something a scheduled or bulk-folder refresh should do
+        (that would turn "wait out the backoff" into "hit every backed-off feed
+        in the folder on every click")."""
         feed_url_list = list(feed_urls)
         if self._refresh_debug_enabled:
             self._logger.info("[refresh] start: feed_count=%d", len(feed_url_list))
@@ -426,8 +434,8 @@ class FeedRefreshService:
 
                     effective_next_retry = (
                         max(
-                            feed_next_retry if feed_next_retry is not None else 0.0,
-                            domain_next_retry if domain_next_retry is not None else 0.0,
+                            0.0 if bypass_backoff else (feed_next_retry if feed_next_retry is not None else 0.0),
+                            0.0 if bypass_backoff else (domain_next_retry if domain_next_retry is not None else 0.0),
                             reader_update_after if reader_update_after is not None else 0.0,
                         )
                         or None
