@@ -93,3 +93,30 @@ def test_current_context_value_wins_over_admin(configured):
     with main.get_meta_connection() as conn:  # default context
         main.set_setting(conn, main.SETTING_MAINTENANCE_HOUR, "7")
     assert main.get_maintenance_hour() == 7
+
+
+def test_proxy_mode_defaults_off_everywhere(configured):
+    """Nothing configured anywhere (no admin default, no per-user override, no
+    env) must resolve to "off" — the proxy is opt-in, never silently on."""
+    assert main.get_proxy_mode() == "off"
+
+
+def test_proxy_mode_per_user_override_wins_over_admin_default(configured):
+    """The admin sets the instance default; an individual user's own override
+    (e.g. only the admin's own account should route through their VPN) must
+    take precedence for that user without affecting the admin default."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
+    assert main.get_proxy_mode() == "as_needed"  # default-context user inherits it
+    with main.get_meta_connection() as conn:  # default context = the "other" user
+        main.set_setting(conn, main.SETTING_PROXY_MODE, "always")
+    assert main.get_proxy_mode() == "always"
+
+
+def test_proxy_mode_reverts_to_instance_default_when_override_cleared(configured):
+    _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
+    with main.get_meta_connection() as conn:
+        main.set_setting(conn, main.SETTING_PROXY_MODE, "always")
+    assert main.get_proxy_mode() == "always"
+    with main.get_meta_connection() as conn:
+        main.delete_setting(conn, main.SETTING_PROXY_MODE)
+    assert main.get_proxy_mode() == "as_needed"

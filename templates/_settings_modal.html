@@ -84,6 +84,17 @@
           </label>
           <p class="settings-hint">Loads every image in an article's body through Lectio's image cache instead of directly from the source site. Stops content blockers from breaking articles whose images they filter, at the cost of more cache traffic and losing high-DPI (srcset) images.</p>
         </div>
+        <h4 class="settings-section-title" style="margin-top:1rem">Network</h4>
+        <div class="settings-section">
+          <label class="settings-label" for="sett-proxy-mode">Outbound proxy</label>
+          <select id="sett-proxy-mode" class="settings-input">
+            <option value="">Inherit instance default</option>
+            <option value="off">Off</option>
+            <option value="as_needed">As needed</option>
+            <option value="always">Always</option>
+          </select>
+          <p class="settings-hint" id="sett-proxy-mode-hint">Routes your feed fetches through the instance's configured proxy (set by an admin in Administration). "As needed" only escalates a feed after it's been refused outright.</p>
+        </div>
         <div class="settings-actions">
           <button type="button" class="settings-save-btn" data-settings-save="account">Save</button>
         </div>

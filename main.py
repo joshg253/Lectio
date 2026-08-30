@@ -403,6 +403,12 @@ SETTING_PORTRAIT_IMG_MAX_WIDTH = "portrait_img_max_width"
 # the proxied single-resolution src). Read Mode always does this regardless of
 # this setting (see proxy_all_body_images).
 SETTING_PROXY_BODY_IMAGES = "proxy_body_images"
+# Outbound-fetch SOCKS5/HTTP proxy (e.g. a gluetun VPN container). URL is
+# admin-only (a non-admin choosing an arbitrary proxy target is SSRF-adjacent);
+# mode is per-user-overridable — "" means inherit the instance default. See
+# get_proxy_url / get_proxy_mode.
+SETTING_PROXY_URL = "proxy_url"
+SETTING_PROXY_MODE = "proxy_mode"  # "off" / "as_needed" / "always"
 SETTING_MAINTENANCE_HOUR = "maintenance_hour"
 SETTING_IMG_CACHE_DAYS = "img_cache_days"
 SETTING_IMG_CACHE_MAX_DIM = "img_cache_max_dim"
@@ -639,6 +645,8 @@ _ENV_IMG_CACHE_MAX_DIM = _env_int("LECTIO_IMG_CACHE_MAX_DIM", 3840)
 _ENV_IMG_TARGET_BYTES = _env_int("LECTIO_IMG_TARGET_BYTES", 1_500_000)
 # Max width (px) for portrait (taller-than-wide) article images; 0 = disabled.
 _ENV_PORTRAIT_IMG_MAX_WIDTH = _env_int("LECTIO_PORTRAIT_IMG_MAX_WIDTH", 650)
+# Outbound-fetch proxy endpoint (e.g. socks5h://gluetun:1080). "" = none configured.
+_ENV_PROXY_URL = os.getenv("LECTIO_PROXY_URL", "").strip()
 
 # --- Scheduler resilience (see ARCHITECTURE "Refresh scheduler") ---
 # Feed fetches are strictly sequential, so one host that accepts a connection and
@@ -1733,6 +1741,23 @@ def proxy_body_images_enabled() -> bool:
     """Per-user: preemptively proxy every article-pane body image through
     /api/img instead of loading third-party URLs directly. Off by default."""
     return get_runtime_setting(SETTING_PROXY_BODY_IMAGES, "0") == "1"
+
+
+_PROXY_MODES = ("off", "as_needed", "always")
+
+
+def get_proxy_url() -> str:
+    """Outbound-fetch proxy endpoint (e.g. gluetun's socks5h://gluetun:1080).
+    Admin-managed; env default, DB override takes precedence."""
+    return get_instance_setting(SETTING_PROXY_URL, _ENV_PROXY_URL)
+
+
+def get_proxy_mode() -> str:
+    """off / as_needed / always for outbound feed fetches. Per-user DB setting
+    overrides the instance (first-admin) default; unset resolves to "off" —
+    the proxy is opt-in everywhere."""
+    val = get_instance_setting(SETTING_PROXY_MODE, "off")
+    return val if val in _PROXY_MODES else "off"
 
 
 def get_img_cache_days() -> int:
@@ -22448,6 +22473,8 @@ def administration_page(request: Request, msg: str | None = None, error: str | N
             "img_cache_days": get_img_cache_days(),
             "img_cache_max_dim": get_img_cache_max_dim(),
             "img_target_bytes": get_img_target_bytes(),
+            "proxy_url": get_proxy_url(),
+            "proxy_mode": get_proxy_mode(),
             # Shared OAuth apps (stored in admin's own app_settings).
             "shared_yt_oauth_client_id": get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_ID, ""),
             "shared_yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)),
@@ -28297,6 +28324,11 @@ def get_all_settings():
         "tz_display": get_runtime_setting(SETTING_TZ_DISPLAY),
         "portrait_img_max_width": get_portrait_img_max_width(),
         "proxy_body_images": proxy_body_images_enabled(),
+        # Raw own row ("" = inherit the instance default) vs. the resolved value
+        # actually in effect for this user right now — the UI shows the former
+        # as the select's value and the latter as a hint when it's "inherit".
+        "proxy_mode_own": get_runtime_setting(SETTING_PROXY_MODE, ""),
+        "proxy_mode_effective": get_proxy_mode(),
         "tz_default": os.environ.get("TZ") or "UTC",
         "maintenance_hour": get_runtime_setting(SETTING_MAINTENANCE_HOUR),
         "maintenance_last_ran_at": maint_last,
@@ -28422,6 +28454,7 @@ async def save_all_settings(request: Request):
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
         SETTING_TZ_DISPLAY, SETTING_PORTRAIT_IMG_MAX_WIDTH, SETTING_PROXY_BODY_IMAGES,
+        SETTING_PROXY_URL, SETTING_PROXY_MODE,
         SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
@@ -28458,6 +28491,7 @@ async def save_all_settings(request: Request):
     # requests silently drop these keys, even if the client sends them.
     _ADMIN_ONLY = {
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
+        SETTING_PROXY_URL,
         SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,

@@ -15,44 +15,30 @@ remainder.
 
 ### SOCKS5 proxy support for outbound fetches (gluetun VPN)
 
-Requested 2026-08-29, top of the queue. A gluetun VPN container now runs on
-the same Docker network as Lectio (`proxy` network) — no networking change
-needed on Lectio's side, just code to actually route requests through it.
+Design settled 2026-08-29. gluetun runs on the `proxy` Docker network at
+`socks5h://gluetun:1080` (shared Windscribe NAT IP — helps ordinary
+geoblocks/rate limits, not real bot detection; region via `.env`'s
+`WINDSCRIBE_SERVER_REGIONS`, not app code). `good-web-citizen` behavior still
+holds — this is for legitimate geoblocks/rate limits, not evading deliberate
+blocks.
 
-Endpoints (live now, unauthenticated — safe since only reachable inside the
-`proxy` network, not exposed to the internet):
-- SOCKS5: `socks5h://gluetun:1080` (use the `socks5h` scheme specifically,
-  not `socks5` — the `h` sends DNS resolution through the tunnel too, which
-  is what was actually tested)
-- HTTP proxy: `http://gluetun:8888` (fallback if a library doesn't do SOCKS5)
+Settings: `SETTING_PROXY_URL` (admin-only) + `SETTING_PROXY_MODE`
+(off/as_needed/always, per-user-overridable via `get_instance_setting`'s
+existing tier chain — own row → admin's row → env). Off everywhere by
+default. **Shipped** (settings scaffold, no fetch-path wiring yet).
 
-Client wiring, once a fetch path is chosen to route through it:
-- `requests`: needs the `requests[socks]` extra (pulls in `pysocks`), then
-  `proxies={"http": "socks5h://gluetun:1080", "https": "socks5h://gluetun:1080"}`
-  per-request.
-- `httpx` (what most of Lectio's own fetching uses): needs the `httpx[socks]`
-  extra, then `httpx.Client(proxy="socks5h://gluetun:1080")`.
-
-Shared-resource note: gluetun is one VPN client shared by whatever opts in,
-not per-app — its exit region is pinned via `.env`'s
-`WINDSCRIBE_SERVER_REGIONS` (currently `US Central,US East,US West`). Change
-that env var, not app code, if Lectio ever needs a different exit region.
-
-Expectations: it's a shared Windscribe NAT IP. Plain unadversarial GETs went
-through fine in testing, but Google/DuckDuckGo/Startpage/Brave flagged it
-immediately (they specifically hunt VPN ranges) — so this will likely help
-against ordinary geoblocks or basic per-IP rate limits on smaller feed
-sources, not against sites running real bot detection.
-
-**Not scoped yet** — needs a decision before implementation: an "Always Use
-/ As Needed" toggle was mentioned, entirely Lectio-side (gluetun needs no
-config for it), but per-feed vs. global, where it lives in Settings, and
-whether "as needed" means auto-retry-through-proxy-on-403/blocked or a
-manual per-feed flag are all still open. `good-web-citizen` behavior
-(honest UA, no forced hammering, no evading legitimate IP blocks — see
-`feedback_good_web_citizen` memory) should still hold; this is for
-ordinary geoblocks/rate limits on sources Lectio has a legitimate reason to
-read, not for evading a site that's deliberately blocking abusive traffic.
+Remaining, as three follow-on PRs:
+- **Always mode wiring**: `get_reader()`/`ReaderApi` construct a proxied
+  session when `get_proxy_mode()` resolves to `always`.
+- **as_needed escalation**: mirror the `browser_ua_feeds` mechanism
+  (`services/feed_refresh.py`'s `on_fetch_refused` + `reader_api.py`'s
+  request hook) with a sibling `proxy_feeds` table. Escalate to proxy only
+  after a feed is already browser-UA-flagged and still hits
+  `_is_fetch_refusal` or `bot_challenge.FeedBlockedError` — flag, retry
+  once same-cycle, surface a `"proxied"` flag in Feed Properties/Failing
+  Feeds like `"browser_ua"` today.
+- New `proxy_feeds` table needs to land in `ensure_meta_schema` so the
+  startup per-user migration backfills existing tenants.
 
 ### Refetch-All has no "already re-fetched recently" skip
 
