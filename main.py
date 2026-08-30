@@ -4146,9 +4146,34 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE highlight_keywords ADD COLUMN yt_max_minutes INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+        # A rule's identity is (scope, scope_id, keyword) everywhere in this file --
+        # fine for same-request lookups, but any table that needs to recognize "the
+        # same rule" *across time* breaks the moment scope/scope_id/keyword changes
+        # (editing a rule's feed list, say): edit_highlight_route does remove-old +
+        # insert-new on an identity change, so anything keyed on the old text is
+        # silently orphaned. rule_uid is a stable id that survives such edits --
+        # add_highlight_keyword carries the prior row's rule_uid forward instead of
+        # minting a new one. Existing rows get one backfilled below (once; empty
+        # rule_uid afterward means a row created before this migration ran and
+        # somehow missed the backfill, not "no rule_uid assigned yet").
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN rule_uid TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        for row in conn.execute("SELECT rowid FROM highlight_keywords WHERE rule_uid = ''").fetchall():
+            conn.execute(
+                "UPDATE highlight_keywords SET rule_uid = ? WHERE rowid = ?",
+                (secrets.token_hex(16), row["rowid"]),
+            )
         # Dedup guard for the youtube_playlist rule: playlistItems.insert is not
         # idempotent, so record each (rule, entry) we've added to avoid re-adding the
         # same video on a later refresh (the cutoff window alone can re-match).
+        # Keyed on (scope, scope_id, keyword) for historical reasons; that text
+        # identity breaks on a scope-changing edit (see rule_uid above), so new
+        # rows also carry rule_uid and get deduped through the partial unique index
+        # below instead once it's populated. Old rows keep rule_uid = '' rather
+        # than get backfilled: there's no reliable way to map them back to a
+        # *current* rule now that their scope text may no longer match anything.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS youtube_playlist_added (
@@ -4161,6 +4186,14 @@ def ensure_meta_schema() -> None:
                 PRIMARY KEY (scope, scope_id, keyword, entry_id, video_id)
             )
             """
+        )
+        try:
+            conn.execute("ALTER TABLE youtube_playlist_added ADD COLUMN rule_uid TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_ytpl_added_rule_uid"
+            " ON youtube_playlist_added (rule_uid, entry_id, video_id) WHERE rule_uid != ''"
         )
         # Per-user YouTube Data API quota spend, keyed by the Pacific calendar date
         # (Google resets quota at midnight Pacific). The API exposes no remaining-quota
@@ -4807,7 +4840,7 @@ def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
         " exclude_scope_ids, sort_order,"
         " webhook_url, webhook_format, webhook_batch,"
         " yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
-        " yt_min_minutes, yt_max_minutes"
+        " yt_min_minutes, yt_max_minutes, rule_uid"
         " FROM highlight_keywords ORDER BY sort_order ASC, rowid ASC"
     ).fetchall()
     return [dict(r) for r in rows]
@@ -5071,6 +5104,7 @@ def add_highlight_keyword(
     yt_mark_read: bool = True,
     yt_min_minutes: int = 0,
     yt_max_minutes: int = 0,
+    rule_uid: str = "",
 ) -> None:
     if scope not in _HIGHLIGHT_VALID_SCOPES:
         raise ValueError(f"Invalid scope: {scope}")
@@ -5100,8 +5134,8 @@ def add_highlight_keyword(
         "  dedup_fuzzy_pct, dedup_min_title_words,"
         "  webhook_url, webhook_format, webhook_batch,"
         "  yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
-        "  yt_min_minutes, yt_max_minutes)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "  yt_min_minutes, yt_max_minutes, rule_uid)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0, 1 if enabled else 0,
          rule_type, search_in, delivery,
          email_to.strip(), batch_time.strip(), max(0, int(batch_count or 0)), 1 if cc_me else 0,
@@ -5110,7 +5144,8 @@ def add_highlight_keyword(
          webhook_url.strip(), webhook_format, 1 if webhook_batch else 0,
          yt_playlist_id.strip(), yt_playlist_title.strip(),
          1 if yt_include_shorts else 0, 1 if yt_mark_read else 0,
-         max(0, int(yt_min_minutes or 0)), max(0, int(yt_max_minutes or 0))),
+         max(0, int(yt_min_minutes or 0)), max(0, int(yt_max_minutes or 0)),
+         rule_uid.strip() or secrets.token_hex(16)),
     )
 
 
@@ -8457,6 +8492,7 @@ def _apply_youtube_playlist_rules(
         scope = str(rule.get("scope", ""))
         scope_id = str(rule.get("scope_id") or "")
         keyword = str(rule.get("keyword", ""))
+        rule_uid = str(rule.get("rule_uid") or "")
         is_regex = bool(rule.get("is_regex"))
         search_in = str(rule.get("search_in") or "title")
         playlist_id = str(rule.get("yt_playlist_id") or "")
@@ -8512,13 +8548,18 @@ def _apply_youtube_playlist_rules(
                                 if max_secs and dur > max_secs:
                                     continue
                             # Dedup guard: claim the (rule, entry, video) row first;
-                            # rowcount 0 means we've added it before — skip.
+                            # rowcount 0 means we've added it before — skip. Written
+                            # against BOTH identities (the legacy scope/scope_id/
+                            # keyword PK and the rule_uid partial unique index, when
+                            # rule_uid is set) — OR IGNORE backs off on a conflict
+                            # with either, so a rule edited since its last add still
+                            # dedupes correctly instead of re-submitting.
                             with get_meta_connection() as conn:
                                 cur = conn.execute(
                                     "INSERT OR IGNORE INTO youtube_playlist_added"
-                                    " (scope, scope_id, keyword, entry_id, video_id, added_at)"
-                                    " VALUES (?,?,?,?,?,?)",
-                                    (scope, scope_id, keyword, eid, vid, now_str),
+                                    " (scope, scope_id, keyword, entry_id, video_id, added_at, rule_uid)"
+                                    " VALUES (?,?,?,?,?,?,?)",
+                                    (scope, scope_id, keyword, eid, vid, now_str, rule_uid),
                                 )
                                 claimed = cur.rowcount > 0
                             if not claimed:
@@ -25747,6 +25788,15 @@ def edit_highlight_route(
     with get_meta_connection() as conn:
         same_identity = (scope == old_scope and str(scope_id or "") == str(old_scope_id or "")
                          and keyword == old_keyword)
+        # INSERT OR REPLACE below re-creates the row (new rowid) even when the
+        # identity is unchanged, so the prior rule_uid must be fetched and
+        # carried forward regardless -- otherwise every edit would mint a new
+        # one, defeating the point (see rule_uid's ensure_meta_schema comment).
+        old_row = conn.execute(
+            "SELECT rule_uid FROM highlight_keywords WHERE scope = ? AND scope_id = ? AND keyword = ?",
+            (old_scope, old_scope_id, old_keyword),
+        ).fetchone()
+        rule_uid = str(old_row["rule_uid"]) if old_row else ""
         if not same_identity:
             remove_highlight_keyword(conn, old_scope, old_scope_id, old_keyword)
         add_highlight_keyword(conn, scope, scope_id, keyword, color, bool(is_regex),
@@ -25757,7 +25807,7 @@ def edit_highlight_route(
                               webhook_url, webhook_format, bool(webhook_batch),
                               yt_playlist_id, yt_playlist_title,
                               bool(yt_include_shorts), bool(yt_mark_read),
-                              yt_min_minutes, yt_max_minutes)
+                              yt_min_minutes, yt_max_minutes, rule_uid)
     return _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, search_in,
                                     delivery, email_to, batch_time, batch_count, cc_me, enabled,
                                     dedup_window_hours, exclude_scope_ids, dedup_fuzzy_pct,

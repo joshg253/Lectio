@@ -126,6 +126,7 @@ def _seed_already_present(rule: dict, feed_urls: set[str], cutoff: datetime, liv
     scope = str(rule.get("scope", ""))
     scope_id = str(rule.get("scope_id") or "")
     keyword = str(rule.get("keyword", ""))
+    rule_uid = str(rule.get("rule_uid") or "")
     now_str = datetime.now().isoformat()
     seeded = 0
     with main.get_meta_connection() as conn:
@@ -134,8 +135,8 @@ def _seed_already_present(rule: dict, feed_urls: set[str], cutoff: datetime, liv
                 continue
             cur = conn.execute(
                 "INSERT OR IGNORE INTO youtube_playlist_added"
-                " (scope, scope_id, keyword, entry_id, video_id, added_at) VALUES (?,?,?,?,?,?)",
-                (scope, scope_id, keyword, str(getattr(entry, "id", "")), vid, now_str),
+                " (scope, scope_id, keyword, entry_id, video_id, added_at, rule_uid) VALUES (?,?,?,?,?,?,?)",
+                (scope, scope_id, keyword, str(getattr(entry, "id", "")), vid, now_str, rule_uid),
             )
             seeded += cur.rowcount
     return seeded

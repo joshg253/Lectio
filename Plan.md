@@ -122,21 +122,17 @@ excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 
 *Moved down from Now on 2026-08-24: deliberately deferred, no trigger condition met yet.*
 
-### youtube_playlist_added dedup key is a text snapshot of the rule, not a stable id
+### email_batch_queue has the same scope-text-identity fragility rule_uid just fixed elsewhere
 
-Found 2026-08-29 while investigating missed/duplicate playlist adds. The
-`youtube_playlist_added` guard's primary key is `(scope, scope_id, keyword,
-entry_id, video_id)` — `scope_id` is the rule's raw feed list (or folder id)
-as a string, not a stable rule id. Editing a rule's scope (adding/removing a
-feed) changes that string, silently orphaning every prior dedup row for that
-rule: already-added videos look "unclaimed" again, and the next matching run
-would re-submit them — `playlistItems.insert` isn't idempotent, so that's a
-duplicate in the real playlist, not just noise. `scripts/backfill_missed_youtube_playlist_adds.py`
-works around this by checking live playlist contents instead of trusting the
-local table. A real fix needs a stable `rule_id` column on `highlight_keywords`
-(none exists today — rules are identified by the scope/scope_id/keyword
-tuple everywhere) and a migration of `youtube_playlist_added` to key off it.
-Not attempted — bigger than this session's fix, and only bites on a scope edit.
+Found 2026-08-29 alongside the `youtube_playlist_added` fix (see git history —
+`highlight_keywords.rule_uid` now survives a scope-changing edit).
+`email_batch_queue` is `UNIQUE(rule_scope, rule_scope_id, rule_keyword,
+entry_id)`, same pattern: editing a batch email rule's scope/keyword while
+entries are queued orphans them (they never flush). Lower stakes than the
+YouTube case — the queue drains on its own schedule rather than accumulating
+history, and the failure mode is a dropped/duplicate email, not a
+non-idempotent external write. Not fixed — no report of it actually biting
+anyone yet; wire it to `rule_uid` if one comes in.
 
 ### Add OIDC login
 
