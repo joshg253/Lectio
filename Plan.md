@@ -58,8 +58,15 @@ The Browserless token is a live secret — it is NOT recorded here (this file is
 Working-default order (Josh's last stated reasoning, 2026-08-30, before the "dev decides" handoff): direct → browser-UA (existing) →
 Browserless (headless) → Windscribe/gluetun → Tailscale (final fallback). Rationale for headless before gluetun: a JS-execution
 challenge is a different problem from IP reputation and doesn't need a proxy hop to solve, so it's cheap to try before spending an IP
-escalation. Browserless can also be *stacked* with a proxy later (headless fetch routed through gluetun or Tailscale) for a combined
-JS-execution + different-exit-IP escalation — not just a strict single-tier chain.
+escalation.
+
+**Stacking Browserless with a proxy is app-level, no infra changes** (confirmed 2026-08-30): pass Chrome's `--proxy-server` as a launch
+flag via Browserless's `launch` query param — `?launch={"args":["--proxy-server=socks5://gluetun:1080"]}` (URL- or base64-encoded JSON
+per their docs), same mechanism on the REST `/content` endpoint or a raw WebSocket/CDP connection. Swap `gluetun:1080` for
+`tailscale:1080` to stack headless rendering with the residential IP instead. Chrome doesn't support SOCKS5 username/password auth, but
+that's moot here since neither proxy has auth configured (internal-only on the `proxy` network). So the full combinatorial toolkit —
+direct, either proxy alone, Browserless alone, or Browserless stacked with either proxy — is available purely through request
+parameters; no docker-compose/container config needed for any combination.
 
 Trust-tier note (Tailscale): a different trust tier from gluetun, not just another endpoint — gluetun/Windscribe exits on a
 disposable-ish shared VPS/datacenter NAT IP; Tailscale exits on Josh's actual home Comcast IP, traceable to his house — fine for basic
