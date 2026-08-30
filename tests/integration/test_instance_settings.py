@@ -40,7 +40,13 @@ def configured(tmp_path, monkeypatch):
     # instance settings, which iterates the (real) user store otherwise.
     monkeypatch.setattr(main, "user_store", _StubUserStore(ADMIN_ID))
     monkeypatch.setattr(main, "_ENV_MAINTENANCE_HOUR", None)
+    monkeypatch.setattr(main, "_ENV_PROXY_URL", "")
     main.invalidate_instance_setting_cache()
+    # _app_settings_cache is keyed by user_id, not by DB path — reusing ADMIN_ID
+    # across tests (each with its own fresh tmp_path DB) would otherwise leak a
+    # previous test's cached values into this one.
+    with main._app_settings_cache_lock:
+        main._app_settings_cache.clear()
     main.ensure_meta_schema()
     main.provision_user_storage(ADMIN_ID)
     main.invalidate_instance_setting_cache()
@@ -48,6 +54,8 @@ def configured(tmp_path, monkeypatch):
         yield
     finally:
         main.invalidate_instance_setting_cache()
+        with main._app_settings_cache_lock:
+            main._app_settings_cache.clear()
         main.close_thread_db_pools()
         tenancy._layout = saved
 
@@ -120,3 +128,42 @@ def test_proxy_mode_reverts_to_instance_default_when_override_cleared(configured
     with main.get_meta_connection() as conn:
         main.delete_setting(conn, main.SETTING_PROXY_MODE)
     assert main.get_proxy_mode() == "as_needed"
+
+
+def test_resolve_proxy_for_fetch_off_by_default(configured):
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") is None
+
+
+def test_resolve_proxy_for_fetch_always_mode_returns_configured_url(configured):
+    _set_admin_setting(main.SETTING_PROXY_MODE, "always")
+    _set_admin_setting(main.SETTING_PROXY_URL, "socks5h://gluetun:1080")
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") == "socks5h://gluetun:1080"
+
+
+def test_resolve_proxy_for_fetch_always_mode_with_no_url_configured(configured):
+    """Mode set to always but no proxy URL configured must not proxy at all
+    (no crash, no bare-scheme proxies dict) rather than error on every fetch."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "always")
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") is None
+
+
+def test_resolve_proxy_for_fetch_as_needed_not_wired_yet(configured):
+    """as_needed escalation is a follow-on PR (Plan.md) — for now it must
+    behave exactly like off, never silently proxy everything."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
+    _set_admin_setting(main.SETTING_PROXY_URL, "socks5h://gluetun:1080")
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") is None
+
+
+def test_resolve_proxy_for_fetch_respects_per_user_override(configured):
+    """A user with mode=off must never be proxied even if the instance
+    default is always — the whole point of the per-user override."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "always")
+    _set_admin_setting(main.SETTING_PROXY_URL, "socks5h://gluetun:1080")
+    other_uid = "u_0the9019200000000000000r"
+    main.provision_user_storage(other_uid)
+    with tenancy.user_context(other_uid):
+        with main.get_meta_connection() as conn:
+            main.set_setting(conn, main.SETTING_PROXY_MODE, "off")
+    assert main._resolve_proxy_for_fetch(other_uid, "https://example.test/feed") is None
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") == "socks5h://gluetun:1080"

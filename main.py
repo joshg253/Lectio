@@ -8937,6 +8937,22 @@ def _flag_browser_ua_on_refusal(feed_url: str) -> bool:
     return newly
 
 
+def _resolve_proxy_for_fetch(uid: str, feed_url: str) -> str | None:
+    """Proxy URL to fetch feed_url through for user uid, or None for direct.
+
+    "always" routes every fetch through the configured proxy. "as_needed"
+    (only escalating feeds the honest+browser-UA fetch was still refused on)
+    is not wired yet — see Plan.md. "off" (the default) never proxies."""
+    try:
+        with tenancy.user_context(uid):
+            mode = get_proxy_mode()
+            if mode == "always":
+                return get_proxy_url() or None
+            return None
+    except Exception:
+        return None
+
+
 def get_reader():
     """Per-(thread, user) persistent Reader, resolved via the tenancy seam.
 
@@ -8959,6 +8975,7 @@ def get_reader():
         ReaderApi(
             tenancy.reader_db_path(uid),
             browser_ua_provider=lambda u=uid: _browser_ua_feeds_for(u),
+            proxy_resolver=lambda url, u=uid: _resolve_proxy_for_fetch(u, url),
             session_timeout=(FEED_CONNECT_TIMEOUT_SECONDS, FEED_READ_TIMEOUT_SECONDS),
         ).client()
     )

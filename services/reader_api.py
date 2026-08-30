@@ -162,6 +162,7 @@ class ReaderApi:
         self,
         db_path: Path | str,
         browser_ua_provider: Callable[[], set[str]] | None = None,
+        proxy_resolver: Callable[[str], str | None] | None = None,
         session_timeout: tuple[float, float] | None = None,
     ) -> None:
         self._db_path = str(db_path)
@@ -169,6 +170,11 @@ class ReaderApi:
         # Called live on each request (the set changes as feeds get flagged), so
         # it must be cheap; main caches it per-user.
         self._browser_ua_provider = browser_ua_provider
+        # Given a feed URL, returns the proxy URL to fetch it through, or None
+        # for a direct fetch. Called live on every request (mode/flag state can
+        # change between fetches); main resolves settings + the as-needed flag
+        # set and keeps this cheap.
+        self._proxy_resolver = proxy_resolver
         # (connect, read) seconds for every feed fetch. Passed through to reader's
         # requests session. None keeps reader's own default.
         self._session_timeout = session_timeout
@@ -220,6 +226,8 @@ class ReaderApi:
                 # for flagged feeds — every other feed keeps the honest UA.
                 if hasattr(retr, 'request_hooks') and self._browser_ua_provider is not None:
                     retr.request_hooks.append(self._make_browser_ua_request_hook())
+                if hasattr(retr, 'request_hooks') and self._proxy_resolver is not None:
+                    retr.request_hooks.append(self._make_proxy_request_hook())
                 if hasattr(retr, 'response_hooks'):
                     retr.response_hooks.append(_fix_feed_response)
 
@@ -244,6 +252,28 @@ class ReaderApi:
                     request.headers.update(_BROWSER_HEADERS)
             except Exception:
                 pass  # never let identity selection break a fetch
+            return request
+
+        return _hook
+
+    def _make_proxy_request_hook(self):
+        """Build a reader request hook that routes fetches through a proxy per
+        the resolver's per-URL decision. requests has no per-request proxies
+        parameter reachable from a hook, only the session-wide default it reads
+        at send() time — so this mutates ``session.proxies`` directly, right
+        before send. Safe because the scheduler refreshes feeds strictly
+        sequentially (see the session_timeout docstring above), so nothing else
+        touches this session's proxies concurrently."""
+        resolver = self._proxy_resolver
+
+        def _hook(session, request, **kwargs):
+            proxy_url = None
+            try:
+                proxy_url = resolver(str(request.url)) if resolver else None
+            except Exception:
+                pass  # never let proxy selection break a fetch
+            if hasattr(session, 'proxies'):
+                session.proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else {}
             return request
 
         return _hook

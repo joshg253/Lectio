@@ -25,18 +25,28 @@ blocks.
 Settings: `SETTING_PROXY_URL` (admin-only) + `SETTING_PROXY_MODE`
 (off/as_needed/always, per-user-overridable via `get_instance_setting`'s
 existing tier chain — own row → admin's row → env). Off everywhere by
-default. **Shipped** (settings scaffold, no fetch-path wiring yet).
+default. **Shipped** (settings scaffold).
 
-Remaining, as three follow-on PRs:
-- **Always mode wiring**: `get_reader()`/`ReaderApi` construct a proxied
-  session when `get_proxy_mode()` resolves to `always`.
+`always` mode wiring **shipped**: `get_reader()` passes a `proxy_resolver`
+into `ReaderApi`, which routes feed fetches through the configured proxy via
+a request hook mutating `session.proxies` (requests has no per-request
+proxies param reachable from a hook). Needed adding `pysocks` as a dependency
+for `socks5h://` support. Verified end-to-end against a real local HTTP
+server + an unreachable SOCKS5 target (raised `SOCKSHTTPConnectionPool`,
+proving it actually routed through PySocks). Scoped to feed fetches only —
+the separate httpx-based image/readability fetches (`/api/img`, save-article
+rendering) are not proxied; a follow-up if that's ever wanted.
+
+Remaining:
 - **as_needed escalation**: mirror the `browser_ua_feeds` mechanism
   (`services/feed_refresh.py`'s `on_fetch_refused` + `reader_api.py`'s
-  request hook) with a sibling `proxy_feeds` table. Escalate to proxy only
-  after a feed is already browser-UA-flagged and still hits
-  `_is_fetch_refusal` or `bot_challenge.FeedBlockedError` — flag, retry
-  once same-cycle, surface a `"proxied"` flag in Feed Properties/Failing
-  Feeds like `"browser_ua"` today.
+  request hook, both already generalized to accept a `proxy_resolver`) with
+  a sibling `proxy_feeds` table. Escalate to proxy only after a feed is
+  already browser-UA-flagged and still hits `_is_fetch_refusal` or
+  `bot_challenge.FeedBlockedError` — flag, retry once same-cycle, surface a
+  `"proxied"` flag in Feed Properties/Failing Feeds like `"browser_ua"`
+  today. `_resolve_proxy_for_fetch` in main.py already has the `as_needed`
+  branch stubbed (returns None, same as off).
 - New `proxy_feeds` table needs to land in `ensure_meta_schema` so the
   startup per-user migration backfills existing tenants.
 
