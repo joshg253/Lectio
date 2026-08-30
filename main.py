@@ -419,6 +419,18 @@ SETTING_PROXY_MODE = "proxy_mode"  # "off" / "as_needed" / "always"
 # (that would route every fetch through the home IP, which "last resort" rules
 # out). URL is admin-only for the same SSRF-adjacent reason as SETTING_PROXY_URL.
 SETTING_TAILSCALE_URL = "tailscale_url"
+# FlareSolverr (real headless Chrome, purpose-built to solve Cloudflare/DDoS-
+# Guard style challenges) — one rung past the primary proxy, before the
+# last-resort backend above. Rides the same proxy_mode too. No token/auth (an
+# internal-network-only container); zero personal exposure — always stacked
+# with the primary proxy (SETTING_PROXY_URL) when one is configured, never
+# with the last-resort one, since it doesn't need the home IP to work and
+# spending it here would defeat "last resort". Gated narrower than the other
+# two tiers: only a real challenge page (bot_challenge.FeedBlockedError, see
+# FeedRefreshService._is_bot_challenge), not any refusal — a plain IP-block
+# 403 wants a different exit IP, not a browser solving a challenge that was
+# never served.
+SETTING_FLARESOLVERR_URL = "flaresolverr_url"
 SETTING_MAINTENANCE_HOUR = "maintenance_hour"
 SETTING_IMG_CACHE_DAYS = "img_cache_days"
 SETTING_IMG_CACHE_MAX_DIM = "img_cache_max_dim"
@@ -659,6 +671,8 @@ _ENV_PORTRAIT_IMG_MAX_WIDTH = _env_int("LECTIO_PORTRAIT_IMG_MAX_WIDTH", 650)
 _ENV_PROXY_URL = os.getenv("LECTIO_PROXY_URL", "").strip()
 # Last-resort outbound proxy (e.g. socks5h://tailscale:1080). "" = none configured.
 _ENV_TAILSCALE_URL = os.getenv("LECTIO_TAILSCALE_URL", "").strip()
+# FlareSolverr endpoint (e.g. http://flaresolverr:8191/v1). "" = none configured.
+_ENV_FLARESOLVERR_URL = os.getenv("LECTIO_FLARESOLVERR_URL", "").strip()
 
 # --- Scheduler resilience (see ARCHITECTURE "Refresh scheduler") ---
 # Feed fetches are strictly sequential, so one host that accepts a connection and
@@ -1778,6 +1792,13 @@ def get_tailscale_url() -> str:
     precedence. Empty means not configured, which is itself the opt-in gate —
     as_needed escalation never reaches this tier without one."""
     return get_instance_setting(SETTING_TAILSCALE_URL, _ENV_TAILSCALE_URL)
+
+
+def get_flaresolverr_url() -> str:
+    """FlareSolverr endpoint (e.g. http://flaresolverr:8191/v1). Admin-managed;
+    env default, DB override takes precedence. Empty means not configured,
+    same opt-in gate as the other two backends."""
+    return get_instance_setting(SETTING_FLARESOLVERR_URL, _ENV_FLARESOLVERR_URL)
 
 
 def get_img_cache_days() -> int:
@@ -3999,6 +4020,19 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # FlareSolverr escalation, between proxy_feeds and tailscale_feeds: a
+        # feed lands here only after the primary proxy was already in play and
+        # the fetch is STILL specifically a bot-challenge (not any refusal) —
+        # see _flag_flaresolverr_feed_on_still_blocked.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS flaresolverr_feeds (
+                feed_url TEXT PRIMARY KEY,
+                flagged_at TEXT NOT NULL DEFAULT (datetime('now')),
+                reason TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS feed_display_prefs (
@@ -5762,6 +5796,32 @@ def flag_tailscale_feed(conn: sqlite3.Connection, feed_url: str, reason: str = "
 
 def unflag_tailscale_feed(conn: sqlite3.Connection, feed_url: str) -> None:
     conn.execute("DELETE FROM tailscale_feeds WHERE feed_url = ?", (feed_url.strip(),))
+
+
+def get_flaresolverr_feed_urls(conn: sqlite3.Connection) -> set[str]:
+    """Feeds whose fetch should route through FlareSolverr in as_needed mode.
+
+    A feed lands here only after the primary proxy was already in play and the
+    fetch is STILL specifically a bot-challenge — see
+    `_flag_flaresolverr_feed_on_still_blocked`. Irrelevant in off/always mode."""
+    rows = conn.execute("SELECT feed_url FROM flaresolverr_feeds").fetchall()
+    return {str(r["feed_url"]) for r in rows}
+
+
+def flag_flaresolverr_feed(conn: sqlite3.Connection, feed_url: str, reason: str = "") -> bool:
+    """Mark a feed for FlareSolverr escalation. Returns True if newly flagged."""
+    feed_url = feed_url.strip()
+    if not feed_url:
+        return False
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO flaresolverr_feeds (feed_url, reason) VALUES (?, ?)",
+        (feed_url, reason[:200]),
+    )
+    return cur.rowcount > 0
+
+
+def unflag_flaresolverr_feed(conn: sqlite3.Connection, feed_url: str) -> None:
+    conn.execute("DELETE FROM flaresolverr_feeds WHERE feed_url = ?", (feed_url.strip(),))
 
 
 def disable_feed(feed_url: str) -> None:
@@ -9144,6 +9204,57 @@ def _flag_tailscale_feed_on_still_blocked(feed_url: str) -> bool:
     return newly
 
 
+# Per-user cache of FlareSolverr-flagged feed URLs — same shape as the two above.
+_flaresolverr_feeds_cache: dict[str, set[str]] = {}
+_flaresolverr_feeds_cache_at: dict[str, float] = {}
+_flaresolverr_feeds_cache_lock = threading.Lock()
+_FLARESOLVERR_FEEDS_CACHE_TTL = 30.0
+
+
+def _flaresolverr_feeds_for(uid: str) -> set[str]:
+    now = time.monotonic()
+    with _flaresolverr_feeds_cache_lock:
+        cached = _flaresolverr_feeds_cache.get(uid)
+        if cached is not None and (now - _flaresolverr_feeds_cache_at.get(uid, 0.0)) < _FLARESOLVERR_FEEDS_CACHE_TTL:
+            return cached
+    try:
+        with tenancy.user_context(uid):
+            with get_meta_connection() as conn:
+                feeds = get_flaresolverr_feed_urls(conn)
+    except Exception:
+        feeds = set()
+    with _flaresolverr_feeds_cache_lock:
+        _flaresolverr_feeds_cache[uid] = feeds
+        _flaresolverr_feeds_cache_at[uid] = now
+    return feeds
+
+
+def _invalidate_flaresolverr_feeds_cache() -> None:
+    with _flaresolverr_feeds_cache_lock:
+        _flaresolverr_feeds_cache.clear()
+        _flaresolverr_feeds_cache_at.clear()
+
+
+def _flag_flaresolverr_feed_on_still_blocked(feed_url: str) -> bool:
+    """Flag a feed for FlareSolverr escalation after the primary proxy was
+    already in play and the fetch is STILL specifically a bot-challenge (see
+    FeedRefreshService._is_bot_challenge — this callback is only ever invoked
+    under that narrower gate, not any refusal). Mode-gated like the other two,
+    plus requires FlareSolverr actually configured. Returns True if newly
+    flagged."""
+    if get_proxy_mode() != "as_needed" or not get_flaresolverr_url():
+        return False
+    try:
+        with get_meta_connection() as conn:
+            newly = flag_flaresolverr_feed(conn, feed_url, reason="still a bot challenge after proxy")
+    except Exception:
+        return False
+    if newly:
+        _invalidate_flaresolverr_feeds_cache()
+        LOGGER.info("[refresh] flagged %s for FlareSolverr escalation", feed_url)
+    return newly
+
+
 # A dead proxy backend (e.g. gluetun restarting, or the Tailscale exit node
 # blipping) must never be worse than not having one. On a proxy-unreachable
 # failure (see services.feed_refresh.FeedRefreshService._is_proxy_unreachable),
@@ -9182,16 +9293,22 @@ def _active_backend_for_fetch(uid: str, feed_url: str) -> tuple[str, str] | None
     failed — the failure itself is what sets that backend's cooldown, so this
     intentionally does not consult it).
 
-    Tailscale outranks the primary proxy (it only ever applies one escalation
-    rung further out, so if a feed is flagged for it, the primary proxy has
-    already been tried and found wanting) and is reachable only in as_needed
-    mode — never "always", which would route every fetch through the home IP,
-    the thing "last resort" exists to rule out."""
+    Precedence follows how deep the escalation ladder goes: tailscale (last
+    resort) outranks flaresolverr (a real challenge solve) which outranks the
+    primary proxy — each is only ever flagged after the one before it was
+    tried and found wanting. All three are reachable only in as_needed mode
+    except the primary proxy's own "always" — never flaresolverr or tailscale
+    in "always", which would spend a real Chrome instance (or the home IP) on
+    every single fetch, the thing per-feed escalation exists to avoid."""
     mode = get_proxy_mode()
     if mode == "as_needed" and feed_url in _tailscale_feeds_for(uid):
         tailscale_url = get_tailscale_url()
         if tailscale_url:
             return ("tailscale", tailscale_url)
+    if mode == "as_needed" and feed_url in _flaresolverr_feeds_for(uid):
+        flaresolverr_url = get_flaresolverr_url()
+        if flaresolverr_url:
+            return ("flaresolverr", flaresolverr_url)
     if mode == "always":
         proxy_url = get_proxy_url()
         if proxy_url:
@@ -9209,6 +9326,13 @@ def _mark_backend_unreachable(feed_url: str) -> None:
     # Should always resolve (a fetch only gets proxied if _active_backend_for_fetch
     # said so in the first place) — "proxy" is a defensive fallback, not expected.
     name = backend[0] if backend else "proxy"
+    if name == "flaresolverr":
+        # Can't actually happen: this only fires on socks.ProxyError (see
+        # FeedRefreshService._is_proxy_unreachable), and a FlareSolverr fetch
+        # never touches pysocks at all — it's a plain HTTP POST to FlareSolverr's
+        # own container, which internally handles any proxy stacking itself.
+        # No-op rather than guessing which of the other two backends to blame.
+        return
     if name == "tailscale":
         with _tailscale_down_lock:
             _tailscale_down_until[uid] = time.monotonic() + _TAILSCALE_DOWN_COOLDOWN_SECONDS
@@ -9234,16 +9358,58 @@ def _resolve_proxy_for_fetch(uid: str, feed_url: str) -> str | None:
     instead. "off" (the default) never proxies. Whichever backend would apply
     is skipped while IT is in its own unreachable cooldown — see
     _mark_backend_unreachable — falling through to direct rather than a
-    tier that's currently down."""
+    tier that's currently down.
+
+    Returns None for a feed FlareSolverr is actively handling instead — that
+    tier is not a proxy swap at all (see _resolve_flaresolverr_for_fetch), and
+    if this also set session.proxies for the same request, the request TO
+    FlareSolverr's own container would get routed through the primary proxy
+    by mistake, which is not what "stack FlareSolverr with the proxy" means
+    (that stacking happens inside FlareSolverr's own request body instead)."""
     try:
         with tenancy.user_context(uid):
             backend = _active_backend_for_fetch(uid, feed_url)
             if backend is None:
                 return None
             name, url = backend
+            if name == "flaresolverr":
+                return None
             if name == "tailscale":
                 return None if _tailscale_is_down(uid) else url
             return None if _proxy_is_down(uid) else url
+    except Exception:
+        return None
+
+
+def _normalize_proxy_scheme_for_flaresolverr(proxy_url: str) -> str:
+    """FlareSolverr passes this straight to Chrome's --proxy-server flag,
+    which only understands plain socks5:// — not socks5h://. The primary
+    proxy's OWN configured URL is socks5h:// on purpose (pysocks/requests
+    needs the "h" to do DNS resolution through the proxy rather than
+    locally), so the two consumers of the same setting need different
+    spellings. Confirmed empirically (2026-08-30): socks5h:// silently broke
+    Chrome's proxy config and it fell through to a bare connection error
+    page instead of the real site."""
+    if proxy_url.startswith("socks5h://"):
+        return "socks5://" + proxy_url[len("socks5h://"):]
+    return proxy_url
+
+
+def _resolve_flaresolverr_for_fetch(uid: str, feed_url: str) -> tuple[str, str | None] | None:
+    """(flaresolverr_endpoint, proxy_url_to_stack_or_None) for feed_url under
+    user uid, or None to fetch it normally. The stack proxy is always the
+    primary proxy when one is configured — confirmed empirically that a real
+    Cloudflare-protected feed (cpp.libhunt.com) needed the stack: FlareSolverr
+    alone, using the bare VPS IP, got a flat "error" (never even reached the
+    challenge), while FlareSolverr + the primary proxy solved it cleanly."""
+    try:
+        with tenancy.user_context(uid):
+            backend = _active_backend_for_fetch(uid, feed_url)
+            if backend is None or backend[0] != "flaresolverr":
+                return None
+            proxy_url = get_proxy_url()
+            stack = _normalize_proxy_scheme_for_flaresolverr(proxy_url) if proxy_url else None
+            return (backend[1], stack)
     except Exception:
         return None
 
@@ -9271,6 +9437,7 @@ def get_reader():
             tenancy.reader_db_path(uid),
             browser_ua_provider=lambda u=uid: _browser_ua_feeds_for(u),
             proxy_resolver=lambda url, u=uid: _resolve_proxy_for_fetch(u, url),
+            flaresolverr_resolver=lambda url, u=uid: _resolve_flaresolverr_for_fetch(u, url),
             session_timeout=(FEED_CONNECT_TIMEOUT_SECONDS, FEED_READ_TIMEOUT_SECONDS),
         ).client()
     )
@@ -10942,6 +11109,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "browser_ua": feed_url in get_browser_ua_feed_urls(_pc),
             "proxied": feed_url in get_proxy_feed_urls(_pc),
             "tailscaled": feed_url in get_tailscale_feed_urls(_pc),
+            "flaresolverred": feed_url in get_flaresolverr_feed_urls(_pc),
             # Declared domain migrations for this feed. Rendered as the "Other
             # domains" list under Website, which is the only way to see them —
             # they otherwise act invisibly at ingest and in the global dedupe
@@ -12577,6 +12745,7 @@ feed_refresh_service = FeedRefreshService(
     failed_feed_backoff_max_seconds=FAILED_FEED_BACKOFF_MAX_SECONDS,
     on_fetch_refused=_flag_browser_ua_on_refusal,
     on_fetch_still_blocked=_flag_proxy_feed_on_still_blocked,
+    on_bot_challenge_still_blocked=_flag_flaresolverr_feed_on_still_blocked,
     on_fetch_still_blocked_via_proxy=_flag_tailscale_feed_on_still_blocked,
     on_proxy_unreachable=_mark_backend_unreachable,
     progress_hook=_note_scheduler_progress,
@@ -22793,6 +22962,7 @@ def administration_page(request: Request, msg: str | None = None, error: str | N
             "proxy_url": get_proxy_url(),
             "proxy_mode": get_proxy_mode(),
             "tailscale_url": get_tailscale_url(),
+            "flaresolverr_url": get_flaresolverr_url(),
             # Shared OAuth apps (stored in admin's own app_settings).
             "shared_yt_oauth_client_id": get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_ID, ""),
             "shared_yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)),
@@ -28772,7 +28942,7 @@ async def save_all_settings(request: Request):
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
         SETTING_TZ_DISPLAY, SETTING_PORTRAIT_IMG_MAX_WIDTH, SETTING_PROXY_BODY_IMAGES,
-        SETTING_PROXY_URL, SETTING_PROXY_MODE, SETTING_TAILSCALE_URL,
+        SETTING_PROXY_URL, SETTING_PROXY_MODE, SETTING_TAILSCALE_URL, SETTING_FLARESOLVERR_URL,
         SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
@@ -28809,7 +28979,7 @@ async def save_all_settings(request: Request):
     # requests silently drop these keys, even if the client sends them.
     _ADMIN_ONLY = {
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
-        SETTING_PROXY_URL, SETTING_TAILSCALE_URL,
+        SETTING_PROXY_URL, SETTING_TAILSCALE_URL, SETTING_FLARESOLVERR_URL,
         SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
@@ -29009,6 +29179,24 @@ def set_feed_tailscale_route(feed_url: str = Form(...), enabled: int = Form(...)
             unflag_tailscale_feed(conn, feed_url)
     _invalidate_tailscale_feeds_cache()
     return JSONResponse({"ok": True, "tailscaled": bool(enabled)})
+
+
+@app.post("/feeds/flaresolverr")
+def set_feed_flaresolverr_route(feed_url: str = Form(...), enabled: int = Form(...)):
+    """Manually flag/unflag a feed for FlareSolverr escalation. Auto-set when
+    the primary proxy was already in play and the fetch was still specifically
+    a bot-challenge; this lets the user reset a feed back to direct/browser-UA
+    /proxy (or force it on). Only takes effect when the resolving mode is
+    as_needed AND FlareSolverr is configured — same gating as
+    _flag_flaresolverr_feed_on_still_blocked."""
+    feed_url = feed_url.strip()
+    with get_meta_connection() as conn:
+        if enabled:
+            flag_flaresolverr_feed(conn, feed_url, reason="manual")
+        else:
+            unflag_flaresolverr_feed(conn, feed_url)
+    _invalidate_flaresolverr_feeds_cache()
+    return JSONResponse({"ok": True, "flaresolverred": bool(enabled)})
 
 
 @app.post("/feeds/reparse")

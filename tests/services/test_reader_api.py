@@ -213,6 +213,7 @@ class _FakeResponse:
         self.raw = _FakeRaw(body)
         self.headers = headers
         self._content = None
+        self.status_code = 200
 
 
 def test_empty_body_with_waf_challenge_header_raises_feed_blocked_error():
@@ -325,3 +326,252 @@ def test_proxy_hook_not_registered_when_no_resolver(monkeypatch):
 
     for retr in r._parser.retrievers.values():
         assert retr.request_hooks == []
+
+
+# --- FlareSolverr request hook: redirects the whole request, not just a header ---
+
+def _load_json_body(data):
+    """req.data is typed as a broad Request.data union; the hook always sets
+    it to real JSON bytes, so assert that rather than fighting the type
+    checker with a cast at every call site."""
+    assert isinstance(data, bytes)
+    import json as _json
+    return _json.loads(data)
+
+
+def test_flaresolverr_hook_redirects_to_endpoint_when_resolver_returns_pair():
+    import requests
+
+    api = ReaderApi(
+        ":memory:",
+        flaresolverr_resolver=lambda url: ("http://flaresolverr:8191/v1", "socks5h://gluetun:1080"),
+    )
+    hook = api._make_flaresolverr_request_hook()
+
+    req = requests.Request("GET", "https://blocked.test/feed")
+    out = hook(_FakeProxySession(), req)
+
+    assert out is req
+    assert req.method == "POST"
+    assert req.url == "http://flaresolverr:8191/v1"
+    assert req.headers == {"Content-Type": "application/json"}
+    body = _load_json_body(req.data)
+    assert body == {
+        "cmd": "request.get",
+        "url": "https://blocked.test/feed",  # the ORIGINAL feed url, not the endpoint
+        "maxTimeout": 55000,
+        "proxy": {"url": "socks5h://gluetun:1080"},
+    }
+    assert req._lectio_via_flaresolverr is True
+
+
+def test_flaresolverr_hook_omits_proxy_field_when_no_stack_proxy():
+    import requests
+
+    api = ReaderApi(":memory:", flaresolverr_resolver=lambda url: ("http://flaresolverr:8191/v1", None))
+    hook = api._make_flaresolverr_request_hook()
+
+    req = requests.Request("GET", "https://blocked.test/feed")
+    hook(_FakeProxySession(), req)
+
+    assert "proxy" not in _load_json_body(req.data)
+
+
+def test_flaresolverr_hook_leaves_request_untouched_when_resolver_returns_none():
+    import requests
+
+    api = ReaderApi(":memory:", flaresolverr_resolver=lambda url: None)
+    hook = api._make_flaresolverr_request_hook()
+
+    req = requests.Request("GET", "https://fine.test/feed")
+    out = hook(_FakeProxySession(), req)
+
+    assert out is req
+    assert req.method == "GET"
+    assert req.url == "https://fine.test/feed"
+    assert not hasattr(req, "_lectio_via_flaresolverr")
+
+
+def test_flaresolverr_hook_swallows_resolver_exceptions():
+    import requests
+
+    def _boom(url: str):
+        raise RuntimeError("resolver blew up")
+
+    api = ReaderApi(":memory:", flaresolverr_resolver=_boom)
+    hook = api._make_flaresolverr_request_hook()
+
+    req = requests.Request("GET", "https://fine.test/feed")
+    out = hook(_FakeProxySession(), req)
+
+    assert out is req
+    assert req.method == "GET"  # untouched, not redirected on a broken resolver
+
+
+def test_flaresolverr_hook_is_idempotent_across_a_second_invocation():
+    """reader's lazy_init_funcs fires _add_response_hook twice per retriever in
+    practice (confirmed empirically 2026-08-30), registering two copies of this
+    hook for the same fetch. Without a guard, the second copy would read the
+    already-redirected request.url (FlareSolverr's own endpoint) and ask
+    FlareSolverr to fetch itself instead of the real feed."""
+    import requests
+
+    calls: list[str] = []
+
+    def resolver(url: str):
+        calls.append(url)
+        return ("http://flaresolverr:8191/v1", None)
+
+    api = ReaderApi(":memory:", flaresolverr_resolver=resolver)
+    hook = api._make_flaresolverr_request_hook()
+
+    req = requests.Request("GET", "https://blocked.test/feed")
+    hook(_FakeProxySession(), req)
+    first_body = _load_json_body(req.data)
+    hook(_FakeProxySession(), req)  # second registered copy, same request
+    second_body = _load_json_body(req.data)
+
+    assert calls == ["https://blocked.test/feed"]  # resolver consulted only once
+    assert first_body == second_body == {"cmd": "request.get", "url": "https://blocked.test/feed", "maxTimeout": 55000}
+    assert req.url == "http://flaresolverr:8191/v1"  # not re-redirected to itself
+
+
+# --- FlareSolverr response hook: unwraps the JSON envelope back into plain
+#     feed bytes, exactly what _fix_feed_response (registered right after)
+#     expects to clean up next. ---
+
+class _FlareSolverrRequest:
+    """Minimal stand-in for the (already request-hook-mutated) Request object
+    reader passes into response hooks — only what _fix_flaresolverr_response
+    reads."""
+    def __init__(self, url: str, via_flaresolverr: bool = False):
+        self.url = url
+        if via_flaresolverr:
+            self._lectio_via_flaresolverr = True
+
+
+def _flaresolverr_json_body(html_response: str, status: int = 200, top_status: str = "ok") -> bytes:
+    import json as _json
+    return _json.dumps({
+        "status": top_status,
+        "solution": {"status": status, "response": html_response},
+    }).encode("utf-8")
+
+
+def test_flaresolverr_response_ignored_when_marker_absent():
+    """A normal (non-redirected) fetch's response must never be touched, even
+    if it happens to look like JSON."""
+    response = _FakeResponse({}, body=b'{"status": "ok"}')
+    request = _FlareSolverrRequest("https://fine.test/feed", via_flaresolverr=False)
+
+    assert reader_api._fix_flaresolverr_response(None, response, request) is None
+    assert response._content is None  # untouched
+
+
+def test_flaresolverr_response_unwraps_pre_wrapped_xml():
+    """Chrome's own "view source" wrapper for an XML response it can't
+    render — verified empirically against a real Cloudflare-protected feed."""
+    wrapped = (
+        '<html><head></head><body><pre style="white-space: pre-wrap;">'
+        '&lt;?xml version="1.0"?&gt;&lt;rss&gt;&lt;channel&gt;&lt;title&gt;T&lt;/title&gt;'
+        '&lt;/channel&gt;&lt;/rss&gt;'
+        '</pre></body></html>'
+    )
+    response = _FakeResponse({}, body=_flaresolverr_json_body(wrapped, status=200))
+    request = _FlareSolverrRequest("http://flaresolverr:8191/v1", via_flaresolverr=True)
+
+    result = reader_api._fix_flaresolverr_response(None, response, request)
+
+    assert result is None
+    assert response._content == b'<?xml version="1.0"?><rss><channel><title>T</title></channel></rss>'
+    assert response.status_code == 200
+    # Confirmed live 2026-08-30: left at FlareSolverr's own application/json,
+    # reader routed the (now-unwrapped) XML body to its JSON-feed parser
+    # instead of feedparser and failed with an empty-document JSON error.
+    # _fix_feed_response's own html->rss override never catches this, since
+    # it only fires when it sees "html" in the CURRENT Content-Type.
+    assert response.headers["Content-Type"] == "application/rss+xml"
+
+
+def test_flaresolverr_response_sets_html_content_type_when_not_pre_wrapped():
+    response = _FakeResponse({}, body=_flaresolverr_json_body("<html>blocked</html>", status=403))
+    request = _FlareSolverrRequest("http://flaresolverr:8191/v1", via_flaresolverr=True)
+
+    reader_api._fix_flaresolverr_response(None, response, request)
+
+    assert response.headers["Content-Type"] == "text/html"
+
+
+def test_flaresolverr_response_is_idempotent_across_a_second_invocation():
+    """reader's lazy_init_funcs fires _add_response_hook twice per retriever
+    in practice (confirmed empirically 2026-08-30), registering two copies of
+    this function for the same fetch. The marker must be cleared after the
+    first successful unwrap, or the second copy re-runs on the ALREADY-
+    unwrapped plain XML bytes and tries to json.loads() them."""
+    wrapped = (
+        '<html><head></head><body><pre style="white-space: pre-wrap;">'
+        '&lt;?xml version="1.0"?&gt;&lt;rss&gt;&lt;channel&gt;&lt;title&gt;T&lt;/title&gt;'
+        '&lt;/channel&gt;&lt;/rss&gt;'
+        '</pre></body></html>'
+    )
+    response = _FakeResponse({}, body=_flaresolverr_json_body(wrapped, status=200))
+    request = _FlareSolverrRequest("http://flaresolverr:8191/v1", via_flaresolverr=True)
+
+    first = reader_api._fix_flaresolverr_response(None, response, request)
+    unwrapped_content = response._content
+    second = reader_api._fix_flaresolverr_response(None, response, request)
+
+    assert first is None
+    assert second is None  # no exception, no re-parse attempt
+    assert response._content == unwrapped_content  # untouched by the second pass
+    assert request._lectio_via_flaresolverr is False
+
+
+def test_flaresolverr_response_sets_the_origins_real_status_not_flaresolverrs():
+    """A site that's STILL blocking even through a real browser must still be
+    detectable as a real failure, not silently treated as a success just
+    because FlareSolverr's own HTTP call succeeded."""
+    response = _FakeResponse({}, body=_flaresolverr_json_body("<html>still blocked</html>", status=403))
+    response.status_code = 200  # FlareSolverr's own call succeeded
+    request = _FlareSolverrRequest("http://flaresolverr:8191/v1", via_flaresolverr=True)
+
+    reader_api._fix_flaresolverr_response(None, response, request)
+
+    assert response.status_code == 403
+
+
+def test_flaresolverr_response_passes_through_non_pre_html_as_is():
+    """No <pre> wrapper found — the origin served real HTML (still a block
+    page, a login wall, whatever) — pass it through so _fix_feed_response's
+    own HTML/challenge detection gets a real look, rather than guessing here."""
+    html = "<html><body>Sorry, you have been blocked</body></html>"
+    response = _FakeResponse({}, body=_flaresolverr_json_body(html, status=403))
+    request = _FlareSolverrRequest("http://flaresolverr:8191/v1", via_flaresolverr=True)
+
+    reader_api._fix_flaresolverr_response(None, response, request)
+
+    assert response._content == html.encode("utf-8")
+
+
+def test_flaresolverr_response_raises_feed_blocked_when_flaresolverr_itself_failed():
+    from services import bot_challenge
+
+    response = _FakeResponse({}, body=_flaresolverr_json_body("", top_status="error"))
+    request = _FlareSolverrRequest("http://flaresolverr:8191/v1", via_flaresolverr=True)
+
+    try:
+        reader_api._fix_flaresolverr_response(None, response, request)
+    except bot_challenge.FeedBlockedError:
+        pass
+    else:
+        raise AssertionError("expected FeedBlockedError, no exception was raised")
+
+
+def test_flaresolverr_response_returns_none_on_invalid_json():
+    """Not valid JSON (FlareSolverr's own HTTP call itself errored, e.g. a 502
+    from its container) — let it fail downstream as a normal HTTP error rather
+    than crashing here."""
+    response = _FakeResponse({}, body=b"<html>Bad Gateway</html>")
+    request = _FlareSolverrRequest("http://flaresolverr:8191/v1", via_flaresolverr=True)
+
+    assert reader_api._fix_flaresolverr_response(None, response, request) is None

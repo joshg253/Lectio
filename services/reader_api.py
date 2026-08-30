@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import html as _html
 import io
+import json
 import re
 import sqlite3
 from collections.abc import Callable
@@ -77,6 +79,80 @@ _HTML_SIGS = (b"<!DOCTYPE html", b"<!doctype html", b"<html", b"<HTML")
 # other control byte is forbidden and makes a document not well-formed. Matched
 # on bytes rather than text because the body is scrubbed before decoding.
 _XML_ILLEGAL_BYTES_RE = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+# FlareSolverr's /v1 endpoint doesn't return the origin's raw bytes — it
+# returns real Chrome's rendered `outerHTML`. For a feed (always served as
+# XML) that's Chrome's own "view source" wrapper: the entire document sits
+# HTML-entity-escaped inside one <pre>. Verified empirically against a real
+# Cloudflare-protected feed (cpp.libhunt.com) — not a documented FlareSolverr
+# contract, just what Chrome always does with an XML response it can't render.
+_FLARESOLVERR_PRE_RE = re.compile(rb"<pre[^>]*>(.*)</pre>", re.IGNORECASE | re.DOTALL)
+
+
+def _fix_flaresolverr_response(session, response, request, **kwargs):
+    """Unwrap a FlareSolverr /v1 response back into what a normal feed fetch
+    would have returned, so everything downstream (starting with
+    _fix_feed_response, registered right after this one) treats it exactly
+    like one. Only touches requests the flaresolverr request hook actually
+    redirected — see the _lectio_via_flaresolverr marker it sets.
+
+    Clears the marker immediately once it fires: reader's lazy_init_funcs
+    fires _add_response_hook twice per retriever in practice (confirmed
+    empirically 2026-08-30, same as the request hook's own note), registering
+    two copies of this function. Without clearing, the second copy would
+    re-run on the ALREADY-unwrapped plain feed bytes from the first and try
+    to json.loads() real XML."""
+    if not getattr(request, "_lectio_via_flaresolverr", False):
+        return None
+    request._lectio_via_flaresolverr = False
+    try:
+        response.raw.decode_content = True
+        raw_bytes = response.raw.read()
+        data = json.loads(raw_bytes)
+    except Exception:
+        return None  # not valid JSON — let it fail downstream as a normal HTTP/parse error
+
+    solution = data.get("solution") or {}
+    if data.get("status") != "ok" or not solution:
+        # FlareSolverr itself gave up (its own timeout, browser crash, etc) —
+        # framed as a challenge failure since that's what sent the fetch here
+        # in the first place, not a malformed-feed problem.
+        raise bot_challenge.FeedBlockedError(
+            f"FlareSolverr: {data.get('message') or 'no solution returned'}",
+            getattr(request, "url", "") or "",
+        )
+
+    html_content = str(solution.get("response") or "")
+    origin_status = solution.get("status")
+    pre_match = _FLARESOLVERR_PRE_RE.search(html_content.encode("utf-8", errors="replace"))
+    if pre_match:
+        content = _html.unescape(pre_match.group(1).decode("utf-8", errors="replace")).encode("utf-8")
+        content_type = "application/rss+xml"
+    else:
+        # Not the XML-viewer wrapper — origin served real HTML (still a block
+        # page, a login wall, whatever). Pass it through as-is so
+        # _fix_feed_response's own HTML/challenge detection gets a real look
+        # at it, rather than guessing here.
+        content = html_content.encode("utf-8")
+        content_type = "text/html"
+
+    response.raw = io.BytesIO(content)
+    response._content = content
+    # FlareSolverr's own response is application/json — left as-is, reader
+    # would route the (now-unwrapped) body to its JSON-feed parser instead of
+    # feedparser and fail with an empty-document JSON error. Set here rather
+    # than left to _fix_feed_response's own sniffing: that only overrides
+    # Content-Type when it sees "html" in the CURRENT value (the case it was
+    # built for — a feed mistakenly served as text/html), which never matches
+    # "application/json".
+    response.headers["Content-Type"] = content_type
+    # The origin's real status, not FlareSolverr's own 200 — so refusal
+    # detection upstream still works for a site that's STILL blocking even
+    # through a real browser (this isn't a magic bypass, just a real one).
+    if isinstance(origin_status, int):
+        response.status_code = origin_status
+    return None
 
 
 def _fix_feed_response(session, response, request, **kwargs):
@@ -163,6 +239,7 @@ class ReaderApi:
         db_path: Path | str,
         browser_ua_provider: Callable[[], set[str]] | None = None,
         proxy_resolver: Callable[[str], str | None] | None = None,
+        flaresolverr_resolver: Callable[[str], tuple[str, str | None] | None] | None = None,
         session_timeout: tuple[float, float] | None = None,
     ) -> None:
         self._db_path = str(db_path)
@@ -173,8 +250,17 @@ class ReaderApi:
         # Given a feed URL, returns the proxy URL to fetch it through, or None
         # for a direct fetch. Called live on every request (mode/flag state can
         # change between fetches); main resolves settings + the as-needed flag
-        # set and keeps this cheap.
+        # set and keeps this cheap. Returns None for a feed the flaresolverr
+        # resolver below is handling instead — the two must never both apply
+        # to the same request, or the FlareSolverr call itself would get
+        # routed through the primary proxy's session.proxies by mistake.
         self._proxy_resolver = proxy_resolver
+        # Given a feed URL, returns (flaresolverr_endpoint_url, proxy_url_to_
+        # stack_or_None) or None for no escalation. One rung past proxy_resolver:
+        # only ever consulted for a feed the primary proxy already failed on. The
+        # stack proxy is embedded in FlareSolverr's own request body (its `proxy`
+        # field) — not the same thing as this session's own session.proxies.
+        self._flaresolverr_resolver = flaresolverr_resolver
         # (connect, read) seconds for every feed fetch. Passed through to reader's
         # requests session. None keeps reader's own default.
         self._session_timeout = session_timeout
@@ -228,7 +314,16 @@ class ReaderApi:
                     retr.request_hooks.append(self._make_browser_ua_request_hook())
                 if hasattr(retr, 'request_hooks') and self._proxy_resolver is not None:
                     retr.request_hooks.append(self._make_proxy_request_hook())
+                # Last among request hooks: for a flagged feed it replaces the
+                # request outright (method/url/body), so it must have final say
+                # over whatever the browser-UA/proxy hooks did to it first.
+                if hasattr(retr, 'request_hooks') and self._flaresolverr_resolver is not None:
+                    retr.request_hooks.append(self._make_flaresolverr_request_hook())
                 if hasattr(retr, 'response_hooks'):
+                    # Must run BEFORE _fix_feed_response: it unwraps FlareSolverr's
+                    # JSON envelope back into plain feed bytes, which _fix_feed_response
+                    # then cleans up exactly like any other fetch's response.
+                    retr.response_hooks.append(_fix_flaresolverr_response)
                     retr.response_hooks.append(_fix_feed_response)
 
         r._parser.lazy_init_funcs.insert(0, _add_response_hook)
@@ -274,6 +369,50 @@ class ReaderApi:
                 pass  # never let proxy selection break a fetch
             if hasattr(session, 'proxies'):
                 session.proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else {}
+            return request
+
+        return _hook
+
+    def _make_flaresolverr_request_hook(self):
+        """Build a reader request hook that redirects a flagged feed's fetch to
+        FlareSolverr's /v1 endpoint instead of the feed's own URL — a real
+        headless-Chrome challenge solve, not a proxy swap, so the whole request
+        (method/url/body) is replaced rather than just headers or session.proxies.
+        _fix_flaresolverr_response (a response hook) unwraps the reply back into
+        plain feed bytes; the _lectio_via_flaresolverr marker set here is what
+        tells it which responses are its to unwrap.
+
+        Self-guarding on that same marker: reader's lazy_init_funcs fires
+        _add_response_hook twice per retriever in practice (confirmed
+        empirically 2026-08-30 — each call appends another copy of this hook,
+        so it runs twice per fetch), and unlike the browser-UA/proxy hooks
+        this one is NOT naturally idempotent — it mutates request.url, so a
+        second pass over an already-redirected request read the FlareSolverr
+        endpoint itself as "the feed to fetch" and asked FlareSolverr to visit
+        its own URL. The other two hooks only mutate headers/session.proxies
+        off the ORIGINAL request each time, which stays correct however many
+        times they run."""
+        resolver = self._flaresolverr_resolver
+
+        def _hook(session, request, **kwargs):
+            if getattr(request, "_lectio_via_flaresolverr", False):
+                return request
+            try:
+                original_url = str(request.url)
+                resolved = resolver(original_url) if resolver else None
+            except Exception:
+                resolved = None  # never let backend selection break a fetch
+            if not resolved:
+                return request
+            flaresolverr_url, stack_proxy_url = resolved
+            body: dict[str, object] = {"cmd": "request.get", "url": original_url, "maxTimeout": 55000}
+            if stack_proxy_url:
+                body["proxy"] = {"url": stack_proxy_url}
+            request.method = "POST"
+            request.url = flaresolverr_url
+            request.headers = {"Content-Type": "application/json"}
+            request.data = json.dumps(body).encode("utf-8")
+            request._lectio_via_flaresolverr = True
             return request
 
         return _hook

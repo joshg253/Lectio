@@ -42,6 +42,7 @@ def configured(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "_ENV_MAINTENANCE_HOUR", None)
     monkeypatch.setattr(main, "_ENV_PROXY_URL", "")
     monkeypatch.setattr(main, "_ENV_TAILSCALE_URL", "")
+    monkeypatch.setattr(main, "_ENV_FLARESOLVERR_URL", "")
     main.invalidate_instance_setting_cache()
     # _app_settings_cache is keyed by user_id, not by DB path — reusing ADMIN_ID
     # across tests (each with its own fresh tmp_path DB) would otherwise leak a
@@ -54,6 +55,15 @@ def configured(tmp_path, monkeypatch):
         main._proxy_down_until.clear()
     with main._tailscale_down_lock:
         main._tailscale_down_until.clear()
+    # And the three per-backend flagged-feeds caches (30s TTL) — keyed by
+    # user_id too, so a feed flagged in one test's tmp_path DB can otherwise
+    # still read back as flagged in the next test reusing ADMIN_ID.
+    with main._proxy_feeds_cache_lock:
+        main._proxy_feeds_cache.clear()
+    with main._tailscale_feeds_cache_lock:
+        main._tailscale_feeds_cache.clear()
+    with main._flaresolverr_feeds_cache_lock:
+        main._flaresolverr_feeds_cache.clear()
     main.ensure_meta_schema()
     main.provision_user_storage(ADMIN_ID)
     main.invalidate_instance_setting_cache()
@@ -319,3 +329,103 @@ def test_mark_backend_unreachable_marks_only_the_active_backend(configured):
             main.flag_proxy_feed(conn, "https://proxy-only-feed.test/feed")
     main._invalidate_proxy_feeds_cache()
     assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://proxy-only-feed.test/feed") == "socks5h://gluetun:1080"
+
+
+# --- FlareSolverr — rides the same proxy_mode, between the proxy and Tailscale ---
+
+def test_flaresolverr_url_defaults_empty(configured):
+    assert main.get_flaresolverr_url() == ""
+
+
+def test_flag_flaresolverr_feed_on_still_blocked_is_noop_without_url_configured(configured):
+    _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
+    assert main._flag_flaresolverr_feed_on_still_blocked("https://example.test/feed") is False
+    with main.get_meta_connection() as conn:
+        assert main.get_flaresolverr_feed_urls(conn) == set()
+
+
+def test_flag_flaresolverr_feed_on_still_blocked_is_noop_always_mode(configured):
+    """Never reachable in always mode — that would spin up real Chrome for
+    every single fetch, the thing per-feed escalation exists to avoid."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "always")
+    _set_admin_setting(main.SETTING_FLARESOLVERR_URL, "http://flaresolverr:8191/v1")
+    assert main._flag_flaresolverr_feed_on_still_blocked("https://example.test/feed") is False
+
+
+def test_flag_flaresolverr_feed_on_still_blocked_flags_in_as_needed_mode(configured):
+    _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
+    _set_admin_setting(main.SETTING_FLARESOLVERR_URL, "http://flaresolverr:8191/v1")
+    assert main._flag_flaresolverr_feed_on_still_blocked("https://example.test/feed") is True
+    assert main._flag_flaresolverr_feed_on_still_blocked("https://example.test/feed") is False  # already flagged
+
+
+def test_resolve_flaresolverr_for_fetch_returns_endpoint_and_stacked_proxy(configured):
+    """Confirmed empirically (2026-08-30) against a real Cloudflare-protected
+    feed: FlareSolverr alone (bare VPS IP) failed outright; stacked with the
+    primary proxy, it solved the challenge cleanly. So the primary proxy is
+    always the stack partner when one is configured — with its scheme
+    normalized for Chrome (socks5h:// -> socks5://; see
+    _normalize_proxy_scheme_for_flaresolverr), NOT the raw configured value:
+    also confirmed empirically that socks5h:// silently broke FlareSolverr's
+    own proxy config and it fell through to a bare connection-error page."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
+    _set_admin_setting(main.SETTING_PROXY_URL, "socks5h://gluetun:1080")
+    _set_admin_setting(main.SETTING_FLARESOLVERR_URL, "http://flaresolverr:8191/v1")
+    with tenancy.user_context(ADMIN_ID):
+        with main.get_meta_connection() as conn:
+            main.flag_proxy_feed(conn, "https://example.test/feed")
+            main.flag_flaresolverr_feed(conn, "https://example.test/feed")
+    main._invalidate_proxy_feeds_cache()
+    main._invalidate_flaresolverr_feeds_cache()
+    result = main._resolve_flaresolverr_for_fetch(ADMIN_ID, "https://example.test/feed")
+    assert result == ("http://flaresolverr:8191/v1", "socks5://gluetun:1080")
+
+
+def test_normalize_proxy_scheme_for_flaresolverr():
+    f = main._normalize_proxy_scheme_for_flaresolverr
+    assert f("socks5h://gluetun:1080") == "socks5://gluetun:1080"
+    assert f("socks5://gluetun:1080") == "socks5://gluetun:1080"  # already plain, untouched
+    assert f("http://gluetun:8888") == "http://gluetun:8888"  # non-SOCKS scheme, untouched
+
+
+def test_resolve_flaresolverr_for_fetch_none_when_not_flagged(configured):
+    _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
+    _set_admin_setting(main.SETTING_FLARESOLVERR_URL, "http://flaresolverr:8191/v1")
+    assert main._resolve_flaresolverr_for_fetch(ADMIN_ID, "https://example.test/feed") is None
+
+
+def test_resolve_proxy_for_fetch_stands_down_for_a_flaresolverr_active_feed(configured):
+    """The primary proxy hook must NOT also fire for a feed FlareSolverr is
+    handling — otherwise the request to FlareSolverr's own container gets
+    routed through the primary proxy's session.proxies by mistake. Stacking
+    happens inside FlareSolverr's own request body instead."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
+    _set_admin_setting(main.SETTING_PROXY_URL, "socks5h://gluetun:1080")
+    _set_admin_setting(main.SETTING_FLARESOLVERR_URL, "http://flaresolverr:8191/v1")
+    with tenancy.user_context(ADMIN_ID):
+        with main.get_meta_connection() as conn:
+            main.flag_proxy_feed(conn, "https://example.test/feed")
+            main.flag_flaresolverr_feed(conn, "https://example.test/feed")
+    main._invalidate_proxy_feeds_cache()
+    main._invalidate_flaresolverr_feeds_cache()
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") is None
+
+
+def test_tailscale_outranks_flaresolverr_when_both_flagged(configured):
+    """Tailscale is only ever flagged after FlareSolverr also failed, so if
+    both flags exist, the fetch must go through the deepest tier reached, not
+    fall back to an earlier one that already proved insufficient."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
+    _set_admin_setting(main.SETTING_PROXY_URL, "socks5h://gluetun:1080")
+    _set_admin_setting(main.SETTING_FLARESOLVERR_URL, "http://flaresolverr:8191/v1")
+    _set_admin_setting(main.SETTING_TAILSCALE_URL, "socks5h://tailscale:1080")
+    with tenancy.user_context(ADMIN_ID):
+        with main.get_meta_connection() as conn:
+            main.flag_proxy_feed(conn, "https://example.test/feed")
+            main.flag_flaresolverr_feed(conn, "https://example.test/feed")
+            main.flag_tailscale_feed(conn, "https://example.test/feed")
+    main._invalidate_proxy_feeds_cache()
+    main._invalidate_flaresolverr_feeds_cache()
+    main._invalidate_tailscale_feeds_cache()
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") == "socks5h://tailscale:1080"
+    assert main._resolve_flaresolverr_for_fetch(ADMIN_ID, "https://example.test/feed") is None

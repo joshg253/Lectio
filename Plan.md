@@ -13,18 +13,19 @@ git history (rationale kept in ARCHITECTURE.md where relevant); items
 that were done-but-with-a-real-remainder were condensed to just that
 remainder.
 
-### Outbound proxy escalation — Browserless still deferred
+### Outbound proxy escalation — shipped, Browserless the only thing left out
 
-Full chain **shipped** 2026-08-30: honest UA → browser identity → gluetun proxy → Tailscale (last-resort, home IP). Design/rationale now
-lives in `docs/architecture/feeds.md` ("Outbound proxy escalation") rather than here — settings shape, per-backend unreachable cooldowns,
-the escalation callback chain in `services/feed_refresh.py`.
+Full chain **shipped** 2026-08-30: honest UA → browser identity → gluetun proxy → FlareSolverr (real Chrome, purpose-built for
+Cloudflare/DDoS-Guard challenges, gated on an actual challenge page not any refusal) → Tailscale (last-resort, home IP). Design/rationale
+lives in `docs/architecture/feeds.md` ("Outbound proxy escalation") — settings shape, per-backend unreachable cooldowns, the
+FlareSolverr request/response-hook mechanism (a genuinely different fetch path than a proxy swap), the `<pre>`-unwrap detail, the
+escalation callback chain in `services/feed_refresh.py`.
 
-**Browserless (headless Chrome) evaluated, not shipped.** Live-tested against two real Cloudflare-protected feeds: plain `/content` never
-cleared the "Just a moment…" interstitial (not stealth-patched, detected as automation regardless of exit IP or wait time); stacking it
-with the proxy softened one site's block but didn't clear it either. The same two feeds fetched with plain `requests` through Tailscale
-alone came back clean — Cloudflare weighs IP/ASN reputation heavily, and that's what actually mattered here, not JS execution. Full
-writeup in `docs/architecture/feeds.md`. Revisit only with a concrete failure Tailscale alone doesn't solve; the added complexity
-(`/content` returns rendered HTML, not the feed's raw bytes) isn't worth it on the current evidence.
+**Browserless (headless Chrome) evaluated, NOT shipped** — FlareSolverr replaces it in the chain, not alongside it. Both are "real
+Chrome" solvers for the same problem; Browserless (live-tested first) never cleared a real Cloudflare interstitial regardless of proxy
+stacking or wait time (its stock image isn't stealth-patched), while FlareSolverr — tried after Josh pointed at an infra cheatsheet
+listing it as a separate, purpose-built tier — solved the *same* feeds cleanly, stacked with gluetun. No evidence Browserless adds
+anything on top of that. Full writeup in `docs/architecture/feeds.md`.
 
 ### Refetch-All has no "already re-fetched recently" skip
 
