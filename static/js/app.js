@@ -16340,6 +16340,13 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       // not yet in the DOM get synced when they render (see
       // bindPostListInteractions's boundCheckbox setup).
       document.getElementById('posts-select-all')?.addEventListener('click', async () => {
+        // Toggle: a second click while anything is selected clears it, mirroring
+        // the selection-count pill's own click-to-clear rather than re-resolving
+        // and re-selecting the same view.
+        if (selectedPosts.size) {
+          clearPostSelection();
+          return;
+        }
         const predicate = currentViewParams();
         predicate.set('filter_term', box.value.trim());
         try {
