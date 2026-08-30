@@ -47,41 +47,37 @@ Remaining:
   `"proxied"` flag in Feed Properties/Failing Feeds like `"browser_ua"`
   today. `_resolve_proxy_for_fetch` in main.py already has the `as_needed`
   branch stubbed (returns None, same as off).
-- **Second backend, later**: a Tailscale container is live on the same
-  `proxy` network — `socks5h://tailscale:1080` (preferred, tunnels DNS too)
-  or `http://tailscale:8888` as fallback, no auth (internal-only). Same
-  client wiring as gluetun (`requests[socks]`/`httpx[socks]`).
+- **Multi-backend escalation chain, later.** Beyond gluetun, Josh is wiring
+  in more backends — the intent (2026-08-30) is an ordered chain, not a
+  free-for-all pick of "which backend for which feed": direct → browser-UA
+  (existing) → gluetun/Windscribe proxy → headless browser → Tailscale
+  (his home IP) as the *final* fallback, each tier tried only after the one
+  before it has actually failed. Current schema (one URL/one mode) supports
+  none of this yet — `_resolve_proxy_for_fetch`/the request hook need real
+  design work before it's pluggable. Not scoped. Per-backend notes so
+  nothing gets lost before that design pass:
 
-  Not a drop-in second URL — it's a different trust tier, not just another
-  endpoint. gluetun/Windscribe exits on a disposable-ish shared NAT IP;
-  Tailscale exits on Josh's actual home Comcast IP, traceable to his house.
-  Good fit: basic geoblocking / simple per-IP rate limiting, where that's an
-  acceptable IP to burn. Bad fit: anything sketchy/untrusted, or a site
-  aggressive enough to escalate (abuse reports, IP blocklisting) — that
-  lands on his real connection, not a burner exit. So a per-feed (or at
-  least per-instance-policy) choice of *which* backend is eligible is
-  necessary, not optional — as_needed can't just blindly try tailscale for
-  every blocked feed.
-
-  Also less reliable than gluetun: it's Josh's home mediaserver, which per
-  his own outage history blips every couple months and occasionally goes
-  down for days. Any code using it must treat a proxy-unreachable failure as
-  "fall through to direct," never as a hard failure of the fetch.
-
-  Current schema is one URL/one mode — doesn't support multiple backends or
-  a trust-tier concept yet. `_resolve_proxy_for_fetch`/the request hook
-  would need real design work before this is pluggable. Not scoped;
-  captured 2026-08-29/30 so the details aren't lost before that design pass.
-
-- **Third tier, later: headless browser.** Josh is wiring in a headless
-  browser (details/endpoint pending) for the same escalation family as
-  browser-UA and the proxy — for feeds/pages blocked by a real JS-executing
-  challenge (e.g. Cloudflare's JS challenge) that neither a spoofed browser
-  UA nor a different exit IP gets past, since those never actually run the
-  page's JS. Would slot in as a further step after proxy in the escalation
-  chain, not a replacement for it. No connection details yet — capture them
-  here (endpoint, protocol: raw CDP vs. a REST wrapper like Browserless,
-  auth) once available, same as gluetun/Tailscale were. Mentioned 2026-08-30.
+  - **Tailscale** (final fallback): `socks5h://tailscale:1080` (preferred,
+    tunnels DNS too) or `http://tailscale:8888`, same `proxy` Docker
+    network, no auth (internal-only), same client wiring as gluetun
+    (`requests[socks]`/`httpx[socks]`). Different trust tier, not just
+    another endpoint: gluetun/Windscribe exits on a disposable-ish shared
+    NAT IP; Tailscale exits on Josh's actual home Comcast IP, traceable to
+    his house — fine for basic geoblocking/rate-limiting, wrong for
+    anything sketchy/untrusted or a site aggressive enough to escalate
+    (abuse reports, IP blocklisting) since that lands on his real
+    connection. Being the *last* resort in the chain is itself most of the
+    answer to "which feeds should this apply to" — it only gets used once
+    gluetun and the headless browser have already failed. Also less
+    reliable than gluetun (his home mediaserver blips every couple months,
+    occasionally days-long) — any code using it must fall through to
+    direct on proxy-unreachable, never hard-fail the fetch.
+  - **Headless browser**: for feeds/pages blocked by a real JS-executing
+    challenge (e.g. Cloudflare's JS challenge) that neither a spoofed
+    browser UA nor a different exit IP gets past, since those never
+    actually run the page's JS. No connection details yet — capture them
+    here (endpoint, protocol: raw CDP vs. a REST wrapper like Browserless,
+    auth) once available.
 - New `proxy_feeds` table needs to land in `ensure_meta_schema` so the
   startup per-user migration backfills existing tenants.
 
