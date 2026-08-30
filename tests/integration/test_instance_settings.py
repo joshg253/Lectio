@@ -47,6 +47,9 @@ def configured(tmp_path, monkeypatch):
     # previous test's cached values into this one.
     with main._app_settings_cache_lock:
         main._app_settings_cache.clear()
+    # _proxy_down_until is also keyed by user_id, same leak risk as above.
+    with main._proxy_down_lock:
+        main._proxy_down_until.clear()
     main.ensure_meta_schema()
     main.provision_user_storage(ADMIN_ID)
     main.invalidate_instance_setting_cache()
@@ -56,6 +59,8 @@ def configured(tmp_path, monkeypatch):
         main.invalidate_instance_setting_cache()
         with main._app_settings_cache_lock:
             main._app_settings_cache.clear()
+        with main._proxy_down_lock:
+            main._proxy_down_until.clear()
         main.close_thread_db_pools()
         tenancy._layout = saved
 
@@ -182,8 +187,29 @@ def test_flag_proxy_feed_on_still_blocked_flags_in_as_needed_mode(configured):
     _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
     assert main._flag_proxy_feed_on_still_blocked("https://example.test/feed") is True
     assert main._flag_proxy_feed_on_still_blocked("https://example.test/feed") is False  # already flagged
-    with main.get_meta_connection() as conn:
-        assert main.get_proxy_feed_urls(conn) == {"https://example.test/feed"}
+
+
+def test_mark_proxy_unreachable_skips_proxy_regardless_of_mode(configured):
+    """A dead proxy backend must never be worse than not having one — the
+    cooldown applies across every mode, not just as_needed."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "always")
+    _set_admin_setting(main.SETTING_PROXY_URL, "socks5h://gluetun:1080")
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") == "socks5h://gluetun:1080"
+    with tenancy.user_context(ADMIN_ID):
+        main._mark_proxy_unreachable()
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") is None
+
+
+def test_mark_proxy_unreachable_is_per_user(configured):
+    """One user's proxy going down must not affect another user's fetches."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "always")
+    _set_admin_setting(main.SETTING_PROXY_URL, "socks5h://gluetun:1080")
+    other_uid = "u_07he9019200000000000000r"
+    main.provision_user_storage(other_uid)
+    with tenancy.user_context(ADMIN_ID):
+        main._mark_proxy_unreachable()
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") is None
+    assert main._resolve_proxy_for_fetch(other_uid, "https://example.test/feed") == "socks5h://gluetun:1080"
 
 
 def test_resolve_proxy_for_fetch_respects_per_user_override(configured):

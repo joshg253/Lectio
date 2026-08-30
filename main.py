@@ -9031,15 +9031,44 @@ def _flag_proxy_feed_on_still_blocked(feed_url: str) -> bool:
     return newly
 
 
+# A dead proxy backend (e.g. gluetun restarting) must never be worse than not
+# having one. On a proxy-unreachable failure (see
+# services.feed_refresh.FeedRefreshService._is_proxy_unreachable),
+# _mark_proxy_unreachable skips the proxy entirely for this user for a cooldown —
+# across every mode, not just as_needed — rather than hard-failing every fetch
+# until someone notices and fixes it.
+_PROXY_DOWN_COOLDOWN_SECONDS = 300.0
+_proxy_down_until: dict[str, float] = {}
+_proxy_down_lock = threading.Lock()
+
+
+def _mark_proxy_unreachable() -> None:
+    uid = tenancy.current_user_id()
+    with _proxy_down_lock:
+        _proxy_down_until[uid] = time.monotonic() + _PROXY_DOWN_COOLDOWN_SECONDS
+    LOGGER.warning(
+        "[refresh] proxy unreachable for user %s — skipping it for %ds", uid, int(_PROXY_DOWN_COOLDOWN_SECONDS)
+    )
+
+
+def _proxy_is_down(uid: str) -> bool:
+    with _proxy_down_lock:
+        until = _proxy_down_until.get(uid)
+    return until is not None and time.monotonic() < until
+
+
 def _resolve_proxy_for_fetch(uid: str, feed_url: str) -> str | None:
     """Proxy URL to fetch feed_url through for user uid, or None for direct.
 
     "always" routes every fetch through the configured proxy. "as_needed"
     only escalates feeds already flagged by _flag_proxy_feed_on_still_blocked
     (browser-UA was already in play and still failed). "off" (the default)
-    never proxies."""
+    never proxies. Any mode is skipped entirely while the proxy is in its
+    unreachable cooldown — see _mark_proxy_unreachable."""
     try:
         with tenancy.user_context(uid):
+            if _proxy_is_down(uid):
+                return None
             mode = get_proxy_mode()
             if mode == "always":
                 return get_proxy_url() or None
@@ -12378,6 +12407,7 @@ feed_refresh_service = FeedRefreshService(
     failed_feed_backoff_max_seconds=FAILED_FEED_BACKOFF_MAX_SECONDS,
     on_fetch_refused=_flag_browser_ua_on_refusal,
     on_fetch_still_blocked=_flag_proxy_feed_on_still_blocked,
+    on_proxy_unreachable=_mark_proxy_unreachable,
     progress_hook=_note_scheduler_progress,
 )
 
@@ -28774,6 +28804,22 @@ def set_feed_browser_ua_route(feed_url: str = Form(...), enabled: int = Form(...
             unflag_browser_ua_feed(conn, feed_url)
     _invalidate_browser_ua_cache()
     return JSONResponse({"ok": True, "browser_ua": bool(enabled)})
+
+
+@app.post("/feeds/proxy")
+def set_feed_proxy_route(feed_url: str = Form(...), enabled: int = Form(...)):
+    """Manually flag/unflag a feed for as-needed proxy escalation. Auto-set when
+    browser-UA was already in play and the fetch still failed; this lets the user
+    reset a feed back to direct/browser-UA (or force it on). Only takes effect
+    when the resolving mode is as_needed — off/always never consult this flag."""
+    feed_url = feed_url.strip()
+    with get_meta_connection() as conn:
+        if enabled:
+            flag_proxy_feed(conn, feed_url, reason="manual")
+        else:
+            unflag_proxy_feed(conn, feed_url)
+    _invalidate_proxy_feeds_cache()
+    return JSONResponse({"ok": True, "proxied": bool(enabled)})
 
 
 @app.post("/feeds/reparse")

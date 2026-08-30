@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import pytest
+import socks
 
 import services.feed_refresh as _feed_refresh_mod
 from services import bot_challenge
@@ -80,7 +81,8 @@ def _make_conn(db_path: Path):
 
 
 def _build_service(db_path: Path, reader, yt_calls: list[str], lead_calls: list[str],
-                   on_fetch_refused=None, on_fetch_still_blocked=None, progress_hook=None):
+                   on_fetch_refused=None, on_fetch_still_blocked=None, on_proxy_unreachable=None,
+                   progress_hook=None):
     def get_meta_connection():
         return _make_conn(db_path)
 
@@ -97,6 +99,7 @@ def _build_service(db_path: Path, reader, yt_calls: list[str], lead_calls: list[
         failed_feed_backoff_max_seconds=24 * 60 * 60,
         on_fetch_refused=on_fetch_refused,
         on_fetch_still_blocked=on_fetch_still_blocked,
+        on_proxy_unreachable=on_proxy_unreachable,
     )
 
 
@@ -274,6 +277,102 @@ def test_proxy_escalation_still_failing_falls_through_to_normal_bookkeeping(tmp_
         ).fetchone()
     assert row is not None and row["consecutive_failures"] == 1
     assert "refused" in (row["last_error"] or "").lower() or "unsupported media" in (row["last_error"] or "").lower()
+
+
+# --- proxy-unreachable auto-fallback (the proxy backend itself is down,
+#     not the site refusing us) ---
+
+def _wrapped_proxy_unreachable() -> RuntimeError:
+    """A proxy-connection failure chained the way requests/urllib3/pysocks
+    actually do it: the socks.ProxyError is reachable only via __context__
+    (implicit — raised inside an except block with no `from`), not __cause__.
+    A __cause__-only chain walk (the original, buggy version of
+    _is_proxy_unreachable) would silently miss this."""
+    try:
+        raise socks.ProxyConnectionError("Error connecting to SOCKS5 proxy gluetun:1080: refused")
+    except socks.ProxyConnectionError:
+        try:
+            raise RuntimeError("Max retries exceeded")  # no `from` -> __context__ only
+        except RuntimeError as e:
+            return e
+
+
+def test_is_proxy_unreachable_walks_context_not_just_cause():
+    assert FeedRefreshService._is_proxy_unreachable(_wrapped_proxy_unreachable())
+    assert not FeedRefreshService._is_proxy_unreachable(RuntimeError("HTTP 415 Unsupported Media Type"))
+    assert not FeedRefreshService._is_proxy_unreachable(RuntimeError("404 Not Found"))
+
+
+class _ProxyDownThenOkReader:
+    """First call raises a proxy-unreachable-shaped failure; every call after
+    that succeeds — simulating the fallback retry going direct."""
+    def __init__(self):
+        self.calls = 0
+
+    def update_feed(self, feed_url: str):
+        self.calls += 1
+        if self.calls == 1:
+            raise _wrapped_proxy_unreachable()
+
+
+def test_proxy_unreachable_falls_back_to_direct_and_succeeds(tmp_path: Path):
+    reader = _ProxyDownThenOkReader()
+    marked_down: list[bool] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_proxy_unreachable=lambda: marked_down.append(True),
+    )
+    service.update_feeds(["https://example.test/feed"])
+
+    assert marked_down == [True]
+    assert reader.calls == 2  # original (proxied, fails) + fallback (direct, succeeds)
+    with _make_conn(tmp_path / "m.sqlite") as conn:
+        row = conn.execute(
+            "SELECT consecutive_failures FROM feed_failure_state WHERE feed_url = ?",
+            ("https://example.test/feed",),
+        ).fetchone()
+    assert row is not None and row["consecutive_failures"] == 0
+
+
+class _AlwaysProxyDownReader:
+    """Every call raises a proxy-unreachable-shaped failure — the site is
+    unreachable full stop, proxy or not."""
+    def __init__(self):
+        self.calls = 0
+
+    def update_feed(self, feed_url: str):
+        self.calls += 1
+        raise _wrapped_proxy_unreachable()
+
+
+def test_proxy_unreachable_fallback_also_failing_falls_through(tmp_path: Path):
+    reader = _AlwaysProxyDownReader()
+    marked_down: list[bool] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_proxy_unreachable=lambda: marked_down.append(True),
+    )
+    service.update_feeds(["https://example.test/feed"])
+
+    assert marked_down == [True]
+    assert reader.calls == 2  # original + one direct fallback attempt, then give up
+    with _make_conn(tmp_path / "m.sqlite") as conn:
+        row = conn.execute(
+            "SELECT consecutive_failures FROM feed_failure_state WHERE feed_url = ?",
+            ("https://example.test/feed",),
+        ).fetchone()
+    assert row is not None and row["consecutive_failures"] == 1
+
+
+def test_proxy_unreachable_not_consulted_when_callback_absent(tmp_path: Path):
+    """No on_proxy_unreachable configured — must behave exactly like before
+    this fix (single attempt, normal failure bookkeeping, no retry)."""
+    reader = _ProxyDownThenOkReader()
+    service = _build_service(tmp_path / "m.sqlite", reader, [], [])
+    service.update_feeds(["https://example.test/feed"])
+    assert reader.calls == 1
 
 
 def test_proxy_escalation_not_consulted_when_callback_absent(tmp_path: Path):

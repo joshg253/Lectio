@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
+import socks  # pysocks — for isinstance checks distinguishing a dead proxy from a refused fetch
+
 from services import bot_challenge
 
 
@@ -58,6 +60,7 @@ class FeedRefreshService:
         failed_feed_backoff_max_seconds: int,
         on_fetch_refused: Callable[[str], bool] | None = None,
         on_fetch_still_blocked: Callable[[str], bool] | None = None,
+        on_proxy_unreachable: Callable[[], None] | None = None,
         progress_hook: Callable[[str], None] | None = None,
     ) -> None:
         self._get_meta_connection = get_meta_connection
@@ -80,6 +83,11 @@ class FeedRefreshService:
         # flag the feed for as-needed proxy escalation (a no-op unless the
         # caller's mode is actually as_needed) and return True if newly flagged.
         self._on_fetch_still_blocked = on_fetch_still_blocked
+        # Called (no args) when the outbound proxy itself refused the connection
+        # (not the site) — should mark the proxy down for a cooldown so this and
+        # subsequent fetches skip it and go direct instead of hard-failing. A dead
+        # proxy backend must never be worse than not having one.
+        self._on_proxy_unreachable = on_proxy_unreachable
         # Called with a short stage label each time the refresh advances. The
         # scheduler watchdog uses it to tell "slow but moving" (a full-library
         # pass legitimately runs for an hour) from "stuck on one socket read".
@@ -111,18 +119,47 @@ class FeedRefreshService:
         return "timed out" in detail or "timeout" in detail or "connecttimeout" in detail
 
     @staticmethod
+    def _exception_chain(exc: BaseException) -> "list[BaseException]":
+        """Every exception reachable from exc via __cause__ (explicit `raise ...
+        from e`) or __context__ (implicit, set automatically when a new exception
+        is raised inside an except block) — a real chain can use either or both
+        at different hops (confirmed empirically: requests/urllib3/pysocks mix
+        both styles wrapping a dead-proxy connection failure), so a type check
+        only on __cause__ silently misses exceptions further down. Cycle-safe."""
+        seen: set[int] = set()
+        chain: list[BaseException] = []
+        stack: list[BaseException] = [exc]
+        while stack:
+            cur = stack.pop()
+            if id(cur) in seen:
+                continue
+            seen.add(id(cur))
+            chain.append(cur)
+            if cur.__cause__ is not None:
+                stack.append(cur.__cause__)
+            if cur.__context__ is not None:
+                stack.append(cur.__context__)
+        return chain
+
+    @staticmethod
     def _is_refusal_or_challenge(exc: Exception) -> bool:
         """_is_fetch_refusal, plus a bot-challenge page (Cloudflare etc.) — a
         different signal (the site served a challenge instead of the feed) but
         one a browser identity or a different exit IP might equally get past.
-        reader wraps the original exception in a ParseError, so check the
-        chain, not just the immediate exception."""
-        exc_check: BaseException | None = exc
-        while exc_check is not None:
-            if isinstance(exc_check, bot_challenge.FeedBlockedError):
-                return True
-            exc_check = exc_check.__cause__
+        reader wraps the original exception, so check the whole chain, not just
+        the immediate exception."""
+        if any(isinstance(e, bot_challenge.FeedBlockedError) for e in FeedRefreshService._exception_chain(exc)):
+            return True
         return FeedRefreshService._is_fetch_refusal(exc)
+
+    @staticmethod
+    def _is_proxy_unreachable(exc: Exception) -> bool:
+        """True when the failure is the proxy backend itself refusing/failing the
+        connection (pysocks' socks.ProxyError and subclasses) — NOT the site.
+        Both look like a generic requests.exceptions.ConnectionError at the top
+        level (same class, same generic message shape), so the only reliable
+        signal is this exception type somewhere down the chain."""
+        return any(isinstance(e, socks.ProxyError) for e in FeedRefreshService._exception_chain(exc))
 
     def compute_failed_feed_backoff_seconds(self, consecutive_failures: int) -> int:
         failures = max(1, int(consecutive_failures))
@@ -514,6 +551,57 @@ class FeedRefreshService:
                                 continue
                         except Exception:
                             pass
+
+                        # Proxy backend itself unreachable (not the site refusing
+                        # us) — e.g. gluetun restarting. Mark it down for a
+                        # cooldown (skips it for this and subsequent fetches,
+                        # across modes) and retry once now, direct. A dead proxy
+                        # must never be worse than not having one.
+                        if self._on_proxy_unreachable is not None and self._is_proxy_unreachable(exc):
+                            try:
+                                self._on_proxy_unreachable()
+                            except Exception:
+                                pass
+                            try:
+                                _updated = reader.update_feed(feed_url)
+                                success_count += 1
+                                _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
+                                if _new_entries:
+                                    self.purge_tombstoned_entries([feed_url])
+                                self._logger.info(
+                                    "[refresh] direct fallback succeeded after proxy-unreachable for %s", feed_url
+                                )
+                                with self._get_meta_connection() as conn:
+                                    conn.execute(
+                                        """
+                                        INSERT INTO feed_failure_state
+                                            (feed_url, consecutive_failures, next_retry_at, last_error, last_success_at)
+                                        VALUES (?, 0, NULL, NULL, ?)
+                                        ON CONFLICT(feed_url) DO UPDATE SET
+                                            consecutive_failures = 0,
+                                            next_retry_at = NULL,
+                                            last_error = NULL,
+                                            last_success_at = excluded.last_success_at,
+                                            acknowledged_at = NULL
+                                        """,
+                                        (feed_url, now_ts),
+                                    )
+                                    feed_state_map[feed_url] = {"consecutive_failures": 0, "next_retry_at": None}
+                                    self._record_fetch_history(
+                                        conn, feed_url, "ok",
+                                        new_entries=_new_entries,
+                                        duration_ms=int((time.perf_counter() - feed_started_at) * 1000),
+                                    )
+                                continue
+                            except Exception as retry_exc:
+                                # Direct also failed — a real site problem, not just
+                                # the proxy. Carry it forward into the normal
+                                # refusal/challenge escalation and failure
+                                # bookkeeping below, same as any other failure.
+                                exc = retry_exc
+                                self._logger.info(
+                                    "[refresh] direct fallback also failed after proxy-unreachable for %s", feed_url
+                                )
 
                         # Refusal/challenge escalation: if the honest UA was refused
                         # (403/415/429/503/timeout) or blocked by a challenge page,
