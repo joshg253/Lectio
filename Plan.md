@@ -31,15 +31,23 @@ httpx-based image/readability fetches (`/api/img`, save-article rendering) are n
 `as_needed` escalation **shipped** (2026-08-30): a sibling `proxy_feeds` table + `_flag_proxy_feed_on_still_blocked` mirror the
 `browser_ua_feeds` mechanism exactly, in `ensure_meta_schema` (backfills existing tenants via the startup per-user migration). The
 trigger in `services/feed_refresh.py` (`_is_refusal_or_challenge`) was deliberately widened beyond the existing `_is_fetch_refusal`
-(403/415/429/503/timeout) to also recognize `bot_challenge.FeedBlockedError` (walking the exception's `__cause__` chain, since reader
-wraps it in a `ParseError`) — a small, intentional change to existing browser-UA escalation too, needed so a Cloudflare-challenge feed
-gets a browser-UA attempt at all before proxy is even considered. Escalates to proxy only once browser-UA has already been in play for
-that feed (either flagged this cycle and its retry also failed, or was already flagged from an earlier cycle) and it's still failing —
-flag, retry once same-cycle. `"proxied"` surfaced in Feed Properties alongside `"browser_ua"`. Mode-gated:
-`_flag_proxy_feed_on_still_blocked` is a no-op outside as_needed (off never wants it, always doesn't need per-feed tracking). **Not
-done**: no manual override UI (Feed
-Properties has Force/Reset buttons for browser_ua; proxy_feeds has no equivalent yet) — small follow-up if wanted, mirrors that exact
-pattern (`/feeds/browser-ua` route + `feed-prop-browser-ua-*` elements in `_feed_properties_modal.html`/`app.js`).
+(403/415/429/503/timeout) to also recognize `bot_challenge.FeedBlockedError` — a small, intentional change to existing browser-UA
+escalation too, needed so a Cloudflare-challenge feed gets a browser-UA attempt at all before proxy is even considered. Escalates to
+proxy only once browser-UA has already been in play for that feed (either flagged this cycle and its retry also failed, or was already
+flagged from an earlier cycle) and it's still failing — flag, retry once same-cycle. `"proxied"` surfaced in Feed Properties alongside
+`"browser_ua"`, with a manual Force/Stop-proxying toggle mirroring the existing browser_ua Force/Reset UI exactly (`/feeds/proxy` route
++ `feed-prop-proxy-*` elements). Mode-gated: `_flag_proxy_feed_on_still_blocked` is a no-op outside as_needed (off never wants it,
+always doesn't need per-feed tracking).
+
+**Proxy-unreachable auto-fallback shipped** (2026-08-30): a dead proxy backend (gluetun restarting, etc.) must never be worse than not
+having one. Detects `pysocks`' `socks.ProxyError` — distinct from the site refusing us, which looks identical at the
+`requests.exceptions.ConnectionError` level — via `_exception_chain`, a proper walk of both `__cause__` (explicit `raise ... from e`)
+and `__context__` (implicit, set when a new exception is raised inside an except block): verified empirically that the real
+requests/urllib3/pysocks chain mixes both styles for a dead-proxy failure, so a `__cause__`-only walk (what `_is_refusal_or_challenge`
+originally did too — fixed in the same pass) silently misses it. On detection: `_mark_proxy_unreachable` skips the proxy for that user
+for a 5-minute cooldown, across every mode (not just as_needed — `always` needs this even more, since one blip would otherwise fail
+every fetch until someone notices), and the current fetch retries once immediately, direct. Verified end-to-end through the real
+`feed_refresh_service.update_feeds()` entry point against a dead SOCKS5 port: cooldown marked, direct retry succeeded, entry ingested.
 
 **Multi-backend escalation chain, later.** Final infra handoff 2026-08-30 — all three backends are live now, and Josh has explicitly
 left the chain order/wiring to whoever builds it ("Lectio's dev decides when/how to chain them"), so treat the order below as a working
