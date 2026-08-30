@@ -6,8 +6,10 @@ import time
 from pathlib import Path
 
 import pytest
+import socks
 
 import services.feed_refresh as _feed_refresh_mod
+from services import bot_challenge
 from services.feed_refresh import FeedRefreshService
 
 
@@ -79,7 +81,8 @@ def _make_conn(db_path: Path):
 
 
 def _build_service(db_path: Path, reader, yt_calls: list[str], lead_calls: list[str],
-                   on_fetch_refused=None, progress_hook=None):
+                   on_fetch_refused=None, on_fetch_still_blocked=None, on_proxy_unreachable=None,
+                   progress_hook=None):
     def get_meta_connection():
         return _make_conn(db_path)
 
@@ -95,6 +98,8 @@ def _build_service(db_path: Path, reader, yt_calls: list[str], lead_calls: list[
         failed_feed_backoff_base_seconds=60,
         failed_feed_backoff_max_seconds=24 * 60 * 60,
         on_fetch_refused=on_fetch_refused,
+        on_fetch_still_blocked=on_fetch_still_blocked,
+        on_proxy_unreachable=on_proxy_unreachable,
     )
 
 
@@ -153,6 +158,233 @@ def test_refusal_no_retry_when_not_newly_flagged(tmp_path: Path):
     service = _build_service(tmp_path / "m2.sqlite", reader, [], [], on_fetch_refused=lambda _u: False)
     service.update_feeds(["https://blocked.test/feed"])
     assert reader.attempts == ["https://blocked.test/feed"]  # no retry
+
+
+# --- proxy (as_needed) escalation, on top of browser-UA ---
+
+class _NTimesRefusingReader:
+    """Fails a feed's first N attempts with a refusal, succeeds after that."""
+    def __init__(self, fail_counts: dict[str, int]):
+        self.remaining = dict(fail_counts)
+        self.attempts: list[str] = []
+
+    def update_feed(self, feed_url: str):
+        self.attempts.append(feed_url)
+        left = self.remaining.get(feed_url, 0)
+        if left > 0:
+            self.remaining[feed_url] = left - 1
+            raise RuntimeError("HTTP 415 Unsupported Media Type")
+
+
+def _wrapped_bot_challenge() -> RuntimeError:
+    """A FeedBlockedError wrapped the way reader wraps it in a ParseError
+    (`raise exc from e`) — see services/reader_api.py's response hook."""
+    try:
+        try:
+            raise bot_challenge.FeedBlockedError("Cloudflare challenge", "https://blocked.test/feed")
+        except bot_challenge.FeedBlockedError as e:
+            raise RuntimeError("unexpected error while getting feed") from e
+    except RuntimeError as wrapped:
+        return wrapped
+
+
+def test_is_refusal_or_challenge_recognizes_wrapped_bot_challenge():
+    f = FeedRefreshService._is_refusal_or_challenge
+    assert f(_wrapped_bot_challenge())
+    assert f(RuntimeError("403 Forbidden"))  # still classifies plain refusals
+    assert not f(RuntimeError("404 Not Found"))
+
+
+def test_proxy_escalation_fires_after_browser_ua_retry_also_fails(tmp_path: Path):
+    """browser-UA newly-flags and retries; that retry ALSO fails; proxy
+    escalation then flags and retries once more, which succeeds."""
+    reader = _NTimesRefusingReader({"https://blocked.test/feed": 2})
+    browser_ua_flagged: list[str] = []
+    proxy_flagged: list[str] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda u: browser_ua_flagged.append(u) or True,
+        on_fetch_still_blocked=lambda u: proxy_flagged.append(u) or True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    assert browser_ua_flagged == ["https://blocked.test/feed"]
+    assert proxy_flagged == ["https://blocked.test/feed"]
+    # original + browser-UA retry + proxy retry = 3 attempts
+    assert reader.attempts == ["https://blocked.test/feed"] * 3
+    with _make_conn(tmp_path / "m.sqlite") as conn:
+        row = conn.execute(
+            "SELECT consecutive_failures FROM feed_failure_state WHERE feed_url = ?",
+            ("https://blocked.test/feed",),
+        ).fetchone()
+    assert row is not None and row["consecutive_failures"] == 0
+
+
+def test_proxy_escalation_fires_directly_when_already_browser_ua_flagged(tmp_path: Path):
+    """Feed already browser-UA-flagged (on_fetch_refused returns False, no
+    retry) — proxy escalation must still fire off the original failure,
+    without waiting for a browser-UA retry that will never happen."""
+    reader = _NTimesRefusingReader({"https://blocked.test/feed": 1})
+    proxy_flagged: list[str] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda _u: False,  # already flagged
+        on_fetch_still_blocked=lambda u: proxy_flagged.append(u) or True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    assert proxy_flagged == ["https://blocked.test/feed"]
+    # original (fails) + proxy retry (succeeds) = 2 attempts, no browser-UA retry
+    assert reader.attempts == ["https://blocked.test/feed"] * 2
+
+
+def test_proxy_escalation_not_attempted_when_browser_ua_retry_succeeds(tmp_path: Path):
+    """The common case: browser-UA alone fixes it — proxy must never be
+    consulted at all."""
+    reader = _RefusingReader({"https://blocked.test/feed"})
+    proxy_flagged: list[str] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda _u: True,
+        on_fetch_still_blocked=lambda u: proxy_flagged.append(u) or True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    assert proxy_flagged == []
+    assert reader.attempts == ["https://blocked.test/feed"] * 2
+
+
+def test_proxy_escalation_still_failing_falls_through_to_normal_bookkeeping(tmp_path: Path):
+    """Both escalations exhausted — must record the failure (not retry-loop
+    forever) using the most recent attempt's error."""
+    reader = _NTimesRefusingReader({"https://blocked.test/feed": 99})
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda _u: True,
+        on_fetch_still_blocked=lambda _u: True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    # original + browser-UA retry + proxy retry = 3 attempts, then give up
+    assert reader.attempts == ["https://blocked.test/feed"] * 3
+    with _make_conn(tmp_path / "m.sqlite") as conn:
+        row = conn.execute(
+            "SELECT consecutive_failures, last_error FROM feed_failure_state WHERE feed_url = ?",
+            ("https://blocked.test/feed",),
+        ).fetchone()
+    assert row is not None and row["consecutive_failures"] == 1
+    assert "refused" in (row["last_error"] or "").lower() or "unsupported media" in (row["last_error"] or "").lower()
+
+
+# --- proxy-unreachable auto-fallback (the proxy backend itself is down,
+#     not the site refusing us) ---
+
+def _wrapped_proxy_unreachable() -> RuntimeError:
+    """A proxy-connection failure chained the way requests/urllib3/pysocks
+    actually do it: the socks.ProxyError is reachable only via __context__
+    (implicit — raised inside an except block with no `from`), not __cause__.
+    A __cause__-only chain walk (the original, buggy version of
+    _is_proxy_unreachable) would silently miss this."""
+    try:
+        raise socks.ProxyConnectionError("Error connecting to SOCKS5 proxy gluetun:1080: refused")
+    except socks.ProxyConnectionError:
+        try:
+            raise RuntimeError("Max retries exceeded")  # no `from` -> __context__ only
+        except RuntimeError as e:
+            return e
+
+
+def test_is_proxy_unreachable_walks_context_not_just_cause():
+    assert FeedRefreshService._is_proxy_unreachable(_wrapped_proxy_unreachable())
+    assert not FeedRefreshService._is_proxy_unreachable(RuntimeError("HTTP 415 Unsupported Media Type"))
+    assert not FeedRefreshService._is_proxy_unreachable(RuntimeError("404 Not Found"))
+
+
+class _ProxyDownThenOkReader:
+    """First call raises a proxy-unreachable-shaped failure; every call after
+    that succeeds — simulating the fallback retry going direct."""
+    def __init__(self):
+        self.calls = 0
+
+    def update_feed(self, feed_url: str):
+        self.calls += 1
+        if self.calls == 1:
+            raise _wrapped_proxy_unreachable()
+
+
+def test_proxy_unreachable_falls_back_to_direct_and_succeeds(tmp_path: Path):
+    reader = _ProxyDownThenOkReader()
+    marked_down: list[bool] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_proxy_unreachable=lambda: marked_down.append(True),
+    )
+    service.update_feeds(["https://example.test/feed"])
+
+    assert marked_down == [True]
+    assert reader.calls == 2  # original (proxied, fails) + fallback (direct, succeeds)
+    with _make_conn(tmp_path / "m.sqlite") as conn:
+        row = conn.execute(
+            "SELECT consecutive_failures FROM feed_failure_state WHERE feed_url = ?",
+            ("https://example.test/feed",),
+        ).fetchone()
+    assert row is not None and row["consecutive_failures"] == 0
+
+
+class _AlwaysProxyDownReader:
+    """Every call raises a proxy-unreachable-shaped failure — the site is
+    unreachable full stop, proxy or not."""
+    def __init__(self):
+        self.calls = 0
+
+    def update_feed(self, feed_url: str):
+        self.calls += 1
+        raise _wrapped_proxy_unreachable()
+
+
+def test_proxy_unreachable_fallback_also_failing_falls_through(tmp_path: Path):
+    reader = _AlwaysProxyDownReader()
+    marked_down: list[bool] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_proxy_unreachable=lambda: marked_down.append(True),
+    )
+    service.update_feeds(["https://example.test/feed"])
+
+    assert marked_down == [True]
+    assert reader.calls == 2  # original + one direct fallback attempt, then give up
+    with _make_conn(tmp_path / "m.sqlite") as conn:
+        row = conn.execute(
+            "SELECT consecutive_failures FROM feed_failure_state WHERE feed_url = ?",
+            ("https://example.test/feed",),
+        ).fetchone()
+    assert row is not None and row["consecutive_failures"] == 1
+
+
+def test_proxy_unreachable_not_consulted_when_callback_absent(tmp_path: Path):
+    """No on_proxy_unreachable configured — must behave exactly like before
+    this fix (single attempt, normal failure bookkeeping, no retry)."""
+    reader = _ProxyDownThenOkReader()
+    service = _build_service(tmp_path / "m.sqlite", reader, [], [])
+    service.update_feeds(["https://example.test/feed"])
+    assert reader.calls == 1
+
+
+def test_proxy_escalation_not_consulted_when_callback_absent(tmp_path: Path):
+    """No on_fetch_still_blocked configured (proxy feature entirely unwired,
+    e.g. an older config) — behavior must be identical to before this PR."""
+    reader = _RefusingReader({"https://blocked.test/feed"})
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda _u: True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+    assert reader.attempts == ["https://blocked.test/feed"] * 2  # browser-UA retry only
 
 
 def test_compute_backoff_caps_at_max(tmp_path: Path):

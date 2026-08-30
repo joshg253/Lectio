@@ -321,6 +321,14 @@
             <span class="feed-prop-strategy-hint">Server returns a valid feed in a browser but fails with the default client? Force browser identity:</span>
             <button type="button" id="feed-prop-browser-ua-force" class="feed-prop-inline-btn" title="Fetch this feed using a browser User-Agent and headers">Use browser identity</button>
           </div>
+          <div id="feed-prop-proxy-row" hidden style="margin-top:0.5rem;">
+            <span class="feed-prop-strategy-hint">🔒 This feed fetches through the outbound proxy (browser identity alone still wasn't enough).</span>
+            <button type="button" id="feed-prop-proxy-reset" class="feed-prop-inline-btn" title="Stop routing this feed through the proxy">Stop proxying</button>
+          </div>
+          <div id="feed-prop-proxy-force-row" hidden style="margin-top:0.5rem;">
+            <span class="feed-prop-strategy-hint">Still failing? Force this feed through the outbound proxy (only takes effect when your Network setting is "As needed"):</span>
+            <button type="button" id="feed-prop-proxy-force" class="feed-prop-inline-btn" title="Fetch this feed through the configured outbound proxy">Force proxy</button>
+          </div>
         </div>
         <!-- Dev feed: manual batch flush -->
         <div id="feed-prop-dev-section" hidden>

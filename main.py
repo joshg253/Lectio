@@ -403,6 +403,12 @@ SETTING_PORTRAIT_IMG_MAX_WIDTH = "portrait_img_max_width"
 # the proxied single-resolution src). Read Mode always does this regardless of
 # this setting (see proxy_all_body_images).
 SETTING_PROXY_BODY_IMAGES = "proxy_body_images"
+# Outbound-fetch SOCKS5/HTTP proxy (e.g. a gluetun VPN container). URL is
+# admin-only (a non-admin choosing an arbitrary proxy target is SSRF-adjacent);
+# mode is per-user-overridable — "" means inherit the instance default. See
+# get_proxy_url / get_proxy_mode.
+SETTING_PROXY_URL = "proxy_url"
+SETTING_PROXY_MODE = "proxy_mode"  # "off" / "as_needed" / "always"
 SETTING_MAINTENANCE_HOUR = "maintenance_hour"
 SETTING_IMG_CACHE_DAYS = "img_cache_days"
 SETTING_IMG_CACHE_MAX_DIM = "img_cache_max_dim"
@@ -639,6 +645,8 @@ _ENV_IMG_CACHE_MAX_DIM = _env_int("LECTIO_IMG_CACHE_MAX_DIM", 3840)
 _ENV_IMG_TARGET_BYTES = _env_int("LECTIO_IMG_TARGET_BYTES", 1_500_000)
 # Max width (px) for portrait (taller-than-wide) article images; 0 = disabled.
 _ENV_PORTRAIT_IMG_MAX_WIDTH = _env_int("LECTIO_PORTRAIT_IMG_MAX_WIDTH", 650)
+# Outbound-fetch proxy endpoint (e.g. socks5h://gluetun:1080). "" = none configured.
+_ENV_PROXY_URL = os.getenv("LECTIO_PROXY_URL", "").strip()
 
 # --- Scheduler resilience (see ARCHITECTURE "Refresh scheduler") ---
 # Feed fetches are strictly sequential, so one host that accepts a connection and
@@ -1733,6 +1741,23 @@ def proxy_body_images_enabled() -> bool:
     """Per-user: preemptively proxy every article-pane body image through
     /api/img instead of loading third-party URLs directly. Off by default."""
     return get_runtime_setting(SETTING_PROXY_BODY_IMAGES, "0") == "1"
+
+
+_PROXY_MODES = ("off", "as_needed", "always")
+
+
+def get_proxy_url() -> str:
+    """Outbound-fetch proxy endpoint (e.g. gluetun's socks5h://gluetun:1080).
+    Admin-managed; env default, DB override takes precedence."""
+    return get_instance_setting(SETTING_PROXY_URL, _ENV_PROXY_URL)
+
+
+def get_proxy_mode() -> str:
+    """off / as_needed / always for outbound feed fetches. Per-user DB setting
+    overrides the instance (first-admin) default; unset resolves to "off" —
+    the proxy is opt-in everywhere."""
+    val = get_instance_setting(SETTING_PROXY_MODE, "off")
+    return val if val in _PROXY_MODES else "off"
 
 
 def get_img_cache_days() -> int:
@@ -3927,6 +3952,20 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # as_needed proxy escalation: a feed lands here only after browser-UA
+        # was already in play (flagged this cycle or earlier) and the fetch
+        # still failed — see _flag_proxy_feed_on_still_blocked. Mode-gated:
+        # only as_needed users ever get a feed flagged here (off never wants
+        # it, always doesn't need per-feed tracking).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS proxy_feeds (
+                feed_url TEXT PRIMARY KEY,
+                flagged_at TEXT NOT NULL DEFAULT (datetime('now')),
+                reason TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS feed_display_prefs (
@@ -5634,6 +5673,34 @@ def flag_browser_ua_feed(conn: sqlite3.Connection, feed_url: str, reason: str = 
 
 def unflag_browser_ua_feed(conn: sqlite3.Connection, feed_url: str) -> None:
     conn.execute("DELETE FROM browser_ua_feeds WHERE feed_url = ?", (feed_url.strip(),))
+
+
+def get_proxy_feed_urls(conn: sqlite3.Connection) -> set[str]:
+    """Feeds whose fetch should route through the outbound proxy in as_needed mode.
+
+    A feed lands here only after browser-UA was already in play (flagged this
+    cycle or earlier) and the fetch still failed — see
+    `_flag_proxy_feed_on_still_blocked`. The request hook in services.reader_api
+    consults this set so the next fetch escalates. Irrelevant in off/always
+    mode — those never consult it."""
+    rows = conn.execute("SELECT feed_url FROM proxy_feeds").fetchall()
+    return {str(r["feed_url"]) for r in rows}
+
+
+def flag_proxy_feed(conn: sqlite3.Connection, feed_url: str, reason: str = "") -> bool:
+    """Mark a feed for as-needed proxy escalation. Returns True if newly flagged."""
+    feed_url = feed_url.strip()
+    if not feed_url:
+        return False
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO proxy_feeds (feed_url, reason) VALUES (?, ?)",
+        (feed_url, reason[:200]),
+    )
+    return cur.rowcount > 0
+
+
+def unflag_proxy_feed(conn: sqlite3.Connection, feed_url: str) -> None:
+    conn.execute("DELETE FROM proxy_feeds WHERE feed_url = ?", (feed_url.strip(),))
 
 
 def disable_feed(feed_url: str) -> None:
@@ -8912,6 +8979,106 @@ def _flag_browser_ua_on_refusal(feed_url: str) -> bool:
     return newly
 
 
+# Per-user cache of as-needed-proxy-flagged feed URLs — same shape as the
+# browser-UA cache above, consulted by the same request-hook mechanism.
+_proxy_feeds_cache: dict[str, set[str]] = {}
+_proxy_feeds_cache_at: dict[str, float] = {}
+_proxy_feeds_cache_lock = threading.Lock()
+_PROXY_FEEDS_CACHE_TTL = 30.0
+
+
+def _proxy_feeds_for(uid: str) -> set[str]:
+    now = time.monotonic()
+    with _proxy_feeds_cache_lock:
+        cached = _proxy_feeds_cache.get(uid)
+        if cached is not None and (now - _proxy_feeds_cache_at.get(uid, 0.0)) < _PROXY_FEEDS_CACHE_TTL:
+            return cached
+    try:
+        with tenancy.user_context(uid):
+            with get_meta_connection() as conn:
+                feeds = get_proxy_feed_urls(conn)
+    except Exception:
+        feeds = set()
+    with _proxy_feeds_cache_lock:
+        _proxy_feeds_cache[uid] = feeds
+        _proxy_feeds_cache_at[uid] = now
+    return feeds
+
+
+def _invalidate_proxy_feeds_cache() -> None:
+    with _proxy_feeds_cache_lock:
+        _proxy_feeds_cache.clear()
+        _proxy_feeds_cache_at.clear()
+
+
+def _flag_proxy_feed_on_still_blocked(feed_url: str) -> bool:
+    """Flag a feed for as-needed proxy escalation after browser-UA was already
+    in play and the fetch still failed, and invalidate the cache so an
+    immediate retry routes through the proxy. Mode-gated: only as_needed users
+    ever get flagged here (off never wants it, always doesn't need per-feed
+    tracking) — checked in the current (ambient) tenancy context, same as the
+    scheduler's other per-user callbacks. Returns True if newly flagged."""
+    if get_proxy_mode() != "as_needed":
+        return False
+    try:
+        with get_meta_connection() as conn:
+            newly = flag_proxy_feed(conn, feed_url, reason="still blocked after browser-UA")
+    except Exception:
+        return False
+    if newly:
+        _invalidate_proxy_feeds_cache()
+        LOGGER.info("[refresh] flagged %s for as-needed proxy escalation", feed_url)
+    return newly
+
+
+# A dead proxy backend (e.g. gluetun restarting) must never be worse than not
+# having one. On a proxy-unreachable failure (see
+# services.feed_refresh.FeedRefreshService._is_proxy_unreachable),
+# _mark_proxy_unreachable skips the proxy entirely for this user for a cooldown —
+# across every mode, not just as_needed — rather than hard-failing every fetch
+# until someone notices and fixes it.
+_PROXY_DOWN_COOLDOWN_SECONDS = 300.0
+_proxy_down_until: dict[str, float] = {}
+_proxy_down_lock = threading.Lock()
+
+
+def _mark_proxy_unreachable() -> None:
+    uid = tenancy.current_user_id()
+    with _proxy_down_lock:
+        _proxy_down_until[uid] = time.monotonic() + _PROXY_DOWN_COOLDOWN_SECONDS
+    LOGGER.warning(
+        "[refresh] proxy unreachable for user %s — skipping it for %ds", uid, int(_PROXY_DOWN_COOLDOWN_SECONDS)
+    )
+
+
+def _proxy_is_down(uid: str) -> bool:
+    with _proxy_down_lock:
+        until = _proxy_down_until.get(uid)
+    return until is not None and time.monotonic() < until
+
+
+def _resolve_proxy_for_fetch(uid: str, feed_url: str) -> str | None:
+    """Proxy URL to fetch feed_url through for user uid, or None for direct.
+
+    "always" routes every fetch through the configured proxy. "as_needed"
+    only escalates feeds already flagged by _flag_proxy_feed_on_still_blocked
+    (browser-UA was already in play and still failed). "off" (the default)
+    never proxies. Any mode is skipped entirely while the proxy is in its
+    unreachable cooldown — see _mark_proxy_unreachable."""
+    try:
+        with tenancy.user_context(uid):
+            if _proxy_is_down(uid):
+                return None
+            mode = get_proxy_mode()
+            if mode == "always":
+                return get_proxy_url() or None
+            if mode == "as_needed" and feed_url in _proxy_feeds_for(uid):
+                return get_proxy_url() or None
+            return None
+    except Exception:
+        return None
+
+
 def get_reader():
     """Per-(thread, user) persistent Reader, resolved via the tenancy seam.
 
@@ -8934,6 +9101,7 @@ def get_reader():
         ReaderApi(
             tenancy.reader_db_path(uid),
             browser_ua_provider=lambda u=uid: _browser_ua_feeds_for(u),
+            proxy_resolver=lambda url, u=uid: _resolve_proxy_for_fetch(u, url),
             session_timeout=(FEED_CONNECT_TIMEOUT_SECONDS, FEED_READ_TIMEOUT_SECONDS),
         ).client()
     )
@@ -10603,6 +10771,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "devto_feed_id": _devto_id,
             "devto": devto_service.get_feed_config(_pc, _devto_id) if _devto_id else None,
             "browser_ua": feed_url in get_browser_ua_feed_urls(_pc),
+            "proxied": feed_url in get_proxy_feed_urls(_pc),
             # Declared domain migrations for this feed. Rendered as the "Other
             # domains" list under Website, which is the only way to see them —
             # they otherwise act invisibly at ingest and in the global dedupe
@@ -12237,6 +12406,8 @@ feed_refresh_service = FeedRefreshService(
     failed_feed_backoff_base_seconds=FAILED_FEED_BACKOFF_BASE_SECONDS,
     failed_feed_backoff_max_seconds=FAILED_FEED_BACKOFF_MAX_SECONDS,
     on_fetch_refused=_flag_browser_ua_on_refusal,
+    on_fetch_still_blocked=_flag_proxy_feed_on_still_blocked,
+    on_proxy_unreachable=_mark_proxy_unreachable,
     progress_hook=_note_scheduler_progress,
 )
 
@@ -22448,6 +22619,8 @@ def administration_page(request: Request, msg: str | None = None, error: str | N
             "img_cache_days": get_img_cache_days(),
             "img_cache_max_dim": get_img_cache_max_dim(),
             "img_target_bytes": get_img_target_bytes(),
+            "proxy_url": get_proxy_url(),
+            "proxy_mode": get_proxy_mode(),
             # Shared OAuth apps (stored in admin's own app_settings).
             "shared_yt_oauth_client_id": get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_ID, ""),
             "shared_yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)),
@@ -28297,6 +28470,11 @@ def get_all_settings():
         "tz_display": get_runtime_setting(SETTING_TZ_DISPLAY),
         "portrait_img_max_width": get_portrait_img_max_width(),
         "proxy_body_images": proxy_body_images_enabled(),
+        # Raw own row ("" = inherit the instance default) vs. the resolved value
+        # actually in effect for this user right now — the UI shows the former
+        # as the select's value and the latter as a hint when it's "inherit".
+        "proxy_mode_own": get_runtime_setting(SETTING_PROXY_MODE, ""),
+        "proxy_mode_effective": get_proxy_mode(),
         "tz_default": os.environ.get("TZ") or "UTC",
         "maintenance_hour": get_runtime_setting(SETTING_MAINTENANCE_HOUR),
         "maintenance_last_ran_at": maint_last,
@@ -28422,6 +28600,7 @@ async def save_all_settings(request: Request):
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
         SETTING_TZ_DISPLAY, SETTING_PORTRAIT_IMG_MAX_WIDTH, SETTING_PROXY_BODY_IMAGES,
+        SETTING_PROXY_URL, SETTING_PROXY_MODE,
         SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
@@ -28458,6 +28637,7 @@ async def save_all_settings(request: Request):
     # requests silently drop these keys, even if the client sends them.
     _ADMIN_ONLY = {
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
+        SETTING_PROXY_URL,
         SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
@@ -28624,6 +28804,22 @@ def set_feed_browser_ua_route(feed_url: str = Form(...), enabled: int = Form(...
             unflag_browser_ua_feed(conn, feed_url)
     _invalidate_browser_ua_cache()
     return JSONResponse({"ok": True, "browser_ua": bool(enabled)})
+
+
+@app.post("/feeds/proxy")
+def set_feed_proxy_route(feed_url: str = Form(...), enabled: int = Form(...)):
+    """Manually flag/unflag a feed for as-needed proxy escalation. Auto-set when
+    browser-UA was already in play and the fetch still failed; this lets the user
+    reset a feed back to direct/browser-UA (or force it on). Only takes effect
+    when the resolving mode is as_needed — off/always never consult this flag."""
+    feed_url = feed_url.strip()
+    with get_meta_connection() as conn:
+        if enabled:
+            flag_proxy_feed(conn, feed_url, reason="manual")
+        else:
+            unflag_proxy_feed(conn, feed_url)
+    _invalidate_proxy_feeds_cache()
+    return JSONResponse({"ok": True, "proxied": bool(enabled)})
 
 
 @app.post("/feeds/reparse")

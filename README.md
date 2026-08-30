@@ -115,7 +115,10 @@ short version:
   rather than misfiled as malformed, one character that XML forbids no
   longer costs you the whole feed, and a feed that's merely malformed
   elsewhere is still ingested from whatever a lenient parser can recover
-  rather than discarded outright.
+  rather than discarded outright. An optional outbound SOCKS5/HTTP proxy
+  (e.g. a VPN container on the same Docker network) can route feed fetches
+  around geoblocks or per-IP rate limits — off by default, set instance-wide
+  or per user in Settings.
 - **Fix a post in place.** Edit its date, title or URL; clean up its body with
   an Aardvark-style element remover; re-fetch its content — undoably, with an
   Internet Archive fallback — one post, or a whole feed or folder at a time.

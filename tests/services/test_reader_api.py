@@ -232,3 +232,96 @@ def test_empty_body_with_no_challenge_header_returns_none_as_before():
     response = _FakeResponse({}, body=b"")
 
     assert reader_api._fix_feed_response(None, response, None) is None
+
+
+# --- proxy request hook ---
+#
+# requests has no per-request "proxies" kwarg reachable from a hook — only the
+# session-wide default it reads at send() time — so the hook mutates
+# session.proxies directly, right before send. See ReaderApi._make_proxy_
+# request_hook's docstring for why that's safe (refresh is sequential).
+
+class _FakeProxySession:
+    def __init__(self):
+        self.proxies: dict = {}
+
+
+def test_proxy_hook_sets_session_proxies_when_resolver_returns_url():
+    api = ReaderApi(":memory:", proxy_resolver=lambda url: "socks5h://gluetun:1080")
+    hook = api._make_proxy_request_hook()
+
+    import requests
+    session = _FakeProxySession()
+    req = requests.Request("GET", "https://example.test/feed")
+    out = hook(session, req)
+
+    assert out is req
+    assert session.proxies == {"http": "socks5h://gluetun:1080", "https": "socks5h://gluetun:1080"}
+
+
+def test_proxy_hook_clears_session_proxies_when_resolver_returns_none():
+    """A prior request may have left proxies set (always mode, or as-needed on
+    a flagged feed) — the next request for an unrelated feed must not inherit
+    it, since the shared session persists across the whole refresh cycle."""
+    api = ReaderApi(":memory:", proxy_resolver=lambda url: None)
+    hook = api._make_proxy_request_hook()
+
+    import requests
+    session = _FakeProxySession()
+    session.proxies = {"http": "socks5h://gluetun:1080", "https": "socks5h://gluetun:1080"}
+    hook(session, requests.Request("GET", "https://fine.test/feed"))
+
+    assert session.proxies == {}
+
+
+def test_proxy_hook_swallows_resolver_exceptions():
+    def _boom(url: str) -> str | None:
+        raise RuntimeError("resolver blew up")
+
+    api = ReaderApi(":memory:", proxy_resolver=_boom)
+    hook = api._make_proxy_request_hook()
+
+    import requests
+    session = _FakeProxySession()
+    session.proxies = {"http": "socks5h://gluetun:1080", "https": "socks5h://gluetun:1080"}
+    out = hook(session, requests.Request("GET", "https://example.test/feed"))
+
+    assert out is not None
+    assert session.proxies == {}  # failed resolution must not leave a stale proxy in place
+
+
+def test_proxy_hook_not_registered_when_no_resolver(monkeypatch):
+    """No proxy_resolver -> no per-request overhead for users with the proxy off."""
+
+    class FakeSession:
+        def __init__(self):
+            self.headers = {}
+
+    class FakeRetriever:
+        def __init__(self):
+            self.session = FakeSession()
+            self.request_hooks: list = []
+            self.response_hooks: list = []
+
+    class FakeParser:
+        def __init__(self):
+            self.lazy_init_funcs = []
+            self.retrievers = {"https://": FakeRetriever(), "http://": FakeRetriever()}
+            self.parsers_by_mime_type = {}
+
+        def lazy_init(self, fn):
+            return fn
+
+    class FakeReader:
+        def __init__(self, path):
+            self._parser = FakeParser()
+
+    monkeypatch.setattr(reader_api, "make_reader", lambda path, **kw: FakeReader(path))
+    monkeypatch.setattr(reader_api, "_LectioReaderStorage", lambda path, **kw: None)
+
+    r = ReaderApi("test.sqlite").client()
+    for hook in r._parser.lazy_init_funcs:
+        hook(r._parser)
+
+    for retr in r._parser.retrievers.values():
+        assert retr.request_hooks == []

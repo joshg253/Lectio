@@ -21,6 +21,7 @@ dependencies = [
     "resend",
     "uvicorn[standard]",
     "markdown>=3.10.2",
+    "pysocks>=1.7.1",
 ]
 
 [project.optional-dependencies]

@@ -135,6 +135,21 @@
         </div>
         <p class="account-hint">An image over the size budget is re-encoded to WebP — losslessly for logos, diagrams and line art, where lossy compression would smear the edges, and lossy otherwise. The dimension cap alone does not bound size.</p>
 
+        <h3>Outbound proxy</h3>
+        <p class="account-hint">Routes feed fetches through a SOCKS5/HTTP proxy (e.g. a gluetun VPN container on the same Docker network) — useful against ordinary geoblocks or per-IP rate limits, not against sites running real bot detection. This is the instance default; a user can override it for themselves in Settings → Account. Off everywhere until set.</p>
+        <div class="tuning-grid">
+          <label class="fld">Proxy URL
+            <input type="text" id="adm-proxy-url" value="{{ proxy_url }}" placeholder="socks5h://gluetun:1080" autocomplete="off" />
+          </label>
+          <label class="fld">Default mode
+            <select id="adm-proxy-mode">
+              <option value="off" {{ 'selected' if proxy_mode == 'off' }}>Off</option>
+              <option value="as_needed" {{ 'selected' if proxy_mode == 'as_needed' }}>As needed</option>
+              <option value="always" {{ 'selected' if proxy_mode == 'always' }}>Always</option>
+            </select>
+          </label>
+        </div>
+
         <h3>Security</h3>
         <p class="account-hint">Repeated failed logins lock the account out for the window.</p>
         <div class="tuning-grid">
@@ -331,6 +346,8 @@
           img_cache_days: $('adm-img-cache-days')?.value.trim() || '',
           img_cache_max_dim: $('adm-img-cache-max-dim')?.value.trim() || '',
           img_target_bytes: $('adm-img-target-bytes')?.value.trim() || '',
+          proxy_url: $('adm-proxy-url')?.value.trim() || '',
+          proxy_mode: $('adm-proxy-mode')?.value || '',
           shared_yt_oauth_client_id: $('adm-yt-oauth-client-id')?.value.trim() || '',
           shared_pinterest_oauth_client_id: $('adm-pinterest-oauth-client-id')?.value.trim() || '',
           fetch_history_max_age_days: $('adm-fetch-history-max-age')?.value.trim() || '',

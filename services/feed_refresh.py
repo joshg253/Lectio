@@ -9,6 +9,10 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
+import socks  # pysocks — for isinstance checks distinguishing a dead proxy from a refused fetch
+
+from services import bot_challenge
+
 
 def _feed_domain(feed_url: str) -> str:
     """Return the netloc (host[:port]) of a feed URL, lower-cased."""
@@ -55,6 +59,8 @@ class FeedRefreshService:
         failed_feed_backoff_base_seconds: int,
         failed_feed_backoff_max_seconds: int,
         on_fetch_refused: Callable[[str], bool] | None = None,
+        on_fetch_still_blocked: Callable[[str], bool] | None = None,
+        on_proxy_unreachable: Callable[[], None] | None = None,
         progress_hook: Callable[[str], None] | None = None,
     ) -> None:
         self._get_meta_connection = get_meta_connection
@@ -67,10 +73,21 @@ class FeedRefreshService:
         self._failed_feed_backoff_base_seconds = failed_feed_backoff_base_seconds
         self._failed_feed_backoff_max_seconds = failed_feed_backoff_max_seconds
         # Called with a feed_url when an honest-UA fetch is refused (403/415/429/
-        # 503/timeout). Should flag the feed for browser-identity escalation and
-        # return True if it was newly flagged (so this cycle can retry it). Keeps
-        # the good-citizen escalation policy out of the service layer.
+        # 503/timeout) or blocked by a challenge page. Should flag the feed for
+        # browser-identity escalation and return True if it was newly flagged (so
+        # this cycle can retry it). Keeps the good-citizen escalation policy out
+        # of the service layer.
         self._on_fetch_refused = on_fetch_refused
+        # Called with a feed_url when browser-UA was already in play (flagged
+        # this cycle or earlier) and the fetch still failed the same way. Should
+        # flag the feed for as-needed proxy escalation (a no-op unless the
+        # caller's mode is actually as_needed) and return True if newly flagged.
+        self._on_fetch_still_blocked = on_fetch_still_blocked
+        # Called (no args) when the outbound proxy itself refused the connection
+        # (not the site) — should mark the proxy down for a cooldown so this and
+        # subsequent fetches skip it and go direct instead of hard-failing. A dead
+        # proxy backend must never be worse than not having one.
+        self._on_proxy_unreachable = on_proxy_unreachable
         # Called with a short stage label each time the refresh advances. The
         # scheduler watchdog uses it to tell "slow but moving" (a full-library
         # pass legitimately runs for an hour) from "stuck on one socket read".
@@ -100,6 +117,49 @@ class FeedRefreshService:
         if any(code in detail for code in ("403", "415", "429", "503")):
             return True
         return "timed out" in detail or "timeout" in detail or "connecttimeout" in detail
+
+    @staticmethod
+    def _exception_chain(exc: BaseException) -> "list[BaseException]":
+        """Every exception reachable from exc via __cause__ (explicit `raise ...
+        from e`) or __context__ (implicit, set automatically when a new exception
+        is raised inside an except block) — a real chain can use either or both
+        at different hops (confirmed empirically: requests/urllib3/pysocks mix
+        both styles wrapping a dead-proxy connection failure), so a type check
+        only on __cause__ silently misses exceptions further down. Cycle-safe."""
+        seen: set[int] = set()
+        chain: list[BaseException] = []
+        stack: list[BaseException] = [exc]
+        while stack:
+            cur = stack.pop()
+            if id(cur) in seen:
+                continue
+            seen.add(id(cur))
+            chain.append(cur)
+            if cur.__cause__ is not None:
+                stack.append(cur.__cause__)
+            if cur.__context__ is not None:
+                stack.append(cur.__context__)
+        return chain
+
+    @staticmethod
+    def _is_refusal_or_challenge(exc: Exception) -> bool:
+        """_is_fetch_refusal, plus a bot-challenge page (Cloudflare etc.) — a
+        different signal (the site served a challenge instead of the feed) but
+        one a browser identity or a different exit IP might equally get past.
+        reader wraps the original exception, so check the whole chain, not just
+        the immediate exception."""
+        if any(isinstance(e, bot_challenge.FeedBlockedError) for e in FeedRefreshService._exception_chain(exc)):
+            return True
+        return FeedRefreshService._is_fetch_refusal(exc)
+
+    @staticmethod
+    def _is_proxy_unreachable(exc: Exception) -> bool:
+        """True when the failure is the proxy backend itself refusing/failing the
+        connection (pysocks' socks.ProxyError and subclasses) — NOT the site.
+        Both look like a generic requests.exceptions.ConnectionError at the top
+        level (same class, same generic message shape), so the only reliable
+        signal is this exception type somewhere down the chain."""
+        return any(isinstance(e, socks.ProxyError) for e in FeedRefreshService._exception_chain(exc))
 
     def compute_failed_feed_backoff_seconds(self, consecutive_failures: int) -> int:
         failures = max(1, int(consecutive_failures))
@@ -492,53 +552,156 @@ class FeedRefreshService:
                         except Exception:
                             pass
 
-                        # Refusal escalation: if the honest UA was refused (403/415/
-                        # 429/503/timeout) and this feed isn't already flagged, flag
-                        # it for browser identity and retry once now. Good-citizen:
-                        # only after a real refusal, never preemptively.
-                        if self._on_fetch_refused is not None and self._is_fetch_refusal(exc):
+                        # Proxy backend itself unreachable (not the site refusing
+                        # us) — e.g. gluetun restarting. Mark it down for a
+                        # cooldown (skips it for this and subsequent fetches,
+                        # across modes) and retry once now, direct. A dead proxy
+                        # must never be worse than not having one.
+                        if self._on_proxy_unreachable is not None and self._is_proxy_unreachable(exc):
                             try:
-                                newly_flagged = self._on_fetch_refused(feed_url)
+                                self._on_proxy_unreachable()
                             except Exception:
-                                newly_flagged = False
-                            if newly_flagged:
+                                pass
+                            try:
+                                _updated = reader.update_feed(feed_url)
+                                success_count += 1
+                                _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
+                                if _new_entries:
+                                    self.purge_tombstoned_entries([feed_url])
+                                self._logger.info(
+                                    "[refresh] direct fallback succeeded after proxy-unreachable for %s", feed_url
+                                )
+                                with self._get_meta_connection() as conn:
+                                    conn.execute(
+                                        """
+                                        INSERT INTO feed_failure_state
+                                            (feed_url, consecutive_failures, next_retry_at, last_error, last_success_at)
+                                        VALUES (?, 0, NULL, NULL, ?)
+                                        ON CONFLICT(feed_url) DO UPDATE SET
+                                            consecutive_failures = 0,
+                                            next_retry_at = NULL,
+                                            last_error = NULL,
+                                            last_success_at = excluded.last_success_at,
+                                            acknowledged_at = NULL
+                                        """,
+                                        (feed_url, now_ts),
+                                    )
+                                    feed_state_map[feed_url] = {"consecutive_failures": 0, "next_retry_at": None}
+                                    self._record_fetch_history(
+                                        conn, feed_url, "ok",
+                                        new_entries=_new_entries,
+                                        duration_ms=int((time.perf_counter() - feed_started_at) * 1000),
+                                    )
+                                continue
+                            except Exception as retry_exc:
+                                # Direct also failed — a real site problem, not just
+                                # the proxy. Carry it forward into the normal
+                                # refusal/challenge escalation and failure
+                                # bookkeeping below, same as any other failure.
+                                exc = retry_exc
+                                self._logger.info(
+                                    "[refresh] direct fallback also failed after proxy-unreachable for %s", feed_url
+                                )
+
+                        # Refusal/challenge escalation: if the honest UA was refused
+                        # (403/415/429/503/timeout) or blocked by a challenge page,
+                        # escalate — first to browser identity (if not already
+                        # flagged), then, if that was already in play and it's
+                        # still failing, to the outbound proxy in as_needed mode.
+                        # Good-citizen: only after a real failure, never preemptively.
+                        if self._is_refusal_or_challenge(exc):
+                            if self._on_fetch_refused is not None:
                                 try:
-                                    _updated = reader.update_feed(feed_url)
-                                    success_count += 1
-                                    _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
-                                    if _new_entries:
-                                        self.purge_tombstoned_entries([feed_url])
-                                    self._logger.info(
-                                        "[refresh] browser-identity retry succeeded for %s", feed_url
-                                    )
-                                    with self._get_meta_connection() as conn:
-                                        conn.execute(
-                                            """
-                                            INSERT INTO feed_failure_state
-                                                (feed_url, consecutive_failures, next_retry_at, last_error, last_success_at)
-                                            VALUES (?, 0, NULL, NULL, ?)
-                                            ON CONFLICT(feed_url) DO UPDATE SET
-                                                consecutive_failures = 0,
-                                                next_retry_at = NULL,
-                                                last_error = NULL,
-                                                last_success_at = excluded.last_success_at,
-                                                acknowledged_at = NULL
-                                            """,
-                                            (feed_url, now_ts),
-                                        )
-                                        feed_state_map[feed_url] = {"consecutive_failures": 0, "next_retry_at": None}
-                                        self._record_fetch_history(
-                                            conn, feed_url, "ok",
-                                            new_entries=_new_entries,
-                                            duration_ms=int((time.perf_counter() - feed_started_at) * 1000),
-                                        )
-                                    continue
+                                    newly_flagged = self._on_fetch_refused(feed_url)
                                 except Exception:
-                                    # Retry also failed — fall through to normal
-                                    # failure bookkeeping below.
-                                    self._logger.info(
-                                        "[refresh] browser-identity retry failed for %s", feed_url
-                                    )
+                                    newly_flagged = False
+                                if newly_flagged:
+                                    try:
+                                        _updated = reader.update_feed(feed_url)
+                                        success_count += 1
+                                        _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
+                                        if _new_entries:
+                                            self.purge_tombstoned_entries([feed_url])
+                                        self._logger.info(
+                                            "[refresh] browser-identity retry succeeded for %s", feed_url
+                                        )
+                                        with self._get_meta_connection() as conn:
+                                            conn.execute(
+                                                """
+                                                INSERT INTO feed_failure_state
+                                                    (feed_url, consecutive_failures, next_retry_at, last_error, last_success_at)
+                                                VALUES (?, 0, NULL, NULL, ?)
+                                                ON CONFLICT(feed_url) DO UPDATE SET
+                                                    consecutive_failures = 0,
+                                                    next_retry_at = NULL,
+                                                    last_error = NULL,
+                                                    last_success_at = excluded.last_success_at,
+                                                    acknowledged_at = NULL
+                                                """,
+                                                (feed_url, now_ts),
+                                            )
+                                            feed_state_map[feed_url] = {"consecutive_failures": 0, "next_retry_at": None}
+                                            self._record_fetch_history(
+                                                conn, feed_url, "ok",
+                                                new_entries=_new_entries,
+                                                duration_ms=int((time.perf_counter() - feed_started_at) * 1000),
+                                            )
+                                        continue
+                                    except Exception as retry_exc:
+                                        # Retry also failed — carry its exception forward
+                                        # (proxy escalation below, and the eventual
+                                        # failure bookkeeping, should reflect the most
+                                        # recent attempt) and fall through.
+                                        exc = retry_exc
+                                        self._logger.info(
+                                            "[refresh] browser-identity retry failed for %s", feed_url
+                                        )
+
+                            # Proxy escalation: browser-UA is now (or was already) in
+                            # play for this feed and it's still failing the same way —
+                            # a no-op unless the current user's mode is as_needed.
+                            if self._on_fetch_still_blocked is not None and self._is_refusal_or_challenge(exc):
+                                try:
+                                    newly_proxied = self._on_fetch_still_blocked(feed_url)
+                                except Exception:
+                                    newly_proxied = False
+                                if newly_proxied:
+                                    try:
+                                        _updated = reader.update_feed(feed_url)
+                                        success_count += 1
+                                        _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
+                                        if _new_entries:
+                                            self.purge_tombstoned_entries([feed_url])
+                                        self._logger.info(
+                                            "[refresh] proxy retry succeeded for %s", feed_url
+                                        )
+                                        with self._get_meta_connection() as conn:
+                                            conn.execute(
+                                                """
+                                                INSERT INTO feed_failure_state
+                                                    (feed_url, consecutive_failures, next_retry_at, last_error, last_success_at)
+                                                VALUES (?, 0, NULL, NULL, ?)
+                                                ON CONFLICT(feed_url) DO UPDATE SET
+                                                    consecutive_failures = 0,
+                                                    next_retry_at = NULL,
+                                                    last_error = NULL,
+                                                    last_success_at = excluded.last_success_at,
+                                                    acknowledged_at = NULL
+                                                """,
+                                                (feed_url, now_ts),
+                                            )
+                                            feed_state_map[feed_url] = {"consecutive_failures": 0, "next_retry_at": None}
+                                            self._record_fetch_history(
+                                                conn, feed_url, "ok",
+                                                new_entries=_new_entries,
+                                                duration_ms=int((time.perf_counter() - feed_started_at) * 1000),
+                                            )
+                                        continue
+                                    except Exception as retry_exc:
+                                        exc = retry_exc
+                                        self._logger.info(
+                                            "[refresh] proxy retry failed for %s", feed_url
+                                        )
 
                         error_count += 1
                         raw_failures = feed_state.get("consecutive_failures")
