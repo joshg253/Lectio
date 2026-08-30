@@ -3714,6 +3714,22 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     async function loadScopePanesWithoutFullRefresh(url, pushHistory = true) {
       const token = ++scopePaneRequestToken;
 
+      // Same idea as loadEntryPaneWithoutFullRefresh's currentUrlHasEntry: whether
+      // we are already standing on a scope-level list (not the bare landing page,
+      // not an article) before this navigation happens.
+      let currentUrlHasScope = false;
+      try {
+        const currentUrl = new URL(window.location.href, window.location.origin);
+        const hasEntry = currentUrl.searchParams.has('feed_url') && currentUrl.searchParams.has('entry_id');
+        const hasScope = currentUrl.searchParams.has('folder_id')
+          || currentUrl.searchParams.has('list_feed_url')
+          || currentUrl.searchParams.has('tag')
+          || currentUrl.searchParams.has('q');
+        currentUrlHasScope = hasScope && !hasEntry;
+      } catch (_e) {
+        currentUrlHasScope = false;
+      }
+
       // Determine if we should inform the server of the user's persisted read_filter
       // via header rather than mutating visible URLs. Also prefer requesting
       // a small chunk in single-pane mode by adding chunk=1 to the request URL.
@@ -3897,10 +3913,23 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         updateScopeActiveState(url);
 
         if (pushHistory) {
-          history.pushState({ lectioScopePane: true, lectioPaneLevel: (window.isSingleMode && window.isSingleMode()) ? 1 : 0 }, '', url);
+          const isSinglePaneMode = Boolean(window.isSingleMode && window.isSingleMode());
+          const nextState = { lectioScopePane: true, lectioPaneLevel: isSinglePaneMode ? 1 : 0 };
+          // In 1-pane mode, picking a different scope (another folder/feed/tag)
+          // while already standing on a list replaces that list's history entry
+          // instead of stacking a new one on top — otherwise phone Back walked
+          // through every previously viewed folder before it ever reached the
+          // folder drawer. The first list reached from the bare landing page (or
+          // from an article) still pushes, same as before.
+          if (isSinglePaneMode && currentUrlHasScope) {
+            history.replaceState(nextState, '', url);
+          } else {
+            history.pushState(nextState, '', url);
+          }
         }
         // Landing on a folder-scoped list re-arms the phone's "Back opens the
-        // folder drawer" step. Must follow the pushState above, which clears it.
+        // folder drawer" step. Must follow the push/replaceState above, which
+        // clears it (push) or leaves it as-is (replace, already correct mid-stack).
         window.armDrawerBack?.();
       } catch (_error) {
         window.location.href = url;

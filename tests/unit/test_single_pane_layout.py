@@ -77,6 +77,17 @@ def test_the_back_controls_are_delegated():
     assert 'data-single-back="1"' in ENTRY_PANE  # article → posts
 
 
+def test_scope_to_scope_navigation_replaces_the_list_entry_instead_of_stacking():
+    """Picking a different folder/feed/tag while already standing on a list must
+    replace that history entry, not push a new one on top of it — otherwise phone
+    Back walked through every previously viewed folder before ever reaching the
+    folder drawer. Mirrors loadEntryPaneWithoutFullRefresh's own
+    currentUrlHasEntry replace-vs-push split for repeated article swipes."""
+    assert "let currentUrlHasScope = false;" in APP_JS
+    assert "if (isSinglePaneMode && currentUrlHasScope) {" in APP_JS
+    assert APP_JS.count("history.replaceState(nextState, '', url);") == 2  # here, and the entry-pane precedent
+
+
 # ── CSS ──
 def test_folders_are_a_drawer_over_the_list_not_a_pane_replacing_it():
     """Modelled on Inoreader, at Josh's request: a hamburger top-left and the tree
