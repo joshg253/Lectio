@@ -149,6 +149,12 @@
             </select>
           </label>
         </div>
+        <p class="account-hint">Last-resort backend (e.g. a Tailscale exit node reaching a real home IP) — a different trust tier from the proxy above: real exposure cost, not a disposable datacenter address. Only reached in "As needed" mode, one escalation rung past the proxy above (browser identity, then proxy, then this), never in "Always". Leave blank to opt out entirely — an unconfigured URL is the gate. Also honors the "As needed" mode override in Settings → Account.</p>
+        <div class="tuning-grid">
+          <label class="fld">Last-resort proxy URL
+            <input type="text" id="adm-tailscale-url" value="{{ tailscale_url }}" placeholder="socks5h://tailscale:1080" autocomplete="off" />
+          </label>
+        </div>
 
         <h3>Security</h3>
         <p class="account-hint">Repeated failed logins lock the account out for the window.</p>
@@ -348,6 +354,7 @@
           img_target_bytes: $('adm-img-target-bytes')?.value.trim() || '',
           proxy_url: $('adm-proxy-url')?.value.trim() || '',
           proxy_mode: $('adm-proxy-mode')?.value || '',
+          tailscale_url: $('adm-tailscale-url')?.value.trim() || '',
           shared_yt_oauth_client_id: $('adm-yt-oauth-client-id')?.value.trim() || '',
           shared_pinterest_oauth_client_id: $('adm-pinterest-oauth-client-id')?.value.trim() || '',
           fetch_history_max_age_days: $('adm-fetch-history-max-age')?.value.trim() || '',

@@ -655,6 +655,73 @@ to October 2024. A real month beats a precise-looking lie.
   (`_HIGH_FANOUT_PACE_SECONDS`) so a big serial burst isn't throttled into
   spurious 404s (YouTube 404s a ~700-request burst though each feed is fine
   singly) — a polite-client measure, feeds to other hosts interleave at full speed.
+- **`bypass_backoff`** (`FeedRefreshService.update_feeds`) — skips the feed- and
+  domain-level backoff checks above, but not reader's own `update_after`
+  (Retry-After/Cache-Control, a real instruction from the site). Wired only into
+  the single-feed manual `/refresh/feed` route: a deliberate click on one feed is
+  a single polite request, the same reasoning already used for a never-updated
+  feed's first fetch. The scheduler and the bulk `/refresh/folder` route stay on
+  the default (respect backoff) — bypassing a whole folder's backoff in one click
+  would hit every backed-off feed on it at once, a different blast radius.
+  Without this, a feed that recovered *after* its last failed attempt stayed
+  reported as failing — and Refresh silently did nothing — for up to the 24h
+  backoff cap.
+
+## Outbound proxy escalation
+
+Three tiers, in order, each only reached once the one before it was already
+tried and still failed: honest UA → browser identity → outbound proxy →
+last-resort backend. The first two are wired into `services/reader_api.py`'s
+request hooks directly; the last two are `FeedRefreshService.update_feeds`'
+`on_fetch_still_blocked` / `on_fetch_still_blocked_via_proxy` callbacks,
+mirroring the browser-UA → proxy escalation shape exactly one rung further
+(same-cycle retry on newly-flagged, same fall-through when already flagged
+from an earlier cycle, same `_is_refusal_or_challenge` gate).
+
+**Settings shape**: `SETTING_PROXY_URL`/`SETTING_TAILSCALE_URL` (admin-only —
+a non-admin choosing an arbitrary proxy target is SSRF-adjacent) +
+`SETTING_PROXY_MODE` (off/as_needed/always, per-user-overridable). The
+last-resort backend rides the *same* `proxy_mode` rather than its own — Josh's
+own framing was to mirror the existing pattern, not invent a second mode
+control — and is reachable only via `as_needed`'s per-feed escalation, never
+`always` (which would route every fetch through a real home IP, the thing
+"last resort" exists to rule out). Its actual opt-in gate is simply being
+configured at all: `_flag_tailscale_feed_on_still_blocked` requires
+`get_tailscale_url()` non-empty, same as the primary proxy requiring
+`get_proxy_url()`.
+
+**Per-backend unreachable cooldown** (`_active_backend_for_fetch`,
+`_mark_backend_unreachable`, `_resolve_proxy_for_fetch`): the two backends
+have very different reliability profiles — a dedicated VPN container is far
+steadier than a home Tailscale exit node, which blips for hours or days. A
+shared cooldown would pause a perfectly fine primary proxy over a last-resort
+hiccup (or vice versa), so each is tracked separately
+(`_proxy_down_until`/`_tailscale_down_until`). `_active_backend_for_fetch`
+centralizes the precedence logic (tailscale flag outranks the primary proxy —
+if a feed is flagged for it, the proxy was already tried and found wanting)
+so both the resolver and the unreachable-marker agree on which backend a
+given fetch actually used, without the mark step needing the fetch to report
+it explicitly.
+
+**Browserless (headless Chrome) was evaluated and deferred, not shipped**
+(2026-08-30): live-tested against two real Cloudflare-protected feeds. Plain
+`/content` got stuck on the "Just a moment…" interstitial indefinitely
+regardless of wait time (`waitForTimeout` up to 6s, `networkidle2`) — its
+default Chromium isn't stealth-patched, and Cloudflare's managed challenge
+detects it as automation regardless of exit IP. Stacking it with the primary
+proxy (`--proxy-server` launch flag) softened one site's response from a hard
+"Sorry, you have been blocked" to the same JS interstitial, but never cleared
+it. The *same two feeds*, fetched with plain `requests` and browser headers
+through the Tailscale tier alone (no headless browser at all), came back
+clean — Cloudflare's challenge tier keys heavily on IP/ASN reputation, and a
+residential IP gets waved through where a datacenter one gets challenged
+regardless of what's driving the browser. So Tailscale is the tier worth
+having; Browserless's marginal value over it is unproven on this sample and
+would add real complexity of its own (`/content` returns browser-rendered
+HTML, not the feed's raw bytes — a different fetch path than the plain-proxy
+request-hook swap, needing its own extraction step before feedparser could
+use it at all). Revisit only with a concrete case Tailscale alone doesn't
+solve.
 
 
 ## Suggesting a replacement for a feed on a known dead-end host

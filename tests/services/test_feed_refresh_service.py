@@ -81,7 +81,8 @@ def _make_conn(db_path: Path):
 
 
 def _build_service(db_path: Path, reader, yt_calls: list[str], lead_calls: list[str],
-                   on_fetch_refused=None, on_fetch_still_blocked=None, on_proxy_unreachable=None,
+                   on_fetch_refused=None, on_fetch_still_blocked=None,
+                   on_fetch_still_blocked_via_proxy=None, on_proxy_unreachable=None,
                    progress_hook=None):
     def get_meta_connection():
         return _make_conn(db_path)
@@ -99,6 +100,7 @@ def _build_service(db_path: Path, reader, yt_calls: list[str], lead_calls: list[
         failed_feed_backoff_max_seconds=24 * 60 * 60,
         on_fetch_refused=on_fetch_refused,
         on_fetch_still_blocked=on_fetch_still_blocked,
+        on_fetch_still_blocked_via_proxy=on_fetch_still_blocked_via_proxy,
         on_proxy_unreachable=on_proxy_unreachable,
     )
 
@@ -279,6 +281,111 @@ def test_proxy_escalation_still_failing_falls_through_to_normal_bookkeeping(tmp_
     assert "refused" in (row["last_error"] or "").lower() or "unsupported media" in (row["last_error"] or "").lower()
 
 
+# --- last-resort escalation (one rung past the proxy) ---
+
+def test_tailscale_escalation_fires_after_proxy_retry_also_fails(tmp_path: Path):
+    """browser-UA and proxy both newly-flag and retry; both retries ALSO fail;
+    last-resort escalation then flags and retries once more, which succeeds."""
+    reader = _NTimesRefusingReader({"https://blocked.test/feed": 3})
+    proxy_flagged: list[str] = []
+    tailscale_flagged: list[str] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda u: True,
+        on_fetch_still_blocked=lambda u: proxy_flagged.append(u) or True,
+        on_fetch_still_blocked_via_proxy=lambda u: tailscale_flagged.append(u) or True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    assert proxy_flagged == ["https://blocked.test/feed"]
+    assert tailscale_flagged == ["https://blocked.test/feed"]
+    # original + browser-UA retry + proxy retry + last-resort retry = 4 attempts
+    assert reader.attempts == ["https://blocked.test/feed"] * 4
+    with _make_conn(tmp_path / "m.sqlite") as conn:
+        row = conn.execute(
+            "SELECT consecutive_failures FROM feed_failure_state WHERE feed_url = ?",
+            ("https://blocked.test/feed",),
+        ).fetchone()
+    assert row is not None and row["consecutive_failures"] == 0
+
+
+def test_tailscale_escalation_fires_directly_when_already_proxy_flagged(tmp_path: Path):
+    """Feed already flagged for both browser-UA and proxy (both callbacks
+    return False, no retries) — last-resort escalation must still fire off the
+    original failure, without waiting for retries that will never happen."""
+    reader = _NTimesRefusingReader({"https://blocked.test/feed": 1})
+    tailscale_flagged: list[str] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda _u: False,  # already flagged
+        on_fetch_still_blocked=lambda _u: False,  # already flagged
+        on_fetch_still_blocked_via_proxy=lambda u: tailscale_flagged.append(u) or True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    assert tailscale_flagged == ["https://blocked.test/feed"]
+    # original (fails) + last-resort retry (succeeds) = 2 attempts
+    assert reader.attempts == ["https://blocked.test/feed"] * 2
+
+
+def test_tailscale_escalation_not_attempted_when_proxy_retry_succeeds(tmp_path: Path):
+    """The common case: proxy alone fixes it — last-resort must never be
+    consulted at all."""
+    reader = _NTimesRefusingReader({"https://blocked.test/feed": 2})
+    tailscale_flagged: list[str] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda _u: True,
+        on_fetch_still_blocked=lambda _u: True,
+        on_fetch_still_blocked_via_proxy=lambda u: tailscale_flagged.append(u) or True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    assert tailscale_flagged == []
+    assert reader.attempts == ["https://blocked.test/feed"] * 3
+
+
+def test_tailscale_escalation_still_failing_falls_through_to_normal_bookkeeping(tmp_path: Path):
+    """All three escalations exhausted — must record the failure (not
+    retry-loop forever) using the most recent attempt's error."""
+    reader = _NTimesRefusingReader({"https://blocked.test/feed": 99})
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda _u: True,
+        on_fetch_still_blocked=lambda _u: True,
+        on_fetch_still_blocked_via_proxy=lambda _u: True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    # original + browser-UA + proxy + last-resort retry = 4 attempts, then give up
+    assert reader.attempts == ["https://blocked.test/feed"] * 4
+    with _make_conn(tmp_path / "m.sqlite") as conn:
+        row = conn.execute(
+            "SELECT consecutive_failures FROM feed_failure_state WHERE feed_url = ?",
+            ("https://blocked.test/feed",),
+        ).fetchone()
+    assert row is not None and row["consecutive_failures"] == 1
+
+
+def test_tailscale_escalation_not_consulted_when_callback_absent(tmp_path: Path):
+    """No on_fetch_still_blocked_via_proxy wired (e.g. no last-resort backend
+    configured anywhere) — proxy escalation still runs, nothing past it."""
+    reader = _NTimesRefusingReader({"https://blocked.test/feed": 2})
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda _u: True,
+        on_fetch_still_blocked=lambda _u: True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    # original + browser-UA retry + proxy retry = 3 attempts, then give up
+    # (no fourth attempt — nothing left to escalate to)
+    assert reader.attempts == ["https://blocked.test/feed"] * 3
+
+
 # --- proxy-unreachable auto-fallback (the proxy backend itself is down,
 #     not the site refusing us) ---
 
@@ -321,7 +428,7 @@ def test_proxy_unreachable_falls_back_to_direct_and_succeeds(tmp_path: Path):
 
     service = _build_service(
         tmp_path / "m.sqlite", reader, [], [],
-        on_proxy_unreachable=lambda: marked_down.append(True),
+        on_proxy_unreachable=lambda _u: marked_down.append(True),
     )
     service.update_feeds(["https://example.test/feed"])
 
@@ -352,7 +459,7 @@ def test_proxy_unreachable_fallback_also_failing_falls_through(tmp_path: Path):
 
     service = _build_service(
         tmp_path / "m.sqlite", reader, [], [],
-        on_proxy_unreachable=lambda: marked_down.append(True),
+        on_proxy_unreachable=lambda _u: marked_down.append(True),
     )
     service.update_feeds(["https://example.test/feed"])
 
@@ -470,6 +577,50 @@ def test_update_feeds_skips_when_backoff_not_elapsed(tmp_path: Path):
     # Current behavior: youtube duration follow-up still runs for each requested feed URL.
     assert yt_calls == ["https://example.com/skip.xml"]
     assert lead_calls == ["https://example.com/skip.xml"]
+
+
+def test_update_feeds_bypass_backoff_fetches_anyway(tmp_path: Path):
+    """A deliberate single-feed refresh (bypass_backoff=True) must actually
+    fetch a feed still inside its backoff window, not silently no-op like the
+    scheduler's own calls do."""
+    db_path = tmp_path / "meta.sqlite"
+    reader = _FakeReader()
+    service = _build_service(db_path, reader, [], [])
+
+    with _make_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO feed_failure_state(feed_url, consecutive_failures, next_retry_at, last_error) VALUES (?, ?, ?, ?)",
+            ("https://example.com/skip.xml", 3, time.time() + 3600, "some error"),
+        )
+
+    service.update_feeds(["https://example.com/skip.xml"], bypass_backoff=True)
+
+    assert reader.updated == ["https://example.com/skip.xml"]
+
+
+def test_update_feeds_bypass_backoff_still_honors_reader_update_after(tmp_path: Path):
+    """bypass_backoff skips our own feed/domain backoff, but not reader's own
+    update_after (Retry-After/Cache-Control) — that's the server's own
+    instruction, not just Lectio's pacing."""
+    db_path = tmp_path / "meta.sqlite"
+
+    class _UpdateAfterReader(_FakeReader):
+        def get_feed(self, feed_url: str, _default=None):
+            class _F:
+                update_after = _UpdateAfterTs()
+                last_updated = 1.0
+            return _F()
+
+    class _UpdateAfterTs:
+        def timestamp(self) -> float:
+            return time.time() + 3600
+
+    reader = _UpdateAfterReader()
+    service = _build_service(db_path, reader, [], [])
+
+    service.update_feeds(["https://example.com/retry-after.xml"], bypass_backoff=True)
+
+    assert reader.updated == []
 
 
 def test_get_problematic_feeds_formats_retry_display(tmp_path: Path):

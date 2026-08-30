@@ -409,6 +409,16 @@ SETTING_PROXY_BODY_IMAGES = "proxy_body_images"
 # get_proxy_url / get_proxy_mode.
 SETTING_PROXY_URL = "proxy_url"
 SETTING_PROXY_MODE = "proxy_mode"  # "off" / "as_needed" / "always"
+# Last-resort outbound proxy (e.g. a Tailscale exit node reaching the real home
+# IP) — a different trust tier from SETTING_PROXY_URL: real exposure cost, not a
+# disposable datacenter NAT. Rides the SAME proxy_mode as the primary proxy
+# rather than its own mode (Josh's own framing: mirror the existing pattern,
+# not invent a new one) — its actual gate is simply being unconfigured by
+# default, same as the primary proxy. Only ever reached via as_needed's
+# per-feed escalation, one rung past the primary proxy, never via "always"
+# (that would route every fetch through the home IP, which "last resort" rules
+# out). URL is admin-only for the same SSRF-adjacent reason as SETTING_PROXY_URL.
+SETTING_TAILSCALE_URL = "tailscale_url"
 SETTING_MAINTENANCE_HOUR = "maintenance_hour"
 SETTING_IMG_CACHE_DAYS = "img_cache_days"
 SETTING_IMG_CACHE_MAX_DIM = "img_cache_max_dim"
@@ -647,6 +657,8 @@ _ENV_IMG_TARGET_BYTES = _env_int("LECTIO_IMG_TARGET_BYTES", 1_500_000)
 _ENV_PORTRAIT_IMG_MAX_WIDTH = _env_int("LECTIO_PORTRAIT_IMG_MAX_WIDTH", 650)
 # Outbound-fetch proxy endpoint (e.g. socks5h://gluetun:1080). "" = none configured.
 _ENV_PROXY_URL = os.getenv("LECTIO_PROXY_URL", "").strip()
+# Last-resort outbound proxy (e.g. socks5h://tailscale:1080). "" = none configured.
+_ENV_TAILSCALE_URL = os.getenv("LECTIO_TAILSCALE_URL", "").strip()
 
 # --- Scheduler resilience (see ARCHITECTURE "Refresh scheduler") ---
 # Feed fetches are strictly sequential, so one host that accepts a connection and
@@ -1758,6 +1770,14 @@ def get_proxy_mode() -> str:
     the proxy is opt-in everywhere."""
     val = get_instance_setting(SETTING_PROXY_MODE, "off")
     return val if val in _PROXY_MODES else "off"
+
+
+def get_tailscale_url() -> str:
+    """Last-resort outbound proxy endpoint (e.g. Tailscale's
+    socks5h://tailscale:1080). Admin-managed; env default, DB override takes
+    precedence. Empty means not configured, which is itself the opt-in gate —
+    as_needed escalation never reaches this tier without one."""
+    return get_instance_setting(SETTING_TAILSCALE_URL, _ENV_TAILSCALE_URL)
 
 
 def get_img_cache_days() -> int:
@@ -3966,6 +3986,19 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Last-resort escalation, one rung past proxy_feeds: a feed lands here
+        # only after the primary proxy was already in play and still failed —
+        # see _flag_tailscale_feed_on_still_blocked. Same mode-gating as
+        # proxy_feeds, plus requires SETTING_TAILSCALE_URL configured.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tailscale_feeds (
+                feed_url TEXT PRIMARY KEY,
+                flagged_at TEXT NOT NULL DEFAULT (datetime('now')),
+                reason TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS feed_display_prefs (
@@ -5701,6 +5734,34 @@ def flag_proxy_feed(conn: sqlite3.Connection, feed_url: str, reason: str = "") -
 
 def unflag_proxy_feed(conn: sqlite3.Connection, feed_url: str) -> None:
     conn.execute("DELETE FROM proxy_feeds WHERE feed_url = ?", (feed_url.strip(),))
+
+
+def get_tailscale_feed_urls(conn: sqlite3.Connection) -> set[str]:
+    """Feeds whose fetch should route through the last-resort proxy in as_needed
+    mode.
+
+    A feed lands here only after the primary proxy was already in play (flagged
+    this cycle or earlier) and the fetch still failed — see
+    `_flag_tailscale_feed_on_still_blocked`. Irrelevant in off/always mode, same
+    as proxy_feeds."""
+    rows = conn.execute("SELECT feed_url FROM tailscale_feeds").fetchall()
+    return {str(r["feed_url"]) for r in rows}
+
+
+def flag_tailscale_feed(conn: sqlite3.Connection, feed_url: str, reason: str = "") -> bool:
+    """Mark a feed for last-resort proxy escalation. Returns True if newly flagged."""
+    feed_url = feed_url.strip()
+    if not feed_url:
+        return False
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO tailscale_feeds (feed_url, reason) VALUES (?, ?)",
+        (feed_url, reason[:200]),
+    )
+    return cur.rowcount > 0
+
+
+def unflag_tailscale_feed(conn: sqlite3.Connection, feed_url: str) -> None:
+    conn.execute("DELETE FROM tailscale_feeds WHERE feed_url = ?", (feed_url.strip(),))
 
 
 def disable_feed(feed_url: str) -> None:
@@ -9031,24 +9092,74 @@ def _flag_proxy_feed_on_still_blocked(feed_url: str) -> bool:
     return newly
 
 
-# A dead proxy backend (e.g. gluetun restarting) must never be worse than not
-# having one. On a proxy-unreachable failure (see
-# services.feed_refresh.FeedRefreshService._is_proxy_unreachable),
-# _mark_proxy_unreachable skips the proxy entirely for this user for a cooldown —
-# across every mode, not just as_needed — rather than hard-failing every fetch
-# until someone notices and fixes it.
+# Per-user cache of last-resort-flagged feed URLs — same shape as the proxy
+# cache above, one rung further out.
+_tailscale_feeds_cache: dict[str, set[str]] = {}
+_tailscale_feeds_cache_at: dict[str, float] = {}
+_tailscale_feeds_cache_lock = threading.Lock()
+_TAILSCALE_FEEDS_CACHE_TTL = 30.0
+
+
+def _tailscale_feeds_for(uid: str) -> set[str]:
+    now = time.monotonic()
+    with _tailscale_feeds_cache_lock:
+        cached = _tailscale_feeds_cache.get(uid)
+        if cached is not None and (now - _tailscale_feeds_cache_at.get(uid, 0.0)) < _TAILSCALE_FEEDS_CACHE_TTL:
+            return cached
+    try:
+        with tenancy.user_context(uid):
+            with get_meta_connection() as conn:
+                feeds = get_tailscale_feed_urls(conn)
+    except Exception:
+        feeds = set()
+    with _tailscale_feeds_cache_lock:
+        _tailscale_feeds_cache[uid] = feeds
+        _tailscale_feeds_cache_at[uid] = now
+    return feeds
+
+
+def _invalidate_tailscale_feeds_cache() -> None:
+    with _tailscale_feeds_cache_lock:
+        _tailscale_feeds_cache.clear()
+        _tailscale_feeds_cache_at.clear()
+
+
+def _flag_tailscale_feed_on_still_blocked(feed_url: str) -> bool:
+    """Flag a feed for last-resort proxy escalation after the primary proxy was
+    already in play and the fetch still failed, and invalidate the cache so an
+    immediate retry routes through it. Mode-gated like _flag_proxy_feed_on_still_blocked,
+    plus requires a last-resort backend actually configured — an unconfigured
+    one is the opt-out, and a flag that could never take effect is just
+    confusing clutter in Feed Properties. Returns True if newly flagged."""
+    if get_proxy_mode() != "as_needed" or not get_tailscale_url():
+        return False
+    try:
+        with get_meta_connection() as conn:
+            newly = flag_tailscale_feed(conn, feed_url, reason="still blocked after proxy")
+    except Exception:
+        return False
+    if newly:
+        _invalidate_tailscale_feeds_cache()
+        LOGGER.info("[refresh] flagged %s for last-resort proxy escalation", feed_url)
+    return newly
+
+
+# A dead proxy backend (e.g. gluetun restarting, or the Tailscale exit node
+# blipping) must never be worse than not having one. On a proxy-unreachable
+# failure (see services.feed_refresh.FeedRefreshService._is_proxy_unreachable),
+# _mark_backend_unreachable skips WHICHEVER backend was actually in play for
+# that fetch, for this user, for a cooldown — across every mode, not just
+# as_needed — rather than hard-failing every fetch until someone notices.
+# Tracked separately per backend: the two have very different reliability
+# profiles (a home Tailscale exit blips far more than a dedicated VPN
+# container), and marking the wrong one down would block a perfectly fine
+# primary proxy over a last-resort hiccup, or vice versa.
 _PROXY_DOWN_COOLDOWN_SECONDS = 300.0
 _proxy_down_until: dict[str, float] = {}
 _proxy_down_lock = threading.Lock()
-
-
-def _mark_proxy_unreachable() -> None:
-    uid = tenancy.current_user_id()
-    with _proxy_down_lock:
-        _proxy_down_until[uid] = time.monotonic() + _PROXY_DOWN_COOLDOWN_SECONDS
-    LOGGER.warning(
-        "[refresh] proxy unreachable for user %s — skipping it for %ds", uid, int(_PROXY_DOWN_COOLDOWN_SECONDS)
-    )
+_TAILSCALE_DOWN_COOLDOWN_SECONDS = 300.0
+_tailscale_down_until: dict[str, float] = {}
+_tailscale_down_lock = threading.Lock()
 
 
 def _proxy_is_down(uid: str) -> bool:
@@ -9057,24 +9168,82 @@ def _proxy_is_down(uid: str) -> bool:
     return until is not None and time.monotonic() < until
 
 
+def _tailscale_is_down(uid: str) -> bool:
+    with _tailscale_down_lock:
+        until = _tailscale_down_until.get(uid)
+    return until is not None and time.monotonic() < until
+
+
+def _active_backend_for_fetch(uid: str, feed_url: str) -> tuple[str, str] | None:
+    """Which outbound-proxy backend a fetch for feed_url would use for user uid,
+    ignoring cooldowns — the precedence an attempt actually follows. Shared by
+    _resolve_proxy_for_fetch (which then applies the cooldown gate) and
+    _mark_backend_unreachable (diagnosing, after the fact, which backend just
+    failed — the failure itself is what sets that backend's cooldown, so this
+    intentionally does not consult it).
+
+    Tailscale outranks the primary proxy (it only ever applies one escalation
+    rung further out, so if a feed is flagged for it, the primary proxy has
+    already been tried and found wanting) and is reachable only in as_needed
+    mode — never "always", which would route every fetch through the home IP,
+    the thing "last resort" exists to rule out."""
+    mode = get_proxy_mode()
+    if mode == "as_needed" and feed_url in _tailscale_feeds_for(uid):
+        tailscale_url = get_tailscale_url()
+        if tailscale_url:
+            return ("tailscale", tailscale_url)
+    if mode == "always":
+        proxy_url = get_proxy_url()
+        if proxy_url:
+            return ("proxy", proxy_url)
+    if mode == "as_needed" and feed_url in _proxy_feeds_for(uid):
+        proxy_url = get_proxy_url()
+        if proxy_url:
+            return ("proxy", proxy_url)
+    return None
+
+
+def _mark_backend_unreachable(feed_url: str) -> None:
+    uid = tenancy.current_user_id()
+    backend = _active_backend_for_fetch(uid, feed_url)
+    # Should always resolve (a fetch only gets proxied if _active_backend_for_fetch
+    # said so in the first place) — "proxy" is a defensive fallback, not expected.
+    name = backend[0] if backend else "proxy"
+    if name == "tailscale":
+        with _tailscale_down_lock:
+            _tailscale_down_until[uid] = time.monotonic() + _TAILSCALE_DOWN_COOLDOWN_SECONDS
+        LOGGER.warning(
+            "[refresh] tailscale unreachable for user %s — skipping it for %ds", uid, int(_TAILSCALE_DOWN_COOLDOWN_SECONDS)
+        )
+    else:
+        with _proxy_down_lock:
+            _proxy_down_until[uid] = time.monotonic() + _PROXY_DOWN_COOLDOWN_SECONDS
+        LOGGER.warning(
+            "[refresh] proxy unreachable for user %s — skipping it for %ds", uid, int(_PROXY_DOWN_COOLDOWN_SECONDS)
+        )
+
+
 def _resolve_proxy_for_fetch(uid: str, feed_url: str) -> str | None:
     """Proxy URL to fetch feed_url through for user uid, or None for direct.
 
-    "always" routes every fetch through the configured proxy. "as_needed"
-    only escalates feeds already flagged by _flag_proxy_feed_on_still_blocked
-    (browser-UA was already in play and still failed). "off" (the default)
-    never proxies. Any mode is skipped entirely while the proxy is in its
-    unreachable cooldown — see _mark_proxy_unreachable."""
+    "always" routes every fetch through the configured primary proxy.
+    "as_needed" escalates progressively: feeds flagged by
+    _flag_proxy_feed_on_still_blocked go through the primary proxy; feeds
+    flagged one rung further by _flag_tailscale_feed_on_still_blocked (primary
+    proxy already tried, still failing) go through the last-resort backend
+    instead. "off" (the default) never proxies. Whichever backend would apply
+    is skipped while IT is in its own unreachable cooldown — see
+    _mark_backend_unreachable — falling through to direct rather than a
+    tier that's currently down."""
     try:
         with tenancy.user_context(uid):
-            if _proxy_is_down(uid):
+            backend = _active_backend_for_fetch(uid, feed_url)
+            if backend is None:
                 return None
-            mode = get_proxy_mode()
-            if mode == "always":
-                return get_proxy_url() or None
-            if mode == "as_needed" and feed_url in _proxy_feeds_for(uid):
-                return get_proxy_url() or None
-            return None
+            name, url = backend
+            if name == "tailscale":
+                return None if _tailscale_is_down(uid) else url
+            return None if _proxy_is_down(uid) else url
     except Exception:
         return None
 
@@ -10772,6 +10941,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "devto": devto_service.get_feed_config(_pc, _devto_id) if _devto_id else None,
             "browser_ua": feed_url in get_browser_ua_feed_urls(_pc),
             "proxied": feed_url in get_proxy_feed_urls(_pc),
+            "tailscaled": feed_url in get_tailscale_feed_urls(_pc),
             # Declared domain migrations for this feed. Rendered as the "Other
             # domains" list under Website, which is the only way to see them —
             # they otherwise act invisibly at ingest and in the global dedupe
@@ -12407,7 +12577,8 @@ feed_refresh_service = FeedRefreshService(
     failed_feed_backoff_max_seconds=FAILED_FEED_BACKOFF_MAX_SECONDS,
     on_fetch_refused=_flag_browser_ua_on_refusal,
     on_fetch_still_blocked=_flag_proxy_feed_on_still_blocked,
-    on_proxy_unreachable=_mark_proxy_unreachable,
+    on_fetch_still_blocked_via_proxy=_flag_tailscale_feed_on_still_blocked,
+    on_proxy_unreachable=_mark_backend_unreachable,
     progress_hook=_note_scheduler_progress,
 )
 
@@ -22621,6 +22792,7 @@ def administration_page(request: Request, msg: str | None = None, error: str | N
             "img_target_bytes": get_img_target_bytes(),
             "proxy_url": get_proxy_url(),
             "proxy_mode": get_proxy_mode(),
+            "tailscale_url": get_tailscale_url(),
             # Shared OAuth apps (stored in admin's own app_settings).
             "shared_yt_oauth_client_id": get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_ID, ""),
             "shared_yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)),
@@ -28600,7 +28772,7 @@ async def save_all_settings(request: Request):
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
         SETTING_TZ_DISPLAY, SETTING_PORTRAIT_IMG_MAX_WIDTH, SETTING_PROXY_BODY_IMAGES,
-        SETTING_PROXY_URL, SETTING_PROXY_MODE,
+        SETTING_PROXY_URL, SETTING_PROXY_MODE, SETTING_TAILSCALE_URL,
         SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
@@ -28637,7 +28809,7 @@ async def save_all_settings(request: Request):
     # requests silently drop these keys, even if the client sends them.
     _ADMIN_ONLY = {
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
-        SETTING_PROXY_URL,
+        SETTING_PROXY_URL, SETTING_TAILSCALE_URL,
         SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
@@ -28820,6 +28992,23 @@ def set_feed_proxy_route(feed_url: str = Form(...), enabled: int = Form(...)):
             unflag_proxy_feed(conn, feed_url)
     _invalidate_proxy_feeds_cache()
     return JSONResponse({"ok": True, "proxied": bool(enabled)})
+
+
+@app.post("/feeds/tailscale")
+def set_feed_tailscale_route(feed_url: str = Form(...), enabled: int = Form(...)):
+    """Manually flag/unflag a feed for last-resort proxy escalation. Auto-set
+    when the primary proxy was already in play and the fetch still failed; this
+    lets the user reset a feed back to direct/browser-UA/proxy (or force it on).
+    Only takes effect when the resolving mode is as_needed AND a last-resort
+    backend is configured — same gating as _flag_tailscale_feed_on_still_blocked."""
+    feed_url = feed_url.strip()
+    with get_meta_connection() as conn:
+        if enabled:
+            flag_tailscale_feed(conn, feed_url, reason="manual")
+        else:
+            unflag_tailscale_feed(conn, feed_url)
+    _invalidate_tailscale_feeds_cache()
+    return JSONResponse({"ok": True, "tailscaled": bool(enabled)})
 
 
 @app.post("/feeds/reparse")
@@ -32147,7 +32336,10 @@ def refresh_feed(
     if feed_id:
         with get_meta_connection() as conn:
             scraper_service.refresh_scraped_feed_by_id(conn, feed_id)
-    feed_refresh_service.update_feeds([feed_url], enhance=False)
+    # A deliberate click on one feed must actually attempt a fetch, not silently
+    # no-op behind a backoff window the user has no visibility into — see
+    # FeedRefreshService.update_feeds' bypass_backoff docstring.
+    feed_refresh_service.update_feeds([feed_url], enhance=False, bypass_backoff=True)
     _run_automation_after_refresh({feed_url})
     invalidate_unread_counts_cache()
     _spawn_feed_enhancement([feed_url])
@@ -33801,6 +33993,11 @@ async def start_refetch_scope(request: Request):
     if folder_id is None and not list_feed_url:
         return JSONResponse({"ok": False, "error": "Pick a feed or a folder."}, status_code=400)
     folder_id = int(folder_id) if folder_id is not None else None
+    # Same "now"/"original"/"pub" picker as the single-article re-fetch (see
+    # refresh_content_route) — applied per article, so "original"/"pub" land
+    # each one on its own date, only "now" is uniform across the batch.
+    date_choice = body.get("date_choice")
+    date_choice = date_choice if date_choice in {"now", "original", "pub"} else None
 
     rows = _scope_refetchable(folder_id, list_feed_url)
     if not rows:
@@ -33819,11 +34016,11 @@ async def start_refetch_scope(request: Request):
                                     status_code=409)
             queue.append({"folder_id": folder_id, "list_feed_url": list_feed_url,
                           "label": label, "count": len(rows),
-                          "estimate_seconds": estimate})
+                          "estimate_seconds": estimate, "date_choice": date_choice})
             return JSONResponse({"ok": True, "queued": True, "position": len(queue),
                                  "total": len(rows), "estimate_seconds": estimate,
                                  "label": label})
-        _refetch_begin(job, label, rows, estimate)
+        _refetch_begin(job, label, rows, estimate, date_choice=date_choice)
 
     uid = tenancy.current_user_id()
     threading.Thread(
@@ -33834,12 +34031,12 @@ async def start_refetch_scope(request: Request):
                          "estimate_seconds": estimate, "label": label})
 
 
-def _refetch_begin(job: dict, label: str, rows: list, estimate: int) -> None:
+def _refetch_begin(job: dict, label: str, rows: list, estimate: int, date_choice: str | None = None) -> None:
     job.update({
         "running": True, "cancel": False, "done": 0, "total": len(rows),
         "ok": 0, "archive": 0, "refused": 0, "dead": 0, "failed": 0, "skipped": 0,
         "scope": label, "started_at": time.time(), "finished_at": None,
-        "estimate_seconds": estimate,
+        "estimate_seconds": estimate, "date_choice": date_choice,
     })
     job.setdefault("queue", [])
     job.setdefault("history", [])
@@ -33869,12 +34066,19 @@ def _refetch_worker(rows: list[tuple[str, str, str]], job: dict) -> None:
         if not rows:
             continue
         with _refetch_jobs_lock:
-            _refetch_begin(job, nxt["label"], rows, nxt["estimate_seconds"])
+            _refetch_begin(job, nxt["label"], rows, nxt["estimate_seconds"], date_choice=nxt.get("date_choice"))
 
 
 def _run_refetch_batch(rows: list[tuple[str, str, str]], job: dict) -> None:
     host_failures: dict[str, int] = {}
     host_last: dict[str, float] = {}
+    # Same "now"/"original"/"pub" picker as the single-article re-fetch, applied
+    # per article below. "now" deliberately overrides bump_received=False (see
+    # the call below) — that default exists to stop a routine backfill from
+    # dumping the whole Inbox's order onto whatever finished last, but an
+    # explicit "Now" pick is exactly asking for that, not an accidental side
+    # effect of one.
+    date_choice = job.get("date_choice")
     try:
         for feed_u, entry_id, link in rows:
             if job.get("cancel"):
@@ -33896,7 +34100,7 @@ def _run_refetch_batch(rows: list[tuple[str, str, str]], job: dict) -> None:
                 # is — bumping every touched saved_at at once used to dump the
                 # whole Inbox's order onto whatever finished last.
                 result = _refresh_captured_article_for_current_user(
-                    feed_u, entry_id, "readability", bump_received=False
+                    feed_u, entry_id, "readability", bump_received=False, date_choice=date_choice
                 )
             except Exception:  # noqa: BLE001 — one bad entry must not end the run
                 LOGGER.warning("[refetch-batch] failed for %s", entry_id, exc_info=True)

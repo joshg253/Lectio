@@ -118,7 +118,10 @@ short version:
   rather than discarded outright. An optional outbound SOCKS5/HTTP proxy
   (e.g. a VPN container on the same Docker network) can route feed fetches
   around geoblocks or per-IP rate limits — off by default, set instance-wide
-  or per user in Settings.
+  or per user in Settings. A second, last-resort backend (e.g. a Tailscale
+  exit node reaching a real home IP) escalates one rung further, only for a
+  feed still failing through the proxy above, and only in "As needed" mode —
+  off unless a URL is configured in Administration.
 - **Fix a post in place.** Edit its date, title or URL; clean up its body with
   an Aardvark-style element remover; re-fetch its content — undoably, with an
   Internet Archive fallback — one post, or a whole feed or folder at a time.

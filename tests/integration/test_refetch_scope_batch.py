@@ -229,7 +229,26 @@ def test_batch_does_not_bump_saved_at(configured, monkeypatch):
 
     _run([None] * 3)
 
-    assert seen_kwargs == [{"bump_received": False}] * 3
+    assert seen_kwargs == [{"bump_received": False, "date_choice": None}] * 3
+
+
+def test_batch_forwards_the_jobs_date_choice(configured, monkeypatch):
+    """The batch's own Land-on picker (job["date_choice"], set by
+    _refetch_begin from the /saved/refetch-scope request) must reach every
+    article in the batch, the same way the single-article button's picker
+    reaches refresh_captured_article."""
+    seen_kwargs = []
+
+    def _fake(feed_url, entry_id, mode, **kwargs):
+        seen_kwargs.append(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", _fake)
+    monkeypatch.setattr(main.time, "sleep", lambda _s: None)
+
+    _run([None] * 2, job={"running": True, "cancel": False, "date_choice": "pub"})
+
+    assert seen_kwargs == [{"bump_received": False, "date_choice": "pub"}] * 2
 
 
 def test_outcomes_are_counted_apart(configured, monkeypatch):
