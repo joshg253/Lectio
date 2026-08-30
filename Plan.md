@@ -15,76 +15,46 @@ remainder.
 
 ### SOCKS5 proxy support for outbound fetches (gluetun VPN)
 
-Design settled 2026-08-29. gluetun runs on the `proxy` Docker network at
-`socks5h://gluetun:1080` (shared Windscribe NAT IP — helps ordinary
-geoblocks/rate limits, not real bot detection; region via `.env`'s
-`WINDSCRIBE_SERVER_REGIONS`, not app code). `good-web-citizen` behavior still
-holds — this is for legitimate geoblocks/rate limits, not evading deliberate
-blocks.
+Design settled 2026-08-29. gluetun runs on the `proxy` Docker network at `socks5h://gluetun:1080` (shared Windscribe Pro NAT IP — helps
+ordinary geoblocks/rate limits, not real bot detection; region via `.env`'s `WINDSCRIBE_SERVER_REGIONS`, not app code). `good-web-citizen`
+behavior still holds — this is for legitimate geoblocks/rate limits, not evading deliberate blocks.
 
-Settings: `SETTING_PROXY_URL` (admin-only) + `SETTING_PROXY_MODE`
-(off/as_needed/always, per-user-overridable via `get_instance_setting`'s
-existing tier chain — own row → admin's row → env). Off everywhere by
-default. **Shipped** (settings scaffold).
+Settings: `SETTING_PROXY_URL` (admin-only) + `SETTING_PROXY_MODE` (off/as_needed/always, per-user-overridable via `get_instance_setting`'s
+existing tier chain — own row → admin's row → env). Off everywhere by default. **Shipped** (settings scaffold).
 
-`always` mode wiring **shipped**: `get_reader()` passes a `proxy_resolver`
-into `ReaderApi`, which routes feed fetches through the configured proxy via
-a request hook mutating `session.proxies` (requests has no per-request
-proxies param reachable from a hook). Needed adding `pysocks` as a dependency
-for `socks5h://` support. Verified end-to-end against a real local HTTP
-server + an unreachable SOCKS5 target (raised `SOCKSHTTPConnectionPool`,
-proving it actually routed through PySocks). Scoped to feed fetches only —
-the separate httpx-based image/readability fetches (`/api/img`, save-article
-rendering) are not proxied; a follow-up if that's ever wanted.
+`always` mode wiring **shipped**: `get_reader()` passes a `proxy_resolver` into `ReaderApi`, which routes feed fetches through the
+configured proxy via a request hook mutating `session.proxies` (requests has no per-request proxies param reachable from a hook). Needed
+adding `pysocks` as a dependency for `socks5h://` support. Verified end-to-end against a real local HTTP server + an unreachable SOCKS5
+target (raised `SOCKSHTTPConnectionPool`, proving it actually routed through PySocks). Scoped to feed fetches only — the separate
+httpx-based image/readability fetches (`/api/img`, save-article rendering) are not proxied; a follow-up if that's ever wanted.
 
 Remaining:
-- **as_needed escalation**: mirror the `browser_ua_feeds` mechanism
-  (`services/feed_refresh.py`'s `on_fetch_refused` + `reader_api.py`'s
-  request hook, both already generalized to accept a `proxy_resolver`) with
-  a sibling `proxy_feeds` table. Escalate to proxy only after a feed is
-  already browser-UA-flagged and still hits `_is_fetch_refusal` or
-  `bot_challenge.FeedBlockedError` — flag, retry once same-cycle, surface a
-  `"proxied"` flag in Feed Properties/Failing Feeds like `"browser_ua"`
-  today. `_resolve_proxy_for_fetch` in main.py already has the `as_needed`
-  branch stubbed (returns None, same as off).
-- **Multi-backend escalation chain, later.** Beyond gluetun, Josh is wiring
-  in more backends — the intent is an ordered chain, not a free-for-all pick
-  of "which backend for which feed," each tier tried only after the one
-  before it has actually failed. Order as of 2026-08-30 (still being
-  rethought live, treat as current-best-guess not final): direct →
-  browser-UA (existing) → headless browser → gluetun/Windscribe proxy (a
-  VPS/datacenter exit, still not Josh's own identity) → Tailscale (his home
-  IP) as the *final* fallback. Rationale for headless before gluetun: a JS-
-  execution challenge is a different problem from IP reputation and doesn't
-  need a proxy hop to solve, so it's cheap to try before spending an IP
-  escalation. Current schema (one URL/one mode) supports none of this yet —
-  `_resolve_proxy_for_fetch`/the request hook need real design work before
-  it's pluggable. Not scoped. Per-backend notes so nothing gets lost before
-  that design pass:
-
-  - **Headless browser** (tried before gluetun): for feeds/pages blocked by
-    a real JS-executing challenge (e.g. Cloudflare's JS challenge) that
-    neither a spoofed browser UA nor a different exit IP gets past, since
-    those never actually run the page's JS. No connection details yet —
-    capture them here (endpoint, protocol: raw CDP vs. a REST wrapper like
-    Browserless, auth) once available.
-  - **Tailscale** (final fallback): `socks5h://tailscale:1080` (preferred,
-    tunnels DNS too) or `http://tailscale:8888`, same `proxy` Docker
-    network, no auth (internal-only), same client wiring as gluetun
-    (`requests[socks]`/`httpx[socks]`). Different trust tier, not just
-    another endpoint: gluetun/Windscribe exits on a disposable-ish shared
-    VPS/datacenter NAT IP; Tailscale exits on Josh's actual home Comcast IP,
-    traceable to his house — fine for basic geoblocking/rate-limiting,
-    wrong for anything sketchy/untrusted or a site aggressive enough to
-    escalate (abuse reports, IP blocklisting) since that lands on his real
-    connection. Being the *last* resort in the chain is itself most of the
-    answer to "which feeds should this apply to" — it only gets used once
-    every earlier tier has already failed. Also less reliable than gluetun
-    (his home mediaserver blips every couple months, occasionally
-    days-long) — any code using it must fall through to direct on
-    proxy-unreachable, never hard-fail the fetch.
-- New `proxy_feeds` table needs to land in `ensure_meta_schema` so the
-  startup per-user migration backfills existing tenants.
+- **as_needed escalation**: mirror the `browser_ua_feeds` mechanism (`services/feed_refresh.py`'s `on_fetch_refused` + `reader_api.py`'s
+  request hook, both already generalized to accept a `proxy_resolver`) with a sibling `proxy_feeds` table. Escalate to proxy only after a
+  feed is already browser-UA-flagged and still hits `_is_fetch_refusal` or `bot_challenge.FeedBlockedError` — flag, retry once same-cycle,
+  surface a `"proxied"` flag in Feed Properties/Failing Feeds like `"browser_ua"` today. `_resolve_proxy_for_fetch` in main.py already has
+  the `as_needed` branch stubbed (returns None, same as off).
+- **Multi-backend escalation chain, later.** Beyond gluetun, Josh is wiring in more backends — the intent is an ordered chain, not a
+  free-for-all pick of "which backend for which feed," each tier tried only after the one before it has actually failed. Order as of
+  2026-08-30 (still being rethought live, treat as current-best-guess not final): direct → browser-UA (existing) → headless browser →
+  gluetun/Windscribe Pro proxy (a VPS/datacenter exit, still not Josh's own identity) → Tailscale (his home IP) as the *final* fallback.
+  Rationale for headless before gluetun: a JS-execution challenge is a different problem from IP reputation and doesn't need a proxy hop to
+  solve, so it's cheap to try before spending an IP escalation. Current schema (one URL/one mode) supports none of this yet —
+  `_resolve_proxy_for_fetch`/the request hook need real design work before it's pluggable. Not scoped. Per-backend notes so nothing gets
+  lost before that design pass:
+  - **Headless browser** (tried before gluetun): for feeds/pages blocked by a real JS-executing challenge (e.g. Cloudflare's JS challenge)
+    that neither a spoofed browser UA nor a different exit IP gets past, since those never actually run the page's JS. No connection details
+    yet — capture them here (endpoint, protocol: raw CDP vs. a REST wrapper like Browserless, auth) once available.
+  - **Tailscale** (final fallback): `socks5h://tailscale:1080` (preferred, tunnels DNS too) or `http://tailscale:8888`, same `proxy` Docker
+    network, no auth (internal-only), same client wiring as gluetun (`requests[socks]`/`httpx[socks]`). Different trust tier, not just
+    another endpoint: gluetun/Windscribe exits on a disposable-ish shared VPS/datacenter NAT IP; Tailscale exits on Josh's actual home
+    Comcast IP, traceable to his house — fine for basic geoblocking/rate-limiting, wrong for anything sketchy/untrusted or a site aggressive
+    enough to escalate (abuse reports, IP blocklisting) since that lands on his real connection — his actual home internet, which he still
+    needs to use day to day, not a throwaway. Being the *last* resort in the chain is itself most of the answer to "which feeds should this
+    apply to" — it only gets used once every earlier tier has already failed. Also less reliable than gluetun (his home mediaserver blips
+    every couple months, occasionally days-long) — any code using it must fall through to direct on proxy-unreachable, never hard-fail the
+    fetch.
+- New `proxy_feeds` table needs to land in `ensure_meta_schema` so the startup per-user migration backfills existing tenants.
 
 ### Refetch-All has no "already re-fetched recently" skip
 
