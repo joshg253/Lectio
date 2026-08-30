@@ -82,10 +82,31 @@ def test_scope_to_scope_navigation_replaces_the_list_entry_instead_of_stacking()
     replace that history entry, not push a new one on top of it — otherwise phone
     Back walked through every previously viewed folder before ever reaching the
     folder drawer. Mirrors loadEntryPaneWithoutFullRefresh's own
-    currentUrlHasEntry replace-vs-push split for repeated article swipes."""
-    assert "let currentUrlHasScope = false;" in APP_JS
-    assert "if (isSinglePaneMode && currentUrlHasScope) {" in APP_JS
+    currentUrlHasEntry replace-vs-push split for repeated article swipes. Gated on
+    pane level (not URL params) and excludes the drawer's history spare, or
+    replacing it would destroy the drawer/Back mechanism outright."""
+    assert "let onScopeList = false;" in APP_JS
+    assert "!(history.state && history.state.lectioDrawerSpare);" in APP_JS
+    assert "if (onScopeList) {" in APP_JS
     assert APP_JS.count("history.replaceState(nextState, '', url);") == 2  # here, and the entry-pane precedent
+
+
+def test_the_drawer_spare_heals_its_stale_url_instead_of_bouncing_to_home():
+    """A sibling scope swap (folder A -> folder B) replaces the REAL list entry
+    in place, never the drawer's history spare sitting below it — you cannot
+    edit a history entry you are not currently on. So the spare's URL, set once
+    when it was armed, goes stale the moment a scope is swapped. Landing back on
+    it must heal it to the last real scope before toggling the drawer open, or
+    Back opened the drawer AND silently reverted the address bar / active-folder
+    highlight to Home."""
+    assert "window.__lectioLastScopeUrl = url;" in APP_JS
+    assert "const landedOnSpare = Boolean(event.state && event.state.lectioDrawerSpare);" in INDEX
+    assert "const healUrl = window.__lectioLastScopeUrl;" in INDEX
+    assert "history.replaceState(event.state, '', healUrl);" in INDEX
+    # armDrawerBack itself prefers the last real scope too, for the rarer
+    # press-Back-twice-with-no-tap-between case that pops all the way to the
+    # true floor and re-arms from there instead of from the spare.
+    assert "const armUrl = window.__lectioLastScopeUrl || window.location.href;" in INDEX
 
 
 # ── CSS ──

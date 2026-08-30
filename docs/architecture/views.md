@@ -119,6 +119,42 @@ The handler lives in `index.html`, not `app.js`, because it registers first — 
 `stopImmediatePropagation()` also suppresses app.js's `popstate` handler, which
 would otherwise refetch the list already on screen.
 
+**Sibling scope swaps (folder A → folder B) replace their history entry rather
+than pushing one, or Back walked through every previously viewed folder before
+reaching the drawer.** `loadScopePanesWithoutFullRefresh` originally pushed
+unconditionally on every scope change; picking three folders in a row stacked
+three entries, and Back stepped through folder B, then folder A, before ever
+reaching the drawer — reported 2026-08-30. The fix mirrors
+`loadEntryPaneWithoutFullRefresh`'s own `currentUrlHasEntry` replace-vs-push
+split (built for repeated article swipes): `onScopeList` is true only when
+already standing on a real list (single-pane, pane level 1, and — critically —
+*not* currently sitting on the drawer's history spare, or replacing it would
+overwrite the spare's `lectioDrawerSpare` flag and destroy the whole mechanism
+above). Drilling in from the drawer or from an article still pushes.
+
+**That exposed a second, previously unreachable bug: the spare goes stale the
+moment a scope swap replaces the entry above it.** The spare's URL is only ever
+accurate at the moment `armDrawerBack` pushes it — a duplicate of whatever was
+current *then*. Before this fix, reaching it required backing out through every
+real intermediate folder entry first (the bug above), so the spare was rarely
+the *first* thing Back landed on. Collapsing sibling swaps into one entry means
+Back from any list now lands on the spare directly — exposing that it still
+points at whatever was on screen when it was armed, possibly several folders
+ago (or the bare landing page, if the spare was armed at initial load). Landing
+on it opened the drawer correctly but silently reverted the address bar,
+document title, and the drawer's "active folder" highlight to that stale URL —
+reads as "Back opened the drawer but also went back to Home."
+
+Fixed by detecting the spare via its `lectioDrawerSpare` state flag (not a
+magic index number — `landedAt === 0` only ever matched the *original*
+bootstrap case, before any scope existed) and healing it in place with
+`history.replaceState` before toggling: `window.__lectioLastScopeUrl`, stashed
+on every real scope load, is what it heals *to*. No re-arm needed on the heal
+path — the same spare entry is reused indefinitely, never consumed. `armDrawerBack`
+itself also prefers `__lectioLastScopeUrl` over `window.location.href` when it
+re-arms, for the rarer double-press-with-no-tap-between case that pops all the
+way to the true floor first.
+
 The toolbar's top-left control mirrors the hierarchy: scoped to a feed it is a
 back arrow labelled with the folder name; at the folder list it is the hamburger.
 Two controls rather than one that changes meaning — a button reading "Folders"

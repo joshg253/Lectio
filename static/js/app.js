@@ -3714,20 +3714,21 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     async function loadScopePanesWithoutFullRefresh(url, pushHistory = true) {
       const token = ++scopePaneRequestToken;
 
-      // Same idea as loadEntryPaneWithoutFullRefresh's currentUrlHasEntry: whether
-      // we are already standing on a scope-level list (not the bare landing page,
-      // not an article) before this navigation happens.
-      let currentUrlHasScope = false;
+      // Same idea as loadEntryPaneWithoutFullRefresh's currentUrlHasEntry: are we
+      // already standing on a real scope-level list, about to be swapped for a
+      // sibling (another folder/feed/tag), rather than drilling in from the
+      // drawer or an article? The pane level is the right signal, not the URL's
+      // query params — the drawer's own history "spare" (see armDrawerBack in
+      // index.html) can carry scope-shaped params too once healed, and replacing
+      // THAT entry instead of pushing a fresh one would destroy the drawer/Back
+      // mechanism entirely.
+      let onScopeList = false;
       try {
-        const currentUrl = new URL(window.location.href, window.location.origin);
-        const hasEntry = currentUrl.searchParams.has('feed_url') && currentUrl.searchParams.has('entry_id');
-        const hasScope = currentUrl.searchParams.has('folder_id')
-          || currentUrl.searchParams.has('list_feed_url')
-          || currentUrl.searchParams.has('tag')
-          || currentUrl.searchParams.has('q');
-        currentUrlHasScope = hasScope && !hasEntry;
+        onScopeList = Boolean(window.isSingleMode && window.isSingleMode())
+          && document.body.getAttribute('data-single-pane-level') === '1'
+          && !(history.state && history.state.lectioDrawerSpare);
       } catch (_e) {
-        currentUrlHasScope = false;
+        onScopeList = false;
       }
 
       // Determine if we should inform the server of the user's persisted read_filter
@@ -3915,13 +3916,18 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         if (pushHistory) {
           const isSinglePaneMode = Boolean(window.isSingleMode && window.isSingleMode());
           const nextState = { lectioScopePane: true, lectioPaneLevel: isSinglePaneMode ? 1 : 0 };
+          // The drawer's Back handler (index.html) heals its history "spare" by
+          // replaying the last real scope URL onto it when it turns out to be
+          // stale — see armDrawerBack. Stash it on every real scope load so that
+          // heal has something current to reach for.
+          window.__lectioLastScopeUrl = url;
           // In 1-pane mode, picking a different scope (another folder/feed/tag)
           // while already standing on a list replaces that list's history entry
           // instead of stacking a new one on top — otherwise phone Back walked
           // through every previously viewed folder before it ever reached the
-          // folder drawer. The first list reached from the bare landing page (or
-          // from an article) still pushes, same as before.
-          if (isSinglePaneMode && currentUrlHasScope) {
+          // folder drawer. Drilling in from the drawer or from an article still
+          // pushes, same as before (onScopeList is false in both cases).
+          if (onScopeList) {
             history.replaceState(nextState, '', url);
           } else {
             history.pushState(nextState, '', url);

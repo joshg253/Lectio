@@ -1392,8 +1392,13 @@
       // Only ever one spare, only at the floor. Mid-stack there are real views
       // to walk back through and the spare would sit in front of them.
       if (drawerBackSpare || !hasDrawerLayout() || historyIndex !== 0) return;
+      // Prefer the last real scope visited over the bare current URL: this only
+      // fires from the true floor, which on a repeat Back press (no tap in
+      // between to re-drive a fresh scope load first) is the bootstrap landing
+      // URL, not whatever list the user actually still has on screen.
+      const armUrl = window.__lectioLastScopeUrl || window.location.href;
       history.pushState({ lectioDrawerSpare: true, lectioPaneLevel: singlePaneLevel },
-                        '', window.location.href);
+                        '', armUrl);
       drawerBackSpare = true;
     }
     window.armDrawerBack = armDrawerBack;
@@ -1500,16 +1505,39 @@
         : 0;
       historyIndex = landedAt;
 
-      // Landing back on index 0 means the next Back would leave the document.
-      if (hasDrawerLayout() && landedAt === 0) {
+      // Landing on the spare itself (however deep the stack, now that a sibling
+      // scope swap replaces its own entry in place instead of pushing — see
+      // loadScopePanesWithoutFullRefresh's onScopeList branch) OR on index 0
+      // (the bootstrap case, before any scope has ever been visited and the
+      // spare above it was consumed by this very pop): either way, the next
+      // Back would otherwise leave the document, so flip the drawer instead.
+      const landedOnSpare = Boolean(event.state && event.state.lectioDrawerSpare);
+      if (hasDrawerLayout() && (landedOnSpare || landedAt === 0)) {
         event.stopImmediatePropagation();
-        // The end of the chain: flip the drawer rather than leaving.
-        toggleDrawer();
-        // Re-arm in the same breath. Consuming one entry and pushing one back
-        // keeps the stack the same size, so this can run forever without
-        // growing history — and without ever running out of presses.
-        drawerBackSpare = false;
-        armDrawerBack();
+        if (landedOnSpare) {
+          // The spare's URL was only ever accurate at the moment it was armed.
+          // A sibling scope swap since then replaced the REAL entry above it,
+          // not this one — you cannot edit a history entry you are not
+          // currently on — so it can be stale (still pointing at whatever
+          // was current when it was pushed). Heal it back to the last real
+          // scope before toggling, or the drawer opens over the right list but
+          // the address bar and "active" folder both silently revert.
+          const healUrl = window.__lectioLastScopeUrl;
+          if (healUrl && healUrl !== window.location.href) {
+            history.replaceState(event.state, '', healUrl);
+          }
+          toggleDrawer();
+          // Still the same spare entry, still sitting right where it was — no
+          // re-arm needed, nothing was consumed.
+        } else {
+          // True floor, nothing armed above it yet: flip the drawer and re-arm
+          // in the same breath. Consuming one entry and pushing one back keeps
+          // the stack the same size, so this can run forever without growing
+          // history — and without ever running out of presses.
+          toggleDrawer();
+          drawerBackSpare = false;
+          armDrawerBack();
+        }
         return;
       }
       drawerBackSpare = false;
