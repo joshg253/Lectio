@@ -329,6 +329,14 @@
             <span class="feed-prop-strategy-hint">Still failing? Force this feed through the outbound proxy (only takes effect when your Network setting is "As needed"):</span>
             <button type="button" id="feed-prop-proxy-force" class="feed-prop-inline-btn" title="Fetch this feed through the configured outbound proxy">Force proxy</button>
           </div>
+          <div id="feed-prop-tailscale-row" hidden style="margin-top:0.5rem;">
+            <span class="feed-prop-strategy-hint">🏠 This feed fetches through the last-resort backend (the proxy alone still wasn't enough).</span>
+            <button type="button" id="feed-prop-tailscale-reset" class="feed-prop-inline-btn" title="Stop routing this feed through the last-resort backend">Stop last-resort</button>
+          </div>
+          <div id="feed-prop-tailscale-force-row" hidden style="margin-top:0.5rem;">
+            <span class="feed-prop-strategy-hint">Still failing even proxied? Force this feed through the last-resort backend (only takes effect when your Network setting is "As needed" and a last-resort backend is configured):</span>
+            <button type="button" id="feed-prop-tailscale-force" class="feed-prop-inline-btn" title="Fetch this feed through the configured last-resort backend">Force last-resort</button>
+          </div>
         </div>
         <!-- Dev feed: manual batch flush -->
         <div id="feed-prop-dev-section" hidden>

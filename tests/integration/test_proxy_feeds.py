@@ -50,3 +50,37 @@ def test_unflag(meta):
 def test_blank_url_not_flagged(meta):
     assert main.flag_proxy_feed(meta, "   ") is False
     assert main.get_proxy_feed_urls(meta) == set()
+
+
+# --- last-resort escalation (tailscale_feeds), same shape one rung further out ---
+
+def test_tailscale_flag_and_get(meta):
+    assert main.get_tailscale_feed_urls(meta) == set()
+    newly = main.flag_tailscale_feed(meta, "https://blocked.test/feed", reason="test")
+    assert newly is True
+    assert main.get_tailscale_feed_urls(meta) == {"https://blocked.test/feed"}
+
+
+def test_tailscale_flag_is_idempotent(meta):
+    assert main.flag_tailscale_feed(meta, "https://x.test/feed") is True
+    assert main.flag_tailscale_feed(meta, "https://x.test/feed") is False  # already flagged
+
+
+def test_tailscale_unflag(meta):
+    main.flag_tailscale_feed(meta, "https://x.test/feed")
+    main.unflag_tailscale_feed(meta, "https://x.test/feed")
+    assert main.get_tailscale_feed_urls(meta) == set()
+
+
+def test_tailscale_blank_url_not_flagged(meta):
+    assert main.flag_tailscale_feed(meta, "   ") is False
+    assert main.get_tailscale_feed_urls(meta) == set()
+
+
+def test_tailscale_feeds_independent_of_proxy_feeds(meta):
+    """The two tables are separate storage — flagging one must not touch the
+    other."""
+    main.flag_proxy_feed(meta, "https://proxied.test/feed")
+    main.flag_tailscale_feed(meta, "https://tailscaled.test/feed")
+    assert main.get_proxy_feed_urls(meta) == {"https://proxied.test/feed"}
+    assert main.get_tailscale_feed_urls(meta) == {"https://tailscaled.test/feed"}

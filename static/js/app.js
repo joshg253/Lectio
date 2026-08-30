@@ -3220,6 +3220,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     const feedPropBrowserUaReset = document.getElementById('feed-prop-browser-ua-reset');
     const feedPropProxyRow = document.getElementById('feed-prop-proxy-row');
     const feedPropProxyReset = document.getElementById('feed-prop-proxy-reset');
+    const feedPropTailscaleRow = document.getElementById('feed-prop-tailscale-row');
+    const feedPropTailscaleReset = document.getElementById('feed-prop-tailscale-reset');
     const feedPropCooldownLabel = document.getElementById('feed-prop-cooldown-label');
     const feedPropCooldown = document.getElementById('feed-prop-cooldown');
     const feedPropTabInfo = document.getElementById('feed-prop-tab-info');
@@ -5557,6 +5559,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         if (feedPropProxyRow) feedPropProxyRow.hidden = !data.proxied;
         const feedPropProxyForceRow = document.getElementById('feed-prop-proxy-force-row');
         if (feedPropProxyForceRow) feedPropProxyForceRow.hidden = !!data.proxied;
+        if (feedPropTailscaleRow) feedPropTailscaleRow.hidden = !data.tailscaled;
+        const feedPropTailscaleForceRow = document.getElementById('feed-prop-tailscale-force-row');
+        if (feedPropTailscaleForceRow) feedPropTailscaleForceRow.hidden = !!data.tailscaled;
 
         setFeedHistory(data.fetch_history || []);
         renderFeedAutomations(data.automations);
@@ -7032,6 +7037,44 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           showToastMessage('Proxy forced on — feed will retry through it on next refresh (as_needed mode only).');
         }
       } catch { showToastMessage('Failed to update feed proxy flag.'); } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+
+    feedPropTailscaleReset?.addEventListener('click', async () => {
+      const feedUrl = feedPropXml?.textContent?.trim();
+      if (!feedUrl) return;
+      feedPropTailscaleReset.disabled = true;
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, enabled: '0' });
+        const resp = await fetch('/feeds/tailscale', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (json.ok) {
+          if (feedPropTailscaleRow) feedPropTailscaleRow.hidden = true;
+          const forceRow = document.getElementById('feed-prop-tailscale-force-row');
+          if (forceRow) forceRow.hidden = false;
+        }
+      } catch { /* leave row visible on error */ } finally {
+        feedPropTailscaleReset.disabled = false;
+      }
+    });
+
+    document.getElementById('feed-prop-tailscale-force')?.addEventListener('click', async () => {
+      const feedUrl = feedPropXml?.textContent?.trim();
+      if (!feedUrl) return;
+      const btn = document.getElementById('feed-prop-tailscale-force');
+      if (btn) btn.disabled = true;
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, enabled: '1' });
+        const resp = await fetch('/feeds/tailscale', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (json.ok) {
+          const forceRow = document.getElementById('feed-prop-tailscale-force-row');
+          if (forceRow) forceRow.hidden = true;
+          if (feedPropTailscaleRow) feedPropTailscaleRow.hidden = false;
+          showToastMessage('Last-resort backend forced on — feed will retry through it on next refresh (as_needed mode only).');
+        }
+      } catch { showToastMessage('Failed to update feed last-resort flag.'); } finally {
         if (btn) btn.disabled = false;
       }
     });

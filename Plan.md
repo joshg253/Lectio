@@ -13,79 +13,18 @@ git history (rationale kept in ARCHITECTURE.md where relevant); items
 that were done-but-with-a-real-remainder were condensed to just that
 remainder.
 
-### SOCKS5 proxy support for outbound fetches (gluetun VPN)
+### Outbound proxy escalation — Browserless still deferred
 
-Design settled 2026-08-29. gluetun runs on the `proxy` Docker network at `socks5h://gluetun:1080` (shared Windscribe Pro NAT IP — helps
-ordinary geoblocks/rate limits, not real bot detection; region via `.env`'s `WINDSCRIBE_SERVER_REGIONS`, not app code). `good-web-citizen`
-behavior still holds — this is for legitimate geoblocks/rate limits, not evading deliberate blocks.
+Full chain **shipped** 2026-08-30: honest UA → browser identity → gluetun proxy → Tailscale (last-resort, home IP). Design/rationale now
+lives in `docs/architecture/feeds.md` ("Outbound proxy escalation") rather than here — settings shape, per-backend unreachable cooldowns,
+the escalation callback chain in `services/feed_refresh.py`.
 
-Settings: `SETTING_PROXY_URL` (admin-only) + `SETTING_PROXY_MODE` (off/as_needed/always, per-user-overridable via `get_instance_setting`'s
-existing tier chain — own row → admin's row → env). Off everywhere by default. **Shipped** (settings scaffold).
-
-`always` mode wiring **shipped**: `get_reader()` passes a `proxy_resolver` into `ReaderApi`, which routes feed fetches through the
-configured proxy via a request hook mutating `session.proxies` (requests has no per-request proxies param reachable from a hook). Needed
-adding `pysocks` as a dependency for `socks5h://` support. Verified end-to-end against a real local HTTP server + an unreachable SOCKS5
-target (raised `SOCKSHTTPConnectionPool`, proving it actually routed through PySocks). Scoped to feed fetches only — the separate
-httpx-based image/readability fetches (`/api/img`, save-article rendering) are not proxied; a follow-up if that's ever wanted.
-
-`as_needed` escalation **shipped** (2026-08-30): a sibling `proxy_feeds` table + `_flag_proxy_feed_on_still_blocked` mirror the
-`browser_ua_feeds` mechanism exactly, in `ensure_meta_schema` (backfills existing tenants via the startup per-user migration). The
-trigger in `services/feed_refresh.py` (`_is_refusal_or_challenge`) was deliberately widened beyond the existing `_is_fetch_refusal`
-(403/415/429/503/timeout) to also recognize `bot_challenge.FeedBlockedError` — a small, intentional change to existing browser-UA
-escalation too, needed so a Cloudflare-challenge feed gets a browser-UA attempt at all before proxy is even considered. Escalates to
-proxy only once browser-UA has already been in play for that feed (either flagged this cycle and its retry also failed, or was already
-flagged from an earlier cycle) and it's still failing — flag, retry once same-cycle. `"proxied"` surfaced in Feed Properties alongside
-`"browser_ua"`, with a manual Force/Stop-proxying toggle mirroring the existing browser_ua Force/Reset UI exactly (`/feeds/proxy` route
-+ `feed-prop-proxy-*` elements). Mode-gated: `_flag_proxy_feed_on_still_blocked` is a no-op outside as_needed (off never wants it,
-always doesn't need per-feed tracking).
-
-**Proxy-unreachable auto-fallback shipped** (2026-08-30): a dead proxy backend (gluetun restarting, etc.) must never be worse than not
-having one. Detects `pysocks`' `socks.ProxyError` — distinct from the site refusing us, which looks identical at the
-`requests.exceptions.ConnectionError` level — via `_exception_chain`, a proper walk of both `__cause__` (explicit `raise ... from e`)
-and `__context__` (implicit, set when a new exception is raised inside an except block): verified empirically that the real
-requests/urllib3/pysocks chain mixes both styles for a dead-proxy failure, so a `__cause__`-only walk (what `_is_refusal_or_challenge`
-originally did too — fixed in the same pass) silently misses it. On detection: `_mark_proxy_unreachable` skips the proxy for that user
-for a 5-minute cooldown, across every mode (not just as_needed — `always` needs this even more, since one blip would otherwise fail
-every fetch until someone notices), and the current fetch retries once immediately, direct. Verified end-to-end through the real
-`feed_refresh_service.update_feeds()` entry point against a dead SOCKS5 port: cooldown marked, direct retry succeeded, entry ingested.
-
-**Multi-backend escalation chain, later.** Final infra handoff 2026-08-30 — all three backends are live now, and Josh has explicitly
-left the chain order/wiring to whoever builds it ("Lectio's dev decides when/how to chain them"), so treat the order below as a working
-default, not a spec:
-
-| tier | how | notes |
-|---|---|---|
-| Direct | Lectio's normal fetch | fastest, zero exposure |
-| Windscribe (gluetun) | `socks5h://gluetun:1080` or `http://gluetun:8888` | disposable third-party IP, no personal exposure |
-| Browserless (headless) | `POST http://browserless:3000/content?token=<shared secret>`, body `{"url": "..."}` | real headless Chrome, clears JS challenges, slower, still no personal exposure (uses the direct VPS IP unless later stacked with a proxy) |
-| Tailscale | `socks5h://tailscale:1080` or `http://tailscale:8888` | genuine home residential IP, real exposure cost — last resort |
-
-The Browserless token is a live secret — it is NOT recorded here (this file is git-tracked); it belongs in `.env` as something like
-`LECTIO_BROWSERLESS_TOKEN` once actually wired up, same as every other credential in this codebase.
-
-Working-default order (Josh's last stated reasoning, 2026-08-30, before the "dev decides" handoff): direct → browser-UA (existing) →
-Browserless (headless) → Windscribe/gluetun → Tailscale (final fallback). Rationale for headless before gluetun: a JS-execution
-challenge is a different problem from IP reputation and doesn't need a proxy hop to solve, so it's cheap to try before spending an IP
-escalation.
-
-**Stacking Browserless with a proxy is app-level, no infra changes** (confirmed 2026-08-30): pass Chrome's `--proxy-server` as a launch
-flag via Browserless's `launch` query param — `?launch={"args":["--proxy-server=socks5://gluetun:1080"]}` (URL- or base64-encoded JSON
-per their docs), same mechanism on the REST `/content` endpoint or a raw WebSocket/CDP connection. Swap `gluetun:1080` for
-`tailscale:1080` to stack headless rendering with the residential IP instead. Chrome doesn't support SOCKS5 username/password auth, but
-that's moot here since neither proxy has auth configured (internal-only on the `proxy` network). So the full combinatorial toolkit —
-direct, either proxy alone, Browserless alone, or Browserless stacked with either proxy — is available purely through request
-parameters; no docker-compose/container config needed for any combination.
-
-Trust-tier note (Tailscale): a different trust tier from gluetun, not just another endpoint — gluetun/Windscribe exits on a
-disposable-ish shared VPS/datacenter NAT IP; Tailscale exits on Josh's actual home Comcast IP, traceable to his house — fine for basic
-geoblocking/rate-limiting, wrong for anything sketchy/untrusted or a site aggressive enough to escalate (abuse reports, IP blocklisting)
-since that lands on his real connection, which he still needs to use day to day. Being the *last* resort in the chain is itself most of
-the answer to "which feeds should this apply to." Also less reliable than gluetun (his home mediaserver blips every couple months,
-occasionally days-long) — any code using it must fall through to direct/an earlier tier on proxy-unreachable, never hard-fail the fetch.
-
-Current schema (one URL/one mode) supports none of this yet — `_resolve_proxy_for_fetch`/the request hook need real design work
-(multiple backends, no fixed "which backend for which feed" policy needed since order + failure does that job) before it's pluggable.
-Not scoped.
+**Browserless (headless Chrome) evaluated, not shipped.** Live-tested against two real Cloudflare-protected feeds: plain `/content` never
+cleared the "Just a moment…" interstitial (not stealth-patched, detected as automation regardless of exit IP or wait time); stacking it
+with the proxy softened one site's block but didn't clear it either. The same two feeds fetched with plain `requests` through Tailscale
+alone came back clean — Cloudflare weighs IP/ASN reputation heavily, and that's what actually mattered here, not JS execution. Full
+writeup in `docs/architecture/feeds.md`. Revisit only with a concrete failure Tailscale alone doesn't solve; the added complexity
+(`/content` returns rendered HTML, not the feed's raw bytes) isn't worth it on the current evidence.
 
 ### Refetch-All has no "already re-fetched recently" skip
 

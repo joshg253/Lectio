@@ -41,15 +41,19 @@ def configured(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "user_store", _StubUserStore(ADMIN_ID))
     monkeypatch.setattr(main, "_ENV_MAINTENANCE_HOUR", None)
     monkeypatch.setattr(main, "_ENV_PROXY_URL", "")
+    monkeypatch.setattr(main, "_ENV_TAILSCALE_URL", "")
     main.invalidate_instance_setting_cache()
     # _app_settings_cache is keyed by user_id, not by DB path — reusing ADMIN_ID
     # across tests (each with its own fresh tmp_path DB) would otherwise leak a
     # previous test's cached values into this one.
     with main._app_settings_cache_lock:
         main._app_settings_cache.clear()
-    # _proxy_down_until is also keyed by user_id, same leak risk as above.
+    # _proxy_down_until/_tailscale_down_until are also keyed by user_id, same
+    # leak risk as above.
     with main._proxy_down_lock:
         main._proxy_down_until.clear()
+    with main._tailscale_down_lock:
+        main._tailscale_down_until.clear()
     main.ensure_meta_schema()
     main.provision_user_storage(ADMIN_ID)
     main.invalidate_instance_setting_cache()
@@ -61,6 +65,8 @@ def configured(tmp_path, monkeypatch):
             main._app_settings_cache.clear()
         with main._proxy_down_lock:
             main._proxy_down_until.clear()
+        with main._tailscale_down_lock:
+            main._tailscale_down_until.clear()
         main.close_thread_db_pools()
         tenancy._layout = saved
 
@@ -196,7 +202,7 @@ def test_mark_proxy_unreachable_skips_proxy_regardless_of_mode(configured):
     _set_admin_setting(main.SETTING_PROXY_URL, "socks5h://gluetun:1080")
     assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") == "socks5h://gluetun:1080"
     with tenancy.user_context(ADMIN_ID):
-        main._mark_proxy_unreachable()
+        main._mark_backend_unreachable("https://example.test/feed")
     assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") is None
 
 
@@ -207,7 +213,7 @@ def test_mark_proxy_unreachable_is_per_user(configured):
     other_uid = "u_07he9019200000000000000r"
     main.provision_user_storage(other_uid)
     with tenancy.user_context(ADMIN_ID):
-        main._mark_proxy_unreachable()
+        main._mark_backend_unreachable("https://example.test/feed")
     assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") is None
     assert main._resolve_proxy_for_fetch(other_uid, "https://example.test/feed") == "socks5h://gluetun:1080"
 
@@ -224,3 +230,92 @@ def test_resolve_proxy_for_fetch_respects_per_user_override(configured):
             main.set_setting(conn, main.SETTING_PROXY_MODE, "off")
     assert main._resolve_proxy_for_fetch(other_uid, "https://example.test/feed") is None
     assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") == "socks5h://gluetun:1080"
+
+
+# --- last-resort backend (Tailscale) — rides the same proxy_mode, one rung
+#     further out than the primary proxy ---
+
+def test_tailscale_url_defaults_empty(configured):
+    assert main.get_tailscale_url() == ""
+
+
+def test_flag_tailscale_feed_on_still_blocked_is_noop_without_url_configured(configured):
+    """as_needed mode alone is not the opt-in — an unconfigured last-resort URL
+    is, same as the primary proxy's own off-by-default gate."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
+    assert main._flag_tailscale_feed_on_still_blocked("https://example.test/feed") is False
+    with main.get_meta_connection() as conn:
+        assert main.get_tailscale_feed_urls(conn) == set()
+
+
+def test_flag_tailscale_feed_on_still_blocked_is_noop_always_mode(configured):
+    """Never reachable in always mode — that would route every fetch through
+    the home IP, exactly what "last resort" rules out."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "always")
+    _set_admin_setting(main.SETTING_TAILSCALE_URL, "socks5h://tailscale:1080")
+    assert main._flag_tailscale_feed_on_still_blocked("https://example.test/feed") is False
+
+
+def test_flag_tailscale_feed_on_still_blocked_flags_in_as_needed_mode(configured):
+    _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
+    _set_admin_setting(main.SETTING_TAILSCALE_URL, "socks5h://tailscale:1080")
+    assert main._flag_tailscale_feed_on_still_blocked("https://example.test/feed") is True
+    assert main._flag_tailscale_feed_on_still_blocked("https://example.test/feed") is False  # already flagged
+
+
+def test_resolve_proxy_for_fetch_prefers_tailscale_over_proxy_when_both_flagged(configured):
+    """Tailscale only ever gets flagged one rung past the proxy (the proxy was
+    already tried and failed) — so if both flags are set, the fetch that
+    already went through the proxy and is being retried again must go through
+    the last-resort backend, not back through the proxy that just failed it."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
+    _set_admin_setting(main.SETTING_PROXY_URL, "socks5h://gluetun:1080")
+    _set_admin_setting(main.SETTING_TAILSCALE_URL, "socks5h://tailscale:1080")
+    with tenancy.user_context(ADMIN_ID):
+        with main.get_meta_connection() as conn:
+            main.flag_proxy_feed(conn, "https://example.test/feed")
+            main.flag_tailscale_feed(conn, "https://example.test/feed")
+    main._invalidate_proxy_feeds_cache()
+    main._invalidate_tailscale_feeds_cache()
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") == "socks5h://tailscale:1080"
+
+
+def test_resolve_proxy_for_fetch_never_uses_tailscale_in_always_mode(configured):
+    """always mode has no per-feed tracking at all — a stray tailscale flag
+    (e.g. left over from a mode switch) must still never take effect there."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "always")
+    _set_admin_setting(main.SETTING_PROXY_URL, "socks5h://gluetun:1080")
+    _set_admin_setting(main.SETTING_TAILSCALE_URL, "socks5h://tailscale:1080")
+    with tenancy.user_context(ADMIN_ID):
+        with main.get_meta_connection() as conn:
+            main.flag_tailscale_feed(conn, "https://example.test/feed")
+    main._invalidate_tailscale_feeds_cache()
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://example.test/feed") == "socks5h://gluetun:1080"
+
+
+def test_mark_backend_unreachable_marks_only_the_active_backend(configured):
+    """A dead last-resort backend must not also pause the primary proxy —
+    they have very different reliability profiles and one blipping is not
+    evidence the other is down too."""
+    _set_admin_setting(main.SETTING_PROXY_MODE, "as_needed")
+    _set_admin_setting(main.SETTING_PROXY_URL, "socks5h://gluetun:1080")
+    _set_admin_setting(main.SETTING_TAILSCALE_URL, "socks5h://tailscale:1080")
+    with tenancy.user_context(ADMIN_ID):
+        with main.get_meta_connection() as conn:
+            main.flag_proxy_feed(conn, "https://tailscale-feed.test/feed")
+            main.flag_tailscale_feed(conn, "https://tailscale-feed.test/feed")
+    main._invalidate_proxy_feeds_cache()
+    main._invalidate_tailscale_feeds_cache()
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://tailscale-feed.test/feed") == "socks5h://tailscale:1080"
+
+    with tenancy.user_context(ADMIN_ID):
+        main._mark_backend_unreachable("https://tailscale-feed.test/feed")
+
+    # The last-resort backend is down for this feed...
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://tailscale-feed.test/feed") is None
+    # ...but the primary proxy is untouched, for a feed that only ever uses it.
+    with tenancy.user_context(ADMIN_ID):
+        with main.get_meta_connection() as conn:
+            main.flag_proxy_feed(conn, "https://proxy-only-feed.test/feed")
+    main._invalidate_proxy_feeds_cache()
+    assert main._resolve_proxy_for_fetch(ADMIN_ID, "https://proxy-only-feed.test/feed") == "socks5h://gluetun:1080"
