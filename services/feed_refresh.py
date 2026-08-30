@@ -60,6 +60,7 @@ class FeedRefreshService:
         failed_feed_backoff_max_seconds: int,
         on_fetch_refused: Callable[[str], bool] | None = None,
         on_fetch_still_blocked: Callable[[str], bool] | None = None,
+        on_bot_challenge_still_blocked: Callable[[str], bool] | None = None,
         on_fetch_still_blocked_via_proxy: Callable[[str], bool] | None = None,
         on_proxy_unreachable: Callable[[str], None] | None = None,
         progress_hook: Callable[[str], None] | None = None,
@@ -84,6 +85,15 @@ class FeedRefreshService:
         # flag the feed for as-needed proxy escalation (a no-op unless the
         # caller's mode is actually as_needed) and return True if newly flagged.
         self._on_fetch_still_blocked = on_fetch_still_blocked
+        # Called with a feed_url when the proxy was already in play and the
+        # fetch is STILL specifically a bot-challenge page (not any refusal —
+        # see _is_bot_challenge). Should flag the feed for FlareSolverr
+        # escalation (a no-op unless configured/opted into) and return True if
+        # newly flagged. Sits between on_fetch_still_blocked (proxy) and
+        # on_fetch_still_blocked_via_proxy (last-resort) in the chain, gated
+        # narrower than either — a real challenge solve is wasted on a failure
+        # that isn't one.
+        self._on_bot_challenge_still_blocked = on_bot_challenge_still_blocked
         # Called with a feed_url when the outbound proxy was already in play
         # (flagged this cycle or earlier, so this fetch already went through it)
         # and it's still failing the same way. Should flag the feed for the
@@ -161,6 +171,17 @@ class FeedRefreshService:
         if any(isinstance(e, bot_challenge.FeedBlockedError) for e in FeedRefreshService._exception_chain(exc)):
             return True
         return FeedRefreshService._is_fetch_refusal(exc)
+
+    @staticmethod
+    def _is_bot_challenge(exc: Exception) -> bool:
+        """Narrower than _is_refusal_or_challenge: only a real challenge page
+        (Cloudflare/DDoS-Guard etc), not a plain 403/429/503/timeout. Gates
+        FlareSolverr escalation — it spins up a real headless Chrome to SOLVE a
+        challenge, so it is wasted (and slow) on a failure that isn't one; a
+        plain IP-reputation block wants a different exit IP instead, not a
+        browser that still presents the same IP unless separately stacked with
+        one."""
+        return any(isinstance(e, bot_challenge.FeedBlockedError) for e in FeedRefreshService._exception_chain(exc))
 
     @staticmethod
     def _is_proxy_unreachable(exc: Exception) -> bool:
@@ -721,10 +742,59 @@ class FeedRefreshService:
                                             "[refresh] proxy retry failed for %s", feed_url
                                         )
 
-                            # Last-resort escalation: the proxy is now (or was
-                            # already) in play for this feed and it's STILL
-                            # failing the same way — a no-op unless a last-resort
-                            # backend is configured and the caller has opted in.
+                            # FlareSolverr escalation: the proxy is now (or was
+                            # already) in play and it's STILL specifically a
+                            # bot-challenge (not any refusal — see
+                            # _is_bot_challenge) — a no-op unless a challenge
+                            # solver is configured and the caller has opted in.
+                            if self._on_bot_challenge_still_blocked is not None and self._is_bot_challenge(exc):
+                                try:
+                                    newly_solved = self._on_bot_challenge_still_blocked(feed_url)
+                                except Exception:
+                                    newly_solved = False
+                                if newly_solved:
+                                    try:
+                                        _updated = reader.update_feed(feed_url)
+                                        success_count += 1
+                                        _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
+                                        if _new_entries:
+                                            self.purge_tombstoned_entries([feed_url])
+                                        self._logger.info(
+                                            "[refresh] flaresolverr retry succeeded for %s", feed_url
+                                        )
+                                        with self._get_meta_connection() as conn:
+                                            conn.execute(
+                                                """
+                                                INSERT INTO feed_failure_state
+                                                    (feed_url, consecutive_failures, next_retry_at, last_error, last_success_at)
+                                                VALUES (?, 0, NULL, NULL, ?)
+                                                ON CONFLICT(feed_url) DO UPDATE SET
+                                                    consecutive_failures = 0,
+                                                    next_retry_at = NULL,
+                                                    last_error = NULL,
+                                                    last_success_at = excluded.last_success_at,
+                                                    acknowledged_at = NULL
+                                                """,
+                                                (feed_url, now_ts),
+                                            )
+                                            feed_state_map[feed_url] = {"consecutive_failures": 0, "next_retry_at": None}
+                                            self._record_fetch_history(
+                                                conn, feed_url, "ok",
+                                                new_entries=_new_entries,
+                                                duration_ms=int((time.perf_counter() - feed_started_at) * 1000),
+                                            )
+                                        continue
+                                    except Exception as retry_exc:
+                                        exc = retry_exc
+                                        self._logger.info(
+                                            "[refresh] flaresolverr retry failed for %s", feed_url
+                                        )
+
+                            # Last-resort escalation: the proxy (or FlareSolverr)
+                            # is now (or was already) in play for this feed and
+                            # it's STILL failing the same way — a no-op unless a
+                            # last-resort backend is configured and the caller
+                            # has opted in.
                             if self._on_fetch_still_blocked_via_proxy is not None and self._is_refusal_or_challenge(exc):
                                 try:
                                     newly_escalated = self._on_fetch_still_blocked_via_proxy(feed_url)

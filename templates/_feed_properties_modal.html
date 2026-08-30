@@ -329,6 +329,14 @@
             <span class="feed-prop-strategy-hint">Still failing? Force this feed through the outbound proxy (only takes effect when your Network setting is "As needed"):</span>
             <button type="button" id="feed-prop-proxy-force" class="feed-prop-inline-btn" title="Fetch this feed through the configured outbound proxy">Force proxy</button>
           </div>
+          <div id="feed-prop-flaresolverr-row" hidden style="margin-top:0.5rem;">
+            <span class="feed-prop-strategy-hint">🧩 This feed fetches through FlareSolverr (a real challenge page, not just a block — the proxy alone couldn't solve it).</span>
+            <button type="button" id="feed-prop-flaresolverr-reset" class="feed-prop-inline-btn" title="Stop routing this feed through FlareSolverr">Stop FlareSolverr</button>
+          </div>
+          <div id="feed-prop-flaresolverr-force-row" hidden style="margin-top:0.5rem;">
+            <span class="feed-prop-strategy-hint">Still failing with a challenge page even proxied? Force this feed through FlareSolverr (only takes effect when your Network setting is "As needed" and FlareSolverr is configured):</span>
+            <button type="button" id="feed-prop-flaresolverr-force" class="feed-prop-inline-btn" title="Fetch this feed through FlareSolverr">Force FlareSolverr</button>
+          </div>
           <div id="feed-prop-tailscale-row" hidden style="margin-top:0.5rem;">
             <span class="feed-prop-strategy-hint">🏠 This feed fetches through the last-resort backend (the proxy alone still wasn't enough).</span>
             <button type="button" id="feed-prop-tailscale-reset" class="feed-prop-inline-btn" title="Stop routing this feed through the last-resort backend">Stop last-resort</button>

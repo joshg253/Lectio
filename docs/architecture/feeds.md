@@ -669,59 +669,152 @@ to October 2024. A real month beats a precise-looking lie.
 
 ## Outbound proxy escalation
 
-Three tiers, in order, each only reached once the one before it was already
+Four tiers, in order, each only reached once the one before it was already
 tried and still failed: honest UA → browser identity → outbound proxy →
-last-resort backend. The first two are wired into `services/reader_api.py`'s
-request hooks directly; the last two are `FeedRefreshService.update_feeds`'
-`on_fetch_still_blocked` / `on_fetch_still_blocked_via_proxy` callbacks,
-mirroring the browser-UA → proxy escalation shape exactly one rung further
-(same-cycle retry on newly-flagged, same fall-through when already flagged
-from an earlier cycle, same `_is_refusal_or_challenge` gate).
+FlareSolverr → last-resort backend. The first two are wired into
+`services/reader_api.py`'s request hooks directly; the last three are
+`FeedRefreshService.update_feeds`' `on_fetch_still_blocked` /
+`on_bot_challenge_still_blocked` / `on_fetch_still_blocked_via_proxy`
+callbacks, each mirroring the one before it one rung further (same-cycle
+retry on newly-flagged, same fall-through when already flagged from an
+earlier cycle). FlareSolverr's gate is narrower than the other two —
+`_is_bot_challenge`, a real challenge page specifically
+(`bot_challenge.FeedBlockedError`), not `_is_refusal_or_challenge`'s broader
+"any refusal" — so a plain IP-block 403 skips it and falls straight through
+to last-resort; spinning up real Chrome to solve a challenge that was never
+served is wasted effort, and the failure it wants (IP reputation) needs a
+different exit IP, not a browser.
 
-**Settings shape**: `SETTING_PROXY_URL`/`SETTING_TAILSCALE_URL` (admin-only —
-a non-admin choosing an arbitrary proxy target is SSRF-adjacent) +
-`SETTING_PROXY_MODE` (off/as_needed/always, per-user-overridable). The
-last-resort backend rides the *same* `proxy_mode` rather than its own — Josh's
-own framing was to mirror the existing pattern, not invent a second mode
-control — and is reachable only via `as_needed`'s per-feed escalation, never
-`always` (which would route every fetch through a real home IP, the thing
-"last resort" exists to rule out). Its actual opt-in gate is simply being
-configured at all: `_flag_tailscale_feed_on_still_blocked` requires
-`get_tailscale_url()` non-empty, same as the primary proxy requiring
-`get_proxy_url()`.
+**Settings shape**: `SETTING_PROXY_URL`/`SETTING_FLARESOLVERR_URL`/
+`SETTING_TAILSCALE_URL` (all admin-only — a non-admin choosing an arbitrary
+proxy/solver target is SSRF-adjacent) + `SETTING_PROXY_MODE`
+(off/as_needed/always, per-user-overridable). FlareSolverr and the
+last-resort backend both ride the *same* `proxy_mode` rather than their own —
+Josh's own framing was to mirror the existing pattern, not invent new mode
+controls — and are reachable only via `as_needed`'s per-feed escalation,
+never `always` (which would spin up real Chrome, or route every fetch
+through a real home IP, on *every* fetch — the whole point of per-feed
+escalation is not doing that preemptively). Each tier's actual opt-in gate is
+simply being configured at all: `_flag_flaresolverr_feed_on_still_blocked`/
+`_flag_tailscale_feed_on_still_blocked` require their own URL non-empty, same
+as the primary proxy requiring `get_proxy_url()`.
+
+**FlareSolverr is not a proxy swap — it redirects the whole request**
+(`ReaderApi._make_flaresolverr_request_hook`, `_fix_flaresolverr_response`).
+Unlike gluetun/Tailscale (transparent to `requests` via `session.proxies`),
+FlareSolverr is its own API: `POST http://flaresolverr:8191/v1` with
+`{"cmd": "request.get", "url": <feed_url>, "proxy": {"url": ...}}`, returning
+real Chrome's rendered `outerHTML`, not the origin's raw bytes. The request
+hook rewrites method/url/headers/body outright (not just headers or
+`session.proxies`) and stamps a `_lectio_via_flaresolverr` marker; the
+response hook (registered *before* `_fix_feed_response`, so its output gets
+the same cleanup as any other fetch) only acts on marked requests, unwraps
+the JSON envelope, and propagates the *origin's* real status code (not
+FlareSolverr's own 200) so refusal detection upstream still works for a site
+that's still blocking even through a real browser. Always stacked with the
+primary proxy when one is configured (`_resolve_flaresolverr_for_fetch`) —
+confirmed empirically that FlareSolverr alone, on the bare VPS IP, failed
+outright on a real Cloudflare-protected feed, while stacked with gluetun it
+solved the same feed cleanly. `_resolve_proxy_for_fetch` stands down
+entirely for a FlareSolverr-active feed, or the request TO FlareSolverr's own
+container would get routed through the primary proxy's `session.proxies` by
+mistake — the stacking happens inside FlareSolverr's own request body
+instead, a completely different mechanism.
+
+**Three more bugs found only by running it against the real container, none
+visible from reading the code:**
+
+- **The unwrapped bytes need their own Content-Type set, not left to
+  `_fix_feed_response`'s sniffing.** FlareSolverr's own HTTP response is
+  `application/json`; `_fix_flaresolverr_response` swaps the *body* for plain
+  feed bytes but did nothing to the header at first. `_fix_feed_response`'s
+  own HTML→RSS override only fires when it sees `"html"` in the *current*
+  Content-Type (the case it was built for — a feed mistakenly served as
+  `text/html`), which never matches `"application/json"`. Left alone, reader
+  routed the now-XML body to its JSON-feed parser instead of feedparser and
+  failed with an empty-document JSON error. Fixed by setting
+  `response.headers["Content-Type"]` explicitly in the unwrap step itself
+  (`application/rss+xml` when the `<pre>` unwrap matched, `text/html`
+  otherwise).
+
+- **The primary proxy's own URL scheme breaks Chrome's `--proxy-server`.**
+  `SETTING_PROXY_URL` is `socks5h://...` on purpose — the trailing `h` tells
+  pysocks/requests to resolve DNS *through* the proxy rather than locally,
+  which the primary-proxy path needs. FlareSolverr passes the same string
+  straight to Chrome's `--proxy-server` flag, which only understands plain
+  `socks5://`. Left as `socks5h://`, FlareSolverr's own proxy configuration
+  silently failed and Chrome fell through to a bare connection-error page
+  instead of the real site — no exception, just wrong content.
+  `_normalize_proxy_scheme_for_flaresolverr` strips the `h` specifically for
+  the value embedded in FlareSolverr's request body; `SETTING_PROXY_URL`
+  itself, and everything else that reads `get_proxy_url()`, is untouched.
+
+- **reader's `lazy_init_funcs` fires `_add_response_hook` twice per
+  retriever**, registering two copies of every hook for the same fetch — a
+  pre-existing quirk of the reader library, not something this feature
+  introduced. Invisible until now: the browser-UA and primary-proxy hooks
+  only mutate headers/`session.proxies` off the *original* request each time,
+  so running twice is a harmless no-op. FlareSolverr's hook is not — it
+  mutates `request.url` itself, so the second copy read the *already-
+  redirected* request and asked FlareSolverr to fetch its own endpoint
+  instead of the real feed (visible as `solution.url` in the JSON response
+  being FlareSolverr's own URL, and a "Method not allowed" body). Fixed with
+  a self-guard: the request hook no-ops if `_lectio_via_flaresolverr` is
+  already set, and the response hook clears that marker immediately after its
+  first successful unwrap — the second copy of it then also correctly no-ops
+  rather than trying to `json.loads()` the already-unwrapped plain XML bytes
+  the first copy left behind.
+
+**The `<pre>` unwrap is empirical, not a documented contract.** A feed is
+always served as XML, which Chrome can't render — its `outerHTML` for that
+response is its own "view source" viewer, the whole document HTML-entity-escaped
+inside one `<pre>`. Verified against a real Cloudflare-protected feed; not
+something FlareSolverr's docs promise, just what real Chrome always does with
+an XML response. If no `<pre>` is found (the origin
+served genuine HTML — still a block page, a login wall, whatever),
+the content passes through as-is so `_fix_feed_response`'s own HTML/challenge
+detection gets a real look at it rather than guessing in the unwrap step.
 
 **Per-backend unreachable cooldown** (`_active_backend_for_fetch`,
-`_mark_backend_unreachable`, `_resolve_proxy_for_fetch`): the two backends
-have very different reliability profiles — a dedicated VPN container is far
-steadier than a home Tailscale exit node, which blips for hours or days. A
-shared cooldown would pause a perfectly fine primary proxy over a last-resort
-hiccup (or vice versa), so each is tracked separately
-(`_proxy_down_until`/`_tailscale_down_until`). `_active_backend_for_fetch`
-centralizes the precedence logic (tailscale flag outranks the primary proxy —
-if a feed is flagged for it, the proxy was already tried and found wanting)
-so both the resolver and the unreachable-marker agree on which backend a
-given fetch actually used, without the mark step needing the fetch to report
-it explicitly.
+`_mark_backend_unreachable`, `_resolve_proxy_for_fetch`): the primary proxy
+and last-resort backend have very different reliability profiles — a
+dedicated VPN container is far steadier than a home Tailscale exit node,
+which blips for hours or days. A shared cooldown would pause a perfectly
+fine primary proxy over a last-resort hiccup (or vice versa), so each is
+tracked separately (`_proxy_down_until`/`_tailscale_down_until`).
+`_active_backend_for_fetch` centralizes the precedence logic (tailscale
+outranks flaresolverr outranks the primary proxy — each is only ever flagged
+after the one before it was tried and found wanting) so the resolver(s) and
+the unreachable-marker agree on which backend a given fetch actually used,
+without the mark step needing the fetch to report it explicitly.
+FlareSolverr has no cooldown of its own: `_mark_backend_unreachable` only
+ever fires on `socks.ProxyError` (see
+`FeedRefreshService._is_proxy_unreachable`), and a FlareSolverr fetch never
+touches pysocks at all — it's a plain HTTP POST to FlareSolverr's own
+container, which handles any proxy stacking internally. A FlareSolverr
+failure just flows into the normal per-feed failure bookkeeping instead
+(scoped out deliberately, not an oversight — the containers "run
+persistently and idle," per the infra cheatsheet, so downtime is a smaller
+risk here than plain slowness, which the existing per-feed backoff already
+absorbs).
 
-**Browserless (headless Chrome) was evaluated and deferred, not shipped**
-(2026-08-30): live-tested against two real Cloudflare-protected feeds. Plain
-`/content` got stuck on the "Just a moment…" interstitial indefinitely
-regardless of wait time (`waitForTimeout` up to 6s, `networkidle2`) — its
-default Chromium isn't stealth-patched, and Cloudflare's managed challenge
-detects it as automation regardless of exit IP. Stacking it with the primary
-proxy (`--proxy-server` launch flag) softened one site's response from a hard
-"Sorry, you have been blocked" to the same JS interstitial, but never cleared
-it. The *same two feeds*, fetched with plain `requests` and browser headers
-through the Tailscale tier alone (no headless browser at all), came back
-clean — Cloudflare's challenge tier keys heavily on IP/ASN reputation, and a
-residential IP gets waved through where a datacenter one gets challenged
-regardless of what's driving the browser. So Tailscale is the tier worth
-having; Browserless's marginal value over it is unproven on this sample and
-would add real complexity of its own (`/content` returns browser-rendered
-HTML, not the feed's raw bytes — a different fetch path than the plain-proxy
-request-hook swap, needing its own extraction step before feedparser could
-use it at all). Revisit only with a concrete case Tailscale alone doesn't
-solve.
+**Browserless (headless Chrome) was evaluated and NOT shipped** (2026-08-30):
+live-tested against two real Cloudflare-protected feeds. Plain `/content`
+got stuck on the "Just a moment…" interstitial indefinitely regardless of
+wait time (`waitForTimeout` up to 6s, `networkidle2`) — its default Chromium
+isn't stealth-patched, and Cloudflare's managed challenge detects it as
+automation regardless of exit IP. Stacking it with the primary proxy
+(`--proxy-server` launch flag) softened one site's response from a hard
+"Sorry, you have been blocked" to the same JS interstitial, but never
+cleared it. **FlareSolverr is a different tool solving the same problem
+properly** — same "real Chrome" idea, but purpose-built and apparently
+stealth-capable where Browserless's stock image is not: stacked with the
+primary proxy, it solved both of the same two feeds Browserless couldn't,
+confirmed live. Browserless stays unshipped; no evidence found that it adds
+anything FlareSolverr doesn't already cover, and it would add its own
+complexity for no benefit (its `/content` also returns browser-rendered
+HTML rather than raw bytes, the same unwrap problem FlareSolverr already
+has to solve).
 
 
 ## Suggesting a replacement for a feed on a known dead-end host

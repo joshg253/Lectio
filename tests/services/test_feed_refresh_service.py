@@ -82,6 +82,7 @@ def _make_conn(db_path: Path):
 
 def _build_service(db_path: Path, reader, yt_calls: list[str], lead_calls: list[str],
                    on_fetch_refused=None, on_fetch_still_blocked=None,
+                   on_bot_challenge_still_blocked=None,
                    on_fetch_still_blocked_via_proxy=None, on_proxy_unreachable=None,
                    progress_hook=None):
     def get_meta_connection():
@@ -100,6 +101,7 @@ def _build_service(db_path: Path, reader, yt_calls: list[str], lead_calls: list[
         failed_feed_backoff_max_seconds=24 * 60 * 60,
         on_fetch_refused=on_fetch_refused,
         on_fetch_still_blocked=on_fetch_still_blocked,
+        on_bot_challenge_still_blocked=on_bot_challenge_still_blocked,
         on_fetch_still_blocked_via_proxy=on_fetch_still_blocked_via_proxy,
         on_proxy_unreachable=on_proxy_unreachable,
     )
@@ -197,6 +199,31 @@ def test_is_refusal_or_challenge_recognizes_wrapped_bot_challenge():
     assert not f(RuntimeError("404 Not Found"))
 
 
+def test_is_bot_challenge_is_narrower_than_is_refusal_or_challenge():
+    """FlareSolverr escalation must be gated on an actual challenge page, not
+    any refusal — spinning up real Chrome is wasted on a plain IP-block 403."""
+    f = FeedRefreshService._is_bot_challenge
+    assert f(_wrapped_bot_challenge())
+    assert not f(RuntimeError("403 Forbidden"))
+    assert not f(RuntimeError("read operation timed out"))
+
+
+class _NTimesBotChallengeReader:
+    """Fails a feed's first N attempts with a wrapped bot-challenge, succeeds
+    after that — same shape as _NTimesRefusingReader but for the narrower
+    FlareSolverr escalation gate."""
+    def __init__(self, fail_counts: dict[str, int]):
+        self.remaining = dict(fail_counts)
+        self.attempts: list[str] = []
+
+    def update_feed(self, feed_url: str):
+        self.attempts.append(feed_url)
+        left = self.remaining.get(feed_url, 0)
+        if left > 0:
+            self.remaining[feed_url] = left - 1
+            raise _wrapped_bot_challenge()
+
+
 def test_proxy_escalation_fires_after_browser_ua_retry_also_fails(tmp_path: Path):
     """browser-UA newly-flags and retries; that retry ALSO fails; proxy
     escalation then flags and retries once more, which succeeds."""
@@ -279,6 +306,138 @@ def test_proxy_escalation_still_failing_falls_through_to_normal_bookkeeping(tmp_
         ).fetchone()
     assert row is not None and row["consecutive_failures"] == 1
     assert "refused" in (row["last_error"] or "").lower() or "unsupported media" in (row["last_error"] or "").lower()
+
+
+# --- FlareSolverr escalation (one rung past the proxy, before last-resort) ---
+
+def test_flaresolverr_escalation_fires_after_proxy_retry_also_fails(tmp_path: Path):
+    """browser-UA and proxy both newly-flag and retry; both retries ALSO fail
+    with a real bot-challenge; FlareSolverr escalation then flags and retries
+    once more, which succeeds."""
+    reader = _NTimesBotChallengeReader({"https://blocked.test/feed": 3})
+    proxy_flagged: list[str] = []
+    flaresolverr_flagged: list[str] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda u: True,
+        on_fetch_still_blocked=lambda u: proxy_flagged.append(u) or True,
+        on_bot_challenge_still_blocked=lambda u: flaresolverr_flagged.append(u) or True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    assert proxy_flagged == ["https://blocked.test/feed"]
+    assert flaresolverr_flagged == ["https://blocked.test/feed"]
+    # original + browser-UA retry + proxy retry + flaresolverr retry = 4 attempts
+    assert reader.attempts == ["https://blocked.test/feed"] * 4
+    with _make_conn(tmp_path / "m.sqlite") as conn:
+        row = conn.execute(
+            "SELECT consecutive_failures FROM feed_failure_state WHERE feed_url = ?",
+            ("https://blocked.test/feed",),
+        ).fetchone()
+    assert row is not None and row["consecutive_failures"] == 0
+
+
+def test_flaresolverr_escalation_skipped_for_a_plain_refusal(tmp_path: Path):
+    """The whole point of the narrower gate: a plain 403 that survives browser-
+    UA and proxy escalation must fall straight through to last-resort, never
+    spinning up FlareSolverr for a failure that isn't a challenge page."""
+    reader = _NTimesRefusingReader({"https://blocked.test/feed": 3})
+    flaresolverr_flagged: list[str] = []
+    tailscale_flagged: list[str] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda u: True,
+        on_fetch_still_blocked=lambda u: True,
+        on_bot_challenge_still_blocked=lambda u: flaresolverr_flagged.append(u) or True,
+        on_fetch_still_blocked_via_proxy=lambda u: tailscale_flagged.append(u) or True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    assert flaresolverr_flagged == []  # never consulted — not a challenge
+    assert tailscale_flagged == ["https://blocked.test/feed"]  # went straight there
+    # original + browser-UA retry + proxy retry + tailscale retry = 4 attempts
+    assert reader.attempts == ["https://blocked.test/feed"] * 4
+
+
+def test_flaresolverr_escalation_fires_directly_when_already_proxy_flagged(tmp_path: Path):
+    """Feed already flagged for both browser-UA and proxy (both callbacks
+    return False, no retries) — FlareSolverr escalation must still fire off
+    the original bot-challenge failure, without waiting for retries that will
+    never happen."""
+    reader = _NTimesBotChallengeReader({"https://blocked.test/feed": 1})
+    flaresolverr_flagged: list[str] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda _u: False,  # already flagged
+        on_fetch_still_blocked=lambda _u: False,  # already flagged
+        on_bot_challenge_still_blocked=lambda u: flaresolverr_flagged.append(u) or True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    assert flaresolverr_flagged == ["https://blocked.test/feed"]
+    # original (fails) + flaresolverr retry (succeeds) = 2 attempts
+    assert reader.attempts == ["https://blocked.test/feed"] * 2
+
+
+def test_flaresolverr_escalation_not_attempted_when_proxy_retry_succeeds(tmp_path: Path):
+    """The common case: proxy alone fixes it — FlareSolverr must never be
+    consulted at all."""
+    reader = _NTimesBotChallengeReader({"https://blocked.test/feed": 2})
+    flaresolverr_flagged: list[str] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda _u: True,
+        on_fetch_still_blocked=lambda _u: True,
+        on_bot_challenge_still_blocked=lambda u: flaresolverr_flagged.append(u) or True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    assert flaresolverr_flagged == []
+    assert reader.attempts == ["https://blocked.test/feed"] * 3
+
+
+def test_flaresolverr_escalation_falls_through_to_tailscale_when_still_failing(tmp_path: Path):
+    """FlareSolverr tried and STILL a challenge — must cascade to last-resort,
+    same as proxy cascading to FlareSolverr."""
+    reader = _NTimesBotChallengeReader({"https://blocked.test/feed": 4})
+    tailscale_flagged: list[str] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda _u: True,
+        on_fetch_still_blocked=lambda _u: True,
+        on_bot_challenge_still_blocked=lambda _u: True,
+        on_fetch_still_blocked_via_proxy=lambda u: tailscale_flagged.append(u) or True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    assert tailscale_flagged == ["https://blocked.test/feed"]
+    # original + browser-UA + proxy + flaresolverr + tailscale retry = 5 attempts
+    assert reader.attempts == ["https://blocked.test/feed"] * 5
+
+
+def test_flaresolverr_escalation_not_consulted_when_callback_absent(tmp_path: Path):
+    """No on_bot_challenge_still_blocked wired (e.g. FlareSolverr not
+    configured anywhere) — proxy escalation still runs, cascades straight to
+    last-resort instead."""
+    reader = _NTimesBotChallengeReader({"https://blocked.test/feed": 3})
+    tailscale_flagged: list[str] = []
+
+    service = _build_service(
+        tmp_path / "m.sqlite", reader, [], [],
+        on_fetch_refused=lambda _u: True,
+        on_fetch_still_blocked=lambda _u: True,
+        on_fetch_still_blocked_via_proxy=lambda u: tailscale_flagged.append(u) or True,
+    )
+    service.update_feeds(["https://blocked.test/feed"])
+
+    assert tailscale_flagged == ["https://blocked.test/feed"]
+    # original + browser-UA + proxy + tailscale retry = 4 attempts (flaresolverr skipped)
+    assert reader.attempts == ["https://blocked.test/feed"] * 4
 
 
 # --- last-resort escalation (one rung past the proxy) ---

@@ -84,3 +84,37 @@ def test_tailscale_feeds_independent_of_proxy_feeds(meta):
     main.flag_tailscale_feed(meta, "https://tailscaled.test/feed")
     assert main.get_proxy_feed_urls(meta) == {"https://proxied.test/feed"}
     assert main.get_tailscale_feed_urls(meta) == {"https://tailscaled.test/feed"}
+
+
+# --- FlareSolverr escalation (flaresolverr_feeds), between proxy and tailscale ---
+
+def test_flaresolverr_flag_and_get(meta):
+    assert main.get_flaresolverr_feed_urls(meta) == set()
+    newly = main.flag_flaresolverr_feed(meta, "https://blocked.test/feed", reason="test")
+    assert newly is True
+    assert main.get_flaresolverr_feed_urls(meta) == {"https://blocked.test/feed"}
+
+
+def test_flaresolverr_flag_is_idempotent(meta):
+    assert main.flag_flaresolverr_feed(meta, "https://x.test/feed") is True
+    assert main.flag_flaresolverr_feed(meta, "https://x.test/feed") is False  # already flagged
+
+
+def test_flaresolverr_unflag(meta):
+    main.flag_flaresolverr_feed(meta, "https://x.test/feed")
+    main.unflag_flaresolverr_feed(meta, "https://x.test/feed")
+    assert main.get_flaresolverr_feed_urls(meta) == set()
+
+
+def test_flaresolverr_blank_url_not_flagged(meta):
+    assert main.flag_flaresolverr_feed(meta, "   ") is False
+    assert main.get_flaresolverr_feed_urls(meta) == set()
+
+
+def test_flaresolverr_feeds_independent_of_the_other_two_tables(meta):
+    main.flag_proxy_feed(meta, "https://proxied.test/feed")
+    main.flag_flaresolverr_feed(meta, "https://challenged.test/feed")
+    main.flag_tailscale_feed(meta, "https://tailscaled.test/feed")
+    assert main.get_proxy_feed_urls(meta) == {"https://proxied.test/feed"}
+    assert main.get_flaresolverr_feed_urls(meta) == {"https://challenged.test/feed"}
+    assert main.get_tailscale_feed_urls(meta) == {"https://tailscaled.test/feed"}
