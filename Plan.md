@@ -72,6 +72,16 @@ Remaining:
   a trust-tier concept yet. `_resolve_proxy_for_fetch`/the request hook
   would need real design work before this is pluggable. Not scoped;
   captured 2026-08-29/30 so the details aren't lost before that design pass.
+
+- **Third tier, later: headless browser.** Josh is wiring in a headless
+  browser (details/endpoint pending) for the same escalation family as
+  browser-UA and the proxy — for feeds/pages blocked by a real JS-executing
+  challenge (e.g. Cloudflare's JS challenge) that neither a spoofed browser
+  UA nor a different exit IP gets past, since those never actually run the
+  page's JS. Would slot in as a further step after proxy in the escalation
+  chain, not a replacement for it. No connection details yet — capture them
+  here (endpoint, protocol: raw CDP vs. a REST wrapper like Browserless,
+  auth) once available, same as gluetun/Tailscale were. Mentioned 2026-08-30.
 - New `proxy_feeds` table needs to land in `ensure_meta_schema` so the
   startup per-user migration backfills existing tenants.
 
