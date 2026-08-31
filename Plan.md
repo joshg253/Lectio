@@ -223,21 +223,6 @@ context right there rather than the write happening silently in the
 background. Writes through the existing `/settings/global-note` route
 (`GLOBAL_NOTE_SETTING_KEY`, main.py:35139). Not built.
 
-### Per-post re-fetch's Land On picker doesn't show its own default
-
-Asked 2026-08-30: what happens if you don't pick a Land On option? Traced it — leaving it unset
-isn't one fixed default, it's conditional. `/articles/refresh-content` always sends
-`bump_received=None` (main.py:32975), which falls back to `is_capture` in
-`refresh_captured_article`: a Lectio capture defaults to **Now** (bumps to top), an ordinary feed
-entry defaults to **Original** (no bump). Same outcome as picking one, just silent about which.
-Josh's ask, refined: not a pre-selected default (a checkbox implying he already chose it), just an
-indicator of which outcome applies if nothing is touched. The picker deliberately resets to unset
-on every menu open (`refetchDateChoice = null`, static/js/app.js:10203 — so a choice on one post
-can't leak to the next); this wants its own visual treatment distinct from an explicit pick (the
-existing `.ctx-refetch-date-opt--active` class), so it reads as "this is what happens if you don't
-touch anything" rather than "you already chose this."
-Not built.
-
 ### New subscription missing from feed tree — UX idea remaining
 
 Root-cause code bug already fixed (2026-07-08: re-adding a feed that existed

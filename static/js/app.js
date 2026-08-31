@@ -10213,8 +10213,16 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       // Reset the date-choice picker for the new post — a choice made for
       // the last post re-fetched must not silently apply to this one.
       refetchDateChoice = null;
+      // Show which outcome applies if nothing is clicked — main.py's own
+      // default (bump_received=None -> is_capture): a capture lands on Now,
+      // an ordinary feed entry keeps Original. Distinct styling from
+      // --active (below) so it reads as "this is what happens", not "you
+      // already chose this". Raised 2026-08-30.
+      const defaultDateChoice = contextPostCaptured ? 'now' : 'original';
       for (const btn of document.querySelectorAll('.ctx-refetch-date-opt:not(.ctx-scope-refetch-date-opt)')) {
         btn.classList.remove('ctx-refetch-date-opt--active');
+        btn.classList.toggle('ctx-refetch-date-opt--default',
+          btn.getAttribute('data-date-choice') === defaultDateChoice);
       }
       const feedUrl = contextPostFeedUrl;
       const entryId = contextPostEntryId;

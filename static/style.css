@@ -8684,6 +8684,14 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
   color: #fff;
   font-weight: 600;
 }
+/* The outcome if nothing is clicked — a dashed outline, deliberately lighter
+   than --active's solid fill, so it reads as "this is what happens" rather
+   than "you already chose this." Never pre-selected as a checkbox would be. */
+.ctx-refetch-date-opt--default {
+  border-style: dashed;
+  border-color: var(--accent, #2f6fd0);
+  color: var(--accent, #2f6fd0);
+}
 
 /* Settings -> Tags. The inventory is a long list, so it scrolls inside its own box
    rather than growing the modal; the counts are right-aligned because the point of
