@@ -4113,16 +4113,66 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       menu.appendChild(newItem);
     }
 
+    // How often to poll .../add-batch/status while a bulk add is running.
+    // Frequent enough that the toast reads as live progress, not so frequent
+    // it's a meaningful fraction of the request traffic a 50-video batch
+    // already generates server-side.
+    const _YT_BATCH_POLL_MS = 900;
+    // Safety cap on the poll loop so a stuck job (should never happen — the
+    // background worker always ends by setting running=false) can't poll
+    // forever instead of just reporting something's wrong.
+    const _YT_BATCH_POLL_MAX_TICKS = 400;  // ~6 minutes at 900ms
+
+    async function _ytPollBatchAddProgress(playlistTitle) {
+      for (let tick = 0; tick < _YT_BATCH_POLL_MAX_TICKS; tick++) {
+        await new Promise((resolve) => setTimeout(resolve, _YT_BATCH_POLL_MS));
+        let job;
+        try {
+          const r = await fetch('/api/youtube/playlists/add-batch/status', { credentials: 'same-origin' });
+          job = await r.json();
+        } catch (_e) {
+          continue;  // a missed poll tick just tries again next interval
+        }
+        if (!job || !job.ok) continue;
+        if (job.running) {
+          if (job.phase === 'checking_existing') {
+            showToastMessage(`Checking "${playlistTitle}" for existing items…`);
+          } else if (job.phase === 'adding') {
+            const parts = [`Adding ${job.processed ?? 0}/${job.total ?? '?'} to "${playlistTitle}"…`];
+            if (job.duplicate) parts.push(`${job.duplicate} already in playlist`);
+            if (job.failed) parts.push(`${job.failed} failed`);
+            showToastMessage(parts.join(' — '));
+          }
+          continue;
+        }
+        // Not running: the job finished (this is the normal exit).
+        if (job.error === 'quota') {
+          showToastMessage('Daily YouTube quota reached — try again tomorrow or add it on youtube.com.');
+        } else if (job.error === 'not_connected') {
+          showToastMessage('YouTube account not connected.');
+        } else if (job.error) {
+          showToastMessage(job.error);
+        } else {
+          showToastMessage(job.message || `Added to "${playlistTitle}".`);
+        }
+        return;
+      }
+      showToastMessage('Still working on it — check back in a moment.');
+    }
+
     async function _ytBulkAddToPlaylist(posts, choice) {
       try {
-        // One request does the whole batch server-side — it checks the
-        // playlist's existing contents first and skips anything already in
-        // it, since the API happily inserts (and later un-removes, both at
-        // once) a duplicate rather than rejecting one. The server caps at
+        // Starts a background job server-side — it checks the playlist's
+        // existing contents first and skips anything already in it, since
+        // the API happily inserts (and later un-removes, both at once) a
+        // duplicate rather than rejecting one. The server caps at
         // _MOVE_BATCH_CAP (500) and stops gracefully on quota exhaustion,
         // reporting partial progress — no separate client-side cap needed;
         // this used to borrow the *automated* per-refresh rule's 25/run
         // quota-safety cap, which doesn't apply to a one-off manual action.
+        // Progress is then polled (_ytPollBatchAddProgress) rather than
+        // waited for in one request — a 50-video batch used to block silently
+        // for the better part of a minute with no feedback at all.
         const resp = await fetch('/api/youtube/playlists/add-batch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -4136,12 +4186,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         const d = await resp.json().catch(() => ({}));
         if (!resp.ok || !d.ok) {
           const err = d.error || `HTTP ${resp.status}`;
+          if (err === 'busy') throw new Error('Already adding to a playlist — try again in a moment.');
           if (err === 'quota') throw new Error('Daily YouTube quota reached — try again tomorrow or add it on youtube.com.');
           if (err === 'not_connected') throw new Error('YouTube account not connected.');
           throw new Error(err);
         }
         if (choice.newTitle) _ytPlaylistsCache = null;  // new playlist changes the list — invalidate
-        showToastMessage(d.message || `Added ${d.added ?? 0} to ${choice.title}.`);
+        showToastMessage(`Checking "${choice.title}" for existing items…`);
+        await _ytPollBatchAddProgress(choice.title);
       } catch (e) {
         showToastMessage(e.message || 'Add to playlist failed.');
       }

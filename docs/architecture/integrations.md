@@ -179,6 +179,21 @@ was already a solved problem.
   The folder dropdown itself is untouched, so the general-purpose case — scoping the
   rule to some other feed that happens to embed videos — is still one manual
   re-selection away, not removed.
+
+  **Manual bulk add (`/api/youtube/playlists/add-batch`) is a separate action from
+  the rule above** — the post list's multi-selection "Add to YouTube Playlist…" — and
+  runs as a background job the client polls, not one blocking request (fixed
+  2026-08-30). It used to hold one HTTP request open for the whole batch (an
+  existing-contents fetch plus one YouTube API call per video), which on a 50-video
+  selection blocked silently for the better part of a minute with no feedback at all.
+  Same shape as the refetch-scope status pill: the route validates, seeds a per-user
+  job dict (`_yt_playlist_batch_jobs`, one job at a time — a second concurrent batch
+  would double the API call rate against the same daily quota and could race the
+  duplicate check), and hands the actual work to `_run_yt_playlist_batch_add` in a
+  background thread (`_run_in_user_context`, since a bare thread loses tenancy
+  binding); `GET .../add-batch/status` reports `phase` (`checking_existing` →
+  `adding` → `done`), `processed`/`total`, and running counts, polled every 900ms to
+  drive a live-updating toast rather than a silent wait.
 - **Save to Pinterest (per-user OAuth)** — an outbound-only integration: a per-entry
   **Pin** button saves an article to one of the user's boards. Pinterest has no
   write-without-OAuth path, so `services/pinterest_oauth.py` speaks the **API v5**

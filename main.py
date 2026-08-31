@@ -28625,16 +28625,106 @@ async def youtube_playlist_add_route(request: Request):
     return JSONResponse({"ok": True, "playlist_id": playlist_id})
 
 
+# One YT playlist bulk-add job at a time, per user — same reasoning as
+# _refetch_jobs: two interleaved batches would double the YouTube API call
+# rate against the same daily quota, and could race each other's duplicate
+# check. Progress is polled from here rather than pushed, mirroring the
+# refetch-scope status pill — the shortest mechanism the app already has for
+# "a request that keeps a background thread busy for longer than a person
+# should stare at a spinner for."
+_yt_playlist_batch_jobs = _PerUserDict()
+_yt_playlist_batch_jobs_lock = threading.Lock()
+
+
+@overload
+def _yt_playlist_batch_job_state(create: Literal[True]) -> dict: ...
+@overload
+def _yt_playlist_batch_job_state(create: bool = False) -> dict | None: ...
+def _yt_playlist_batch_job_state(create: bool = False) -> dict | None:
+    with _yt_playlist_batch_jobs_lock:
+        job = _yt_playlist_batch_jobs.get("job")
+        if job is None and create:
+            job = {"running": False}
+            _yt_playlist_batch_jobs["job"] = job
+        return job
+
+
+def _run_yt_playlist_batch_add(
+    video_ids: list[str], playlist_id: str, new_title: str, job: dict,
+) -> None:
+    """Background worker for POST /api/youtube/playlists/add-batch.
+
+    Mutates *job* in place as it goes (same idiom as _run_refetch_batch) so
+    GET .../add-batch/status, polled by the client, can show live progress —
+    raised 2026-08-30: the prior synchronous version blocked one HTTP request
+    for the whole batch (a playlist-contents fetch plus one YouTube API call
+    per video) with no feedback until it finished, which on a 50-video batch
+    read as "nothing is happening" for the better part of a minute."""
+    token = get_youtube_oauth_token()
+    if not token:
+        job.update({"running": False, "done": True, "error": "not_connected"})
+        return
+    try:
+        if not playlist_id:
+            created = youtube_oauth_service.create_playlist(token, new_title)
+            playlist_id = created["id"]
+            existing: set[str] = set()  # brand-new playlist — nothing to dedupe against
+        else:
+            existing = youtube_oauth_service.list_playlist_video_ids(token, playlist_id)
+    except youtube_oauth_service.QuotaExceeded:
+        mark_yt_quota_exhausted()
+        job.update({"running": False, "done": True, "error": "quota"})
+        return
+    except Exception as exc:  # noqa: BLE001
+        job.update({"running": False, "done": True, "error": str(exc)})
+        return
+
+    job["playlist_id"] = playlist_id
+    job["phase"] = "adding"
+    added = duplicate = failed = 0
+    for i, video_id in enumerate(video_ids, 1):
+        if video_id in existing:
+            duplicate += 1
+            job["duplicate"] = duplicate
+        else:
+            try:
+                youtube_oauth_service.add_video_to_playlist(token, playlist_id, video_id)
+                existing.add(video_id)  # guards against a dupe within this same batch too
+                added += 1
+                job["added"] = added
+            except youtube_oauth_service.QuotaExceeded:
+                # Stop burning calls once quota's gone; report what succeeded so far
+                # rather than hiding real progress behind an error.
+                mark_yt_quota_exhausted()
+                job["error"] = "quota"
+                job["processed"] = i
+                break
+            except Exception as exc:  # noqa: BLE001 — one bad video must not sink the batch
+                failed += 1
+                job["failed"] = failed
+                LOGGER.warning("[yt-playlist-batch] failed to add %s to %s: %s", video_id, playlist_id, exc)
+        job["processed"] = i
+
+    msg = f"Added {added}."
+    if duplicate:
+        msg += f" {duplicate} already in the playlist."
+    if failed:
+        msg += f" {failed} failed."
+    job.update({"running": False, "done": True, "phase": "done", "message": msg})
+
+
 @app.post("/api/youtube/playlists/add-batch")
 async def youtube_playlist_add_batch_route(request: Request):
-    """Add several videos to a playlist (or a new one) in one request.
+    """Start a background bulk add of several videos to a playlist (or a new
+    one); the post list's multi-selection "Add to YouTube Playlist…" action.
 
-    Body: {video_ids: [str, ...], playlist_id?, new_title?} — the post list's
-    multi-selection bulk "Add to YouTube Playlist…" action. Checks the
-    playlist's existing contents first and skips any video already in it
-    (see list_playlist_video_ids) rather than letting the insert create a
-    silent duplicate.
-    """
+    Body: {video_ids: [str, ...], playlist_id?, new_title?}. Returns
+    immediately once the job is running — the client polls
+    GET /api/youtube/playlists/add-batch/status for progress, same shape as
+    the refetch-scope status pill. See _run_yt_playlist_batch_add for the
+    actual work, including the existing-contents check that skips a video
+    already in the playlist rather than letting the insert create a silent
+    duplicate."""
     body = await request.json()
     video_ids = body.get("video_ids")
     if not isinstance(video_ids, list) or not video_ids:
@@ -28649,51 +28739,36 @@ async def youtube_playlist_add_batch_route(request: Request):
     new_title = (body.get("new_title") or "").strip()
     if not playlist_id and not new_title:
         return JSONResponse({"ok": False, "error": "playlist_id or new_title required"}, status_code=400)
-
-    token = get_youtube_oauth_token()
-    if not token:
+    if not get_youtube_oauth_token():
         return JSONResponse({"ok": False, "error": "not_connected"}, status_code=401)
 
-    try:
-        if not playlist_id:
-            created = youtube_oauth_service.create_playlist(token, new_title)
-            playlist_id = created["id"]
-            existing: set[str] = set()  # brand-new playlist — nothing to dedupe against
-        else:
-            existing = youtube_oauth_service.list_playlist_video_ids(token, playlist_id)
-    except youtube_oauth_service.QuotaExceeded:
-        mark_yt_quota_exhausted()
-        return JSONResponse({"ok": False, "error": "quota"}, status_code=429)
-    except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+    job = _yt_playlist_batch_job_state(create=True)
+    with _yt_playlist_batch_jobs_lock:
+        if job.get("running"):
+            return JSONResponse({"ok": False, "error": "busy"}, status_code=409)
+        job.update({
+            "running": True, "done": False, "error": None, "phase": "checking_existing",
+            "total": len(video_ids), "processed": 0, "added": 0, "duplicate": 0, "failed": 0,
+            "message": None,
+        })
 
-    added = duplicate = failed = 0
-    for video_id in video_ids:
-        if video_id in existing:
-            duplicate += 1
-            continue
-        try:
-            youtube_oauth_service.add_video_to_playlist(token, playlist_id, video_id)
-            existing.add(video_id)  # guards against a dupe within this same batch too
-            added += 1
-        except youtube_oauth_service.QuotaExceeded:
-            # Stop burning calls once quota's gone; report what succeeded so far
-            # rather than hiding real progress behind an error.
-            mark_yt_quota_exhausted()
-            break
-        except Exception as exc:  # noqa: BLE001 — one bad video must not sink the batch
-            failed += 1
-            LOGGER.warning("[yt-playlist-batch] failed to add %s to %s: %s", video_id, playlist_id, exc)
+    uid = tenancy.current_user_id()
+    threading.Thread(
+        target=lambda: _run_in_user_context(
+            uid, _run_yt_playlist_batch_add, video_ids, playlist_id, new_title, job),
+        daemon=True,
+    ).start()
+    return JSONResponse({"ok": True, "started": True, "total": len(video_ids)})
 
-    msg = f"Added {added}."
-    if duplicate:
-        msg += f" {duplicate} already in the playlist."
-    if failed:
-        msg += f" {failed} failed."
-    return JSONResponse({
-        "ok": True, "playlist_id": playlist_id,
-        "added": added, "duplicate": duplicate, "failed": failed, "message": msg,
-    })
+
+@app.get("/api/youtube/playlists/add-batch/status")
+def youtube_playlist_add_batch_status_route():
+    """Progress of the running bulk-add job, polled by the client for a live
+    toast — see _run_yt_playlist_batch_add for what each field means."""
+    job = _yt_playlist_batch_job_state()
+    if job is None:
+        return JSONResponse({"ok": True, "running": False})
+    return JSONResponse({"ok": True, **job})
 
 
 @app.post("/deviantart/disconnect")
