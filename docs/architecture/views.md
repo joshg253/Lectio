@@ -633,3 +633,25 @@ rather than reusing the `[data-toggle-panel]` handler's own load-on-open fetch (
 `global-note-modal`) — two concurrent fetch-and-compare-against-the-textarea calls on the same
 open would race each other. Falls back to appending onto whatever's currently shown if the fetch
 fails, rather than doing nothing.
+
+## `.posts` scrolls, `.pane-posts` never does — a stale assumption broke chunking on phones
+
+Root-caused 2026-08-31 from "All isn't chunking on my phone." `setupPostChunks`' scroll-trigger and
+the chunk-delta append's scroll-position preservation both special-cased single-pane (phone) mode
+to read/bind `.pane-posts` instead of `.posts`, on the belief that `.pane-posts` is what scrolls
+there. Measured live: `.pane-posts` has `overflow-y: hidden` and reports `scrollHeight ===
+clientHeight` in every mode — it never scrolls, anywhere. `.posts` (the item container
+`setupPostChunks` already queries for `getPostItems()`) is the actual scrolling element
+universally, confirmed by a genuinely-overflowing `scrollHeight` (2803) vs `clientHeight` (761) on
+a seeded 30-item list.
+
+Binding the `'scroll'` listener to an element that never scrolls means it never fires, so
+scroll-triggered server fetches for more items silently stop working — the list caps at whatever
+was already in the DOM. The same wrong element fed `ensureViewportFilled`'s "how much room is
+left" calculation too: reading a fixed-size wrapper as if it were the scrollable one always
+computed ~0 remaining, so the initial fill loop kept growing the local reveal window past the
+normal chunk size until everything already present in the DOM was shown — the on-screen symptom
+("the scrollbar was tiny and it kept scrolling forever") is that over-revealed local batch, with no
+further server fetch ever following it once you'd scrolled through it. Both call sites now just use
+`postsContainer`/`postsInnerEl` (`.posts`) unconditionally — no single-pane branch, since the
+branch's premise was never true.

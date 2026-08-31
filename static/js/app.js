@@ -3877,10 +3877,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
 
           // .posts is the actual item container and the element setupPostChunks
           // queries. Append there so getPostItems() finds new items and the
-          // chunk counter advances correctly. In single-pane mode .pane-posts
-          // scrolls, so preserve scroll on the right element.
+          // chunk counter advances correctly. .posts is also the actual
+          // scrolling element in every layout mode (see setupPostChunks'
+          // scrollEl for the live measurement) — .pane-posts never scrolls,
+          // so reading/restoring scrollTop there was a silent no-op on a
+          // phone, moot only because the chunk-delta fetch that reaches here
+          // never used to fire there either.
           const postsInnerEl = currentPostsPane.querySelector('.posts') || currentPostsPane;
-          const scrollingEl = (window.isSingleMode && window.isSingleMode()) ? currentPostsPane : postsInnerEl;
+          const scrollingEl = postsInnerEl;
           const prevScroll = scrollingEl.scrollTop;
 
           // Avoid appending duplicates: only append items whose entry-id
@@ -16323,10 +16327,20 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       }
       postsContainer.dataset.chunkBound = '1';
 
-      // In single-pane mode .pane-posts scrolls; in multi-pane .posts scrolls.
-      const scrollEl = (window.isSingleMode && window.isSingleMode())
-        ? (document.querySelector('.pane-posts') || postsContainer)
-        : postsContainer;
+      // .posts itself is the actual scrolling element in every layout mode —
+      // .pane-posts (the section wrapping it in single-pane/phone mode) has
+      // overflow-y:hidden and never scrolls, so a 'scroll' listener bound to
+      // it never fires and chunk-loading silently stops working on a phone.
+      // Confirmed live 2026-08-31: .posts had scrollHeight 2803 vs
+      // clientHeight 761 (genuinely scrollable) while .pane-posts reported
+      // scrollHeight === clientHeight (fixed). Also explains the initial
+      // over-reveal (ensureViewportFilled's "remaining space" math read the
+      // fixed wrapper, saw ~0 remaining every iteration, and kept growing the
+      // local window until everything already in the DOM was shown) —
+      // the on-screen symptom was "the scrollbar was tiny and it kept
+      // scrolling forever" through a big already-loaded batch with no further
+      // server fetch ever following it.
+      const scrollEl = postsContainer;
 
       const chunkSize = Number.parseInt(postsContainer.getAttribute('data-chunk-size') || '10', 10) || 10;
       let visibleCount = chunkSize;
