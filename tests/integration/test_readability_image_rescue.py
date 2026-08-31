@@ -118,6 +118,35 @@ def test_rebelmouse_body_description_selector_beats_header_wrapper():
     assert "data:image/svg" not in html  # every placeholder got promoted
 
 
+def test_rebelmouse_soundslice_tab_player_embeds_survive():
+    """premierguitar.com lessons embed soundslice.com as an interactive
+    tab/notation player under each "Ex. N" -- raised 2026-08-31, a second
+    real gap in the same lessons the body-description fix above covers:
+    readability's own .summary() strips every <iframe> unconditionally
+    (recovered via _reinject_readability_embeds' allowlist, shared with the
+    general sanitizer), and soundslice.com wasn't on that allowlist, so even
+    a clean body-description extraction lost the actual exercise content."""
+    page = (
+        "<html><head><title>Two-Hand Tapping</title></head><body>"
+        '<article class="clearfix image-article"><h1>Two-Hand Tapping</h1></article>'
+        '<div class="body-description">'
+        "<p>Get exotic with these spicy two-handed patterns over several "
+        "exercises, each with its own tab player to work through.</p>"
+        '<p><strong>Ex. 1</strong></p>'
+        '<iframe src="https://www.soundslice.com/slices/1yTTc/embed/" '
+        'width="100%" height="500" frameborder="0"></iframe>'
+        '<p><strong>Ex. 2</strong></p>'
+        '<iframe src="https://www.soundslice.com/slices/4pY8c/embed/" '
+        'width="100%" height="293" frameborder="0"></iframe>'
+        "</div></body></html>"
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert html.lower().count("<iframe") == 2
+    assert "soundslice.com/slices/1yTTc" in html
+    assert "soundslice.com/slices/4pY8c" in html
+    assert "sandbox=" in html  # still passes through the normal iframe sanitize
+
+
 def test_rebelmouse_runner_src_lazy_attr_is_promoted():
     tag = (
         '<img class="rm-lazyloadable-image" '

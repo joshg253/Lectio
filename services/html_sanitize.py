@@ -232,6 +232,11 @@ _NO_STRIP_ANCESTORS = frozenset({"code", "pre", "samp", "kbd", "var"})
 # exact match or dot-suffix (so "www.youtube.com" and "youtube.com" both match
 # "youtube.com"). Players run sandboxed (see _IFRAME_SANDBOX) so they can't reach
 # Lectio's origin. Curated for video/audio + a few social/code embeds.
+# soundslice.com added 2026-08-31: premierguitar.com lessons embed it as an
+# interactive tab/notation player, ~18 per lesson on some pages -- readability
+# strips every <iframe> unconditionally, and _reinject_readability_embeds
+# (below) shares this same allowlist to recover them, so this one line covers
+# both the readability-strip-and-recover path and the general sanitizer pass.
 _EMBED_HOST_ALLOWLIST = frozenset({
     "youtube.com", "youtube-nocookie.com", "youtu.be",
     "player.vimeo.com", "vimeo.com",
@@ -244,6 +249,7 @@ _EMBED_HOST_ALLOWLIST = frozenset({
     "codepen.io",
     "redditmedia.com",
     "archive.org",
+    "soundslice.com",
 })
 # allow-same-origin refers to the *embed's* origin (a different host), so the
 # player runs while remaining unable to script Lectio's page.

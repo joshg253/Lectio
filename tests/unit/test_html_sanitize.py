@@ -67,6 +67,7 @@ def test_class_kept_id_dropped():
     "https://bandcamp.com/EmbeddedPlayer/album=1",
     "https://open.spotify.com/embed/track/1",
     "https://codepen.io/x/embed/y",
+    "https://www.soundslice.com/slices/1yTTc/embed/",
 ])
 def test_trusted_embeds_kept_and_sandboxed(host):
     out = H.sanitize_html(f'<iframe src="{host}"></iframe>')
