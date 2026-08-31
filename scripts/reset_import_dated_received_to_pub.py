@@ -16,8 +16,15 @@ the same `first_updated` stamp turned out to cover 1,183 entries total, most
 unstarred, so --starred-only defaults to false now to cover the whole
 cluster; pass it to reproduce the narrower first pass.
 
-Entries with no `published` date at all are left alone -- there is nothing
-to fall back to; guessing would replace one wrong date with another.
+Second run (2026-08-30) re-measured the fixed cluster: 263 of the 357 still
+showing this date turned out to be genuinely, correctly dated (checked two
+feeds' full publish-date distributions -- an ordinary spread, no artificial
+pile-up on this one day). Of the 93 still stuck with no `published` date, 8
+do carry a real `updated` timestamp (github releases, xkcd, realpython --
+plausible dates, not import artifacts), so that's now a second fallback tier.
+
+Entries with neither `published` nor `updated` are left alone -- there is
+nothing to fall back to; guessing would replace one wrong date with another.
 Starred entries also get saved_entries.saved_at bumped to match, mirroring
 the Pub-date re-fetch picker's own bump_received=True behavior, so star
 order moves with the corrected date instead of drifting out of sync with
@@ -46,7 +53,7 @@ def _candidates(date: str, starred_only: bool) -> list[dict]:
     with main.get_reader() as reader:
         db = reader._storage.get_db()
         rows = db.execute(
-            "SELECT feed, id, title, published, first_updated, read FROM entries "
+            "SELECT feed, id, title, published, updated, first_updated, read FROM entries "
             "WHERE first_updated LIKE ?",
             (f"{date}%",),
         ).fetchall()
@@ -54,13 +61,15 @@ def _candidates(date: str, starred_only: bool) -> list[dict]:
         starred = {(r["feed_url"], r["entry_id"]) for r in conn.execute(
             "SELECT feed_url, entry_id FROM saved_entries")}
     out = []
-    for feed, entry_id, title, published, first_updated, read in rows:
+    for feed, entry_id, title, published, updated, first_updated, read in rows:
         is_starred = (feed, entry_id) in starred
         if starred_only and not is_starred:
             continue
+        source_date = published or updated
         out.append({
             "feed": feed, "entry_id": entry_id, "title": title,
-            "published": published, "first_updated": first_updated,
+            "source_date": source_date, "source_field": "published" if published else "updated",
+            "first_updated": first_updated,
             "read": bool(read), "starred": is_starred,
         })
     return out
@@ -68,12 +77,14 @@ def _candidates(date: str, starred_only: bool) -> list[dict]:
 
 def run(uid: str, date: str, apply: bool, starred_only: bool) -> None:
     candidates = _candidates(date, starred_only)
-    no_pub = [c for c in candidates if not c["published"]]
-    fixable = [c for c in candidates if c["published"]]
+    no_date = [c for c in candidates if not c["source_date"]]
+    fixable = [c for c in candidates if c["source_date"]]
+    from_published = [c for c in fixable if c["source_field"] == "published"]
+    from_updated = [c for c in fixable if c["source_field"] == "updated"]
     scope = "starred entries" if starred_only else "entries"
     print(f"[{uid}] {len(candidates)} {scope} with Received={date} "
-          f"({len(fixable)} have a Published date to switch to, "
-          f"{len(no_pub)} have none and are skipped)")
+          f"({len(from_published)} from Published, {len(from_updated)} from Updated "
+          f"(no Published), {len(no_date)} have neither and are skipped)")
     if not fixable:
         return
     if not apply:
@@ -89,17 +100,17 @@ def run(uid: str, date: str, apply: bool, starred_only: bool) -> None:
         db = reader._storage.get_db()
         with main.get_meta_connection() as conn:
             for c in fixable:
-                pub = datetime.fromisoformat(c["published"])
-                if pub.tzinfo is None:
-                    pub = pub.replace(tzinfo=timezone.utc)
+                src = datetime.fromisoformat(c["source_date"])
+                if src.tzinfo is None:
+                    src = src.replace(tzinfo=timezone.utc)
                 else:
                     # A non-UTC offset survives fromisoformat but strftime
                     # below has no concept of it -- it prints the aware
                     # datetime's own wall-clock fields verbatim, silently
                     # dropping the offset instead of converting. Caught by
                     # review 2026-08-31.
-                    pub = pub.astimezone(timezone.utc)
-                stored = pub.strftime("%Y-%m-%d %H:%M:%S")
+                    src = src.astimezone(timezone.utc)
+                stored = src.strftime("%Y-%m-%d %H:%M:%S")
                 with db:
                     db.execute(
                         "UPDATE entries SET first_updated = ?, recent_sort = ? "
