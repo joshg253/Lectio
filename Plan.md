@@ -279,6 +279,20 @@ unsubscribe manually.
 
 ## Tier 4 — real features, not blocking anything today
 
+### Soundslice tab-player embeds are permanently blocked by the content owner's own domain allowlist
+
+Raised 2026-08-31, premierguitar.com lessons: `soundslice.com` is now on the iframe embed
+allowlist, but the player itself refuses to load off-domain — confirmed live, even a bare fetch of
+the embed URL returns "Failed embed allowlist check." — because Soundslice lets the *creator*
+(premierguitar.com's own account) restrict which domains may embed a given slice, and Lectio isn't
+one of them (nor could it ever ask to be, since PG doesn't know Lectio exists). No public
+static/print/image export endpoint either (403/404 on the obvious guesses) — same gate. A static
+image would need actually rendering the *original* premierguitar.com page (where the embed IS
+authorized) in a real headless browser and screenshotting just that region — FlareSolverr gives us
+real Chrome already, but per-slice screenshot-and-crop at capture time is a genuine new feature,
+not a tweak. Skipped for now — narrow (guitar tab specifically), not worth the effort unless it
+comes up more.
+
 **Dedup subsystem** — one coherent area, biggest single feature idea on the list.
 
 ### Combine cross-feed duplicates instead of marking one read
