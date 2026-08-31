@@ -114,19 +114,58 @@ CDN URL. So resolution ran and came back empty despite an obvious single candida
 in the content. Not investigated further — worth checking whether this is systemic across
 ArtStation entries or a one-off before digging into the resolver itself.
 
-### Outbound proxy escalation — shipped, Browserless the only thing left out
+### A re-fetch on a Substack post duplicated the lead image
 
-Full chain **shipped** 2026-08-30: honest UA → browser identity → gluetun proxy → FlareSolverr (real Chrome, purpose-built for
-Cloudflare/DDoS-Guard challenges, gated on an actual challenge page not any refusal) → Tailscale (last-resort, home IP). Design/rationale
-lives in `docs/architecture/feeds.md` ("Outbound proxy escalation") — settings shape, per-backend unreachable cooldowns, the
-FlareSolverr request/response-hook mechanism (a genuinely different fetch path than a proxy swap), the `<pre>`-unwrap detail, the
-escalation callback chain in `services/feed_refresh.py`.
+Noticed 2026-08-30, part of Josh's usual fix for old starred entries with a broken lead image:
+Refetch content (Pub date). Works fine generally; on one kriscox.substack.com post it left the
+same photo showing twice — once as a hoisted `<figure><img></figure>` ahead of `<article>`, and
+again inside the article body. The two `<img>` tags point at *different* substackcdn.com asset
+paths (`da4ee994-...` vs `d06b02fd-...`) but the same source dimensions (2884x1622) — first guess
+was two separate Substack asset uploads of the same photo, **ruled out**: Josh checked the live
+page and the image renders only once there. So one of the two copies must be CSS-hidden in
+Substack's raw page markup — invisible in a real browser, but indistinguishable from visible
+content to a server-side fetch-and-parse (readability/full-page capture never runs CSS, so
+`display:none`/`visibility:hidden` nodes look identical to shown ones). This is the same gap
+already named as the browser extension's killer feature below ("Visibility-aware capture") — a
+second real instance of a hidden node getting captured as if it were visible, this time on
+Substack rather than the uBlock/JWPlayer cases that motivated that item. Not investigated further
+here; the eventual fix is that item's DOM-walk-and-drop-hidden-nodes capture, not a per-site patch.
 
-**Browserless (headless Chrome) evaluated, NOT shipped** — FlareSolverr replaces it in the chain, not alongside it. Both are "real
-Chrome" solvers for the same problem; Browserless (live-tested first) never cleared a real Cloudflare interstitial regardless of proxy
-stacking or wait time (its stock image isn't stealth-patched), while FlareSolverr — tried after Josh pointed at an infra cheatsheet
-listing it as a separate, purpose-built tier — solved the *same* feeds cleanly, stacked with gluetun. No evidence Browserless adds
-anything on top of that. Full writeup in `docs/architecture/feeds.md`.
+### Entry pane doesn't refresh after a background auto-refetch-on-tag finishes
+
+First noticed 2026-08-30 as what looked like a bad extraction (a mindyourdecisions.com entry,
+"Fantabulous Numbers," showing only the embedded video after tagging) — **root-caused via a live
+repro on a second entry the same day**, and it isn't an extraction bug. Tagging a stub entry (empty
+`content`/`summary`) triggers `_maybe_autofetch_on_keep` (main.py:33223), which re-fetches in a
+background thread *after* the tag request already returned — "off-request so the star stays
+instant," per its own docstring. The already-open entry pane has no way to know that background
+fetch finished, so it keeps showing the stale stub render (just an empty `lectio-embed` placeholder
+slot, no visible text) until the pane is closed and reopened. Confirmed directly: right after
+tagging, the DB already held the full 19,916-char article (every solution step, no missing prose),
+while the open pane still showed just the video slot; navigating away and back showed the real
+content immediately. This reframes the first report too — "a manual re-fetch fixed it" was most
+likely just forcing a pane re-render onto content the background auto-refetch had *already* filled
+in, not a second, better extraction.
+
+Not built: some way for the pane to pick up the auto-refetch's result once it lands — e.g. the
+existing tag-response payload flagging that a background re-fetch was kicked off, and the pane
+polling or re-fetching itself once it's done, rather than the user having to discover the trick of
+clicking away and back.
+
+### Per-post re-fetch's Land On picker doesn't show its own default
+
+Asked 2026-08-30: what happens if you don't pick a Land On option? Traced it — leaving it unset
+isn't one fixed default, it's conditional. `/articles/refresh-content` always sends
+`bump_received=None` (main.py:32975), which falls back to `is_capture` in
+`refresh_captured_article`: a Lectio capture defaults to **Now** (bumps to top), an ordinary feed
+entry defaults to **Original** (no bump). Same outcome as picking one, just silent about which.
+Josh's ask, refined: not a pre-selected default (a checkbox implying he already chose it), just an
+indicator of which outcome applies if nothing is touched. The picker deliberately resets to unset
+on every menu open (`refetchDateChoice = null`, static/js/app.js:10203 — so a choice on one post
+can't leak to the next); this wants its own visual treatment distinct from an explicit pick (the
+existing `.ctx-refetch-date-opt--active` class), so it reads as "this is what happens if you don't
+touch anything" rather than "you already chose this."
+Not built.
 
 ### Refetch-All has no "already re-fetched recently" skip
 
@@ -541,6 +580,32 @@ and DeviantArt integration calls included. So the region to instrument is now na
 "between tag_block and posts_block" generally, but specifically **whatever runs immediately after
 tag_block and before `list_entries`'s own fetch begins** — add a tick there before theorizing
 further.
+
+**A second capture, same day, sharpens it further.** `GET /?folder_id=11&read_filter=unread` (a
+tiny folder — 16 feeds, 3 entries) logged `5498ms`, and its own follow-up chunk request logged
+`7075ms`, both while the same refresh pass was still running (a `minecraft.net` parse error and the
+DeviantArt/dev.to integration calls landed seconds before, in the log right above). Real work in
+both requests was trivial — `meta_block` 68-74ms, `tag_block` 0-17ms, `list_entries` fetch 30-38ms,
+process ~60-70ms — under 200ms combined against 5.5-7s totals. The gap is the same
+tag_block-to-list_entries-fetch region as the folder_id=1 capture, this time ~5s and ~6.5s on
+requests doing almost no real work. **That the gap doesn't scale with folder size (16 feeds/3
+entries vs. 2,181 feeds/250 entries in the first capture, same few-second gap either way) rules out
+per-folder query cost and points at something shared** — a lock or connection contended with the
+concurrently-running refresh thread is now the leading suspect over pure GIL/CPU contention.
+Whatever runs in that gap is almost certainly a blocking DB call; reader's own `busy_timeout` has
+already needed tuning once for a concurrent-writer flakiness issue (see the flaky-CI fix under
+Saved articles in git history) — a busy_timeout retry stacking up while refresh holds a write lock
+would explain a several-second stall with no timing of its own exactly like this.
+
+**Josh's ask (2026-08-30):** the VPS has 4 vCores — can background refresh just not eat all of them
+while someone's actively using the app? Cheapest lever: lower the refresh thread's OS niceness
+(`os.setpriority`, Linux-only) once at thread start. That fits "only when there's obvious user
+activity" for free, with no activity-detection code needed — niceness only matters once a core is
+actually contended, i.e. exactly when a foreground request and refresh are both runnable at once;
+idle, refresh still gets full throughput. Caveat: it only addresses CPU-scheduling contention. The
+two captures just above look more like a DB lock/busy_timeout stall than CPU starvation, so
+niceness is a good complementary fix, not a proven fix for the multi-second numbers actually
+measured here — the DB-lock lead above should still be chased first.
 
 Also corrected while chasing this: refresh is **not** a thread pool. It calls
 `reader.update_feed()` sequentially in one background thread, so the contention
