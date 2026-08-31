@@ -92,3 +92,26 @@ def test_a_genuinely_standalone_link_wrapped_in_em_still_converts():
     html = f'<p><em><a href="https://youtu.be/{VID}">Watch</a></em></p>'
     out = main._embed_standalone_youtube_links(html)
     assert f"/embed/{VID}" in out
+
+
+# The <p>-only check above missed the same bug in a <div>/<li> (or any other
+# block container) -- raised in review 2026-08-31: a citation link wrapped for
+# emphasis inside a <div> fell through to comparing against just the <em>
+# wrapper (no recognized block parent), so other prose alongside it went
+# undetected and the link still converted, losing the surrounding text.
+
+
+def test_a_citation_link_wrapped_in_em_inside_a_div_is_left_alone():
+    html = f'<div>He once said, <em><a href="https://youtu.be/{VID}">the quote</a></em> to us.</div>'
+    assert main._embed_standalone_youtube_links(html) == html
+
+
+def test_a_citation_link_wrapped_in_em_inside_a_list_item_is_left_alone():
+    html = f'<li>He once said, <em><a href="https://youtu.be/{VID}">the quote</a></em> to us.</li>'
+    assert main._embed_standalone_youtube_links(html) == html
+
+
+def test_a_genuinely_standalone_link_wrapped_in_em_inside_a_div_still_converts():
+    html = f'<div><em><a href="https://youtu.be/{VID}">Watch</a></em></div>'
+    out = main._embed_standalone_youtube_links(html)
+    assert f"/embed/{VID}" in out

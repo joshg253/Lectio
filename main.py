@@ -16117,6 +16117,17 @@ _BC_URL_RE = re.compile(
 # other text existed — converting a citation link buried in prose into a
 # full embedded player. Root-caused 2026-08-30 on exactly that shape.
 _INLINE_WRAPPER_TAGS = {"em", "strong", "b", "i", "span", "small", "mark", "u", "s", "sub", "sup", "cite", "q", "abbr"}
+# Containers a standalone link's text is compared against once inline
+# wrappers are climbed past. <p> was the only one recognized at first —
+# raised in review 2026-08-31: a link wrapped for emphasis inside a <div> or
+# <li> (rather than a <p>) fell through to comparing against just the inline
+# wrapper itself, so other prose in that block went undetected and the link
+# still converted, losing the citation text exactly like the <p> case this
+# function was built to fix.
+_BLOCK_CONTAINER_TAGS = {
+    "p", "div", "li", "td", "th", "blockquote", "section", "article",
+    "aside", "figure", "figcaption", "header", "footer", "main",
+}
 
 
 def _standalone_link_target(a):
@@ -16135,9 +16146,9 @@ def _standalone_link_target(a):
     while parent is not None and parent.name in _INLINE_WRAPPER_TAGS:
         node = parent
         parent = parent.parent
-    if parent is not None and parent.name == "p":
+    if parent is not None and parent.name in _BLOCK_CONTAINER_TAGS:
         if parent.get_text(strip=True) != anchor_text:
-            return None  # other prose in the paragraph → inline mention
+            return None  # other prose in the block → inline mention
         return parent
     if node.get_text(strip=True) != anchor_text:
         return None  # other content alongside the link's wrapper → inline mention
