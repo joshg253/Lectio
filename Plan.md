@@ -136,69 +136,27 @@ path, so it needs its own measurement pass before touching anything.
 
 **Re-fetch/extraction quality & staleness** — the article being read is broken or stale; directly in the way of triage.
 
-### Re-fetch snapshot skips summary-only entries — Undo silently missing, bad extraction becomes permanent "original"
+### premierguitar.com: readability locks onto the author bio, and the feed itself ships thin bodies
 
-Root-caused 2026-08-30 from a real incident on premierguitar.com's "Elliot Easton Shakes It Up"
-(feeds/lessons.rss). Sequence: the entry's real 6,788-char lesson body lived in `entries.summary`
-(`entries.content` was empty — the normal shape for a feed with no `<content:encoded>`). A
-"Re-fetch content" mis-extracted the live page down to a 580-char author-bio blurb. No Undo
-appeared. A follow-up "Fetch full page" also came out bad. Restore then put back the 580-char bio
-blurb, not the real original.
+**The snapshot/Undo bug here is FIXED** (2026-08-30, see git history — `read_entry_content_json`
+now falls back to `summary` when `content` is empty, mirroring the display path; rationale in
+`docs/architecture/saved.md` "Editing a post's body"). What's left is site-specific, not a Lectio
+bug in the general sense:
 
-**Root cause:** the pre-replacement snapshot, `read_entry_content_json`
-(services/saved_articles.py:361), reads only the raw `entries.content` column — no fallback to
-`summary` the way the actual display path (`_resolve_entry_content_html`, main.py:17539, via
-`entry.get_content(prefer_summary=False)`) already has. So on an entry whose real body lives in
-`summary`: the first re-fetch finds `content` empty, has nothing to snapshot, and
-`entry_content_edits` never gets a row (`_original is not None` gate at
-services/saved_articles.py:574 is false) — that's why no Undo showed. The bad extraction then
-overwrites `content` with nothing protecting the true original, and every re-fetch after that
-snapshots *the previous bad result* as "original," compounding the loss. The original text itself
-isn't destroyed (`summary` is never written by any of this — `replace_entry_content`/
-`restore_entry_content` only ever touch `content`), just orphaned: once `content` is non-empty,
-display prefers it over `summary`, so the good copy still exists but is hidden. This is the same
-`content`-vs-`summary` shape as the raw-Markdown bug above — both are places where an ingest-time
-asymmetry (some feeds populate only `summary`) breaks a codepath that assumes `content`.
+Root-caused from a real incident on "Elliot Easton Shakes It Up" (feeds/lessons.rss): a "Re-fetch
+content" mis-extracted the live page down to a 580-char author-bio blurb instead of the real
+6,788-char lesson. **premierguitar.com's readability extraction locking onto the author bio instead
+of the lesson body is its own site-specific miss, unexamined** — the boilerplate/sibling guard
+(`is_boilerplate_extraction`) didn't catch it because that guard only fires once a matching sibling
+extraction is already stored, not on a lesson's first bad re-fetch.
 
-**Recovered by hand 2026-08-30**: copied `entries.summary` back into `entries.content` for the one
-affected entry and cleared its stale `entry_content_edits`/`entry_content_overrides` rows.
-
-**Fix, not yet built:** give `read_entry_content_json` the same content-then-summary fallback
-`_resolve_entry_content_html` already has, so the very first re-fetch on a summary-only entry
-snapshots the real original instead of finding nothing. Separately, premierguitar.com's readability
-extraction locking onto the author bio instead of the lesson body is its own site-specific miss,
-unexamined — the boilerplate/sibling guard (`is_boilerplate_extraction`) didn't catch it because
-that guard only fires once a matching sibling extraction is already stored, not on a lesson's first
-bad re-fetch.
-
-**More premierguitar.com lessons data points (2026-08-30), all still-original `summary` (never
-re-fetched):** "Exploring Open-String Voicings" carries only 3 images against however many "Ex. N"
-tab diagrams the live lesson actually has; "Middle Eastern and Anatolian Rhythms Using Two-Hand
-Tapping" carries just 1 (the hero image) and zero tab diagrams at all. Consistent across three
-lessons now — premierguitar.com's feed itself ships a trimmed body missing tab images, independent
-of the re-fetch bug above. A proper fix needs the live page pulled well (the readability miss above
-is exactly that), not papering over the feed. Not investigated further.
-
-### Feeds shipping raw Markdown instead of HTML render as a wall of text
-
-Root-caused 2026-08-30 from a specific complaint — blog.gitea.com's "Gitea 1.27.3 is released"
-(the motivating example for the Add-link-to-Note idea above). The feed's `summary` field contains
-literal Markdown source (`## Security`, `**bold**`, `- ` bullet lists, `[text](url)` links), not
-rendered HTML — confirmed via the stored `entries.summary` row. With no HTML tags to interpret,
-headers/bold/bullets/links never render and the browser collapses every newline into one dense
-paragraph.
-
-**Scoped, not built.** Markdown-to-HTML conversion already exists — `markdown_to_article_html`
-(main.py:13423) — but only runs on the full-page-capture/readability fetch path (a page declared
-or served as `text/markdown`), not at feed ingest. The ingest sanitizer that touches every entry's
-`summary`/`content`, `_sanitize_entry` (services/reader_sanitize.py:166), only handles HTML — and
-already special-cases blog.gitea.com for an unrelated bug (an epoch-placeholder pubDate) right
-above where this fix would go. The fix: in that function's `_clean()`, detect "no HTML tags but
-Markdown-shaped syntax" on the raw field and run it through `markdown.markdown()` (already a
-pyproject dependency, same call `markdown_to_article_html` makes) before the existing
-`resolve_relative_urls`/`sanitize_html` pipeline — skipping that function's title-extraction/
-absolutize extras, which a feed entry doesn't need. Josh recalls a similar wall-of-text symptom on
-another feed recently but couldn't place which one — watch for a second confirmed instance.
+**Three premierguitar.com lessons data points, all still-original `summary` (never re-fetched):**
+"Exploring Open-String Voicings" carries only 3 images against however many "Ex. N" tab diagrams
+the live lesson actually has; "Middle Eastern and Anatolian Rhythms Using Two-Hand Tapping" carries
+just 1 (the hero image) and zero tab diagrams; "Elliot Easton" above had none either before repair.
+Consistent across three lessons — premierguitar.com's feed itself ships a trimmed body missing tab
+images. A proper fix needs the live page pulled well (the readability miss above is exactly that),
+not papering over the feed.
 
 ### Entry pane doesn't refresh after a background auto-refetch-on-tag finishes
 
@@ -1018,6 +976,11 @@ not scheduled, just watched.
 - **makeuseof re-fetch returns white images.** Seen once during testing
   2026-08-06 and never investigated. Waiting on a second sighting rather than
   hunting it cold — Josh will flag it if it recurs.
+- **A second raw-Markdown-instead-of-HTML feed, unconfirmed.** The
+  blog.gitea.com case is fixed (see git history 2026-08-30); Josh recalls a
+  similar wall-of-text symptom on another feed recently but couldn't place
+  which one. The fix already covers it generically if it recurs — just
+  watching for a confirmed second instance to be sure.
 - **~407 stored feed URLs differ from canonical only by a trailing slash.**
   Harmless: re-measured 2026-08-11 across 2,868 feeds and there are **zero**
   canonical collisions, so no duplicate subscriptions are hiding behind them. A

@@ -84,6 +84,42 @@ def test_ingest_drops_untrusted_iframe():
     assert "<iframe" not in entries[0].content[0].value.lower()
 
 
+def test_ingest_renders_raw_markdown_content():
+    """blog.gitea.com ships literal Markdown source in an HTML-typed field, not
+    rendered HTML -- with no tags to interpret, a browser collapses every
+    newline into one dense wall of text. Root-caused 2026-08-30."""
+    raw = _feed(
+        "## Security\n\nThis release fixes **CVE-2026-12345**.\n\n"
+        "- one\n- two\n\nSee [the changelog](https://example.test/changelog)."
+    )
+    feed, entries = SanitizingFeedparserParser()("https://x.test/feed", io.BytesIO(raw), {})
+    content = entries[0].content[0].value
+    assert "<h2>Security</h2>" in content
+    assert "<strong>CVE-2026-12345</strong>" in content
+    assert "<li>one</li>" in content
+    assert '<a href="https://example.test/changelog"' in content
+
+
+def test_ingest_leaves_genuine_plain_text_alone():
+    """No Markdown-shaped syntax at all -- must not be run through the Markdown
+    renderer (which would e.g. eat a lone leading '#' as a heading marker)."""
+    raw = _feed("Just an ordinary paragraph of prose, nothing special about it.")
+    feed, entries = SanitizingFeedparserParser()("https://x.test/feed", io.BytesIO(raw), {})
+    content = entries[0].content[0].value
+    assert "<h" not in content.lower()
+    assert "ordinary paragraph of prose" in content
+
+
+def test_ingest_leaves_real_html_alone():
+    """Genuine HTML content (has tags) must never be treated as Markdown, even
+    if it happens to contain literal '**' or '##' text."""
+    raw = _feed('<p>Use ** for bold and ## for a heading in our custom syntax.</p>')
+    feed, entries = SanitizingFeedparserParser()("https://x.test/feed", io.BytesIO(raw), {})
+    content = entries[0].content[0].value
+    assert "<strong>" not in content
+    assert "Use ** for bold" in content
+
+
 def test_internal_imports_still_available():
     """Smoke-test that the private reader symbols we import still exist after upgrades."""
     from reader._parser.feedparser import FeedparserParser as _FP  # noqa: F401

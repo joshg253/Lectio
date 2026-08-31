@@ -361,13 +361,29 @@ def replace_entry_content(
 def read_entry_content_json(reader, feed_url: str, entry_id: str) -> str | None:
     """Return reader's raw ``entries.content`` JSON for an entry, or None.
 
-    The counterpart to replace_entry_content: cleanup edits snapshot this before
-    overwriting so the pristine body can be restored verbatim, rather than being
-    re-derived (which would lose whatever the feed no longer serves)."""
+    The counterpart to replace_entry_content: cleanup edits and re-fetches snapshot this before
+    overwriting so the pristine body can be restored verbatim, rather than being re-derived (which
+    would lose whatever the feed no longer serves).
+
+    Falls back to ``summary`` when ``content`` is empty, wrapped into the same JSON shape — mirrors
+    the fallback the display path (_resolve_entry_content_html) already has via
+    entry.get_content(prefer_summary=False). Without this, a feed with no <content:encoded> (body
+    lives only in summary) had nothing to snapshot on its first re-fetch: the snapshot silently
+    skipped (no Undo appeared), the bad extraction overwrote content with nothing protecting the
+    real original, and every re-fetch after that snapshotted the previous bad result as "original."
+    """
     row = reader._storage.get_db().execute(
-        "SELECT content FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id),
+        "SELECT content, summary FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id),
     ).fetchone()
-    return row[0] if row else None  # index access: reader's row_factory is not ours to assume
+    if not row:
+        return None
+    # index access: reader's row_factory is not ours to assume
+    content, summary = row[0], row[1]
+    if content:
+        return content
+    if summary:
+        return json.dumps([{"value": summary, "type": "text/html", "language": None}])
+    return None
 
 
 def restore_entry_content(reader, feed_url: str, entry_id: str, content_json: str) -> None:

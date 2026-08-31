@@ -740,6 +740,8 @@ Saving or reverting re-renders **only the article pane**, via `window.lectioRelo
 
 Deferred: promoting a recorded removal into a per-feed rule. That rule belongs at render time inside `_apply_feed_content_cleanups`, *not* as a bulk rewrite of stored bodies — feed-wide it would touch hundreds of entries irreversibly, and the render-time form covers old and new posts alike and can be switched off.
 
+**The snapshot must fall back to `summary`, not just read `content`.** `read_entry_content_json` (shared by this route and re-fetch) used to read only reader's `entries.content` column. A feed with no `<content:encoded>` — the normal shape, not a broken one — stores its body in `summary` instead, leaving `content` empty. The first edit or re-fetch on such an entry found nothing to snapshot, silently skipped the `entry_content_edits` insert, and the bad result then became the only copy with no Undo ever having appeared — root-caused 2026-08-30 on a premierguitar.com lesson whose re-fetch grabbed only the author bio. Fixed by falling back to `summary`, wrapped into the same JSON content shape, mirroring the fallback the display path (`_resolve_entry_content_html`) already had.
+
 ## Archive old stars ("Inbox bankruptcy") — the saved_at trap
 
 Settings → Feeds → Utilities → **Archive old stars** clears the Inbox of stars from long enough ago that they are, by any honest reading, not something still being gotten to. `services/archive_old_stars.py` is a pure decision function; `main.py`'s `_current_archive_old_stars_plan` supplies the dates and does every write.
