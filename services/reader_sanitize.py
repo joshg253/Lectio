@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
@@ -163,6 +164,28 @@ def _drop_placeholder_date(value):
     return None if dt.year <= _MIN_PUBLISH_YEAR else value
 
 
+# A feed's HTML-typed field, but actually raw Markdown source (blog.gitea.com's
+# release posts: literal "## Security", "**bold**", "- " bullets, "[text](url)"
+# links) -- rendered by a browser as one unformatted wall of text, since there
+# are no tags to interpret. Requires BOTH no HTML tags at all AND a Markdown
+# hint: a false positive here would mangle a feed that never used Markdown
+# syntax to begin with.
+_HTML_TAG_RE = re.compile(r"<[a-zA-Z/][^>]*>")
+_MARKDOWN_HINT_RE = re.compile(
+    r"(^#{1,6}[ \t]+\S|\*\*[^*\n]+\*\*|^[ \t]*[-*+][ \t]+\S|\[[^\]\n]+\]\([^)\n]+\))",
+    re.MULTILINE,
+)
+
+
+def _looks_like_markdown(text: str) -> bool:
+    return not _HTML_TAG_RE.search(text) and bool(_MARKDOWN_HINT_RE.search(text))
+
+
+def _render_markdown(text: str) -> str:
+    import markdown as _markdown  # same call main.markdown_to_article_html makes
+    return _markdown.markdown(text, extensions=["fenced_code", "tables", "sane_lists"])
+
+
 def _sanitize_entry(entry, feed_url: str = ""):
     """Return ``entry`` with its content/summary run through html_sanitize, and
     any placeholder publish date dropped.
@@ -189,6 +212,8 @@ def _sanitize_entry(entry, feed_url: str = ""):
     base = _entry_html_base(entry, feed_url)
 
     def _clean(raw: str) -> str:
+        if _looks_like_markdown(raw):
+            raw = _render_markdown(raw)
         # Resolve BEFORE sanitizing: the sanitizer's embed host-allowlist judges
         # absolute URLs, which is what feedparser used to hand it.
         return html_sanitize.sanitize_html(html_sanitize.resolve_relative_urls(raw, base))

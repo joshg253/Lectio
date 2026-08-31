@@ -526,6 +526,37 @@ def test_the_snapshot_keeps_the_first_original(reader, meta_conn):
     assert "ORIGINAL feed body" in original
 
 
+def test_a_summary_only_entry_still_gets_a_snapshot(reader, meta_conn):
+    """A feed with no <content:encoded> stores its body in `summary`, not `content`
+    (the normal shape, not a broken one). Before this fallback existed, the first
+    re-fetch on such an entry found `content` empty, snapshotted nothing, and a bad
+    extraction became the permanent "original" with no Undo ever having appeared —
+    root-caused on a real premierguitar.com entry, 2026-08-30."""
+    reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
+    reader.disable_feed_updates(REAL_FEED)
+    reader.add_entry({
+        "feed_url": REAL_FEED, "id": ARTICLE, "link": ARTICLE, "title": "Focus",
+        "summary": "The real lesson body, living only in summary.",
+    })
+    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                      (REAL_FEED, ARTICLE))
+    meta_conn.commit()
+
+    assert refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE,
+                                    extract=_extract_ok)["ok"] is True
+
+    row = meta_conn.execute(
+        "SELECT original_content FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+        (REAL_FEED, ARTICLE),
+    ).fetchone()
+    assert row is not None, "no snapshot was taken — the summary-only entry had nothing to Undo to"
+    assert "living only in summary" in row[0]
+
+    from services.saved_articles import restore_entry_content
+    restore_entry_content(reader, REAL_FEED, ARTICLE, row[0])
+    assert "living only in summary" in reader.get_entry((REAL_FEED, ARTICLE)).content[0].value
+
+
 # ── the short-title hole: informit again, 2026-07-31 ──
 _INDEX_HTML = ("<div>" + "".join(
     f'<dl><dt><a class="title" href="http://x.test/a{i}">Some Article Title {i}</a></dt>'

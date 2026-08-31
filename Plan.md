@@ -5,41 +5,284 @@ explains why the code looks the way it does, in ARCHITECTURE.md.
 
 ## Now
 
-Roughly ordered: recurring/active pain first, then concrete bugs, then
-items already scoped and decided so they're ready whenever picked up, then
-measurement/investigation jobs, then low-urgency work and the two standing
-watch-lists last. Re-prioritized 2026-08-28: shipped/closed items moved to
-git history (rationale kept in ARCHITECTURE.md where relevant); items
-that were done-but-with-a-real-remainder were condensed to just that
-remainder.
+Grouped and re-prioritized 2026-08-30 (was a flat rough ordering before). Five tiers: things
+actively impeding unread-clearing right now, small independent wins, ready-to-run maintenance,
+real features that aren't blocking anything today, and deliberately-deferred big investments.
+Within a tier, related items are clustered under a bold sub-heading; unrelated items stand alone.
+Two standing watch-lists (CodeQL, Parked) moved to their own section at the end — nothing in them
+is scheduled, they're just what to check if a related symptom recurs.
 
-### Outbound proxy escalation — shipped, Browserless the only thing left out
+## Tier 1 — actively impeding unread-clearing
 
-Full chain **shipped** 2026-08-30: honest UA → browser identity → gluetun proxy → FlareSolverr (real Chrome, purpose-built for
-Cloudflare/DDoS-Guard challenges, gated on an actual challenge page not any refusal) → Tailscale (last-resort, home IP). Design/rationale
-lives in `docs/architecture/feeds.md` ("Outbound proxy escalation") — settings shape, per-backend unreachable cooldowns, the
-FlareSolverr request/response-hook mechanism (a genuinely different fetch path than a proxy swap), the `<pre>`-unwrap detail, the
-escalation callback chain in `services/feed_refresh.py`.
+**Refresh-contention latency** — home-route stalls, post-refresh read-range slowness, the GIL-contention tally, and the post-restart startup flood are all the same investigation now; merged into one item below.
 
-**Browserless (headless Chrome) evaluated, NOT shipped** — FlareSolverr replaces it in the chain, not alongside it. Both are "real
-Chrome" solvers for the same problem; Browserless (live-tested first) never cleared a real Cloudflare interstitial regardless of proxy
-stacking or wait time (its stock image isn't stealth-patched), while FlareSolverr — tried after Josh pointed at an infra cheatsheet
-listing it as a separate, purpose-built tier — solved the *same* feeds cleanly, stacked with gluetun. No evidence Browserless adds
-anything on top of that. Full writeup in `docs/architecture/feeds.md`.
+### Refresh-contention latency (home route, Read Above/Below, and the GIL tally — merged 2026-08-30)
 
-### Refetch-All has no "already re-fetched recently" skip
+Reported 2026-08-11 as "serious delay browsing". Home requests logged a median of
+700ms but **9% over 3s, peaking at 7.2s**, always while a refresh pass was
+running. Shipped that day: the route no longer builds a `FeedInFolder` for all
+2,867 feeds on every load (only the two folders whose rows actually render), which
+removes most of the pure-Python work that was being contended over.
 
-Surfaced 2026-08-23 alongside the re-fetch date picker (built 2026-08-24 —
-see `docs/architecture/saved.md` "The re-fetch date picker"). There is no
-dedicated "last fetched/re-fetched at" column — only `entries.published`
-(the article's own date), `entries.first_updated` (Lectio's original ingest
-time, now *not* always immutable: the date picker's "Now"/"Pub date" choices
-deliberately move it), and `entry_content_edits.edited_at` (frozen at the
-*first* re-fetch, for the Revert button — not updated on later ones). If
-Refetch-All should ever skip entries already re-fetched recently — no point
-re-spending a site's bandwidth on articles just fixed minutes ago — that
-needs a new column; nothing today records it. Not scoped further; raised but
-not asked for yet.
+Two dead ends, both measured, so nobody re-runs them:
+
+- **Free-threaded Python is blocked by lxml.** The whole dependency stack
+  (pillow, lxml, uvloop, pydantic-core) installs fine on free-threaded 3.14.6,
+  but importing the app flips `sys._is_gil_enabled()` back to `True`:
+  *"the GIL has been enabled to load module 'lxml.etree', which has not declared
+  that it can run safely without the GIL"*. lxml 6.1.1 is current, so there is
+  nothing to upgrade to. `PYTHON_GIL=0` would force it, but lxml arrives via
+  `readability-lxml` and runs in the **refresh thread** — forcing unprotected C
+  code in the one concurrent path is the worst possible place to take that risk.
+  Recheck when lxml declares free-threading support; nothing else blocks it.
+- **`sys.setswitchinterval()` does not help.** Benchmarked against the app's own
+  sanitizer in a background thread with home-route-shaped work in the foreground:
+  default 5ms gave p50 22.2ms / p95 30.3ms; 1ms, 0.5ms and 0.1ms were all *worse*
+  on latency (25-26ms p50) **and** on refresh throughput. Pure context-switch
+  overhead. Do not ship it.
+
+**The open lead.** That benchmark showed a competing CPU thread roughly *doubles*
+foreground latency (11ms → 22ms). Production went 0.5s → 7s, which is ~14×. So
+GIL contention alone does not explain the spikes and something else is
+contributing — candidates, in order of suspicion: the `_home_request_semaphore`
+serialising concurrent home renders (it 503s rather than queues, so a phone
+retrying compounds it), meta-DB lock contention with refresh's writes, and
+refresh's own DB work blocking readers.
+
+**Caught live 2026-08-30**: Josh reported `GET /?folder_id=1&read_filter=unread` taking ~10s; the
+log confirms `11124ms` total. The `[perf]` ticks pin the gap down further than before:
+`meta_block=263ms` + `tag_block=126ms` finished at 18:18:56.0, then nothing logged until
+`list_entries` fetch starts at ~18:19:03.1 (`posts_block=2541ms` total, of which `fetch_ms=1454` +
+`filter/enrich/process≈360ms` are accounted for) — **roughly 6.2s of the 11.1s sits between
+tag_block finishing and posts_block's own work starting**, still with no timing of its own, plus
+another ~2s after posts_block before the response is logged as sent. A refresh pass was confirmed
+running throughout — dozens of concurrent `httpx` feed fetches logged in the same window, dev.to
+and DeviantArt integration calls included. So the region to instrument is now narrower: not
+"between tag_block and posts_block" generally, but specifically **whatever runs immediately after
+tag_block and before `list_entries`'s own fetch begins** — add a tick there before theorizing
+further.
+
+**A second capture, same day, sharpens it further.** `GET /?folder_id=11&read_filter=unread` (a
+tiny folder — 16 feeds, 3 entries) logged `5498ms`, and its own follow-up chunk request logged
+`7075ms`, both while the same refresh pass was still running (a `minecraft.net` parse error and the
+DeviantArt/dev.to integration calls landed seconds before, in the log right above). Real work in
+both requests was trivial — `meta_block` 68-74ms, `tag_block` 0-17ms, `list_entries` fetch 30-38ms,
+process ~60-70ms — under 200ms combined against 5.5-7s totals. The gap is the same
+tag_block-to-list_entries-fetch region as the folder_id=1 capture, this time ~5s and ~6.5s on
+requests doing almost no real work. **That the gap doesn't scale with folder size (16 feeds/3
+entries vs. 2,181 feeds/250 entries in the first capture, same few-second gap either way) rules out
+per-folder query cost and points at something shared** — a lock or connection contended with the
+concurrently-running refresh thread is now the leading suspect over pure GIL/CPU contention.
+Whatever runs in that gap is almost certainly a blocking DB call; reader's own `busy_timeout` has
+already needed tuning once for a concurrent-writer flakiness issue (see the flaky-CI fix under
+Saved articles in git history) — a busy_timeout retry stacking up while refresh holds a write lock
+would explain a several-second stall with no timing of its own exactly like this.
+
+**Josh's ask (2026-08-30):** the VPS has 4 vCores — can background refresh just not eat all of them
+while someone's actively using the app? Cheapest lever: lower the refresh thread's OS niceness
+(`os.setpriority`, Linux-only) once at thread start. That fits "only when there's obvious user
+activity" for free, with no activity-detection code needed — niceness only matters once a core is
+actually contended, i.e. exactly when a foreground request and refresh are both runnable at once;
+idle, refresh still gets full throughput. Caveat: it only addresses CPU-scheduling contention. The
+two captures just above look more like a DB lock/busy_timeout stall than CPU starvation, so
+niceness is a good complementary fix, not a proven fix for the multi-second numbers actually
+measured here — the DB-lock lead above should still be chased first.
+
+**Same shape, worse, right after a restart (2026-08-30).** Josh reported the app taking "a minute
+or more" to feel usable after a container restart. `/healthz` itself responds in ~15-20s (Docker's
+health check passes fast), but the log shows a startup flood immediately after: a one-time per-user
+scraped-feed backfill, a YouTube-video recheck, a starred-archive orphan sweep (skipped ~8,500
+rows), then the first scheduled refresh pass hitting a large batch of feeds essentially all at once
+— everything is simultaneously "due" right after a restart instead of trickling in on its normal
+cadence. Not independently measured (this observation landed during an unrelated rebuild mishap, so
+the timeline is muddied — see git history same day), but it is consistent with, and probably an
+amplified case of, the same contention this whole item is chasing. Worth re-measuring cleanly once
+the DB-lock lead above is understood, rather than treating it as a separate bug.
+
+Also corrected while chasing this: refresh is **not** a thread pool. It calls
+`reader.update_feed()` sequentially in one background thread, so the contention
+is one CPU-hungry thread, not many.
+
+
+**The GIL-contention tally that used to be its own item** — same phenomenon, folded in here rather than tracked separately. Add a line each time a stall is noticed enough to record; the pattern (time of day, request type, cadence) is more visible in one place.
+
+| Date | Request | Wall time | Notes |
+|---|---|---|---|
+| 2026-08-23 | `GET /?folder_id=23&sort_dir=desc&star_only=1` (5 items) | 6919ms | 6.3s gap between two already-fast, already-logged steps — nothing itself slow |
+| 2026-08-23 | `GET /?folder_id=1&star_only=1&kept=starred&sort_by=starred&sort_dir=desc` (F5 on Saved) | 18664ms | Landed mid-scheduled-refresh — dozens of concurrent `httpx` feed fetches logged in the same window |
+| 2026-08-23 | 4 back-to-back `GET /?folder_id=1&star_only=1&kept=starred` (clicked Saved) | 2114/7882/8684/18192/9303ms | Cluster, not a one-off — same gap signature (list_entries logs fast, posts_block/meta_block absorb the delay) ~5-7 min after a container restart; may correlate with post-restart cold caches/backfill rather than being independent of it |
+| 2026-08-30 | `GET /?folder_id=1&read_filter=unread` | 9786ms | ~7 min after a restart — **confirms** the 2026-08-23 5-7-min-post-restart correlation rather than just suggesting it. Same tag_block→list_entries gap (~5.8s, `meta_block=75ms`+`tag_block=0ms` at :37.4, `list_entries` fetch not starting until ~:43.2) |
+| 2026-08-30 | `GET /?folder_id=1&read_filter=unread&list_feed_url=...jsnover.com...` | 9216ms | ~9 min after the same restart — still elevated a bit past the 5-7-min band, so the window isn't a sharp cutoff |
+
+**Read Above/Below, same shape:**
+
+
+`_light_entries_from_sql` (2026-08-28, docs/architecture/views.md) fixed the
+entry-hydration cost — reading the "Deals" folder's full history (17 feeds,
+~10.7k entries) dropped from 8.4s to 0.4-1.0s in a settled DB. But a real
+mark-range-read minutes later on the same folder measured `fetch_ms=4301`
+(~5s total) instead. Diagnosed, not fixed: a refresh cycle had just written to
+that folder's feeds (slickdeals: `modified=16`) ~3 minutes earlier, and
+reading through a WAL file still holding recent writes costs more than
+reading a checkpointed one. Same shape as the home-route item above —
+concurrent-with-refresh reads pay a tax the isolated benchmark doesn't show.
+Ruled out as a cause: the mark-as-read write loop itself (117 individual
+`reader.mark_entry_as_read` calls) — measured at 38ms total, not the
+bottleneck.
+
+The lead, if picked up: whether reader's WAL checkpoint behavior can be made
+more proactive after a refresh pass, so reads shortly after don't inherit an
+un-checkpointed WAL. Bigger and riskier than the fetch-path fix — it's a
+pragma/timing change affecting every read/write in the app, not just this one
+path, so it needs its own measurement pass before touching anything.
+
+**Re-fetch/extraction quality & staleness** — the article being read is broken or stale; directly in the way of triage.
+
+### premierguitar.com: readability locks onto the author bio, and the feed itself ships thin bodies
+
+**The snapshot/Undo bug here is FIXED** (2026-08-30, see git history — `read_entry_content_json`
+now falls back to `summary` when `content` is empty, mirroring the display path; rationale in
+`docs/architecture/saved.md` "Editing a post's body"). What's left is site-specific, not a Lectio
+bug in the general sense:
+
+Root-caused from a real incident on "Elliot Easton Shakes It Up" (feeds/lessons.rss): a "Re-fetch
+content" mis-extracted the live page down to a 580-char author-bio blurb instead of the real
+6,788-char lesson. **premierguitar.com's readability extraction locking onto the author bio instead
+of the lesson body is its own site-specific miss, unexamined** — the boilerplate/sibling guard
+(`is_boilerplate_extraction`) didn't catch it because that guard only fires once a matching sibling
+extraction is already stored, not on a lesson's first bad re-fetch.
+
+**Three premierguitar.com lessons data points, all still-original `summary` (never re-fetched):**
+"Exploring Open-String Voicings" carries only 3 images against however many "Ex. N" tab diagrams
+the live lesson actually has; "Middle Eastern and Anatolian Rhythms Using Two-Hand Tapping" carries
+just 1 (the hero image) and zero tab diagrams; "Elliot Easton" above had none either before repair.
+Consistent across three lessons — premierguitar.com's feed itself ships a trimmed body missing tab
+images. A proper fix needs the live page pulled well (the readability miss above is exactly that),
+not papering over the feed.
+
+### Entry pane doesn't refresh after a background auto-refetch-on-tag finishes
+
+First noticed 2026-08-30 as what looked like a bad extraction (a mindyourdecisions.com entry,
+"Fantabulous Numbers," showing only the embedded video after tagging) — **root-caused via a live
+repro on a second entry the same day**, and it isn't an extraction bug. Tagging a stub entry (empty
+`content`/`summary`) triggers `_maybe_autofetch_on_keep` (main.py:33223), which re-fetches in a
+background thread *after* the tag request already returned — "off-request so the star stays
+instant," per its own docstring. The already-open entry pane has no way to know that background
+fetch finished, so it keeps showing the stale stub render (just an empty `lectio-embed` placeholder
+slot, no visible text) until the pane is closed and reopened. Confirmed directly: right after
+tagging, the DB already held the full 19,916-char article (every solution step, no missing prose),
+while the open pane still showed just the video slot; navigating away and back showed the real
+content immediately. This reframes the first report too — "a manual re-fetch fixed it" was most
+likely just forcing a pane re-render onto content the background auto-refetch had *already* filled
+in, not a second, better extraction.
+
+Not built: some way for the pane to pick up the auto-refetch's result once it lands — e.g. the
+existing tag-response payload flagging that a background re-fetch was kicked off, and the pane
+polling or re-fetching itself once it's done, rather than the user having to discover the trick of
+clicking away and back.
+
+### An ArtStation entry with a body image still resolved to no lead image
+
+Noticed 2026-08-30: a list-view thumbnail missing on an ArtStation feed entry. Checked
+`entry_lead_images` for it — the row exists with `fetched_at` set (a resolution attempt did
+complete) but `image_url`/`image_alt`/`image_title`/`thumb_crop` are all NULL, even though the
+entry's stored body has exactly one `<img>`, a normal (non-signed-looking) `cdnb.artstation.com`
+CDN URL. So resolution ran and came back empty despite an obvious single candidate sitting right
+in the content. Not investigated further — worth checking whether this is systemic across
+ArtStation entries or a one-off before digging into the resolver itself.
+
+### A re-fetch on a Substack post duplicated the lead image
+
+Noticed 2026-08-30, part of Josh's usual fix for old starred entries with a broken lead image:
+Refetch content (Pub date). Works fine generally; on one kriscox.substack.com post it left the
+same photo showing twice — once as a hoisted `<figure><img></figure>` ahead of `<article>`, and
+again inside the article body. The two `<img>` tags point at *different* substackcdn.com asset
+paths (`da4ee994-...` vs `d06b02fd-...`) but the same source dimensions (2884x1622) — first guess
+was two separate Substack asset uploads of the same photo, **ruled out**: Josh checked the live
+page and the image renders only once there. So one of the two copies must be CSS-hidden in
+Substack's raw page markup — invisible in a real browser, but indistinguishable from visible
+content to a server-side fetch-and-parse (readability/full-page capture never runs CSS, so
+`display:none`/`visibility:hidden` nodes look identical to shown ones). This is the same gap
+already named as the browser extension's killer feature below ("Visibility-aware capture") — a
+second real instance of a hidden node getting captured as if it were visible, this time on
+Substack rather than the uBlock/JWPlayer cases that motivated that item. Not investigated further
+here; the eventual fix is that item's DOM-walk-and-drop-hidden-nodes capture, not a per-site patch.
+
+## Tier 2 — small, fast, independent wins
+
+**Navigation/UX papercuts** — no design work needed, just haven't been built.
+
+### Clicking a feed name doesn't reveal it in the tree
+
+Noticed 2026-08-30 via a post-list feed-name link (`.post-feed-link`)
+navigating without scrolling/highlighting the feed in the folder tree the
+way clicking the tree's own `.feed-link` does. First check (desktop
+Chromium) didn't reproduce it, but a second try pinned down the actual
+path: from Feeds → All, clicking a post's feed-name link reproduces it
+reliably (in the VSCode integrated browser, so not a phone/Firefox
+quirk after all) — lands on `/?folder_id=1&list_feed_url=<feed>&read_filter=unread`
+with the list filtered to that feed but nothing selected/scrolled-to in
+the sidebar tree. Not diagnosed further — next step is comparing this
+path's navigation code against whatever the tree's own `.feed-link` click
+does to reveal/highlight (`static/js/app.js:3603` has the existing
+reveal-a-lazy-loaded-feed logic for pane-swap navigation; worth checking
+whether the All-view click routes through it or bypasses it).
+
+### "Add link to Note" quick-capture — idea, not scoped
+
+Raised 2026-08-30: a fast way to drop a link into the Global Note while
+browsing, for problematic posts noticed in passing (bad render, feed issue,
+etc.). Scoped down 2026-08-30: available from both the per-post context menu
+and an entry-pane button. Action appends the post's link to the existing
+Global Note and opens the note editor with it focused, so Josh types his own
+context right there rather than the write happening silently in the
+background. Writes through the existing `/settings/global-note` route
+(`GLOBAL_NOTE_SETTING_KEY`, main.py:35139). Not built.
+
+### Rules editor: YT Playlist scope shows every feed, and chips have no URL tooltip
+
+Two asks 2026-08-30, both in the rules draft editor (static/js/app.js, the shared feed-scope
+picker starting ~line 12414, used by every rule type):
+
+- **"Add to YT Playlist" should scope its feed picker to the YT folder.** `folderSel` always lists
+  every folder ("All Feeds" plus the whole tree, main.py's `/api/folder-feeds` behind it), with
+  nothing narrowing it for `ruleType === 'youtube_playlist'` specifically — even though a playlist
+  rule only ever makes sense against YouTube feeds. The pieces already exist server-side
+  (`get_yt_folder_name()` / `_folder_is_yt_folder`, main.py:774/30688) to default or restrict the
+  picker when the rule type is youtube_playlist.
+- **Rule chips have no hover tooltip.** The scope chips (`hl-folder-tag`,
+  static/js/app.js:12522-12524) are built with `tag.textContent = feedTitleByUrl.get(url) || url`
+  and no `title` attribute, so there's no way to disambiguate same-titled feeds without opening Feed
+  Properties. Concrete case: Josh has multiple Monterey Bay Aquarium feeds in one Add-to-YT-Playlist
+  rule and can't tell from the chip which one is actually the blog rather than the channel. A plain
+  `tag.title = url` fixes it for every rule type, not just this one.
+
+Not built.
+
+### Per-post re-fetch's Land On picker doesn't show its own default
+
+Asked 2026-08-30: what happens if you don't pick a Land On option? Traced it — leaving it unset
+isn't one fixed default, it's conditional. `/articles/refresh-content` always sends
+`bump_received=None` (main.py:32975), which falls back to `is_capture` in
+`refresh_captured_article`: a Lectio capture defaults to **Now** (bumps to top), an ordinary feed
+entry defaults to **Original** (no bump). Same outcome as picking one, just silent about which.
+Josh's ask, refined: not a pre-selected default (a checkbox implying he already chose it), just an
+indicator of which outcome applies if nothing is touched. The picker deliberately resets to unset
+on every menu open (`refetchDateChoice = null`, static/js/app.js:10203 — so a choice on one post
+can't leak to the next); this wants its own visual treatment distinct from an explicit pick (the
+existing `.ctx-refetch-date-opt--active` class), so it reads as "this is what happens if you don't
+touch anything" rather than "you already chose this."
+Not built.
+
+### New subscription missing from feed tree — UX idea remaining
+
+Root-cause code bug already fixed (2026-07-08: re-adding a feed that existed
+in reader as disabled now calls `enable_feed()`). Remaining idea, not asked
+for: auto-disambiguate duplicate display titles (e.g. suffix from the feed
+URL path) — the tree tooltip already shows the URL, but identical titles
+still invite unsubscribing the wrong feed.
+
+## Tier 3 — maintenance backlog, ready to run
 
 ### Redirecting feeds — 128 candidates ready, awaiting Josh's own `--apply` run
 
@@ -77,193 +320,29 @@ the redirect (which they do once a migration finishes). The stored URL also
 feeds the Change-URL field, the dupe scan and discovery, so a forwarder makes
 all three describe somewhere the posts do not come from.
 
-### Read Mode: no Back guard
+### Backfill already-expired signed lead-image thumbnails — script built, not yet run
 
-Read Mode (`GET /read`) still has no equivalent of the main app's Back-button
-guard (resume was already fixed 2026-08-25 — separate `lectio-read-last-position`
-localStorage key so the main app and Read Mode don't bounce into each other).
-Not cheap: `/read` has no drawer for Back to land on, and a Back that visibly
-does nothing is worse than one that exits the app. Give Read Mode a
-collapsible folder tree first, then add the guard.
+**Built 2026-08-28**: `scripts/backfill_expired_deviantart_thumbnails.py`
+(dry-run by default, `--apply` to write, `--limit`/`--delay`/`--user`).
+Walks every un-pinned wixmp `entry_lead_images` row, calls the same
+`_resign_expired_deviantart_url` the article-view path already uses (cheap
+checks first, so most rows cost no DeviantArt API call at all), and feeds
+the result through `store_entry_lead_image` — which pins it as a side
+effect via the existing 2026-08-24 sink. Not run against the live ~22,300-row
+backlog yet — needs a dry-run count first to gauge how much of the batch is
+actually still resignable (a dead deviation with no fresh URL to fetch just
+stays unpinned).
 
-### GIL-contention request stalls — tally
+### Uncategorized orphan-feed cleanup — 9 stragglers left (manual)
 
-Not fixed, not investigated further yet — just tracking how often it's bad
-enough to notice before deciding whether it's worth the architectural work
-(background refresh and request handling currently share the same
-process/threads, so a request can sit for seconds with nothing itself wrong,
-starved of CPU by a concurrent background refresh doing CPU-bound work —
-parsing, sanitizing). Add a line each time Josh notices one; look for a
-pattern (time of day, request type, cadence) once there are enough to see one.
+9 feeds are dead/one-shot/ambiguous (an Instagram post URL, a single Vice
+article, cochaser.com (no entries), WebServicesDir, whiskypaint/nolanfa
+tumblrs, norfolkwinters, crispian-jago, owenyoung myfeed) — sort or
+unsubscribe manually.
 
-| Date | Request | Wall time | Notes |
-|---|---|---|---|
-| 2026-08-23 | `GET /?folder_id=23&sort_dir=desc&star_only=1` (5 items) | 6919ms | 6.3s gap between two already-fast, already-logged steps — nothing itself slow |
-| 2026-08-23 | `GET /?folder_id=1&star_only=1&kept=starred&sort_by=starred&sort_dir=desc` (F5 on Saved) | 18664ms | Landed mid-scheduled-refresh — dozens of concurrent `httpx` feed fetches logged in the same window |
-| 2026-08-23 | 4 back-to-back `GET /?folder_id=1&star_only=1&kept=starred` (clicked Saved) | 2114/7882/8684/18192/9303ms | Cluster, not a one-off — same gap signature (list_entries logs fast, posts_block/meta_block absorb the delay) ~5-7 min after a container restart; may correlate with post-restart cold caches/backfill rather than being independent of it |
+## Tier 4 — real features, not blocking anything today
 
-### CodeQL board — watch-note
-
-Board is at zero open alerts as of 2026-08-26 (PR #241 fixed a
-`py/weak-sensitive-data-hashing` on `_entry_thumb_cache_key`'s sha1 — CodeQL
-flags a hash whenever the input matches an "id" pattern, even here where
-`entry_id` is a public feed-entry id, not a credential, and the hash is a
-cache key, not a security control. Fixed rather than dismissed: sha256 costs
-nothing and ends the noise, cheaper than arguing false-positive each time).
-
-⚠ **A negative lookahead will not clear a redos alert.** CodeQL's regex model
-ignores lookaheads, so `(?:-(?!->)[^-]*)*` — measurably linear — was re-flagged
-as ambiguous on the first push of #200. Either write the loop lookahead-free or
-move the scan out of the regex into Python.
-
-**Committed page fixtures are excluded** (`paths-ignore: tests/fixtures`, added
-2026-08-13 for alert 198). A captured page is byte-for-byte what a site served,
-so analyzing it reports the remote site's choices as ours — jQuery from a CDN
-with no SRI, in that case.
-
-**If the reflective-XSS class keeps recurring**, the repo already has the pattern
-for it: `.github/codeql/queries/` holds guard-aware copies of the SSRF and
-path-injection queries that model our audited guards as sanitizer barriers, with
-the stock versions excluded in `codeql-config.yml`. A `LectioReflectiveXss.ql`
-modeling `html_sanitize.sanitize_html` / `sanitize_inline_title` as barriers would
-end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, and
-excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
-`py/full-ssrf` was.
-
-## Later
-
-*Moved down from Now on 2026-08-13: real, but not what is next.*
-
-*Moved down from Now on 2026-08-24: deliberately deferred, no trigger condition met yet.*
-
-### email_batch_queue has the same scope-text-identity fragility rule_uid just fixed elsewhere
-
-Found 2026-08-29 alongside the `youtube_playlist_added` fix (see git history —
-`highlight_keywords.rule_uid` now survives a scope-changing edit).
-`email_batch_queue` is `UNIQUE(rule_scope, rule_scope_id, rule_keyword,
-entry_id)`, same pattern: editing a batch email rule's scope/keyword while
-entries are queued orphans them (they never flush). Lower stakes than the
-YouTube case — the queue drains on its own schedule rather than accumulating
-history, and the failure mode is a dropped/duplicate email, not a
-non-idempotent external write. Not fixed — no report of it actually biting
-anyone yet; wire it to `rule_uid` if one comes in.
-
-### Add OIDC login
-
-Not scoped. Current auth (`services/users.py`, `/login` at `main.py:21999`)
-is username/password only — no SSO/OIDC exists today. Architecture-level
-addition (new login flow, session handling alongside the existing one,
-tenancy binding from an OIDC subject to a Lectio `user_id`, first-login
-provisioning) — wants a real plan before code, not attempted yet.
-
-### Email "full article text" doesn't run Readability on thin-stub feeds
-
-Noticed 2026-08-28 while building the full-text Email Article option. It
-only pulls what's already stored (`entry.content`/`entry.summary`) — for a
-feed that ships a thin stub body, that's still a thin email even with the
-checkbox on, while Readability Mode (the existing extraction used for
-Save/re-fetch) can pull the real article from the same feeds. Worth wiring
-the checkbox to run that extraction live when the stored body is thin.
-Not scoped — needs a real example of a thin-stub feed to test against first.
-
-### One stored image per entry, but three feeds want two
-
-Found 2026-08-13, **not built.** Three comic feeds want a different image in the
-list than in the article, and Lectio stores **one** URL per entry — the list crop
-is *derived* from it on the render path, network-free by contract. That works
-only when the crop's URL is derivable:
-
-| feed | article | list | derivable? |
-|---|---|---|---|
-| Penny Arcade | `/comics/x.jpg` | `/comics/panels/x-p1.jpg` | yes — plugin |
-| dresdencodak | `dc_minis_N.jpg` | `dc_minis_N_thumbnail.jpg` | yes, for DC Minis only |
-| mahonoir | `03-10.jpg` | og `0310thumb.png` | **no** (`03-12.jpg` → `12thumb.png`) |
-
-mahonoir needed no code in the end — the publisher ships a purpose-made preview
-card as a media thumbnail, so `media_rss` (manually locked) picks it up. But that
-was luck, and the Tuning panel shows a *better* og:image for those posts that
-nothing can select while another strategy supplies the lead.
-
-The general fix is a second stored URL plus a per-feed "thumbnail source"
-setting (auto / same as article / og:image / media). That is a meta-DB column, so
-it needs the startup per-user migration or existing tenants 500. Worth doing when
-a fourth feed wants it; not before.
-
-**Check what the feed already provides before writing a plugin** — two of three
-needed derivation, one needed only the right strategy.
-
-### og_scrape feeds with no og:image at all
-
-Found in the 2026-08-13 lead-image sweep, **no action taken.** Of 585
-auto-detected `og_scrape` feeds, **162 entries' source pages carry no `og:image`**
-— they fall back to a body image, which is correct for them. Not broken, but
-that bucket is where any future "odd body image was picked" report will come
-from, so it is worth knowing it exists before re-diagnosing from scratch.
-
-### Single-user mode does not exist anymore — retire DEFAULT_USER
-
-Multi-user is simply how Lectio works now; making one account is the "single user" case. But `DEFAULT_USER_ID = "default"` survives as the default value of the `lectio_current_user` ContextVar (`services/tenancy.py:53`), so any code path that never binds a user silently resolves to the legacy top-level DBs at `/data/lectio_meta.sqlite3` and `/data/lectio_reader.sqlite` instead of failing. Those files are stale — the legacy reader DB was last written 2026-07-24 and is 73 KB against a 685 MB per-user one — so the failure mode is not an error, it is quietly correct-looking answers computed from the wrong database. It has already produced nonsense failing-feed counts during debugging, and it is the same trap as a background thread losing its tenancy binding.
-
-The change: default the ContextVar to `None` and make resolution raise when unbound, so every background thread, CLI script and push handler must bind a user explicitly and a missed binding fails loudly at the first read. Then delete the legacy path branches in `tenancy.py` and the stale DB files, and drop `DEFAULT_USER_ID` from `_RESERVED_USERNAMES`.
-
-Not small: 54 references outside `tenancy.py` and `tests/`. Wants its own PR, and wants the per-user startup migration checked, since anything still reading the legacy paths will surface the moment they stop resolving. Related: the bg-thread tenancy rule already in place (`_run_in_user_context`).
-
-### Backfill older posts from a URL pattern
-
-Idea 2026-08-13, **not scoped.** A feed shows the publisher's recent window; the
-back catalogue is usually still on the site behind predictable URLs (paginated
-archives, or per-item ids the feed already exposes). Where the pattern is
-derivable, Lectio could walk backwards and import what the feed no longer lists,
-instead of the library starting the day you subscribed.
-
-The fetching is the easy half. These are the decisions to make first:
-
-- **Dates.** A synthesized entry with no real published date lands at "now" and
-  floods the top of the Inbox — the exact corruption `restore_bumped_publish_dates`
-  had to repair. Mine the date from the page, and if there is none, the entry is
-  not importable rather than importable-with-today.
-- **Identity, before the first fetch.** Backfill must dedupe against what is
-  already there *and* against what was deliberately deleted, or an import
-  resurrects everything the user threw away. `dedup_dismissed` and the
-  retention sweep both have a claim here.
-- **Where it stops.** Walking until 404 is how one subscription becomes 4,000
-  entries. Needs a bound the user sets (N pages, or back to a date) and a dry
-  run that reports the count before writing.
-- **Rate.** This is the largest burst of outbound requests the app could make.
-  It must go through `refetch_batch.run_paced`, not a new loop
-  ([[good-web-citizen]] applies at import too).
-
-Fits the existing adapter shape: a per-feed pattern (stored, not hardcoded —
-see `image_size_rule` for the precedent) plus a paced walker. Worth a real plan
-before any code.
-
-### "Filter this view" — two follow-ups left
-
-- **`list_entries_for_feeds` enriches every record it returns**, so both
-  whole-view routes (`/entries/move-visible-to-feed` and the older
-  `/entries/mark-range-read`) pay full display work — thumbnails, favicons,
-  formatted dates — for entries nobody will render. A `light_only=True` that
-  returns the pre-enrichment records would serve both; the move endpoint needs
-  only `feed_url`/`id`/`title`/`link`/`feed_title`, and mark-range-read needs
-  only `feed_url`/`id`. Not done because it touches a hot, heavily-shared
-  function and the existing unbounded caller has been fine in production;
-  measure before building.
-- **`/entries/mark-range-read` ignores the active search.** It passes scope,
-  tag, sort and read/star filters to `list_entries_for_feeds` but never `q`, so
-  "mark everything above this" inside a search resolves the anchor against the
-  unsearched list. Noticed while modeling the move route on it; not fixed here
-  because it is a separate behavior change with its own test surface.
-
-### Auto-file saved articles — the tail
-
-- **guitarplayer.com's 303 articles** — the site's own subscription is a
-  scraped one-article stub (barred as a target), and probing showed many
-  article URLs soft-404. **Decision confirmed 2026-08-09: look for/build a
-  real guitarplayer feed** rather than leaving them as one-off saves or
-  deleting — worth the investigation despite the soft-404s.
-- **166 already-converted stars** — tagged entries starred by a since-fixed
-  backfill bug. Indistinguishable from a genuine star-and-tag, so they cannot
-  be surgically reverted; the unstar-tagged pass is what removes them.
+**Dedup subsystem** — one coherent area, biggest single feature idea on the list.
 
 ### Combine cross-feed duplicates instead of marking one read
 
@@ -300,27 +379,70 @@ than one real feed, or similar — the script reports but never guesses at
 these). Worth a manual look via `/saved/duplicates` if they're worth
 clearing by hand; low urgency otherwise.
 
-### Feed-tag suggestion suppression — do not attempt a third heuristic
+### Saved-articles dupe scan follow-ups (deferred)
 
-**Tried twice and REVERTED (2026-07-29).** Read this before trying again.
+> **Deprioritized 2026-07-21 by the cross-feed measurement (see "Cross-feed duplicate scan").** Fuzzy
+> matching was the theory for "there must be more dupes"; the measurement says the
+> missing dupes aren't fuzzy, they're **out of scope** — the scan only reads
+> `lectio:saved` while the Saved view shows all starred items, and 447 of ~490
+> real duplicate groups are cross-feed. Within `lectio:saved` the exact tiers find
+> just 5 groups in 4,334 items, so there is little left for fuzzy to catch. Fix the
+> scope first (cross-feed scan, and auto-filing which collapses most of them),
+> re-measure, and only then ask whether fuzzy is worth its false-positive risk.
 
-- *Coverage* (tag on ~90% of a feed's entries) caught `Popular Deals`, `Forum`,
-  `VinylDeals`, `LaptopDeals`, talkpython's 8-tag block — 661 pairs. Then Josh:
-  "Lessons should be the category". A guitarplayer tag feed puts `Lessons` on every
-  post and it is the right filing tag. **Suggestions are for filing, not for
-  discriminating within a feed, so uniformity is not disqualifying.**
-- *Feed-name echo* (uniform AND tag tokens ⊆ feed-title tokens, camelCase split)
-  looked right: it suppressed `Popular Deals`/`VinylDeals` and kept `Lessons`
-  against the title "Guitar Player" — **which was an assumed title.** The live one
-  is "Latest from Guitar Player in Lessons", so it suppressed `Lessons` too. Feed
-  URLs fail the same way: `/r/VinylDeals/` vs `/feeds/tag/lessons`.
+- **Fuzzy title matching in the Saved scan** — `/saved/duplicates` matches on
+  canonical URL/slug (confirmed) and exact normalized title / extracted-body
+  prefix (possible). A typo-fixed re-save where the title, URL, *and* body all
+  changed slips through; the safe-dedup fuzzy tier (`title_word_similarity`
+  ≥ 0.80) would catch it but needs blocking (e.g. rarest-title-word buckets) to
+  stay sane at 10k+ saved items. Add only if the exact tiers leave real dupes
+  behind after the Instapaper-import cleanup.
 
-`VinylDeals` is a *place*; `Lessons` is a *kind of content*. That is semantic and
-no feed metadata expresses it. **A useless chip is ignored; a hidden wanted one is
-invisible** — so everything is shown and the user dismisses per (feed, tag).
-Resolution shipped 2026-07-29: manual per-(feed, tag) dismissal
-(`suppressed_feed_tags`, × on each chip, undo at Feed Properties → *Hidden
-tags*) instead of a third heuristic.
+### Auto-file saved articles — the tail
+
+- **guitarplayer.com's 303 articles** — the site's own subscription is a
+  scraped one-article stub (barred as a target), and probing showed many
+  article URLs soft-404. **Decision confirmed 2026-08-09: look for/build a
+  real guitarplayer feed** rather than leaving them as one-off saves or
+  deleting — worth the investigation despite the soft-404s.
+- **166 already-converted stars** — tagged entries starred by a since-fixed
+  backfill bug. Indistinguishable from a genuine star-and-tag, so they cannot
+  be surgically reverted; the unstar-tagged pass is what removes them.
+
+**Rules engine follow-ups**
+
+### email_batch_queue has the same scope-text-identity fragility rule_uid just fixed elsewhere
+
+Found 2026-08-29 alongside the `youtube_playlist_added` fix (see git history —
+`highlight_keywords.rule_uid` now survives a scope-changing edit).
+`email_batch_queue` is `UNIQUE(rule_scope, rule_scope_id, rule_keyword,
+entry_id)`, same pattern: editing a batch email rule's scope/keyword while
+entries are queued orphans them (they never flush). Lower stakes than the
+YouTube case — the queue drains on its own schedule rather than accumulating
+history, and the failure mode is a dropped/duplicate email, not a
+non-idempotent external write. Not fixed — no report of it actually biting
+anyone yet; wire it to `rule_uid` if one comes in.
+
+### Tag filtering for firehose feeds — follow-ups
+
+The generic **tag_filter rule** is shipped (rules engine `tag_filter` type;
+see ARCHITECTURE "Feed-provided tag suggestions"): include/exclude feed-tag
+lists per rule, any scope, auto-mark-read after refresh, dry-run/run-now/
+history.
+
+Multi-word tags are **not** a problem: `parse_tag_filter_spec`
+([main.py:5779](main.py#L5779)) splits on **commas, not spaces**, and
+`normalize_tag_value` hyphenates to the stored form — so
+`+Steam Deck, -Xbox Series X/S` can be typed naturally.
+
+Remaining follow-ups:
+
+- **dev.to adapter** stays API-based (its value is language/reaction
+  filtering, not just tags): extend to multiple include tags — one API call
+  per include tag, merged + deduped by article id, exclusion applied
+  client-side on `tag_list`.
+- freeCodeCamp per-tag Ghost RSS (`/news/tag/<slug>/rss/`) remains a fallback
+  if include-list recall from the main feed's window is insufficient.
 
 ### Article cleanup — Phase 2: promote a removal into a per-feed rule
 
@@ -365,137 +487,32 @@ Re-measure once there are edits on **≥3 entries of the same real feed** —
 that's the shape that would justify building this. Until then Phase 1's
 hand-cleanup is doing the job.
 
-### Offline actions — two pieces left
+### Refetch-All has no "already re-fetched recently" skip
 
-Shipped 2026-08-01 and confirmed on the Supernote 2026-08-02; design rationale is
-in ARCHITECTURE.md ("Offline reading and offline acting"). What was left undone:
+Surfaced 2026-08-23 alongside the re-fetch date picker (built 2026-08-24 —
+see `docs/architecture/saved.md` "The re-fetch date picker"). There is no
+dedicated "last fetched/re-fetched at" column — only `entries.published`
+(the article's own date), `entries.first_updated` (Lectio's original ingest
+time, now *not* always immutable: the date picker's "Now"/"Pub date" choices
+deliberately move it), and `entry_content_edits.edited_at` (frozen at the
+*first* re-fetch, for the Revert button — not updated on later ones). If
+Refetch-All should ever skip entries already re-fetched recently — no point
+re-spending a site's bandwidth on articles just fixed minutes ago — that
+needs a new column; nothing today records it. Not scoped further; raised but
+not asked for yet.
 
-- **The stale-action guard.** The conflict rule as shipped is plain
-  last-writer-wins: a queued action replays over whatever the server now holds.
-  "If the server state already moved, accept the server's version" needs a
-  per-entry modification time the schema does not carry (`archived_entries` has
-  `archived_at`, `saved_entries` has `saved_at`, tags and read state have
-  nothing), so it is a schema question, not a client tweak. Low urgency — the
-  only conflicting writer is Josh on another device, within minutes. Worth doing
-  only if a surprising revert is actually observed.
-- **An offline star/unstar.** Scoped in but not built: the reader has no star
-  control, only Archive (which unstars) and Delete. Adding one is a UI question
-  first, and Read Mode deliberately has few controls.
+### Read Mode: no Back guard
 
-Deliberately *not* built: a `synced_actions` idempotency table. The four routes
-the outbox drives are already idempotent set-state operations, so replaying one
-is a no-op; an action-id table would cost a meta-DB schema change plus the
-startup per-user migration for no behavioral change.
+Read Mode (`GET /read`) still has no equivalent of the main app's Back-button
+guard (resume was already fixed 2026-08-25 — separate `lectio-read-last-position`
+localStorage key so the main app and Read Mode don't bounce into each other).
+Not cheap: `/read` has no drawer for Back to land on, and a Back that visibly
+does nothing is worse than one that exits the app. Give Read Mode a
+collapsible folder tree first, then add the guard.
 
-### Page-weight reduction — follow-ups
+## Tier 5 — deliberately deferred / big investments
 
-- **Entry-pane loading state/timeout** — slow pane loads still look like dead
-  clicks.
-- **Optional**: the pane-swap path still renders the full page server-side per
-  fetch (posts + tree + shells, ~200KB now); a render-splitting/fragment
-  endpoint for `.pane-posts`/`.pane-entry` would cut server time further.
-
-### Home-route latency under refresh — measured, partly fixed
-
-Reported 2026-08-11 as "serious delay browsing". Home requests logged a median of
-700ms but **9% over 3s, peaking at 7.2s**, always while a refresh pass was
-running. Shipped that day: the route no longer builds a `FeedInFolder` for all
-2,867 feeds on every load (only the two folders whose rows actually render), which
-removes most of the pure-Python work that was being contended over.
-
-Two dead ends, both measured, so nobody re-runs them:
-
-- **Free-threaded Python is blocked by lxml.** The whole dependency stack
-  (pillow, lxml, uvloop, pydantic-core) installs fine on free-threaded 3.14.6,
-  but importing the app flips `sys._is_gil_enabled()` back to `True`:
-  *"the GIL has been enabled to load module 'lxml.etree', which has not declared
-  that it can run safely without the GIL"*. lxml 6.1.1 is current, so there is
-  nothing to upgrade to. `PYTHON_GIL=0` would force it, but lxml arrives via
-  `readability-lxml` and runs in the **refresh thread** — forcing unprotected C
-  code in the one concurrent path is the worst possible place to take that risk.
-  Recheck when lxml declares free-threading support; nothing else blocks it.
-- **`sys.setswitchinterval()` does not help.** Benchmarked against the app's own
-  sanitizer in a background thread with home-route-shaped work in the foreground:
-  default 5ms gave p50 22.2ms / p95 30.3ms; 1ms, 0.5ms and 0.1ms were all *worse*
-  on latency (25-26ms p50) **and** on refresh throughput. Pure context-switch
-  overhead. Do not ship it.
-
-**The open lead.** That benchmark showed a competing CPU thread roughly *doubles*
-foreground latency (11ms → 22ms). Production went 0.5s → 7s, which is ~14×. So
-GIL contention alone does not explain the spikes and something else is
-contributing — candidates, in order of suspicion: the `_home_request_semaphore`
-serialising concurrent home renders (it 503s rather than queues, so a phone
-retrying compounds it), meta-DB lock contention with refresh's writes, and
-refresh's own DB work blocking readers. **Instrument the region between the
-`tag_block` and `posts_block` ticks before theorising further** — the whole reason
-this took a while to find is that the expensive part sat in a gap with no timing
-of its own.
-
-Also corrected while chasing this: refresh is **not** a thread pool. It calls
-`reader.update_feed()` sequentially in one background thread, so the contention
-is one CPU-hungry thread, not many.
-
-### Read Above/Below still slow right after a refresh touches the same feeds
-
-`_light_entries_from_sql` (2026-08-28, docs/architecture/views.md) fixed the
-entry-hydration cost — reading the "Deals" folder's full history (17 feeds,
-~10.7k entries) dropped from 8.4s to 0.4-1.0s in a settled DB. But a real
-mark-range-read minutes later on the same folder measured `fetch_ms=4301`
-(~5s total) instead. Diagnosed, not fixed: a refresh cycle had just written to
-that folder's feeds (slickdeals: `modified=16`) ~3 minutes earlier, and
-reading through a WAL file still holding recent writes costs more than
-reading a checkpointed one. Same shape as the home-route item above —
-concurrent-with-refresh reads pay a tax the isolated benchmark doesn't show.
-Ruled out as a cause: the mark-as-read write loop itself (117 individual
-`reader.mark_entry_as_read` calls) — measured at 38ms total, not the
-bottleneck.
-
-The lead, if picked up: whether reader's WAL checkpoint behavior can be made
-more proactive after a refresh pass, so reads shortly after don't inherit an
-un-checkpointed WAL. Bigger and riskier than the fetch-path fix — it's a
-pragma/timing change affecting every read/write in the app, not just this one
-path, so it needs its own measurement pass before touching anything.
-
-### Parked, deliberately
-
-Genuinely nothing to do here until one of these recurs or a lead turns up —
-not scheduled, just watched.
-
-- **makeuseof re-fetch returns white images.** Seen once during testing
-  2026-08-06 and never investigated. Waiting on a second sighting rather than
-  hunting it cold — Josh will flag it if it recurs.
-- **~407 stored feed URLs differ from canonical only by a trailing slash.**
-  Harmless: re-measured 2026-08-11 across 2,868 feeds and there are **zero**
-  canonical collisions, so no duplicate subscriptions are hiding behind them. A
-  normalization pass would tidy the spellings and nothing else.
-- **A re-fetch that returns a *different unique* article.** The sibling-text
-  guard cannot see this shape — entry 26031 came back as a piece about
-  sandbox-game rendering, unique text and all. The slug/title mismatch guard is
-  what should have caught it and did not. Worth investigating if it recurs.
-- **The scheduler's trickle case.** The stall watchdog bounds it but does not
-  prevent it: a host feeding one byte per 29s keeps a pass "advancing" per-read
-  but not per-feed. If that shows up, the fix is a per-feed wall-clock budget in
-  `update_feeds`, not a shorter read deadline.
-- **The Wayback timestamp as a date source.** The availability API returns the
-  *closest* snapshot, so its timestamp is whatever crawl happened to be nearest.
-  A real first-capture date needs the CDX API sorted ascending; probed
-  2026-08-04, it worked (what-if/105 → 2014-07-19) but timed out on 2 of 3 tries.
-  Worth revisiting only if a cluster shows up with no other date source.
-- **Inline SVG in feed content is mangled at ingest.** feedparser parses an
-  HTML-escaped `<description>` as HTML, where a trailing slash is meaningless, so
-  `<rect/><circle/><path/>` becomes `<rect><circle><path>` — every shape nested
-  inside the rect, which cannot contain them. The browser paints the rect and
-  drops the rest, so **any feed shipping inline SVG art renders as a flat colour
-  block**. Lectio's own sanitizers are innocent; the damage is done before either
-  sees it. A real fix means re-parsing SVG subtrees as XML at ingest. The
-  screenshot tooling emits explicit end tags to dodge it, which is a workaround
-  for the demo, not a fix.
-- **Article-nav post-swap binder exception.** Mitigated 2026-07-08 (the
-  pane-swap catch-all no longer hard-reloads on a post-swap error once the pane
-  has already rendered), but the underlying entry-specific binder exception
-  still exists somewhere. If it recurs, grab the
-  `'[lectio] entry-pane post-swap enhancement failed'` console error to
-  identify and fix the actual binder.
+**Architecture**
 
 ### main.py / index.html breakup — extraction map (2026-08-09, investigation only)
 
@@ -551,121 +568,46 @@ mechanical file split.
 7. The shared rendering core — do not attempt as part of a mechanical
    split; treat as its own carefully-tested project.
 
-### Full-content fetch at ingest for body-less feeds
+### Single-user mode does not exist anymore — retire DEFAULT_USER
 
-meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
-description/content element at all; older stored entries have bodies, so this
-is upstream). A per-feed "fetch full content from the source page at ingest"
-option (readability pipeline already exists) would fix such feeds generally —
-per-feed opt-in in Feed Properties, capped/throttled like enhancement. Doesn't
-help the bot-walled feeds above (they're blocked at fetch, before content
-matters) but could recover feeds elsewhere that are body-less rather than
-blocked.
+Multi-user is simply how Lectio works now; making one account is the "single user" case. But `DEFAULT_USER_ID = "default"` survives as the default value of the `lectio_current_user` ContextVar (`services/tenancy.py:53`), so any code path that never binds a user silently resolves to the legacy top-level DBs at `/data/lectio_meta.sqlite3` and `/data/lectio_reader.sqlite` instead of failing. Those files are stale — the legacy reader DB was last written 2026-07-24 and is 73 KB against a 685 MB per-user one — so the failure mode is not an error, it is quietly correct-looking answers computed from the wrong database. It has already produced nonsense failing-feed counts during debugging, and it is the same trap as a background thread losing its tenancy binding.
 
-### Single-post pages as first-class entries (the "feed" that is one document)
+The change: default the ContextVar to `None` and make resolution raise when unbound, so every background thread, CLI script and push handler must bind a user explicitly and a missed binding fails loudly at the first read. Then delete the legacy path branches in `tenancy.py` and the stale DB files, and drop `DEFAULT_USER_ID` from `_RESERVED_USERNAMES`.
 
-Josh has several "feeds" that are really **a single standing document** — e.g.
-`https://schacon.github.io/git/everyday.html` (Everyday Git). There's no RSS to
-subscribe to, and the content is a reference doc he wants to keep and re-read, not
-a stream.
+Not small: 54 references outside `tenancy.py` and `tests/`. Wants its own PR, and wants the per-user startup migration checked, since anything still reading the legacy paths will surface the moment they stop resolving. Related: the bg-thread tenancy rule already in place (`_run_in_user_context`).
 
-Current workaround (his): save as a Saved Article → create a feed → move the entry
-into it. Two things make that unsatisfying, and they're separate problems:
+### Add OIDC login
 
-1. **The capture is bad** — that is what the full-page capture mode is for (readability returns 6.7% of this
-   particular page, and the wrong node). Fixing raw/full-page save makes the
-   workaround *work*, and is the cheap immediate win.
-2. **The workflow is a hack** — "save, then manufacture a feed, then move it" is
-   three steps to express "track this one page." A first-class **single-page
-   subscription** would be: add a URL, get a one-entry feed, optionally re-check
-   periodically and bump/re-capture when the page changes (the classic
-   page-monitoring feature other readers ship for RSS-less sites). Natural home is
-   the existing add-feed/discovery path — when discovery finds no feed, offer
-   "track this page" instead of failing.
+Not scoped. Current auth (`services/users.py`, `/login` at `main.py:21999`)
+is username/password only — no SSO/OIDC exists today. Architecture-level
+addition (new login flow, session handling alongside the existing one,
+tenancy binding from an OIDC subject to a Lectio `user_id`, first-login
+provisioning) — wants a real plan before code, not attempted yet.
 
-**Josh's stated preference (2026-07-21) is not a synthetic single-page feed — it's
-to file such pages into an existing, at-least-related real feed.** That is what auto-filing does,
-which does exactly this in bulk. So the first-class single-page subscription is
-mostly *superseded*: build #1's raw-capture fix (makes the content good) and
-auto-file (puts it somewhere sensible), then reassess. Only revisit
-page-monitoring if the "re-check the page for changes" half turns out to be
-the actual want.
+### Multiuser
 
-### Backfill already-expired signed lead-image thumbnails — script built, not yet run
-
-**Built 2026-08-28**: `scripts/backfill_expired_deviantart_thumbnails.py`
-(dry-run by default, `--apply` to write, `--limit`/`--delay`/`--user`).
-Walks every un-pinned wixmp `entry_lead_images` row, calls the same
-`_resign_expired_deviantart_url` the article-view path already uses (cheap
-checks first, so most rows cost no DeviantArt API call at all), and feeds
-the result through `store_entry_lead_image` — which pins it as a side
-effect via the existing 2026-08-24 sink. Not run against the live ~22,300-row
-backlog yet — needs a dry-run count first to gauge how much of the batch is
-actually still resignable (a dead deviation with no fresh URL to fetch just
-stays unpinned).
-
-### Tag filtering for firehose feeds — follow-ups
-
-The generic **tag_filter rule** is shipped (rules engine `tag_filter` type;
-see ARCHITECTURE "Feed-provided tag suggestions"): include/exclude feed-tag
-lists per rule, any scope, auto-mark-read after refresh, dry-run/run-now/
-history.
-
-Multi-word tags are **not** a problem: `parse_tag_filter_spec`
-([main.py:5779](main.py#L5779)) splits on **commas, not spaces**, and
-`normalize_tag_value` hyphenates to the stored form — so
-`+Steam Deck, -Xbox Series X/S` can be typed naturally.
-
-Remaining follow-ups:
-
-- **dev.to adapter** stays API-based (its value is language/reaction
-  filtering, not just tags): extend to multiple include tags — one API call
-  per include tag, merged + deduped by article id, exclusion applied
-  client-side on `tag_list`.
-- freeCodeCamp per-tag Ghost RSS (`/news/tag/<slug>/rss/`) remains a fallback
-  if include-list recall from the main feed's window is insufficient.
-
-### New subscription missing from feed tree — UX idea remaining
-
-Root-cause code bug already fixed (2026-07-08: re-adding a feed that existed
-in reader as disabled now calls `enable_feed()`). Remaining idea, not asked
-for: auto-disambiguate duplicate display titles (e.g. suffix from the feed
-URL path) — the tree tooltip already shows the URL, but identical titles
-still invite unsubscribing the wrong feed.
-
-### Global audio player — deferred v2 ideas
-
-Shipped in PR #111 (see git history). Still deferred: queue/playlist of audio
-across a folder, remember position per episode, Media Session API (lock-screen /
-hardware-key controls), speed presets.
-
-### Uncategorized orphan-feed cleanup — 9 stragglers left (manual)
-
-9 feeds are dead/one-shot/ambiguous (an Instagram post URL, a single Vice
-article, cochaser.com (no entries), WebServicesDir, whiskypaint/nolanfa
-tumblrs, norfolkwinters, crispian-jago, owenyoung myfeed) — sort or
-unsubscribe manually.
-
-### Send-to-destination — remaining candidates
-
-The rule engine + on-star fan-out + shared destination senders are shipped
-(Instapaper auto-rule, YouTube playlist, email, Quire, Pinterest). Only build more
-destinations if actually wanted: save-to-tag / starred-archive as a rule action,
-future read-later services (Pocket is shutting down; Readwise/Reader, Wallabag if
-someone runs one). Each is "manual action → rule type" reusing the existing engine
-(own per-run cap, "configured?" gate, run-log entry, not-idempotent guard). Small
-per destination.
-
-**Readit (wereadit.com)** — send-to-Readit is blocked: their
-`/api/bookmarklet/save` is unreachable outside their own extension
-(Cloudflare challenges both server traffic and the browser CORS preflight).
-Revisit only if Readit CORS-enables the endpoint (issue draft handed to
-Josh for github.com/mahmoudalwadia/readit-extension). **Import from Readit**
-likewise blocked until they expose an export/RSS/API of saves. The reverse
-direction works today — Lectio speaks the Readit extension's save protocol
-(see ARCHITECTURE "Extension save protocol"), so pointing the extension's
-Backend at Lectio is a one-click capture path already.
-
+- **Performance investigation** — a systematic per-request baseline (DB time,
+  enrich time, refresh contention) under realistic load.
+- **Shared-content tenancy mode** — one global feed/entry store plus per-user
+  overlays (read/star/folders/subs). Only worth building at real scale, but it is
+  the biggest caching/refresh win: one refresh per feed regardless of subscriber
+  count, deduped storage, and unread counts moved to an incrementally-maintained
+  per-user table instead of live scans. reader 3.24 documents the canonical
+  layout — `shared.sqlite` for content, per-user DBs for personal state, a routing
+  layer merging at query time, with `update_feeds_iter()` fanning out per-feed
+  results. Lectio currently fetches each feed once per user; that is fine for 1–3
+  trusted users and is the natural limit before this becomes worth building.
+- **Per-user resource fairness** — rate limits on refresh, scraping and thumb
+  generation. Not needed for trusted users; hooks are in the seam.
+- **Write-abuse protection (read-state spam).** Every read toggle writes the
+  reader DB and `entry_read_state` and bumps `_unread_counts_generation`, which
+  invalidates the counts cache and forces a recompute — so flip-flopping hammers
+  the shared SQLite. Defenses cheapest → strongest: coalesce rapid toggles on one
+  entry (last-write-wins); throttle the counts recompute per user; and the actual
+  blocker, a per-user token bucket on the state-changing endpoints returning 429
+  with a cooldown. ⚠ **Tune so legitimate heavy use never trips it** — fast
+  keyboard triage marking dozens of items is normal; only sustained pathological
+  flip-flopping should hit the limit.
 ### Lectio browser extension (fork of readit-extension)
 
 **Deliberately deprioritized below the Now chain**, despite item 1 being genuinely
@@ -720,24 +662,215 @@ no build step) into a Lectio-branded extension. Motivations, in value order:
 Keep the wire protocol unchanged (`/api/bookmarklet/save`) so the stock
 extension keeps working too.
 
-### Saved-articles dupe scan follow-ups (deferred)
+### Single-post pages as first-class entries (the "feed" that is one document)
 
-> **Deprioritized 2026-07-21 by the cross-feed measurement (see "Cross-feed duplicate scan").** Fuzzy
-> matching was the theory for "there must be more dupes"; the measurement says the
-> missing dupes aren't fuzzy, they're **out of scope** — the scan only reads
-> `lectio:saved` while the Saved view shows all starred items, and 447 of ~490
-> real duplicate groups are cross-feed. Within `lectio:saved` the exact tiers find
-> just 5 groups in 4,334 items, so there is little left for fuzzy to catch. Fix the
-> scope first (cross-feed scan, and auto-filing which collapses most of them),
-> re-measure, and only then ask whether fuzzy is worth its false-positive risk.
+Josh has several "feeds" that are really **a single standing document** — e.g.
+`https://schacon.github.io/git/everyday.html` (Everyday Git). There's no RSS to
+subscribe to, and the content is a reference doc he wants to keep and re-read, not
+a stream.
 
-- **Fuzzy title matching in the Saved scan** — `/saved/duplicates` matches on
-  canonical URL/slug (confirmed) and exact normalized title / extracted-body
-  prefix (possible). A typo-fixed re-save where the title, URL, *and* body all
-  changed slips through; the safe-dedup fuzzy tier (`title_word_similarity`
-  ≥ 0.80) would catch it but needs blocking (e.g. rarest-title-word buckets) to
-  stay sane at 10k+ saved items. Add only if the exact tiers leave real dupes
-  behind after the Instapaper-import cleanup.
+Current workaround (his): save as a Saved Article → create a feed → move the entry
+into it. Two things make that unsatisfying, and they're separate problems:
+
+1. **The capture is bad** — that is what the full-page capture mode is for (readability returns 6.7% of this
+   particular page, and the wrong node). Fixing raw/full-page save makes the
+   workaround *work*, and is the cheap immediate win.
+2. **The workflow is a hack** — "save, then manufacture a feed, then move it" is
+   three steps to express "track this one page." A first-class **single-page
+   subscription** would be: add a URL, get a one-entry feed, optionally re-check
+   periodically and bump/re-capture when the page changes (the classic
+   page-monitoring feature other readers ship for RSS-less sites). Natural home is
+   the existing add-feed/discovery path — when discovery finds no feed, offer
+   "track this page" instead of failing.
+
+**Josh's stated preference (2026-07-21) is not a synthetic single-page feed — it's
+to file such pages into an existing, at-least-related real feed.** That is what auto-filing does,
+which does exactly this in bulk. So the first-class single-page subscription is
+mostly *superseded*: build #1's raw-capture fix (makes the content good) and
+auto-file (puts it somewhere sensible), then reassess. Only revisit
+page-monitoring if the "re-check the page for changes" half turns out to be
+the actual want.
+
+### Backfill older posts from a URL pattern
+
+Idea 2026-08-13, **not scoped.** A feed shows the publisher's recent window; the
+back catalogue is usually still on the site behind predictable URLs (paginated
+archives, or per-item ids the feed already exposes). Where the pattern is
+derivable, Lectio could walk backwards and import what the feed no longer lists,
+instead of the library starting the day you subscribed.
+
+The fetching is the easy half. These are the decisions to make first:
+
+- **Dates.** A synthesized entry with no real published date lands at "now" and
+  floods the top of the Inbox — the exact corruption `restore_bumped_publish_dates`
+  had to repair. Mine the date from the page, and if there is none, the entry is
+  not importable rather than importable-with-today.
+- **Identity, before the first fetch.** Backfill must dedupe against what is
+  already there *and* against what was deliberately deleted, or an import
+  resurrects everything the user threw away. `dedup_dismissed` and the
+  retention sweep both have a claim here.
+- **Where it stops.** Walking until 404 is how one subscription becomes 4,000
+  entries. Needs a bound the user sets (N pages, or back to a date) and a dry
+  run that reports the count before writing.
+- **Rate.** This is the largest burst of outbound requests the app could make.
+  It must go through `refetch_batch.run_paced`, not a new loop
+  ([[good-web-citizen]] applies at import too).
+
+Fits the existing adapter shape: a per-feed pattern (stored, not hardcoded —
+see `image_size_rule` for the precedent) plus a paced walker. Worth a real plan
+before any code.
+
+**Grab bag** — low-urgency, independent of each other and of everything above.
+
+### "Filter this view" — two follow-ups left
+
+- **`list_entries_for_feeds` enriches every record it returns**, so both
+  whole-view routes (`/entries/move-visible-to-feed` and the older
+  `/entries/mark-range-read`) pay full display work — thumbnails, favicons,
+  formatted dates — for entries nobody will render. A `light_only=True` that
+  returns the pre-enrichment records would serve both; the move endpoint needs
+  only `feed_url`/`id`/`title`/`link`/`feed_title`, and mark-range-read needs
+  only `feed_url`/`id`. Not done because it touches a hot, heavily-shared
+  function and the existing unbounded caller has been fine in production;
+  measure before building.
+- **`/entries/mark-range-read` ignores the active search.** It passes scope,
+  tag, sort and read/star filters to `list_entries_for_feeds` but never `q`, so
+  "mark everything above this" inside a search resolves the anchor against the
+  unsearched list. Noticed while modeling the move route on it; not fixed here
+  because it is a separate behavior change with its own test surface.
+
+### Page-weight reduction — follow-ups
+
+- **Entry-pane loading state/timeout** — slow pane loads still look like dead
+  clicks.
+- **Optional**: the pane-swap path still renders the full page server-side per
+  fetch (posts + tree + shells, ~200KB now); a render-splitting/fragment
+  endpoint for `.pane-posts`/`.pane-entry` would cut server time further.
+
+### Offline actions — two pieces left
+
+Shipped 2026-08-01 and confirmed on the Supernote 2026-08-02; design rationale is
+in ARCHITECTURE.md ("Offline reading and offline acting"). What was left undone:
+
+- **The stale-action guard.** The conflict rule as shipped is plain
+  last-writer-wins: a queued action replays over whatever the server now holds.
+  "If the server state already moved, accept the server's version" needs a
+  per-entry modification time the schema does not carry (`archived_entries` has
+  `archived_at`, `saved_entries` has `saved_at`, tags and read state have
+  nothing), so it is a schema question, not a client tweak. Low urgency — the
+  only conflicting writer is Josh on another device, within minutes. Worth doing
+  only if a surprising revert is actually observed.
+- **An offline star/unstar.** Scoped in but not built: the reader has no star
+  control, only Archive (which unstars) and Delete. Adding one is a UI question
+  first, and Read Mode deliberately has few controls.
+
+Deliberately *not* built: a `synced_actions` idempotency table. The four routes
+the outbox drives are already idempotent set-state operations, so replaying one
+is a no-op; an action-id table would cost a meta-DB schema change plus the
+startup per-user migration for no behavioral change.
+
+### Email "full article text" doesn't run Readability on thin-stub feeds
+
+Noticed 2026-08-28 while building the full-text Email Article option. It
+only pulls what's already stored (`entry.content`/`entry.summary`) — for a
+feed that ships a thin stub body, that's still a thin email even with the
+checkbox on, while Readability Mode (the existing extraction used for
+Save/re-fetch) can pull the real article from the same feeds. Worth wiring
+the checkbox to run that extraction live when the stored body is thin.
+Not scoped — needs a real example of a thin-stub feed to test against first.
+
+### One stored image per entry, but three feeds want two
+
+Found 2026-08-13, **not built.** Three comic feeds want a different image in the
+list than in the article, and Lectio stores **one** URL per entry — the list crop
+is *derived* from it on the render path, network-free by contract. That works
+only when the crop's URL is derivable:
+
+| feed | article | list | derivable? |
+|---|---|---|---|
+| Penny Arcade | `/comics/x.jpg` | `/comics/panels/x-p1.jpg` | yes — plugin |
+| dresdencodak | `dc_minis_N.jpg` | `dc_minis_N_thumbnail.jpg` | yes, for DC Minis only |
+| mahonoir | `03-10.jpg` | og `0310thumb.png` | **no** (`03-12.jpg` → `12thumb.png`) |
+
+mahonoir needed no code in the end — the publisher ships a purpose-made preview
+card as a media thumbnail, so `media_rss` (manually locked) picks it up. But that
+was luck, and the Tuning panel shows a *better* og:image for those posts that
+nothing can select while another strategy supplies the lead.
+
+The general fix is a second stored URL plus a per-feed "thumbnail source"
+setting (auto / same as article / og:image / media). That is a meta-DB column, so
+it needs the startup per-user migration or existing tenants 500. Worth doing when
+a fourth feed wants it; not before.
+
+**Check what the feed already provides before writing a plugin** — two of three
+needed derivation, one needed only the right strategy.
+
+### og_scrape feeds with no og:image at all
+
+Found in the 2026-08-13 lead-image sweep, **no action taken.** Of 585
+auto-detected `og_scrape` feeds, **162 entries' source pages carry no `og:image`**
+— they fall back to a body image, which is correct for them. Not broken, but
+that bucket is where any future "odd body image was picked" report will come
+from, so it is worth knowing it exists before re-diagnosing from scratch.
+
+### Full-content fetch at ingest for body-less feeds
+
+meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
+description/content element at all; older stored entries have bodies, so this
+is upstream). A per-feed "fetch full content from the source page at ingest"
+option (readability pipeline already exists) would fix such feeds generally —
+per-feed opt-in in Feed Properties, capped/throttled like enhancement. Doesn't
+help the bot-walled feeds above (they're blocked at fetch, before content
+matters) but could recover feeds elsewhere that are body-less rather than
+blocked.
+
+### Send-to-destination — remaining candidates
+
+The rule engine + on-star fan-out + shared destination senders are shipped
+(Instapaper auto-rule, YouTube playlist, email, Quire, Pinterest). Only build more
+destinations if actually wanted: save-to-tag / starred-archive as a rule action,
+future read-later services (Pocket is shutting down; Readwise/Reader, Wallabag if
+someone runs one). Each is "manual action → rule type" reusing the existing engine
+(own per-run cap, "configured?" gate, run-log entry, not-idempotent guard). Small
+per destination.
+
+**Readit (wereadit.com)** — send-to-Readit is blocked: their
+`/api/bookmarklet/save` is unreachable outside their own extension
+(Cloudflare challenges both server traffic and the browser CORS preflight).
+Revisit only if Readit CORS-enables the endpoint (issue draft handed to
+Josh for github.com/mahmoudalwadia/readit-extension). **Import from Readit**
+likewise blocked until they expose an export/RSS/API of saves. The reverse
+direction works today — Lectio speaks the Readit extension's save protocol
+(see ARCHITECTURE "Extension save protocol"), so pointing the extension's
+Backend at Lectio is a one-click capture path already.
+
+### Global audio player — deferred v2 ideas
+
+Shipped in PR #111 (see git history). Still deferred: queue/playlist of audio
+across a folder, remember position per episode, Media Session API (lock-screen /
+hardware-key controls), speed presets.
+
+### Feed-tag suggestion suppression — do not attempt a third heuristic
+
+**Tried twice and REVERTED (2026-07-29).** Read this before trying again.
+
+- *Coverage* (tag on ~90% of a feed's entries) caught `Popular Deals`, `Forum`,
+  `VinylDeals`, `LaptopDeals`, talkpython's 8-tag block — 661 pairs. Then Josh:
+  "Lessons should be the category". A guitarplayer tag feed puts `Lessons` on every
+  post and it is the right filing tag. **Suggestions are for filing, not for
+  discriminating within a feed, so uniformity is not disqualifying.**
+- *Feed-name echo* (uniform AND tag tokens ⊆ feed-title tokens, camelCase split)
+  looked right: it suppressed `Popular Deals`/`VinylDeals` and kept `Lessons`
+  against the title "Guitar Player" — **which was an assumed title.** The live one
+  is "Latest from Guitar Player in Lessons", so it suppressed `Lessons` too. Feed
+  URLs fail the same way: `/r/VinylDeals/` vs `/feeds/tag/lessons`.
+
+`VinylDeals` is a *place*; `Lessons` is a *kind of content*. That is semantic and
+no feed metadata expresses it. **A useless chip is ignored; a hidden wanted one is
+invisible** — so everything is shown and the user dismisses per (feed, tag).
+Resolution shipped 2026-07-29: manual per-(feed, tag) dismissal
+(`suppressed_feed_tags`, × on each chip, undo at Feed Properties → *Hidden
+tags*) instead of a third heuristic.
 
 ### Code health (deferred — low value, no user impact)
 
@@ -805,27 +938,81 @@ Other unbuilt cleanups:
   rewrite that structure (or go through reader's API), not overwrite the column with
   a bare HTML string.
 
-### Multiuser
+## Watch-lists
 
-- **Performance investigation** — a systematic per-request baseline (DB time,
-  enrich time, refresh contention) under realistic load.
-- **Shared-content tenancy mode** — one global feed/entry store plus per-user
-  overlays (read/star/folders/subs). Only worth building at real scale, but it is
-  the biggest caching/refresh win: one refresh per feed regardless of subscriber
-  count, deduped storage, and unread counts moved to an incrementally-maintained
-  per-user table instead of live scans. reader 3.24 documents the canonical
-  layout — `shared.sqlite` for content, per-user DBs for personal state, a routing
-  layer merging at query time, with `update_feeds_iter()` fanning out per-feed
-  results. Lectio currently fetches each feed once per user; that is fine for 1–3
-  trusted users and is the natural limit before this becomes worth building.
-- **Per-user resource fairness** — rate limits on refresh, scraping and thumb
-  generation. Not needed for trusted users; hooks are in the seam.
-- **Write-abuse protection (read-state spam).** Every read toggle writes the
-  reader DB and `entry_read_state` and bumps `_unread_counts_generation`, which
-  invalidates the counts cache and forces a recompute — so flip-flopping hammers
-  the shared SQLite. Defenses cheapest → strongest: coalesce rapid toggles on one
-  entry (last-write-wins); throttle the counts recompute per user; and the actual
-  blocker, a per-user token bucket on the state-changing endpoints returning 429
-  with a cooldown. ⚠ **Tune so legitimate heavy use never trips it** — fast
-  keyboard triage marking dozens of items is normal; only sustained pathological
-  flip-flopping should hit the limit.
+Nothing here is scheduled — just what to check if a related symptom recurs.
+
+### CodeQL board — watch-note
+
+Board is at zero open alerts as of 2026-08-26 (PR #241 fixed a
+`py/weak-sensitive-data-hashing` on `_entry_thumb_cache_key`'s sha1 — CodeQL
+flags a hash whenever the input matches an "id" pattern, even here where
+`entry_id` is a public feed-entry id, not a credential, and the hash is a
+cache key, not a security control. Fixed rather than dismissed: sha256 costs
+nothing and ends the noise, cheaper than arguing false-positive each time).
+
+⚠ **A negative lookahead will not clear a redos alert.** CodeQL's regex model
+ignores lookaheads, so `(?:-(?!->)[^-]*)*` — measurably linear — was re-flagged
+as ambiguous on the first push of #200. Either write the loop lookahead-free or
+move the scan out of the regex into Python.
+
+**Committed page fixtures are excluded** (`paths-ignore: tests/fixtures`, added
+2026-08-13 for alert 198). A captured page is byte-for-byte what a site served,
+so analyzing it reports the remote site's choices as ours — jQuery from a CDN
+with no SRI, in that case.
+
+**If the reflective-XSS class keeps recurring**, the repo already has the pattern
+for it: `.github/codeql/queries/` holds guard-aware copies of the SSRF and
+path-injection queries that model our audited guards as sanitizer barriers, with
+the stock versions excluded in `codeql-config.yml`. A `LectioReflectiveXss.ql`
+modeling `html_sanitize.sanitize_html` / `sanitize_inline_title` as barriers would
+end the hand-dismissals. Not built yet — two dismissals is not yet a pattern, and
+excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
+`py/full-ssrf` was.
+
+### Parked, deliberately
+
+Genuinely nothing to do here until one of these recurs or a lead turns up —
+not scheduled, just watched.
+
+- **makeuseof re-fetch returns white images.** Seen once during testing
+  2026-08-06 and never investigated. Waiting on a second sighting rather than
+  hunting it cold — Josh will flag it if it recurs.
+- **A second raw-Markdown-instead-of-HTML feed, unconfirmed.** The
+  blog.gitea.com case is fixed (see git history 2026-08-30); Josh recalls a
+  similar wall-of-text symptom on another feed recently but couldn't place
+  which one. The fix already covers it generically if it recurs — just
+  watching for a confirmed second instance to be sure.
+- **~407 stored feed URLs differ from canonical only by a trailing slash.**
+  Harmless: re-measured 2026-08-11 across 2,868 feeds and there are **zero**
+  canonical collisions, so no duplicate subscriptions are hiding behind them. A
+  normalization pass would tidy the spellings and nothing else.
+- **A re-fetch that returns a *different unique* article.** The sibling-text
+  guard cannot see this shape — entry 26031 came back as a piece about
+  sandbox-game rendering, unique text and all. The slug/title mismatch guard is
+  what should have caught it and did not. Worth investigating if it recurs.
+- **The scheduler's trickle case.** The stall watchdog bounds it but does not
+  prevent it: a host feeding one byte per 29s keeps a pass "advancing" per-read
+  but not per-feed. If that shows up, the fix is a per-feed wall-clock budget in
+  `update_feeds`, not a shorter read deadline.
+- **The Wayback timestamp as a date source.** The availability API returns the
+  *closest* snapshot, so its timestamp is whatever crawl happened to be nearest.
+  A real first-capture date needs the CDX API sorted ascending; probed
+  2026-08-04, it worked (what-if/105 → 2014-07-19) but timed out on 2 of 3 tries.
+  Worth revisiting only if a cluster shows up with no other date source.
+- **Inline SVG in feed content is mangled at ingest.** feedparser parses an
+  HTML-escaped `<description>` as HTML, where a trailing slash is meaningless, so
+  `<rect/><circle/><path/>` becomes `<rect><circle><path>` — every shape nested
+  inside the rect, which cannot contain them. The browser paints the rect and
+  drops the rest, so **any feed shipping inline SVG art renders as a flat colour
+  block**. Lectio's own sanitizers are innocent; the damage is done before either
+  sees it. A real fix means re-parsing SVG subtrees as XML at ingest. The
+  screenshot tooling emits explicit end tags to dodge it, which is a workaround
+  for the demo, not a fix.
+- **Article-nav post-swap binder exception.** Mitigated 2026-07-08 (the
+  pane-swap catch-all no longer hard-reloads on a post-swap error once the pane
+  has already rendered), but the underlying entry-specific binder exception
+  still exists somewhere. If it recurs, grab the
+  `'[lectio] entry-pane post-swap enhancement failed'` console error to
+  identify and fix the actual binder.
+
