@@ -1587,6 +1587,22 @@
     // Intercept internal app navigation links and perform SPA loads.
     // Do not intercept external links, modified clicks, or the brand/logo
     // (which must remain a bare `/`).
+    // Only a click on the root "Feeds" (or root "Saved") scope's OWN filter
+    // pill should become the remembered default for next time -- a folder,
+    // feed, or tag view's filter choice is for that view alone. Raised
+    // 2026-08-31: toggling read/unread while looking at one single feed was
+    // silently changing what "Feeds" (all) opens to on the next visit.
+    function _readFilterPillIsRootScope(url) {
+      if (url.searchParams.has('feed_url') || url.searchParams.has('list_feed_url') || url.searchParams.has('tag')) {
+        return false;
+      }
+      const folderId = url.searchParams.get('folder_id');
+      if (!folderId) return true;
+      const rootTree = document.querySelector('.tree[data-root-folder-id]');
+      const rootFolderId = rootTree ? rootTree.getAttribute('data-root-folder-id') : null;
+      return !rootFolderId || folderId === rootFolderId;
+    }
+
     document.addEventListener('click', function(e){
       const a = e.target.closest('a');
       if (!a) return;
@@ -1618,7 +1634,7 @@
         if (a.matches && a.matches('.filter-menu .menu-item:not(.filter-history-item)')) {
           const u2 = new URL(href, window.location.origin);
           const rf = u2.searchParams.get('read_filter') || u2.searchParams.get('resume_read_filter');
-          if (rf) {
+          if (rf && _readFilterPillIsRootScope(u2)) {
             // Feeds and Saved keep separate remembered filters (mode from the link).
             const savedMode2 = u2.searchParams.get('star_only') === '1';
             window.localStorage.setItem(savedMode2 ? 'lectio-read-filter-saved' : 'lectio-read-filter', rf);
@@ -1668,7 +1684,7 @@
       try {
         const u = new URL(pill.href, window.location.origin);
         const rf = u.searchParams.get('read_filter') || u.searchParams.get('resume_read_filter');
-        if (rf) {
+        if (rf && _readFilterPillIsRootScope(u)) {
           // Feeds and Saved keep separate remembered filters (mode from the link).
           const savedMode2 = u.searchParams.get('star_only') === '1';
           window.localStorage.setItem(savedMode2 ? 'lectio-read-filter-saved' : 'lectio-read-filter', rf);

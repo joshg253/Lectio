@@ -474,6 +474,25 @@ marks "don't touch this" (retention/purge, bulk mark-read), so the filter meant
 to find what you starred has to honor that unconditionally, or starring
 something hidden would defeat the point of being able to find it again.
 
+### The remembered read-filter default must only come from the root scope
+
+Same bug class as the sort one above, raised 2026-08-31: toggling Read/Unread while
+looking at one single feed was silently changing what the root "Feeds" (all) view
+opens to on the next visit. `lectio-read-filter`/`lectio-read-filter-saved`
+(localStorage, mirrored to a same-named cookie the server reads for the default
+when a request carries no explicit `read_filter`) were written on *any*
+`.filter-menu` pill click, keyed only by `star_only` (Feeds vs Saved mode) — never
+by scope. A folder, feed, or tag view's filter choice is for that view alone, not a
+vote for every other view's default.
+
+`_readFilterPillIsRootScope(url)` gates both write sites (the capture-phase link
+interceptor and the plain filter-pill click listener — kept as two listeners
+deliberately, to avoid a capture/bubble race, so both need the same gate):
+a click only persists when the clicked link has no `feed_url`/`list_feed_url`/`tag`,
+and its `folder_id` (if any) matches the tree's own root folder id
+(`.tree[data-root-folder-id]`). Anything narrower still filters the current view via
+the URL param — it just stops overwriting the shared default.
+
 ## Async bulk mark-read
 
 `/feeds/mark-read`, `/folders/mark-read`, and `/entries/mark-older-than-read` serve two response modes controlled by the `X-Requested-With` request header:
