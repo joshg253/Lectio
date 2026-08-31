@@ -328,6 +328,7 @@
           <button type="button" class="feeds-tab-btn" data-feeds-view="failing" role="tab" aria-selected="false">Failing{% if failing_feeds %} <span class="feeds-tab-count">{{ failing_feeds | length }}</span>{% endif %}</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="deactivated" role="tab" aria-selected="false">Deactivated{% if inactive_feed_count > 0 %} <span class="feeds-tab-count">{{ inactive_feed_count }}</span>{% endif %}</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="stale" role="tab" aria-selected="false">Stale</button>
+          <button type="button" class="feeds-tab-btn" data-feeds-view="fetch-tiers" role="tab" aria-selected="false">Fetch Tiers</button>
         </div>
 
         <div class="feeds-tab-panel" data-feeds-panel="folders">
@@ -397,6 +398,13 @@
           {# Ranks EVERY active feed — megabytes at thousands of feeds — so the
              list loads on first open of this view, not inline with the page. #}
           <div id="settings-stale-lazy" data-lazy-src="/settings/feeds/panel/stale">
+            <p class="muted">Loading…</p>
+          </div>
+        </div>
+
+        <div class="feeds-tab-panel" data-feeds-panel="fetch-tiers" hidden>
+          <p class="muted feeds-stale-intro">Which feeds are routing through each outbound-fetch escalation tier right now.</p>
+          <div id="settings-fetch-tiers-lazy" data-lazy-src="/settings/feeds/panel/fetch-tiers">
             <p class="muted">Loading…</p>
           </div>
         </div>

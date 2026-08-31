@@ -1102,6 +1102,26 @@ body[data-single-mode="1"] #folders-collapse-btn {
   overflow: auto;
 }
 
+.fetch-tier-section {
+  margin-bottom: 1.1rem;
+}
+
+.fetch-tier-section:last-child {
+  margin-bottom: 0;
+}
+
+.fetch-tier-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.15rem;
+  font-size: 0.92rem;
+}
+
+.fetch-tier-hint {
+  margin: 0 0 0.4rem;
+}
+
 .problem-feed-item {
   border: 1px solid var(--line);
   border-radius: 7px;

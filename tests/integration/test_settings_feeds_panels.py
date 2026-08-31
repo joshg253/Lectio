@@ -91,6 +91,8 @@ def test_home_page_does_not_inline_heavy_panels(configured):
     assert 'data-lazy-src="/settings/feeds/panel/stale"' in body
     assert 'id="settings-failing-lazy"' in body
     assert 'data-lazy-src="/settings/feeds/panel/failing"' in body
+    assert 'id="settings-fetch-tiers-lazy"' in body
+    assert 'data-lazy-src="/settings/feeds/panel/fetch-tiers"' in body
 
 
 def test_app_js_is_external_not_inline(configured):
@@ -138,6 +140,35 @@ def test_failing_panel_fragment_lists_failing_feeds(configured):
     assert f'data-feed-url="{FEED}"' in body
     assert "403 Forbidden" in body
     assert 'id="problematic-feeds-modal"' in body
+
+
+def test_fetch_tiers_panel_fragment_lists_flagged_feeds(configured):
+    """Raised 2026-08-31: no way to see which feeds are routing through the
+    paid VPN proxy / home-IP Tailscale / FlareSolverr without opening each
+    one's Feed Properties individually."""
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO proxy_feeds (feed_url, reason) VALUES (?, ?)",
+            (FEED, "still a refusal after browser-UA"),
+        )
+        conn.execute(
+            "INSERT INTO tailscale_feeds (feed_url, reason) VALUES (?, ?)",
+            (FEED, "still a refusal after proxy"),
+        )
+    resp = _client().get("/settings/feeds/panel/fetch-tiers")
+    assert resp.status_code == 200
+    assert resp.headers["cache-control"] == "no-store"
+    body = resp.text
+    assert body.count(f'<li class="problem-feed-item" data-feed-url="{FEED}"') == 2  # once per tier it's flagged in
+    assert "still a refusal after browser-UA" in body
+    assert "still a refusal after proxy" in body
+    assert "None right now." in body  # FlareSolverr tier, nothing flagged
+
+
+def test_fetch_tiers_panel_empty_state(configured):
+    resp = _client().get("/settings/feeds/panel/fetch-tiers")
+    assert resp.status_code == 200
+    assert resp.text.count("None right now.") == 3  # nothing flagged in any tier
 
 
 def test_unknown_panel_is_404(configured):

@@ -826,6 +826,15 @@ complexity for no benefit (its `/content` also returns browser-rendered
 HTML rather than raw bytes, the same unwrap problem FlareSolverr already
 has to solve).
 
+**Settings → Feeds → Fetch Tiers** (added 2026-08-31) makes the three
+escalation tables (`proxy_feeds`, `tailscale_feeds`, `flaresolverr_feeds`)
+visible as one page instead of only discoverable a feed at a time via its own
+Properties — Josh's ask was specifically to see how much the paid VPN and the
+home IP are actually being exposed. Read-only: same lazy-panel pattern as
+Stale/Failing (`/settings/feeds/panel/fetch-tiers`, `_settings_feeds_fetch_tiers.html`),
+one section per tier showing each flagged feed's title, its own `reason`
+(whichever escalation attempt first flagged it), and `flagged_at`.
+
 
 ## Suggesting a replacement for a feed on a known dead-end host
 

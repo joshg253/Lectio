@@ -35768,7 +35768,7 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
     Markup matches what index.html used to inline; all row interactions are
     event-delegated, so injection needs no JS hooks.
     """
-    if panel_name not in {"folders", "stale", "failing"}:
+    if panel_name not in {"folders", "stale", "failing", "fetch-tiers"}:
         return Response(status_code=404)
     with get_meta_connection() as conn:
         snapshot = get_meta_structure_snapshot(conn)
@@ -35831,6 +35831,43 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
             # Unsubscribe fallback target for unfoldered feeds. The inline
             # panel used the currently-selected folder; a fragment has no
             # selection, so fall back to the root ("All Feeds") folder.
+            "selected_folder_id": root_id,
+        })
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+    if panel_name == "fetch-tiers":
+        # How many feeds are routing through each outbound-fetch escalation
+        # tier right now — added 2026-08-31 so Josh can see how much his paid
+        # VPN and home IP (Tailscale) are actually being exposed to, rather
+        # than that being invisible until a feed's Properties happened to be
+        # opened. Same three tables the escalation callbacks in
+        # services/feed_refresh.py write to (see add_proxy_feed /
+        # add_tailscale_feed / add_flaresolverr_feed); each row's own
+        # ``reason`` and ``flagged_at`` come from whichever escalation attempt
+        # first flagged it.
+        def _tier_rows(table: str) -> list[dict]:
+            rows = conn.execute(
+                f"SELECT feed_url, reason, flagged_at FROM {table} ORDER BY flagged_at DESC"  # noqa: S608 -- table is one of 3 literals below, never user input
+            ).fetchall()
+            out = []
+            for row in rows:
+                url = str(row["feed_url"])
+                out.append({
+                    "feed_url": url,
+                    "feed_title": feed_title_map.get(url, url),
+                    "reason": row["reason"],
+                    "flagged_at": row["flagged_at"],
+                })
+            return out
+
+        with get_meta_connection() as conn:
+            proxy_rows = _tier_rows("proxy_feeds")
+            tailscale_rows = _tier_rows("tailscale_feeds")
+            flaresolverr_rows = _tier_rows("flaresolverr_feeds")
+        html = templates.env.get_template("_settings_feeds_fetch_tiers.html").render({
+            "proxy_rows": proxy_rows,
+            "tailscale_rows": tailscale_rows,
+            "flaresolverr_rows": flaresolverr_rows,
             "selected_folder_id": root_id,
         })
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
