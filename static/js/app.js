@@ -11909,7 +11909,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
                   runBtn.style.opacity = '';
                 } else {
                   showToastMessage(`Marked ${n} entr${n === 1 ? 'y' : 'ies'} as read.`);
-                  window.location.reload();
+                  // A full reload used to sit here -- it blew away whatever
+                  // the user had open (raised 2026-08-31: closed the Settings
+                  // dialog they ran this from). Same in-place refresh the
+                  // hide-shorts backfill already uses instead.
+                  try { await _refreshSidebarCounts(); } catch (e) { console.error('rule run-now: sidebar refresh failed', e); }
+                  try { await refreshCurrentFeedOrFolder(); } catch (e) { console.error('rule run-now: view refresh failed', e); }
+                  runBtn.disabled = false;
+                  runBtn.style.opacity = '';
                 }
               } catch (err) {
                 window.alert('Run failed: ' + (err.message || err));
@@ -12101,7 +12108,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         const mergeable = data.mergeable || [];
         const redundant = data.redundant || [];
         const mismatched = data.mismatched || [];
-        if (mergeable.length === 0 && redundant.length === 0 && mismatched.length === 0) {
+        const regexConvertible = data.regex_convertible || [];
+        if (mergeable.length === 0 && redundant.length === 0 && mismatched.length === 0
+            && regexConvertible.length === 0) {
           section.hidden = true;
           listEl.innerHTML = '';
           return;
@@ -12111,17 +12120,18 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
 
         const COLOR_HEX = { yellow: '#e6c34d', green: '#5cb85c', blue: '#4a90d9', orange: '#e08a3c', red: '#d9534f', purple: '#9b6bce' };
 
-        // Same identity, but color/delivery/email differ across the group —
-        // merging would have to silently pick a side, so this is shown for
-        // awareness only (no action button). Edit one to match the others,
-        // then it moves up into the mergeable list on its own.
+        // Leftover singletons under one identity that still disagree with
+        // each other once every already-agreeing pair has been split out
+        // into its own mergeable card below — shown for awareness only (no
+        // action button). Edit one to match another, then it moves up into
+        // the mergeable list on its own.
         mismatched.forEach((group) => {
           const card = document.createElement('div');
           card.className = 'hl-suggestion-card';
           const label = document.createElement('div');
           label.className = 'hl-suggestion-label';
           const typeLabel = HL_TYPE_LABELS[group.type] || group.type;
-          label.textContent = `${group.rules.length} ${typeLabel} rules on ${hlScopeLabel(group.scope, group.scope_id)} could be one, but use different settings (color, delivery, or email) — edit them to match first:`;
+          label.textContent = `${group.rules.length} ${typeLabel} rules on ${hlScopeLabel(group.scope, group.scope_id)} use different settings (color, delivery, or email) — edit them to match first:`;
           card.appendChild(label);
           const chips = document.createElement('div');
           chips.className = 'hl-suggestion-chips';
@@ -12168,6 +12178,60 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
                 body: new URLSearchParams({
                   type: group.type, scope: group.scope, scope_id: group.scope_id || '',
                   search_in: group.search_in, is_regex: group.is_regex ? '1' : '0',
+                  color: group.rules[0].color || '', delivery: group.rules[0].delivery || '',
+                  email_to: group.rules[0].email_to || '', batch_time: group.rules[0].batch_time || '',
+                  batch_count: group.rules[0].batch_count || '0', cc_me: group.rules[0].cc_me ? '1' : '0',
+                }).toString(),
+              });
+              const result = await resp.json();
+              if (!resp.ok || !result.ok) throw new Error(result.error || `HTTP ${resp.status}`);
+              await _hlRefetchAndRender();
+            } catch (err) {
+              btn.disabled = false;
+              window.alert('Merge failed: ' + (err.message || err));
+            }
+          });
+          card.appendChild(btn);
+          listEl.appendChild(card);
+        });
+
+        // Plain-text rule(s) next to a regex rule on the same scope — a plain
+        // keyword is always representable as an escaped regex, so this is
+        // mergeable too, just across the is_regex boundary find_mergeable_rule_groups
+        // stops at. Raised 2026-08-31. Same "nothing pre-checked" convention:
+        // the merge still needs an explicit click.
+        regexConvertible.forEach((group) => {
+          const card = document.createElement('div');
+          card.className = 'hl-suggestion-card';
+          const label = document.createElement('div');
+          label.className = 'hl-suggestion-label';
+          const typeLabel = HL_TYPE_LABELS[group.type] || group.type;
+          label.textContent = `${group.rules.length} ${typeLabel} rules on ${hlScopeLabel(group.scope, group.scope_id)} could be one if the plain-text rule became regex:`;
+          card.appendChild(label);
+          const chips = document.createElement('div');
+          chips.className = 'hl-suggestion-chips';
+          group.rules.forEach((r) => {
+            const chip = document.createElement('span');
+            chip.className = 'hl-suggestion-chip';
+            if (COLOR_HEX[r.color]) chip.style.borderLeftColor = COLOR_HEX[r.color];
+            chip.textContent = r.is_regex ? r.keyword : `${r.keyword} (plain)`;
+            chips.appendChild(chip);
+          });
+          card.appendChild(chips);
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'settings-secondary-btn';
+          btn.textContent = 'Convert & merge into one regex rule';
+          btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try {
+              const resp = await fetch('/highlights/merge-group-regex-convert', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                credentials: 'same-origin',
+                body: new URLSearchParams({
+                  type: group.type, scope: group.scope, scope_id: group.scope_id || '',
+                  search_in: group.search_in,
                 }).toString(),
               });
               const result = await resp.json();
