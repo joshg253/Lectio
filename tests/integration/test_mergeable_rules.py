@@ -166,6 +166,32 @@ def test_two_disjoint_pairs_merge_leaving_no_residual_mismatch(env):
     assert {"C#", "C++"} in keyword_sets
 
 
+def test_merging_one_settings_subgroup_does_not_delete_the_other(env):
+    """Regression for a real data-loss bug (2026-08-31): merging the orange
+    pair deleted the blue pair and the green singleton too, because the
+    DELETE only re-derived the code up to the SELECT's settings filter, not
+    the row-removal query -- both must match on the exact settings tuple
+    that was requested, not just identity, or a merge on one subgroup wipes
+    every other subgroup sharing its identity."""
+    _add_rule("global", "", "Dillinger Escape Plan", color="orange")
+    _add_rule("global", "", "C#", color="blue")
+    _add_rule("global", "", "C++", color="blue")
+    _add_rule("global", "", "Python", color="green")
+    _add_rule("global", "", "Between the Buried and Me", color="orange")
+    with main.get_meta_connection() as conn:
+        result = main.merge_highlight_rule_group(
+            conn, "highlight", "global", "", "title", False, "orange", "immediately", "", "", 0, False,
+        )
+        conn.commit()
+        rows = {r["keyword"]: r["color"] for r in conn.execute(
+            "SELECT keyword, color FROM highlight_keywords WHERE scope = 'global'")}
+    assert result is not None
+    assert result["merged_count"] == 2
+    assert rows["Dillinger Escape Plan, Between the Buried and Me"] == "orange"
+    assert rows["C#"] == "blue" and rows["C++"] == "blue"
+    assert rows["Python"] == "green"
+
+
 def test_mismatched_delivery_settings_are_flagged_not_grouped(env):
     fid = _make_folder("Notif")
     _add_rule("folder", str(fid), "a", delivery="immediately")

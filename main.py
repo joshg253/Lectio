@@ -5083,8 +5083,10 @@ def merge_highlight_rule_group(
     min_sort_order = min(int(r["sort_order"] or 0) for r in rows)
     conn.execute(
         "DELETE FROM highlight_keywords"
-        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND is_regex = ?",
-        (rule_type, scope, scope_id, search_in, 1 if is_regex else 0),
+        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND is_regex = ?"
+        " AND color = ? AND delivery = ? AND email_to = ? AND batch_time = ? AND batch_count = ? AND cc_me = ?",
+        (rule_type, scope, scope_id, search_in, 1 if is_regex else 0,
+         color, delivery, email_to, batch_time, batch_count, 1 if cc_me else 0),
     )
     add_highlight_keyword(
         conn, scope, scope_id, merged_keyword, template["color"], is_regex,
