@@ -128,6 +128,25 @@ identity tuple rather than trusting a client-supplied row list, so a stale
 preview (a rule removed or edited since the page loaded) fails closed —
 returns `None` (409 at the route) instead of merging the wrong things.
 
+**The identity's `is_regex` term means a plain rule sitting next to a regex rule on
+the same scope was invisible to all of the above (raised 2026-08-31).**
+`find_regex_convertible_rule_groups` / `merge_regex_convertible_rule_group` /
+`POST /highlights/merge-group-regex-convert` cover exactly that boundary: group by
+`(type, scope, scope_id, search_in)` **without** `is_regex`, keep only groups that
+actually span both a regex and a plain rule (a same-`is_regex` group is the
+function above's job, not this one's), apply the same `_MERGE_IDENTITY_FIELDS`
+mismatch guard, and — on merge — `re.escape()` each plain keyword before joining as
+`(a)|(b)` alternation, same as the regex path. Confirmed live 2026-08-31 on
+`("Lowe's", plain)` next to `("AirPods|iPhone|MacBook|AppleTV", regex)`: `re.escape`
+leaves the apostrophe alone (not a regex metacharacter, and not escaped by Python's
+`re.escape` since 3.7 dropped over-escaping), so the merged pattern
+(`(Lowe's)|(AirPods|iPhone|MacBook|AppleTV)`) matches exactly what the plain rule
+already matched — Josh's own hesitation about hand-converting it to regex (unsure
+how to escape the apostrophe) turned out to be a non-issue, but the one-click
+conversion means nobody has to work that out by hand anyway. Same run turned up a
+second real case on a feedburner feed rule mixing plain `iPhone` with regex
+`Apple|iOS|iPadOS`, confirming this isn't a one-off shape.
+
 **A feed rule already covered by a folder rule** (`find_redundant_feed_rules`)
 is the secondary case: a feed-scoped rule whose keyword set is a full subset
 of a same-type folder rule's on a folder the feed belongs to does nothing —

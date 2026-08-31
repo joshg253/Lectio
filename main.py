@@ -5083,6 +5083,112 @@ def merge_highlight_rule_group(
     }
 
 
+def find_regex_convertible_rule_groups(conn: sqlite3.Connection) -> list[dict]:
+    """Groups of 2+ rules sharing (type, scope, scope_id, search_in) that span
+    BOTH a regex and a plain-text rule -- a same-is_regex group is already
+    handled by find_mergeable_rule_groups, so this only surfaces the boundary
+    case that one can't see. A plain-text keyword is always representable as
+    an escaped regex (re.escape), so nothing here is actually blocked by
+    is_regex disagreeing -- only by shown deliberately as its own suggestion
+    tier since it changes a rule's is_regex, not just its keyword. Raised
+    2026-08-31: "Lowe's" (plain) sat next to a regex rule on the same folder
+    with nothing offering to combine them.
+
+    Same behavior-identity guard as find_mergeable_rule_groups -- a group
+    whose rules carry different color/delivery/email settings is excluded
+    entirely, not silently merged with one side's settings winning."""
+    rows = conn.execute(
+        "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
+        " email_to, batch_time, batch_count, cc_me, sort_order"
+        " FROM highlight_keywords WHERE type IN ('highlight', 'mark_as_read')"
+        " ORDER BY sort_order ASC, rowid ASC"
+    ).fetchall()
+    by_identity: dict[tuple, list[dict]] = {}
+    for r in rows:
+        key = (r["type"], r["scope"], r["scope_id"], r["search_in"])
+        by_identity.setdefault(key, []).append(dict(r))
+
+    groups = []
+    for key, group_rows in by_identity.items():
+        if len(group_rows) < 2:
+            continue
+        if len({bool(r["is_regex"]) for r in group_rows}) < 2:
+            continue  # all-regex or all-plain -- find_mergeable_rule_groups' territory
+        if len({tuple(r[f] for f in _MERGE_IDENTITY_FIELDS) for r in group_rows}) > 1:
+            continue
+        rule_type, scope, scope_id, search_in = key
+        groups.append({
+            "type": rule_type, "scope": scope, "scope_id": scope_id,
+            "search_in": search_in, "rules": group_rows,
+        })
+    return groups
+
+
+def merge_regex_convertible_rule_group(
+    conn: sqlite3.Connection, rule_type: str, scope: str, scope_id: str, search_in: str,
+) -> dict | None:
+    """Like merge_highlight_rule_group, but across the is_regex boundary: a
+    plain-text keyword is escaped (re.escape) before joining, so the result
+    matches exactly the same literal text the plain rule did -- see
+    find_regex_convertible_rule_groups. Re-derives the current matching rows
+    rather than trusting a caller-supplied list, same reasoning as the
+    regex-only merge. Refuses (returns None) when fewer than 2 rows match, the
+    group turns out to be single-is_regex after all (stale suggestion), or
+    they carry different color/delivery/email settings."""
+    if rule_type not in _MERGEABLE_RULE_TYPES:
+        return None
+    rows = conn.execute(
+        "SELECT rowid, * FROM highlight_keywords"
+        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ?"
+        " ORDER BY sort_order ASC, rowid ASC",
+        (rule_type, scope, scope_id, search_in),
+    ).fetchall()
+    if len(rows) < 2:
+        return None
+    rows = [dict(r) for r in rows]
+    if len({bool(r["is_regex"]) for r in rows}) < 2:
+        return None
+    if len({tuple(r[f] for f in _MERGE_IDENTITY_FIELDS) for r in rows}) > 1:
+        return None
+
+    template = rows[0]
+    seen_kw: list[str] = []
+    for r in rows:
+        kw = str(r["keyword"] or "").strip()
+        if not kw:
+            continue
+        pattern = kw if r["is_regex"] else re.escape(kw)
+        if pattern not in seen_kw:
+            seen_kw.append(pattern)
+    merged_keyword = "|".join(f"({kw})" for kw in seen_kw)
+
+    min_sort_order = min(int(r["sort_order"] or 0) for r in rows)
+    conn.execute(
+        "DELETE FROM highlight_keywords"
+        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ?",
+        (rule_type, scope, scope_id, search_in),
+    )
+    add_highlight_keyword(
+        conn, scope, scope_id, merged_keyword, template["color"], True,
+        rule_type, search_in, template["delivery"], template["email_to"],
+        template["batch_time"], template["batch_count"], bool(template["cc_me"]),
+        template["enabled"], template["dedup_window_hours"], template["exclude_scope_ids"],
+        template["dedup_fuzzy_pct"], template["dedup_min_title_words"],
+        template["webhook_url"], template["webhook_format"], bool(template["webhook_batch"]),
+        template["yt_playlist_id"], template["yt_playlist_title"], bool(template["yt_include_shorts"]),
+        bool(template["yt_mark_read"]), template["yt_min_minutes"], template["yt_max_minutes"],
+    )
+    conn.execute(
+        "UPDATE highlight_keywords SET sort_order = ?"
+        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND is_regex = 1 AND keyword = ?",
+        (min_sort_order, rule_type, scope, scope_id, search_in, merged_keyword),
+    )
+    return {
+        "type": rule_type, "scope": scope, "scope_id": scope_id, "search_in": search_in,
+        "is_regex": True, "keyword": merged_keyword, "merged_count": len(rows),
+    }
+
+
 def _split_plain_keywords(raw: str) -> set[str]:
     return {kw.strip().lower() for kw in (raw or "").split(",") if kw.strip()}
 
@@ -26139,7 +26245,11 @@ def get_highlight_suggestions_route():
     with get_meta_connection() as conn:
         mergeable, mismatched = find_mergeable_rule_groups(conn)
         redundant = find_redundant_feed_rules(conn)
-    return JSONResponse({"ok": True, "mergeable": mergeable, "mismatched": mismatched, "redundant": redundant})
+        regex_convertible = find_regex_convertible_rule_groups(conn)
+    return JSONResponse({
+        "ok": True, "mergeable": mergeable, "mismatched": mismatched, "redundant": redundant,
+        "regex_convertible": regex_convertible,
+    })
 
 
 @app.post("/highlights/merge-group")
@@ -26152,6 +26262,27 @@ def merge_highlight_group_route(
 ):
     with get_meta_connection() as conn:
         result = merge_highlight_rule_group(conn, type, scope, scope_id, search_in, bool(is_regex))
+    if result is None:
+        return JSONResponse(
+            {"ok": False, "error": "Nothing to merge — the group changed since this was suggested."},
+            status_code=409,
+        )
+    return JSONResponse({"ok": True, **result})
+
+
+@app.post("/highlights/merge-group-regex-convert")
+def merge_highlight_group_regex_convert_route(
+    type: str = Form(...),
+    scope: str = Form(...),
+    scope_id: str = Form(""),
+    search_in: str = Form("title"),
+):
+    """Merge a group spanning the is_regex boundary — see
+    find_regex_convertible_rule_groups / merge_regex_convertible_rule_group.
+    No is_regex form field: unlike /highlights/merge-group, the group by
+    definition isn't one is_regex value."""
+    with get_meta_connection() as conn:
+        result = merge_regex_convertible_rule_group(conn, type, scope, scope_id, search_in)
     if result is None:
         return JSONResponse(
             {"ok": False, "error": "Nothing to merge — the group changed since this was suggested."},

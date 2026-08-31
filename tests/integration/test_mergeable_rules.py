@@ -375,3 +375,117 @@ def test_merge_group_route_409s_on_a_stale_group(env):
         })
     assert r.status_code == 409
     assert r.json()["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# find_regex_convertible_rule_groups / merge_regex_convertible_rule_group
+#
+# Raised 2026-08-31: "Lowe's" (plain) sat in the same Deals folder as the two
+# regex rules above (test_live_library_shape_is_reproduced) with nothing
+# offering to fold it in, even though a plain keyword is always representable
+# as an escaped regex.
+# ---------------------------------------------------------------------------
+
+def test_a_plain_and_a_regex_rule_on_the_same_scope_are_flagged(env):
+    fid = _make_folder("Deals")
+    _add_rule("folder", str(fid), "Lowe's", type="mark_as_read", is_regex=False)
+    _add_rule("folder", str(fid), "AirPods|iPhone", type="mark_as_read", is_regex=True)
+    with main.get_meta_connection() as conn:
+        groups = main.find_regex_convertible_rule_groups(conn)
+    assert len(groups) == 1
+    assert {r["keyword"] for r in groups[0]["rules"]} == {"Lowe's", "AirPods|iPhone"}
+
+
+def test_all_regex_or_all_plain_groups_are_excluded(env):
+    """A same-is_regex group is find_mergeable_rule_groups' territory, not
+    this one -- both-regex or both-plain groups must not double up here."""
+    _add_rule("global", "", "a", is_regex=True)
+    _add_rule("global", "", "b", is_regex=True)
+    with main.get_meta_connection() as conn:
+        assert main.find_regex_convertible_rule_groups(conn) == []
+    _add_rule("feed", FEED, "c", is_regex=False)
+    _add_rule("feed", FEED, "d", is_regex=False)
+    with main.get_meta_connection() as conn:
+        assert main.find_regex_convertible_rule_groups(conn) == []
+
+
+def test_mismatched_settings_are_excluded_from_regex_conversion_too(env):
+    fid = _make_folder("Mixed")
+    _add_rule("folder", str(fid), "a", is_regex=False, color="blue")
+    _add_rule("folder", str(fid), "b", is_regex=True, color="green")
+    with main.get_meta_connection() as conn:
+        groups = main.find_regex_convertible_rule_groups(conn)
+    assert groups == []
+
+
+def test_merge_regex_convert_escapes_the_plain_keyword(env):
+    _add_rule("global", "", "Lowe's", is_regex=False)
+    _add_rule("global", "", "AirPods|iPhone", is_regex=True)
+    with main.get_meta_connection() as conn:
+        result = main.merge_regex_convertible_rule_group(conn, "highlight", "global", "", "title")
+        conn.commit()
+        rows = conn.execute("SELECT keyword, is_regex FROM highlight_keywords WHERE scope = 'global'").fetchall()
+    assert result is not None
+    assert len(rows) == 1
+    assert rows[0]["is_regex"] == 1
+    # re.escape leaves the apostrophe alone (not a regex metacharacter, and
+    # not escaped by Python's re.escape since 3.7) -- Josh's own reason for
+    # not hand-writing this rule as regex was hesitating over exactly that
+    # escaping, which turns out to be a non-issue here.
+    assert rows[0]["keyword"] == "(Lowe's)|(AirPods|iPhone)"
+    import re as _re
+    assert _re.search(rows[0]["keyword"], "Lowe's has a sale")
+    assert _re.search(rows[0]["keyword"], "New AirPods dropped")
+    assert not _re.search(rows[0]["keyword"], "Something else entirely")
+
+
+def test_merge_regex_convert_refuses_when_settings_mismatch(env):
+    fid = _make_folder("Mixed")
+    _add_rule("folder", str(fid), "a", is_regex=False, color="blue")
+    _add_rule("folder", str(fid), "b", is_regex=True, color="green")
+    with main.get_meta_connection() as conn:
+        result = main.merge_regex_convertible_rule_group(conn, "highlight", "folder", str(fid), "title")
+        rows = conn.execute("SELECT COUNT(*) FROM highlight_keywords").fetchone()[0]
+    assert result is None
+    assert rows == 2
+
+
+def test_merge_regex_convert_refuses_a_stale_all_regex_group(env):
+    _add_rule("global", "", "a", is_regex=True)
+    _add_rule("global", "", "b", is_regex=True)
+    with main.get_meta_connection() as conn:
+        result = main.merge_regex_convertible_rule_group(conn, "highlight", "global", "", "title")
+    assert result is None
+
+
+def test_suggestions_route_includes_regex_convertible_bucket(env):
+    from fastapi.testclient import TestClient
+
+    fid = _make_folder("Deals")
+    _add_rule("folder", str(fid), "Lowe's", type="mark_as_read", is_regex=False)
+    _add_rule("folder", str(fid), "AirPods|iPhone", type="mark_as_read", is_regex=True)
+
+    app = _app()
+    app.post("/highlights/merge-group-regex-convert")(main.merge_highlight_group_regex_convert_route)
+    with TestClient(app) as client:
+        r = client.get("/highlights/suggestions")
+    assert r.status_code == 200
+    assert len(r.json()["regex_convertible"]) == 1
+
+
+def test_merge_group_regex_convert_route_applies_and_persists(env):
+    from fastapi.testclient import TestClient
+
+    _add_rule("global", "", "Lowe's", is_regex=False)
+    _add_rule("global", "", "AirPods|iPhone", is_regex=True)
+    app = _app()
+    app.post("/highlights/merge-group-regex-convert")(main.merge_highlight_group_regex_convert_route)
+    with TestClient(app) as client:
+        r = client.post("/highlights/merge-group-regex-convert", data={
+            "type": "highlight", "scope": "global", "scope_id": "", "search_in": "title",
+        })
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    with main.get_meta_connection() as conn:
+        rows = conn.execute("SELECT keyword, is_regex FROM highlight_keywords WHERE scope = 'global'").fetchall()
+    assert len(rows) == 1 and rows[0]["is_regex"] == 1

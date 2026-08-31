@@ -12101,7 +12101,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         const mergeable = data.mergeable || [];
         const redundant = data.redundant || [];
         const mismatched = data.mismatched || [];
-        if (mergeable.length === 0 && redundant.length === 0 && mismatched.length === 0) {
+        const regexConvertible = data.regex_convertible || [];
+        if (mergeable.length === 0 && redundant.length === 0 && mismatched.length === 0
+            && regexConvertible.length === 0) {
           section.hidden = true;
           listEl.innerHTML = '';
           return;
@@ -12168,6 +12170,57 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
                 body: new URLSearchParams({
                   type: group.type, scope: group.scope, scope_id: group.scope_id || '',
                   search_in: group.search_in, is_regex: group.is_regex ? '1' : '0',
+                }).toString(),
+              });
+              const result = await resp.json();
+              if (!resp.ok || !result.ok) throw new Error(result.error || `HTTP ${resp.status}`);
+              await _hlRefetchAndRender();
+            } catch (err) {
+              btn.disabled = false;
+              window.alert('Merge failed: ' + (err.message || err));
+            }
+          });
+          card.appendChild(btn);
+          listEl.appendChild(card);
+        });
+
+        // Plain-text rule(s) next to a regex rule on the same scope — a plain
+        // keyword is always representable as an escaped regex, so this is
+        // mergeable too, just across the is_regex boundary find_mergeable_rule_groups
+        // stops at. Raised 2026-08-31. Same "nothing pre-checked" convention:
+        // the merge still needs an explicit click.
+        regexConvertible.forEach((group) => {
+          const card = document.createElement('div');
+          card.className = 'hl-suggestion-card';
+          const label = document.createElement('div');
+          label.className = 'hl-suggestion-label';
+          const typeLabel = HL_TYPE_LABELS[group.type] || group.type;
+          label.textContent = `${group.rules.length} ${typeLabel} rules on ${hlScopeLabel(group.scope, group.scope_id)} could be one if the plain-text rule became regex:`;
+          card.appendChild(label);
+          const chips = document.createElement('div');
+          chips.className = 'hl-suggestion-chips';
+          group.rules.forEach((r) => {
+            const chip = document.createElement('span');
+            chip.className = 'hl-suggestion-chip';
+            if (COLOR_HEX[r.color]) chip.style.borderLeftColor = COLOR_HEX[r.color];
+            chip.textContent = r.is_regex ? r.keyword : `${r.keyword} (plain)`;
+            chips.appendChild(chip);
+          });
+          card.appendChild(chips);
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'settings-secondary-btn';
+          btn.textContent = 'Convert & merge into one regex rule';
+          btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try {
+              const resp = await fetch('/highlights/merge-group-regex-convert', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                credentials: 'same-origin',
+                body: new URLSearchParams({
+                  type: group.type, scope: group.scope, scope_id: group.scope_id || '',
+                  search_in: group.search_in,
                 }).toString(),
               });
               const result = await resp.json();
