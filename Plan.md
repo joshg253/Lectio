@@ -186,18 +186,6 @@ result isn't broken, just noisier than ideal.
 
 **Navigation/UX papercuts** — no design work needed, just haven't been built.
 
-### "Add link to Note" button reported as doing nothing — not reproduced
-
-Raised 2026-08-31: Josh said the entry-pane's sticky-note-icon button ("Add link to Note",
-`#entry-add-link-to-note-button`, built 2026-08-30) does nothing. Couldn't reproduce: clean
-Playwright runs (desktop and mobile viewport, empty seeded entry and a page-load with the entry
-already open) all show the button wired correctly — click opens the Global Note modal with the
-link appended and the cursor placed after it, zero console errors either time. The header
-hamburger-menu "Note" button (different feature, same modal) was also checked and works fine.
-Need more detail to make progress: exact steps, whether ANY visible change happens on click, and
-browser/device — most bugs this session that resisted a clean repro turned out to be phone- or
-Firefox-specific.
-
 ### New subscription missing from feed tree — UX idea remaining
 
 Root-cause code bug already fixed (2026-07-08: re-adding a feed that existed
