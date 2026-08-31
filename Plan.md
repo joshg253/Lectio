@@ -223,26 +223,6 @@ context right there rather than the write happening silently in the
 background. Writes through the existing `/settings/global-note` route
 (`GLOBAL_NOTE_SETTING_KEY`, main.py:35139). Not built.
 
-### Rules editor: YT Playlist scope shows every feed, and chips have no URL tooltip
-
-Two asks 2026-08-30, both in the rules draft editor (static/js/app.js, the shared feed-scope
-picker starting ~line 12414, used by every rule type):
-
-- **"Add to YT Playlist" should scope its feed picker to the YT folder.** `folderSel` always lists
-  every folder ("All Feeds" plus the whole tree, main.py's `/api/folder-feeds` behind it), with
-  nothing narrowing it for `ruleType === 'youtube_playlist'` specifically — even though a playlist
-  rule only ever makes sense against YouTube feeds. The pieces already exist server-side
-  (`get_yt_folder_name()` / `_folder_is_yt_folder`, main.py:774/30688) to default or restrict the
-  picker when the rule type is youtube_playlist.
-- **Rule chips have no hover tooltip.** The scope chips (`hl-folder-tag`,
-  static/js/app.js:12522-12524) are built with `tag.textContent = feedTitleByUrl.get(url) || url`
-  and no `title` attribute, so there's no way to disambiguate same-titled feeds without opening Feed
-  Properties. Concrete case: Josh has multiple Monterey Bay Aquarium feeds in one Add-to-YT-Playlist
-  rule and can't tell from the chip which one is actually the blog rather than the channel. A plain
-  `tag.title = url` fixes it for every rule type, not just this one.
-
-Not built.
-
 ### Per-post re-fetch's Land On picker doesn't show its own default
 
 Asked 2026-08-30: what happens if you don't pick a Land On option? Traced it — leaving it unset

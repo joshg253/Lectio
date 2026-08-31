@@ -24027,6 +24027,16 @@ def _home_inner(
         # modal's lazily-fetched /settings/all data ever having loaded —
         # rendered directly so it's correct on first paint.
         "is_yt_folder": _selected_folder_name_ == get_yt_folder_name(),
+        # The rules editor scopes an "Add to YT Playlist" rule's feed picker to
+        # this folder (a playlist rule is never meaningful against a non-YT
+        # feed) — rendered page-wide rather than looked up lazily so it works
+        # the first time the rules panel opens, not just after visiting
+        # Settings -> YouTube. None when the folder doesn't exist yet (never
+        # auto-created just for this — that's YouTube Sync's job).
+        "yt_folder_id": next(
+            (cast(int, row["id"]) for row in folder_rows if str(row["name"]) == get_yt_folder_name()),
+            None,
+        ),
         "selected_feed_url": selected_feed_url,
         "selected_tag": selected_tag,
         "selected_query": selected_query,

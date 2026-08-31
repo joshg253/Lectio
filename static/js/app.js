@@ -12534,6 +12534,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             const tag = document.createElement('span');
             tag.className = 'hl-folder-tag';
             tag.textContent = feedTitleByUrl.get(url) || url;
+            // Same-titled feeds (e.g. a site's blog vs its channel, both
+            // showing the same display name) are otherwise indistinguishable
+            // without opening Feed Properties. Raised 2026-08-30.
+            tag.title = url;
             const x = document.createElement('button');
             x.type = 'button'; x.className = 'hl-folder-tag-remove'; x.textContent = '×';
             x.setAttribute('aria-label', 'Remove');
@@ -13130,10 +13134,37 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           // (selectedFeedUrls), so a type change keeps the chosen feed(s) automatically.
         }
         syncTypeControls();
+        // Same YT-folder scoping as the type-change listener below, but for
+        // the initial build: an existing youtube_playlist rule saved with no
+        // folder scope (global) still gets narrowed rather than showing every
+        // feed in the library. A rule that already has a real scope is left
+        // exactly as saved — only the unscoped case is ambiguous enough to fix.
+        if (typeSel.value === 'youtube_playlist' && !folderSel.value && window.YT_FOLDER_ID != null) {
+          folderSel.value = String(window.YT_FOLDER_ID);
+          loadFolderFeeds(folderSel.value);
+          renderFeedChips();
+        }
         typeSel.addEventListener('change', syncTypeControls);
         deliverySel.addEventListener('change', syncTypeControls);
         matchMethodSel.addEventListener('change', syncTypeControls);
         folderSel.addEventListener('change', syncTypeControls);
+
+        // "Add to YT Playlist" only ever makes sense against YouTube feeds, so
+        // switching TO this type re-scopes the feed picker to the YT folder —
+        // it previously kept showing every folder. Only on an explicit type
+        // CHANGE (never on initial draft-open via syncTypeControls() above),
+        // so editing an existing rule's already-chosen scope is never
+        // clobbered. Raised 2026-08-30.
+        typeSel.addEventListener('change', () => {
+          if (typeSel.value === 'youtube_playlist' && window.YT_FOLDER_ID != null
+              && folderSel.value !== String(window.YT_FOLDER_ID)) {
+            folderSel.value = String(window.YT_FOLDER_ID);
+            selectedFeedUrls.clear();
+            loadFolderFeeds(folderSel.value);
+            renderFeedChips();
+            renderFeedDrop();
+          }
+        });
 
         /* The scope this draft would save to. Explicit feed picks always win —
          * the picker can select feeds without a folder, and silently discarding

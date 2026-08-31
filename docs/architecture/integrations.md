@@ -166,6 +166,19 @@ was already a solved problem.
   is gated on `yt_oauth_connected` (server-side in `/highlights/add`; hidden in the
   rule-builder until connected) so it can't be created without a token. Runs in the
   per-user background context like the other after-refresh rules.
+
+  **The rule stays general-purpose; only the editor's default changed (2026-08-30).**
+  The paragraph above still holds — the engine matches any feed/folder scope, because
+  a YouTube video can be embedded in an article from any feed. But the rule-builder's
+  feed picker used to default to showing every folder's feeds regardless, which made
+  finding your actual YouTube channel feeds (the common case for this rule type) hard
+  once a library has more than a handful of folders. Switching the type dropdown to
+  "Add to YT Playlist" now snaps the picker to `window.YT_FOLDER_ID` (a page-wide
+  global, main.py's home-route context — has to be correct on first paint rather than
+  fetched lazily from Settings, same reasoning as the neighboring `is_yt_folder` flag).
+  The folder dropdown itself is untouched, so the general-purpose case — scoping the
+  rule to some other feed that happens to embed videos — is still one manual
+  re-selection away, not removed.
 - **Save to Pinterest (per-user OAuth)** — an outbound-only integration: a per-entry
   **Pin** button saves an article to one of the user's boards. Pinterest has no
   write-without-OAuth path, so `services/pinterest_oauth.py` speaks the **API v5**
