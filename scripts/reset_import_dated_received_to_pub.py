@@ -92,6 +92,13 @@ def run(uid: str, date: str, apply: bool, starred_only: bool) -> None:
                 pub = datetime.fromisoformat(c["published"])
                 if pub.tzinfo is None:
                     pub = pub.replace(tzinfo=timezone.utc)
+                else:
+                    # A non-UTC offset survives fromisoformat but strftime
+                    # below has no concept of it -- it prints the aware
+                    # datetime's own wall-clock fields verbatim, silently
+                    # dropping the offset instead of converting. Caught by
+                    # review 2026-08-31.
+                    pub = pub.astimezone(timezone.utc)
                 stored = pub.strftime("%Y-%m-%d %H:%M:%S")
                 with db:
                     db.execute(
@@ -105,7 +112,14 @@ def run(uid: str, date: str, apply: bool, starred_only: bool) -> None:
                         "WHERE feed_url = ? AND entry_id = ?",
                         (stored, c["feed"], c["entry_id"]),
                     )
-            conn.commit()
+                # Committed per-row, matching the reader DB's own `with db:`
+                # granularity above -- committing only once at the end of the
+                # loop left a crash partway through the batch with some rows'
+                # reader dates fixed but their saved_entries.saved_at stale,
+                # and re-running the script wouldn't reselect those rows to
+                # repair the mismatch (their `fixable` criteria was already
+                # satisfied). Caught by review 2026-08-31.
+                conn.commit()
     print(f"[{uid}] fixed {len(fixable)}")
     print(f"      log: {out}")
 
