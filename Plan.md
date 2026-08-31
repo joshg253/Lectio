@@ -111,6 +111,8 @@ is one CPU-hungry thread, not many.
 | 2026-08-23 | `GET /?folder_id=23&sort_dir=desc&star_only=1` (5 items) | 6919ms | 6.3s gap between two already-fast, already-logged steps — nothing itself slow |
 | 2026-08-23 | `GET /?folder_id=1&star_only=1&kept=starred&sort_by=starred&sort_dir=desc` (F5 on Saved) | 18664ms | Landed mid-scheduled-refresh — dozens of concurrent `httpx` feed fetches logged in the same window |
 | 2026-08-23 | 4 back-to-back `GET /?folder_id=1&star_only=1&kept=starred` (clicked Saved) | 2114/7882/8684/18192/9303ms | Cluster, not a one-off — same gap signature (list_entries logs fast, posts_block/meta_block absorb the delay) ~5-7 min after a container restart; may correlate with post-restart cold caches/backfill rather than being independent of it |
+| 2026-08-30 | `GET /?folder_id=1&read_filter=unread` | 9786ms | ~7 min after a restart — **confirms** the 2026-08-23 5-7-min-post-restart correlation rather than just suggesting it. Same tag_block→list_entries gap (~5.8s, `meta_block=75ms`+`tag_block=0ms` at :37.4, `list_entries` fetch not starting until ~:43.2) |
+| 2026-08-30 | `GET /?folder_id=1&read_filter=unread&list_feed_url=...jsnover.com...` | 9216ms | ~9 min after the same restart — still elevated a bit past the 5-7-min band, so the window isn't a sharp cutoff |
 
 **Read Above/Below, same shape:**
 
