@@ -299,6 +299,33 @@ def test_lead_image_prepend_not_fooled_by_a_shared_generic_filename():
     assert html.find("id=999") < html.find("id=101")  # leads the body
 
 
+def test_lead_image_still_prepended_when_dimensions_match_by_coincidence_on_a_different_host():
+    """Raised in review 2026-08-31: dimensions alone risked a false positive
+    on a CMS that resizes every hero to one standard preset (e.g. every
+    image at the same WxH) -- an unrelated in-body image sharing that size
+    by coincidence must not suppress a genuinely different hero. The
+    same-photo signal now also requires the same host, which the real
+    Substack case (test above) already shares between og:image and the
+    in-body copy."""
+    body = (
+        "<div id='article-body'>"
+        "<p>The article body has plenty of prose to extract cleanly here, well "
+        "past readability's minimum length threshold for a real article.</p>"
+        '<img src="https://other-cdn.test/unrelated_2884x1622.jpg" width="1456">'
+        "</div>"
+    )
+    page = (
+        '<html><head><meta property="og:image" '
+        'content="https://substackcdn.com/image/fetch/w_1200/'
+        'https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F'
+        'da4ee994-5039-48d1-a918-ab4f10b8d22a_2884x1622.jpeg"></head>'
+        f"<body>{body}</body></html>"
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert "da4ee994" in html  # the real hero still got prepended
+    assert html.find("da4ee994") < html.find("unrelated_2884x1622.jpg")
+
+
 def test_lead_image_still_prepended_when_dimensions_genuinely_differ():
     """The dimension-signature fallback must not swallow a real missing-hero
     case -- a body image with different pixel dimensions than og:image is not

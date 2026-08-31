@@ -13912,6 +13912,7 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
         # dimensions as a suffix (..._2884x1622.jpeg) even though the id
         # prefix differs, so fall back to that as a same-photo signal.
         lead_dim_sig = _image_dimension_signature(lead)
+        lead_host = urlparse(lead).netloc
         already_present = (
             lead in article_html
             or any(
@@ -13919,7 +13920,16 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
                 for src in re.findall(r'src="([^"]*)"', article_html)
             )
             or (lead_dim_sig is not None and any(
-                _image_dimension_signature(src) == lead_dim_sig
+                # Same host too, not dimensions alone (raised in review
+                # 2026-08-31): a CMS that resizes every hero to one standard
+                # preset (e.g. every image at 1200x630) would otherwise
+                # false-positive on any unrelated in-body image sharing that
+                # size, silently dropping a genuinely different hero. The
+                # motivating case (Substack) already shares a host between
+                # og:image and the in-body copy, so this doesn't lose the
+                # fix it was added for.
+                urlparse(src).netloc == lead_host
+                and _image_dimension_signature(src) == lead_dim_sig
                 for src in re.findall(r'src="([^"]*)"', article_html)
             ))
         )
