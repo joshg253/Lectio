@@ -2,12 +2,17 @@
 from both the per-post context menu and a dedicated entry-pane button, both
 routed through one shared openGlobalNoteWithLink(link) helper.
 
-The context-menu path appends a Lectio-internal URL built from the post's own
-feed_url/entry_id/folder_id via lectioEntryUrl() (mirroring the post-item
-anchor's own href in index.html), not contextPostLink (the source article's
-own URL, shared with Copy URL) -- raised in review 2026-08-31: the point of
-the feature is a reportable link back to THIS post in Lectio, not wherever it
-originally came from.
+Both call sites append a Lectio-internal URL, not the source article's own
+link -- the point of the feature is a reportable link back to THIS entry in
+Lectio (e.g. "problem with this one"), not wherever it originally came from.
+The entry-pane button was corrected 2026-08-31 to use window.location.href
+instead of a stamped data-entry-link attribute. The context-menu path -- which
+can act on a post that isn't the one currently open, so window.location.href
+isn't available -- was flagged in the same 2026-08-31 review as still using
+contextPostLink (the source article's own URL, shared with Copy URL); it now
+builds one from the post's own feed_url/entry_id/folder_id via the
+lectioEntryUrl() helper, mirroring the post-item anchor's own href in
+index.html.
 
 Source assertions, because this is client-side context-menu/pane-button
 wiring with no JS test harness in this repo.
@@ -82,20 +87,26 @@ def test_context_menu_click_hides_the_menu_and_opens_the_note_with_a_lectio_url(
     assert "openGlobalNoteWithLink(link)" in block
 
 
-def test_entry_pane_button_exists_with_its_own_link_and_is_conditional():
-    """Only rendered when the entry actually has a link -- nothing to add
-    otherwise."""
+def test_entry_pane_button_exists_and_is_unconditional():
+    """Renders whenever the entry pane does -- it appends the current Lectio
+    page URL, not the entry's own link, so there's nothing to gate on."""
     assert 'id="entry-add-link-to-note-button"' in ENTRY_PANE
-    assert "{% if selected_entry.link %}" in ENTRY_PANE
-    idx = ENTRY_PANE.index('id="entry-add-link-to-note-button"')
-    block = ENTRY_PANE[max(0, idx - 200):idx + 300]
-    assert 'data-entry-link="{{ selected_entry.link }}"' in block
+    assert "data-entry-link" not in ENTRY_PANE
+
+
+def test_entry_pane_button_appends_the_lectio_page_url_not_the_source_link():
+    """Corrected 2026-08-31: the useful link for reporting a problem is the
+    one that reopens THIS entry in Lectio, not the source article."""
+    idx = APP_JS.index('document.getElementById(\'entry-add-link-to-note-button\')')
+    block = APP_JS[idx:idx + 1000]
+    assert "openGlobalNoteWithLink(window.location.href)" in block
+    assert "data-entry-link" not in block
 
 
 def test_entry_pane_button_click_is_guarded_against_double_binding():
     """Rebinding on every pane swap without this guard would fire the note
     append once per prior swap on a single click."""
     idx = APP_JS.index("entryAddLinkToNoteButton.dataset.boundClick")
-    block = APP_JS[max(0, idx - 200):idx + 400]
+    block = APP_JS[max(0, idx - 200):idx + 700]
     assert "!entryAddLinkToNoteButton.dataset.boundClick" in block
-    assert "openGlobalNoteWithLink(link)" in block
+    assert "openGlobalNoteWithLink(window.location.href)" in block

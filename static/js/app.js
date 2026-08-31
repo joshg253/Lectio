@@ -8439,8 +8439,12 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         entryAddLinkToNoteButton.dataset.boundClick = '1';
         entryAddLinkToNoteButton.addEventListener('click', (event) => {
           event.preventDefault();
-          const link = entryAddLinkToNoteButton.getAttribute('data-entry-link');
-          if (link) openGlobalNoteWithLink(link);
+          // The Lectio page URL (this entry, in this app), not the source
+          // article's own link — raised 2026-08-31: the point is a quick way
+          // to drop a reportable link into the Note (e.g. "problem with this
+          // one"), and the useful link for that is the one that reopens THIS
+          // entry in Lectio, not wherever it originally came from.
+          openGlobalNoteWithLink(window.location.href);
         });
       }
     }
