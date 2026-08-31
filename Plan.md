@@ -349,6 +349,14 @@ clearing by hand; low urgency otherwise.
 
 **Rules engine follow-ups**
 
+### Rule scope: allow selecting multiple folders, not just one
+
+Requested by Josh 2026-08-31. A rule's scope currently picks a single feed or
+a single folder; there's no way to scope one rule to several folders at once
+without duplicating the rule per folder. Not investigated yet — needs a look
+at how scope is stored/matched today (`rule_scope`/`rule_scope_id`) before
+sizing the change.
+
 ### email_batch_queue has the same scope-text-identity fragility rule_uid just fixed elsewhere
 
 Found 2026-08-29 alongside the `youtube_playlist_added` fix (see git history —
