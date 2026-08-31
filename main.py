@@ -13893,10 +13893,18 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
             raw_img_count > 4 and art_img_count < raw_img_count // 2
         )
         if needs_fallback:
+            # Separate from art_img_count above (which stays <img>-only for the
+            # trigger and the whole-body-rescue gate below): the two ACCEPTANCE
+            # comparisons that follow need a combined-media baseline on both
+            # sides, or a candidate with real iframe embeds but zero inline
+            # images loses to article_html's own img-only count instead of its
+            # actual (possibly iframe-recovered) media count — raised 2026-08-31.
+            art_media_count = _media_tag_count(article_html)
             fallback = normalize_proxy_lazy_media(_bs4_content_fallback(raw_html))
-            if fallback and _media_tag_count(fallback) > art_img_count:
+            if fallback and _media_tag_count(fallback) > art_media_count:
                 article_html = sanitize_readability_html(fallback).strip()
-                art_img_count = _media_tag_count(article_html)
+                art_img_count = article_html.lower().count("<img")
+                art_media_count = _media_tag_count(article_html)
             # Last resort: readability *and* the selector fallback both kept
             # essentially no images on an image-heavy page — the catastrophic
             # case, not mere trimming. guitarplayer lessons are the example:
@@ -13915,7 +13923,7 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
             article_text_len = len(re.sub(r"<[^>]+>", "", article_html))
             if art_img_count <= 1 and raw_img_count > 10 and article_text_len < _WHOLE_BODY_RESCUE_MIN_TEXT:
                 whole = _whole_body_content(raw_html)
-                if whole and _media_tag_count(whole) > art_img_count:
+                if whole and _media_tag_count(whole) > art_media_count:
                     article_html = whole
     # Prepend the publisher's hero image when the body doesn't already open with
     # it — the article's lead image lives in the page header, outside the content
