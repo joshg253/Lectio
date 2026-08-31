@@ -544,6 +544,20 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         });
     }
 
+    // Builds the Lectio page URL for a post (folder_id/feed_url/entry_id),
+    // mirroring the post-item anchor's own href in index.html -- used by the
+    // list's context-menu Add-link-to-Note action below, which (unlike the
+    // entry pane's own button) has no window.location.href for the post
+    // since it may never have been opened.
+    function lectioEntryUrl(feedUrl, entryId, folderId) {
+      if (!feedUrl || !entryId) return '';
+      const params = new URLSearchParams();
+      if (folderId) params.set('folder_id', folderId);
+      params.set('feed_url', feedUrl);
+      params.set('entry_id', entryId);
+      return `${window.location.origin}/?${params.toString()}`;
+    }
+
     function closeAddModal(modalId) {
       const modal = document.getElementById(modalId);
       if (modal) {
@@ -8062,7 +8076,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
           }
           setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
-          setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostLink));
+          setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
           setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
           setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
@@ -8615,7 +8629,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               setMenuItemVisible(postStarBulkButton, false);
               setMenuItemVisible(postUnstarBulkButton, false);
               setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
-              setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostLink));
+              setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
               setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
               setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
               setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
@@ -9758,7 +9772,12 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     postAddLinkToNoteButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const link = contextPostLink;
+      // The Lectio page URL for this post, not its external source link --
+      // same reasoning as the entry pane's own Add-to-Note button: the point
+      // is a link that reopens THIS post in Lectio, not wherever it
+      // originally came from. Raised in review 2026-08-31: this context-menu
+      // path was still using contextPostLink (the source article's own URL).
+      const link = lectioEntryUrl(contextPostFeedUrl, contextPostEntryId, contextPostFolderId);
       hideAllContextMenus();
       if (link) openGlobalNoteWithLink(link);
     });

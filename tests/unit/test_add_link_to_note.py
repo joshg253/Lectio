@@ -2,6 +2,13 @@
 from both the per-post context menu and a dedicated entry-pane button, both
 routed through one shared openGlobalNoteWithLink(link) helper.
 
+The context-menu path appends a Lectio-internal URL built from the post's own
+feed_url/entry_id/folder_id via lectioEntryUrl() (mirroring the post-item
+anchor's own href in index.html), not contextPostLink (the source article's
+own URL, shared with Copy URL) -- raised in review 2026-08-31: the point of
+the feature is a reportable link back to THIS post in Lectio, not wherever it
+originally came from.
+
 Source assertions, because this is client-side context-menu/pane-button
 wiring with no JS test harness in this repo.
 """
@@ -42,20 +49,35 @@ def test_context_menu_item_exists_and_is_hidden_by_default():
     assert 'id="ctx-post-add-link-to-note" class="context-menu-item" hidden' in INDEX
 
 
-def test_context_menu_visibility_mirrors_copy_url():
-    """Both need exactly one post's link, so both are hidden in the same three
-    places: no link, bulk selection, and shown when a link exists."""
+def test_lectio_entry_url_helper_builds_a_folder_feed_entry_link():
+    start = APP_JS.index("function lectioEntryUrl(feedUrl, entryId, folderId) {")
+    block = APP_JS[start:start + 500]
+    assert "if (!feedUrl || !entryId) return '';" in block
+    assert "params.set('feed_url', feedUrl);" in block
+    assert "params.set('entry_id', entryId);" in block
+    assert "if (folderId) params.set('folder_id', folderId);" in block
+
+
+def test_context_menu_visibility_gates_on_feed_and_entry_id_not_the_source_link():
+    """Unlike Copy URL (which genuinely needs contextPostLink), the note
+    quick-capture needs feed_url+entry_id to build a Lectio URL -- a post
+    with no source link (still possible for some synthetic entries) can still
+    offer this action."""
     for pattern in (
-        "setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostLink));",
+        "setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));",
         "setMenuItemVisible(postAddLinkToNoteButton, false);",
     ):
         assert APP_JS.count(pattern) >= 1, pattern
-    assert APP_JS.count("setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostLink));") == 2
+    assert APP_JS.count(
+        "setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));"
+    ) == 2
+    assert "setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostLink));" not in APP_JS
 
 
-def test_context_menu_click_hides_the_menu_and_opens_the_note():
+def test_context_menu_click_hides_the_menu_and_opens_the_note_with_a_lectio_url():
     idx = APP_JS.index("postAddLinkToNoteButton?.addEventListener('click'")
-    block = APP_JS[idx:idx + 300]
+    block = APP_JS[idx:idx + 700]
+    assert "lectioEntryUrl(contextPostFeedUrl, contextPostEntryId, contextPostFolderId)" in block
     assert "hideAllContextMenus();" in block
     assert "openGlobalNoteWithLink(link)" in block
 
