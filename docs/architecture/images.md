@@ -228,6 +228,21 @@ recovered it. Both now accept `/embed/` and `youtube-nocookie.com`.
 The paragraph-sole rule is the scope guard and is unchanged: a link inside a
 sentence stays a link. The anchor's *text* was never required to be a bare URL.
 
+**The scope guard only checked the anchor's *immediate* parent, so an inline-wrapped
+citation link slipped past it (2026-08-30).** `<p>Inigo Montoya once said, <em><a
+href="youtu.be/…">the quote</a></em>.</p>` has `<em>`, not `<p>`, as the anchor's
+immediate parent — the rule's `if parent.name == "p"` never matched, so the
+"other prose present → leave it alone" comparison never ran at all, and the anchor
+alone got swapped for the player. Result: the quote text vanished (`replace_with`
+only touches the `<a>`), leaving "Inigo Montoya once said," dangling in front of
+a video that isn't what the sentence is about — a citation link, not an embedded
+one. `_standalone_link_target` (shared with `_embed_standalone_bandcamp_links`,
+which had the identical bug) now walks up through inline formatting wrappers
+(`em`/`strong`/`b`/`i`/`span`/…) to
+find the true block ancestor before running the same text-equality check, so a
+styled-for-emphasis link gets exactly the same "sole content of its block" rule a
+bare one always had — no exemption, just the correct comparison target.
+
 ## A body image that fails has to be able to try again
 
 The hero has always had an `onerror` that retries via `/api/img?u=…`; body images

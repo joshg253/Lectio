@@ -16109,6 +16109,41 @@ _BC_URL_RE = re.compile(
 )
 
 
+# Inline formatting tags a citation-style link is commonly wrapped in — these
+# don't make a link "alone" the way sitting directly in a bare <p> does.
+# "Inigo Montoya once said, <em><a href=youtu.be/...>quote</a></em>." has
+# <em>, not <p>, as the anchor's immediate parent, so a check that only ever
+# looked at the immediate parent silently skipped verifying the paragraph's
+# other text existed — converting a citation link buried in prose into a
+# full embedded player. Root-caused 2026-08-30 on exactly that shape.
+_INLINE_WRAPPER_TAGS = {"em", "strong", "b", "i", "span", "small", "mark", "u", "s", "sub", "sup", "cite", "q", "abbr"}
+
+
+def _standalone_link_target(a):
+    """The element to replace with an embed if *a* is the sole meaningful
+    content of its block, else None (a worded link sitting inside prose).
+
+    Walks up through inline formatting wrappers to the first block-level
+    ancestor (or the anchor itself, if there is none) before comparing text,
+    so a link wrapped in <em>/<strong>/etc. still gets the same "nothing else
+    in this block" check a bare <p><a>...</a></p> gets — an inline wrapper
+    must not exempt a link from it, only change which node holds the text to
+    compare against."""
+    anchor_text = a.get_text(strip=True)
+    node = a
+    parent = a.parent
+    while parent is not None and parent.name in _INLINE_WRAPPER_TAGS:
+        node = parent
+        parent = parent.parent
+    if parent is not None and parent.name == "p":
+        if parent.get_text(strip=True) != anchor_text:
+            return None  # other prose in the paragraph → inline mention
+        return parent
+    if node.get_text(strip=True) != anchor_text:
+        return None  # other content alongside the link's wrapper → inline mention
+    return node
+
+
 def _embed_standalone_youtube_links(content_html: str) -> str:
     """Turn a paragraph/anchor that is *only* a bare YouTube link into a player.
 
@@ -16127,17 +16162,9 @@ def _embed_standalone_youtube_links(content_html: str) -> str:
         href = str(a.get("href") or "").strip()
         if not href or not _YT_WATCH_URL_RE.match(href):
             continue
-        # The link must be the sole content of its block — convert a paragraph
-        # (or lone anchor) that is just this link, but not a worded link sitting
-        # inside a sentence. Compare the anchor's text against its container's
-        # full text: if they match, the anchor is the container's only content.
-        anchor_text = a.get_text(strip=True)
-        parent = a.parent
-        target = a
-        if parent is not None and parent.name == "p":
-            if parent.get_text(strip=True) != anchor_text:
-                continue  # other prose in the paragraph → inline mention
-            target = parent
+        target = _standalone_link_target(a)
+        if target is None:
+            continue
         vid = youtube_duration_service.extract_video_id(href)
         if not vid:
             continue
@@ -16195,13 +16222,9 @@ def _embed_standalone_bandcamp_links(content_html: str) -> str:
         if not m:
             continue
         embed_type = m.group(1).lower()  # "album" or "track"
-        anchor_text = a.get_text(strip=True)
-        parent = a.parent
-        target = a
-        if parent is not None and parent.name == "p":
-            if parent.get_text(strip=True) != anchor_text:
-                continue  # inline mention — other text present
-            target = parent
+        target = _standalone_link_target(a)
+        if target is None:
+            continue
         cached = lead_image_service.get_cached_source_html(href)
         if cached:
             _, page_html = cached

@@ -66,3 +66,29 @@ def test_video_id_extracted_from_an_embed_url():
     assert main.youtube_duration_service.extract_video_id(
         f"https://www.youtube.com/embed/{VID}?si=abc"
     ) == VID
+
+
+# A link inline-wrapped (<em>/<strong>/etc.) for emphasis has that tag, not <p>,
+# as its immediate parent — the "sole content of its block" check used to look
+# only at the immediate parent, so a wrapped citation link skipped the check
+# entirely and got converted into a full embedded player. Root-caused 2026-08-30
+# on a real post: 'Inigo Montoya once said, <em><a href=youtu.be/...>quote</a>
+# </em>.' — a reference link inside prose, not a video the post embeds.
+
+
+def test_a_citation_link_wrapped_in_em_inside_a_sentence_is_left_alone():
+    html = f'<p>He once said, <em><a href="https://youtu.be/{VID}">the quote</a></em> to us.</p>'
+    assert main._embed_standalone_youtube_links(html) == html
+
+
+def test_a_citation_link_wrapped_in_strong_inside_a_sentence_is_left_alone():
+    html = f'<p>Watch it: <strong><a href="https://youtu.be/{VID}">here</a></strong>, seriously.</p>'
+    assert main._embed_standalone_youtube_links(html) == html
+
+
+def test_a_genuinely_standalone_link_wrapped_in_em_still_converts():
+    """The fix must not overcorrect -- a link that really is alone in its
+    paragraph should still become a player even if it's wrapped for styling."""
+    html = f'<p><em><a href="https://youtu.be/{VID}">Watch</a></em></p>'
+    out = main._embed_standalone_youtube_links(html)
+    assert f"/embed/{VID}" in out
