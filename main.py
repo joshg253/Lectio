@@ -16109,6 +16109,52 @@ _BC_URL_RE = re.compile(
 )
 
 
+# Inline formatting tags a citation-style link is commonly wrapped in — these
+# don't make a link "alone" the way sitting directly in a bare <p> does.
+# "Inigo Montoya once said, <em><a href=youtu.be/...>quote</a></em>." has
+# <em>, not <p>, as the anchor's immediate parent, so a check that only ever
+# looked at the immediate parent silently skipped verifying the paragraph's
+# other text existed — converting a citation link buried in prose into a
+# full embedded player. Root-caused 2026-08-30 on exactly that shape.
+_INLINE_WRAPPER_TAGS = {"em", "strong", "b", "i", "span", "small", "mark", "u", "s", "sub", "sup", "cite", "q", "abbr"}
+# Containers a standalone link's text is compared against once inline
+# wrappers are climbed past. <p> was the only one recognized at first —
+# raised in review 2026-08-31: a link wrapped for emphasis inside a <div> or
+# <li> (rather than a <p>) fell through to comparing against just the inline
+# wrapper itself, so other prose in that block went undetected and the link
+# still converted, losing the citation text exactly like the <p> case this
+# function was built to fix.
+_BLOCK_CONTAINER_TAGS = {
+    "p", "div", "li", "td", "th", "blockquote", "section", "article",
+    "aside", "figure", "figcaption", "header", "footer", "main",
+}
+
+
+def _standalone_link_target(a):
+    """The element to replace with an embed if *a* is the sole meaningful
+    content of its block, else None (a worded link sitting inside prose).
+
+    Walks up through inline formatting wrappers to the first block-level
+    ancestor (or the anchor itself, if there is none) before comparing text,
+    so a link wrapped in <em>/<strong>/etc. still gets the same "nothing else
+    in this block" check a bare <p><a>...</a></p> gets — an inline wrapper
+    must not exempt a link from it, only change which node holds the text to
+    compare against."""
+    anchor_text = a.get_text(strip=True)
+    node = a
+    parent = a.parent
+    while parent is not None and parent.name in _INLINE_WRAPPER_TAGS:
+        node = parent
+        parent = parent.parent
+    if parent is not None and parent.name in _BLOCK_CONTAINER_TAGS:
+        if parent.get_text(strip=True) != anchor_text:
+            return None  # other prose in the block → inline mention
+        return parent
+    if node.get_text(strip=True) != anchor_text:
+        return None  # other content alongside the link's wrapper → inline mention
+    return node
+
+
 def _embed_standalone_youtube_links(content_html: str) -> str:
     """Turn a paragraph/anchor that is *only* a bare YouTube link into a player.
 
@@ -16127,17 +16173,9 @@ def _embed_standalone_youtube_links(content_html: str) -> str:
         href = str(a.get("href") or "").strip()
         if not href or not _YT_WATCH_URL_RE.match(href):
             continue
-        # The link must be the sole content of its block — convert a paragraph
-        # (or lone anchor) that is just this link, but not a worded link sitting
-        # inside a sentence. Compare the anchor's text against its container's
-        # full text: if they match, the anchor is the container's only content.
-        anchor_text = a.get_text(strip=True)
-        parent = a.parent
-        target = a
-        if parent is not None and parent.name == "p":
-            if parent.get_text(strip=True) != anchor_text:
-                continue  # other prose in the paragraph → inline mention
-            target = parent
+        target = _standalone_link_target(a)
+        if target is None:
+            continue
         vid = youtube_duration_service.extract_video_id(href)
         if not vid:
             continue
@@ -16195,13 +16233,9 @@ def _embed_standalone_bandcamp_links(content_html: str) -> str:
         if not m:
             continue
         embed_type = m.group(1).lower()  # "album" or "track"
-        anchor_text = a.get_text(strip=True)
-        parent = a.parent
-        target = a
-        if parent is not None and parent.name == "p":
-            if parent.get_text(strip=True) != anchor_text:
-                continue  # inline mention — other text present
-            target = parent
+        target = _standalone_link_target(a)
+        if target is None:
+            continue
         cached = lead_image_service.get_cached_source_html(href)
         if cached:
             _, page_html = cached
@@ -24027,6 +24061,16 @@ def _home_inner(
         # modal's lazily-fetched /settings/all data ever having loaded —
         # rendered directly so it's correct on first paint.
         "is_yt_folder": _selected_folder_name_ == get_yt_folder_name(),
+        # The rules editor scopes an "Add to YT Playlist" rule's feed picker to
+        # this folder (a playlist rule is never meaningful against a non-YT
+        # feed) — rendered page-wide rather than looked up lazily so it works
+        # the first time the rules panel opens, not just after visiting
+        # Settings -> YouTube. None when the folder doesn't exist yet (never
+        # auto-created just for this — that's YouTube Sync's job).
+        "yt_folder_id": next(
+            (cast(int, row["id"]) for row in folder_rows if str(row["name"]) == get_yt_folder_name()),
+            None,
+        ),
         "selected_feed_url": selected_feed_url,
         "selected_tag": selected_tag,
         "selected_query": selected_query,

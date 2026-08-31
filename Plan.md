@@ -212,68 +212,6 @@ here; the eventual fix is that item's DOM-walk-and-drop-hidden-nodes capture, no
 
 **Navigation/UX papercuts** — no design work needed, just haven't been built.
 
-### Clicking a feed name doesn't reveal it in the tree
-
-Noticed 2026-08-30 via a post-list feed-name link (`.post-feed-link`)
-navigating without scrolling/highlighting the feed in the folder tree the
-way clicking the tree's own `.feed-link` does. First check (desktop
-Chromium) didn't reproduce it, but a second try pinned down the actual
-path: from Feeds → All, clicking a post's feed-name link reproduces it
-reliably (in the VSCode integrated browser, so not a phone/Firefox
-quirk after all) — lands on `/?folder_id=1&list_feed_url=<feed>&read_filter=unread`
-with the list filtered to that feed but nothing selected/scrolled-to in
-the sidebar tree. Not diagnosed further — next step is comparing this
-path's navigation code against whatever the tree's own `.feed-link` click
-does to reveal/highlight (`static/js/app.js:3603` has the existing
-reveal-a-lazy-loaded-feed logic for pane-swap navigation; worth checking
-whether the All-view click routes through it or bypasses it).
-
-### "Add link to Note" quick-capture — idea, not scoped
-
-Raised 2026-08-30: a fast way to drop a link into the Global Note while
-browsing, for problematic posts noticed in passing (bad render, feed issue,
-etc.). Scoped down 2026-08-30: available from both the per-post context menu
-and an entry-pane button. Action appends the post's link to the existing
-Global Note and opens the note editor with it focused, so Josh types his own
-context right there rather than the write happening silently in the
-background. Writes through the existing `/settings/global-note` route
-(`GLOBAL_NOTE_SETTING_KEY`, main.py:35139). Not built.
-
-### Rules editor: YT Playlist scope shows every feed, and chips have no URL tooltip
-
-Two asks 2026-08-30, both in the rules draft editor (static/js/app.js, the shared feed-scope
-picker starting ~line 12414, used by every rule type):
-
-- **"Add to YT Playlist" should scope its feed picker to the YT folder.** `folderSel` always lists
-  every folder ("All Feeds" plus the whole tree, main.py's `/api/folder-feeds` behind it), with
-  nothing narrowing it for `ruleType === 'youtube_playlist'` specifically — even though a playlist
-  rule only ever makes sense against YouTube feeds. The pieces already exist server-side
-  (`get_yt_folder_name()` / `_folder_is_yt_folder`, main.py:774/30688) to default or restrict the
-  picker when the rule type is youtube_playlist.
-- **Rule chips have no hover tooltip.** The scope chips (`hl-folder-tag`,
-  static/js/app.js:12522-12524) are built with `tag.textContent = feedTitleByUrl.get(url) || url`
-  and no `title` attribute, so there's no way to disambiguate same-titled feeds without opening Feed
-  Properties. Concrete case: Josh has multiple Monterey Bay Aquarium feeds in one Add-to-YT-Playlist
-  rule and can't tell from the chip which one is actually the blog rather than the channel. A plain
-  `tag.title = url` fixes it for every rule type, not just this one.
-
-Not built.
-
-### Per-post re-fetch's Land On picker doesn't show its own default
-
-Asked 2026-08-30: what happens if you don't pick a Land On option? Traced it — leaving it unset
-isn't one fixed default, it's conditional. `/articles/refresh-content` always sends
-`bump_received=None` (main.py:32975), which falls back to `is_capture` in
-`refresh_captured_article`: a Lectio capture defaults to **Now** (bumps to top), an ordinary feed
-entry defaults to **Original** (no bump). Same outcome as picking one, just silent about which.
-Josh's ask, refined: not a pre-selected default (a checkbox implying he already chose it), just an
-indicator of which outcome applies if nothing is touched. The picker deliberately resets to unset
-on every menu open (`refetchDateChoice = null`, static/js/app.js:10203 — so a choice on one post
-can't leak to the next); this wants its own visual treatment distinct from an explicit pick (the
-existing `.ctx-refetch-date-opt--active` class), so it reads as "this is what happens if you don't
-touch anything" rather than "you already chose this."
-Not built.
-
 ### New subscription missing from feed tree — UX idea remaining
 
 Root-cause code bug already fixed (2026-07-08: re-adding a feed that existed

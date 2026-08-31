@@ -82,3 +82,32 @@ def test_other_folder_renders_the_gate_as_inactive(tenant):
         html = client.get("/", params={"folder_id": folder_id}).text
 
     assert 'data-yt-folder="0"' in html
+
+
+def test_yt_folder_id_is_stamped_page_wide_for_the_rules_editor(tenant):
+    """The rules editor's "Add to YT Playlist" scope picker reads
+    window.YT_FOLDER_ID to restrict itself to YouTube feeds -- has to be
+    correct on first paint, same reasoning as is_yt_folder above, so a rule
+    can be scoped correctly without visiting Settings -> YouTube first."""
+    with main.get_meta_connection() as conn:
+        root = main.get_root_folder_id(conn)
+        cur = conn.execute(
+            "INSERT INTO folders (name, parent_id) VALUES (?, ?)", (main.get_yt_folder_name(), root)
+        )
+        folder_id = cur.lastrowid
+        conn.commit()
+    main.invalidate_meta_structure_cache()
+
+    with TestClient(_app()) as client:
+        html = client.get("/").text
+
+    assert f"window.YT_FOLDER_ID = {folder_id};" in html
+
+
+def test_yt_folder_id_is_null_when_the_folder_does_not_exist_yet(tenant):
+    """Never auto-created just to answer this -- that stays YouTube Sync's job
+    (main._run_youtube_sync)."""
+    with TestClient(_app()) as client:
+        html = client.get("/").text
+
+    assert "window.YT_FOLDER_ID = null;" in html

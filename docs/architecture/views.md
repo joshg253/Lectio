@@ -277,6 +277,21 @@ initial sort/filter state (rebuilt server-side from remembered preferences in
 the fragment path) but the SPA re-stamps them from live state at click time.
 Fragment responses are `Cache-Control: no-store`, like the page itself.
 
+**A stray bubble-phase handler can outrun the reveal.** `.post-feed-link` (the
+feed name shown on each post row) is a real `<a>` with a correct href to the
+feed's own folder, navigated by the document-level capture-phase `<a>`
+interceptor (`index.html`). A second, older click listener bound directly on
+`.post-item` (`bindPostListInteractions`, app.js) also reacted to any click
+inside `.post-feed` — a leftover from before the feed name was a working
+anchor — and re-navigated using the *tree's own, already-rendered* `.feed-link`
+href instead of the clicked link's, which is often stale (the currently-viewed
+folder, not the feed's real one). Root-caused 2026-08-30 via a live browser
+repro: two GET requests fired from one click, the second (wrong) one winning
+the race and leaving `updateScopeActiveState` acting on the wrong URL, so the
+tree never revealed the feed. Fixed with an `event.defaultPrevented` guard —
+the same pattern `.post-main-link`'s sibling handler already used — so a real
+anchor's own (already-correct) navigation always wins.
+
 The app's main script lives in `static/js/app.js` (long-lived cache, busted by
 `?v={STATIC_ASSET_VERSION}` — new static files must be added to
 `_static_asset_version()`'s hash list or their changes won't bust caches). It
@@ -603,3 +618,40 @@ after the first in-page navigation, while still working on a direct URL load
 (which is why it survived testing). The search button, its clear control, the
 query input, and the search form's `submit` handler are therefore all delegated
 from `document`. Wire anything new on this toolbar the same way.
+
+## "Add link to Note" — append with the cursor ready, not a silent write
+
+Raised 2026-08-30: a fast way to drop a problematic post's link into the Global Note while
+browsing, from the per-post context menu (list and entry-pane title share one menu, so this
+covers both automatically) and a dedicated entry-pane button (`entry-add-link-to-note-button`,
+`data-entry-link` stamped at render time).
+
+`openGlobalNoteWithLink(link)` (app.js) opens the modal with the link **appended**, not saved —
+the note isn't submitted until the user does, so they type their own context right there rather
+than a background write happening silently. It runs its own fetch of `/settings/global-note`
+rather than reusing the `[data-toggle-panel]` handler's own load-on-open fetch (which also targets
+`global-note-modal`) — two concurrent fetch-and-compare-against-the-textarea calls on the same
+open would race each other. Falls back to appending onto whatever's currently shown if the fetch
+fails, rather than doing nothing.
+
+## `.posts` scrolls, `.pane-posts` never does — a stale assumption broke chunking on phones
+
+Root-caused 2026-08-31 from "All isn't chunking on my phone." `setupPostChunks`' scroll-trigger and
+the chunk-delta append's scroll-position preservation both special-cased single-pane (phone) mode
+to read/bind `.pane-posts` instead of `.posts`, on the belief that `.pane-posts` is what scrolls
+there. Measured live: `.pane-posts` has `overflow-y: hidden` and reports `scrollHeight ===
+clientHeight` in every mode — it never scrolls, anywhere. `.posts` (the item container
+`setupPostChunks` already queries for `getPostItems()`) is the actual scrolling element
+universally, confirmed by a genuinely-overflowing `scrollHeight` (2803) vs `clientHeight` (761) on
+a seeded 30-item list.
+
+Binding the `'scroll'` listener to an element that never scrolls means it never fires, so
+scroll-triggered server fetches for more items silently stop working — the list caps at whatever
+was already in the DOM. The same wrong element fed `ensureViewportFilled`'s "how much room is
+left" calculation too: reading a fixed-size wrapper as if it were the scrollable one always
+computed ~0 remaining, so the initial fill loop kept growing the local reveal window past the
+normal chunk size until everything already present in the DOM was shown — the on-screen symptom
+("the scrollbar was tiny and it kept scrolling forever") is that over-revealed local batch, with no
+further server fetch ever following it once you'd scrolled through it. Both call sites now just use
+`postsContainer`/`postsInnerEl` (`.posts`) unconditionally — no single-pane branch, since the
+branch's premise was never true.

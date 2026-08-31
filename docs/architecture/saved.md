@@ -491,6 +491,16 @@ overrides `bump_received` outright when set:
   passes `bump_received=False`) are untouched — `date_choice` is additive,
   not a replacement for `bump_received`.
 
+**The unset default is now shown, not just true (2026-08-30).** Asked directly: "if I don't pick
+one, what happens?" — the picker's own "nothing pre-selected" convention meant there was no way to
+tell without reading the code. Fixed by mirroring the server rule client-side as a passive hint —
+`contextPostCaptured ? 'now' : 'original'` gets a dashed `.ctx-refetch-date-opt--default` outline,
+deliberately distinct from the solid `--active` fill an explicit pick gets, so it reads as "this is
+what happens" rather than "you already chose this" (a pre-checked-looking chip would misrepresent
+the choice, the same reasoning as the dupe scans' own nothing-pre-checked rule). Recomputed on every
+menu open alongside the existing reset, using the same `data-post-captured` attribute the Re-fetch
+guard already reads.
+
 **Why `saved_at` needed its own fix alongside this.** The star-order bump
 used raw SQL `CURRENT_TIMESTAMP`, which cannot be pointed at an arbitrary
 date — landing the Received columns on the pub date while `saved_at` still

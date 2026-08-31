@@ -508,6 +508,56 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       }
     });
 
+    // "Add link to Note" quick-capture (raised 2026-08-30): a fast way to drop
+    // a problematic post's link into the Global Note while browsing, for
+    // context added right there rather than a silent background write. Opens
+    // the note editor with the link already appended and the cursor placed
+    // right after it, so the user types their own context immediately.
+    // Deliberately its own fetch rather than reusing the [data-toggle-panel]
+    // handler above (which also refreshes global-note-modal on open) — a
+    // second concurrent fetch-and-compare against the same textarea would
+    // race this one.
+    function openGlobalNoteWithLink(link) {
+      const modal = document.getElementById('global-note-modal');
+      const ta = document.getElementById('global-note-text');
+      if (!modal || !ta || !link) return;
+      modal.removeAttribute('hidden');
+      const before = ta.value;
+      const appendLink = (base) => {
+        const trimmedBase = base.replace(/\s+$/, '');
+        return trimmedBase ? `${trimmedBase}\n\n${link}\n` : `${link}\n`;
+      };
+      fetch('/settings/global-note', { credentials: 'same-origin', headers: { 'X-Requested-With': 'lectio-global-note-load' } })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          const base = (d && typeof d.note_text === 'string' && ta.value === before) ? d.note_text : ta.value;
+          ta.value = appendLink(base);
+          ta.focus();
+          ta.setSelectionRange(ta.value.length, ta.value.length);
+        })
+        .catch(() => {
+          // Fetch failed — still append onto whatever's currently shown
+          // rather than doing nothing.
+          ta.value = appendLink(ta.value);
+          ta.focus();
+          ta.setSelectionRange(ta.value.length, ta.value.length);
+        });
+    }
+
+    // Builds the Lectio page URL for a post (folder_id/feed_url/entry_id),
+    // mirroring the post-item anchor's own href in index.html -- used by the
+    // list's context-menu Add-link-to-Note action below, which (unlike the
+    // entry pane's own button) has no window.location.href for the post
+    // since it may never have been opened.
+    function lectioEntryUrl(feedUrl, entryId, folderId) {
+      if (!feedUrl || !entryId) return '';
+      const params = new URLSearchParams();
+      if (folderId) params.set('folder_id', folderId);
+      params.set('feed_url', feedUrl);
+      params.set('entry_id', entryId);
+      return `${window.location.origin}/?${params.toString()}`;
+    }
+
     function closeAddModal(modalId) {
       const modal = document.getElementById(modalId);
       if (modal) {
@@ -3106,6 +3156,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     const postMarkAboveReadButton = document.getElementById('ctx-post-mark-above-read');
     const postMarkBelowReadButton = document.getElementById('ctx-post-mark-below-read');
     const postCopyUrlButton = document.getElementById('ctx-post-copy-url');
+    const postAddLinkToNoteButton = document.getElementById('ctx-post-add-link-to-note');
     const postAutomationButton = document.getElementById('ctx-post-automation');
     const postMoveToFeedButton = document.getElementById('ctx-post-move-to-feed');
     const postMoveVisibleButton = document.getElementById('ctx-post-move-visible');
@@ -3840,10 +3891,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
 
           // .posts is the actual item container and the element setupPostChunks
           // queries. Append there so getPostItems() finds new items and the
-          // chunk counter advances correctly. In single-pane mode .pane-posts
-          // scrolls, so preserve scroll on the right element.
+          // chunk counter advances correctly. .posts is also the actual
+          // scrolling element in every layout mode (see setupPostChunks'
+          // scrollEl for the live measurement) — .pane-posts never scrolls,
+          // so reading/restoring scrollTop there was a silent no-op on a
+          // phone, moot only because the chunk-delta fetch that reaches here
+          // never used to fire there either.
           const postsInnerEl = currentPostsPane.querySelector('.posts') || currentPostsPane;
-          const scrollingEl = (window.isSingleMode && window.isSingleMode()) ? currentPostsPane : postsInnerEl;
+          const scrollingEl = postsInnerEl;
           const prevScroll = scrollingEl.scrollTop;
 
           // Avoid appending duplicates: only append items whose entry-id
@@ -8021,6 +8076,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
           }
           setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
+          setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
           setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
           setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
@@ -8301,6 +8357,15 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         schedulePoll();
       }
 
+      const entryAddLinkToNoteButton = document.getElementById('entry-add-link-to-note-button');
+      if (entryAddLinkToNoteButton && !entryAddLinkToNoteButton.dataset.boundClick) {
+        entryAddLinkToNoteButton.dataset.boundClick = '1';
+        entryAddLinkToNoteButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          const link = entryAddLinkToNoteButton.getAttribute('data-entry-link');
+          if (link) openGlobalNoteWithLink(link);
+        });
+      }
     }
 
     bindEntryPaneInteractions();
@@ -8419,6 +8484,18 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         if (!postItem.dataset.boundTileClick) {
           postItem.dataset.boundTileClick = '1';
           postItem.addEventListener('click', (event) => {
+            // .post-feed-link is now a real <a> with its own working href,
+            // already navigated by the document-level capture-phase <a>
+            // interceptor (index.html) before this bubble-phase handler ever
+            // runs. Without this guard both fired: the interceptor navigated
+            // correctly using the link's own href (the feed's real folder),
+            // then this handler fired again and re-navigated using the
+            // TREE's *existing* (often stale/wrong-folder) .feed-link href
+            // instead — winning the race and leaving the sidebar tree
+            // unrevealed. Root-caused 2026-08-30 via a live click repro.
+            if (event.defaultPrevented) {
+              return;
+            }
             if (event.target.closest('.post-save-toggle-form, .post-read-toggle-form, .post-select-check')) {
               return;
             }
@@ -8491,6 +8568,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               }
               setMenuItemVisible(postMarkReadBulkButton, true);
               setMenuItemVisible(postCopyUrlButton, false);
+              setMenuItemVisible(postAddLinkToNoteButton, false);
               setMenuItemVisible(postMarkFeedReadButton, false);
               setMenuItemVisible(postOpenInFeedsButton, false);
               setMenuItemVisible(postAutomationButton, false);
@@ -8551,6 +8629,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               setMenuItemVisible(postStarBulkButton, false);
               setMenuItemVisible(postUnstarBulkButton, false);
               setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
+              setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
               setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
               setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
               setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
@@ -9690,6 +9769,19 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       }
     });
 
+    postAddLinkToNoteButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      // The Lectio page URL for this post, not its external source link --
+      // same reasoning as the entry pane's own Add-to-Note button: the point
+      // is a link that reopens THIS post in Lectio, not wherever it
+      // originally came from. Raised in review 2026-08-31: this context-menu
+      // path was still using contextPostLink (the source article's own URL).
+      const link = lectioEntryUrl(contextPostFeedUrl, contextPostEntryId, contextPostFolderId);
+      hideAllContextMenus();
+      if (link) openGlobalNoteWithLink(link);
+    });
+
     postAutomationButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -10201,8 +10293,16 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       // Reset the date-choice picker for the new post — a choice made for
       // the last post re-fetched must not silently apply to this one.
       refetchDateChoice = null;
+      // Show which outcome applies if nothing is clicked — main.py's own
+      // default (bump_received=None -> is_capture): a capture lands on Now,
+      // an ordinary feed entry keeps Original. Distinct styling from
+      // --active (below) so it reads as "this is what happens", not "you
+      // already chose this". Raised 2026-08-30.
+      const defaultDateChoice = contextPostCaptured ? 'now' : 'original';
       for (const btn of document.querySelectorAll('.ctx-refetch-date-opt:not(.ctx-scope-refetch-date-opt)')) {
         btn.classList.remove('ctx-refetch-date-opt--active');
+        btn.classList.toggle('ctx-refetch-date-opt--default',
+          btn.getAttribute('data-date-choice') === defaultDateChoice);
       }
       const feedUrl = contextPostFeedUrl;
       const entryId = contextPostEntryId;
@@ -12522,6 +12622,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             const tag = document.createElement('span');
             tag.className = 'hl-folder-tag';
             tag.textContent = feedTitleByUrl.get(url) || url;
+            // Same-titled feeds (e.g. a site's blog vs its channel, both
+            // showing the same display name) are otherwise indistinguishable
+            // without opening Feed Properties. Raised 2026-08-30.
+            tag.title = url;
             const x = document.createElement('button');
             x.type = 'button'; x.className = 'hl-folder-tag-remove'; x.textContent = '×';
             x.setAttribute('aria-label', 'Remove');
@@ -13118,10 +13222,37 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           // (selectedFeedUrls), so a type change keeps the chosen feed(s) automatically.
         }
         syncTypeControls();
+        // Same YT-folder scoping as the type-change listener below, but for
+        // the initial build: an existing youtube_playlist rule saved with no
+        // folder scope (global) still gets narrowed rather than showing every
+        // feed in the library. A rule that already has a real scope is left
+        // exactly as saved — only the unscoped case is ambiguous enough to fix.
+        if (typeSel.value === 'youtube_playlist' && !folderSel.value && window.YT_FOLDER_ID != null) {
+          folderSel.value = String(window.YT_FOLDER_ID);
+          loadFolderFeeds(folderSel.value);
+          renderFeedChips();
+        }
         typeSel.addEventListener('change', syncTypeControls);
         deliverySel.addEventListener('change', syncTypeControls);
         matchMethodSel.addEventListener('change', syncTypeControls);
         folderSel.addEventListener('change', syncTypeControls);
+
+        // "Add to YT Playlist" only ever makes sense against YouTube feeds, so
+        // switching TO this type re-scopes the feed picker to the YT folder —
+        // it previously kept showing every folder. Only on an explicit type
+        // CHANGE (never on initial draft-open via syncTypeControls() above),
+        // so editing an existing rule's already-chosen scope is never
+        // clobbered. Raised 2026-08-30.
+        typeSel.addEventListener('change', () => {
+          if (typeSel.value === 'youtube_playlist' && window.YT_FOLDER_ID != null
+              && folderSel.value !== String(window.YT_FOLDER_ID)) {
+            folderSel.value = String(window.YT_FOLDER_ID);
+            selectedFeedUrls.clear();
+            loadFolderFeeds(folderSel.value);
+            renderFeedChips();
+            renderFeedDrop();
+          }
+        });
 
         /* The scope this draft would save to. Explicit feed picks always win —
          * the picker can select feeds without a folder, and silently discarding
@@ -16215,10 +16346,20 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       }
       postsContainer.dataset.chunkBound = '1';
 
-      // In single-pane mode .pane-posts scrolls; in multi-pane .posts scrolls.
-      const scrollEl = (window.isSingleMode && window.isSingleMode())
-        ? (document.querySelector('.pane-posts') || postsContainer)
-        : postsContainer;
+      // .posts itself is the actual scrolling element in every layout mode —
+      // .pane-posts (the section wrapping it in single-pane/phone mode) has
+      // overflow-y:hidden and never scrolls, so a 'scroll' listener bound to
+      // it never fires and chunk-loading silently stops working on a phone.
+      // Confirmed live 2026-08-31: .posts had scrollHeight 2803 vs
+      // clientHeight 761 (genuinely scrollable) while .pane-posts reported
+      // scrollHeight === clientHeight (fixed). Also explains the initial
+      // over-reveal (ensureViewportFilled's "remaining space" math read the
+      // fixed wrapper, saw ~0 remaining every iteration, and kept growing the
+      // local window until everything already in the DOM was shown) —
+      // the on-screen symptom was "the scrollbar was tiny and it kept
+      // scrolling forever" through a big already-loaded batch with no further
+      // server fetch ever following it.
+      const scrollEl = postsContainer;
 
       const chunkSize = Number.parseInt(postsContainer.getAttribute('data-chunk-size') || '10', 10) || 10;
       let visibleCount = chunkSize;

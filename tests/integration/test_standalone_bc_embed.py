@@ -90,3 +90,14 @@ def test_no_bandcamp_is_noop():
 
 def test_non_string_content_is_noop():
     assert main._embed_standalone_bandcamp_links(None) is None  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+
+
+def test_a_citation_link_wrapped_in_em_inside_a_sentence_is_left_alone():
+    """Same fix as _embed_standalone_youtube_links, shared via
+    _standalone_link_target -- an inline formatting wrapper (<em>, <strong>,
+    etc.) must not exempt a link from the "sole content of its block" check."""
+    html = f'<p>Check out <em><a href="{ALBUM_URL}">this one</a></em>, it rules.</p>'
+    with patch.object(main.lead_image_service, "get_cached_source_html", return_value=None):
+        out = main._embed_standalone_bandcamp_links(html)
+    assert "EmbeddedPlayer" not in out
+    assert "this one" in out
