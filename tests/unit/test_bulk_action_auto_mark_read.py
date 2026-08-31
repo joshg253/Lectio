@@ -6,9 +6,10 @@ same selection was a second manual step for the common case.
   (ok_video_ids: newly-added or already-on-the-playlist) — a video that
   failed, or was never reached because the run stopped on quota, is left
   unread on purpose.
-- Bulk "Add tag" marks read everything tagged — tagging implies keeping/
-  filing it, unconditionally (no partial-failure case: the route either
-  tags every entry or reports one shared error).
+- Bulk "Edit tags" (formerly "Add tag", 2026-08-31) marks read every entry
+  that still has a tag after the edit — tagging implies keeping/filing it,
+  but since a bulk edit can now REMOVE a tag too, an entry that lost its last
+  tag is not a keep action and must not be marked read.
 
 Source assertions, because this is client-side bulk-action wiring with no JS
 test harness in this repo.
@@ -44,8 +45,11 @@ def test_poller_ignores_a_status_response_for_a_different_job():
     assert "if (job.stale) return;" in block
 
 
-def test_bulk_add_tag_marks_read_everything_tagged():
-    idx = APP_JS.index("showToastMessage(data.message || 'Tags added.');")
-    block = APP_JS[idx:idx + 1150]
+def test_bulk_edit_tags_marks_read_only_entries_still_tagged_after_the_edit():
+    idx = APP_JS.index("showToastMessage(data.message || 'Tags updated.');")
+    block = APP_JS[idx:idx + 2000]
+    assert "data.still_tagged" in block
+    assert "data.now_untagged" in block
+    assert "stillTaggedKeys" in block
     assert "/entries/read-batch" in block
-    assert "applyReadStateToSelection(entries)" in block
+    assert "applyReadStateToSelection(toMarkRead)" in block

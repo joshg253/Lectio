@@ -294,6 +294,14 @@ keeping services free of main/DB imports.
   spelling, and takes plain strings only (a structured value belongs to some other
   schema's `vendor`). A bare `vendor` key is ignored — unnamespaced, it could mean
   anything.
+- **neowin.net's `<neowin:tags>` counts too — same shape, a hashtag list
+  instead of one name.** Raised 2026-08-31 rechecking an earlier "no can do":
+  Neowin ships `<neowin:tags>#OpenAI #ChatGPT #Ads</neowin:tags>` instead of
+  `<category>`, invisible to feedparser's `.tags`/`.category` the same way the
+  Shopify vendor field is. `_prefixed_hashtag_field_tags` mirrors
+  `_shopify_vendor_tags`'s `<prefix>_vendor` matching but for `<prefix>_tags`,
+  splitting the value on whitespace instead of taking it whole (a leading `#`
+  is stripped by the shared `_clean_tag_values`, same as any other tag).
 - **Storage.** `entry_feed_tags(feed_url, entry_id, tag, first_seen_at)`, tags
   stored **raw** and normalized only at display, because the raw text is the
   foundation for tag-filtered feed adapters. Replace-per-entry semantics, so
@@ -862,3 +870,31 @@ An alias is applied inside `normalize_tag_value`, which every tag path already r
 **Chains are refused in both directions.** `_apply_tag_alias` takes exactly one hop, so `a -> b -> c` would leave `a` resolving to a tag that holds nothing. Creating an alias whose canonical is itself an alias is refused, and so is aliasing a tag that other aliases already point at.
 
 Counts in the inventory keep feed-provided and manual tags apart because they live in different stores and a rewrite touches both; one combined number would hide which half is which. Manual counts come from a single grouped query against reader's `entry_tags`, not `get_entry_counts` per tag — there are 33,511 distinct tags.
+
+
+## Bulk "Edit tags" — add and remove in one pass
+
+`POST /entries/tags-batch` (multi-select context menu, and the single-post
+tag icon — same modal, same route) used to only ever append: renamed from
+"Add tag" to "Edit tags" 2026-08-31 after Josh found the append-only version
+a footgun for editing several posts' tags at once — no way to also drop one
+meant falling back to doing each post by hand.
+
+Input now uses the same `+/-tag` convention as the rule editor's tag_filter
+spec (`parse_tag_filter_spec`): a leading `-` removes, bare/`+` adds.
+`parse_manual_tag_edit_tokens` splits on whitespace/comma (not the filter
+spec's comma-only split — multi-word manual tags aren't the concern here the
+way a typed filter phrase is) into `(add_tokens, remove_set)`.
+`apply_manual_tag_edits` applies them against **each entry's own existing
+tags** — a mixed selection has no single "current" state, so removing a tag
+one post doesn't have is simply a no-op for that post, never an error. A tag
+both added and removed in the same edit ends up removed: the leading `-` is
+the more specific, deliberate keystroke.
+
+**Success no longer implies "every entry now has a tag."** The append-only
+route could safely mark every touched entry's tag indicator (and its "kept"
+state) true unconditionally; a route that can also remove cannot. The
+response carries `still_tagged`/`now_untagged` — `[feed_url, entry_id]` pairs
+per outcome — so the client updates each post's indicator correctly and only
+auto-marks-read the ones that still have a tag (tagging implies keeping/
+filing it; losing your last tag is not a keep action).

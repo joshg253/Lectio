@@ -1,4 +1,8 @@
-"""Integration tests for the bulk "Add tag" context-menu action (/entries/tags-batch)."""
+"""Integration tests for the bulk "Edit tags" context-menu action (/entries/tags-batch).
+
+Renamed from "Add tag" 2026-08-31: the old route only ever appended, with no
+way to remove a tag across a multi-selection -- now uses the same +/-tag
+convention as the rule editor's tag_filter spec."""
 from __future__ import annotations
 
 import json
@@ -48,7 +52,7 @@ def _tags(entry_id: str) -> list[str]:
 
 
 def _batch(pairs, tags_text: str) -> dict:
-    resp = main.add_manual_tags_to_entries_batch_route(entries=json.dumps(pairs), tags_text=tags_text)
+    resp = main.edit_manual_tags_on_entries_batch_route(entries=json.dumps(pairs), tags_text=tags_text)
     return json.loads(bytes(resp.body))
 
 
@@ -81,7 +85,7 @@ def test_batch_tag_rejects_no_valid_tags(env):
 def test_batch_tag_rejects_oversize_and_bad_payload(env):
     data = _batch([[FEED, str(i)] for i in range(main._MOVE_BATCH_CAP + 1)], "tag")
     assert not data["ok"] and "Too many" in data["error"]
-    resp = main.add_manual_tags_to_entries_batch_route(entries="not json", tags_text="tag")
+    resp = main.edit_manual_tags_on_entries_batch_route(entries="not json", tags_text="tag")
     assert not json.loads(bytes(resp.body))["ok"]
 
 
@@ -91,3 +95,60 @@ def test_batch_tag_counts_malformed_pairs_as_failed(env):
     assert data["ok"] and data["tagged"] == 2 and data["failed"] == 1
     assert _tags("e1") == ["tag"]
     assert _tags("e2") == ["tag"]
+
+
+# --- removal (raised 2026-08-31: "Add tag" with no way to also remove) ---
+
+
+def test_batch_remove_drops_a_tag_each_entry_already_has(env):
+    _setup_entries()
+    with main.get_reader() as reader:
+        reader.set_tag((FEED, "e1"), f"{main.MANUAL_TAG_KEY_PREFIX}old")
+        reader.set_tag((FEED, "e1"), f"{main.MANUAL_TAG_KEY_PREFIX}keep")
+        reader.set_tag((FEED, "e2"), f"{main.MANUAL_TAG_KEY_PREFIX}old")
+    data = _batch([[FEED, "e1"], [FEED, "e2"]], "-old")
+    assert data["ok"] and data["tagged"] == 2
+    assert _tags("e1") == ["keep"]
+    assert _tags("e2") == []
+    assert [FEED, "e1"] in data["still_tagged"]
+    assert [FEED, "e2"] in data["now_untagged"]
+
+
+def test_batch_remove_is_a_noop_on_an_entry_without_the_tag(env):
+    """A mixed selection where only SOME posts have the tag being removed --
+    each entry's own tags are the base, so this must not error or touch e2."""
+    _setup_entries()
+    with main.get_reader() as reader:
+        reader.set_tag((FEED, "e1"), f"{main.MANUAL_TAG_KEY_PREFIX}special")
+        reader.set_tag((FEED, "e2"), f"{main.MANUAL_TAG_KEY_PREFIX}unrelated")
+    data = _batch([[FEED, "e1"], [FEED, "e2"]], "-special")
+    assert data["ok"] and data["tagged"] == 2
+    assert _tags("e1") == []
+    assert _tags("e2") == ["unrelated"]
+
+
+def test_batch_add_and_remove_in_one_edit(env):
+    _setup_entries()
+    with main.get_reader() as reader:
+        reader.set_tag((FEED, "e1"), f"{main.MANUAL_TAG_KEY_PREFIX}old")
+    data = _batch([[FEED, "e1"]], "-old new")
+    assert data["ok"]
+    assert _tags("e1") == ["new"]
+
+
+def test_batch_remove_only_rejects_empty_leftover_when_both_sides_empty(env):
+    """Bare '-' with nothing after it, or whitespace, is still "no valid
+    tags" -- same rejection as the old add-only route."""
+    _setup_entries()
+    data = _batch([[FEED, "e1"]], "-")
+    assert not data["ok"] and "No valid tags" in data["error"]
+
+
+def test_a_tag_removed_and_re_added_in_the_same_edit_stays_removed(env):
+    """The leading '-' is the more specific, deliberate keystroke."""
+    _setup_entries()
+    with main.get_reader() as reader:
+        reader.set_tag((FEED, "e1"), f"{main.MANUAL_TAG_KEY_PREFIX}x")
+    data = _batch([[FEED, "e1"]], "-x x")
+    assert data["ok"]
+    assert _tags("e1") == []

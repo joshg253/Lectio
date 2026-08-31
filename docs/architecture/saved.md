@@ -606,6 +606,57 @@ kept unless the archived copy actually succeeds. The guard still applies to the
 archived fetch, comparing the ORIGINAL URL against the archived page's title, so a
 snapshot of the same parked page is refused just as the live one was.
 
+**An archive-fallback capture's own images need unwrapping, not just absolutizing.**
+`_absolutize_article_urls` resolves relative image `src`s against the page it
+extracted from — which, for this fallback, is the Wayback *snapshot* URL, so a
+relative src absolutizes into `http://web.archive.org/web/<ts>im_/<original>` rather
+than the plain original. That `im_` image-proxy hop is markedly flakier than the
+site it wraps (caught live 2026-08-31: a beehiiv-hosted image 404'd through it while
+the exact URL it wraps, fetched directly, returned 200). `_unwrap_wayback_image_urls`
+runs in `_finalize_article_html` right after absolutizing and rewrites any such
+wrapper back to the original URL it already carries — nothing is gained by routing
+the image through Wayback once the HTML capture itself is done.
+
+**og:image and the readability body can each name a different re-encoded copy of the
+same photo.** Raised 2026-08-31 against a live Substack post: og:image pointed at one
+CDN-proxied asset id, the post's own in-body header image at a different one — same
+source photo, regenerated separately, so the exact-URL check in
+`extract_readability_article`'s hero-prepend guard didn't recognize the body already
+had it and stamped a visible duplicate above the title. Both filenames still carried
+the original upload's pixel dimensions as a suffix (`..._2884x1622.jpeg`) even though
+the asset id differed, so `_image_dimension_signature` uses that as a same-photo
+fallback when the exact-URL match misses.
+
+**A CDN that identifies images by query string, not path, breaks path-based "same
+image" checks.** Also raised 2026-08-31, on premierguitar.com: its media-library CDN
+serves every image at the literal path `.../image.jpg`, distinguished only by `?id=`.
+Both `_dedupe_readability_images` (which used to strip the whole query string before
+comparing, to catch the common case of a repeated image differing only by a resize
+param) and the hero-prepend guard's filename check treated every image on the page as
+"the same src" — silently dropping a second, genuinely different tab-diagram image as
+a duplicate, and treating og:image as "already shown" by any unrelated image sharing
+the generic filename. `_dedupe_img_src_key` is the fix both now share: normalize to
+path + query, but with a small blocklist of known presentation-only keys (width,
+height, quality, crop, coordinates, dpr, ...) dropped first — a pure resize-param
+difference (`?w=2`) still dedupes, but an identifying `?id=` does not.
+
+**RebelMouse CMS (premierguitar.com and siblings) needed two more fixes to actually
+reach its images.** `_bs4_content_fallback` gained a `body-description` selector —
+readability's own scoring was locking onto the page's `<article class="...
+image-article...">` header/hero wrapper (matched first by the generic `tag: article`
+fallback), losing every "Ex. N" tab-diagram image that lives in the real body
+alongside it. And its lazy-loaded images ship a blank `data:image/svg+xml` `src` with
+the real URL only in a nonstandard `data-runner-src` attribute — not one of the
+`data-src`/`data-lazy-src`/`data-original`/`data-image` names `normalize_proxy_lazy_media`
+already promoted — so `sanitize_readability_html` stripped the placeholder with nothing
+to replace it. Both fallback call sites in `extract_readability_article` (the `< 300`
+char branch and the low-image-count branch) also needed `normalize_proxy_lazy_media`
+run on their result before sanitizing — it previously ran only on readability's own
+primary summary, so a selector-fallback image's lazy attrs never got the same
+promotion. See Plan.md for a remaining gap: the fallback-acceptance gate only compares
+image *count*, so a text-only lesson page can lose a clean selector match to
+whole-body-rescue on a 0-vs-0 tie.
+
 **Re-fetch is gated on KEPT, not on the star.** Both re-fetch items (readability
 and whole-page) appear when the post is one Lectio is keeping — a capture, starred,
 **or manually tagged** — because only then is there a stored copy worth replacing.

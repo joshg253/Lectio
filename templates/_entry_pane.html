@@ -500,16 +500,13 @@
         </div>
         {% endif %}
         {% endif %}
-        {% if selected_entry.link %}
         <button
           type="button"
           id="entry-add-link-to-note-button"
           class="entry-source-button"
-          data-entry-link="{{ selected_entry.link }}"
-          title="Add link to Note"
-          aria-label="Add link to Note"
+          title="Add this Lectio page's link to Note"
+          aria-label="Add this Lectio page's link to Note"
         ><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span></button>
-        {% endif %}
         {% if selected_entry.content_html %}
         <button
           type="button"

@@ -120,6 +120,7 @@ def extract_feed_entry_tags(raw_entry: object) -> list[str]:
         values.extend(_split_multi_value_term(str(category)))
 
     values.extend(_shopify_vendor_tags(raw_entry))
+    values.extend(_prefixed_hashtag_field_tags(raw_entry))
 
     return _clean_tag_values(values)
 
@@ -148,6 +149,35 @@ def _shopify_vendor_tags(raw_entry: object) -> list[str]:
         # Shopify's plain string.
         if isinstance(value, str) and 0 < len(value.strip()) <= _MAX_VENDOR_LEN:
             out.append(value.strip())
+    return out
+
+
+# A custom-namespace <prefix:tags>#Word #Word</prefix:tags> element, flattened
+# by feedparser to a `<prefix>_tags` dict key when the namespace isn't one it
+# recognizes — same shape as _shopify_vendor_tags' <prefix>_vendor handling.
+# Raised 2026-08-31 against neowin.net, which ships exactly this
+# (`<neowin:tags>#OpenAI #ChatGPT #Ads</neowin:tags>`) and was previously
+# invisible to entry_feed_tags entirely: neither feedparser's `.tags` nor
+# `.category` sees an unrecognized namespace's own element name, only its
+# flattened dict key.
+_PREFIXED_TAGS_KEY_RE = re.compile(r"^[a-z0-9]{1,20}_tags$")
+_MAX_PREFIXED_TAG_LEN = 60
+
+
+def _prefixed_hashtag_field_tags(raw_entry: object) -> list[str]:
+    if not hasattr(raw_entry, "keys") or not hasattr(raw_entry, "get"):
+        return []
+    mapping = cast(Mapping[Any, Any], raw_entry)
+    out: list[str] = []
+    for key in mapping.keys():
+        if not _PREFIXED_TAGS_KEY_RE.match(str(key).lower()):
+            continue
+        value = mapping.get(key)
+        if not isinstance(value, str):
+            continue
+        for token in value.split():
+            if 0 < len(token) <= _MAX_PREFIXED_TAG_LEN:
+                out.append(token)
     return out
 
 

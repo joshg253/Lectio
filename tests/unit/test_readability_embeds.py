@@ -66,3 +66,36 @@ def test_absolutize_leaves_absolute_urls_untouched():
     out = main._absolutize_article_urls(html, "https://fabiensanglard.net/keyboards/index.html")
     assert 'src="https://cdn.example/a.png"' in out
     assert 'href="https://x.test/p"' in out
+
+
+def test_unwraps_wayback_image_proxy_url():
+    """An archive-fallback capture (mode="archive", or the auto mismatch/dead
+    fallback) resolves relative image src against the snapshot URL, producing
+    im_-wrapped web.archive.org URLs. Raised 2026-08-31 against two live
+    beehiiv entries: the im_ proxy 404'd while the URL it wraps, fetched
+    directly, returned 200 image/jpeg -- unwrap it rather than store the
+    fragile proxy."""
+    html = (
+        '<figure><img src="http://web.archive.org/web/20251005150628im_/'
+        'https://beehiiv-images-production.s3.amazonaws.com/uploads/asset/file/'
+        'x/max.jpg?t=1759359474"></figure>'
+    )
+    out = main._unwrap_wayback_image_urls(html)
+    assert (
+        'src="https://beehiiv-images-production.s3.amazonaws.com/uploads/asset/file/'
+        'x/max.jpg?t=1759359474"' in out
+    )
+    assert "web.archive.org" not in out
+
+
+def test_unwrap_wayback_is_a_noop_without_it():
+    html = '<img src="https://cdn.example/a.png">'
+    assert main._unwrap_wayback_image_urls(html) == html
+
+
+def test_unwrap_wayback_leaves_a_non_image_wayback_link_alone():
+    """Only a wrapped src/href *value* (the whole quoted attribute is the
+    wrapper) is unwrapped -- a plain link mentioning web.archive.org some
+    other way is left untouched."""
+    html = '<a href="https://web.archive.org/">Wayback home</a>'
+    assert main._unwrap_wayback_image_urls(html) == html
