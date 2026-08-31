@@ -13,6 +13,107 @@ git history (rationale kept in ARCHITECTURE.md where relevant); items
 that were done-but-with-a-real-remainder were condensed to just that
 remainder.
 
+### "Add link to Note" quick-capture — idea, not scoped
+
+Raised 2026-08-30: a fast way to drop a link into the Global Note while
+browsing, for problematic posts noticed in passing (bad render, feed issue,
+etc.). Scoped down 2026-08-30: available from both the per-post context menu
+and an entry-pane button. Action appends the post's link to the existing
+Global Note and opens the note editor with it focused, so Josh types his own
+context right there rather than the write happening silently in the
+background. Writes through the existing `/settings/global-note` route
+(`GLOBAL_NOTE_SETTING_KEY`, main.py:35139). Not built.
+
+### Clicking a feed name doesn't reveal it in the tree
+
+Noticed 2026-08-30 via a post-list feed-name link (`.post-feed-link`)
+navigating without scrolling/highlighting the feed in the folder tree the
+way clicking the tree's own `.feed-link` does. First check (desktop
+Chromium) didn't reproduce it, but a second try pinned down the actual
+path: from Feeds → All, clicking a post's feed-name link reproduces it
+reliably (in the VSCode integrated browser, so not a phone/Firefox
+quirk after all) — lands on `/?folder_id=1&list_feed_url=<feed>&read_filter=unread`
+with the list filtered to that feed but nothing selected/scrolled-to in
+the sidebar tree. Not diagnosed further — next step is comparing this
+path's navigation code against whatever the tree's own `.feed-link` click
+does to reveal/highlight (`static/js/app.js:3603` has the existing
+reveal-a-lazy-loaded-feed logic for pane-swap navigation; worth checking
+whether the All-view click routes through it or bypasses it).
+
+### Feeds shipping raw Markdown instead of HTML render as a wall of text
+
+Root-caused 2026-08-30 from a specific complaint — blog.gitea.com's "Gitea 1.27.3 is released"
+(the motivating example for the Add-link-to-Note idea above). The feed's `summary` field contains
+literal Markdown source (`## Security`, `**bold**`, `- ` bullet lists, `[text](url)` links), not
+rendered HTML — confirmed via the stored `entries.summary` row. With no HTML tags to interpret,
+headers/bold/bullets/links never render and the browser collapses every newline into one dense
+paragraph.
+
+**Scoped, not built.** Markdown-to-HTML conversion already exists — `markdown_to_article_html`
+(main.py:13423) — but only runs on the full-page-capture/readability fetch path (a page declared
+or served as `text/markdown`), not at feed ingest. The ingest sanitizer that touches every entry's
+`summary`/`content`, `_sanitize_entry` (services/reader_sanitize.py:166), only handles HTML — and
+already special-cases blog.gitea.com for an unrelated bug (an epoch-placeholder pubDate) right
+above where this fix would go. The fix: in that function's `_clean()`, detect "no HTML tags but
+Markdown-shaped syntax" on the raw field and run it through `markdown.markdown()` (already a
+pyproject dependency, same call `markdown_to_article_html` makes) before the existing
+`resolve_relative_urls`/`sanitize_html` pipeline — skipping that function's title-extraction/
+absolutize extras, which a feed entry doesn't need. Josh recalls a similar wall-of-text symptom on
+another feed recently but couldn't place which one — watch for a second confirmed instance.
+
+### Re-fetch snapshot skips summary-only entries — Undo silently missing, bad extraction becomes permanent "original"
+
+Root-caused 2026-08-30 from a real incident on premierguitar.com's "Elliot Easton Shakes It Up"
+(feeds/lessons.rss). Sequence: the entry's real 6,788-char lesson body lived in `entries.summary`
+(`entries.content` was empty — the normal shape for a feed with no `<content:encoded>`). A
+"Re-fetch content" mis-extracted the live page down to a 580-char author-bio blurb. No Undo
+appeared. A follow-up "Fetch full page" also came out bad. Restore then put back the 580-char bio
+blurb, not the real original.
+
+**Root cause:** the pre-replacement snapshot, `read_entry_content_json`
+(services/saved_articles.py:361), reads only the raw `entries.content` column — no fallback to
+`summary` the way the actual display path (`_resolve_entry_content_html`, main.py:17539, via
+`entry.get_content(prefer_summary=False)`) already has. So on an entry whose real body lives in
+`summary`: the first re-fetch finds `content` empty, has nothing to snapshot, and
+`entry_content_edits` never gets a row (`_original is not None` gate at
+services/saved_articles.py:574 is false) — that's why no Undo showed. The bad extraction then
+overwrites `content` with nothing protecting the true original, and every re-fetch after that
+snapshots *the previous bad result* as "original," compounding the loss. The original text itself
+isn't destroyed (`summary` is never written by any of this — `replace_entry_content`/
+`restore_entry_content` only ever touch `content`), just orphaned: once `content` is non-empty,
+display prefers it over `summary`, so the good copy still exists but is hidden. This is the same
+`content`-vs-`summary` shape as the raw-Markdown bug above — both are places where an ingest-time
+asymmetry (some feeds populate only `summary`) breaks a codepath that assumes `content`.
+
+**Recovered by hand 2026-08-30**: copied `entries.summary` back into `entries.content` for the one
+affected entry and cleared its stale `entry_content_edits`/`entry_content_overrides` rows.
+
+**Fix, not yet built:** give `read_entry_content_json` the same content-then-summary fallback
+`_resolve_entry_content_html` already has, so the very first re-fetch on a summary-only entry
+snapshots the real original instead of finding nothing. Separately, premierguitar.com's readability
+extraction locking onto the author bio instead of the lesson body is its own site-specific miss,
+unexamined — the boilerplate/sibling guard (`is_boilerplate_extraction`) didn't catch it because
+that guard only fires once a matching sibling extraction is already stored, not on a lesson's first
+bad re-fetch.
+
+**More premierguitar.com lessons data points (2026-08-30), all still-original `summary` (never
+re-fetched):** "Exploring Open-String Voicings" carries only 3 images against however many "Ex. N"
+tab diagrams the live lesson actually has; "Middle Eastern and Anatolian Rhythms Using Two-Hand
+Tapping" carries just 1 (the hero image) and zero tab diagrams at all. Consistent across three
+lessons now — premierguitar.com's feed itself ships a trimmed body missing tab images, independent
+of the re-fetch bug above. A proper fix needs the live page pulled well (the readability miss above
+is exactly that), not papering over the feed. Not investigated further.
+
+### An ArtStation entry with a body image still resolved to no lead image
+
+Noticed 2026-08-30: a list-view thumbnail missing on an ArtStation feed entry. Checked
+`entry_lead_images` for it — the row exists with `fetched_at` set (a resolution attempt did
+complete) but `image_url`/`image_alt`/`image_title`/`thumb_crop` are all NULL, even though the
+entry's stored body has exactly one `<img>`, a normal (non-signed-looking) `cdnb.artstation.com`
+CDN URL. So resolution ran and came back empty despite an obvious single candidate sitting right
+in the content. Not investigated further — worth checking whether this is systemic across
+ArtStation entries or a one-off before digging into the resolver itself.
+
 ### Outbound proxy escalation — shipped, Browserless the only thing left out
 
 Full chain **shipped** 2026-08-30: honest UA → browser identity → gluetun proxy → FlareSolverr (real Chrome, purpose-built for
@@ -426,10 +527,20 @@ GIL contention alone does not explain the spikes and something else is
 contributing — candidates, in order of suspicion: the `_home_request_semaphore`
 serialising concurrent home renders (it 503s rather than queues, so a phone
 retrying compounds it), meta-DB lock contention with refresh's writes, and
-refresh's own DB work blocking readers. **Instrument the region between the
-`tag_block` and `posts_block` ticks before theorising further** — the whole reason
-this took a while to find is that the expensive part sat in a gap with no timing
-of its own.
+refresh's own DB work blocking readers.
+
+**Caught live 2026-08-30**: Josh reported `GET /?folder_id=1&read_filter=unread` taking ~10s; the
+log confirms `11124ms` total. The `[perf]` ticks pin the gap down further than before:
+`meta_block=263ms` + `tag_block=126ms` finished at 18:18:56.0, then nothing logged until
+`list_entries` fetch starts at ~18:19:03.1 (`posts_block=2541ms` total, of which `fetch_ms=1454` +
+`filter/enrich/process≈360ms` are accounted for) — **roughly 6.2s of the 11.1s sits between
+tag_block finishing and posts_block's own work starting**, still with no timing of its own, plus
+another ~2s after posts_block before the response is logged as sent. A refresh pass was confirmed
+running throughout — dozens of concurrent `httpx` feed fetches logged in the same window, dev.to
+and DeviantArt integration calls included. So the region to instrument is now narrower: not
+"between tag_block and posts_block" generally, but specifically **whatever runs immediately after
+tag_block and before `list_entries`'s own fetch begins** — add a tick there before theorizing
+further.
 
 Also corrected while chasing this: refresh is **not** a thread pool. It calls
 `reader.update_feed()` sequentially in one background thread, so the contention
