@@ -152,6 +152,26 @@ existing tag-response payload flagging that a background re-fetch was kicked off
 polling or re-fetching itself once it's done, rather than the user having to discover the trick of
 clicking away and back.
 
+### Rules editor: YT Playlist scope shows every feed, and chips have no URL tooltip
+
+Two asks 2026-08-30, both in the rules draft editor (static/js/app.js, the shared feed-scope
+picker starting ~line 12414, used by every rule type):
+
+- **"Add to YT Playlist" should scope its feed picker to the YT folder.** `folderSel` always lists
+  every folder ("All Feeds" plus the whole tree, main.py's `/api/folder-feeds` behind it), with
+  nothing narrowing it for `ruleType === 'youtube_playlist'` specifically — even though a playlist
+  rule only ever makes sense against YouTube feeds. The pieces already exist server-side
+  (`get_yt_folder_name()` / `_folder_is_yt_folder`, main.py:774/30688) to default or restrict the
+  picker when the rule type is youtube_playlist.
+- **Rule chips have no hover tooltip.** The scope chips (`hl-folder-tag`,
+  static/js/app.js:12522-12524) are built with `tag.textContent = feedTitleByUrl.get(url) || url`
+  and no `title` attribute, so there's no way to disambiguate same-titled feeds without opening Feed
+  Properties. Concrete case: Josh has multiple Monterey Bay Aquarium feeds in one Add-to-YT-Playlist
+  rule and can't tell from the chip which one is actually the blog rather than the channel. A plain
+  `tag.title = url` fixes it for every rule type, not just this one.
+
+Not built.
+
 ### Per-post re-fetch's Land On picker doesn't show its own default
 
 Asked 2026-08-30: what happens if you don't pick a Land On option? Traced it — leaving it unset
@@ -606,6 +626,17 @@ idle, refresh still gets full throughput. Caveat: it only addresses CPU-scheduli
 two captures just above look more like a DB lock/busy_timeout stall than CPU starvation, so
 niceness is a good complementary fix, not a proven fix for the multi-second numbers actually
 measured here — the DB-lock lead above should still be chased first.
+
+**Same shape, worse, right after a restart (2026-08-30).** Josh reported the app taking "a minute
+or more" to feel usable after a container restart. `/healthz` itself responds in ~15-20s (Docker's
+health check passes fast), but the log shows a startup flood immediately after: a one-time per-user
+scraped-feed backfill, a YouTube-video recheck, a starred-archive orphan sweep (skipped ~8,500
+rows), then the first scheduled refresh pass hitting a large batch of feeds essentially all at once
+— everything is simultaneously "due" right after a restart instead of trickling in on its normal
+cadence. Not independently measured (this observation landed during an unrelated rebuild mishap, so
+the timeline is muddied — see git history same day), but it is consistent with, and probably an
+amplified case of, the same contention this whole item is chasing. Worth re-measuring cleanly once
+the DB-lock lead above is understood, rather than treating it as a separate bug.
 
 Also corrected while chasing this: refresh is **not** a thread pool. It calls
 `reader.update_feed()` sequentially in one background thread, so the contention
