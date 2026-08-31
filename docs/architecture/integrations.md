@@ -194,6 +194,15 @@ was already a solved problem.
   binding); `GET .../add-batch/status` reports `phase` (`checking_existing` →
   `adding` → `done`), `processed`/`total`, and running counts, polled every 900ms to
   drive a live-updating toast rather than a silent wait.
+
+  **Auto-marks read on completion (2026-08-31)**, so a right-click -> Mark as read
+  on the same selection isn't a required second step. The job also tracks
+  `ok_video_ids` — videos that ended up either newly-added or already-on-the-playlist
+  — and the client marks read only the posts whose video landed in that set; a video
+  that failed, or was never reached because the run stopped on quota, is deliberately
+  left unread. Bulk "Add tag" does the same unconditionally (tagging implies
+  filing/keeping it, and that route either tags every entry or reports one shared
+  error — no partial-failure case to exclude).
 - **Save to Pinterest (per-user OAuth)** — an outbound-only integration: a per-entry
   **Pin** button saves an article to one of the user's boards. Pinterest has no
   write-without-OAuth path, so `services/pinterest_oauth.py` speaks the **API v5**

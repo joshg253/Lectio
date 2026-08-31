@@ -93,6 +93,9 @@ def test_batch_add_skips_videos_already_in_playlist(env, monkeypatch):
     assert job["added"] == 2 and job["duplicate"] == 1 and job["failed"] == 0
     assert job["done"] and not job["running"]
     assert added == ["new1", "new2"]
+    # Duplicate AND newly-added both count as "settled" for the client's
+    # auto-mark-read step — only a real failure should leave a post unread.
+    assert set(job["ok_video_ids"]) == {"already1", "new1", "new2"}
 
 
 def test_batch_add_skips_duplicates_within_the_same_batch(env, monkeypatch):
@@ -132,6 +135,24 @@ def test_batch_add_stops_on_quota_but_reports_partial_success(env, monkeypatch):
     job = _run_worker(["v1", "v2", "v3"], playlist_id="PL1")
     assert job["added"] == 1 and job["error"] == "quota"
     assert calls == ["v1", "v2"]  # stopped before v3
+    # v2 hit quota (not settled) and v3 was never reached — neither belongs in
+    # the auto-mark-read set; only v1 actually succeeded.
+    assert job["ok_video_ids"] == ["v1"]
+
+
+def test_a_failed_video_is_excluded_from_auto_mark_read(env, monkeypatch):
+    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids",
+                        lambda token, pid: set())
+
+    def _add(token, pid, vid):
+        if vid == "bad":
+            raise ValueError("boom")
+        return {"id": "item"}
+
+    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist", _add)
+    job = _run_worker(["v1", "bad", "v2"], playlist_id="PL1")
+    assert job["added"] == 2 and job["failed"] == 1
+    assert job["ok_video_ids"] == ["v1", "v2"]
 
 
 # --- route: validation, start-a-job, status polling ---

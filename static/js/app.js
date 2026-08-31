@@ -4123,7 +4123,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // forever instead of just reporting something's wrong.
     const _YT_BATCH_POLL_MAX_TICKS = 400;  // ~6 minutes at 900ms
 
-    async function _ytPollBatchAddProgress(playlistTitle) {
+    async function _ytPollBatchAddProgress(playlistTitle, posts) {
       for (let tick = 0; tick < _YT_BATCH_POLL_MAX_TICKS; tick++) {
         await new Promise((resolve) => setTimeout(resolve, _YT_BATCH_POLL_MS));
         let job;
@@ -4145,7 +4145,23 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           }
           continue;
         }
-        // Not running: the job finished (this is the normal exit).
+        // Not running: the job finished (this is the normal exit). Mark read
+        // whichever selected posts ended up newly-added or already-on-the-
+        // playlist (job.ok_video_ids) — raised 2026-08-31: waiting for this
+        // toast just to then right-click -> Mark as read on the same
+        // selection was a second manual step for the common case. A video
+        // that failed, or was never reached because the run stopped on
+        // quota, is excluded on purpose — those are worth noticing unread.
+        const okIds = new Set(job.ok_video_ids || []);
+        const toMark = (posts || []).filter((p) => okIds.has(p.videoId));
+        if (toMark.length) {
+          try {
+            const body = new URLSearchParams({ entries: JSON.stringify(toMark.map((p) => [p.feedUrl, p.entryId])) });
+            const r = await fetch('/entries/read-batch', { method: 'POST', body, credentials: 'same-origin' });
+            const d = await r.json().catch(() => ({}));
+            if (d && d.ok) applyReadStateToSelection(toMark);
+          } catch (_e) { /* the toast below still reports the add itself */ }
+        }
         if (job.error === 'quota') {
           showToastMessage('Daily YouTube quota reached — try again tomorrow or add it on youtube.com.');
         } else if (job.error === 'not_connected') {
@@ -4193,7 +4209,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         }
         if (choice.newTitle) _ytPlaylistsCache = null;  // new playlist changes the list — invalidate
         showToastMessage(`Checking "${choice.title}" for existing items…`);
-        await _ytPollBatchAddProgress(choice.title);
+        await _ytPollBatchAddProgress(choice.title, posts);
       } catch (e) {
         showToastMessage(e.message || 'Add to playlist failed.');
       }
@@ -10090,7 +10106,16 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               applyPostItemHasTagsState(e.feedUrl, e.entryId, true);
               applyPostItemKeptState(e.feedUrl, e.entryId, true);
             }
-            // Selection is left as-is — bulk actions chain (tag, then mark read).
+            // Tagging implies filing/keeping it — mark read along with the tag
+            // rather than requiring a separate rc->Mark as read afterward.
+            // Raised 2026-08-31, same reasoning as the YT-playlist bulk add.
+            try {
+              const readBody = new URLSearchParams({ entries: JSON.stringify(entries.map((e) => [e.feedUrl, e.entryId])) });
+              const readResp = await fetch('/entries/read-batch', { method: 'POST', body: readBody });
+              const readData = await readResp.json().catch(() => ({}));
+              if (readData && readData.ok) applyReadStateToSelection(entries);
+            } catch (_e) { /* the tag itself already succeeded and is reported above */ }
+            // Selection is left as-is — bulk actions chain.
           } else {
             showToastMessage(data.error || 'Add tag failed.');
             confirmBtn.disabled = false;

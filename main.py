@@ -28682,16 +28682,25 @@ def _run_yt_playlist_batch_add(
     job["playlist_id"] = playlist_id
     job["phase"] = "adding"
     added = duplicate = failed = 0
+    # Videos that ended up either newly-added or already-on-the-playlist —
+    # the two outcomes the client auto-marks read for once the job finishes
+    # (raised 2026-08-31: "have to wait until I see the done message before I
+    # can rc->mark"). A video that failed, or never got looked at because the
+    # run stopped on quota, is deliberately excluded — those are exactly the
+    # cases worth noticing unread, not silently marking done.
+    ok_video_ids: list[str] = []
     for i, video_id in enumerate(video_ids, 1):
         if video_id in existing:
             duplicate += 1
             job["duplicate"] = duplicate
+            ok_video_ids.append(video_id)
         else:
             try:
                 youtube_oauth_service.add_video_to_playlist(token, playlist_id, video_id)
                 existing.add(video_id)  # guards against a dupe within this same batch too
                 added += 1
                 job["added"] = added
+                ok_video_ids.append(video_id)
             except youtube_oauth_service.QuotaExceeded:
                 # Stop burning calls once quota's gone; report what succeeded so far
                 # rather than hiding real progress behind an error.
@@ -28704,6 +28713,7 @@ def _run_yt_playlist_batch_add(
                 job["failed"] = failed
                 LOGGER.warning("[yt-playlist-batch] failed to add %s to %s: %s", video_id, playlist_id, exc)
         job["processed"] = i
+        job["ok_video_ids"] = list(ok_video_ids)
 
     msg = f"Added {added}."
     if duplicate:
@@ -28749,7 +28759,7 @@ async def youtube_playlist_add_batch_route(request: Request):
         job.update({
             "running": True, "done": False, "error": None, "phase": "checking_existing",
             "total": len(video_ids), "processed": 0, "added": 0, "duplicate": 0, "failed": 0,
-            "message": None,
+            "message": None, "ok_video_ids": [],
         })
 
     uid = tenancy.current_user_id()
