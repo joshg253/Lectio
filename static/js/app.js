@@ -11909,7 +11909,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
                   runBtn.style.opacity = '';
                 } else {
                   showToastMessage(`Marked ${n} entr${n === 1 ? 'y' : 'ies'} as read.`);
-                  window.location.reload();
+                  // A full reload used to sit here -- it blew away whatever
+                  // the user had open (raised 2026-08-31: closed the Settings
+                  // dialog they ran this from). Same in-place refresh the
+                  // hide-shorts backfill already uses instead.
+                  try { await _refreshSidebarCounts(); } catch (e) { console.error('rule run-now: sidebar refresh failed', e); }
+                  try { await refreshCurrentFeedOrFolder(); } catch (e) { console.error('rule run-now: view refresh failed', e); }
+                  runBtn.disabled = false;
+                  runBtn.style.opacity = '';
                 }
               } catch (err) {
                 window.alert('Run failed: ' + (err.message || err));
