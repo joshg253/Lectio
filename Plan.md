@@ -169,19 +169,6 @@ CDN URL. So resolution ran and came back empty despite an obvious single candida
 in the content. Not investigated further — worth checking whether this is systemic across
 ArtStation entries or a one-off before digging into the resolver itself.
 
-### Whole-body rescue can beat a good selector match on a text-only lesson page
-
-Noticed 2026-08-31 fixing the premierguitar.com tab-diagram issue above: the bs4-selector fallback
-(now including `body-description` for RebelMouse/premierguitar) is only accepted when it has MORE
-`<img>` tags than what readability kept. A lesson page with real prose but zero images (no tab
-diagrams on that particular lesson) ties 0-vs-0 against readability's own bad nav-chrome extraction,
-so the selector match loses and whole-body-rescue fires instead — technically more complete (grabs
-everything, chrome included) but noisier than the clean `body-description` match would have been.
-Confirmed live on "Middle Eastern and Anatolian Rhythms Using Two-Hand Tapping": captured fine
-either way, just with extra nav chrome mixed in. Would need the fallback-acceptance gate to also
-weigh text length/quality, not image count alone — not done here, low priority since the current
-result isn't broken, just noisier than ideal.
-
 ### The re-fetch/save-article path has no proxy/FlareSolverr escalation, only feed refresh does
 
 Raised 2026-08-31 on three tamriel-rebuilt.org entries (their feed only ships thin Drupal teaser

@@ -197,6 +197,41 @@ def test_future_plc_article_body_id_beats_whole_body():
     assert "tab0.jpg" in html
 
 
+def test_iframe_only_content_beats_whole_body_rescue():
+    """A selector-fallback match whose only real content is <iframe> embeds
+    (zero <img>) must still beat whole-body-rescue on a chrome-image-heavy
+    page -- raised 2026-08-31 on a live premierguitar.com lesson whose
+    tab-diagrams are all soundslice.com players, not static images.
+    art_img_count stayed <img>-only for the initial needs_fallback trigger
+    (see _media_tag_count's docstring for why: _reinject_readability_embeds
+    would otherwise make a chrome-only readability pick look "media-rich"
+    once its embeds are recovered, suppressing the fallback search entirely)
+    but the fallback ACCEPTANCE and whole-body-rescue gate both count
+    iframes, so a real iframe-only match no longer loses a 0-vs-0 image tie
+    to either chrome extraction."""
+    chrome_imgs = "".join(f'<img src="https://cdn.test/related{i}.jpg">' for i in range(20))
+    players = "".join(
+        f'<iframe src="https://www.soundslice.com/slices/{i}/embed/" '
+        f'width="100%" height="500" frameborder="0"></iframe>'
+        for i in range(3)
+    )
+    page = (
+        "<html><head><title>Two-Hand Tapping</title></head><body>"
+        f"<header><nav>{chrome_imgs}</nav></header>"
+        '<div id="article-body">'
+        "<p>Get exotic with these spicy two-handed patterns over several "
+        "exercises, each with its own tab player to work through instead of "
+        "a static diagram.</p>"
+        f"{players}</div>"
+        f'<aside class="related">More from PG{chrome_imgs}</aside>'
+        "</body></html>"
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert html.lower().count("<iframe") == 3
+    assert "spicy two-handed" in html
+    assert "related0.jpg" not in html   # whole-body-rescue did NOT fire
+
+
 def test_future_plc_in_body_chrome_is_stripped():
     """Future plc nests a social-share bar and a newsletter signup *inside*
     #article-body, ahead of the prose, so a container match kept them and every
@@ -373,3 +408,11 @@ def test_lead_image_still_prepended_when_dimensions_genuinely_differ():
     _title, html = main.extract_readability_article(page, URL)
     assert "hero_1600x900.png" in html
     assert html.find("hero_1600x900.png") < html.find("thumb_400x300.jpg")
+
+
+def test_media_tag_count_counts_img_and_iframe_together():
+    assert main._media_tag_count("") == 0
+    assert main._media_tag_count("<p>no media</p>") == 0
+    assert main._media_tag_count('<img src="a.jpg">') == 1
+    assert main._media_tag_count('<IFRAME src="a"></IFRAME>') == 1  # case-insensitive
+    assert main._media_tag_count('<img src="a.jpg"><iframe src="b"></iframe><img src="c.jpg">') == 3

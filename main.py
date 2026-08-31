@@ -13812,6 +13812,19 @@ def fetch_readability_article(source_url: str, *, capture: dict | None = None) -
 _WHOLE_BODY_RESCUE_MIN_TEXT = 1200
 
 
+def _media_tag_count(html: str) -> int:
+    """<img> + <iframe> tag count — the fallback-selection comparisons in
+    extract_readability_article treat both as "real content", not just
+    images. An allowlisted <iframe> embed (a soundslice.com tab player, a
+    YouTube video) is exactly as much a reason to prefer one candidate over
+    another as an <img> is; counting only <img> made a body-description
+    selector match with real embedded content but zero inline images lose a
+    0-vs-0 tie against readability's own chrome-only extraction, raised
+    2026-08-31."""
+    lowered = html.lower()
+    return lowered.count("<img") + lowered.count("<iframe")
+
+
 def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, str]:
     """Readability-extract ``(title, article_html)`` from already-obtained page
     HTML — e.g. a rendered DOM captured by the user's browser (extension save),
@@ -13857,6 +13870,21 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
                 article_html = fallback_clean
                 _bs4_fallback_used = True
     if not _bs4_fallback_used and "<img" in raw_html:
+        # The trigger below stays <img>-only, deliberately: article_html at
+        # this point already carries whatever _reinject_readability_embeds
+        # recovered, which scans the WHOLE raw page for allowlisted <iframe>s
+        # and bolts them onto readability's summary regardless of which text
+        # container they came from — so a chrome-only extraction can look
+        # "media-rich" once its embeds are recovered even though its actual
+        # prose is garbage. Counting iframes here made needs_fallback go
+        # false and skip looking for a better candidate at all. The
+        # ACCEPTANCE comparisons just below are different: there an <iframe>
+        # embed IS exactly as much a reason to prefer one full candidate over
+        # another as an <img> is (raised 2026-08-31: a body-description
+        # selector match with zero <img> but several soundslice.com tab
+        # players lost a 0-vs-0 tie to readability's own chrome extraction,
+        # so a page with real content fell through to whole-body-rescue and
+        # dragged in nav chrome for no reason) — so those use _media_tag_count.
         raw_img_count = raw_html.lower().count("<img")
         art_img_count = article_html.lower().count("<img")
         # Fall back if readability stripped all images, or if the page is
@@ -13866,9 +13894,9 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
         )
         if needs_fallback:
             fallback = normalize_proxy_lazy_media(_bs4_content_fallback(raw_html))
-            if fallback and fallback.lower().count("<img") > art_img_count:
+            if fallback and _media_tag_count(fallback) > art_img_count:
                 article_html = sanitize_readability_html(fallback).strip()
-                art_img_count = article_html.lower().count("<img")
+                art_img_count = _media_tag_count(article_html)
             # Last resort: readability *and* the selector fallback both kept
             # essentially no images on an image-heavy page — the catastrophic
             # case, not mere trimming. guitarplayer lessons are the example:
@@ -13887,7 +13915,7 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
             article_text_len = len(re.sub(r"<[^>]+>", "", article_html))
             if art_img_count <= 1 and raw_img_count > 10 and article_text_len < _WHOLE_BODY_RESCUE_MIN_TEXT:
                 whole = _whole_body_content(raw_html)
-                if whole and whole.lower().count("<img") > art_img_count:
+                if whole and _media_tag_count(whole) > art_img_count:
                     article_html = whole
     # Prepend the publisher's hero image when the body doesn't already open with
     # it — the article's lead image lives in the page header, outside the content
