@@ -49,3 +49,48 @@ def test_response_buckets_drive_per_entry_tag_state_not_a_blanket_true():
     assert "applyPostItemHasTagsState(feedUrl, entryId, true)" in block
     assert "data.now_untagged" in block
     assert "applyPostItemHasTagsState(feedUrl, entryId, false)" in block
+
+
+# --- Chip picker (raised 2026-08-31): show what's already there, dimmed when
+# only some of the selection has it, click to stage/unstage removal ---
+
+
+def test_chip_picker_uses_the_batch_coverage_endpoint_for_any_selection_size():
+    """Single and multi selection share one endpoint now -- no more branching
+    on entries.length === 1."""
+    idx = APP_JS.index("fetch('/entries/manual-tags-batch?'")
+    block = APP_JS[idx:idx + 300]
+    assert "entries.map((e) => [e.feedUrl, e.entryId])" in block
+
+
+def test_chip_is_dimmed_when_not_on_every_selected_post():
+    idx = APP_JS.index("if (counts[tag] < total) btn.classList.add('bulk-tag-chip--partial');")
+    assert idx > -1
+
+
+def test_chip_click_toggles_a_removal_token_in_the_input():
+    idx = APP_JS.index("const removalToken = `-${tag}`;")
+    block = APP_JS[idx:idx + 500]
+    assert "tokens.indexOf(removalToken)" in block
+    assert "tokens.push(removalToken)" in block
+    assert "tokens.splice(idx, 1)" in block
+
+
+def test_chips_re_sync_their_marked_state_as_the_input_changes():
+    """Typing "-tag" by hand must also mark that chip, not just clicking it."""
+    idx = APP_JS.index("const syncChipMarkedStates = () => {")
+    block = APP_JS[idx:idx + 400]
+    assert "staged.has(`-${chip.dataset.tag}`)" in block
+    assert "input.oninput = () => { updateConfirmState(); syncChipMarkedStates(); };" in APP_JS
+
+
+# --- Stale entry-pane chips after a bulk edit (raised 2026-08-31): the pane
+# renders its own tag chips server-side, so a post-list state sync alone
+# doesn't reach it if the open entry is one of the ones just edited ---
+
+
+def test_a_bulk_edit_refreshes_the_open_entry_pane_when_it_is_in_the_selection():
+    idx = APP_JS.index("const openFeedUrl = openParams.get('feed_url');")
+    block = APP_JS[idx:idx + 500]
+    assert "entries.some((e) => e.feedUrl === openFeedUrl && e.entryId === openEntryId)" in block
+    assert "loadEntryPaneWithoutFullRefresh(window.location.href, false);" in block

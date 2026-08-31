@@ -34243,15 +34243,37 @@ def _merge_manual_tags(existing_tags: list[str], added_raw_tags: str) -> str:
     return " ".join(merged_tags)
 
 
-@app.get("/entries/manual-tags")
-def get_entry_manual_tags_route(
-    feed_url: str = Query(...),
-    entry_id: str = Query(...),
-):
-    """Current manual tags for one entry — used to populate the Add Tag
-    dialog when it's opened for a single post, so it shows what's already
-    there instead of just a blank append box."""
-    return JSONResponse({"tags": get_manual_tags_for_entry(feed_url, entry_id)})
+@app.get("/entries/manual-tags-batch")
+def get_entries_manual_tags_batch_route(entries: str = Query(...)):
+    """Tag coverage across a selection (one entry or many) — populates the
+    Edit Tags dialog's chip picker, added 2026-08-31 so a bulk edit shows
+    what's actually there instead of a blank box the user has to guess a
+    tag's exact stored spelling into (multi-word tags collapse whitespace to
+    hyphens at normalize time, so "science + math" is stored as
+    "science-+-math" — a chip to click is far more reliable than retyping
+    that by hand). ``counts[tag]`` is how many of the selected entries carry
+    it; a tag present on every entry (``counts[tag] == total``) renders as a
+    normal chip client-side, a partial one dimmed."""
+    try:
+        pairs = json.loads(entries)
+        assert isinstance(pairs, list)
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": "Bad entries payload."}, status_code=400)
+    if len(pairs) > _MOVE_BATCH_CAP:
+        return JSONResponse(
+            {"ok": False, "error": f"Too many entries (max {_MOVE_BATCH_CAP} per action)."},
+            status_code=400,
+        )
+    counts: dict[str, int] = {}
+    total = 0
+    for pair in pairs:
+        if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
+            continue
+        feed_url, entry_id = str(pair[0]).strip(), str(pair[1])
+        total += 1
+        for tag in get_manual_tags_for_entry(feed_url, entry_id):
+            counts[tag] = counts.get(tag, 0) + 1
+    return JSONResponse({"ok": True, "counts": counts, "total": total})
 
 
 @app.post("/entries/tags")

@@ -10038,9 +10038,11 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       targetSel.focus();
     }
 
-    // Shared driver for the bulk tag-add modal. `entries` is a list of
-    // {feedUrl, entryId}; always appends (server merges with each entry's own
-    // existing tags), so this is safe to run on a mixed-tag selection.
+    // Shared driver for the Edit Tags modal (add and remove). `entries` is a
+    // list of {feedUrl, entryId}; the server applies +/- edits against each
+    // entry's OWN existing tags (see apply_manual_tag_edits), so this is safe
+    // to run on a mixed-tag selection — removing a tag one post doesn't have
+    // is simply a no-op for that post.
     function openBulkTagModal(entries, bodyText) {
       if (!entries.length) return;
       const modal = document.getElementById('bulk-tag-modal');
@@ -10057,34 +10059,63 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       confirmBtn.textContent = 'Save';
       attachTagAutocomplete(input, () => lectioTagNames, {});
 
-      // Only shown for a single post — a mixed bulk selection has no one set
-      // of "current tags" worth displaying.
+      // Chips for every tag on the selection (dimmed when not on all of it) —
+      // added 2026-08-31 so removing one never depends on retyping its exact
+      // normalized spelling (a multi-word tag like "science + math" is stored
+      // hyphenated, "science-+-math", which nobody types unprompted). One
+      // click toggles "-tagname" in the input; clicking again un-stages it.
+      const syncChipMarkedStates = () => {
+        if (!existingChips) return;
+        const staged = new Set(tokenizeTags(input.value));
+        for (const chip of existingChips.querySelectorAll('.bulk-tag-chip')) {
+          chip.classList.toggle('bulk-tag-chip--marked', staged.has(`-${chip.dataset.tag}`));
+        }
+      };
       if (existingWrap && existingChips) {
         existingWrap.hidden = true;
         existingChips.replaceChildren();
-        if (entries.length === 1) {
-          const { feedUrl, entryId } = entries[0];
-          fetch(`/entries/manual-tags?feed_url=${encodeURIComponent(feedUrl)}&entry_id=${encodeURIComponent(entryId)}`)
-            .then((resp) => resp.json())
-            .then((data) => {
-              const tags = Array.isArray(data?.tags) ? data.tags : [];
-              if (!tags.length) return;
-              existingChips.replaceChildren(...tags.map((tag) => {
-                const span = document.createElement('span');
-                span.className = 'entry-tag-link';
-                span.textContent = `#${tag}`;
-                return span;
-              }));
-              existingWrap.hidden = false;
-            })
-            .catch(() => {});
-        }
+        fetch('/entries/manual-tags-batch?' + new URLSearchParams({
+          entries: JSON.stringify(entries.map((e) => [e.feedUrl, e.entryId])),
+        }))
+          .then((resp) => resp.json())
+          .then((data) => {
+            const counts = (data && data.ok && data.counts) || {};
+            const total = (data && data.total) || entries.length;
+            const tags = Object.keys(counts).sort((a, b) => a.localeCompare(b));
+            if (!tags.length) return;
+            existingChips.replaceChildren(...tags.map((tag) => {
+              const btn = document.createElement('button');
+              btn.type = 'button';
+              btn.className = 'bulk-tag-chip';
+              if (counts[tag] < total) btn.classList.add('bulk-tag-chip--partial');
+              btn.dataset.tag = tag;
+              btn.title = counts[tag] < total ? `On ${counts[tag]} of ${total} selected` : 'On every selected post';
+              btn.textContent = `#${tag}`;
+              btn.addEventListener('click', () => {
+                const tokens = tokenizeTags(input.value);
+                const removalToken = `-${tag}`;
+                const idx = tokens.indexOf(removalToken);
+                if (idx === -1) {
+                  tokens.push(removalToken);
+                } else {
+                  tokens.splice(idx, 1);
+                }
+                input.value = tokens.join(' ');
+                input.dispatchEvent(new Event('input'));
+                input.focus();
+              });
+              return btn;
+            }));
+            existingWrap.hidden = false;
+            syncChipMarkedStates();
+          })
+          .catch(() => {});
       }
 
       const updateConfirmState = () => {
         confirmBtn.disabled = tokenizeTags(input.value).length === 0;
       };
-      input.oninput = updateConfirmState;
+      input.oninput = () => { updateConfirmState(); syncChipMarkedStates(); };
       updateConfirmState();
 
       input.onkeydown = (event) => {
@@ -10129,6 +10160,21 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             for (const [feedUrl, entryId] of data.now_untagged || []) {
               applyPostItemHasTagsState(feedUrl, entryId, false);
             }
+            // The entry pane renders its own tag chips server-side at pane-load
+            // time, so a post-list state sync above doesn't touch it — if the
+            // pane currently open IS one of the edited entries, its chips would
+            // otherwise sit stale until closed and reopened. Raised 2026-08-31:
+            // removed a tag, the "current tags" list stopped offering it (server
+            // state was correct), but the open pane still showed the old chip.
+            try {
+              const openParams = new URLSearchParams(window.location.search);
+              const openFeedUrl = openParams.get('feed_url');
+              const openEntryId = openParams.get('entry_id');
+              if (openFeedUrl && openEntryId
+                  && entries.some((e) => e.feedUrl === openFeedUrl && e.entryId === openEntryId)) {
+                loadEntryPaneWithoutFullRefresh(window.location.href, false);
+              }
+            } catch (_e) { /* pane just stays as-is until next navigation */ }
             // Tagging implies filing/keeping it — mark read along with the tag
             // rather than requiring a separate rc->Mark as read afterward.
             // Raised 2026-08-31, same reasoning as the YT-playlist bulk add.

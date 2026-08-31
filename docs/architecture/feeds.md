@@ -898,3 +898,28 @@ response carries `still_tagged`/`now_untagged` — `[feed_url, entry_id]` pairs
 per outcome — so the client updates each post's indicator correctly and only
 auto-marks-read the ones that still have a tag (tagging implies keeping/
 filing it; losing your last tag is not a keep action).
+
+**The chip picker exists because a multi-word tag isn't what it looks like
+typed back.** `normalize_tag_value_raw` collapses internal whitespace to
+hyphens, so a tag shown/typed as "science + math" is stored as
+`science-+-math` — retyping `-science+math` to remove it silently targets a
+tag that was never there. Raised live 2026-08-31 on exactly this case: the
+removal appeared to do nothing (the real, differently-spelled tag was
+untouched), yet the next open of Edit Tags no longer offered it either (the
+attempted removal WAS a real edit — of a normalized string that happened to
+match nothing). `GET /entries/manual-tags-batch` (one endpoint for a
+selection of any size, replacing a single-entry-only `/entries/manual-tags`)
+returns `counts[tag]` = how many of the selected entries carry it; the client
+renders one chip per tag, dimmed when `counts[tag] < total`, and a click
+toggles `-tagname` in the input by the tag's own stored spelling — so removal
+never depends on retyping it by hand.
+
+**A bulk edit has to reach the entry pane, not just the post list.** The pane
+renders its own tag chips server-side at load time; the post-list state sync
+above (`applyPostItemHasTagsState`) touches list rows, not the open pane.
+Raised in the same live report: removing a tag from a post whose pane was
+open left the pane showing the stale chip even though the server-side removal
+had actually succeeded. The bulk-edit success handler now checks whether the
+open pane's `(feed_url, entry_id)` is among the edited entries and, if so,
+calls `loadEntryPaneWithoutFullRefresh` — the same in-place refresh the
+single-entry tag form already used.

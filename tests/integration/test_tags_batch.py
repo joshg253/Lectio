@@ -152,3 +152,49 @@ def test_a_tag_removed_and_re_added_in_the_same_edit_stays_removed(env):
     data = _batch([[FEED, "e1"]], "-x x")
     assert data["ok"]
     assert _tags("e1") == []
+
+
+# --- /entries/manual-tags-batch (Edit Tags dialog's chip picker, raised 2026-08-31) ---
+
+
+def _coverage(pairs) -> dict:
+    resp = main.get_entries_manual_tags_batch_route(entries=json.dumps(pairs))
+    return json.loads(bytes(resp.body))
+
+
+def test_coverage_counts_a_tag_shared_by_the_whole_selection(env):
+    _setup_entries()
+    with main.get_reader() as reader:
+        reader.set_tag((FEED, "e1"), f"{main.MANUAL_TAG_KEY_PREFIX}both")
+        reader.set_tag((FEED, "e2"), f"{main.MANUAL_TAG_KEY_PREFIX}both")
+    data = _coverage([[FEED, "e1"], [FEED, "e2"]])
+    assert data["ok"] and data["total"] == 2
+    assert data["counts"] == {"both": 2}
+
+
+def test_coverage_partial_tag_count_is_less_than_total(env):
+    """The client dims a chip when counts[tag] < total -- this is what
+    supplies that number."""
+    _setup_entries()
+    with main.get_reader() as reader:
+        reader.set_tag((FEED, "e1"), f"{main.MANUAL_TAG_KEY_PREFIX}only-e1")
+    data = _coverage([[FEED, "e1"], [FEED, "e2"]])
+    assert data["ok"] and data["total"] == 2
+    assert data["counts"] == {"only-e1": 1}
+
+
+def test_coverage_works_for_a_single_entry_selection(env):
+    """Single and multi selection share one endpoint now."""
+    _setup_entries()
+    with main.get_reader() as reader:
+        reader.set_tag((FEED, "e1"), f"{main.MANUAL_TAG_KEY_PREFIX}solo")
+    data = _coverage([[FEED, "e1"]])
+    assert data["ok"] and data["total"] == 1
+    assert data["counts"] == {"solo": 1}
+
+
+def test_coverage_rejects_oversize_and_bad_payload(env):
+    data = _coverage([[FEED, str(i)] for i in range(main._MOVE_BATCH_CAP + 1)])
+    assert not data["ok"] and "Too many" in data["error"]
+    resp = main.get_entries_manual_tags_batch_route(entries="not json")
+    assert not json.loads(bytes(resp.body))["ok"]
