@@ -277,6 +277,21 @@ initial sort/filter state (rebuilt server-side from remembered preferences in
 the fragment path) but the SPA re-stamps them from live state at click time.
 Fragment responses are `Cache-Control: no-store`, like the page itself.
 
+**A stray bubble-phase handler can outrun the reveal.** `.post-feed-link` (the
+feed name shown on each post row) is a real `<a>` with a correct href to the
+feed's own folder, navigated by the document-level capture-phase `<a>`
+interceptor (`index.html`). A second, older click listener bound directly on
+`.post-item` (`bindPostListInteractions`, app.js) also reacted to any click
+inside `.post-feed` — a leftover from before the feed name was a working
+anchor — and re-navigated using the *tree's own, already-rendered* `.feed-link`
+href instead of the clicked link's, which is often stale (the currently-viewed
+folder, not the feed's real one). Root-caused 2026-08-30 via a live browser
+repro: two GET requests fired from one click, the second (wrong) one winning
+the race and leaving `updateScopeActiveState` acting on the wrong URL, so the
+tree never revealed the feed. Fixed with an `event.defaultPrevented` guard —
+the same pattern `.post-main-link`'s sibling handler already used — so a real
+anchor's own (already-correct) navigation always wins.
+
 The app's main script lives in `static/js/app.js` (long-lived cache, busted by
 `?v={STATIC_ASSET_VERSION}` — new static files must be added to
 `_static_asset_version()`'s hash list or their changes won't bust caches). It

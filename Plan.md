@@ -212,22 +212,6 @@ here; the eventual fix is that item's DOM-walk-and-drop-hidden-nodes capture, no
 
 **Navigation/UX papercuts** — no design work needed, just haven't been built.
 
-### Clicking a feed name doesn't reveal it in the tree
-
-Noticed 2026-08-30 via a post-list feed-name link (`.post-feed-link`)
-navigating without scrolling/highlighting the feed in the folder tree the
-way clicking the tree's own `.feed-link` does. First check (desktop
-Chromium) didn't reproduce it, but a second try pinned down the actual
-path: from Feeds → All, clicking a post's feed-name link reproduces it
-reliably (in the VSCode integrated browser, so not a phone/Firefox
-quirk after all) — lands on `/?folder_id=1&list_feed_url=<feed>&read_filter=unread`
-with the list filtered to that feed but nothing selected/scrolled-to in
-the sidebar tree. Not diagnosed further — next step is comparing this
-path's navigation code against whatever the tree's own `.feed-link` click
-does to reveal/highlight (`static/js/app.js:3603` has the existing
-reveal-a-lazy-loaded-feed logic for pane-swap navigation; worth checking
-whether the All-view click routes through it or bypasses it).
-
 ### "Add link to Note" quick-capture — idea, not scoped
 
 Raised 2026-08-30: a fast way to drop a link into the Global Note while

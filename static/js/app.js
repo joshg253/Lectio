@@ -8419,6 +8419,18 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         if (!postItem.dataset.boundTileClick) {
           postItem.dataset.boundTileClick = '1';
           postItem.addEventListener('click', (event) => {
+            // .post-feed-link is now a real <a> with its own working href,
+            // already navigated by the document-level capture-phase <a>
+            // interceptor (index.html) before this bubble-phase handler ever
+            // runs. Without this guard both fired: the interceptor navigated
+            // correctly using the link's own href (the feed's real folder),
+            // then this handler fired again and re-navigated using the
+            // TREE's *existing* (often stale/wrong-folder) .feed-link href
+            // instead — winning the race and leaving the sidebar tree
+            // unrevealed. Root-caused 2026-08-30 via a live click repro.
+            if (event.defaultPrevented) {
+              return;
+            }
             if (event.target.closest('.post-save-toggle-form, .post-read-toggle-form, .post-select-check')) {
               return;
             }
