@@ -138,28 +138,6 @@ path, so it needs its own measurement pass before touching anything.
 
 **Re-fetch/extraction quality & staleness** — the article being read is broken or stale; directly in the way of triage.
 
-### premierguitar.com: readability locks onto the author bio, and the feed itself ships thin bodies
-
-**The snapshot/Undo bug here is FIXED** (2026-08-30, see git history — `read_entry_content_json`
-now falls back to `summary` when `content` is empty, mirroring the display path; rationale in
-`docs/architecture/saved.md` "Editing a post's body"). What's left is site-specific, not a Lectio
-bug in the general sense:
-
-Root-caused from a real incident on "Elliot Easton Shakes It Up" (feeds/lessons.rss): a "Re-fetch
-content" mis-extracted the live page down to a 580-char author-bio blurb instead of the real
-6,788-char lesson. **premierguitar.com's readability extraction locking onto the author bio instead
-of the lesson body is its own site-specific miss, unexamined** — the boilerplate/sibling guard
-(`is_boilerplate_extraction`) didn't catch it because that guard only fires once a matching sibling
-extraction is already stored, not on a lesson's first bad re-fetch.
-
-**Three premierguitar.com lessons data points, all still-original `summary` (never re-fetched):**
-"Exploring Open-String Voicings" carries only 3 images against however many "Ex. N" tab diagrams
-the live lesson actually has; "Middle Eastern and Anatolian Rhythms Using Two-Hand Tapping" carries
-just 1 (the hero image) and zero tab diagrams; "Elliot Easton" above had none either before repair.
-Consistent across three lessons — premierguitar.com's feed itself ships a trimmed body missing tab
-images. A proper fix needs the live page pulled well (the readability miss above is exactly that),
-not papering over the feed.
-
 ### Entry pane doesn't refresh after a background auto-refetch-on-tag finishes
 
 First noticed 2026-08-30 as what looked like a bad extraction (a mindyourdecisions.com entry,
@@ -191,26 +169,34 @@ CDN URL. So resolution ran and came back empty despite an obvious single candida
 in the content. Not investigated further — worth checking whether this is systemic across
 ArtStation entries or a one-off before digging into the resolver itself.
 
-### A re-fetch on a Substack post duplicated the lead image
+### Whole-body rescue can beat a good selector match on a text-only lesson page
 
-Noticed 2026-08-30, part of Josh's usual fix for old starred entries with a broken lead image:
-Refetch content (Pub date). Works fine generally; on one kriscox.substack.com post it left the
-same photo showing twice — once as a hoisted `<figure><img></figure>` ahead of `<article>`, and
-again inside the article body. The two `<img>` tags point at *different* substackcdn.com asset
-paths (`da4ee994-...` vs `d06b02fd-...`) but the same source dimensions (2884x1622) — first guess
-was two separate Substack asset uploads of the same photo, **ruled out**: Josh checked the live
-page and the image renders only once there. So one of the two copies must be CSS-hidden in
-Substack's raw page markup — invisible in a real browser, but indistinguishable from visible
-content to a server-side fetch-and-parse (readability/full-page capture never runs CSS, so
-`display:none`/`visibility:hidden` nodes look identical to shown ones). This is the same gap
-already named as the browser extension's killer feature below ("Visibility-aware capture") — a
-second real instance of a hidden node getting captured as if it were visible, this time on
-Substack rather than the uBlock/JWPlayer cases that motivated that item. Not investigated further
-here; the eventual fix is that item's DOM-walk-and-drop-hidden-nodes capture, not a per-site patch.
+Noticed 2026-08-31 fixing the premierguitar.com tab-diagram issue above: the bs4-selector fallback
+(now including `body-description` for RebelMouse/premierguitar) is only accepted when it has MORE
+`<img>` tags than what readability kept. A lesson page with real prose but zero images (no tab
+diagrams on that particular lesson) ties 0-vs-0 against readability's own bad nav-chrome extraction,
+so the selector match loses and whole-body-rescue fires instead — technically more complete (grabs
+everything, chrome included) but noisier than the clean `body-description` match would have been.
+Confirmed live on "Middle Eastern and Anatolian Rhythms Using Two-Hand Tapping": captured fine
+either way, just with extra nav chrome mixed in. Would need the fallback-acceptance gate to also
+weigh text length/quality, not image count alone — not done here, low priority since the current
+result isn't broken, just noisier than ideal.
 
 ## Tier 2 — small, fast, independent wins
 
 **Navigation/UX papercuts** — no design work needed, just haven't been built.
+
+### "Add link to Note" button reported as doing nothing — not reproduced
+
+Raised 2026-08-31: Josh said the entry-pane's sticky-note-icon button ("Add link to Note",
+`#entry-add-link-to-note-button`, built 2026-08-30) does nothing. Couldn't reproduce: clean
+Playwright runs (desktop and mobile viewport, empty seeded entry and a page-load with the entry
+already open) all show the button wired correctly — click opens the Global Note modal with the
+link appended and the cursor placed after it, zero console errors either time. The header
+hamburger-menu "Note" button (different feature, same modal) was also checked and works fine.
+Need more detail to make progress: exact steps, whether ANY visible change happens on click, and
+browser/device — most bugs this session that resisted a clean repro turned out to be phone- or
+Firefox-specific.
 
 ### New subscription missing from feed tree — UX idea remaining
 
