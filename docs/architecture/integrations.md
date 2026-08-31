@@ -117,16 +117,31 @@ share type/scope/search_in/is_regex and still mean different things —
 measured live 2026-08-19: a folder-9 `highlight` group mixed `blue` and
 `green`, a global group mixed `blue` and `orange`. Merging would have to pick
 a side silently. `_MERGE_IDENTITY_FIELDS` (`color`, `delivery`, `email_to`,
-`batch_time`, `batch_count`, `cc_me`) extends the grouping key so a group with
-any of those differing is reported as `mismatched`, not `mergeable` — visible
-so the mismatch isn't a mystery, but never merged onto one side's setting.
-Suggestion-with-preview, never automatic (decided 2026-08-24): nothing merges
-without a click, matching how the duplicate-feed scans already behave.
+`batch_time`, `batch_count`, `cc_me`) extends the grouping key: within an
+identity group, `find_mergeable_rule_groups` further splits rows by this
+settings tuple and offers each settings-consistent subgroup of 2+ as its own
+independent `mergeable` entry. Raised 2026-08-31 by Josh against a real
+5-rule group (orange/blue/blue/green/orange) that used to come back as one
+big `mismatched` blob: it now offers the orange pair and the blue pair as two
+separate merges, leaving the true singleton (green, no partner) unreported —
+same as a genuinely solo identity group always has been. `mismatched` now
+means only the narrower thing left over: 2+ settings-distinct singletons
+under one identity that still disagree once every already-agreeing pair has
+been pulled out. Suggestion-with-preview, never automatic (decided
+2026-08-24): nothing merges without a click, matching how the duplicate-feed
+scans already behave.
 
 `merge_highlight_rule_group` re-derives the current matching rows from the
-identity tuple rather than trusting a client-supplied row list, so a stale
-preview (a rule removed or edited since the page loaded) fails closed —
-returns `None` (409 at the route) instead of merging the wrong things.
+identity tuple **and** the specific settings values passed in (not just
+identity+is_regex) rather than trusting a client-supplied row list, so a
+stale preview (a rule removed or edited since the page loaded) fails closed —
+returns `None` (409 at the route) instead of merging the wrong things. The
+settings values are part of the match now, not a same-group precondition
+checked after the fact: an identity key can hold several settings-distinct
+subgroups, so a merge request has to say which one it means (the client reads
+it off the first rule in the subgroup card it's acting on) rather than
+letting the query silently gather every row sharing identity regardless of
+settings.
 
 **The identity's `is_regex` term means a plain rule sitting next to a regex rule on
 the same scope was invisible to all of the above (raised 2026-08-31).**

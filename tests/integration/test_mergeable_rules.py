@@ -127,18 +127,43 @@ def test_deduplicate_and_tag_filter_types_are_never_offered(env):
     assert groups == []
 
 
-def test_mismatched_colors_are_flagged_not_grouped(env):
-    """Live-data shape (2026-08-19): folder 9's three highlight rules mix
-    blue and green. Merging must never silently pick a color."""
+def test_partial_color_agreement_forms_a_group_and_leaves_the_singleton_unreported(env):
+    """Raised 2026-08-31 by Josh's real 5-rule example (orange/blue/blue/
+    green/orange): rules that already agree on settings should merge even
+    when they share an identity with others that don't. C#/C++ (both blue)
+    become a group; Python (green, no partner) is not reported anywhere --
+    same as a genuinely solo identity group always has been. Merging must
+    still never silently pick a color across rules that actually disagree
+    (see test_mismatched_delivery_settings_are_flagged_not_grouped)."""
     fid = _make_folder("Mixed")
     _add_rule("folder", str(fid), "C#", color="blue")
     _add_rule("folder", str(fid), "C++", color="blue")
     _add_rule("folder", str(fid), "Python", color="green")
     with main.get_meta_connection() as conn:
         groups, mismatched = main.find_mergeable_rule_groups(conn)
-    assert groups == []
-    assert len(mismatched) == 1
-    assert {r["keyword"] for r in mismatched[0]["rules"]} == {"C#", "C++", "Python"}
+    assert mismatched == []
+    assert len(groups) == 1
+    assert {r["keyword"] for r in groups[0]["rules"]} == {"C#", "C++"}
+
+
+def test_two_disjoint_pairs_merge_leaving_no_residual_mismatch(env):
+    """Josh's literal report (2026-08-31): 5 rules, orange/blue/blue/green/
+    orange. Dillinger and BTBAM (orange) merge, C#/C++ (blue) merge, Python
+    (green, solo) is reported nowhere -- every non-singleton settings-value
+    already got its own group, so there's no 2+-way disagreement left to
+    flag as mismatched."""
+    _add_rule("global", "", "Dillinger Escape Plan", color="orange")
+    _add_rule("global", "", "C#", color="blue")
+    _add_rule("global", "", "C++", color="blue")
+    _add_rule("global", "", "Python", color="green")
+    _add_rule("global", "", "Between the Buried and Me", color="orange")
+    with main.get_meta_connection() as conn:
+        groups, mismatched = main.find_mergeable_rule_groups(conn)
+    assert mismatched == []
+    assert len(groups) == 2
+    keyword_sets = [{r["keyword"] for r in g["rules"]} for g in groups]
+    assert {"Dillinger Escape Plan", "Between the Buried and Me"} in keyword_sets
+    assert {"C#", "C++"} in keyword_sets
 
 
 def test_mismatched_delivery_settings_are_flagged_not_grouped(env):
@@ -160,7 +185,9 @@ def test_merge_joins_plain_keywords_as_a_comma_list(env):
     _add_rule("folder", str(fid), "C#", color="blue", search_in="both")
     _add_rule("folder", str(fid), "C++", color="blue", search_in="both")
     with main.get_meta_connection() as conn:
-        result = main.merge_highlight_rule_group(conn, "highlight", "folder", str(fid), "both", False)
+        result = main.merge_highlight_rule_group(
+            conn, "highlight", "folder", str(fid), "both", False, "blue", "immediately", "", "", 0, False,
+        )
         conn.commit()
         rows = conn.execute("SELECT keyword, color FROM highlight_keywords WHERE scope_id = ?", (str(fid),)).fetchall()
     assert result is not None
@@ -174,7 +201,9 @@ def test_merge_joins_regex_keywords_as_alternation(env):
     _add_rule("global", "", "foo.*bar", is_regex=True)
     _add_rule("global", "", "baz+", is_regex=True)
     with main.get_meta_connection() as conn:
-        main.merge_highlight_rule_group(conn, "highlight", "global", "", "title", True)
+        main.merge_highlight_rule_group(
+            conn, "highlight", "global", "", "title", True, "yellow", "immediately", "", "", 0, False,
+        )
         conn.commit()
         rows = conn.execute("SELECT keyword FROM highlight_keywords WHERE scope = 'global'").fetchall()
     assert len(rows) == 1
@@ -187,7 +216,9 @@ def test_merge_dedupes_overlapping_individual_keywords(env):
     _add_rule("global", "", "python, rust")
     _add_rule("global", "", "rust, go")
     with main.get_meta_connection() as conn:
-        main.merge_highlight_rule_group(conn, "highlight", "global", "", "title", False)
+        main.merge_highlight_rule_group(
+            conn, "highlight", "global", "", "title", False, "yellow", "immediately", "", "", 0, False,
+        )
         conn.commit()
         rows = conn.execute("SELECT keyword FROM highlight_keywords WHERE scope = 'global'").fetchall()
     assert len(rows) == 1
@@ -204,7 +235,9 @@ def test_merge_preserves_min_sort_order(env):
         conn.execute("UPDATE highlight_keywords SET sort_order = 5 WHERE keyword = 'a'")
         conn.execute("UPDATE highlight_keywords SET sort_order = 9 WHERE keyword = 'b'")
         conn.commit()
-        main.merge_highlight_rule_group(conn, "highlight", "global", "", "title", False)
+        main.merge_highlight_rule_group(
+            conn, "highlight", "global", "", "title", False, "yellow", "immediately", "", "", 0, False,
+        )
         conn.commit()
         row = conn.execute("SELECT sort_order FROM highlight_keywords WHERE scope = 'global'").fetchone()
     assert row["sort_order"] == 5
@@ -212,11 +245,16 @@ def test_merge_preserves_min_sort_order(env):
 
 
 def test_merge_refuses_when_settings_mismatch(env):
+    """Requesting a merge for one specific settings value only picks up rows
+    that actually match it -- if the group's other row uses different
+    settings, fewer than 2 rows match the request and nothing merges."""
     fid = _make_folder("Mixed")
     _add_rule("folder", str(fid), "a", color="blue")
     _add_rule("folder", str(fid), "b", color="green")
     with main.get_meta_connection() as conn:
-        result = main.merge_highlight_rule_group(conn, "highlight", "folder", str(fid), "title", False)
+        result = main.merge_highlight_rule_group(
+            conn, "highlight", "folder", str(fid), "title", False, "blue", "immediately", "", "", 0, False,
+        )
         rows = conn.execute("SELECT COUNT(*) FROM highlight_keywords").fetchone()[0]
     assert result is None
     assert rows == 2  # nothing was touched
@@ -227,7 +265,9 @@ def test_merge_refuses_a_stale_group(env):
     nothing to merge, and the surviving rule must be untouched."""
     _add_rule("global", "", "a")
     with main.get_meta_connection() as conn:
-        result = main.merge_highlight_rule_group(conn, "highlight", "global", "", "title", False)
+        result = main.merge_highlight_rule_group(
+            conn, "highlight", "global", "", "title", False, "yellow", "immediately", "", "", 0, False,
+        )
         rows = conn.execute("SELECT keyword FROM highlight_keywords").fetchall()
     assert result is None
     assert [r["keyword"] for r in rows] == ["a"]
@@ -238,7 +278,9 @@ def test_merge_refuses_a_non_mergeable_type(env):
     _add_rule("folder", str(fid), "slug", type="deduplicate")
     _add_rule("folder", str(fid), "title", type="deduplicate")
     with main.get_meta_connection() as conn:
-        result = main.merge_highlight_rule_group(conn, "deduplicate", "folder", str(fid), "title", False)
+        result = main.merge_highlight_rule_group(
+            conn, "deduplicate", "folder", str(fid), "title", False, "yellow", "immediately", "", "", 0, False,
+        )
     assert result is None
 
 
@@ -301,7 +343,11 @@ def test_different_search_in_does_not_cover(env):
 
 
 def test_live_library_shape_is_reproduced(env):
-    """The exact 2026-08-19 measurement: 5 rules across 3 groups collapse to 3."""
+    """The exact 2026-08-19 measurement, re-verified 2026-08-31 after
+    settings-subgrouping landed: 8 rules across 3 identities collapse to 3
+    groups (folder 8's pair, folder 9's blue pair, global's orange pair).
+    Python and PS4 are solo leftovers with no partner to disagree with, so
+    neither is reported in either bucket."""
     fid8, fid9 = _make_folder("Deals"), _make_folder("Dev")
     _add_rule("folder", str(fid8), "AirPods|iPhone|MacBook|AppleTV", type="mark_as_read", is_regex=True)
     _add_rule("folder", str(fid8), "Micro ?Center", type="mark_as_read", is_regex=True)
@@ -313,9 +359,9 @@ def test_live_library_shape_is_reproduced(env):
     _add_rule("global", "", "PS4", color="blue", search_in="both")
     with main.get_meta_connection() as conn:
         groups, mismatched = main.find_mergeable_rule_groups(conn)
-    assert len(groups) == 1  # only folder 8 (same color/delivery) merges cleanly
-    assert len(mismatched) == 2  # folder 9 and global both mix colors
-    assert sum(len(g["rules"]) for g in groups) - len(groups) == 1  # 2 rules -> 1
+    assert len(groups) == 3  # folder 8's pair, folder 9's blue pair, global's orange pair
+    assert mismatched == []
+    assert sum(len(g["rules"]) for g in groups) == 6  # 3 pairs of 2
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +403,8 @@ def test_merge_group_route_applies_and_persists(env):
     with TestClient(_app()) as client:
         r = client.post("/highlights/merge-group", data={
             "type": "highlight", "scope": "global", "scope_id": "", "search_in": "title", "is_regex": "0",
+            "color": "yellow", "delivery": "immediately", "email_to": "", "batch_time": "",
+            "batch_count": "0", "cc_me": "0",
         })
     assert r.status_code == 200
     assert r.json()["ok"] is True
@@ -372,6 +420,8 @@ def test_merge_group_route_409s_on_a_stale_group(env):
     with TestClient(_app()) as client:
         r = client.post("/highlights/merge-group", data={
             "type": "highlight", "scope": "global", "scope_id": "", "search_in": "title", "is_regex": "0",
+            "color": "yellow", "delivery": "immediately", "email_to": "", "batch_time": "",
+            "batch_count": "0", "cc_me": "0",
         })
     assert r.status_code == 409
     assert r.json()["ok"] is False

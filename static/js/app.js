@@ -12113,17 +12113,18 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
 
         const COLOR_HEX = { yellow: '#e6c34d', green: '#5cb85c', blue: '#4a90d9', orange: '#e08a3c', red: '#d9534f', purple: '#9b6bce' };
 
-        // Same identity, but color/delivery/email differ across the group —
-        // merging would have to silently pick a side, so this is shown for
-        // awareness only (no action button). Edit one to match the others,
-        // then it moves up into the mergeable list on its own.
+        // Leftover singletons under one identity that still disagree with
+        // each other once every already-agreeing pair has been split out
+        // into its own mergeable card below — shown for awareness only (no
+        // action button). Edit one to match another, then it moves up into
+        // the mergeable list on its own.
         mismatched.forEach((group) => {
           const card = document.createElement('div');
           card.className = 'hl-suggestion-card';
           const label = document.createElement('div');
           label.className = 'hl-suggestion-label';
           const typeLabel = HL_TYPE_LABELS[group.type] || group.type;
-          label.textContent = `${group.rules.length} ${typeLabel} rules on ${hlScopeLabel(group.scope, group.scope_id)} could be one, but use different settings (color, delivery, or email) — edit them to match first:`;
+          label.textContent = `${group.rules.length} ${typeLabel} rules on ${hlScopeLabel(group.scope, group.scope_id)} use different settings (color, delivery, or email) — edit them to match first:`;
           card.appendChild(label);
           const chips = document.createElement('div');
           chips.className = 'hl-suggestion-chips';
@@ -12170,6 +12171,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
                 body: new URLSearchParams({
                   type: group.type, scope: group.scope, scope_id: group.scope_id || '',
                   search_in: group.search_in, is_regex: group.is_regex ? '1' : '0',
+                  color: group.rules[0].color || '', delivery: group.rules[0].delivery || '',
+                  email_to: group.rules[0].email_to || '', batch_time: group.rules[0].batch_time || '',
+                  batch_count: group.rules[0].batch_count || '0', cc_me: group.rules[0].cc_me ? '1' : '0',
                 }).toString(),
               });
               const result = await resp.json();
