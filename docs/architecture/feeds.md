@@ -294,6 +294,14 @@ keeping services free of main/DB imports.
   spelling, and takes plain strings only (a structured value belongs to some other
   schema's `vendor`). A bare `vendor` key is ignored — unnamespaced, it could mean
   anything.
+- **neowin.net's `<neowin:tags>` counts too — same shape, a hashtag list
+  instead of one name.** Raised 2026-08-31 rechecking an earlier "no can do":
+  Neowin ships `<neowin:tags>#OpenAI #ChatGPT #Ads</neowin:tags>` instead of
+  `<category>`, invisible to feedparser's `.tags`/`.category` the same way the
+  Shopify vendor field is. `_prefixed_hashtag_field_tags` mirrors
+  `_shopify_vendor_tags`'s `<prefix>_vendor` matching but for `<prefix>_tags`,
+  splitting the value on whitespace instead of taking it whole (a leading `#`
+  is stripped by the shared `_clean_tag_values`, same as any other tag).
 - **Storage.** `entry_feed_tags(feed_url, entry_id, tag, first_seen_at)`, tags
   stored **raw** and normalized only at display, because the raw text is the
   foundation for tag-filtered feed adapters. Replace-per-entry semantics, so

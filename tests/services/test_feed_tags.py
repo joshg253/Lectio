@@ -858,3 +858,50 @@ def test_structured_or_oversized_vendor_values_are_ignored():
     assert extract_feed_entry_tags({"s_vendor": {"name": "x"}}) == []
     assert extract_feed_entry_tags({"s_vendor": "x" * 61}) == []
     assert extract_feed_entry_tags({"s_vendor": "   "}) == []
+
+
+# --- neowin.net: <neowin:tags>#OpenAI #ChatGPT #Ads</neowin:tags> is invisible to
+# feedparser's .tags/.category, same shape as the Shopify vendor field above —
+# raised 2026-08-31, checking whether "no can do" still held for it.
+
+
+_NEOWIN_RSS = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:neowin="https://www.neowin.net/">
+  <channel>
+    <title>Neowin</title>
+    <item>
+      <title>ChatGPT Ads hits $1 billion annual revenue run rate</title>
+      <link>https://www.neowin.net/news/chatgpt-ads-hits-1-billion/</link>
+      <guid>https://www.neowin.net/news/chatgpt-ads-hits-1-billion/</guid>
+      <neowin:tags>#OpenAI #ChatGPT #Ads</neowin:tags>
+    </item>
+  </channel>
+</rss>
+"""
+
+
+def test_neowin_style_hashtag_field_becomes_tags():
+    assert extract_feed_entry_tags(_first_entry(_NEOWIN_RSS)) == ["OpenAI", "ChatGPT", "Ads"]
+
+
+def test_hashtag_field_is_found_under_any_namespace_prefix():
+    xml = _NEOWIN_RSS.replace("xmlns:neowin=", "xmlns:pub=").replace("<neowin:", "<pub:").replace("</neowin:", "</pub:")
+    assert extract_feed_entry_tags(_first_entry(xml)) == ["OpenAI", "ChatGPT", "Ads"]
+
+
+def test_a_bare_tags_key_is_not_harvested_twice():
+    """A bare `tags` key is feedparser's OWN structured .tags list, already
+    handled above — this extractor only matches a namespaced `<prefix>_tags`
+    string, so it must not also fire on that."""
+    assert extract_feed_entry_tags({"tags": "#should-not-double-count"}) == []
+
+
+def test_hashtag_field_without_hash_prefix_still_works():
+    """Not every publisher prefixes with #; splitting on whitespace alone
+    still separates the terms, and _clean_tag_values' leading-# strip is a
+    no-op when there's nothing to strip."""
+    assert extract_feed_entry_tags({"pub_tags": "OpenAI ChatGPT Ads"}) == ["OpenAI", "ChatGPT", "Ads"]
+
+
+def test_oversized_hashtag_tokens_are_ignored():
+    assert extract_feed_entry_tags({"pub_tags": "#" + "x" * 61}) == []
