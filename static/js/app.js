@@ -508,6 +508,42 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       }
     });
 
+    // "Add link to Note" quick-capture (raised 2026-08-30): a fast way to drop
+    // a problematic post's link into the Global Note while browsing, for
+    // context added right there rather than a silent background write. Opens
+    // the note editor with the link already appended and the cursor placed
+    // right after it, so the user types their own context immediately.
+    // Deliberately its own fetch rather than reusing the [data-toggle-panel]
+    // handler above (which also refreshes global-note-modal on open) — a
+    // second concurrent fetch-and-compare against the same textarea would
+    // race this one.
+    function openGlobalNoteWithLink(link) {
+      const modal = document.getElementById('global-note-modal');
+      const ta = document.getElementById('global-note-text');
+      if (!modal || !ta || !link) return;
+      modal.removeAttribute('hidden');
+      const before = ta.value;
+      const appendLink = (base) => {
+        const trimmedBase = base.replace(/\s+$/, '');
+        return trimmedBase ? `${trimmedBase}\n\n${link}\n` : `${link}\n`;
+      };
+      fetch('/settings/global-note', { credentials: 'same-origin', headers: { 'X-Requested-With': 'lectio-global-note-load' } })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          const base = (d && typeof d.note_text === 'string' && ta.value === before) ? d.note_text : ta.value;
+          ta.value = appendLink(base);
+          ta.focus();
+          ta.setSelectionRange(ta.value.length, ta.value.length);
+        })
+        .catch(() => {
+          // Fetch failed — still append onto whatever's currently shown
+          // rather than doing nothing.
+          ta.value = appendLink(ta.value);
+          ta.focus();
+          ta.setSelectionRange(ta.value.length, ta.value.length);
+        });
+    }
+
     function closeAddModal(modalId) {
       const modal = document.getElementById(modalId);
       if (modal) {
@@ -3106,6 +3142,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     const postMarkAboveReadButton = document.getElementById('ctx-post-mark-above-read');
     const postMarkBelowReadButton = document.getElementById('ctx-post-mark-below-read');
     const postCopyUrlButton = document.getElementById('ctx-post-copy-url');
+    const postAddLinkToNoteButton = document.getElementById('ctx-post-add-link-to-note');
     const postAutomationButton = document.getElementById('ctx-post-automation');
     const postMoveToFeedButton = document.getElementById('ctx-post-move-to-feed');
     const postMoveVisibleButton = document.getElementById('ctx-post-move-visible');
@@ -8021,6 +8058,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
           }
           setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
+          setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostLink));
           setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
           setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
           setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
@@ -8301,6 +8339,15 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         schedulePoll();
       }
 
+      const entryAddLinkToNoteButton = document.getElementById('entry-add-link-to-note-button');
+      if (entryAddLinkToNoteButton && !entryAddLinkToNoteButton.dataset.boundClick) {
+        entryAddLinkToNoteButton.dataset.boundClick = '1';
+        entryAddLinkToNoteButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          const link = entryAddLinkToNoteButton.getAttribute('data-entry-link');
+          if (link) openGlobalNoteWithLink(link);
+        });
+      }
     }
 
     bindEntryPaneInteractions();
@@ -8503,6 +8550,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               }
               setMenuItemVisible(postMarkReadBulkButton, true);
               setMenuItemVisible(postCopyUrlButton, false);
+              setMenuItemVisible(postAddLinkToNoteButton, false);
               setMenuItemVisible(postMarkFeedReadButton, false);
               setMenuItemVisible(postOpenInFeedsButton, false);
               setMenuItemVisible(postAutomationButton, false);
@@ -8563,6 +8611,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               setMenuItemVisible(postStarBulkButton, false);
               setMenuItemVisible(postUnstarBulkButton, false);
               setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
+              setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostLink));
               setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
               setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
               setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
@@ -9700,6 +9749,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       if (!copied) {
         window.alert('Could not copy URL to clipboard.');
       }
+    });
+
+    postAddLinkToNoteButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const link = contextPostLink;
+      hideAllContextMenus();
+      if (link) openGlobalNoteWithLink(link);
     });
 
     postAutomationButton?.addEventListener('click', (event) => {

@@ -618,3 +618,18 @@ after the first in-page navigation, while still working on a direct URL load
 (which is why it survived testing). The search button, its clear control, the
 query input, and the search form's `submit` handler are therefore all delegated
 from `document`. Wire anything new on this toolbar the same way.
+
+## "Add link to Note" — append with the cursor ready, not a silent write
+
+Raised 2026-08-30: a fast way to drop a problematic post's link into the Global Note while
+browsing, from the per-post context menu (list and entry-pane title share one menu, so this
+covers both automatically) and a dedicated entry-pane button (`entry-add-link-to-note-button`,
+`data-entry-link` stamped at render time).
+
+`openGlobalNoteWithLink(link)` (app.js) opens the modal with the link **appended**, not saved —
+the note isn't submitted until the user does, so they type their own context right there rather
+than a background write happening silently. It runs its own fetch of `/settings/global-note`
+rather than reusing the `[data-toggle-panel]` handler's own load-on-open fetch (which also targets
+`global-note-modal`) — two concurrent fetch-and-compare-against-the-textarea calls on the same
+open would race each other. Falls back to appending onto whatever's currently shown if the fetch
+fails, rather than doing nothing.

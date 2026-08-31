@@ -500,6 +500,16 @@
         </div>
         {% endif %}
         {% endif %}
+        {% if selected_entry.link %}
+        <button
+          type="button"
+          id="entry-add-link-to-note-button"
+          class="entry-source-button"
+          data-entry-link="{{ selected_entry.link }}"
+          title="Add link to Note"
+          aria-label="Add link to Note"
+        ><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span></button>
+        {% endif %}
         {% if selected_entry.content_html %}
         <button
           type="button"
@@ -511,7 +521,7 @@
           title="Clean up article (hover to select, click to remove)"
           aria-label="Clean up article"
         ><span class="material-symbols-rounded" aria-hidden="true">cleaning_services</span></button>
-        
+
         {% endif %}
       </div>
     </div>

@@ -212,17 +212,6 @@ here; the eventual fix is that item's DOM-walk-and-drop-hidden-nodes capture, no
 
 **Navigation/UX papercuts** — no design work needed, just haven't been built.
 
-### "Add link to Note" quick-capture — idea, not scoped
-
-Raised 2026-08-30: a fast way to drop a link into the Global Note while
-browsing, for problematic posts noticed in passing (bad render, feed issue,
-etc.). Scoped down 2026-08-30: available from both the per-post context menu
-and an entry-pane button. Action appends the post's link to the existing
-Global Note and opens the note editor with it focused, so Josh types his own
-context right there rather than the write happening silently in the
-background. Writes through the existing `/settings/global-note` route
-(`GLOBAL_NOTE_SETTING_KEY`, main.py:35139). Not built.
-
 ### New subscription missing from feed tree — UX idea remaining
 
 Root-cause code bug already fixed (2026-07-08: re-adding a feed that existed
