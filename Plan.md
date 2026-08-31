@@ -182,6 +182,31 @@ either way, just with extra nav chrome mixed in. Would need the fallback-accepta
 weigh text length/quality, not image count alone — not done here, low priority since the current
 result isn't broken, just noisier than ideal.
 
+### The re-fetch/save-article path has no proxy/FlareSolverr escalation, only feed refresh does
+
+Raised 2026-08-31 on three tamriel-rebuilt.org entries (their feed only ships thin Drupal teaser
+summaries, no full content, `<img>` count 1/14/1) that "Refetch content" was supposed to fill in.
+All three came back `403 Forbidden` — confirmed live: an honest fetch, then the browser-UA retry
+`fetch_readability_article` already does, both refused. `_refresh_captured_article_for_current_user`
+never reaches for the proxy/Tailscale/FlareSolverr tiers `FeedRefreshService.update_feeds` has —
+those escalation callbacks are wired into the feed-refresh loop only (`services/feed_refresh.py`),
+not the single-article re-fetch/save path (`saved_articles_service.refresh_captured_article` /
+`fetch_readability_article`). A site whose FEED is reachable but whose ARTICLE PAGES are
+Cloudflare/bot-walled (this looks like exactly that shape) can never be helped by "Refetch content"
+no matter how many outbound-fetch tiers exist, because none of them are offered to it. Worth
+wiring the same escalation ladder into the re-fetch path — same shape as the feed-refresh one,
+just triggered from a single-article context instead of a batch.
+
+### A thin post whose entire content is one image ends up looking empty
+
+Also from tamriel-rebuilt.org (2026-08-31): entry 17652's summary is exactly one `<img>` and no
+other text — the lead-image hoist strips that image out of the body once it becomes the hero,
+which is correct for a normal article (avoid showing the hero twice) but leaves NOTHING behind
+when the image was the entire post. Reads as "no img" even though the thumb/hero resolved
+correctly. Re-fetch can't help here either (see the item above — this site 403s it). Would need
+the hoist-and-strip step to check whether stripping would leave the body empty and skip the strip
+in that case; not done here.
+
 ## Tier 2 — small, fast, independent wins
 
 **Navigation/UX papercuts** — no design work needed, just haven't been built.
