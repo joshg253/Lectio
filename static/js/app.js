@@ -8677,7 +8677,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
                 postAddToPlaylistButton.textContent = `Add ${contextSelectedPosts.length} to YouTube Playlist…`;
               }
               setMenuItemVisible(postAddToPlaylistButton, allYoutube);
-              if (postAddTagButton) postAddTagButton.textContent = `Add tag to ${contextSelectedPosts.length} posts…`;
+              if (postAddTagButton) postAddTagButton.textContent = `Edit tags on ${contextSelectedPosts.length} posts…`;
               setMenuItemVisible(postAddTagButton, true);
               if (postStarBulkButton) postStarBulkButton.textContent = `Add star to ${contextSelectedPosts.length} posts`;
               setMenuItemVisible(postStarBulkButton, true);
@@ -8740,7 +8740,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               setMenuItemVisible(postClearImgCacheButton, true);
               if (postAddToPlaylistButton) postAddToPlaylistButton.textContent = 'Add to YouTube Playlist…';
               setMenuItemVisible(postAddToPlaylistButton, Boolean(videoId));
-              if (postAddTagButton) postAddTagButton.textContent = 'Add tag…';
+              if (postAddTagButton) postAddTagButton.textContent = 'Edit tags…';
               setMenuItemVisible(postAddTagButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             }
             showPostContextMenu(event);
@@ -8801,7 +8801,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           const entryId = postItem.getAttribute('data-post-entry-id') || '';
           if (!feedUrl || !entryId) return;
           const title = postItem.getAttribute('data-post-title') || '';
-          const bodyText = title ? `Add a tag to "${title}".` : 'Add a tag to this post.';
+          const bodyText = title ? `Edit tags on "${title}".` : 'Edit tags on this post.';
           openBulkTagModal([{ feedUrl, entryId }], bodyText);
         });
       }
@@ -10050,7 +10050,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       bodyEl.textContent = bodyText;
       input.value = '';
       confirmBtn.disabled = true;
-      confirmBtn.textContent = 'Add tag';
+      confirmBtn.textContent = 'Save';
       attachTagAutocomplete(input, () => lectioTagNames, {});
 
       // Only shown for a single post — a mixed bulk selection has no one set
@@ -10090,14 +10090,20 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       confirmBtn.onclick = async () => {
         const tokens = tokenizeTags(input.value);
         if (!tokens.length) return;
-        const invalid = tokens.filter((t) => !TAG_VALID_RE.test(t));
+        // A leading "-" (remove) is not part of TAG_VALID_RE's charset (it
+        // can't be the FIRST character of a real tag, only appear within
+        // one), so it's stripped before validating and re-attached after.
+        const invalid = tokens.filter((t) => {
+          const bare = t.startsWith('-') ? t.slice(1) : t;
+          return !bare || !TAG_VALID_RE.test(bare);
+        });
         if (invalid.length) {
           showToastMessage('Tags may only contain letters, numbers, and: - _ + . #');
           input.select();
           return;
         }
         confirmBtn.disabled = true;
-        confirmBtn.textContent = 'Adding…';
+        confirmBtn.textContent = 'Saving…';
         try {
           const body = new URLSearchParams({
             entries: JSON.stringify(entries.map((e) => [e.feedUrl, e.entryId])),
@@ -10107,33 +10113,44 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           const data = await resp.json();
           if (data.ok) {
             modal.setAttribute('hidden', '');
-            showToastMessage(data.message || 'Tags added.');
-            // This route only ever appends, so every touched entry now has at
-            // least one tag — sync the tag icon (and kept, same as the
-            // single-entry /entries/tags path already does via syncKeptFromTagResponse).
-            for (const e of entries) {
-              applyPostItemHasTagsState(e.feedUrl, e.entryId, true);
-              applyPostItemKeptState(e.feedUrl, e.entryId, true);
+            showToastMessage(data.message || 'Tags updated.');
+            // Add and remove can both happen in the same edit now, so unlike
+            // the old append-only route, success no longer implies "every
+            // touched entry has a tag" — the server reports which of the two
+            // buckets each entry actually landed in.
+            for (const [feedUrl, entryId] of data.still_tagged || []) {
+              applyPostItemHasTagsState(feedUrl, entryId, true);
+              applyPostItemKeptState(feedUrl, entryId, true);
+            }
+            for (const [feedUrl, entryId] of data.now_untagged || []) {
+              applyPostItemHasTagsState(feedUrl, entryId, false);
             }
             // Tagging implies filing/keeping it — mark read along with the tag
             // rather than requiring a separate rc->Mark as read afterward.
             // Raised 2026-08-31, same reasoning as the YT-playlist bulk add.
-            try {
-              const readBody = new URLSearchParams({ entries: JSON.stringify(entries.map((e) => [e.feedUrl, e.entryId])) });
-              const readResp = await fetch('/entries/read-batch', { method: 'POST', body: readBody });
-              const readData = await readResp.json().catch(() => ({}));
-              if (readData && readData.ok) applyReadStateToSelection(entries);
-            } catch (_e) { /* the tag itself already succeeded and is reported above */ }
+            // Only the entries that still HAVE a tag after this edit count as
+            // "kept" for this purpose — one that lost its last tag wasn't a
+            // keep action.
+            const stillTaggedKeys = new Set((data.still_tagged || []).map(([f, e]) => `${f} ${e}`));
+            const toMarkRead = entries.filter((e) => stillTaggedKeys.has(`${e.feedUrl} ${e.entryId}`));
+            if (toMarkRead.length) {
+              try {
+                const readBody = new URLSearchParams({ entries: JSON.stringify(toMarkRead.map((e) => [e.feedUrl, e.entryId])) });
+                const readResp = await fetch('/entries/read-batch', { method: 'POST', body: readBody });
+                const readData = await readResp.json().catch(() => ({}));
+                if (readData && readData.ok) applyReadStateToSelection(toMarkRead);
+              } catch (_e) { /* the tag edit itself already succeeded and is reported above */ }
+            }
             // Selection is left as-is — bulk actions chain.
           } else {
-            showToastMessage(data.error || 'Add tag failed.');
+            showToastMessage(data.error || 'Edit tags failed.');
             confirmBtn.disabled = false;
-            confirmBtn.textContent = 'Add tag';
+            confirmBtn.textContent = 'Save';
           }
         } catch (_) {
-          showToastMessage('Add tag failed — network error.');
+          showToastMessage('Edit tags failed — network error.');
           confirmBtn.disabled = false;
-          confirmBtn.textContent = 'Add tag';
+          confirmBtn.textContent = 'Save';
         }
       };
 
@@ -10148,8 +10165,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       hideAllContextMenus();
       if (!entries.length) return;
       const bodyText = entries.length === 1
-        ? (contextPostTitle ? `Add a tag to “${contextPostTitle}”.` : 'Add a tag to this post.')
-        : `Add a tag to ${entries.length} posts.`;
+        ? (contextPostTitle ? `Edit tags on “${contextPostTitle}”.` : 'Edit tags on this post.')
+        : `Edit tags on ${entries.length} posts.`;
       openBulkTagModal(entries, bodyText);
     });
 

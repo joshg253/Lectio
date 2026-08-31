@@ -34167,6 +34167,52 @@ async def api_bookmarklet_save(request: Request):
                         headers=_BOOKMARKLET_CORS_HEADERS)
 
 
+def parse_manual_tag_edit_tokens(raw_value: str | None) -> tuple[list[str], set[str]]:
+    """Split a bulk tag-edit input into (add tokens, remove-normalized-set).
+
+    Same ``+/-tag`` convention already used by the rule editor's tag_filter
+    spec (``parse_tag_filter_spec``): a leading ``-`` marks removal, a bare or
+    ``+``-prefixed token marks addition. Space/comma-separated, matching the
+    existing single-tag input's own tokenizing (``parse_manual_hashtags``),
+    not the filter spec's comma-only split — multi-word tags aren't a manual-
+    tag concern the way they are for a typed filter phrase.
+    """
+    add_tokens: list[str] = []
+    remove_set: set[str] = set()
+    seen_add: set[str] = set()
+    if not raw_value:
+        return add_tokens, remove_set
+    for token in re.split(r"[\s,]+", raw_value):
+        if not token:
+            continue
+        if token[0] == "-":
+            normalized = normalize_tag_value(token[1:])
+            if normalized:
+                remove_set.add(normalized)
+        else:
+            token = token[1:] if token[0] == "+" else token
+            normalized = normalize_tag_value(token)
+            if normalized and normalized not in seen_add:
+                seen_add.add(normalized)
+                add_tokens.append(normalized)
+    return add_tokens, remove_set
+
+
+def apply_manual_tag_edits(existing_tags: list[str], add_tokens: list[str], remove_set: set[str]) -> list[str]:
+    """Existing tags with ``remove_set`` dropped and ``add_tokens`` appended
+    (deduped, capped at ``MAX_MANUAL_TAGS``). A tag both added and removed in
+    the same edit is removed — the leading ``-`` was the more specific,
+    deliberate keystroke."""
+    kept = [t for t in existing_tags if t not in remove_set]
+    for tok in add_tokens:
+        if len(kept) >= MAX_MANUAL_TAGS:
+            break
+        if tok in remove_set or tok in kept:
+            continue
+        kept.append(tok)
+    return kept
+
+
 def _merge_manual_tags(existing_tags: list[str], added_raw_tags: str) -> str:
     """Append newly-typed tags onto an entry's existing manual tags.
 
@@ -34253,17 +34299,28 @@ def set_entry_manual_tags(
 
 
 @app.post("/entries/tags-batch")
-def add_manual_tags_to_entries_batch_route(
+def edit_manual_tags_on_entries_batch_route(
     entries: str = Form(...),
     tags_text: str = Form(...),
 ):
-    """Append a tag (or tags) onto a batch of entries' manual tags.
+    """Add and/or remove tags across a batch of entries' manual tags.
 
     ``entries`` is a JSON array of ``[feed_url, entry_id]`` pairs (the post
     list's multi-selection) — same shape as ``/entries/move-to-feed-batch``.
-    Always appends, never replaces: unlike the single-entry route this has no
-    ``append_mode`` switch, since a bulk add must never blank out tags a
-    different selected post already had.
+    ``tags_text`` uses the same ``+/-tag`` convention as the rule editor's
+    tag_filter spec (``-tag`` removes, bare/``+tag`` adds) — see
+    ``parse_manual_tag_edit_tokens``. Each entry's OWN existing tags are the
+    base for the edit (unlike the single-entry route's replace mode, which
+    would blank out tags a different selected post already had), so removing
+    a tag one post doesn't have is simply a no-op for that post.
+
+    Renamed from "Add tag" to "Edit tags" 2026-08-31 (Josh: a bulk add with no
+    way to also remove was a footgun — meant editing 3 posts' tags but had to
+    fall back to doing each by hand). Returns per-entry ``still_tagged``/
+    ``now_untagged`` pairs (not a blanket "every touched entry now has a tag"
+    the way the append-only route could assume) so the client updates each
+    post's tag/kept indicator correctly rather than assuming success implies
+    "has tags."
     """
     try:
         pairs = json.loads(entries)
@@ -34275,11 +34332,13 @@ def add_manual_tags_to_entries_batch_route(
             {"ok": False, "error": f"Too many entries (max {_MOVE_BATCH_CAP} per action)."},
             status_code=400,
         )
-    added_tokens = parse_manual_hashtags(tags_text)
-    if not added_tokens:
+    add_tokens, remove_set = parse_manual_tag_edit_tokens(tags_text)
+    if not add_tokens and not remove_set:
         return JSONResponse({"ok": False, "error": "No valid tags."}, status_code=400)
 
-    tagged = failed = 0
+    updated = failed = 0
+    still_tagged: list[list[str]] = []
+    now_untagged: list[list[str]] = []
     for pair in pairs:
         if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
             failed += 1
@@ -34287,16 +34346,21 @@ def add_manual_tags_to_entries_batch_route(
         feed_url, entry_id = str(pair[0]).strip(), str(pair[1])
         try:
             existing_tags = get_manual_tags_for_entry(feed_url, entry_id)
-            set_manual_tags_for_entry(feed_url, entry_id, _merge_manual_tags(existing_tags, tags_text))
-            tagged += 1
+            new_tags = apply_manual_tag_edits(existing_tags, add_tokens, remove_set)
+            set_manual_tags_for_entry(feed_url, entry_id, " ".join(new_tags))
+            updated += 1
+            (still_tagged if new_tags else now_untagged).append([feed_url, entry_id])
         except Exception as exc:  # noqa: BLE001 — one bad entry must not sink the batch
             failed += 1
-            LOGGER.warning("[tags-batch] failed to tag %s in %s: %s", entry_id, feed_url, exc)
+            LOGGER.warning("[tags-batch] failed to edit tags on %s in %s: %s", entry_id, feed_url, exc)
 
-    msg = f"Tagged {tagged} post{'s' if tagged != 1 else ''}."
+    msg = f"Updated tags on {updated} post{'s' if updated != 1 else ''}."
     if failed:
         msg += f" {failed} failed."
-    return JSONResponse({"ok": True, "tagged": tagged, "failed": failed, "message": msg})
+    return JSONResponse({
+        "ok": True, "tagged": updated, "failed": failed, "message": msg,
+        "still_tagged": still_tagged, "now_untagged": now_untagged,
+    })
 
 
 @app.post("/entries/read-batch")
