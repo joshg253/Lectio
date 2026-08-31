@@ -12657,6 +12657,37 @@ _READABILITY_IMG_TAG_RE = re.compile(r'<img\b[^>]*>', re.IGNORECASE)
 _READABILITY_IMG_SRC_RE = re.compile(r'\bsrc\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
 
 
+_DEDUPE_PRESENTATION_QUERY_KEYS = frozenset({
+    "width", "height", "w", "h", "quality", "q", "fit", "crop",
+    "coordinates", "size", "dpr",
+})
+
+
+def _dedupe_img_src_key(src: str) -> str:
+    """Normalize an <img> src to a dedup key: path plus any query params NOT
+    known to be pure presentation (resize/crop/quality) hints.
+
+    Dropping the whole query string conflated two genuinely different images
+    on any CDN that identifies the asset BY query param rather than by path
+    — raised 2026-08-31: premierguitar.com's media-library CDN serves every
+    image at the literal path .../image.jpg, distinguished only by ?id=, so
+    two different tab-diagram images collided as "the same src" and the
+    second was silently dropped as a duplicate. Presentation-only keys
+    (width/height/quality/...) are still dropped, which is what lets the
+    intended case — og:image and an in-body copy differing only by a resize
+    query — keep deduping."""
+    path, _, query = src.partition("?")
+    if not query:
+        return path.strip().lower()
+    kept = sorted(
+        (k, v) for k, v in parse_qsl(query, keep_blank_values=True)
+        if k.lower() not in _DEDUPE_PRESENTATION_QUERY_KEYS
+    )
+    if not kept:
+        return path.strip().lower()
+    return f"{path.strip().lower()}?{urlencode(kept)}"
+
+
 def _dedupe_readability_images(article_html: str) -> str:
     """Drop repeated <img> tags that share an src (readability sometimes keeps
     the lead image twice — e.g. og:image plus the in-body copy)."""
@@ -12666,7 +12697,7 @@ def _dedupe_readability_images(article_html: str) -> str:
         src_match = _READABILITY_IMG_SRC_RE.search(match.group(0))
         if not src_match:
             return match.group(0)
-        src = src_match.group(1).split("?", 1)[0].strip().lower()
+        src = _dedupe_img_src_key(src_match.group(1))
         if src in seen:
             return ""
         seen.add(src)
@@ -12736,7 +12767,15 @@ def normalize_proxy_lazy_media(content: str) -> str:
         if not (is_img or is_source):
             return tag
 
-        lazy_src = attrs.get("data-src") or attrs.get("data-lazy-src") or attrs.get("data-original") or attrs.get("data-image")
+        # data-runner-src: RebelMouse CMS (premierguitar.com and its sibling
+        # sites) — raised 2026-08-31 against live "Ex. N" guitar-tab diagrams
+        # shipping as a blank data:image/svg+xml placeholder src with the real
+        # URL only in data-runner-src, so captures kept an empty box instead
+        # of the tablature the lesson is actually about.
+        lazy_src = (
+            attrs.get("data-src") or attrs.get("data-lazy-src") or attrs.get("data-original")
+            or attrs.get("data-image") or attrs.get("data-runner-src")
+        )
         lazy_srcset = attrs.get("data-srcset") or attrs.get("data-lazy-srcset")
         current_src = attrs.get("src", "")
         current_srcset = attrs.get("srcset", "")
@@ -13302,6 +13341,18 @@ def _lead_image_from_html(raw_html: str, source_url: str) -> str | None:
         return None
 
 
+_IMG_DIMENSION_SIGNATURE_RE = re.compile(r"_(\d{3,5}x\d{3,5})\.\w{3,4}(?:[?%]|$)")
+
+
+def _image_dimension_signature(url: str) -> str | None:
+    """A WxH token embedded in a CDN filename (e.g. Substack's own upload
+    naming, ..._2884x1622.jpeg), used to recognize the same source photo
+    re-served under a different re-encoded asset id. See the duplicate-hero
+    guard in extract_readability_article."""
+    m = _IMG_DIMENSION_SIGNATURE_RE.search(url)
+    return m.group(1) if m else None
+
+
 def _bs4_content_fallback(raw_html: str) -> str:
     """Extract article content via BS4 using known content-area selectors.
 
@@ -13315,6 +13366,13 @@ def _bs4_content_fallback(raw_html: str) -> str:
             tag.decompose()
         for selector_type, value in [
             ("id",    "article-body"),     # Future plc (guitarplayer/guitarworld/musicradar/…)
+            ("class", "body-description"),  # RebelMouse CMS (premierguitar.com) — raised
+                                             # 2026-08-31: readability's own scoring locked
+                                             # onto the page's header/hero block instead
+                                             # (<article class="...image-article...">, matched
+                                             # first by the "tag: article" fallback below,
+                                             # before this selector was added), losing every
+                                             # "Ex. N" tab-diagram image in the real lesson body.
             ("class", "post-body"),       # Blogger
             ("class", "entry-content"),   # WordPress / Blogger
             ("class", "post-content"),    # Ghost, common themes
@@ -13788,7 +13846,11 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     _bs4_fallback_used = False
     if len(article_html) < 300:
         # Readability found nothing meaningful (or just a short tagline/subtitle).
-        fallback = _bs4_content_fallback(raw_html)
+        # Lazy-attrs need the same pre-sanitize promotion as the primary summary
+        # above, or a fallback selector's own lazy-loaded images (RebelMouse's
+        # data-runner-src, etc.) lose their blank placeholder src to the
+        # sanitizer with nothing promoted to replace it — raised 2026-08-31.
+        fallback = normalize_proxy_lazy_media(_bs4_content_fallback(raw_html))
         if fallback:
             fallback_clean = sanitize_readability_html(fallback).strip()
             if fallback_clean and len(fallback_clean) > len(article_html):
@@ -13803,7 +13865,7 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
             raw_img_count > 4 and art_img_count < raw_img_count // 2
         )
         if needs_fallback:
-            fallback = _bs4_content_fallback(raw_html)
+            fallback = normalize_proxy_lazy_media(_bs4_content_fallback(raw_html))
             if fallback and fallback.lower().count("<img") > art_img_count:
                 article_html = sanitize_readability_html(fallback).strip()
                 art_img_count = article_html.lower().count("<img")
@@ -13832,8 +13894,36 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     # readability extracts (a #article-body of tab figures has no hero).
     lead = _lead_image_from_html(raw_html, source_url)
     if lead:
-        lead_seg = lead.rsplit("/", 1)[-1].split("?", 1)[0]
-        if lead not in article_html and (not lead_seg or lead_seg not in article_html):
+        # A bare last-path-segment match used to stand in for "already
+        # present," which false-positived on premierguitar.com's media-library
+        # CDN (raised 2026-08-31): every image there is literally named
+        # image.jpg, distinguished only by ?id=, so og:image's filename
+        # matched ANY other image on the page and the real hero was silently
+        # dropped as "already shown." _dedupe_img_src_key is the same
+        # query-aware identity check _dedupe_readability_images uses, so the
+        # two stay consistent.
+        lead_key = _dedupe_img_src_key(lead)
+        # Substack (and likely other CDN-resize proxies) can serve og:image and
+        # the post's own in-body header image as two DIFFERENT re-encoded asset
+        # ids for the same source photo — raised 2026-08-31: og:image's id
+        # didn't appear anywhere in the body, so the exact-match check below
+        # missed it and prepended a genuine duplicate (same photo, twice).
+        # Both asset filenames still carry the original upload's pixel
+        # dimensions as a suffix (..._2884x1622.jpeg) even though the id
+        # prefix differs, so fall back to that as a same-photo signal.
+        lead_dim_sig = _image_dimension_signature(lead)
+        already_present = (
+            lead in article_html
+            or any(
+                _dedupe_img_src_key(src) == lead_key
+                for src in re.findall(r'src="([^"]*)"', article_html)
+            )
+            or (lead_dim_sig is not None and any(
+                _image_dimension_signature(src) == lead_dim_sig
+                for src in re.findall(r'src="([^"]*)"', article_html)
+            ))
+        )
+        if not already_present:
             article_html = f'<figure><img src="{html.escape(lead, quote=True)}"></figure>' + article_html
     article_html = _finalize_article_html(article_html, source_url, _img_sizes)
     if not article_html:
@@ -13841,10 +13931,36 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     return title, article_html
 
 
+_WAYBACK_IMG_WRAPPER_RE = re.compile(
+    r'(["\'])https?://web\.archive\.org/web/\d+[a-z]{0,3}_?/(https?://[^"\']+)\1',
+    re.IGNORECASE,
+)
+
+
+def _unwrap_wayback_image_urls(article_html: str) -> str:
+    """Rewrite a Wayback-snapshot-wrapped image URL back to the original it wraps.
+
+    An archive-fallback capture (mode="archive", or the automatic mismatch/dead
+    fallback in _refresh_captured_article_for_current_user) extracts content
+    from a Wayback snapshot page, so every relative image src absolutizes
+    against the *snapshot* URL — producing im_-wrapped web.archive.org URLs
+    (http://web.archive.org/web/<ts>im_/<original>). That wrapper is far
+    flakier than the site it wraps: raised 2026-08-31 against two live
+    beehiiv-hosted entries where the im_ proxy 404'd while the exact same URL
+    it wraps, fetched directly, returned 200 image/jpeg. The wrapper already
+    carries the original URL, so unwrap it rather than storing the fragile
+    proxy — nothing is gained by going through Wayback for the image once the
+    HTML capture itself is done."""
+    if "web.archive.org" not in article_html:
+        return article_html
+    return _WAYBACK_IMG_WRAPPER_RE.sub(r"\1\2\1", article_html)
+
+
 def _finalize_article_html(article_html: str, source_url: str, img_sizes) -> str:
     """Shared post-processing for captured article HTML, whether readability-
     extracted or full-page. Reapplies image sizes captured from the raw page,
-    resolves relative URLs against the source, and applies the entry pane's
+    resolves relative URLs against the source, unwraps any Wayback-snapshot
+    image-proxy URL that resolution produced, and applies the entry pane's
     hotlink handling (route known hotlink hosts through /api/img; strip the
     Referer elsewhere so foreign-Referer placeholder hosts serve the real
     image)."""
@@ -13852,6 +13968,7 @@ def _finalize_article_html(article_html: str, source_url: str, img_sizes) -> str
     article_html = _dedupe_readability_images(article_html)
     article_html = _strip_bandcamp_track_signature(article_html)
     article_html = _absolutize_article_urls(article_html, source_url)
+    article_html = _unwrap_wayback_image_urls(article_html)
     article_html = proxy_hotlink_images(article_html)
     article_html = add_no_referrer_to_images(article_html)
     return article_html

@@ -88,6 +88,64 @@ def test_last_resort_needs_an_image_heavy_page():
     assert html.lower().count("<img") <= 3
 
 
+def test_rebelmouse_body_description_selector_beats_header_wrapper():
+    """RebelMouse CMS (premierguitar.com and siblings) — raised 2026-08-31:
+    readability's own scoring locked onto the page's <article class="...
+    image-article..."> header/hero wrapper, which the generic "tag: article"
+    fallback selector also matches first, losing every "Ex. N" tab-diagram
+    image that actually lives in class="body-description" alongside it."""
+    tabs = "".join(
+        f'<img class="rm-shortcode rm-lazyloadable-image" '
+        f'src="data:image/svg+xml,%3Csvg%3E%3C/svg%3E" '
+        f'data-runner-src="https://cdn.test/image.jpg?id={i}" width="600">'
+        for i in range(6)
+    )
+    page = (
+        "<html><head><title>Two-Hand Tapping</title></head><body>"
+        '<article class="clearfix image-article">'
+        "<h1>Two-Hand Tapping</h1><h2>subtitle</h2>"
+        "<picture><img src=\"https://cdn.test/hero.jpg\"></picture>"
+        "</article>"
+        '<div class="body-description">'
+        "<p>Get exotic with these spicy two-handed patterns over several "
+        "exercises, each with its own tablature diagram to work through.</p>"
+        f"{tabs}</div>"
+        "</body></html>"
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert html.lower().count("<img") >= 6
+    assert "id=0" in html and "id=5" in html
+    assert "data:image/svg" not in html  # every placeholder got promoted
+
+
+def test_rebelmouse_runner_src_lazy_attr_is_promoted():
+    tag = (
+        '<img class="rm-lazyloadable-image" '
+        'src="data:image/svg+xml,%3Csvg%3E%3C/svg%3E" '
+        'data-runner-src="https://cdn.test/real.jpg" width="600">'
+    )
+    out = main.normalize_proxy_lazy_media(tag)
+    assert 'src="https://cdn.test/real.jpg"' in out
+
+
+def test_dedupe_keeps_distinct_images_sharing_a_generic_cdn_filename():
+    """premierguitar.com's media-library CDN serves every image at the
+    literal path .../image.jpg, distinguished only by ?id= — raised
+    2026-08-31: stripping the whole query string before comparing collapsed
+    two DIFFERENT tab-diagram images into "the same src" and dropped the
+    second one. A pure resize-param difference (?w=) must still dedupe."""
+    html = (
+        '<img src="https://cdn.test/image.jpg?id=1&width=600">'
+        '<img src="https://cdn.test/image.jpg?id=2&width=600">'
+        '<img src="https://x/a.jpg">'
+        '<img src="https://x/a.jpg?w=2">'
+    )
+    out = main._dedupe_readability_images(html)
+    assert out.count("<img") == 3        # id=1, id=2, and ONE copy of a.jpg
+    assert "id=1" in out and "id=2" in out
+    assert out.count("a.jpg") == 1
+
+
 def test_future_plc_article_body_id_beats_whole_body():
     """Future plc sites (guitarplayer/guitarworld/musicradar) put the article in
     an id=article-body container. The fallback must pick that — clean tab
@@ -183,3 +241,79 @@ def test_lead_image_prepended_from_og_when_absent():
     logo_page = page.replace("hero-700-80.png", "site-logo.png")
     _t, logo_html = main.extract_readability_article(logo_page, URL)
     assert "site-logo.png" not in logo_html
+
+
+def test_lead_image_not_re_prepended_when_the_body_has_the_same_photo_under_a_different_id():
+    """Raised 2026-08-31 (live Substack post): og:image and the post's own
+    in-body header image can be two DIFFERENT re-encoded asset ids for the
+    SAME source photo -- Substack regenerates og:image separately from the
+    live page body. The exact-URL/exact-filename check missed this and
+    prepended a genuine visual duplicate (the same photo twice: once above
+    the title, once again in its normal spot). Both asset filenames still
+    carry the original upload's pixel dimensions as a suffix even though the
+    id prefix differs -- that's the same-photo signal to fall back to."""
+    body = (
+        "<div id='article-body'>"
+        "<h1>The Power of Signals</h1>"
+        '<img src="https://substackcdn.com/image/fetch/w_1456/'
+        'https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F'
+        'd06b02fd-e88a-4fa6-89a1-1a6be220f70d_2884x1622.jpeg" width="1456">'
+        "<p>The article body has plenty of prose to extract cleanly here, well "
+        "past readability's minimum length threshold for a real article.</p>"
+        "</div>"
+    )
+    page = (
+        '<html><head><meta property="og:image" '
+        'content="https://substackcdn.com/image/fetch/w_1200/'
+        'https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F'
+        'da4ee994-5039-48d1-a918-ab4f10b8d22a_2884x1622.jpeg"></head>'
+        f"<body>{body}</body></html>"
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert html.count("<img") == 1  # not duplicated
+    assert "da4ee994" not in html   # the og:image asset id was never used
+    assert "d06b02fd" in html       # the body's own image survived untouched
+
+
+def test_lead_image_prepend_not_fooled_by_a_shared_generic_filename():
+    """og:image and unrelated in-body images sharing a literal CDN filename
+    (premierguitar.com's media-library/image.jpg?id=..., raised 2026-08-31)
+    must not read as "the hero is already shown" -- the real hero (matching
+    ?id=) still needs prepending even though the bare filename appears
+    elsewhere on unrelated images."""
+    body = (
+        "<div id='article-body'>"
+        "<p>The article body has plenty of prose to extract cleanly here, well "
+        "past readability's minimum length threshold for a real article.</p>"
+        '<img src="https://cdn.test/image.jpg?id=101" width="500">'
+        '<img src="https://cdn.test/image.jpg?id=102" width="500">'
+        "</div>"
+    )
+    page = (
+        '<html><head><meta property="og:image" '
+        'content="https://cdn.test/image.jpg?id=999"></head>'
+        f"<body>{body}</body></html>"
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert "id=999" in html                          # the real hero got prepended
+    assert html.find("id=999") < html.find("id=101")  # leads the body
+
+
+def test_lead_image_still_prepended_when_dimensions_genuinely_differ():
+    """The dimension-signature fallback must not swallow a real missing-hero
+    case -- a body image with different pixel dimensions than og:image is not
+    the same photo, so og:image still gets prepended."""
+    body = (
+        "<div id='article-body'>"
+        "<p>The article body has plenty of prose to extract cleanly here.</p>"
+        '<img src="https://cdn.test/thumb_400x300.jpg" width="400">'
+        "</div>"
+    )
+    page = (
+        '<html><head><meta property="og:image" '
+        'content="https://cdn.test/hero_1600x900.png"></head>'
+        f"<body>{body}</body></html>"
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert "hero_1600x900.png" in html
+    assert html.find("hero_1600x900.png") < html.find("thumb_400x300.jpg")
