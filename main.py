@@ -28649,6 +28649,20 @@ def _yt_playlist_batch_job_state(create: bool = False) -> dict | None:
         return job
 
 
+def _yt_playlist_job_update(job: dict, fields: dict) -> None:
+    """Merge *fields* into *job* under the shared lock, one atomic update.
+
+    Raised in review 2026-08-31: the status route used to read `job` (via
+    `{"ok": True, **job}`) with no lock while this worker mutated it field by
+    field with no lock either, so a status poll landing mid-iteration could
+    observe a torn snapshot — e.g. `processed` already bumped but `added`
+    still one behind. Batching each iteration's changes into one dict and
+    merging them in a single locked `.update()` means a poll only ever sees
+    a fully-applied iteration, never a partial one."""
+    with _yt_playlist_batch_jobs_lock:
+        job.update(fields)
+
+
 def _run_yt_playlist_batch_add(
     video_ids: list[str], playlist_id: str, new_title: str, job: dict,
 ) -> None:
@@ -28662,7 +28676,7 @@ def _run_yt_playlist_batch_add(
     read as "nothing is happening" for the better part of a minute."""
     token = get_youtube_oauth_token()
     if not token:
-        job.update({"running": False, "done": True, "error": "not_connected"})
+        _yt_playlist_job_update(job, {"running": False, "done": True, "error": "not_connected"})
         return
     try:
         if not playlist_id:
@@ -28673,14 +28687,13 @@ def _run_yt_playlist_batch_add(
             existing = youtube_oauth_service.list_playlist_video_ids(token, playlist_id)
     except youtube_oauth_service.QuotaExceeded:
         mark_yt_quota_exhausted()
-        job.update({"running": False, "done": True, "error": "quota"})
+        _yt_playlist_job_update(job, {"running": False, "done": True, "error": "quota"})
         return
     except Exception as exc:  # noqa: BLE001
-        job.update({"running": False, "done": True, "error": str(exc)})
+        _yt_playlist_job_update(job, {"running": False, "done": True, "error": str(exc)})
         return
 
-    job["playlist_id"] = playlist_id
-    job["phase"] = "adding"
+    _yt_playlist_job_update(job, {"playlist_id": playlist_id, "phase": "adding"})
     added = duplicate = failed = 0
     # Videos that ended up either newly-added or already-on-the-playlist —
     # the two outcomes the client auto-marks read for once the job finishes
@@ -28690,37 +28703,41 @@ def _run_yt_playlist_batch_add(
     # cases worth noticing unread, not silently marking done.
     ok_video_ids: list[str] = []
     for i, video_id in enumerate(video_ids, 1):
+        update: dict = {}
+        quota_stopped = False
         if video_id in existing:
             duplicate += 1
-            job["duplicate"] = duplicate
+            update["duplicate"] = duplicate
             ok_video_ids.append(video_id)
         else:
             try:
                 youtube_oauth_service.add_video_to_playlist(token, playlist_id, video_id)
                 existing.add(video_id)  # guards against a dupe within this same batch too
                 added += 1
-                job["added"] = added
+                update["added"] = added
                 ok_video_ids.append(video_id)
             except youtube_oauth_service.QuotaExceeded:
                 # Stop burning calls once quota's gone; report what succeeded so far
                 # rather than hiding real progress behind an error.
                 mark_yt_quota_exhausted()
-                job["error"] = "quota"
-                job["processed"] = i
-                break
+                update["error"] = "quota"
+                quota_stopped = True
             except Exception as exc:  # noqa: BLE001 — one bad video must not sink the batch
                 failed += 1
-                job["failed"] = failed
+                update["failed"] = failed
                 LOGGER.warning("[yt-playlist-batch] failed to add %s to %s: %s", video_id, playlist_id, exc)
-        job["processed"] = i
-        job["ok_video_ids"] = list(ok_video_ids)
+        update["processed"] = i
+        update["ok_video_ids"] = list(ok_video_ids)
+        _yt_playlist_job_update(job, update)
+        if quota_stopped:
+            break
 
     msg = f"Added {added}."
     if duplicate:
         msg += f" {duplicate} already in the playlist."
     if failed:
         msg += f" {failed} failed."
-    job.update({"running": False, "done": True, "phase": "done", "message": msg})
+    _yt_playlist_job_update(job, {"running": False, "done": True, "phase": "done", "message": msg})
 
 
 @app.post("/api/youtube/playlists/add-batch")
@@ -28753,13 +28770,20 @@ async def youtube_playlist_add_batch_route(request: Request):
         return JSONResponse({"ok": False, "error": "not_connected"}, status_code=401)
 
     job = _yt_playlist_batch_job_state(create=True)
+    # A fresh id per batch (not reused across runs), so the status route can
+    # tell "this is MY batch's progress" from "a different batch started and
+    # finished between my polls" -- raised in review 2026-08-31: with no id,
+    # a short batch finishing before the client's first 900ms poll, followed
+    # immediately by a second batch, meant that first poll could consume the
+    # SECOND batch's status and mark the wrong posts read.
+    job_id = secrets.token_hex(8)
     with _yt_playlist_batch_jobs_lock:
         if job.get("running"):
             return JSONResponse({"ok": False, "error": "busy"}, status_code=409)
         job.update({
             "running": True, "done": False, "error": None, "phase": "checking_existing",
             "total": len(video_ids), "processed": 0, "added": 0, "duplicate": 0, "failed": 0,
-            "message": None, "ok_video_ids": [],
+            "message": None, "ok_video_ids": [], "job_id": job_id,
         })
 
     uid = tenancy.current_user_id()
@@ -28768,17 +28792,33 @@ async def youtube_playlist_add_batch_route(request: Request):
             uid, _run_yt_playlist_batch_add, video_ids, playlist_id, new_title, job),
         daemon=True,
     ).start()
-    return JSONResponse({"ok": True, "started": True, "total": len(video_ids)})
+    return JSONResponse({"ok": True, "started": True, "total": len(video_ids), "job_id": job_id})
 
 
 @app.get("/api/youtube/playlists/add-batch/status")
-def youtube_playlist_add_batch_status_route():
+def youtube_playlist_add_batch_status_route(job_id: str | None = Query(default=None)):
     """Progress of the running bulk-add job, polled by the client for a live
-    toast — see _run_yt_playlist_batch_add for what each field means."""
+    toast — see _run_yt_playlist_batch_add for what each field means.
+
+    *job_id*, when passed, must match the current job's own id or the
+    response reports not-running rather than handing back a DIFFERENT
+    batch's progress — see the id-generation comment on the POST route for
+    why. Omitted entirely, the caller gets whatever job is currently
+    tracked (back-compat for any caller that hasn't been given an id yet)."""
     job = _yt_playlist_batch_job_state()
     if job is None:
         return JSONResponse({"ok": True, "running": False})
-    return JSONResponse({"ok": True, **job})
+    # Snapshot under the lock rather than unpacking the live dict directly —
+    # the worker mutates it via _yt_playlist_job_update, also under this
+    # lock, so a poll landing between two of its updates used to risk a torn
+    # read (some fields already bumped, others not yet). _yt_playlist_batch_job_state()
+    # already released the lock by the time we get `job` back, so re-acquiring
+    # it here for the copy alone doesn't deadlock (the lock isn't reentrant).
+    with _yt_playlist_batch_jobs_lock:
+        snapshot = dict(job)
+    if job_id and snapshot.get("job_id") != job_id:
+        return JSONResponse({"ok": True, "running": False, "stale": True})
+    return JSONResponse({"ok": True, **snapshot})
 
 
 @app.post("/deviantart/disconnect")

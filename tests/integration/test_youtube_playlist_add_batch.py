@@ -194,3 +194,64 @@ def test_batch_add_rejects_a_second_job_while_one_is_running(env, monkeypatch):
     job["running"] = True
     data = _call({"video_ids": ["v1"], "playlist_id": "PL1"})
     assert not data["ok"] and data["error"] == "busy"
+
+
+# --- job_id correlation (raised in review 2026-08-31) ---
+
+
+def test_start_response_carries_a_job_id(env, monkeypatch):
+    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids",
+                        lambda token, pid: set())
+    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist",
+                        lambda token, pid, vid: {"id": "item"})
+    data = _call({"video_ids": ["v1"], "playlist_id": "PL1"})
+    assert data["ok"] and data["job_id"]
+
+
+def test_status_with_the_matching_job_id_reports_real_progress(env, monkeypatch):
+    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids",
+                        lambda token, pid: set())
+    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist",
+                        lambda token, pid, vid: {"id": "item"})
+    data = _call({"video_ids": ["v1"], "playlist_id": "PL1"})
+    resp = main.youtube_playlist_add_batch_status_route(job_id=data["job_id"])
+    body = json.loads(bytes(resp.body))
+    assert body["ok"] and "stale" not in body
+
+
+def test_status_with_a_stale_job_id_reports_not_running_instead_of_the_new_batchs_progress(env, monkeypatch):
+    """A poller from an earlier batch must not consume a LATER batch's status
+    -- raised in review 2026-08-31: with no id, a fast-finishing batch
+    followed immediately by a new one meant the first poller could read the
+    second batch's progress and mark the wrong posts read."""
+    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids",
+                        lambda token, pid: set())
+    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist",
+                        lambda token, pid, vid: {"id": "item"})
+    _call({"video_ids": ["v1"], "playlist_id": "PL1"})
+    resp = main.youtube_playlist_add_batch_status_route(job_id="not-the-real-job-id")
+    body = json.loads(bytes(resp.body))
+    assert body["ok"] and body["running"] is False and body["stale"] is True
+
+
+def test_status_with_no_job_id_still_works(env, monkeypatch):
+    """Back-compat: a caller that predates job_id gets whatever job is
+    currently tracked, same as before."""
+    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids",
+                        lambda token, pid: set())
+    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist",
+                        lambda token, pid, vid: {"id": "item"})
+    _call({"video_ids": ["v1"], "playlist_id": "PL1"})
+    resp = main.youtube_playlist_add_batch_status_route(job_id=None)
+    body = json.loads(bytes(resp.body))
+    assert body["ok"] and "stale" not in body
+
+
+def test_job_update_helper_merges_under_the_lock(env):
+    """_yt_playlist_job_update is the single mutation point the worker now
+    uses instead of scattered unlocked job[...] assignments (raised in
+    review 2026-08-31: a status poll landing mid-iteration used to risk a
+    torn read)."""
+    job: dict = {"processed": 0}
+    main._yt_playlist_job_update(job, {"processed": 1, "added": 1})
+    assert job == {"processed": 1, "added": 1}

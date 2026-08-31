@@ -4123,17 +4123,26 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // forever instead of just reporting something's wrong.
     const _YT_BATCH_POLL_MAX_TICKS = 400;  // ~6 minutes at 900ms
 
-    async function _ytPollBatchAddProgress(playlistTitle, posts) {
+    async function _ytPollBatchAddProgress(playlistTitle, posts, jobId) {
       for (let tick = 0; tick < _YT_BATCH_POLL_MAX_TICKS; tick++) {
         await new Promise((resolve) => setTimeout(resolve, _YT_BATCH_POLL_MS));
         let job;
         try {
-          const r = await fetch('/api/youtube/playlists/add-batch/status', { credentials: 'same-origin' });
+          const qs = jobId ? `?job_id=${encodeURIComponent(jobId)}` : '';
+          const r = await fetch(`/api/youtube/playlists/add-batch/status${qs}`, { credentials: 'same-origin' });
           job = await r.json();
         } catch (_e) {
           continue;  // a missed poll tick just tries again next interval
         }
         if (!job || !job.ok) continue;
+        // A different batch started (and possibly already finished) since
+        // this poller's own job_id was issued -- raised in review 2026-08-31:
+        // with no id, a short batch finishing before the first poll landed,
+        // followed immediately by a second batch, meant this poller could
+        // consume the SECOND batch's status and mark the wrong posts read.
+        // That other batch has its own poller tracking its own progress —
+        // this one has nothing left to report, so it just stops quietly.
+        if (job.stale) return;
         if (job.running) {
           if (job.phase === 'checking_existing') {
             showToastMessage(`Checking "${playlistTitle}" for existing items…`);
@@ -4209,7 +4218,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         }
         if (choice.newTitle) _ytPlaylistsCache = null;  // new playlist changes the list — invalidate
         showToastMessage(`Checking "${choice.title}" for existing items…`);
-        await _ytPollBatchAddProgress(choice.title, posts);
+        await _ytPollBatchAddProgress(choice.title, posts, d.job_id);
       } catch (e) {
         showToastMessage(e.message || 'Add to playlist failed.');
       }
