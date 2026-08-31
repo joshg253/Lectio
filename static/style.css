@@ -1102,6 +1102,26 @@ body[data-single-mode="1"] #folders-collapse-btn {
   overflow: auto;
 }
 
+.fetch-tier-section {
+  margin-bottom: 1.1rem;
+}
+
+.fetch-tier-section:last-child {
+  margin-bottom: 0;
+}
+
+.fetch-tier-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.15rem;
+  font-size: 0.92rem;
+}
+
+.fetch-tier-hint {
+  margin: 0 0 0.4rem;
+}
+
 .problem-feed-item {
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -5078,6 +5098,36 @@ body[data-keyboard-open="1"] .action-modal-panel {
   flex-wrap: wrap;
   gap: 0.3rem 0.5rem;
   margin-top: 0.2rem;
+}
+
+/* Clickable chips in the Edit Tags dialog (raised 2026-08-31): one click
+   stages/unstages "-tagname" in the input, so removing a tag never depends
+   on retyping its exact normalized spelling. */
+.bulk-tag-chip {
+  color: var(--link);
+  font-size: 0.78rem;
+  line-height: 1.2;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.bulk-tag-chip:hover {
+  color: var(--link-hover);
+  text-decoration: underline;
+}
+
+/* Not on every selected post. */
+.bulk-tag-chip--partial {
+  opacity: 0.55;
+}
+
+/* Staged for removal in the input right now. */
+.bulk-tag-chip--marked {
+  color: var(--danger, #c0392b);
+  text-decoration: line-through;
 }
 
 .fakefeedz-modes {

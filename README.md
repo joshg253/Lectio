@@ -54,13 +54,15 @@ short version:
   layout that collapses to two panes on a tablet and one on a phone. Checkbox
   multi-select on the post list — opening a post checks its own box too, and
   Select All grabs the whole current view (filters and all, not just what's
-  scrolled into view) — for bulk actions: add a tag to several posts at once,
-  star or unstar several at once (with the same short undo window as a
-  single unstar), add several YouTube videos to a playlist in one go, or move
-  several to a different feed — including out of Saved Articles onto a real
-  subscription once you've found its feed. Each row also carries its own tag
-  icon beside the star, filled when the post is tagged, opening the same Add
-  Tag dialog (which shows the post's current tags) for a one-off add.
+  scrolled into view) — for bulk actions: edit tags on several posts at once
+  (add and remove in the same pass, with a clickable chip for every tag on
+  the selection so removing one never depends on retyping its exact stored
+  spelling), star or unstar several at once (with the same short undo window
+  as a single unstar), add several YouTube videos to a playlist in one go, or
+  move several to a different feed — including out of Saved Articles onto a
+  real subscription once you've found its feed. Each row also carries its
+  own tag icon beside the star, filled when the post is tagged, opening the
+  same Edit Tags dialog for a one-off add or remove.
 - **Picks up where you left off.** Close the tab, press Back once too often, or
   swipe the app away — reopening Lectio returns you to the same article, scrolled
   to the same place. It also installs to your home screen as a standalone app via
@@ -123,7 +125,9 @@ short version:
   (real headless Chrome, purpose-built for Cloudflare/DDoS-Guard challenges)
   for a feed still showing an actual challenge page, then a last-resort
   backend (e.g. a Tailscale exit node reaching a real home IP) as the final
-  fallback.
+  fallback. Settings → Feeds → Fetch Tiers lists which feeds are currently
+  routing through each tier, so it's visible how much the proxy and the
+  last-resort backend are actually being used.
 - **Fix a post in place.** Edit its date, title or URL; clean up its body with
   an Aardvark-style element remover; re-fetch its content — undoably, with an
   Internet Archive fallback — one post, or a whole feed or folder at a time.

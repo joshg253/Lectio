@@ -47,7 +47,7 @@ def test_poller_ignores_a_status_response_for_a_different_job():
 
 def test_bulk_edit_tags_marks_read_only_entries_still_tagged_after_the_edit():
     idx = APP_JS.index("showToastMessage(data.message || 'Tags updated.');")
-    block = APP_JS[idx:idx + 2000]
+    block = APP_JS[idx:idx + 3200]
     assert "data.still_tagged" in block
     assert "data.now_untagged" in block
     assert "stillTaggedKeys" in block

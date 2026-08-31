@@ -13812,6 +13812,19 @@ def fetch_readability_article(source_url: str, *, capture: dict | None = None) -
 _WHOLE_BODY_RESCUE_MIN_TEXT = 1200
 
 
+def _media_tag_count(html: str) -> int:
+    """<img> + <iframe> tag count — the fallback-selection comparisons in
+    extract_readability_article treat both as "real content", not just
+    images. An allowlisted <iframe> embed (a soundslice.com tab player, a
+    YouTube video) is exactly as much a reason to prefer one candidate over
+    another as an <img> is; counting only <img> made a body-description
+    selector match with real embedded content but zero inline images lose a
+    0-vs-0 tie against readability's own chrome-only extraction, raised
+    2026-08-31."""
+    lowered = html.lower()
+    return lowered.count("<img") + lowered.count("<iframe")
+
+
 def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, str]:
     """Readability-extract ``(title, article_html)`` from already-obtained page
     HTML — e.g. a rendered DOM captured by the user's browser (extension save),
@@ -13857,6 +13870,21 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
                 article_html = fallback_clean
                 _bs4_fallback_used = True
     if not _bs4_fallback_used and "<img" in raw_html:
+        # The trigger below stays <img>-only, deliberately: article_html at
+        # this point already carries whatever _reinject_readability_embeds
+        # recovered, which scans the WHOLE raw page for allowlisted <iframe>s
+        # and bolts them onto readability's summary regardless of which text
+        # container they came from — so a chrome-only extraction can look
+        # "media-rich" once its embeds are recovered even though its actual
+        # prose is garbage. Counting iframes here made needs_fallback go
+        # false and skip looking for a better candidate at all. The
+        # ACCEPTANCE comparisons just below are different: there an <iframe>
+        # embed IS exactly as much a reason to prefer one full candidate over
+        # another as an <img> is (raised 2026-08-31: a body-description
+        # selector match with zero <img> but several soundslice.com tab
+        # players lost a 0-vs-0 tie to readability's own chrome extraction,
+        # so a page with real content fell through to whole-body-rescue and
+        # dragged in nav chrome for no reason) — so those use _media_tag_count.
         raw_img_count = raw_html.lower().count("<img")
         art_img_count = article_html.lower().count("<img")
         # Fall back if readability stripped all images, or if the page is
@@ -13865,10 +13893,18 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
             raw_img_count > 4 and art_img_count < raw_img_count // 2
         )
         if needs_fallback:
+            # Separate from art_img_count above (which stays <img>-only for the
+            # trigger and the whole-body-rescue gate below): the two ACCEPTANCE
+            # comparisons that follow need a combined-media baseline on both
+            # sides, or a candidate with real iframe embeds but zero inline
+            # images loses to article_html's own img-only count instead of its
+            # actual (possibly iframe-recovered) media count — raised 2026-08-31.
+            art_media_count = _media_tag_count(article_html)
             fallback = normalize_proxy_lazy_media(_bs4_content_fallback(raw_html))
-            if fallback and fallback.lower().count("<img") > art_img_count:
+            if fallback and _media_tag_count(fallback) > art_media_count:
                 article_html = sanitize_readability_html(fallback).strip()
                 art_img_count = article_html.lower().count("<img")
+                art_media_count = _media_tag_count(article_html)
             # Last resort: readability *and* the selector fallback both kept
             # essentially no images on an image-heavy page — the catastrophic
             # case, not mere trimming. guitarplayer lessons are the example:
@@ -13887,7 +13923,7 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
             article_text_len = len(re.sub(r"<[^>]+>", "", article_html))
             if art_img_count <= 1 and raw_img_count > 10 and article_text_len < _WHOLE_BODY_RESCUE_MIN_TEXT:
                 whole = _whole_body_content(raw_html)
-                if whole and whole.lower().count("<img") > art_img_count:
+                if whole and _media_tag_count(whole) > art_media_count:
                     article_html = whole
     # Prepend the publisher's hero image when the body doesn't already open with
     # it — the article's lead image lives in the page header, outside the content
@@ -34243,15 +34279,37 @@ def _merge_manual_tags(existing_tags: list[str], added_raw_tags: str) -> str:
     return " ".join(merged_tags)
 
 
-@app.get("/entries/manual-tags")
-def get_entry_manual_tags_route(
-    feed_url: str = Query(...),
-    entry_id: str = Query(...),
-):
-    """Current manual tags for one entry — used to populate the Add Tag
-    dialog when it's opened for a single post, so it shows what's already
-    there instead of just a blank append box."""
-    return JSONResponse({"tags": get_manual_tags_for_entry(feed_url, entry_id)})
+@app.get("/entries/manual-tags-batch")
+def get_entries_manual_tags_batch_route(entries: str = Query(...)):
+    """Tag coverage across a selection (one entry or many) — populates the
+    Edit Tags dialog's chip picker, added 2026-08-31 so a bulk edit shows
+    what's actually there instead of a blank box the user has to guess a
+    tag's exact stored spelling into (multi-word tags collapse whitespace to
+    hyphens at normalize time, so "science + math" is stored as
+    "science-+-math" — a chip to click is far more reliable than retyping
+    that by hand). ``counts[tag]`` is how many of the selected entries carry
+    it; a tag present on every entry (``counts[tag] == total``) renders as a
+    normal chip client-side, a partial one dimmed."""
+    try:
+        pairs = json.loads(entries)
+        assert isinstance(pairs, list)
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": "Bad entries payload."}, status_code=400)
+    if len(pairs) > _MOVE_BATCH_CAP:
+        return JSONResponse(
+            {"ok": False, "error": f"Too many entries (max {_MOVE_BATCH_CAP} per action)."},
+            status_code=400,
+        )
+    counts: dict[str, int] = {}
+    total = 0
+    for pair in pairs:
+        if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
+            continue
+        feed_url, entry_id = str(pair[0]).strip(), str(pair[1])
+        total += 1
+        for tag in get_manual_tags_for_entry(feed_url, entry_id):
+            counts[tag] = counts.get(tag, 0) + 1
+    return JSONResponse({"ok": True, "counts": counts, "total": total})
 
 
 @app.post("/entries/tags")
@@ -35746,7 +35804,7 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
     Markup matches what index.html used to inline; all row interactions are
     event-delegated, so injection needs no JS hooks.
     """
-    if panel_name not in {"folders", "stale", "failing"}:
+    if panel_name not in {"folders", "stale", "failing", "fetch-tiers"}:
         return Response(status_code=404)
     with get_meta_connection() as conn:
         snapshot = get_meta_structure_snapshot(conn)
@@ -35809,6 +35867,43 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
             # Unsubscribe fallback target for unfoldered feeds. The inline
             # panel used the currently-selected folder; a fragment has no
             # selection, so fall back to the root ("All Feeds") folder.
+            "selected_folder_id": root_id,
+        })
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+    if panel_name == "fetch-tiers":
+        # How many feeds are routing through each outbound-fetch escalation
+        # tier right now — added 2026-08-31 so Josh can see how much his paid
+        # VPN and home IP (Tailscale) are actually being exposed to, rather
+        # than that being invisible until a feed's Properties happened to be
+        # opened. Same three tables the escalation callbacks in
+        # services/feed_refresh.py write to (see add_proxy_feed /
+        # add_tailscale_feed / add_flaresolverr_feed); each row's own
+        # ``reason`` and ``flagged_at`` come from whichever escalation attempt
+        # first flagged it.
+        def _tier_rows(table: str) -> list[dict]:
+            rows = conn.execute(
+                f"SELECT feed_url, reason, flagged_at FROM {table} ORDER BY flagged_at DESC"  # noqa: S608 -- table is one of 3 literals below, never user input
+            ).fetchall()
+            out = []
+            for row in rows:
+                url = str(row["feed_url"])
+                out.append({
+                    "feed_url": url,
+                    "feed_title": feed_title_map.get(url, url),
+                    "reason": row["reason"],
+                    "flagged_at": row["flagged_at"],
+                })
+            return out
+
+        with get_meta_connection() as conn:
+            proxy_rows = _tier_rows("proxy_feeds")
+            tailscale_rows = _tier_rows("tailscale_feeds")
+            flaresolverr_rows = _tier_rows("flaresolverr_feeds")
+        html = templates.env.get_template("_settings_feeds_fetch_tiers.html").render({
+            "proxy_rows": proxy_rows,
+            "tailscale_rows": tailscale_rows,
+            "flaresolverr_rows": flaresolverr_rows,
             "selected_folder_id": root_id,
         })
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})

@@ -1,0 +1,38 @@
+{# Settings → Feeds → Fetch Tiers. Served by /settings/feeds/panel/fetch-tiers
+   and injected on first open of that view. Shows which feeds are routing
+   through each outbound-fetch escalation tier (paid VPN proxy, home-IP
+   Tailscale, FlareSolverr) right now, so it's visible how much each is
+   actually being exposed rather than only discoverable one feed's
+   Properties at a time. Reuses the .problem-feed-* classes the Stale/Failing
+   lists already use. #}
+{% macro tier_section(title, hint, rows) %}
+<div class="fetch-tier-section">
+  <h4 class="fetch-tier-title">{{ title }} <span class="feeds-tab-count">{{ rows | length }}</span></h4>
+  <p class="muted fetch-tier-hint">{{ hint }}</p>
+  {% if rows %}
+  <ul class="problem-feed-list">
+    {% for row in rows %}
+    <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}">
+      <div class="problem-feed-row">
+        <button type="button" class="problem-feed-link" data-problem-feed-properties data-feed-url="{{ row.feed_url }}" title="{{ row.feed_url }}">{{ row.feed_title }}</button>
+        <div class="problem-feed-actions">
+          <a class="problem-feed-action" href="/?folder_id={{ selected_folder_id }}&list_feed_url={{ row.feed_url | urlencode }}&read_filter=all" title="View this feed's posts in the reader"><span class="material-symbols-rounded" aria-hidden="true">list_alt</span></a>
+          <a class="problem-feed-action" href="{{ row.feed_url }}" target="_blank" rel="noopener noreferrer" title="Open feed URL"><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
+        </div>
+      </div>
+      <div class="problem-feed-meta">
+        <span>{{ row.reason }}</span>
+        <span>Flagged: {{ row.flagged_at }}</span>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">None right now.</p>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{{ tier_section("Paid VPN proxy", "Feeds escalated to the gluetun proxy after a plain fetch was refused.", proxy_rows) }}
+{{ tier_section("Home IP (Tailscale)", "Feeds escalated further, past the proxy, to your home network's exit IP.", tailscale_rows) }}
+{{ tier_section("FlareSolverr", "Feeds needing a real headless-Chrome challenge solve (Cloudflare/DDoS-Guard) — routed through whichever of the above is also active for the feed.", flaresolverr_rows) }}

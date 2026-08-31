@@ -118,6 +118,35 @@ def test_rebelmouse_body_description_selector_beats_header_wrapper():
     assert "data:image/svg" not in html  # every placeholder got promoted
 
 
+def test_rebelmouse_soundslice_tab_player_embeds_survive():
+    """premierguitar.com lessons embed soundslice.com as an interactive
+    tab/notation player under each "Ex. N" -- raised 2026-08-31, a second
+    real gap in the same lessons the body-description fix above covers:
+    readability's own .summary() strips every <iframe> unconditionally
+    (recovered via _reinject_readability_embeds' allowlist, shared with the
+    general sanitizer), and soundslice.com wasn't on that allowlist, so even
+    a clean body-description extraction lost the actual exercise content."""
+    page = (
+        "<html><head><title>Two-Hand Tapping</title></head><body>"
+        '<article class="clearfix image-article"><h1>Two-Hand Tapping</h1></article>'
+        '<div class="body-description">'
+        "<p>Get exotic with these spicy two-handed patterns over several "
+        "exercises, each with its own tab player to work through.</p>"
+        '<p><strong>Ex. 1</strong></p>'
+        '<iframe src="https://www.soundslice.com/slices/1yTTc/embed/" '
+        'width="100%" height="500" frameborder="0"></iframe>'
+        '<p><strong>Ex. 2</strong></p>'
+        '<iframe src="https://www.soundslice.com/slices/4pY8c/embed/" '
+        'width="100%" height="293" frameborder="0"></iframe>'
+        "</div></body></html>"
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert html.lower().count("<iframe") == 2
+    assert "soundslice.com/slices/1yTTc" in html
+    assert "soundslice.com/slices/4pY8c" in html
+    assert "sandbox=" in html  # still passes through the normal iframe sanitize
+
+
 def test_rebelmouse_runner_src_lazy_attr_is_promoted():
     tag = (
         '<img class="rm-lazyloadable-image" '
@@ -166,6 +195,95 @@ def test_future_plc_article_body_id_beats_whole_body():
     assert 12 <= html.lower().count("<img") <= 16      # the tabs, not the chrome
     assert "related0.jpg" not in html                   # no related-article junk
     assert "tab0.jpg" in html
+
+
+def test_iframe_only_content_beats_whole_body_rescue():
+    """A selector-fallback match whose only real content is <iframe> embeds
+    (zero <img>) must still beat whole-body-rescue on a chrome-image-heavy
+    page -- raised 2026-08-31 on a live premierguitar.com lesson whose
+    tab-diagrams are all soundslice.com players, not static images.
+    art_img_count stayed <img>-only for the initial needs_fallback trigger
+    (see _media_tag_count's docstring for why: _reinject_readability_embeds
+    would otherwise make a chrome-only readability pick look "media-rich"
+    once its embeds are recovered, suppressing the fallback search entirely)
+    but the fallback ACCEPTANCE and whole-body-rescue gate both count
+    iframes, so a real iframe-only match no longer loses a 0-vs-0 image tie
+    to either chrome extraction."""
+    chrome_imgs = "".join(f'<img src="https://cdn.test/related{i}.jpg">' for i in range(20))
+    players = "".join(
+        f'<iframe src="https://www.soundslice.com/slices/{i}/embed/" '
+        f'width="100%" height="500" frameborder="0"></iframe>'
+        for i in range(3)
+    )
+    page = (
+        "<html><head><title>Two-Hand Tapping</title></head><body>"
+        f"<header><nav>{chrome_imgs}</nav></header>"
+        '<div id="article-body">'
+        "<p>Get exotic with these spicy two-handed patterns over several "
+        "exercises, each with its own tab player to work through instead of "
+        "a static diagram.</p>"
+        f"{players}</div>"
+        f'<aside class="related">More from PG{chrome_imgs}</aside>'
+        "</body></html>"
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert html.lower().count("<iframe") == 3
+    assert "spicy two-handed" in html
+    assert "related0.jpg" not in html   # whole-body-rescue did NOT fire
+
+
+def test_fallback_acceptance_weighs_the_articles_real_media_count_not_image_only(monkeypatch):
+    """The fallback-acceptance comparison must weigh article_html's full media
+    count (images + iframes, after _reinject_readability_embeds restores the
+    allowlisted iframes readability's own .summary() always strips) against
+    the candidate's, not article_html's <img>-only count -- raised in review
+    2026-08-31. Before the fix, an article already carrying 3 real soundslice
+    tab-player embeds but zero <img> still read as a 0-media baseline, so a
+    much thinner 1-image "related articles" teaser beat it and replaced it,
+    discarding the real embeds.
+
+    Readability's own scoring keeps small two-node pages like this as one
+    whole-body blob rather than isolating the "lesson" div (there's no third
+    sibling to make one candidate clearly win), which would extract both
+    divs together and mask the bug regardless of the fix. Document is faked
+    here to pin exactly what "readability's own extraction" returned, so the
+    test exercises the real downstream comparison logic rather than fighting
+    Document's heuristics for an artificial fixture."""
+    players = "".join(
+        f'<iframe src="https://www.soundslice.com/slices/{i}/embed/" '
+        f'width="100%" height="500" frameborder="0"></iframe>'
+        for i in range(3)
+    )
+    raw_html = (
+        "<html><head><title>Two-Hand Tapping</title></head><body>"
+        f'<div class="lesson"><p>Get exotic with these spicy two-handed patterns.</p>{players}</div>'
+        '<div id="article-body"><p>Related.</p><img src="https://cdn.test/related.jpg"></div>'
+        "</body></html>"
+    )
+
+    class _FakeDocument:
+        def __init__(self, html, url=None):
+            pass
+
+        def short_title(self):
+            return "Two-Hand Tapping"
+
+        def summary(self, html_partial=True):
+            # Mirrors what readability's real .summary() does: keeps the real
+            # lesson prose, strips every <iframe> unconditionally (0 <img>, 0
+            # <iframe> — the iframes only come back via reinjection below).
+            return (
+                '<div class="lesson"><p>Get exotic with these spicy two-handed patterns '
+                "over several exercises, each with its own tab player to work through "
+                "instead of a static diagram, spanning several full paragraphs of real "
+                "lesson prose so the article stays well past the short-article "
+                "bs4-fallback length threshold used elsewhere in extraction.</p></div>"
+            )
+
+    monkeypatch.setattr(main, "Document", _FakeDocument)
+    _title, html = main.extract_readability_article(raw_html, URL)
+    assert html.lower().count("<iframe") == 3
+    assert "related.jpg" not in html
 
 
 def test_future_plc_in_body_chrome_is_stripped():
@@ -344,3 +462,11 @@ def test_lead_image_still_prepended_when_dimensions_genuinely_differ():
     _title, html = main.extract_readability_article(page, URL)
     assert "hero_1600x900.png" in html
     assert html.find("hero_1600x900.png") < html.find("thumb_400x300.jpg")
+
+
+def test_media_tag_count_counts_img_and_iframe_together():
+    assert main._media_tag_count("") == 0
+    assert main._media_tag_count("<p>no media</p>") == 0
+    assert main._media_tag_count('<img src="a.jpg">') == 1
+    assert main._media_tag_count('<IFRAME src="a"></IFRAME>') == 1  # case-insensitive
+    assert main._media_tag_count('<img src="a.jpg"><iframe src="b"></iframe><img src="c.jpg">') == 3

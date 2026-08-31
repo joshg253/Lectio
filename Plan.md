@@ -169,18 +169,30 @@ CDN URL. So resolution ran and came back empty despite an obvious single candida
 in the content. Not investigated further — worth checking whether this is systemic across
 ArtStation entries or a one-off before digging into the resolver itself.
 
-### Whole-body rescue can beat a good selector match on a text-only lesson page
+### The re-fetch/save-article path has no proxy/FlareSolverr escalation, only feed refresh does
 
-Noticed 2026-08-31 fixing the premierguitar.com tab-diagram issue above: the bs4-selector fallback
-(now including `body-description` for RebelMouse/premierguitar) is only accepted when it has MORE
-`<img>` tags than what readability kept. A lesson page with real prose but zero images (no tab
-diagrams on that particular lesson) ties 0-vs-0 against readability's own bad nav-chrome extraction,
-so the selector match loses and whole-body-rescue fires instead — technically more complete (grabs
-everything, chrome included) but noisier than the clean `body-description` match would have been.
-Confirmed live on "Middle Eastern and Anatolian Rhythms Using Two-Hand Tapping": captured fine
-either way, just with extra nav chrome mixed in. Would need the fallback-acceptance gate to also
-weigh text length/quality, not image count alone — not done here, low priority since the current
-result isn't broken, just noisier than ideal.
+Raised 2026-08-31 on three tamriel-rebuilt.org entries (their feed only ships thin Drupal teaser
+summaries, no full content, `<img>` count 1/14/1) that "Refetch content" was supposed to fill in.
+All three came back `403 Forbidden` — confirmed live: an honest fetch, then the browser-UA retry
+`fetch_readability_article` already does, both refused. `_refresh_captured_article_for_current_user`
+never reaches for the proxy/Tailscale/FlareSolverr tiers `FeedRefreshService.update_feeds` has —
+those escalation callbacks are wired into the feed-refresh loop only (`services/feed_refresh.py`),
+not the single-article re-fetch/save path (`saved_articles_service.refresh_captured_article` /
+`fetch_readability_article`). A site whose FEED is reachable but whose ARTICLE PAGES are
+Cloudflare/bot-walled (this looks like exactly that shape) can never be helped by "Refetch content"
+no matter how many outbound-fetch tiers exist, because none of them are offered to it. Worth
+wiring the same escalation ladder into the re-fetch path — same shape as the feed-refresh one,
+just triggered from a single-article context instead of a batch.
+
+### A thin post whose entire content is one image ends up looking empty
+
+Also from tamriel-rebuilt.org (2026-08-31): entry 17652's summary is exactly one `<img>` and no
+other text — the lead-image hoist strips that image out of the body once it becomes the hero,
+which is correct for a normal article (avoid showing the hero twice) but leaves NOTHING behind
+when the image was the entire post. Reads as "no img" even though the thumb/hero resolved
+correctly. Re-fetch can't help here either (see the item above — this site 403s it). Would need
+the hoist-and-strip step to check whether stripping would leave the body empty and skip the strip
+in that case; not done here.
 
 ## Tier 2 — small, fast, independent wins
 
@@ -253,6 +265,20 @@ tumblrs, norfolkwinters, crispian-jago, owenyoung myfeed) — sort or
 unsubscribe manually.
 
 ## Tier 4 — real features, not blocking anything today
+
+### Soundslice tab-player embeds are permanently blocked by the content owner's own domain allowlist
+
+Raised 2026-08-31, premierguitar.com lessons: `soundslice.com` is now on the iframe embed
+allowlist, but the player itself refuses to load off-domain — confirmed live, even a bare fetch of
+the embed URL returns "Failed embed allowlist check." — because Soundslice lets the *creator*
+(premierguitar.com's own account) restrict which domains may embed a given slice, and Lectio isn't
+one of them (nor could it ever ask to be, since PG doesn't know Lectio exists). No public
+static/print/image export endpoint either (403/404 on the obvious guesses) — same gate. A static
+image would need actually rendering the *original* premierguitar.com page (where the embed IS
+authorized) in a real headless browser and screenshotting just that region — FlareSolverr gives us
+real Chrome already, but per-slice screenshot-and-crop at capture time is a genuine new feature,
+not a tweak. Skipped for now — narrow (guitar tab specifically), not worth the effort unless it
+comes up more.
 
 **Dedup subsystem** — one coherent area, biggest single feature idea on the list.
 
