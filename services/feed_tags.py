@@ -193,7 +193,16 @@ _SINGLE_VALUE_META_TAG_KEYS = {"article:tag", "og:article:tag"}
 _MAX_PAGE_TAGS = 15
 # Distinct 4-digit years on one page that mark an archive list rather than tags.
 _ARCHIVE_YEAR_RUN = 5
-_ANCHOR_RE = re.compile(r"<a\b([^>]*)>(.{0,120}?)</a>", re.IGNORECASE | re.DOTALL)
+# 500, not 120: a tag anchor's own text is usually short, but plenty of sites
+# (Astro/React-built ones especially) prepend a decorative SVG icon inside
+# the anchor before the visible label — tartanllama.xyz's /tags/cpp/ link
+# wraps ~400 chars of <svg><path.../></svg> around "<span>C++</span>", found
+# live 2026-08-31 when a real /tags/ href produced no tag at all: the old
+# 120-char cap meant the lazy match could never reach </a> and the whole
+# anchor was invisible to every tier below, not just malformed. Still a
+# bounded (not catastrophic-backtracking) quantifier — cost is linear in the
+# cap, and a full-document scan already runs in milliseconds at 5MB.
+_ANCHOR_RE = re.compile(r"<a\b([^>]*)>(.{0,500}?)</a>", re.IGNORECASE | re.DOTALL)
 # /tag/x, /tags/x, /category/x, /categories/x — trailing slash optional. The
 # capture is the slug, used when the anchor has no text of its own.
 _TAXONOMY_HREF_RE = re.compile(r"/(?:tags?|categor(?:y|ies))/([^/?#]+)", re.IGNORECASE)
@@ -218,20 +227,31 @@ _TAXONOMY_QUERY_RE = re.compile(
 
 # "Posted on 8/31/26 in <a href="/deals/target">Target</a>, <a href="/deals/
 # household-essentials">Household Essentials</a>" — gottadeal.com's byline.
-# The anchors carry no rel="tag", no "tag" class, and no /tag//category/ URL
-# shape (their own top-level section is "/deals/", not a taxonomy word), so
-# none of the tiers above see them at all — this is the only signal on the
-# page. Anchored on the "Posted ... in" text cue rather than href/class,
-# unlike every other tier, but still bounded to a short run of anchors right
-# after that cue (not "any anchor" or the surrounding sentence) — a past
-# attempt on this exact site harvested the whole "in XXX, YYY" phrase as one
-# garbage tag (see the tag-classed-anchor tier's own note above), which this
-# avoids by taking each anchor's own text, not the byline's.
+# "Filed under:\n<a href="/Coding">Coding</a>\n<a href="/AoCO2025">AoCO2025</a>"
+# — xania.org's (Matt Godbolt's blog) equivalent, found live 2026-08-31 in the
+# same shape: no rel="tag", no "tag" class, hrefs ("/Coding") that don't match
+# the /tag//category/ tier either. Anchored on the "Posted ... in"/"Filed
+# under" text cue rather than href/class, unlike every other tier, but still
+# bounded to a short run of anchors right after that cue (not "any anchor" or
+# the surrounding sentence) — a past attempt on the gottadeal.com case
+# harvested the whole "in XXX, YYY" phrase as one garbage tag (see the
+# tag-classed-anchor tier's own note above), which this avoids by taking each
+# anchor's own text, not the byline's.
 _POSTED_IN_RE = re.compile(
-    r"\bposted\s+(?:on\s+[^<]{0,20}?\s+)?in\s+((?:<a\b[^>]*>[^<]{1,60}</a>\s*(?:,|and)?\s*)+)",
+    r"\b(?:posted\s+(?:on\s+[^<]{0,20}?\s+)?in|filed\s+under)\s*:?\s+"
+    r"((?:<a\b[^>]*>[^<]{1,60}</a>\s*(?:,|and)?\s*)+)",
     re.IGNORECASE,
 )
 _POSTED_IN_ANCHOR_RE = re.compile(r"<a\b[^>]*>([^<]{1,60})</a>", re.IGNORECASE)
+
+# refp.se: <a itemProp="keywords" href="/articles/tagged/rss">#rss</a> — real
+# per-article tags via schema.org microdata, found live 2026-08-31. No rel=
+# "tag", no "tag" class (itemProp is a different attribute entirely), and the
+# href's "/tagged/" doesn't match the /tag//tags/ taxonomy-href tier (a
+# different word, not a prefix of it).
+_ITEMPROP_KEYWORDS_ANCHOR_RE = re.compile(
+    r'<a\b[^>]*\bitemprop\s*=\s*["\']keywords["\'][^>]*>([^<]{1,60})</a>', re.IGNORECASE
+)
 
 # labnol.org (Digital Inspiration): tag chips carry no rel="tag", no "tag"
 # class, and no /tag//category/ href — their only taxonomy signal is the
@@ -392,6 +412,20 @@ def tags_from_url_path(url: str | None) -> list[str]:
     return out
 
 
+# youtube.com/youtu.be watch pages carry a <meta name="keywords"> that is
+# YouTube's own fixed, locale-translated UI boilerplate ("Video, share,
+# camera phone, video phone, free, upload" — German shown here), not
+# per-video content: confirmed live 2026-08-31, all 63 sampled YouTube
+# entries across unrelated channels produced the byte-identical six tags.
+# None of the other tiers have anything to key on for a YouTube page either
+# (no rel="tag", no /tag//category/ hrefs — YouTube's real per-video tags
+# live only in its API/embedded JSON, a different extraction mechanism
+# entirely, already served elsewhere by services/youtube_oauth.py). So the
+# whole page-scrape is skipped for this host rather than trying to filter
+# just the bad meta tag, which would still return nothing useful anyway.
+_YOUTUBE_HOSTS = frozenset({"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"})
+
+
 def extract_page_tags(html: str | None, source_url: str | None = None) -> list[str]:
     """Harvest article tags from a source page — the fallback for entries
     whose feed never delivered <category> data (aged out of the feed window,
@@ -402,6 +436,12 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
       (class contains "tag") linking to /tag/ or /category/ paths — how
       Valnet sites (MakeUseOf, How-To-Geek) mark their article tag block.
     """
+    if source_url:
+        try:
+            if urlparse(source_url).hostname in _YOUTUBE_HOSTS:
+                return []
+        except ValueError:
+            pass
     if not html:
         return tags_from_url_path(source_url)
     # Generous cap: tag blocks often sit at the BOTTOM of article pages
@@ -420,8 +460,20 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
             continue
         if key in _SINGLE_VALUE_META_TAG_KEYS:
             values.append(content)
-        else:
+        elif "," in content:
             values.extend(part.strip() for part in content.split(","))
+        elif len(content) > _TAG_TEXT_MAX_CHARS * 2:
+            # No comma AND too long to plausibly be one tag — sethmlarson.dev
+            # ships keywords space-separated, not comma-separated:
+            # content="python pypi open source maintainer urllib3 ...". Left
+            # unsplit this always exceeds _clean_tag_values's length cap and
+            # is silently dropped whole, so splitting on whitespace here can
+            # only recover tags that were otherwise guaranteed to be lost —
+            # a genuine short space-free phrase ("machine learning") is
+            # well under this threshold and stays a single value.
+            values.extend(content.split())
+        else:
+            values.append(content)
 
     # rel="tag" microformat anchors: tag name is the (short) link text.
     for m in _ANCHOR_RE.finditer(html):
@@ -541,6 +593,12 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
     # aria-label="... tagged with X" (see _ARIA_TAGGED_WITH_RE).
     for m in _ARIA_TAGGED_WITH_RE.finditer(html):
         text = html_module.unescape(m.group(1) or m.group(2) or "").strip()
+        if text:
+            values.append(text)
+
+    # itemprop="keywords" anchors (see _ITEMPROP_KEYWORDS_ANCHOR_RE).
+    for m in _ITEMPROP_KEYWORDS_ANCHOR_RE.finditer(html):
+        text = html_module.unescape(m.group(1)).strip()
         if text:
             values.append(text)
 

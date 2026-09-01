@@ -254,12 +254,59 @@ def test_page_tags_single_quotes_and_parsely():
     assert extract_page_tags(html) == ["linux", "gaming"]
 
 
+def test_page_tags_keywords_falls_back_to_space_split_when_long_and_comma_free():
+    """sethmlarson.dev: keywords ships space-separated, not comma-separated.
+    Left whole this always exceeds the length cap and is silently dropped —
+    found live 2026-08-31 surveying untagged feeds."""
+    html = ('<meta name="keywords" content="python pypi open source maintainer '
+            'urllib3 requests http networking security oss"/>')
+    out = extract_page_tags(html)
+    assert "python" in out
+    assert "urllib3" in out
+    assert "oss" in out
+
+
+def test_page_tags_keywords_short_comma_free_value_stays_one_tag():
+    """A short space-free phrase must NOT get shredded into words — only the
+    long, comma-free shape (guaranteed junk otherwise) triggers the split."""
+    html = '<meta name="keywords" content="machine learning">'
+    assert extract_page_tags(html) == ["machine learning"]
+
+
 def test_page_tags_ignores_other_metas_and_junk():
     html = '''<meta property="og:title" content="Not a tag">
       <meta name="description" content="prose, with, commas">
       <meta property="article:tag" content="">
       <meta property="article:tag" content="''' + ("x" * 80) + '''">'''
     assert extract_page_tags(html) == []
+
+
+# --- youtube.com is excluded entirely ---------------------------------------
+# Its <meta name="keywords"> is fixed, locale-translated UI boilerplate, not
+# per-video content — confirmed live 2026-08-31: 63 sampled entries across
+# unrelated YouTube channels all produced the byte-identical six "tags"
+# ("Video, share, camera phone, video phone, free, upload", German shown
+# here). No other tier has anything real to key on for a YouTube page either.
+
+def test_youtube_watch_page_yields_nothing_even_with_a_keywords_meta():
+    html = '<meta name="keywords" content="Video, teilen, Kamerahandy, Videohandy, kostenlos, hochladen">'
+    assert extract_page_tags(html, "https://www.youtube.com/watch?v=hsm0ahVdb0Q") == []
+
+
+def test_youtube_short_link_host_also_excluded():
+    html = '<meta name="keywords" content="Video, teilen, Kamerahandy, Videohandy, kostenlos, hochladen">'
+    assert extract_page_tags(html, "https://youtu.be/hsm0ahVdb0Q") == []
+
+
+def test_youtube_url_path_fallback_also_suppressed():
+    """Without even a page fetch, tags_from_url_path("/shorts/<id>") would
+    otherwise yield the equally useless "shorts" for every Short regardless
+    of channel or subject."""
+    assert extract_page_tags(None, "https://www.youtube.com/shorts/abc123") == []
+
+
+def test_non_youtube_host_is_unaffected():
+    assert extract_page_tags('<a rel="tag" href="/x">Real Tag</a>', "https://example.com/post") == ["Real Tag"]
 
 
 def test_page_tags_empty_input_and_cap():
@@ -708,6 +755,21 @@ def test_anchor_wrapping_markup_is_left_to_the_title_tier():
     assert extract_page_tags(html) == []
 
 
+def test_taxonomy_href_anchor_survives_a_decorative_icon():
+    """tartanllama.xyz: a /tags/cpp/ link wraps ~400 chars of <svg> markup
+    around the visible "C++" label. Found live 2026-08-31 — the anchor was
+    entirely invisible to every tier (not just this one) because the old
+    120-char _ANCHOR_RE cap could never reach </a>."""
+    html = ('<a href="/tags/cpp/" class="relative pr-2 text-lg" data-x="y">'
+            '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+            'class="inline-block opacity-80 -mr-3.5 size-4">'
+            '<path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M5 9l14 0" />'
+            '<path d="M5 15l14 0" /><path d="M11 4l-4 16" /><path d="M17 4l-4 16" /></svg>'
+            '&nbsp;<span>C++</span> </a>')
+    assert extract_page_tags(html) == ["C++"]
+
+
 def test_sentence_length_text_is_not_a_tag():
     """Guards the gottadeal failure: surrounding prose harvested as a tag."""
     long_text = "Posted on 7/29/26 in Woot!, Pet Supplies and a great deal more besides"
@@ -825,6 +887,29 @@ def test_posted_in_does_not_reach_past_a_run_of_anchors():
             'you might not expect to find a bargain this good.')
     out = extract_page_tags(html)
     assert out == ["Target"]
+
+
+def test_filed_under_byline_anchors_are_captured():
+    """xania.org (Matt Godbolt's blog): "Filed under:" instead of "Posted
+    in" — same shape, different cue word. Found live 2026-08-31."""
+    html = 'Filed under:\n<a href="/Coding">Coding</a>\n<a href="/AoCO2025">AoCO2025</a>'
+    out = extract_page_tags(html)
+    assert "Coding" in out
+    assert "AoCO2025" in out
+
+
+# --- itemprop="keywords" anchors --------------------------------------------
+# refp.se: real per-article tags via schema.org microdata, no rel="tag", no
+# "tag" class, href "/articles/tagged/x" doesn't match the /tag//tags/
+# taxonomy-href tier either ("tagged" isn't "tag"/"tags"). Found live
+# 2026-08-31.
+
+def test_itemprop_keywords_anchors_are_captured():
+    html = ('<a itemProp="keywords" href="/articles/tagged/developer-life">#developer-life</a>'
+            '<a itemProp="keywords" href="/articles/tagged/blogging">#blogging</a>')
+    out = extract_page_tags(html)
+    assert "developer-life" in out
+    assert "blogging" in out
 
 
 # --- aria-label="... tagged with X" -----------------------------------------
