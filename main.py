@@ -63,6 +63,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from services import bluesky
 from services import flaresolverr as flaresolverr_service
+from services import page_fetch
 from services import site_content_plugins
 from services import publish_date as publish_date_service
 from services import deviantart as deviantart_service
@@ -9624,11 +9625,45 @@ reader_sanitize.set_entry_tag_sink(feed_tag_service.record_entry_tags)
 reader_sanitize.set_feed_window_sink(_store_feed_window)
 reader_sanitize.set_url_rewrite_provider(get_feed_url_rewrites)
 
+
+def _page_fetch_backends() -> page_fetch.FetchBackends:
+    """Backends available to the CURRENT tenancy for a single page fetch
+    (tag/lead-image scraping, saved-article re-fetch) — resolved at fetch
+    time so it reads the contextvars-scoped current user, same trick as the
+    feed ladder's own per-user resolver lambdas (see _resolve_proxy_for_fetch
+    just above). PageFetcher itself never touches settings or tenancy — it
+    only sees whatever this returns, already resolved.
+
+    Deliberately diverges from the feed ladder's mode gate: the feed ladder
+    only reaches FlareSolverr/Tailscale in "as_needed" mode, because "always"
+    would spend a real Chrome instance on every single feed poll. That
+    reasoning doesn't apply here — this ladder is reactive by construction,
+    only ever reaching FlareSolverr after the shallower tiers already failed
+    on this exact URL — so a user on proxy_mode="always" still gets
+    FlareSolverr rather than silently losing challenge-solving. See
+    docs/architecture/feeds.md."""
+    uid = tenancy.current_user_id()
+    mode = get_proxy_mode()
+    proxy = get_proxy_url() if (mode != "off" and not _proxy_is_down(uid)) else ""
+    flare = get_flaresolverr_url() if mode != "off" else ""
+    return page_fetch.FetchBackends(mode=mode, proxy_url=proxy, flaresolverr_url=flare)
+
+
+# Shared by the tag/lead-image fetch (services/lead_images.py) and the
+# saved-article re-fetch path (fetch_readability_article/fetch_full_page_article
+# below) so a host FlareSolverr solved for one is immediately known to the
+# other — see services/page_fetch.py and Plan.md.
+page_fetcher = page_fetch.PageFetcher(
+    backends=_page_fetch_backends,
+    honest_user_agent=READABILITY_USER_AGENT,
+)
+
 lead_image_service = LeadImageService(
     get_meta_connection=get_meta_connection,
     get_reader=get_reader,
     user_agent=READABILITY_USER_AGENT,
     extract_video_id=youtube_duration_service.extract_video_id,
+    page_fetcher=page_fetcher,
 )
 
 

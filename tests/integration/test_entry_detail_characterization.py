@@ -58,9 +58,10 @@ def env(tmp_path):
     li = main.lead_image_service
     for _attr in ("_cache", "_fetched_at_cache", "_alt_cache", "_title_cache",
                   "_entry_crop_cache", "_source_fetch_in_progress", "_source_fetch_events",
-                  "_debug_bypass_feeds", "_source_html_cache", "_waf_block_until",
+                  "_debug_bypass_feeds", "_source_html_cache",
                   "_source_html_fetch_events"):
         getattr(li, _attr).clear()
+    li._page_fetcher._state.clear()
     li._webcomic_feeds = None
     li._none_strategy_feeds = None
     # Drain any lead-image write callables queued by *other* tests: the shared write

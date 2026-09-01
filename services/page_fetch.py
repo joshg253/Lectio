@@ -230,6 +230,14 @@ class HostEscalationState:
                 for (uid, host), st in self._by_key.items()
             ]
 
+    def clear(self) -> None:
+        """Drop all learned/blocked state. For test isolation — a shared
+        PageFetcher (like main.py's process-global one) must not let one
+        test's cooldown or learned tier leak into another reusing the same
+        host name."""
+        with self._lock:
+            self._by_key.clear()
+
     def _evict_locked(self) -> None:
         while len(self._by_key) > self._max_hosts:
             self._by_key.popitem(last=False)
@@ -398,9 +406,9 @@ class PageFetcher:
             client_kwargs["proxy"] = proxy
         try:
             with url_guard.build_client(**client_kwargs) as client:
-                response = url_guard.safe_get(client, url, headers=dict(headers))
+                response = url_guard.safe_get(client, url)
                 if response.status_code == 409:
-                    retried = self._retry_js_cookie_challenge(client, url, response, headers)
+                    retried = self._retry_js_cookie_challenge(client, url, response)
                     if retried is not None:
                         response = retried
             return _attempt_from_response(tier, response)
@@ -417,9 +425,7 @@ class PageFetcher:
         except httpx.HTTPError as exc:
             return _Attempt(tier=tier, status=None, html=None, final_url=url, headers={}, response=None, error=exc)
 
-    def _retry_js_cookie_challenge(
-        self, client: httpx.Client, url: str, response: httpx.Response, headers: Mapping[str, str]
-    ) -> httpx.Response | None:
+    def _retry_js_cookie_challenge(self, client: httpx.Client, url: str, response: httpx.Response) -> httpx.Response | None:
         """A 409 whose body sets a cookie via JS (e.g. BlueHost humans_XXXXX) is
         solvable without a full browser — set the cookie ourselves and retry
         once. Returns None (leave the 409 standing) if the body doesn't match."""
@@ -432,7 +438,7 @@ class PageFetcher:
         cname, cval = cookie_str.split("=", 1)
         domain = urlparse(url).netloc.removeprefix("www.")
         client.cookies.set(cname.strip(), cval.strip(), domain=domain)
-        return url_guard.safe_get(client, url, headers=dict(headers))
+        return url_guard.safe_get(client, url)
 
     def _urllib_fallback(self, url: str, user_agent: str) -> tuple[str, str, dict] | None:
         """TLS-fingerprint workaround for hosts (e.g. Tumblr) that drop httpx's
