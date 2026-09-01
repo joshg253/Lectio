@@ -111,6 +111,7 @@ def test_fetch_full_page_article_yields_sheets_and_video(page, monkeypatch):
         text = page
         headers = {"content-type": "text/html"}
         is_success = True
+        url = TRANS_URL
 
         def raise_for_status(self):
             return None

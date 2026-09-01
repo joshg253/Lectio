@@ -13663,10 +13663,6 @@ def markdown_to_article_html(md_text: str, source_url: str) -> tuple[str, str]:
 # 404 taken at face value told the user the article was gone and offered to
 # delete it. Mirrors feed_discovery's escalation policy.
 _READABILITY_REFUSAL_STATUSES = frozenset({401, 403, 404, 405, 410, 429, 451, 503})
-_READABILITY_BROWSER_UA = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
 
 
 # Publish-date sources in a page's head, ordered by how much publishers maintain
@@ -13791,45 +13787,52 @@ def mine_publish_date(raw_html: str | None) -> datetime | None:
     return None
 
 
-def fetch_readability_article(source_url: str, *, capture: dict | None = None) -> tuple[str, str]:
+def fetch_readability_article(
+    source_url: str,
+    *,
+    capture: dict | None = None,
+    max_tier: page_fetch.FetchTier = "proxy",
+    ignore_cooldown: bool = False,
+) -> tuple[str, str]:
     """Fetch *source_url* and return ``(title, article_html)``: the
     readability-extracted, sanitized article body. Shared by the reader-view
-    route and save-article capture. Raises on fetch/extraction failure.
-    Markdown documents (text/markdown, or .md/.md.txt paths served as plain
-    text) are converted instead of readability-extracted.
+    route and save-article capture. Raises on fetch/extraction failure (a
+    page_fetch.PageFetchError exposes .response/.status_code the same way an
+    httpx.HTTPStatusError would, for callers that duck-type it — see
+    services/saved_articles.py's dead-vs-blocked classification). Markdown
+    documents (text/markdown, or .md/.md.txt paths served as plain text) are
+    converted instead of readability-extracted.
 
-    An honest fetch is tried first; only if the host refuses does it retry once
-    with a browser identity. That retry is not about winning an arms race — a
-    host that blocks by IP still refuses — but about not *mistaking a refusal
-    for a deletion*: the caller flags 404/410 as "the article is gone", and a
-    bot-wall answering 404 turned a live article into a delete prompt.
+    Escalates through services/page_fetch.py's honest -> browser -> proxy ->
+    FlareSolverr ladder — not about winning an arms race (a host that blocks
+    by IP still refuses honest and browser identity alike), but about not
+    *mistaking a refusal for a deletion*: the caller flags 404/410 as "the
+    article is gone", and a bot-wall answering 404 turned a live article into
+    a delete prompt, which is also why _READABILITY_REFUSAL_STATUSES is wider
+    than the default set. *max_tier* defaults to "proxy" (no FlareSolverr) —
+    this runs on the synchronous reader-view render path too, where a ~55s
+    FlareSolverr call would hang a page behind a spinner with no cancel; only
+    callers that know they're off the request path (the re-fetch path) opt
+    into "flaresolverr". *ignore_cooldown* is for a user-initiated re-fetch —
+    a person clicking "Refetch content" is not the polite background traffic
+    the cooldown exists to pace.
 
     *capture*, when given, receives the raw response body under ``"raw_html"``.
     readability strips head metadata, so a caller wanting the page's publish date
     would otherwise have to fetch it a second time."""
-    headers = {"User-Agent": READABILITY_USER_AGENT}
-    with url_guard.build_client(timeout=12.0, headers=headers) as client:
-        response = url_guard.safe_get(client, source_url, headers=headers)
-    if response.status_code in _READABILITY_REFUSAL_STATUSES:
-        retry_headers = {"User-Agent": _READABILITY_BROWSER_UA}
-        try:
-            with url_guard.build_client(timeout=12.0, headers=retry_headers) as client:
-                retried = url_guard.safe_get(client, source_url, headers=retry_headers)
-            # Keep the retry only if it actually did better; otherwise the
-            # honest response is the one worth reporting.
-            if retried.is_success or retried.status_code != response.status_code:
-                response = retried
-        except Exception:  # noqa: BLE001 — the first response still stands
-            LOGGER.debug("readability: browser-identity retry failed for %s", source_url, exc_info=True)
-    response.raise_for_status()
-    if _is_markdown_response(response.headers.get("content-type", ""), source_url):
-        if capture is not None:
-            capture["raw_html"] = response.text
-        return markdown_to_article_html(response.text, source_url)
+    result = page_fetcher.fetch(
+        source_url,
+        timeout=12.0,
+        refusal_statuses=_READABILITY_REFUSAL_STATUSES,
+        max_tier=max_tier,
+        ignore_cooldown=ignore_cooldown,
+    )
     if capture is not None:
-        capture["raw_html"] = response.text
-    title, article_html = extract_readability_article(response.text, source_url)
-    return title, _append_site_embeds(article_html, source_url, response.text)
+        capture["raw_html"] = result.html
+    if _is_markdown_response(result.headers.get("content-type", ""), source_url):
+        return markdown_to_article_html(result.html, source_url)
+    title, article_html = extract_readability_article(result.html, source_url)
+    return title, _append_site_embeds(article_html, source_url, result.html)
 
 
 # Below this much extracted article text, readability is treated as having
@@ -14120,21 +14123,35 @@ def _whole_body_content(raw_html: str) -> str:
     return html_sanitize.sanitize_html(body_html).strip()
 
 
-def fetch_full_page_article(source_url: str, *, capture: dict | None = None) -> tuple[str, str]:
+def fetch_full_page_article(
+    source_url: str,
+    *,
+    capture: dict | None = None,
+    max_tier: page_fetch.FetchTier = "proxy",
+    ignore_cooldown: bool = False,
+) -> tuple[str, str]:
     """Fetch *source_url* and return ``(title, body_html)`` without readability
     extraction — see extract_full_page_article. Markdown is still converted.
+    Shares fetch_readability_article's escalation ladder and *max_tier*/
+    *ignore_cooldown* semantics (see its docstring) — this used to have no
+    retry of any kind, so every caller now gets the honest->browser->proxy
+    ladder for free, not just the FlareSolverr rung.
 
     *capture* receives the raw body under ``"raw_html"``, so a caller can mine the
     page's publish date from the fetch it already made."""
-    with url_guard.build_client(timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
-        response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
-    response.raise_for_status()
+    result = page_fetcher.fetch(
+        source_url,
+        timeout=12.0,
+        refusal_statuses=_READABILITY_REFUSAL_STATUSES,
+        max_tier=max_tier,
+        ignore_cooldown=ignore_cooldown,
+    )
     if capture is not None:
-        capture["raw_html"] = response.text
-    if _is_markdown_response(response.headers.get("content-type", ""), source_url):
-        return markdown_to_article_html(response.text, source_url)
-    title, article_html = extract_full_page_article(response.text, source_url)
-    return title, _append_site_embeds(article_html, source_url, response.text)
+        capture["raw_html"] = result.html
+    if _is_markdown_response(result.headers.get("content-type", ""), source_url):
+        return markdown_to_article_html(result.html, source_url)
+    title, article_html = extract_full_page_article(result.html, source_url)
+    return title, _append_site_embeds(article_html, source_url, result.html)
 
 
 def build_readability_response(source_url: str) -> HTMLResponse:
@@ -33533,8 +33550,12 @@ async def refresh_saved_article_content(
     _dc = date_choice if date_choice in {"now", "original", "pub"} else None
     # positional: feed_url, entry_id, mode, bump_received (unused here — the
     # date_choice picker is the only knob this route exposes), date_choice.
+    # ignore_cooldown=True: a person clicking "Refetch content" is asking on
+    # purpose, not the polite background traffic the page-fetch ladder's own
+    # host cooldown exists to pace.
     result = await run_in_threadpool(
-        _refresh_captured_article_for_current_user, feed_url, entry_id, mode, None, _dc
+        _refresh_captured_article_for_current_user, feed_url, entry_id, mode, None, _dc,
+        ignore_cooldown=True,
     )
     if result.get("ok"):
         return JSONResponse({
@@ -33815,6 +33836,8 @@ def _refresh_captured_article_for_current_user(
     feed_url: str, entry_id: str, mode: str = "readability",
     bump_received: bool | None = None,
     date_choice: str | None = None,
+    *,
+    ignore_cooldown: bool = False,
 ) -> dict:
     """Re-fetch a Lectio capture that lives on a real feed (post auto-filing),
     with the current tenancy's reader/meta DB.
@@ -33828,6 +33851,16 @@ def _refresh_captured_article_for_current_user(
     fetch is *refused* (parked page, 404), which leaves out the case that sent
     users to archive.org by hand: a publisher serving a page that passes every
     guard but is no longer the article — rewritten, truncated, or paywalled.
+
+    Escalates the live fetch through services/page_fetch.py's full ladder,
+    FlareSolverr rung included (unlike a plain reader-view render, this is
+    never on a request's hot path — always behind run_in_threadpool or a
+    background thread). *ignore_cooldown*, when True, skips the page ladder's
+    own host cooldown — pass it for a user-initiated re-fetch (a person
+    clicking "Refetch content" is not the polite background traffic the
+    cooldown exists to pace); leave it False for the auto-refetch-on-keep
+    thread and the batch worker, which already have their own host-cooldown
+    mechanisms and should stay well-behaved.
 
     *bump_received* and *date_choice* are forwarded as-is to
     refresh_captured_article — see there."""
@@ -33854,7 +33887,7 @@ def _refresh_captured_article_for_current_user(
         # used: the snapshot IS the target.
         target = from_archive or url
         try:
-            return _base(target, capture=_capture)
+            return _base(target, capture=_capture, max_tier="flaresolverr", ignore_cooldown=ignore_cooldown)
         except TypeError:
             return _base(target)       # a caller-supplied extractor without the kwarg
 
