@@ -10,10 +10,14 @@ module only speaks the JSON contract at FlareSolverr's HTTP boundary.
 from __future__ import annotations
 
 import html as _html
+import json
 import re
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
-from services import bot_challenge
+import httpx
+
+from services import bot_challenge, url_guard
 
 # FlareSolverr's /v1 endpoint doesn't return the origin's raw bytes — it
 # returns real Chrome's rendered `outerHTML`. For a feed (always served as
@@ -75,6 +79,44 @@ def unwrap_view_source(html_content: str) -> bytes | None:
     if not pre_match:
         return None
     return _html.unescape(pre_match.group(1).decode("utf-8", errors="replace")).encode("utf-8")
+
+
+def solve(
+    endpoint: str,
+    target_url: str,
+    *,
+    proxy_url: str | None = None,
+    timeout: float = 60.0,
+    max_timeout_ms: int = 55_000,
+) -> Solution:
+    """POST to the admin-configured FlareSolverr endpoint and return its parsed Solution.
+
+    Used by the page-fetch escalation ladder (services/page_fetch.py) — the
+    feed-refresh ladder reaches FlareSolverr a different way, via a reader
+    request hook (services/reader_api.py), not through this function.
+
+    SSRF boundary: ``target_url`` is externally influenced (a feed's article
+    link) and MUST be safe to fetch — checked here, fail-closed, same as every
+    other outbound fetch in this codebase. ``endpoint`` is admin-only instance
+    configuration (the flaresolverr_url setting), never request input — the
+    same trust basis on which reader's own FlareSolverr hook bypasses
+    url_guard for this exact call (see docs/architecture/feeds.md). It is
+    deliberately NOT run through is_safe_outbound_url, which would refuse
+    every real deployment (a Docker-internal RFC1918 address like
+    http://flaresolverr:8191/v1).
+    """
+    if not url_guard.is_safe_outbound_url(target_url):
+        raise url_guard.UnsafeURLError(target_url)
+    if urlparse(endpoint).scheme not in ("http", "https"):
+        raise ValueError(f"FlareSolverr endpoint must be http(s): {endpoint!r}")
+    body = build_request_body(target_url, proxy_url=proxy_url, max_timeout_ms=max_timeout_ms)
+    # verify=WEB_SSL_CONTEXT so a compromised/misconfigured solver can't be used
+    # to bounce this POST elsewhere; plain client.post (not url_guard.safe_post)
+    # since endpoint is trusted config, not the guarded target — deliberate.
+    with httpx.Client(follow_redirects=False, verify=url_guard.WEB_SSL_CONTEXT, timeout=timeout) as client:
+        response = client.post(endpoint, headers={"Content-Type": "application/json"}, content=json.dumps(body).encode("utf-8"))
+    response.raise_for_status()
+    return parse_envelope(response.json(), target_url)
 
 
 def normalize_proxy_scheme(proxy_url: str) -> str:
