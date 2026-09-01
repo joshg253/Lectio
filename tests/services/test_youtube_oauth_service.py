@@ -83,6 +83,50 @@ def test_quota_exceeded_raises_distinct_error(monkeypatch):
         yt.add_video_to_playlist("tok", "PL1", "vid12345678")
 
 
+def test_quota_exceeded_still_detected_when_the_message_pushes_reason_past_a_truncation(monkeypatch):
+    """Raised 2026-08-31: Google's real error repeats a verbose, HTML-linked
+    message at both the top level and inside errors[0] before the `reason`
+    field -- long enough that a truncated-text substring match on the first
+    ~300 chars of the raw body missed it entirely, live in production. The
+    fix parses the full JSON body instead of substring-matching truncated
+    text, so a long message can no longer push `reason` out of view."""
+    verbose_message = (
+        'The request cannot be completed because you have exceeded your '
+        '<a href="/youtube/v3/getting-started#quota">quota</a>.'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={"error": {
+                "code": 403,
+                "message": verbose_message,
+                "errors": [{"message": verbose_message, "domain": "youtube.quota", "reason": "quotaExceeded"}],
+            }},
+            headers={"content-type": "application/json"},
+        )
+
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
+    with pytest.raises(yt.QuotaExceeded):
+        yt.add_video_to_playlist("tok", "PL1", "vid12345678")
+
+
+def test_a_genuine_403_with_no_quota_reason_still_raises_a_plain_runtime_error(monkeypatch):
+    """Not every 403 is quota (e.g. a revoked/invalid token) -- those must
+    keep surfacing as an ordinary failure, not be swallowed as QuotaExceeded."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={"error": {"errors": [{"reason": "forbidden"}]}},
+            headers={"content-type": "application/json"},
+        )
+
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
+    with pytest.raises(RuntimeError) as exc_info:
+        yt.add_video_to_playlist("tok", "PL1", "vid12345678")
+    assert not isinstance(exc_info.value, yt.QuotaExceeded)
+
+
 def test_create_playlist_returns_normalized(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"id": "PLnew", "snippet": {"title": "TV"}},

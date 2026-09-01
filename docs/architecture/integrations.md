@@ -237,6 +237,38 @@ was already a solved problem.
   left unread. Bulk "Add tag" does the same unconditionally (tagging implies
   filing/keeping it, and that route either tags every entry or reports one shared
   error — no partial-failure case to exclude).
+
+  **Two bugs found live (2026-08-31), on a real 50-video batch that hit the daily
+  quota partway through:**
+  - `services/youtube_oauth._raise_for_quota` used to substring-match `"quotaExceeded"`
+    against `resp.text[:300]` — but Google's real 403 body repeats a verbose,
+    HTML-linked message at both the top level and inside `errors[0]` *before* the
+    `reason` field, long enough to push it past 300 chars. Missed there, the batch
+    worker treated every remaining video as an ordinary per-video failure instead of
+    recognizing quota exhaustion and stopping cleanly — it just kept burning through
+    the rest of the selection, each insert individually 403ing. Fixed by parsing the
+    full JSON body's `error.errors[].reason` instead of truncated text, and folding in
+    `dailyLimitExceeded`/`userRateLimitExceeded`/`rateLimitExceeded` alongside
+    `quotaExceeded` (the intermixed 200s/403s in the batch that surfaced this look more
+    like a per-second rate limit than a hard daily wall, but both call for the same
+    stop-and-preserve-partial-progress handling).
+  - The auto-mark-read step only ever ran from the client-side poll loop
+    (`_ytPollBatchAddProgress`) started the moment the batch kicked off — but changing
+    folders is a real page reload in this server-rendered app (no client-side
+    routing), which kills that poll loop along with everything else on the page. The
+    background job itself is unaffected (it's a server thread, not tied to the
+    request), so the adds kept happening, but nothing was left to mark the results
+    read once nothing was polling. `_ytResumeBatchJobOnLoad()` now runs once on every
+    page load (gated on the YT account-features flag): it re-fetches the tracked job,
+    and if it's still running or finished-but-unconsumed, rebuilds a `posts` array
+    from the current page's `.post-item[data-post-video-id]` elements and either
+    resumes the same live poller or runs the shared finished-job handler
+    (`_ytHandleFinishedBatchJob`, extracted out of the poll loop for this reuse)
+    directly. A post that isn't in the current view (a different folder) just can't be
+    matched and is left as-is — no worse than before this existed. A `localStorage`
+    flag (`lectio-yt-batch-consumed`, keyed by job id) stops a finished job from
+    re-showing its toast and re-running the (harmless but pointless) mark-read call on
+    every subsequent page load.
 - **Save to Pinterest (per-user OAuth)** — an outbound-only integration: a per-entry
   **Pin** button saves an article to one of the user's boards. Pinterest has no
   write-without-OAuth path, so `services/pinterest_oauth.py` speaks the **API v5**

@@ -4123,6 +4123,34 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // forever instead of just reporting something's wrong.
     const _YT_BATCH_POLL_MAX_TICKS = 400;  // ~6 minutes at 900ms
 
+    // Shared by the live poller below and _ytResumeBatchJobOnLoad (raised
+    // 2026-08-31: a page reload — e.g. switching folders, which is a real
+    // navigation in this app, not client-side routing — kills whatever poll
+    // loop was watching a batch, so a job that finished (or kept finishing)
+    // after the reload never got its auto-mark-read step run at all; every
+    // successfully-added video sat unread until manually cleaned up).
+    async function _ytHandleFinishedBatchJob(job, posts, playlistTitle) {
+      const okIds = new Set(job.ok_video_ids || []);
+      const toMark = (posts || []).filter((p) => okIds.has(p.videoId));
+      if (toMark.length) {
+        try {
+          const body = new URLSearchParams({ entries: JSON.stringify(toMark.map((p) => [p.feedUrl, p.entryId])) });
+          const r = await fetch('/entries/read-batch', { method: 'POST', body, credentials: 'same-origin' });
+          const d = await r.json().catch(() => ({}));
+          if (d && d.ok) applyReadStateToSelection(toMark);
+        } catch (_e) { /* the toast below still reports the add itself */ }
+      }
+      if (job.error === 'quota') {
+        showToastMessage('Daily YouTube quota reached — try again tomorrow or add it on youtube.com.');
+      } else if (job.error === 'not_connected') {
+        showToastMessage('YouTube account not connected.');
+      } else if (job.error) {
+        showToastMessage(job.error);
+      } else {
+        showToastMessage(job.message || `Added to "${playlistTitle}".`);
+      }
+    }
+
     async function _ytPollBatchAddProgress(playlistTitle, posts, jobId) {
       for (let tick = 0; tick < _YT_BATCH_POLL_MAX_TICKS; tick++) {
         await new Promise((resolve) => setTimeout(resolve, _YT_BATCH_POLL_MS));
@@ -4161,28 +4189,59 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         // selection was a second manual step for the common case. A video
         // that failed, or was never reached because the run stopped on
         // quota, is excluded on purpose — those are worth noticing unread.
-        const okIds = new Set(job.ok_video_ids || []);
-        const toMark = (posts || []).filter((p) => okIds.has(p.videoId));
-        if (toMark.length) {
-          try {
-            const body = new URLSearchParams({ entries: JSON.stringify(toMark.map((p) => [p.feedUrl, p.entryId])) });
-            const r = await fetch('/entries/read-batch', { method: 'POST', body, credentials: 'same-origin' });
-            const d = await r.json().catch(() => ({}));
-            if (d && d.ok) applyReadStateToSelection(toMark);
-          } catch (_e) { /* the toast below still reports the add itself */ }
-        }
-        if (job.error === 'quota') {
-          showToastMessage('Daily YouTube quota reached — try again tomorrow or add it on youtube.com.');
-        } else if (job.error === 'not_connected') {
-          showToastMessage('YouTube account not connected.');
-        } else if (job.error) {
-          showToastMessage(job.error);
-        } else {
-          showToastMessage(job.message || `Added to "${playlistTitle}".`);
-        }
+        await _ytHandleFinishedBatchJob(job, posts, playlistTitle);
+        _ytMarkBatchJobConsumed(job.job_id);
         return;
       }
       showToastMessage('Still working on it — check back in a moment.');
+    }
+
+    // localStorage key marking a finished batch job as already handled, so a
+    // page reload doesn't re-run the mark-read step (harmless — already-read
+    // entries stay read) and re-show its "Added to…" toast forever until the
+    // next batch starts. Per-browser only, which is fine here: it's purely a
+    // don't-repeat-yourself guard, not a source of truth (the job itself,
+    // and what's actually read, live server-side).
+    function _ytMarkBatchJobConsumed(jobId) {
+      if (!jobId) return;
+      try { localStorage.setItem('lectio-yt-batch-consumed', jobId); } catch (_e) { /* best effort */ }
+    }
+
+    function _ytBatchJobAlreadyConsumed(jobId) {
+      if (!jobId) return false;
+      try { return localStorage.getItem('lectio-yt-batch-consumed') === jobId; } catch (_e) { return false; }
+    }
+
+    // Resumes tracking a batch add that outlived the page that started it —
+    // raised 2026-08-31: the add itself runs in a background thread, unaffected
+    // by navigation, but the poller that watches for completion and marks
+    // finished posts read lives only on the page that started it. Runs once on
+    // load; a post that isn't in the current view (a different folder, say)
+    // just can't be matched against ok_video_ids and stays as-is — no worse
+    // than before this existed.
+    async function _ytResumeBatchJobOnLoad() {
+      let job;
+      try {
+        const r = await fetch('/api/youtube/playlists/add-batch/status', { credentials: 'same-origin' });
+        job = await r.json();
+      } catch (_e) {
+        return;
+      }
+      if (!job || !job.ok || !job.job_id) return;
+      if (!job.running && (!job.ok_video_ids || !job.ok_video_ids.length || _ytBatchJobAlreadyConsumed(job.job_id))) return;
+      const posts = Array.from(document.querySelectorAll('.post-item[data-post-video-id]'))
+        .map((el) => ({
+          feedUrl: el.getAttribute('data-post-feed-url'),
+          entryId: el.getAttribute('data-post-entry-id'),
+          videoId: el.getAttribute('data-post-video-id'),
+        }))
+        .filter((p) => p.videoId);
+      if (job.running) {
+        await _ytPollBatchAddProgress('your playlist', posts, job.job_id);
+        return;
+      }
+      await _ytHandleFinishedBatchJob(job, posts, 'your playlist');
+      _ytMarkBatchJobConsumed(job.job_id);
     }
 
     async function _ytBulkAddToPlaylist(posts, choice) {
@@ -8452,6 +8511,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     bindEntryPaneInteractions();
     try { if (_ytAccountFeaturesEnabled) enhanceYoutubeEmbeds(document.querySelector('.pane-entry')); } catch (e) {}
     try { applyPortraitImageCap(document.querySelector('.pane-entry')); } catch (e) {}
+    if (_ytAccountFeaturesEnabled) _ytResumeBatchJobOnLoad();
 
     // --- Post multi-select (checkboxes) -----------------------------------
     // The checkbox is the only thing that ADDS to the selection — checking
