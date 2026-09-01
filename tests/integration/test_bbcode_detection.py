@@ -43,3 +43,28 @@ def test_html_content_keeps_newlines_unconverted():
     if main._looks_like_bbcode(_ELI_HTML):  # would only run for true BBCode
         converted = main._bbcode_to_html(_ELI_HTML)
         assert "<br" not in converted.lower(), "HTML newlines were turned into <br>"
+
+
+# --- [line]: IPB/Invision's horizontal-rule tag (Nexus Mods) ---------------
+# Self-closing, no [/line] counterpart — found live 2026-09-01 rendering as
+# literal "[line]" text in a real Nexus Mods news post that otherwise
+# converted correctly ([size=5] etc.), because _bbcode_to_html had no
+# substitution for it at all.
+
+def test_line_tag_becomes_hr():
+    text = "[b]Some text.[/b]<br/>\n<br/>[line]\n<br/>\n<br/>[size=5]More[/size]"
+    assert main._looks_like_bbcode(text) is True
+    converted = main._bbcode_to_html(text)
+    assert "<hr>" in converted
+    assert "[line]" not in converted
+
+
+def test_line_alone_is_not_added_as_a_bbcode_signal():
+    """"line" must NOT be added to _BBCODE_SIGNAL_RE: real prose documenting
+    matplotlib's fmt string ("[marker][line][color]", freecodecamp.org) would
+    then read as BBCode (color already signals once; line would make two) and
+    get corrupted. Only [color] should fire here — one signal, below the
+    >=2 threshold, so detection correctly stays off."""
+    text = "fmt = '[marker][line][color]'"
+    assert len(main._BBCODE_SIGNAL_RE.findall(text)) == 1
+    assert main._looks_like_bbcode(text) is False
