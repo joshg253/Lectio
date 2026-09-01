@@ -456,6 +456,7 @@ dependencies = [
     { name = "reader" },
     { name = "resend" },
     { name = "smartcrop" },
+    { name = "socksio" },
     { name = "sqlalchemy" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -494,6 +495,7 @@ requires-dist = [
     { name = "reader", specifier = ">=3.25" },
     { name = "resend" },
     { name = "smartcrop", specifier = ">=0.5" },
+    { name = "socksio", specifier = ">=1.0.0" },
     { name = "sqlalchemy" },
     { name = "uvicorn", extras = ["standard"] },
 ]
@@ -1019,6 +1021,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/79/02/0e3fd1b276a19c5be2e938505641756f5be6653f9a00aba88ae62c497dad/smartcrop-0.5.0.tar.gz", hash = "sha256:7df6b004cc1da7f2f47baa3433a9291affc6dab3ca2dd19101e83bef6c5a07aa", size = 6635784, upload-time = "2026-03-06T11:56:30.908Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a1/8d/4870eedf7f32f6818fd92c0a7f88f471f9b2b777cbb4468c0199c2470def/smartcrop-0.5.0-py3-none-any.whl", hash = "sha256:d9fab10436f3650d995e1e517233a2cf9a52a4c6255e645814dee621d966b0fe", size = 9194, upload-time = "2026-03-06T11:56:26.447Z" },
+]
+
+[[package]]
+name = "socksio"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/5c/48a7d9495be3d1c651198fd99dbb6ce190e2274d0f28b9051307bdec6b85/socksio-1.0.0.tar.gz", hash = "sha256:f88beb3da5b5c38b9890469de67d0cb0f9d494b78b106ca1845f96c10b91c4ac", size = 19055, upload-time = "2020-04-17T15:50:34.664Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/37/c3/6eeb6034408dac0fa653d126c9204ade96b819c936e136c5e8a6897eee9c/socksio-1.0.0-py3-none-any.whl", hash = "sha256:95dc1f15f9b34e8d7b16f06d74b8ccf48f609af32ab33c608d08761c5dcbb1f3", size = 12763, upload-time = "2020-04-17T15:50:31.878Z" },
 ]
 
 [[package]]
