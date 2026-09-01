@@ -835,6 +835,67 @@ Stale/Failing (`/settings/feeds/panel/fetch-tiers`, `_settings_feeds_fetch_tiers
 one section per tier showing each flagged feed's title, its own `reason`
 (whichever escalation attempt first flagged it), and `flagged_at`.
 
+### Page fetches: a second, deliberately different ladder (`services/page_fetch.py`)
+
+Everything above is about *feeds*. Two other things fetch a single *page* URL
+on demand — the tag/lead-image scraper (`_fetch_page_html`) and the
+saved-article re-fetch path (`fetch_readability_article`/
+`fetch_full_page_article`) — and until 2026-08-31 neither could get past a
+browser-identity retry, so a site whose feed is reachable but whose article
+pages are Cloudflare-walled (gottadeal.com's tags, three tamriel-rebuilt.org
+re-fetches) couldn't be helped.
+
+Not a rewrite of the ladder above: the feed ladder is a flag-and-retry loop
+over persisted per-`feed_url` state that an hourly cron escalates through
+across cycles. A page fetch is synchronous, single-URL, and resolved (or not)
+inside one call, so `PageFetcher.fetch()` runs the whole honest → browser →
+proxy → FlareSolverr ladder itself. The one genuinely shared piece — the
+FlareSolverr wire protocol — is factored into `services/flaresolverr.py`,
+imported by both `reader_api.py` (feeds) and `page_fetch.py` (pages).
+
+- **Host-keyed, in-memory state**, not a new meta-DB table: `HostEscalationState`
+  tracks the cheapest tier known to work per `(user, host)` and a 6h cooldown
+  once every tier fails — the direct, tier-aware replacement for
+  `_fetch_page_html`'s old `_waf_block_until`. The cooldown compares the tier
+  available when a host was given up on against the deepest tier available
+  now, so a newly-configured proxy/FlareSolverr immediately lifts an old
+  block with no invalidation hook. In-memory because losing it on restart
+  costs one extra round trip, not a cron cycle — not worth a schema migration.
+- **FlareSolverr gated on an actual `bot_challenge` marker**, not any
+  refusal — same reasoning as the feed ladder's `_is_bot_challenge`. A plain
+  403 (tamriel-rebuilt.org) stops at the proxy tier; a real Cloudflare page
+  reaches FlareSolverr.
+- **`socks5h://` needs no Chrome-style rewrite on this path** — httpx 0.28 (+
+  the `socksio` dependency) accepts it natively for the proxy tier.
+  `flaresolverr.normalize_proxy_scheme` is still needed for FlareSolverr's own
+  POST body, which Chrome's `--proxy-server` flag does require unprefixed.
+- **FlareSolverr is reachable in `proxy_mode="always"` here**, unlike feeds —
+  the ladder is reactive by construction (only reached after shallower tiers
+  already failed on this URL), so the feed ladder's "don't spend Chrome on
+  every fetch" reasoning doesn't apply.
+- **No Tailscale tier.** It's the feed ladder's audited, persisted last
+  resort; an in-memory, host-keyed background fetch has no business reaching
+  the home IP on its own judgment. Revisit only if proxy+FlareSolverr both
+  fail somewhere Tailscale would have helped.
+- **`max_tier` differs by call site**: `fetch_readability_article`/
+  `fetch_full_page_article` default to `"proxy"` (no FlareSolverr) because
+  they also run on the synchronous reader-view render path, where a ~55s
+  solve would hang a page behind an uncancelable spinner.
+  `_refresh_captured_article_for_current_user` (always backgrounded) opts
+  into `"flaresolverr"`. The tag/lead-image path always gets the full ladder.
+- **`ignore_cooldown=True` on `/articles/refresh-content`** — a deliberate
+  click isn't the polite background traffic the cooldown paces. The
+  auto-refetch thread and batch worker leave it `False`; they already have
+  their own host cooldown/pacing.
+- **FlareSolverr's endpoint URL is exempt from `url_guard`; the fetch target
+  never is.** `flaresolverr.solve()` asserts the target passes
+  `is_safe_outbound_url` before ever reaching the solver, but doesn't check
+  the endpoint itself (admin-only config, would refuse any real Docker
+  deployment) — same trust basis the feed hook already relies on.
+- **Settings → Feeds → Fetch Tiers gained a fourth section** for
+  `HostEscalationState.snapshot()`, shown separately from the three feed
+  tables above (different key, different lifetime).
+
 
 ## Suggesting a replacement for a feed on a known dead-end host
 

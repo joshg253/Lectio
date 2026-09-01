@@ -35960,10 +35960,21 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
             proxy_rows = _tier_rows("proxy_feeds")
             tailscale_rows = _tier_rows("tailscale_feeds")
             flaresolverr_rows = _tier_rows("flaresolverr_feeds")
+        # The page-fetch ladder (services/page_fetch.py — tag/lead-image
+        # scraping and the saved-article re-fetch path) is a second,
+        # independent consumer of the same proxy/FlareSolverr backends, with
+        # its own in-memory per-host memory instead of these three tables.
+        # Surfaced here too, or it would be invisible next to the feed ladder
+        # this panel already exists to make visible — see Plan.md.
+        page_fetch_rows = sorted(
+            page_fetcher._state.snapshot(),
+            key=lambda row: (not row["blocked"], row["host"]),
+        )
         html = templates.env.get_template("_settings_feeds_fetch_tiers.html").render({
             "proxy_rows": proxy_rows,
             "tailscale_rows": tailscale_rows,
             "flaresolverr_rows": flaresolverr_rows,
+            "page_fetch_rows": page_fetch_rows,
             "selected_folder_id": root_id,
         })
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})

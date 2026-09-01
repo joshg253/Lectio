@@ -24,6 +24,7 @@ shared FlareSolverr container for no benefit.
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
@@ -36,6 +37,8 @@ from urllib.parse import urlparse
 import httpx
 
 from services import bot_challenge, flaresolverr, tenancy, url_guard
+
+LOGGER = logging.getLogger("lectio.page_fetch")
 
 FetchTier = Literal["honest", "browser", "proxy", "flaresolverr"]
 
@@ -363,6 +366,8 @@ class PageFetcher:
                 # status, success or not, is the answer to report.
                 if attempt.ok:
                     self._state.record_success(uid, host, tier)
+                    if _TIER_RANK[tier] >= _TIER_RANK["proxy"]:
+                        LOGGER.info("[page-fetch] %s served by %s", url, tier)
                     return PageFetchResult(
                         html=attempt.html or "",
                         final_url=attempt.final_url,

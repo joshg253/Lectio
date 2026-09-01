@@ -35,6 +35,10 @@ def configured(tmp_path, monkeypatch):
         legacy_starred=tmp_path / "starred.sqlite",
     )
     main.ensure_meta_schema()
+    # main.page_fetcher's host memory is a process-global singleton — clear it
+    # so another test's escalation state for a reused host doesn't leak into
+    # this panel's "None right now." empty-state assertion.
+    main.page_fetcher._state.clear()
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
         reader.add_entry({
@@ -168,7 +172,26 @@ def test_fetch_tiers_panel_fragment_lists_flagged_feeds(configured):
 def test_fetch_tiers_panel_empty_state(configured):
     resp = _client().get("/settings/feeds/panel/fetch-tiers")
     assert resp.status_code == 200
-    assert resp.text.count("None right now.") == 3  # nothing flagged in any tier
+    # 3 feed-ladder tiers + the page-fetch ladder's own (host-keyed) section.
+    assert resp.text.count("None right now.") == 4
+
+
+def test_fetch_tiers_panel_lists_page_fetch_host_state(configured):
+    """The page-fetch ladder (services/page_fetch.py — tag/lead-image
+    scraping and the saved-article re-fetch path) is a second consumer of the
+    same backends, with its own host-keyed in-memory state instead of the
+    three feed_url-keyed tables above — must be visible here too."""
+    import time as _time
+
+    main.page_fetcher._state.record_block(
+        "u_test", "blocked.example", deepest_available="browser", challenge="Cloudflare block", now=_time.monotonic(),
+    )
+    resp = _client().get("/settings/feeds/panel/fetch-tiers")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "blocked.example" in body
+    assert "Cloudflare block" in body
+    assert "Cooling down" in body
 
 
 def test_unknown_panel_is_404(configured):
