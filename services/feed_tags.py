@@ -425,6 +425,18 @@ def tags_from_url_path(url: str | None) -> list[str]:
 # just the bad meta tag, which would still return nothing useful anyway.
 _YOUTUBE_HOSTS = frozenset({"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"})
 
+# github.com/<owner>/<repo>/releases/... pages are dominated by GitHub's own
+# global site nav/marketing chrome — a "NavGroup" mega-menu whose section
+# headers and product links ("AI CODE CREATION", "DevOps", "Software
+# Development", "Security") read exactly like real tags but are identical on
+# every github.com page, unrelated to the specific release. Confirmed live
+# 2026-08-31 backfilling 7 different repos' releases.atom feeds: every one
+# produced the same four junk values. Scoped to /releases/ specifically
+# (not all of github.com) — a release page has no per-release taxonomy of
+# its own; a repo's real "topics" live on the repo's main page, a different
+# concept, not attempted here.
+_GITHUB_RELEASE_PATH_RE = re.compile(r"^/[^/]+/[^/]+/releases/", re.IGNORECASE)
+
 
 def extract_page_tags(html: str | None, source_url: str | None = None) -> list[str]:
     """Harvest article tags from a source page — the fallback for entries
@@ -438,7 +450,10 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
     """
     if source_url:
         try:
-            if urlparse(source_url).hostname in _YOUTUBE_HOSTS:
+            parsed_source = urlparse(source_url)
+            if parsed_source.hostname in _YOUTUBE_HOSTS:
+                return []
+            if parsed_source.hostname == "github.com" and _GITHUB_RELEASE_PATH_RE.match(parsed_source.path or ""):
                 return []
         except ValueError:
             pass

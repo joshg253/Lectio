@@ -309,6 +309,30 @@ def test_non_youtube_host_is_unaffected():
     assert extract_page_tags('<a rel="tag" href="/x">Real Tag</a>', "https://example.com/post") == ["Real Tag"]
 
 
+# --- github.com/*/releases/ is excluded -------------------------------------
+# A release page's real content is dominated by GitHub's own global nav/
+# marketing chrome ("AI CODE CREATION", "DevOps", "Software Development",
+# "Security" — top-level product links, identical on every github.com page),
+# not per-release taxonomy. Found live 2026-08-31 backfilling 7 different
+# repos' releases.atom feeds: every one produced the same four junk tags.
+
+def test_github_release_page_yields_nothing_even_with_real_looking_anchors():
+    html = '<a rel="tag" href="/topics/devops">DevOps</a><a rel="tag" href="/topics/security">Security</a>'
+    assert extract_page_tags(html, "https://github.com/dborth/fceugx/releases/tag/4.0.1") == []
+
+
+def test_github_non_release_pages_are_unaffected():
+    """Scoped to /releases/ specifically — a repo's main page (or any other
+    github.com path) is not excluded (the "dborth" is the URL-path fallback
+    tier picking up the owner segment, unrelated to this exclusion)."""
+    html = '<a rel="tag" href="/x">Real Tag</a>'
+    assert extract_page_tags(html, "https://github.com/dborth/fceugx") == ["Real Tag", "dborth"]
+
+
+def test_github_blog_is_unaffected():
+    assert extract_page_tags('<a rel="tag" href="/x">Real Tag</a>', "https://github.blog/some-post") == ["Real Tag"]
+
+
 def test_page_tags_empty_input_and_cap():
     assert extract_page_tags(None) == []
     assert extract_page_tags("") == []
