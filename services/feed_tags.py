@@ -437,6 +437,32 @@ _YOUTUBE_HOSTS = frozenset({"youtube.com", "www.youtube.com", "m.youtube.com", "
 # concept, not attempted here.
 _GITHUB_RELEASE_PATH_RE = re.compile(r"^/[^/]+/[^/]+/releases/", re.IGNORECASE)
 
+# Site-wide <nav> landmarks (main menu, mega-menus, mobile-nav duplicates)
+# never legitimately contain per-article tags, but their links are often
+# taxonomy-shaped — neowin.net's global nav links every top-level section via
+# /news/tags/<slug>/, genuine taxonomy hrefs, just for the SITE, not the
+# article — and pass every anchor tier below. Found live 2026-09-01: a real
+# neowin.net article's own tags were captured correctly (a rel="tag" list
+# after the content, exactly where the user pointed), but padded with 10
+# extra site-nav categories (Microsoft, Gaming, Google, Apple, ...) that had
+# nothing to do with the specific post. Stripped before any tier runs — the
+# readability path already strips chrome like this before extracting article
+# text (_strip_site_chrome); this file just never had the equivalent. Bounded
+# (not an unbounded lazy match) so a <nav> with no matching close can't turn
+# into an O(document length) scan per occurrence.
+_NAV_RE = re.compile(r"<nav\b[^>]*>.{0,150000}?</nav>", re.IGNORECASE | re.DOTALL)
+
+# Not every nav menu uses the semantic <nav> landmark _NAV_RE strips — neowin
+# also has a SEPARATE secondary menu bar, <ul class="nav-secondary-menu">,
+# sitting right after </nav> closes (found in the same live check, still
+# leaking DEALS/Gaming/Guides/Hands On/Specs Appeal/Opinion through even
+# after the <nav> strip). Scoped to <ul>, not any element, so a genuine
+# nested list inside real content can't accidentally get eaten by this one.
+_NAV_CLASS_UL_RE = re.compile(
+    r'<ul\b[^>]*\bclass\s*=\s*["\'][^"\']*\bnav\b[^"\']*["\'][^>]*>.{0,20000}?</ul>',
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 def extract_page_tags(html: str | None, source_url: str | None = None) -> list[str]:
     """Harvest article tags from a source page — the fallback for entries
@@ -464,6 +490,8 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
     # regex scan of a few MB is milliseconds. The cap only guards degenerate
     # multi-MB pages (live blogs).
     html = html[:5_000_000]
+    html = _NAV_RE.sub(" ", html)
+    html = _NAV_CLASS_UL_RE.sub(" ", html)
     values: list[str] = []
     for meta in _META_TAG_RE.findall(html):
         attrs: dict[str, str] = {}

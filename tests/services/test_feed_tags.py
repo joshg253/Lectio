@@ -333,6 +333,44 @@ def test_github_blog_is_unaffected():
     assert extract_page_tags('<a rel="tag" href="/x">Real Tag</a>', "https://github.blog/some-post") == ["Real Tag"]
 
 
+# --- site-wide nav chrome is stripped before extraction ---------------------
+# neowin.net: a real article's own tags (a rel="tag" list after the content,
+# exactly where the user pointed) were captured correctly, but padded with
+# site-wide nav categories that have nothing to do with the specific post —
+# found live 2026-09-01. Two separate nav structures on the same page: the
+# semantic <nav> landmark (global mega-menu) and a second <ul class="nav-
+# secondary-menu"> sitting right after </nav> closes, neither wrapped in
+# anything the earlier tiers already knew to ignore.
+
+def test_semantic_nav_landmark_is_stripped():
+    html = (
+        '<nav class="site-nav"><a href="/news/tags/microsoft/">Microsoft</a>'
+        '<a href="/news/tags/gaming/">Gaming</a></nav>'
+        '<div class="article-tags"><a href="/news/tags/windows_11/" rel="tag" '
+        'title="View all posts in Windows 11">Windows 11</a></div>'
+    )
+    out = extract_page_tags(html, "https://www.neowin.net/news/some-article/")
+    assert out == ["Windows 11", "news"]
+
+
+def test_nav_classed_ul_outside_a_nav_landmark_is_also_stripped():
+    html = (
+        '<ul class="nav-secondary-menu"><li><a href="/deals">DEALS</a></li>'
+        '<li><a href="/news/tags/gaming/#tags">Gaming</a></li></ul>'
+        '<div class="article-tags"><a href="/news/tags/windows_11/" rel="tag" '
+        'title="View all posts in Windows 11">Windows 11</a></div>'
+    )
+    out = extract_page_tags(html, "https://www.neowin.net/news/some-article/")
+    assert out == ["Windows 11", "news"]
+
+
+def test_a_real_nested_list_outside_any_nav_class_is_not_touched():
+    """The <ul> stripping is scoped to class="...nav..." specifically — an
+    ordinary content list must survive."""
+    html = '<ul class="recipe-steps"><li>Step one</li><li>Step two</li></ul><a rel="tag" href="/x">Real Tag</a>'
+    assert extract_page_tags(html) == ["Real Tag"]
+
+
 def test_page_tags_empty_input_and_cap():
     assert extract_page_tags(None) == []
     assert extract_page_tags("") == []
