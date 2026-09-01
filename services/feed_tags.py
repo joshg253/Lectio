@@ -212,6 +212,23 @@ _TAXONOMY_QUERY_RE = re.compile(
     r"[?&]([A-Za-z0-9_-]{0,40}?(?:tags?|categor(?:y|ies)|topics?))=([^&#]+)", re.IGNORECASE
 )
 
+# "Posted on 8/31/26 in <a href="/deals/target">Target</a>, <a href="/deals/
+# household-essentials">Household Essentials</a>" — gottadeal.com's byline.
+# The anchors carry no rel="tag", no "tag" class, and no /tag//category/ URL
+# shape (their own top-level section is "/deals/", not a taxonomy word), so
+# none of the tiers above see them at all — this is the only signal on the
+# page. Anchored on the "Posted ... in" text cue rather than href/class,
+# unlike every other tier, but still bounded to a short run of anchors right
+# after that cue (not "any anchor" or the surrounding sentence) — a past
+# attempt on this exact site harvested the whole "in XXX, YYY" phrase as one
+# garbage tag (see the tag-classed-anchor tier's own note above), which this
+# avoids by taking each anchor's own text, not the byline's.
+_POSTED_IN_RE = re.compile(
+    r"\bposted\s+(?:on\s+[^<]{0,20}?\s+)?in\s+((?:<a\b[^>]*>[^<]{1,60}</a>\s*(?:,|and)?\s*)+)",
+    re.IGNORECASE,
+)
+_POSTED_IN_ANCHOR_RE = re.compile(r"<a\b[^>]*>([^<]{1,60})</a>", re.IGNORECASE)
+
 
 def _taxonomy_slug_from_href(href: str) -> str | None:
     """The taxonomy term an href encodes, or None if it encodes none.
@@ -498,6 +515,13 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
             text = (attrs.get("title") or "").strip()
         if len(text) >= 2:
             values.append(text)
+
+    # "Posted ... in <a>Category</a>, <a>Category</a>" byline (see _POSTED_IN_RE).
+    for m in _POSTED_IN_RE.finditer(html):
+        for am in _POSTED_IN_ANCHOR_RE.finditer(m.group(1)):
+            text = html_module.unescape(am.group(1)).strip()
+            if text:
+                values.append(text)
 
     # An archive/sidebar year list is not a set of tags. nwcpp.org's page carries
     # 2000-2026 down the side, and all sixteen were harvested onto one post. A real

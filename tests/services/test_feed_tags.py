@@ -767,6 +767,45 @@ def test_path_tags_work_with_no_html_at_all():
     ]
 
 
+# --- "Posted ... in <a>Category</a>, <a>Category</a>" byline ---------------
+# gottadeal.com's real taxonomy: found live 2026-08-31 on a real entry that
+# was already reachable (the proxy escalation fix landed first) but still
+# yielded only the generic path tag "deals" — its per-article anchors carry
+# no rel="tag", no "tag" class, and their href ("/deals/target") doesn't
+# match the /tag//category/ URL-shape tier either, since "deals" is the
+# site's own top-level section, not a taxonomy word.
+
+def test_posted_in_byline_anchors_are_captured():
+    html = ('<font color=#888888>Posted on 8/31/26 in '
+            '<a href="/deals/target">Target</a>, '
+            '<a href="/deals/household-essentials">Household Essentials</a></font>')
+    out = extract_page_tags(html, "https://gottadeal.com/deals/some-slug-476534")
+    assert "Target" in out
+    assert "Household Essentials" in out
+
+
+def test_posted_in_single_category():
+    html = 'Posted in <a href="/deals/electronics">Electronics</a>'
+    assert extract_page_tags(html) == ["Electronics"]
+
+
+def test_posted_in_requires_an_adjacent_anchor():
+    """The cue text alone (no anchor right after "in") must not match —
+    otherwise this tier degrades into the free-prose-harvest failure mode
+    test_sentence_length_text_is_not_a_tag guards against for the anchor-text
+    tiers."""
+    assert extract_page_tags("<p>Posted in the comments below by a reader.</p>") == []
+
+
+def test_posted_in_does_not_reach_past_a_run_of_anchors():
+    """A sentence AFTER the anchor run must not get pulled in — only the
+    anchors themselves are tags."""
+    html = ('Posted in <a href="/deals/target">Target</a> and other places '
+            'you might not expect to find a bargain this good.')
+    out = extract_page_tags(html)
+    assert out == ["Target"]
+
+
 # --- the same taxonomy stated twice ----------------------------------------
 
 def test_meta_and_path_forms_collapse_to_one_chip():
