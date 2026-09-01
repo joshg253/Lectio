@@ -233,6 +233,17 @@ def test_page_tags_article_tag_metas():
     assert extract_page_tags(html) == ["Windows 11", "Backup", "Storage"]
 
 
+def test_page_tags_og_article_tag_metas():
+    """initialcommit.com: og:article:tag, not bare article:tag — same
+    one-tag-per-meta convention (Open Graph's own og: prefix on the
+    article: namespace), found live 2026-08-31 surveying untagged feeds
+    once the page-fetch escalation fix made the page reachable at all."""
+    html = '''<meta property="og:article:section" content="Programming"/>
+      <meta property="og:article:tag" content="programming"/>
+      <meta property="og:article:tag" content="coding"/>'''
+    assert extract_page_tags(html) == ["programming", "coding"]
+
+
 def test_page_tags_keywords_split_and_dedupe():
     html = '''<meta name="keywords" content="python, AI,  python , machine learning">'''
     assert extract_page_tags(html) == ["python", "AI", "machine learning"]
@@ -750,6 +761,16 @@ def test_structure_words_are_dropped():
     assert tags_from_url_path("https://example.com/blog/post/my-title") == []
 
 
+def test_front_main_routing_segments_are_dropped():
+    """netbeans.apache.org: /front/main/blogs/entry/<slug> — found live
+    2026-08-31 in the untagged-feed survey. "front"/"main" are this site's
+    own URL routing, not a subject, same class as blog/entry/page already
+    in the stopword list."""
+    assert tags_from_url_path(
+        "https://netbeans.apache.org/front/main/blogs/entry/netbeans-status-interview-at-javaone/"
+    ) == []
+
+
 def test_bad_input_is_safe():
     for value in (None, "", "not a url", "https://example.com"):
         assert tags_from_url_path(value) == []
@@ -804,6 +825,38 @@ def test_posted_in_does_not_reach_past_a_run_of_anchors():
             'you might not expect to find a bargain this good.')
     out = extract_page_tags(html)
     assert out == ["Target"]
+
+
+# --- aria-label="... tagged with X" -----------------------------------------
+# labnol.org (Digital Inspiration): tag chips carry no rel="tag", no "tag"
+# class, and their href (e.g. "/google-calendar") has no /tag//category/
+# shape either — the accessibility label is the only signal. Found live
+# 2026-08-31 in the same untagged-feed survey as the og:article:tag fix.
+
+def test_aria_label_tagged_with_is_captured():
+    html = ('<a href="/google-calendar" aria-label="View all posts tagged with Google Calendar">'
+            '#google calendar</a>')
+    assert extract_page_tags(html) == ["Google Calendar"]
+
+
+def test_aria_label_tagged_with_single_quotes():
+    html = "<a href='/x' aria-label='View all posts tagged with Mail Merge for Gmail'>text</a>"
+    assert extract_page_tags(html) == ["Mail Merge for Gmail"]
+
+
+def test_aria_label_scoped_to_the_attribute_not_page_prose():
+    """"tagged with" appearing elsewhere on the page (not inside an
+    aria-label) must not become a tag."""
+    html = "<p>This post is tagged with enthusiasm and a healthy dose of sarcasm.</p>"
+    assert extract_page_tags(html) == []
+
+
+def test_aria_label_multiple_chips_all_captured():
+    html = ('<a aria-label="View all posts tagged with Google Calendar">a</a>'
+            '<a aria-label="View all posts tagged with Mail Merge for Gmail">b</a>')
+    out = extract_page_tags(html)
+    assert "Google Calendar" in out
+    assert "Mail Merge for Gmail" in out
 
 
 # --- the same taxonomy stated twice ----------------------------------------

@@ -185,7 +185,11 @@ _META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.IGNORECASE)
 _META_ATTR_RE = re.compile(
     r'\b(property|name|content)\s*=\s*("([^"]*)"|\'([^\']*)\')', re.IGNORECASE
 )
-_PAGE_TAG_KEYS = {"article:tag", "parsely-tags", "keywords", "news_keywords", "sailthru.tags"}
+# og:article:tag (e.g. initialcommit.com) is the same one-value-per-meta-tag
+# convention as bare article:tag — Open Graph's own og: prefix on top of the
+# article: namespace, not a different taxonomy shape.
+_PAGE_TAG_KEYS = {"article:tag", "og:article:tag", "parsely-tags", "keywords", "news_keywords", "sailthru.tags"}
+_SINGLE_VALUE_META_TAG_KEYS = {"article:tag", "og:article:tag"}
 _MAX_PAGE_TAGS = 15
 # Distinct 4-digit years on one page that mark an archive list rather than tags.
 _ARCHIVE_YEAR_RUN = 5
@@ -228,6 +232,17 @@ _POSTED_IN_RE = re.compile(
     re.IGNORECASE,
 )
 _POSTED_IN_ANCHOR_RE = re.compile(r"<a\b[^>]*>([^<]{1,60})</a>", re.IGNORECASE)
+
+# labnol.org (Digital Inspiration): tag chips carry no rel="tag", no "tag"
+# class, and no /tag//category/ href — their only taxonomy signal is the
+# accessibility label: aria-label="View all posts tagged with Google
+# Calendar". Scoped to the aria-label attribute specifically (not "tagged
+# with" anywhere in the page) so this can't drift into harvesting prose.
+_ARIA_TAGGED_WITH_RE = re.compile(
+    r'aria-label\s*=\s*(?:"[^"]*\btagged\s+with\s+([^"]{1,60})"'
+    r"|'[^']*\btagged\s+with\s+([^']{1,60})')",
+    re.IGNORECASE,
+)
 
 
 def _taxonomy_slug_from_href(href: str) -> str | None:
@@ -282,8 +297,8 @@ def _looks_like_a_tag(text: str) -> bool:
 # reject most noise.
 _PATH_TAG_STOPWORDS = frozenset({
     "a", "amp", "article", "articles", "blog", "blogs", "e", "en", "entry",
-    "index", "p", "page", "pages", "post", "posts", "s", "story", "stories",
-    "us", "www",
+    "front", "index", "main", "p", "page", "pages", "post", "posts", "s",
+    "story", "stories", "us", "www",
 })
 _PATH_TAG_SEGMENT_RE = re.compile(r"^[a-z][a-z0-9-]{2,29}$")
 _MAX_PATH_TAGS = 3
@@ -403,7 +418,7 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
         content = (attrs.get("content") or "").strip()
         if key not in _PAGE_TAG_KEYS or not content:
             continue
-        if key == "article:tag":
+        if key in _SINGLE_VALUE_META_TAG_KEYS:
             values.append(content)
         else:
             values.extend(part.strip() for part in content.split(","))
@@ -522,6 +537,12 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
             text = html_module.unescape(am.group(1)).strip()
             if text:
                 values.append(text)
+
+    # aria-label="... tagged with X" (see _ARIA_TAGGED_WITH_RE).
+    for m in _ARIA_TAGGED_WITH_RE.finditer(html):
+        text = html_module.unescape(m.group(1) or m.group(2) or "").strip()
+        if text:
+            values.append(text)
 
     # An archive/sidebar year list is not a set of tags. nwcpp.org's page carries
     # 2000-2026 down the side, and all sixteen were harvested onto one post. A real
