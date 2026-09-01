@@ -62,6 +62,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from services import bluesky
+from services import flaresolverr as flaresolverr_service
 from services import site_content_plugins
 from services import publish_date as publish_date_service
 from services import deviantart as deviantart_service
@@ -9513,18 +9514,9 @@ def _resolve_proxy_for_fetch(uid: str, feed_url: str) -> str | None:
         return None
 
 
-def _normalize_proxy_scheme_for_flaresolverr(proxy_url: str) -> str:
-    """FlareSolverr passes this straight to Chrome's --proxy-server flag,
-    which only understands plain socks5:// — not socks5h://. The primary
-    proxy's OWN configured URL is socks5h:// on purpose (pysocks/requests
-    needs the "h" to do DNS resolution through the proxy rather than
-    locally), so the two consumers of the same setting need different
-    spellings. Confirmed empirically (2026-08-30): socks5h:// silently broke
-    Chrome's proxy config and it fell through to a bare connection error
-    page instead of the real site."""
-    if proxy_url.startswith("socks5h://"):
-        return "socks5://" + proxy_url[len("socks5h://"):]
-    return proxy_url
+# Moved to services/flaresolverr.py (shared with the page-fetch escalation
+# ladder); kept as a name here since it's part of the module's tested surface.
+_normalize_proxy_scheme_for_flaresolverr = flaresolverr_service.normalize_proxy_scheme
 
 
 def _resolve_flaresolverr_for_fetch(uid: str, feed_url: str) -> tuple[str, str | None] | None:

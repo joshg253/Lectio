@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html as _html
 import io
 import json
 import re
@@ -12,7 +11,7 @@ from typing import TypedDict
 from reader import make_reader
 from reader._storage import Storage as _ReaderStorage
 
-from services import bot_challenge, reader_sanitize
+from services import bot_challenge, flaresolverr, reader_sanitize
 
 
 class _ExtraReaderKwargs(TypedDict, total=False):
@@ -81,15 +80,6 @@ _HTML_SIGS = (b"<!DOCTYPE html", b"<!doctype html", b"<html", b"<HTML")
 _XML_ILLEGAL_BYTES_RE = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
-# FlareSolverr's /v1 endpoint doesn't return the origin's raw bytes — it
-# returns real Chrome's rendered `outerHTML`. For a feed (always served as
-# XML) that's Chrome's own "view source" wrapper: the entire document sits
-# HTML-entity-escaped inside one <pre>. Verified empirically against a real
-# Cloudflare-protected feed (cpp.libhunt.com) — not a documented FlareSolverr
-# contract, just what Chrome always does with an XML response it can't render.
-_FLARESOLVERR_PRE_RE = re.compile(rb"<pre[^>]*>(.*)</pre>", re.IGNORECASE | re.DOTALL)
-
-
 def _fix_flaresolverr_response(session, response, request, **kwargs):
     """Unwrap a FlareSolverr /v1 response back into what a normal feed fetch
     would have returned, so everything downstream (starting with
@@ -113,28 +103,19 @@ def _fix_flaresolverr_response(session, response, request, **kwargs):
     except Exception:
         return None  # not valid JSON — let it fail downstream as a normal HTTP/parse error
 
-    solution = data.get("solution") or {}
-    if data.get("status") != "ok" or not solution:
-        # FlareSolverr itself gave up (its own timeout, browser crash, etc) —
-        # framed as a challenge failure since that's what sent the fetch here
-        # in the first place, not a malformed-feed problem.
-        raise bot_challenge.FeedBlockedError(
-            f"FlareSolverr: {data.get('message') or 'no solution returned'}",
-            getattr(request, "url", "") or "",
-        )
+    # FeedBlockedError propagates uncaught if FlareSolverr itself gave up.
+    solution = flaresolverr.parse_envelope(data, getattr(request, "url", "") or "")
 
-    html_content = str(solution.get("response") or "")
-    origin_status = solution.get("status")
-    pre_match = _FLARESOLVERR_PRE_RE.search(html_content.encode("utf-8", errors="replace"))
-    if pre_match:
-        content = _html.unescape(pre_match.group(1).decode("utf-8", errors="replace")).encode("utf-8")
+    unwrapped = flaresolverr.unwrap_view_source(solution.html)
+    if unwrapped is not None:
+        content = unwrapped
         content_type = "application/rss+xml"
     else:
         # Not the XML-viewer wrapper — origin served real HTML (still a block
         # page, a login wall, whatever). Pass it through as-is so
         # _fix_feed_response's own HTML/challenge detection gets a real look
         # at it, rather than guessing here.
-        content = html_content.encode("utf-8")
+        content = solution.html.encode("utf-8")
         content_type = "text/html"
 
     response.raw = io.BytesIO(content)
@@ -150,8 +131,8 @@ def _fix_flaresolverr_response(session, response, request, **kwargs):
     # The origin's real status, not FlareSolverr's own 200 — so refusal
     # detection upstream still works for a site that's STILL blocking even
     # through a real browser (this isn't a magic bypass, just a real one).
-    if isinstance(origin_status, int):
-        response.status_code = origin_status
+    if solution.status is not None:
+        response.status_code = solution.status
     return None
 
 
@@ -405,9 +386,7 @@ class ReaderApi:
             if not resolved:
                 return request
             flaresolverr_url, stack_proxy_url = resolved
-            body: dict[str, object] = {"cmd": "request.get", "url": original_url, "maxTimeout": 55000}
-            if stack_proxy_url:
-                body["proxy"] = {"url": stack_proxy_url}
+            body = flaresolverr.build_request_body(original_url, proxy_url=stack_proxy_url)
             request.method = "POST"
             request.url = flaresolverr_url
             request.headers = {"Content-Type": "application/json"}
