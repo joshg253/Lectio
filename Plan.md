@@ -971,6 +971,22 @@ not scheduled, just watched.
 - **makeuseof re-fetch returns white images.** Seen once during testing
   2026-08-06 and never investigated. Waiting on a second sighting rather than
   hunting it cold — Josh will flag it if it recurs.
+- **guitarworld.com lessons: an interactive practice widget (MatchMySound,
+  `app.matchmysound.com/embed.html?ass_id=...`) totally missing from Lectio's
+  capture.** Found 2026-09-02 on one entry. Not the same shape as the
+  Soundslice/PremierGuitar item above — that one captures a real iframe that
+  then fails to *load* (creator domain-allowlist). Here nothing embed-shaped
+  reaches Lectio's stored content at all (checked 40 recent entries in the
+  feed, zero matches), and a plain fetch of the live page comes back as a
+  content-free JS shell (zero occurrences of the article's own title text) —
+  same failure Lectio's own fetcher likely hits. Looked paywalled at first
+  (VS Code's unauthenticated browser showed "exclusively for Guitar World
+  Backstage Pass members"), but Josh isn't logged in either way and sees the
+  full article + widget in Vivaldi — probably a client-side/script-driven
+  paywall gate his adblocker kills, not a real server-side one. Since none of
+  the fetch-escalation tiers run an adblocker, they'd likely all hit the same
+  gate regardless. One article, not chased further — revisit only if this
+  turns out to be a pattern across more than this one lesson.
 - **A second raw-Markdown-instead-of-HTML feed, unconfirmed.** The
   blog.gitea.com case is fixed (see git history 2026-08-30); Josh recalls a
   similar wall-of-text symptom on another feed recently but couldn't place
