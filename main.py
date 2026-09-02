@@ -481,6 +481,13 @@ SETTING_DEVIANTART_SYNC_STATUS = "deviantart_sync_status"
 # so the Settings UI can list the failed/unwatched artists as profile links instead
 # of telling the user to "see logs" (which they have no access to).
 SETTING_DEVIANTART_SYNC_DETAIL = "deviantart_sync_detail"
+# Set "1" the moment a sync finds a NEWLY-unwatched (now auto-paused) artist;
+# cleared only when the DeviantArt Integrations sub-tab is actually opened —
+# drives the Integrations/DeviantArt tab dots, deliberately separate from
+# whether the unwatched list itself is empty (that list stays populated for
+# Josh to act on "at some point or not"; this flag is just "there's something
+# new in it you haven't looked at yet").
+SETTING_DEVIANTART_UNWATCHED_DIRTY = "deviantart_unwatched_dirty"
 SETTING_YT_OAUTH_CLIENT_ID = "yt_oauth_client_id"
 SETTING_YT_OAUTH_CLIENT_SECRET = "yt_oauth_client_secret"
 SETTING_YT_OAUTH_ACCESS_TOKEN = "yt_oauth_access_token"
@@ -1485,7 +1492,9 @@ def _schedule_da_sync_resume(uid: str, delay_s: float, next_round: int) -> None:
 
 
 def sync_deviantart_watchlist(auto_resume_round: int = 0) -> dict:
-    """Add a gallery feed for every artist the user Watches (add-only).
+    """Add a gallery feed for every artist the user Watches (add-only), and
+    pause (disable_feed) any subscribed artist newly dropped from the watch
+    list — see the reconcile step in _sync_deviantart_watchlist_locked.
 
     Skips artists already subscribed (anywhere) so it won't duplicate existing
     DeviantArt feeds. When DeviantArt's rate cap interrupts the run, schedules a
@@ -1605,11 +1614,38 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
     invalidate_meta_structure_cache()
     invalidate_unread_counts_cache()
 
-    # Reconcile: surface subscribed DA artists no longer on the watch list. Add-only
-    # on purpose — unsubscribing is a manual decision (curated feeds may outlive a
-    # Watch), so they're reported, not removed.
+    # Reconcile: surface subscribed DA artists no longer on the watch list.
+    # Unsubscribing stays a manual decision (curated feeds may outlive a
+    # Watch), but leaving them actively refreshing was surprising once
+    # noticed — so a NEWLY-unwatched artist's feed(s) get paused (disable_feed,
+    # same as Settings' own pause/disable — no data lost, nothing unsubscribed)
+    # once, the first run that sees them drop off the watch list. Not reapplied
+    # on later runs: if Josh re-enables one by hand (decided to keep it live
+    # despite the unwatch), a later sync must not fight that choice by
+    # disabling it again every time it still shows up as unwatched.
     watching_lower = {a.lower() for a in watching}
     unwatched = sorted(u for u in existing if u not in watching_lower) if watching else []
+    prior_unwatched_lower = {
+        str(u.get("username") or "").strip().lower()
+        for u in _load_da_sync_detail().get("unwatched", [])
+    }
+    newly_unwatched = [u for u in unwatched if u not in prior_unwatched_lower]
+    if newly_unwatched:
+        with get_meta_connection() as conn:
+            placeholders = ",".join("?" for _ in newly_unwatched)
+            rows = conn.execute(
+                f"SELECT id, username FROM deviantart_feeds WHERE COALESCE(source, 'gallery') != 'watch'"
+                f" AND lower(username) IN ({placeholders})",
+                newly_unwatched,
+            ).fetchall()
+        for row in rows:
+            disable_feed(deviantart_service.feed_file_url(str(row["id"])))
+        LOGGER.info(
+            "[deviantart] %d newly-unwatched artist(s) paused (updates disabled, not unsubscribed): %s",
+            len(rows), ", ".join(sorted(str(r["username"]) for r in rows)),
+        )
+        with get_meta_connection() as conn:
+            set_setting(conn, SETTING_DEVIANTART_UNWATCHED_DIRTY, "1")
     if unwatched:
         LOGGER.info("[deviantart] %d subscribed artist(s) no longer watched: %s",
                     len(unwatched), ", ".join(unwatched))
@@ -6944,13 +6980,27 @@ def _dry_run_pattern(
     exclude_shorts: bool = False,
     min_secs: int = 0,
     max_secs: int = 0,
+    unread_only: bool = False,
 ) -> dict:
-    """Preview which entries a pattern-based rule would affect (read + unread, newest first).
+    """Preview which entries a pattern-based rule would affect (read + unread, newest first
+    -- unless ``unread_only``, see below).
 
     ``match_all_if_empty`` supports rules whose keyword is an optional filter (e.g.
     youtube_playlist: a blank keyword means "every entry in scope"). ``exclude_shorts``
     drops YouTube Shorts from the preview so it matches what a youtube_playlist rule
-    with Include-Shorts off would actually add."""
+    with Include-Shorts off would actually add.
+
+    ``unread_only``: mark_as_read (like _run_now_pattern, its actual apply path) only
+    ever acts on unread entries, and the default read+unread scan here is ordered by
+    recency and capped at max_entries -- on a large, active library a genuinely-unread
+    but no-longer-recent entry sits well past that cap and the preview silently never
+    reaches it, even though Run Now (unbounded, read=False) would have caught it fine.
+    Found 2026-09-02: a global-scope rule's preview reported no match for an article
+    ranked ~19,600th by recency in a 123k-entry library. When set, scans read=False
+    with no cap at all -- exactly _run_now_pattern's own scan -- trading "preview can
+    be slow on a huge unread backlog" for "preview mustn't lie about what Run Now will
+    actually do." Other rule types sharing this function (highlight, in particular)
+    legitimately care about already-read entries too, so this defaults off."""
 
     if not keyword:
         if not match_all_if_empty:
@@ -6981,7 +7031,16 @@ def _dry_run_pattern(
         feed_title_map = {str(f.url): feed_display_title(f, str(f.url)) for f in reader.get_feeds()}
 
         def iter_entries():
-            if feed_urls is None:
+            if unread_only:
+                # Mirrors _run_now_pattern's own iter_unread exactly: no limit, no
+                # per-feed split -- a capped/split scan is exactly what missed the
+                # match this option exists to fix.
+                if feed_urls is None:
+                    yield from reader.get_entries(read=False)
+                else:
+                    for furl in feed_urls:
+                        yield from reader.get_entries(feed=furl, read=False)
+            elif feed_urls is None:
                 yield from reader.get_entries(limit=max_entries)
             elif len(feed_urls) == 1:
                 yield from reader.get_entries(feed=next(iter(feed_urls)), limit=max_entries)
@@ -6991,7 +7050,7 @@ def _dry_run_pattern(
                     yield from reader.get_entries(feed=furl, limit=per_feed)
 
         for entry in iter_entries():
-            if total_scanned >= max_entries:
+            if not unread_only and total_scanned >= max_entries:
                 break
             if exclude_shorts and _is_youtube_short(entry):
                 continue
@@ -26939,7 +26998,8 @@ def rules_dry_run_route(
                                       match_all_if_empty=(_is_yt or type in ("instapaper", "quire", "save_article")),
                                       exclude_shorts=(_is_yt and not yt_include_shorts),
                                       min_secs=(max(0, yt_min_minutes) * 60 if _is_yt else 0),
-                                      max_secs=(max(0, yt_max_minutes) * 60 if _is_yt else 0))
+                                      max_secs=(max(0, yt_max_minutes) * 60 if _is_yt else 0),
+                                      unread_only=(type == "mark_as_read"))
         else:
             return JSONResponse({"error": "unknown rule type"}, status_code=400)
     if "error" in result:
@@ -29343,6 +29403,19 @@ def deviantart_unsubscribe_unwatched_route(request: Request):
     return JSONResponse({"ok": True, "count": len(feed_urls)})
 
 
+@app.post("/deviantart/unwatched-viewed")
+def deviantart_mark_unwatched_viewed_route(request: Request):
+    """Clears the Integrations/DeviantArt tab dots — fired when the DeviantArt
+    sub-tab is actually opened, not just the parent Integrations tab (see
+    SETTING_DEVIANTART_UNWATCHED_DIRTY). The unwatched list itself is untouched;
+    this only tracks whether Josh has looked at it since it last changed."""
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_DEVIANTART_UNWATCHED_DIRTY, "0")
+    if is_async_action_request(request, "lectio-da-unwatched-viewed"):
+        return JSONResponse({"ok": True})
+    return RedirectResponse(url="/", status_code=303)
+
+
 @app.post("/deviantart/push-watchlist")
 def deviantart_push_watchlist_route():
     result = push_galleries_to_deviantart_watchlist()
@@ -29497,6 +29570,7 @@ def get_all_settings():
         "deviantart_username": get_runtime_setting(SETTING_DEVIANTART_USERNAME),
         "deviantart_sync_status": get_runtime_setting(SETTING_DEVIANTART_SYNC_STATUS),
         "deviantart_sync_detail": _load_da_sync_detail(),
+        "deviantart_unwatched_dirty": get_runtime_setting(SETTING_DEVIANTART_UNWATCHED_DIRTY) == "1",
         "deviantart_deactivated": _da_deactivated_list(),
         "deviantart_folder_name": _deviantart_folder_name(),
         "quire_client_id": quire_cid,

@@ -7,7 +7,7 @@
       <div class="hl-tab-bar settings-tab-bar" role="tablist">
         <button type="button" class="hl-tab-btn hl-tab-btn--active" data-settings-tab="account" role="tab" aria-selected="true">Account</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="contacts" role="tab" aria-selected="false">Contacts</button>
-        <button type="button" class="hl-tab-btn" data-settings-tab="integrations" role="tab" aria-selected="false">Integrations</button>
+        <button type="button" class="hl-tab-btn" data-settings-tab="integrations" role="tab" aria-selected="false">Integrations<span id="settings-tab-dot-integrations" class="settings-tab-dot" hidden></span></button>
         <button type="button" class="hl-tab-btn" data-settings-tab="feeds" role="tab" aria-selected="false">Feeds</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="automation" role="tab" aria-selected="false">Automation</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="importexport" role="tab" aria-selected="false">Import/Export</button>
@@ -117,7 +117,7 @@
       <div id="settings-tab-integrations" class="settings-tab-panel" hidden>
         <div class="feeds-tab-bar" role="tablist">
           <button type="button" class="feeds-tab-btn feeds-tab-btn--active" data-int-view="youtube" role="tab" aria-selected="true">YouTube</button>
-          <button type="button" class="feeds-tab-btn" data-int-view="deviantart" role="tab" aria-selected="false">DeviantArt</button>
+          <button type="button" class="feeds-tab-btn" data-int-view="deviantart" role="tab" aria-selected="false">DeviantArt<span id="settings-tab-dot-deviantart" class="settings-tab-dot" hidden></span></button>
           <button type="button" class="feeds-tab-btn" data-int-view="instapaper" role="tab" aria-selected="false">Instapaper</button>
           <button type="button" class="feeds-tab-btn" data-int-view="pinterest" role="tab" aria-selected="false">Pinterest</button>
           <button type="button" class="feeds-tab-btn" data-int-view="quire" role="tab" aria-selected="false">Quire</button>
@@ -205,7 +205,7 @@
               <ul id="sett-da-deactivated-list" class="settings-da-artist-list"></ul>
             </div>
             <div id="sett-da-unwatched-wrap" hidden>
-              <p class="settings-hint" style="margin-bottom:0.2rem"><strong>Subscribed but no longer watched</strong> — kept on purpose; unsubscribe below, or leave them and unsubscribe by hand:</p>
+              <p class="settings-hint" style="margin-bottom:0.2rem"><strong>Subscribed but no longer watched</strong> — updates paused automatically the first time this was noticed (nothing lost or unsubscribed); re-enable one from Feed Properties to keep following it live, unsubscribe below, or leave it paused:</p>
               <ul id="sett-da-unwatched-list" class="settings-da-artist-list"></ul>
               <button type="button" id="sett-da-unsubscribe-unwatched" class="settings-inline-btn">Unsubscribe all unwatched</button>
               <span id="sett-da-unsubscribe-unwatched-status" class="settings-inline-status"></span>

@@ -753,6 +753,23 @@
             </div>
           </div>
         </div>
+        {% if selected_feed_tag %}
+        {# Set by clicking a suggested-tag chip's name in the entry pane
+           (feed-tag-filter-name). Precise server-side match against
+           entry_feed_tags, not the free-text "Filter this view" box below —
+           see get_entry_ids_with_feed_tag. Dropped by any other toolbar link
+           (sort/read-filter/tag) since tb_base doesn't carry it forward:
+           deliberately a lightweight preview, not a sticky scope. #}
+        <div class="feed-tag-filter-active-row">
+          <span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">sell</span>
+          Filtering: #{{ selected_feed_tag }}
+          <a class="feed-tag-filter-clear"
+             href="{{ tb_base }}{{ tb_sort }}{{ tb_rf }}"
+             title="Clear feed-tag filter" aria-label="Clear feed-tag filter">
+            <span class="material-symbols-rounded" aria-hidden="true">close</span>
+          </a>
+        </div>
+        {% endif %}
         <div id="toolbar-search-row" class="toolbar-search-row{% if not selected_query %} toolbar-search-hidden{% endif %}">
           <form method="get" action="/" class="posts-search-form" role="search" aria-label="Search posts">
             {# Searching from the Inbox must search the Inbox. #}

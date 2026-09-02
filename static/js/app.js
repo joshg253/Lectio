@@ -2788,6 +2788,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     const tagsHeaderBtn = document.getElementById('tags-header-btn');
     const TAGS_COLLAPSED_KEY = 'lectio-tags-collapsed';
     let problematicFeedsViewedThisSession = false;
+    let daUnwatchedViewedThisSession = false;
 
     function applyTagsCollapsed(collapsed) {
       if (!tagsTreeBlock) return;
@@ -2839,6 +2840,25 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         await fetch('/settings/problematic-feeds/viewed', {
           method: 'POST',
           headers: { 'X-Requested-With': 'lectio-problematic-feeds-viewed' },
+          credentials: 'same-origin',
+        });
+      } catch (_err) {
+        // ignore
+      }
+    }
+
+    async function markDeviantArtUnwatchedViewed() {
+      // Clear the dots the instant the deepest tab (DeviantArt) opens, rather
+      // than waiting on the round-trip — the unwatched list itself is
+      // untouched, so there's nothing to lose by clearing optimistically.
+      document.getElementById('settings-tab-dot-integrations')?.setAttribute('hidden', '');
+      document.getElementById('settings-tab-dot-deviantart')?.setAttribute('hidden', '');
+      if (daUnwatchedViewedThisSession) return;
+      daUnwatchedViewedThisSession = true;
+      try {
+        await fetch('/deviantart/unwatched-viewed', {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'lectio-da-unwatched-viewed' },
           credentials: 'same-origin',
         });
       } catch (_err) {
@@ -14233,6 +14253,13 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         const daActionStatus = document.getElementById('sett-da-action-status');
         if (daActionStatus && d.deviantart_sync_status) daActionStatus.textContent = d.deviantart_sync_status;
         renderDaSyncDetail(d.deviantart_sync_detail, daConnected, d.deviantart_deactivated);
+        // Yellow dot on Integrations + DeviantArt tabs when a sync just
+        // auto-paused a newly-unwatched artist; cleared only by actually
+        // opening the DeviantArt sub-tab (see the click handler below), not
+        // by this data load or by opening Integrations alone.
+        const daDirty = Boolean(d.deviantart_unwatched_dirty);
+        document.getElementById('settings-tab-dot-integrations')?.toggleAttribute('hidden', !daDirty);
+        document.getElementById('settings-tab-dot-deviantart')?.toggleAttribute('hidden', !daDirty);
         // Quire integration: creds, connection status, project picker, usage meter.
         v('sett-quire-id', d.quire_client_id);
         secretField('sett-quire-secret', d.quire_client_secret_set, d.quire_client_secret_masked);
@@ -15369,6 +15396,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         intTab.querySelectorAll('[data-int-panel]').forEach(panel => {
           panel.hidden = panel.getAttribute('data-int-panel') !== view;
         });
+        if (view === 'deviantart') void markDeviantArtUnwatchedViewed();
       });
     });
 
@@ -17661,6 +17689,33 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           targetInput.value = typedTokens.join(' ');
           suggestionButton.disabled = true;
           entryTagsForm?.querySelector('button[type="submit"]')?.click();
+        });
+      }
+
+      // Clicking the tag NAME itself (not the +) narrows the current view to
+      // posts carrying this feed tag — a lightweight server-side preview
+      // (list_entries_for_feeds' selected_feed_tag), not the persisted
+      // tag_filter rule the ▲/▼ buttons arm. Whatever's currently loaded
+      // (this folder/feed, sort, read filter) stays as-is; only feed_tag is
+      // added, so it composes with the current view rather than forcing a
+      // single-feed scope.
+      for (const nameButton of document.querySelectorAll('[data-feed-tag-filter]')) {
+        if (nameButton.dataset.boundClick) {
+          continue;
+        }
+        nameButton.dataset.boundClick = '1';
+        nameButton.addEventListener('click', () => {
+          const tag = nameButton.getAttribute('data-feed-tag-filter');
+          if (!tag) return;
+          const targetUrl = new URL(window.location.href);
+          targetUrl.searchParams.set('feed_tag', tag);
+          if (typeof loadScopePanesWithoutFullRefresh === 'function') {
+            loadScopePanesWithoutFullRefresh(targetUrl.toString()).catch(() => {
+              window.location.href = targetUrl.toString();
+            });
+          } else {
+            window.location.href = targetUrl.toString();
+          }
         });
       }
 
