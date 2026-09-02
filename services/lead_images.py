@@ -656,8 +656,25 @@ class LeadImageService:
     # Per-feed injected-block stripping: maps a host substring to a tuple of
     # CSS class markers.  Divs whose class attribute contains ALL markers are
     # removed before image extraction so sidebar/promo thumbnails don't win.
+    #
+    # pcgamer.com / guitarplayer.com: Future plc's shared CMS appends a
+    # <div class="product"><figure class="van-image-figure">...</figure></a>
+    # <p>2026 games: All the upcoming games<br/>Best PC games: ...</p></div>
+    # "related roundup" widget to most articles — found live 2026-09-01 on a
+    # pcgamer.com post whose feed content had exactly ONE <img> total, and it
+    # was this widget's 654x661 thumbnail (uncaptioned, near-square), so it
+    # won the lead-image pick by default; the real 2345x1319 article photo
+    # never made it into the feed at all. Confirmed at scale before adding
+    # this: 366/671 pcgamer.com entries and 7/100 guitarplayer.com entries
+    # carry the exact class="product" wrapper. Deliberately narrower than
+    # "van-image-figure" alone, which Future's CMS also uses for genuine
+    # inline content figures (a real, captioned "(Image credit: Future)"
+    # guitar-tab image was found using van-image-figure with no product
+    # wrapper) — stripping on that alone would eat real article images too.
     _FEED_STRIP_RULES: dict[str, tuple[str, ...]] = {
         "mynorthwest.com": ("related", "alignright"),
+        "pcgamer.com": ("product",),
+        "guitarplayer.com": ("product",),
     }
 
     _FEED_STRIP_DIV_RE = re.compile(r'<(/?)div\b[^>]*>', re.IGNORECASE)
