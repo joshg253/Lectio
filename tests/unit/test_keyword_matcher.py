@@ -184,6 +184,11 @@ def test_dry_run_unread_only_reaches_a_match_the_capped_scan_would_miss(isolated
     assert capped["total_matches"] == 0
     assert uncapped["total_matches"] == 1
     assert uncapped["matches"][0]["title"] == "Apple's iCloud thing"
+    # The client picks its "(read + unread)" vs "unread entries" wording off
+    # this field -- claiming a broader scan than actually happened is its own
+    # bug (found 2026-09-02, right after this fix shipped).
+    assert capped["unread_only"] is False
+    assert uncapped["unread_only"] is True
 
 
 # --- curly punctuation folds, so a term matches either spelling ---------------

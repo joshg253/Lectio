@@ -12634,10 +12634,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           const matches = data.matches || [];
           const summary = document.createElement('div');
           summary.className = 'hl-rule-dryrun-summary';
+          // mark_as_read only ever acts on unread entries (see unread_only on
+          // _dry_run_pattern) -- saying "(read + unread)" when the scan was
+          // actually unread-only claimed a broader check than really happened.
+          const scopeLabel = data.unread_only ? 'unread entries' : 'entries (read + unread)';
           if (matches.length === 0) {
-            summary.textContent = 'No matches in last ' + (data.total_scanned || 0) + ' entries (read + unread)';
+            summary.textContent = 'No matches in last ' + (data.total_scanned || 0) + ' ' + scopeLabel;
           } else {
-            summary.textContent = data.total_matches + ' match' + (data.total_matches === 1 ? '' : 'es') + (data.truncated ? ' (showing first 20)' : '') + ' in last ' + (data.total_scanned || 0) + ' entries (read + unread)';
+            summary.textContent = data.total_matches + ' match' + (data.total_matches === 1 ? '' : 'es') + (data.truncated ? ' (showing first 20)' : '') + ' in last ' + (data.total_scanned || 0) + ' ' + scopeLabel;
           }
           panel.appendChild(summary);
           /* Why a tag filter found nothing. '-mac, +pc' reads as "drop Apple,

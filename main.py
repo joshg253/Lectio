@@ -7093,6 +7093,7 @@ def _dry_run_pattern(
         "total_scanned": total_scanned,
         "total_matches": total_matches,
         "truncated": total_matches > result_limit,
+        "unread_only": unread_only,
     }
 
 
