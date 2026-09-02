@@ -96,13 +96,28 @@ def _auth_headers(access_token: str) -> dict:
     return {"User-Agent": _USER_AGENT, "Authorization": f"Bearer {access_token}"}
 
 
+_QUOTA_REASONS = {"quotaExceeded", "dailyLimitExceeded", "userRateLimitExceeded", "rateLimitExceeded"}
+
+
 def _raise_for_quota(resp: httpx.Response, what: str) -> None:
     if resp.status_code == 200:
         return
-    body = resp.text[:300]
-    if resp.status_code == 403 and "quotaExceeded" in body:
-        raise QuotaExceeded(f"{what}: daily YouTube API quota exceeded")
-    raise RuntimeError(f"{what} failed: HTTP {resp.status_code}: {body}")
+    if resp.status_code == 403:
+        # Parsed from the full JSON body, not a truncated substring match --
+        # raised 2026-08-31: Google's real error wraps its `reason` field in a
+        # verbose, HTML-linked `message` (repeated at both the top level and
+        # inside errors[0]) that alone runs well past a 300-char truncation,
+        # so a truncated-text "quotaExceeded" in body check missed it. Once
+        # missed here, a batch add treated every remaining video as an
+        # ordinary per-video failure instead of stopping cleanly and
+        # preserving what had already succeeded.
+        try:
+            reasons = {e.get("reason") for e in resp.json().get("error", {}).get("errors", [])}
+        except Exception:
+            reasons = set()
+        if reasons & _QUOTA_REASONS:
+            raise QuotaExceeded(f"{what}: daily YouTube API quota exceeded")
+    raise RuntimeError(f"{what} failed: HTTP {resp.status_code}: {resp.text[:300]}")
 
 
 def list_playlists(access_token: str) -> list[dict]:
