@@ -13489,6 +13489,13 @@ def _bbcode_to_html(text: str) -> str:
                  r'<details><summary>Spoiler</summary>\1</details>', out, flags=re.I | re.S)
     out = re.sub(r'\[h([1-6])\](.*?)\[/h\1\]',
                  r'<h\1>\2</h\1>', out, flags=re.I | re.S)
+    # [line] — IPB/Invision's horizontal-rule tag (Nexus Mods news posts),
+    # self-closing with no [/line] counterpart. Not in _BBCODE_SIGNAL_RE:
+    # "line" alone would false-positive on real prose like matplotlib's
+    # documented fmt string "[marker][line][color]" (freecodecamp.org),
+    # confirmed live 2026-09-01 — genuine BBCode posts already carry other
+    # signal tags ([size], [url], ...) that trigger detection without it.
+    out = re.sub(r'\[line\]', r'<hr>', out, flags=re.I)
 
     # inline
     out = re.sub(r'\[b\](.*?)\[/b\]', r'<strong>\1</strong>', out, flags=re.I | re.S)
