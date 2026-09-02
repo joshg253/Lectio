@@ -62,14 +62,34 @@ and DeviantArt integration calls included. So the region to instrument is now na
 tag_block and before `list_entries`'s own fetch begins** — add a tick there before theorizing
 further.
 
-**Instrumented 2026-09-01, not yet re-measured live.** New `[perf] home: gap_block=%dms
-(badges=%dms title_map=%dms rest=%dms)` log line (main.py, right before `posts_start`) splits this
-region into the two reader-touching calls (`get_saved_unread_count`/`get_saved_counts_by_folder`/
-`get_starred_inbox_total` as `badges`, `get_feed_title_map` as `title_map`) versus the pure-Python
-remainder (`rest` — inactive-feed sorting, the folder-tree loop, limit calc). If `badges`/`title_map`
-dominate during a concurrent refresh, that confirms the reader-DB-lock theory; if `rest` dominates
-instead, the culprit is elsewhere (GIL/CPU contention on the folder loop, contrary to the "already
-fixed to lazy" comment at that code). Needs a live capture during a refresh pass to read.
+**Instrumented and measured live, 2026-09-01, right after a restart with refresh/FlareSolverr churn
+running.** New `[perf] home: gap_block=%dms (badges=%dms title_map=%dms rest=%dms)` log line
+(main.py, right before `posts_start`) confirms the theory cleanly: across five captured stalls
+(2.1s-9.7s gap_block), `badges` accounted for 98-100% of the gap every time; `title_map` and the
+pure-Python `rest` (folder-tree loop, inactive-feed sort) stayed at 0-6ms even on the worst request.
+Rules out `get_feed_title_map` and the folder loop entirely — the "already fixed to lazy" comment
+there holds up.
+
+`badges` wraps `get_saved_unread_count()` / `get_saved_counts_by_folder()` / `get_starred_inbox_total()`.
+Only the first touches the reader DB (a raw `db.execute(...)` on `reader._storage.get_db()`,
+main.py:15789) — the other two are meta-DB-only. That raw reader query is the prime suspect for
+the actual lock wait.
+
+**But it is not confined to that one call.** In the same capture window, `meta_block` (app's own
+meta DB, normally 7-80ms) spiked to 1730ms and 2391ms, and `posts_block` (which calls
+`list_entries_for_feeds`, a different reader-DB path) spiked to 7325ms — both independent of
+`get_saved_unread_count`. So the mechanism is not "one slow query to optimize" — it's *whichever*
+query happens to be mid-flight when the refresh thread commits a write that gets stuck behind a
+lock. This matches the busy_timeout-stacking theory already floated for the Read Above/Below WAL
+item above; the two are very likely the same root cause.
+
+**Next, before any fix:** confirm this is actually SQLite lock-wait (vs. some other serialization,
+e.g. a Python-level lock/GIL artifact) by instrumenting the busy-wait itself — reader's and the
+meta connection's configured `busy_timeout`/`timeout=` values, and ideally a `sqlite3_trace`/
+`PRAGMA busy_timeout` check plus logging actual `SQLITE_BUSY` retries if reader exposes them. If
+confirmed, the fix is likely on the WAL/checkpoint or refresh-transaction-granularity side (per the
+Read Above/Below item's lead), not a rewrite of `get_saved_unread_count` — needs a plan before
+touching anything, this is a shared-connection-behavior change, not a local one.
 
 **A second capture, same day, sharpens it further.** `GET /?folder_id=11&read_filter=unread` (a
 tiny folder — 16 feeds, 3 entries) logged `5498ms`, and its own follow-up chunk request logged
