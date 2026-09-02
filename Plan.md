@@ -744,6 +744,28 @@ before any code.
 
 **Grab bag** — low-urgency, independent of each other and of everything above.
 
+### `make rebuild` cycle is 100-130s, getting annoying under heavy iteration
+
+Noted 2026-09-01: real numbers from a session doing several rebuild-test cycles in a
+row — `docker compose build` (dominated by the layer-export substep) runs ~60-70s,
+then container start-to-healthy adds another 40-55s, consistently. Not new, just
+not measured until now; been "well over a minute" for days per Josh. Not painful
+for a normal single deploy, but a session iterating on a live-diagnosis loop
+(instrument → rebuild → observe → repeat, e.g. the refresh-contention gap_block
+work above) eats minutes per cycle on this alone.
+
+Not investigated. Two separate things to look at if it's worth the time:
+
+- **Build/export time** — likely the BuildKit layer-export step; see
+  [[docker-disk-pressure]] (cache grows ~1GB/session already).
+- **Start-to-healthy time** — may not be independent of the post-restart startup
+  flood already tracked above (backfill + YouTube recheck + orphan sweep + a full
+  refresh batch all firing at once right after boot) — worth checking whether
+  they're the same root cause before treating this as a second problem.
+
+Unclear how much longer this session will be in heavy-iteration mode, so not
+scoped further — revisit if it keeps coming up.
+
 ### "Filter this view" — two follow-ups left
 
 - **`list_entries_for_feeds` enriches every record it returns**, so both
