@@ -12,6 +12,16 @@ Within a tier, related items are clustered under a bold sub-heading; unrelated i
 Two standing watch-lists (CodeQL, Parked) moved to their own section at the end — nothing in them
 is scheduled, they're just what to check if a related symptom recurs.
 
+## Up next
+
+### Rule scope: allow selecting multiple folders, not just one
+
+Requested by Josh 2026-08-31; **earmarked 2026-09-02 for a dedicated new session** — promoted
+here so it isn't buried under Tier 4. A rule's scope currently picks a single feed or a single
+folder; there's no way to scope one rule to several folders at once without duplicating the rule
+per folder. Not investigated yet — needs a look at how scope is stored/matched today
+(`rule_scope`/`rule_scope_id`) before sizing the change.
+
 ## Tier 1 — actively impeding unread-clearing
 
 **Refresh-contention latency** — home-route stalls, post-refresh read-range slowness, the GIL-contention tally, and the post-restart startup flood are all the same investigation now; merged into one item below.
@@ -113,6 +123,7 @@ is one CPU-hungry thread, not many.
 | 2026-08-23 | 4 back-to-back `GET /?folder_id=1&star_only=1&kept=starred` (clicked Saved) | 2114/7882/8684/18192/9303ms | Cluster, not a one-off — same gap signature (list_entries logs fast, posts_block/meta_block absorb the delay) ~5-7 min after a container restart; may correlate with post-restart cold caches/backfill rather than being independent of it |
 | 2026-08-30 | `GET /?folder_id=1&read_filter=unread` | 9786ms | ~7 min after a restart — **confirms** the 2026-08-23 5-7-min-post-restart correlation rather than just suggesting it. Same tag_block→list_entries gap (~5.8s, `meta_block=75ms`+`tag_block=0ms` at :37.4, `list_entries` fetch not starting until ~:43.2) |
 | 2026-08-30 | `GET /?folder_id=1&read_filter=unread&list_feed_url=...jsnover.com...` | 9216ms | ~9 min after the same restart — still elevated a bit past the 5-7-min band, so the window isn't a sharp cutoff |
+| 2026-09-02 | [entry pane, play.nobleknight.com](https://lectio.catfork.win/?folder_id=23&sort_dir=desc&read_filter=unread&feed_url=https%3A%2F%2Fplay.nobleknight.com%2Ffeed&entry_id=https%3A%2F%2Fplay.nobleknight.com%2F%3Fp%3D19266) | "really long time to open" | Not measured server-side yet — flagged by Josh, not chased in-session. Same folder (23) as the 2026-08-23 cluster above |
 
 **Read Above/Below, same shape:**
 
@@ -168,6 +179,15 @@ entry's stored body has exactly one `<img>`, a normal (non-signed-looking) `cdnb
 CDN URL. So resolution ran and came back empty despite an obvious single candidate sitting right
 in the content. Not investigated further — worth checking whether this is systemic across
 ArtStation entries or a one-off before digging into the resolver itself.
+
+### A Bluesky entry has a thumb but no lead image
+
+Flagged 2026-09-02, not investigated:
+[entry](https://lectio.catfork.win/?folder_id=6&read_filter=unread&feed_url=https%3A%2F%2Fbsky.app%2Fprofile%2Fdid%3Aplc%3Ae2ehcohu3lrobwew5gzqd7vp%2Frss&entry_id=at%3A%2F%2Fdid%3Aplc%3Ae2ehcohu3lrobwew5gzqd7vp%2Fapp.bsky.feed.post%2F3muab5zxz4k2a)
+— a thumbnail resolved and shows in the list, but the entry pane shows no lead image. Opposite
+shape from the usual "no thumb" reports; worth checking whether the thumb and lead-image resolvers
+disagree on this entry, or whether Bluesky's `at://` post feeds need their own handling (same
+family as the DeviantArt/webcomic per-source lead-image work already in git history).
 
 ### Shared proxy/FlareSolverr escalation for page fetches — SHIPPED 2026-08-31
 
@@ -252,6 +272,64 @@ in reader as disabled now calls `enable_feed()`). Remaining idea, not asked
 for: auto-disambiguate duplicate display titles (e.g. suffix from the feed
 URL path) — the tree tooltip already shows the URL, but identical titles
 still invite unsubscribing the wrong feed.
+
+**Field reports, 2026-09-02 — flagged, not investigated unless noted**
+
+### Suggested-tag chips render blue — likely a regression from today's clickable-name change
+
+The chip name (`.feed-tag-filter-name`) went from a plain `<span>` to a `<button>` today (see
+"click a suggested tag to filter the view", git history) so it could be clickable. Checked while
+triaging this report: the app has a global `button { background: var(--accent); color: white; ... }`
+reset (`static/style.css` ~line 1915) that every bare `<button>` picks up unless overridden.
+`.feed-tag-filter-name`'s own rule does override background/color/border explicitly, and by CSS
+specificity a class selector should win over a bare-tag one — so on paper this shouldn't be blue.
+Not fully explained: possibly a browser default `-webkit-appearance`/`appearance` control style
+leaking through underneath (not overridden), possibly something else. Needs an actual visual check
+in a browser, not just reading the CSS.
+
+### Global Note (?) — posts list scrolls way up sometimes
+
+"open note? posts list scrolls way up sometimes" — vague as reported, not reproduced. Sounds like
+opening the Global Note (or some other panel) occasionally yanks the post list's scroll position.
+Needs a repro before it's actionable — ask Josh what exactly triggers it next time it happens.
+
+### Global "hide subscriber-only" toggle for YouTube
+
+Feature idea, not scoped: a library-wide setting to hide YouTube videos that are members/subscriber-only,
+similar in spirit to the existing hide-Shorts/hide-unpremiered per-feed display prefs
+(`_DISPLAY_PREF_KEYS`). Not investigated — needs checking whether the feed data even distinguishes
+subscriber-only videos before sizing this.
+
+### Suggested-tag chips: "+N more" collapses back when any ▲/▼ is toggled
+
+"suggtags collapses when ^v any" — toggling a tag_filter include/exclude sign on ONE chip appears to
+re-collapse the "+N more" expanded state for the whole row (the pane re-renders after a ▲/▼ click,
+per the existing `_maybe_autofetch_on_keep`-adjacent code path, and the expand/collapse state is
+presumably client-side-only and lost on re-render). Not investigated. Same feature area as the
+blue-chip report above — worth looking at both together.
+
+### Larger tag chips / "+^vx" sizing for a specific feed ("Surface")
+
+"larger tags/'+^vx' for Surface" — cryptic as given; sounds like a request for bigger suggested-tag
+chips (or their controls) on a specific feed/folder (Microsoft Surface-related?) where the current
+size is hard to hit/read. Needs Josh to clarify exactly what and where before this is actionable.
+
+### Global ignored suggested-tags list, editable in Settings
+
+Distinct from the existing per-(feed, tag) dismissal (`suppressed_feed_tags`, × on a chip, undo at
+Feed Properties → *Hidden tags* — see "Feed-tag suggestion suppression" below). Josh wants a
+**global** list of tag values (e.g. `comments`) that should never render as a suggested-tag chip on
+*any* feed — filtering the chip from the suggestion UI itself, explicitly **not** a rule that acts
+on entries carrying that tag. Wants it editable somewhere in Settings (a new list, add/remove).
+Not scoped: needs a new setting (JSON list or a small table), a check at chip-render time
+(`feed_tag_suggestions` filtering), and a Settings UI panel.
+
+### MAR scope: only what's currently shown, or newer-not-yet-seen too?
+
+"mark folder only shown or potentially newer that haven't been seen yet?" — a question about what a
+folder's "Mark Read" bulk action should cover: just the entries currently rendered/loaded in the
+list, or also anything newer that hasn't been fetched into view yet. Not resolved — needs Josh to
+say which behavior he actually wants (and whether the two already differ today) before scoping.
 
 ## Tier 3 — maintenance backlog, ready to run
 
@@ -395,14 +473,6 @@ clearing by hand; low urgency otherwise.
   be surgically reverted; the unstar-tagged pass is what removes them.
 
 **Rules engine follow-ups**
-
-### Rule scope: allow selecting multiple folders, not just one
-
-Requested by Josh 2026-08-31. A rule's scope currently picks a single feed or
-a single folder; there's no way to scope one rule to several folders at once
-without duplicating the rule per folder. Not investigated yet — needs a look
-at how scope is stored/matched today (`rule_scope`/`rule_scope_id`) before
-sizing the change.
 
 ### email_batch_queue has the same scope-text-identity fragility rule_uid just fixed elsewhere
 
