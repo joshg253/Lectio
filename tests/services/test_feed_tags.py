@@ -233,6 +233,17 @@ def test_page_tags_article_tag_metas():
     assert extract_page_tags(html) == ["Windows 11", "Backup", "Storage"]
 
 
+def test_page_tags_og_article_tag_metas():
+    """initialcommit.com: og:article:tag, not bare article:tag — same
+    one-tag-per-meta convention (Open Graph's own og: prefix on the
+    article: namespace), found live 2026-08-31 surveying untagged feeds
+    once the page-fetch escalation fix made the page reachable at all."""
+    html = '''<meta property="og:article:section" content="Programming"/>
+      <meta property="og:article:tag" content="programming"/>
+      <meta property="og:article:tag" content="coding"/>'''
+    assert extract_page_tags(html) == ["programming", "coding"]
+
+
 def test_page_tags_keywords_split_and_dedupe():
     html = '''<meta name="keywords" content="python, AI,  python , machine learning">'''
     assert extract_page_tags(html) == ["python", "AI", "machine learning"]
@@ -243,12 +254,121 @@ def test_page_tags_single_quotes_and_parsely():
     assert extract_page_tags(html) == ["linux", "gaming"]
 
 
+def test_page_tags_keywords_falls_back_to_space_split_when_long_and_comma_free():
+    """sethmlarson.dev: keywords ships space-separated, not comma-separated.
+    Left whole this always exceeds the length cap and is silently dropped —
+    found live 2026-08-31 surveying untagged feeds."""
+    html = ('<meta name="keywords" content="python pypi open source maintainer '
+            'urllib3 requests http networking security oss"/>')
+    out = extract_page_tags(html)
+    assert "python" in out
+    assert "urllib3" in out
+    assert "oss" in out
+
+
+def test_page_tags_keywords_short_comma_free_value_stays_one_tag():
+    """A short space-free phrase must NOT get shredded into words — only the
+    long, comma-free shape (guaranteed junk otherwise) triggers the split."""
+    html = '<meta name="keywords" content="machine learning">'
+    assert extract_page_tags(html) == ["machine learning"]
+
+
 def test_page_tags_ignores_other_metas_and_junk():
     html = '''<meta property="og:title" content="Not a tag">
       <meta name="description" content="prose, with, commas">
       <meta property="article:tag" content="">
       <meta property="article:tag" content="''' + ("x" * 80) + '''">'''
     assert extract_page_tags(html) == []
+
+
+# --- youtube.com is excluded entirely ---------------------------------------
+# Its <meta name="keywords"> is fixed, locale-translated UI boilerplate, not
+# per-video content — confirmed live 2026-08-31: 63 sampled entries across
+# unrelated YouTube channels all produced the byte-identical six "tags"
+# ("Video, share, camera phone, video phone, free, upload", German shown
+# here). No other tier has anything real to key on for a YouTube page either.
+
+def test_youtube_watch_page_yields_nothing_even_with_a_keywords_meta():
+    html = '<meta name="keywords" content="Video, teilen, Kamerahandy, Videohandy, kostenlos, hochladen">'
+    assert extract_page_tags(html, "https://www.youtube.com/watch?v=hsm0ahVdb0Q") == []
+
+
+def test_youtube_short_link_host_also_excluded():
+    html = '<meta name="keywords" content="Video, teilen, Kamerahandy, Videohandy, kostenlos, hochladen">'
+    assert extract_page_tags(html, "https://youtu.be/hsm0ahVdb0Q") == []
+
+
+def test_youtube_url_path_fallback_also_suppressed():
+    """Without even a page fetch, tags_from_url_path("/shorts/<id>") would
+    otherwise yield the equally useless "shorts" for every Short regardless
+    of channel or subject."""
+    assert extract_page_tags(None, "https://www.youtube.com/shorts/abc123") == []
+
+
+def test_non_youtube_host_is_unaffected():
+    assert extract_page_tags('<a rel="tag" href="/x">Real Tag</a>', "https://example.com/post") == ["Real Tag"]
+
+
+# --- github.com/*/releases/ is excluded -------------------------------------
+# A release page's real content is dominated by GitHub's own global nav/
+# marketing chrome ("AI CODE CREATION", "DevOps", "Software Development",
+# "Security" — top-level product links, identical on every github.com page),
+# not per-release taxonomy. Found live 2026-08-31 backfilling 7 different
+# repos' releases.atom feeds: every one produced the same four junk tags.
+
+def test_github_release_page_yields_nothing_even_with_real_looking_anchors():
+    html = '<a rel="tag" href="/topics/devops">DevOps</a><a rel="tag" href="/topics/security">Security</a>'
+    assert extract_page_tags(html, "https://github.com/dborth/fceugx/releases/tag/4.0.1") == []
+
+
+def test_github_non_release_pages_are_unaffected():
+    """Scoped to /releases/ specifically — a repo's main page (or any other
+    github.com path) is not excluded (the "dborth" is the URL-path fallback
+    tier picking up the owner segment, unrelated to this exclusion)."""
+    html = '<a rel="tag" href="/x">Real Tag</a>'
+    assert extract_page_tags(html, "https://github.com/dborth/fceugx") == ["Real Tag", "dborth"]
+
+
+def test_github_blog_is_unaffected():
+    assert extract_page_tags('<a rel="tag" href="/x">Real Tag</a>', "https://github.blog/some-post") == ["Real Tag"]
+
+
+# --- site-wide nav chrome is stripped before extraction ---------------------
+# neowin.net: a real article's own tags (a rel="tag" list after the content,
+# exactly where the user pointed) were captured correctly, but padded with
+# site-wide nav categories that have nothing to do with the specific post —
+# found live 2026-09-01. Two separate nav structures on the same page: the
+# semantic <nav> landmark (global mega-menu) and a second <ul class="nav-
+# secondary-menu"> sitting right after </nav> closes, neither wrapped in
+# anything the earlier tiers already knew to ignore.
+
+def test_semantic_nav_landmark_is_stripped():
+    html = (
+        '<nav class="site-nav"><a href="/news/tags/microsoft/">Microsoft</a>'
+        '<a href="/news/tags/gaming/">Gaming</a></nav>'
+        '<div class="article-tags"><a href="/news/tags/windows_11/" rel="tag" '
+        'title="View all posts in Windows 11">Windows 11</a></div>'
+    )
+    out = extract_page_tags(html, "https://www.neowin.net/news/some-article/")
+    assert out == ["Windows 11", "news"]
+
+
+def test_nav_classed_ul_outside_a_nav_landmark_is_also_stripped():
+    html = (
+        '<ul class="nav-secondary-menu"><li><a href="/deals">DEALS</a></li>'
+        '<li><a href="/news/tags/gaming/#tags">Gaming</a></li></ul>'
+        '<div class="article-tags"><a href="/news/tags/windows_11/" rel="tag" '
+        'title="View all posts in Windows 11">Windows 11</a></div>'
+    )
+    out = extract_page_tags(html, "https://www.neowin.net/news/some-article/")
+    assert out == ["Windows 11", "news"]
+
+
+def test_a_real_nested_list_outside_any_nav_class_is_not_touched():
+    """The <ul> stripping is scoped to class="...nav..." specifically — an
+    ordinary content list must survive."""
+    html = '<ul class="recipe-steps"><li>Step one</li><li>Step two</li></ul><a rel="tag" href="/x">Real Tag</a>'
+    assert extract_page_tags(html) == ["Real Tag"]
 
 
 def test_page_tags_empty_input_and_cap():
@@ -697,6 +817,21 @@ def test_anchor_wrapping_markup_is_left_to_the_title_tier():
     assert extract_page_tags(html) == []
 
 
+def test_taxonomy_href_anchor_survives_a_decorative_icon():
+    """tartanllama.xyz: a /tags/cpp/ link wraps ~400 chars of <svg> markup
+    around the visible "C++" label. Found live 2026-08-31 — the anchor was
+    entirely invisible to every tier (not just this one) because the old
+    120-char _ANCHOR_RE cap could never reach </a>."""
+    html = ('<a href="/tags/cpp/" class="relative pr-2 text-lg" data-x="y">'
+            '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+            'class="inline-block opacity-80 -mr-3.5 size-4">'
+            '<path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M5 9l14 0" />'
+            '<path d="M5 15l14 0" /><path d="M11 4l-4 16" /><path d="M17 4l-4 16" /></svg>'
+            '&nbsp;<span>C++</span> </a>')
+    assert extract_page_tags(html) == ["C++"]
+
+
 def test_sentence_length_text_is_not_a_tag():
     """Guards the gottadeal failure: surrounding prose harvested as a tag."""
     long_text = "Posted on 7/29/26 in Woot!, Pet Supplies and a great deal more besides"
@@ -750,6 +885,16 @@ def test_structure_words_are_dropped():
     assert tags_from_url_path("https://example.com/blog/post/my-title") == []
 
 
+def test_front_main_routing_segments_are_dropped():
+    """netbeans.apache.org: /front/main/blogs/entry/<slug> — found live
+    2026-08-31 in the untagged-feed survey. "front"/"main" are this site's
+    own URL routing, not a subject, same class as blog/entry/page already
+    in the stopword list."""
+    assert tags_from_url_path(
+        "https://netbeans.apache.org/front/main/blogs/entry/netbeans-status-interview-at-javaone/"
+    ) == []
+
+
 def test_bad_input_is_safe():
     for value in (None, "", "not a url", "https://example.com"):
         assert tags_from_url_path(value) == []
@@ -765,6 +910,100 @@ def test_path_tags_work_with_no_html_at_all():
     assert extract_page_tags(None, "https://www.guitarplayer.com/lessons/advice-tips/x") == [
         "lessons", "advice tips"
     ]
+
+
+# --- "Posted ... in <a>Category</a>, <a>Category</a>" byline ---------------
+# gottadeal.com's real taxonomy: found live 2026-08-31 on a real entry that
+# was already reachable (the proxy escalation fix landed first) but still
+# yielded only the generic path tag "deals" — its per-article anchors carry
+# no rel="tag", no "tag" class, and their href ("/deals/target") doesn't
+# match the /tag//category/ URL-shape tier either, since "deals" is the
+# site's own top-level section, not a taxonomy word.
+
+def test_posted_in_byline_anchors_are_captured():
+    html = ('<font color=#888888>Posted on 8/31/26 in '
+            '<a href="/deals/target">Target</a>, '
+            '<a href="/deals/household-essentials">Household Essentials</a></font>')
+    out = extract_page_tags(html, "https://gottadeal.com/deals/some-slug-476534")
+    assert "Target" in out
+    assert "Household Essentials" in out
+
+
+def test_posted_in_single_category():
+    html = 'Posted in <a href="/deals/electronics">Electronics</a>'
+    assert extract_page_tags(html) == ["Electronics"]
+
+
+def test_posted_in_requires_an_adjacent_anchor():
+    """The cue text alone (no anchor right after "in") must not match —
+    otherwise this tier degrades into the free-prose-harvest failure mode
+    test_sentence_length_text_is_not_a_tag guards against for the anchor-text
+    tiers."""
+    assert extract_page_tags("<p>Posted in the comments below by a reader.</p>") == []
+
+
+def test_posted_in_does_not_reach_past_a_run_of_anchors():
+    """A sentence AFTER the anchor run must not get pulled in — only the
+    anchors themselves are tags."""
+    html = ('Posted in <a href="/deals/target">Target</a> and other places '
+            'you might not expect to find a bargain this good.')
+    out = extract_page_tags(html)
+    assert out == ["Target"]
+
+
+def test_filed_under_byline_anchors_are_captured():
+    """xania.org (Matt Godbolt's blog): "Filed under:" instead of "Posted
+    in" — same shape, different cue word. Found live 2026-08-31."""
+    html = 'Filed under:\n<a href="/Coding">Coding</a>\n<a href="/AoCO2025">AoCO2025</a>'
+    out = extract_page_tags(html)
+    assert "Coding" in out
+    assert "AoCO2025" in out
+
+
+# --- itemprop="keywords" anchors --------------------------------------------
+# refp.se: real per-article tags via schema.org microdata, no rel="tag", no
+# "tag" class, href "/articles/tagged/x" doesn't match the /tag//tags/
+# taxonomy-href tier either ("tagged" isn't "tag"/"tags"). Found live
+# 2026-08-31.
+
+def test_itemprop_keywords_anchors_are_captured():
+    html = ('<a itemProp="keywords" href="/articles/tagged/developer-life">#developer-life</a>'
+            '<a itemProp="keywords" href="/articles/tagged/blogging">#blogging</a>')
+    out = extract_page_tags(html)
+    assert "developer-life" in out
+    assert "blogging" in out
+
+
+# --- aria-label="... tagged with X" -----------------------------------------
+# labnol.org (Digital Inspiration): tag chips carry no rel="tag", no "tag"
+# class, and their href (e.g. "/google-calendar") has no /tag//category/
+# shape either — the accessibility label is the only signal. Found live
+# 2026-08-31 in the same untagged-feed survey as the og:article:tag fix.
+
+def test_aria_label_tagged_with_is_captured():
+    html = ('<a href="/google-calendar" aria-label="View all posts tagged with Google Calendar">'
+            '#google calendar</a>')
+    assert extract_page_tags(html) == ["Google Calendar"]
+
+
+def test_aria_label_tagged_with_single_quotes():
+    html = "<a href='/x' aria-label='View all posts tagged with Mail Merge for Gmail'>text</a>"
+    assert extract_page_tags(html) == ["Mail Merge for Gmail"]
+
+
+def test_aria_label_scoped_to_the_attribute_not_page_prose():
+    """"tagged with" appearing elsewhere on the page (not inside an
+    aria-label) must not become a tag."""
+    html = "<p>This post is tagged with enthusiasm and a healthy dose of sarcasm.</p>"
+    assert extract_page_tags(html) == []
+
+
+def test_aria_label_multiple_chips_all_captured():
+    html = ('<a aria-label="View all posts tagged with Google Calendar">a</a>'
+            '<a aria-label="View all posts tagged with Mail Merge for Gmail">b</a>')
+    out = extract_page_tags(html)
+    assert "Google Calendar" in out
+    assert "Mail Merge for Gmail" in out
 
 
 # --- the same taxonomy stated twice ----------------------------------------
