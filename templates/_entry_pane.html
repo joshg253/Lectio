@@ -282,7 +282,13 @@
             aria-label="Add #{{ tag }} to this post"
           >+</button>
           {% endif %}
-          <span class="feed-tag-filter-name">{{ tag }}</span>
+          <button
+            type="button"
+            class="feed-tag-filter-name"
+            data-feed-tag-filter="{{ tag }}"
+            title="Filter this view to posts tagged #{{ tag }}"
+            aria-label="Filter this view to posts tagged #{{ tag }}"
+          >{{ tag }}</button>
           {# The arrows toggle the feed's tag_filter rule, which keys off tags
              the PUBLISHER ships. For a tag pinned by hand that this feed never
              publishes, filtering on it can never match anything — so the

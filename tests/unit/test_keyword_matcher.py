@@ -12,6 +12,29 @@ import re
 import pytest
 
 import main
+from services import tenancy
+
+
+@pytest.fixture
+def isolated_reader(tmp_path):
+    """Real reader entries (add_entry) need a fresh per-test DB -- the module's
+    other tests only ever read, which tolerates shared ambient state, but a
+    write here collided with a leftover row from a prior run of this same
+    test against that shared state (found 2026-09-02)."""
+    saved = tenancy._layout
+    main.close_thread_db_pools()
+    tenancy.configure(
+        data_dir=tmp_path,
+        legacy_reader=tmp_path / "reader.sqlite",
+        legacy_meta=tmp_path / "meta.sqlite3",
+        legacy_starred=tmp_path / "starred.sqlite",
+    )
+    main.ensure_meta_schema()
+    try:
+        yield
+    finally:
+        main.close_thread_db_pools()
+        tenancy._layout = saved
 
 
 @pytest.mark.parametrize("keyword,expected", [
@@ -122,6 +145,50 @@ def test_dry_run_run_now_and_live_matching_share_one_matcher(monkeypatch):
 
     assert calls == [("spoiler, leak", False), ("leak, rumor", False),
                      ("spoiler, leak", False), ("leak, rumor", False)]
+
+
+def test_dry_run_unread_only_reaches_a_match_the_capped_scan_would_miss(isolated_reader):
+    """Found 2026-09-02: mark_as_read's preview scanned read+unread by recency,
+    capped at max_entries -- a genuinely-unread but no-longer-recent match sat
+    past the cap and never showed up in the preview, even though Run Now
+    (unbounded, read=False -- see _run_now_pattern) would have caught it fine.
+    unread_only mirrors that same scan for the preview."""
+    import datetime as dt
+
+    feed = "https://example.test/unread-only-feed"
+    reader = main.get_reader()
+    try:
+        reader.add_feed(feed, allow_invalid_url=True)
+    except Exception:
+        pass
+    # Filler entries that don't match the pattern, newer than the target and
+    # more numerous than the cap below -- exactly what pushes it out of reach.
+    for i in range(6):
+        reader.add_entry({
+            "feed_url": feed, "id": f"newer-{i}", "title": "unrelated post",
+            "link": f"https://example.test/newer-{i}",
+            "published": dt.datetime(2026, 9, 1, tzinfo=dt.timezone.utc),
+        })
+    # The actual target: much OLDER, unread, and it DOES match the pattern.
+    reader.add_entry({
+        "feed_url": feed, "id": "target", "title": "Apple's iCloud thing",
+        "link": "https://example.test/target",
+        "published": dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc),
+    })
+
+    with main.get_meta_connection() as conn:
+        capped = main._dry_run_pattern(conn, "feed", feed, "Apple's iCloud", False, "title", max_entries=5)
+        uncapped = main._dry_run_pattern(conn, "feed", feed, "Apple's iCloud", False, "title",
+                                         max_entries=5, unread_only=True)
+
+    assert capped["total_matches"] == 0
+    assert uncapped["total_matches"] == 1
+    assert uncapped["matches"][0]["title"] == "Apple's iCloud thing"
+    # The client picks its "(read + unread)" vs "unread entries" wording off
+    # this field -- claiming a broader scan than actually happened is its own
+    # bug (found 2026-09-02, right after this fix shipped).
+    assert capped["unread_only"] is False
+    assert uncapped["unread_only"] is True
 
 
 # --- curly punctuation folds, so a term matches either spelling ---------------

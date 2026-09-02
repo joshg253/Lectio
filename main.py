@@ -481,6 +481,13 @@ SETTING_DEVIANTART_SYNC_STATUS = "deviantart_sync_status"
 # so the Settings UI can list the failed/unwatched artists as profile links instead
 # of telling the user to "see logs" (which they have no access to).
 SETTING_DEVIANTART_SYNC_DETAIL = "deviantart_sync_detail"
+# Set "1" the moment a sync finds a NEWLY-unwatched (now auto-paused) artist;
+# cleared only when the DeviantArt Integrations sub-tab is actually opened —
+# drives the Integrations/DeviantArt tab dots, deliberately separate from
+# whether the unwatched list itself is empty (that list stays populated for
+# Josh to act on "at some point or not"; this flag is just "there's something
+# new in it you haven't looked at yet").
+SETTING_DEVIANTART_UNWATCHED_DIRTY = "deviantart_unwatched_dirty"
 SETTING_YT_OAUTH_CLIENT_ID = "yt_oauth_client_id"
 SETTING_YT_OAUTH_CLIENT_SECRET = "yt_oauth_client_secret"
 SETTING_YT_OAUTH_ACCESS_TOKEN = "yt_oauth_access_token"
@@ -1485,7 +1492,9 @@ def _schedule_da_sync_resume(uid: str, delay_s: float, next_round: int) -> None:
 
 
 def sync_deviantart_watchlist(auto_resume_round: int = 0) -> dict:
-    """Add a gallery feed for every artist the user Watches (add-only).
+    """Add a gallery feed for every artist the user Watches (add-only), and
+    pause (disable_feed) any subscribed artist newly dropped from the watch
+    list — see the reconcile step in _sync_deviantart_watchlist_locked.
 
     Skips artists already subscribed (anywhere) so it won't duplicate existing
     DeviantArt feeds. When DeviantArt's rate cap interrupts the run, schedules a
@@ -1605,11 +1614,38 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
     invalidate_meta_structure_cache()
     invalidate_unread_counts_cache()
 
-    # Reconcile: surface subscribed DA artists no longer on the watch list. Add-only
-    # on purpose — unsubscribing is a manual decision (curated feeds may outlive a
-    # Watch), so they're reported, not removed.
+    # Reconcile: surface subscribed DA artists no longer on the watch list.
+    # Unsubscribing stays a manual decision (curated feeds may outlive a
+    # Watch), but leaving them actively refreshing was surprising once
+    # noticed — so a NEWLY-unwatched artist's feed(s) get paused (disable_feed,
+    # same as Settings' own pause/disable — no data lost, nothing unsubscribed)
+    # once, the first run that sees them drop off the watch list. Not reapplied
+    # on later runs: if Josh re-enables one by hand (decided to keep it live
+    # despite the unwatch), a later sync must not fight that choice by
+    # disabling it again every time it still shows up as unwatched.
     watching_lower = {a.lower() for a in watching}
     unwatched = sorted(u for u in existing if u not in watching_lower) if watching else []
+    prior_unwatched_lower = {
+        str(u.get("username") or "").strip().lower()
+        for u in _load_da_sync_detail().get("unwatched", [])
+    }
+    newly_unwatched = [u for u in unwatched if u not in prior_unwatched_lower]
+    if newly_unwatched:
+        with get_meta_connection() as conn:
+            placeholders = ",".join("?" for _ in newly_unwatched)
+            rows = conn.execute(
+                f"SELECT id, username FROM deviantart_feeds WHERE COALESCE(source, 'gallery') != 'watch'"
+                f" AND lower(username) IN ({placeholders})",
+                newly_unwatched,
+            ).fetchall()
+        for row in rows:
+            disable_feed(deviantart_service.feed_file_url(str(row["id"])))
+        LOGGER.info(
+            "[deviantart] %d newly-unwatched artist(s) paused (updates disabled, not unsubscribed): %s",
+            len(rows), ", ".join(sorted(str(r["username"]) for r in rows)),
+        )
+        with get_meta_connection() as conn:
+            set_setting(conn, SETTING_DEVIANTART_UNWATCHED_DIRTY, "1")
     if unwatched:
         LOGGER.info("[deviantart] %d subscribed artist(s) no longer watched: %s",
                     len(unwatched), ", ".join(unwatched))
@@ -4273,6 +4309,14 @@ def ensure_meta_schema() -> None:
                 "UPDATE highlight_keywords SET rule_uid = ? WHERE rowid = ?",
                 (secrets.token_hex(16), row["rowid"]),
             )
+        # Optional display name, purely cosmetic (never matched against, never
+        # part of the (scope, scope_id, keyword) identity) -- for a MAR rule
+        # whose keyword has grown into a long regex, the rules list can show
+        # this instead, with the pattern still one hover away as a tooltip.
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN label TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         # Dedup guard for the youtube_playlist rule: playlistItems.insert is not
         # idempotent, so record each (rule, entry) we've added to avoid re-adding the
         # same video on a later refresh (the cutoff window alone can re-match).
@@ -4948,7 +4992,7 @@ def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
         " exclude_scope_ids, sort_order,"
         " webhook_url, webhook_format, webhook_batch,"
         " yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
-        " yt_min_minutes, yt_max_minutes, rule_uid"
+        " yt_min_minutes, yt_max_minutes, rule_uid, label"
         " FROM highlight_keywords ORDER BY sort_order ASC, rowid ASC"
     ).fetchall()
     return [dict(r) for r in rows]
@@ -5099,6 +5143,7 @@ def merge_highlight_rule_group(
         template["webhook_url"], template["webhook_format"], bool(template["webhook_batch"]),
         template["yt_playlist_id"], template["yt_playlist_title"], bool(template["yt_include_shorts"]),
         bool(template["yt_mark_read"]), template["yt_min_minutes"], template["yt_max_minutes"],
+        label=str(template.get("label") or ""),
     )
     conn.execute(
         "UPDATE highlight_keywords SET sort_order = ?"
@@ -5185,7 +5230,13 @@ def merge_regex_convertible_rule_group(
         kw = str(r["keyword"] or "").strip()
         if not kw:
             continue
-        pattern = kw if r["is_regex"] else re.escape(kw)
+        # A plain keyword's commas are OR-term separators (split_keyword_terms),
+        # not literal text -- re.escape(kw) on the whole string turned "Pixel
+        # Watch, Ryobi, Google Pixel" into one dead literal requiring all three
+        # names adjacent with commas, instead of three alternatives. Escape each
+        # term individually, then alternate them, before this whole row becomes
+        # one outer (...) group below.
+        pattern = kw if r["is_regex"] else "|".join(re.escape(term) for term in split_keyword_terms(kw))
         if pattern not in seen_kw:
             seen_kw.append(pattern)
     merged_keyword = "|".join(f"({kw})" for kw in seen_kw)
@@ -5205,6 +5256,7 @@ def merge_regex_convertible_rule_group(
         template["webhook_url"], template["webhook_format"], bool(template["webhook_batch"]),
         template["yt_playlist_id"], template["yt_playlist_title"], bool(template["yt_include_shorts"]),
         bool(template["yt_mark_read"]), template["yt_min_minutes"], template["yt_max_minutes"],
+        label=str(template.get("label") or ""),
     )
     conn.execute(
         "UPDATE highlight_keywords SET sort_order = ?"
@@ -5345,6 +5397,7 @@ def add_highlight_keyword(
     yt_min_minutes: int = 0,
     yt_max_minutes: int = 0,
     rule_uid: str = "",
+    label: str = "",
 ) -> None:
     if scope not in _HIGHLIGHT_VALID_SCOPES:
         raise ValueError(f"Invalid scope: {scope}")
@@ -5374,8 +5427,8 @@ def add_highlight_keyword(
         "  dedup_fuzzy_pct, dedup_min_title_words,"
         "  webhook_url, webhook_format, webhook_batch,"
         "  yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
-        "  yt_min_minutes, yt_max_minutes, rule_uid)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "  yt_min_minutes, yt_max_minutes, rule_uid, label)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0, 1 if enabled else 0,
          rule_type, search_in, delivery,
          email_to.strip(), batch_time.strip(), max(0, int(batch_count or 0)), 1 if cc_me else 0,
@@ -5385,7 +5438,7 @@ def add_highlight_keyword(
          yt_playlist_id.strip(), yt_playlist_title.strip(),
          1 if yt_include_shorts else 0, 1 if yt_mark_read else 0,
          max(0, int(yt_min_minutes or 0)), max(0, int(yt_max_minutes or 0)),
-         rule_uid.strip() or secrets.token_hex(16)),
+         rule_uid.strip() or secrets.token_hex(16), label.strip()),
     )
 
 
@@ -6938,13 +6991,27 @@ def _dry_run_pattern(
     exclude_shorts: bool = False,
     min_secs: int = 0,
     max_secs: int = 0,
+    unread_only: bool = False,
 ) -> dict:
-    """Preview which entries a pattern-based rule would affect (read + unread, newest first).
+    """Preview which entries a pattern-based rule would affect (read + unread, newest first
+    -- unless ``unread_only``, see below).
 
     ``match_all_if_empty`` supports rules whose keyword is an optional filter (e.g.
     youtube_playlist: a blank keyword means "every entry in scope"). ``exclude_shorts``
     drops YouTube Shorts from the preview so it matches what a youtube_playlist rule
-    with Include-Shorts off would actually add."""
+    with Include-Shorts off would actually add.
+
+    ``unread_only``: mark_as_read (like _run_now_pattern, its actual apply path) only
+    ever acts on unread entries, and the default read+unread scan here is ordered by
+    recency and capped at max_entries -- on a large, active library a genuinely-unread
+    but no-longer-recent entry sits well past that cap and the preview silently never
+    reaches it, even though Run Now (unbounded, read=False) would have caught it fine.
+    Found 2026-09-02: a global-scope rule's preview reported no match for an article
+    ranked ~19,600th by recency in a 123k-entry library. When set, scans read=False
+    with no cap at all -- exactly _run_now_pattern's own scan -- trading "preview can
+    be slow on a huge unread backlog" for "preview mustn't lie about what Run Now will
+    actually do." Other rule types sharing this function (highlight, in particular)
+    legitimately care about already-read entries too, so this defaults off."""
 
     if not keyword:
         if not match_all_if_empty:
@@ -6975,7 +7042,16 @@ def _dry_run_pattern(
         feed_title_map = {str(f.url): feed_display_title(f, str(f.url)) for f in reader.get_feeds()}
 
         def iter_entries():
-            if feed_urls is None:
+            if unread_only:
+                # Mirrors _run_now_pattern's own iter_unread exactly: no limit, no
+                # per-feed split -- a capped/split scan is exactly what missed the
+                # match this option exists to fix.
+                if feed_urls is None:
+                    yield from reader.get_entries(read=False)
+                else:
+                    for furl in feed_urls:
+                        yield from reader.get_entries(feed=furl, read=False)
+            elif feed_urls is None:
                 yield from reader.get_entries(limit=max_entries)
             elif len(feed_urls) == 1:
                 yield from reader.get_entries(feed=next(iter(feed_urls)), limit=max_entries)
@@ -6985,7 +7061,7 @@ def _dry_run_pattern(
                     yield from reader.get_entries(feed=furl, limit=per_feed)
 
         for entry in iter_entries():
-            if total_scanned >= max_entries:
+            if not unread_only and total_scanned >= max_entries:
                 break
             if exclude_shorts and _is_youtube_short(entry):
                 continue
@@ -7028,6 +7104,7 @@ def _dry_run_pattern(
         "total_scanned": total_scanned,
         "total_matches": total_matches,
         "truncated": total_matches > result_limit,
+        "unread_only": unread_only,
     }
 
 
@@ -10841,6 +10918,35 @@ def get_entry_keys_for_manual_tag(feed_urls: set[str], tag: str) -> set[tuple[st
             conn.close()
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("get_entry_keys_for_manual_tag failed: %s", exc)
+    return keys
+
+
+def get_entry_ids_with_feed_tag(feed_urls: set[str], tag: str) -> set[tuple[str, str]]:
+    """(feed_url, entry_id) of entries carrying feed-provided tag *tag*
+    (entry_feed_tags, the publisher-shipped suggestions — not a manual tag),
+    restricted to *feed_urls*. Backs the entry pane's click-to-preview on a
+    suggested-tag chip: unlike the tag_filter automation rule, this is a
+    one-off read-path filter over whatever the current view already fetched,
+    not a persisted rule, so it lives in the meta DB (entry_feed_tags) and
+    normalizes at read time the same way the tag_filter matcher does (raw
+    stored values aren't pre-normalized)."""
+    keys: set[tuple[str, str]] = set()
+    if not feed_urls:
+        return keys
+    normalized = normalize_tag_value(tag)
+    if not normalized:
+        return keys
+    feed_list = list(feed_urls)
+    with get_meta_connection() as conn:
+        for i in range(0, len(feed_list), 900):
+            chunk = feed_list[i:i + 900]
+            ph = ",".join("?" for _ in chunk)
+            for row in conn.execute(
+                f"SELECT feed_url, entry_id, tag FROM entry_feed_tags WHERE feed_url IN ({ph})",
+                chunk,
+            ):
+                if normalize_tag_value(str(row["tag"])) == normalized:
+                    keys.add((str(row["feed_url"]), str(row["entry_id"])))
     return keys
 
 
@@ -14707,6 +14813,7 @@ def list_entries_for_feeds(
     read_filter: str = "all",
     star_only: bool = False,
     selected_tag: str | None = None,
+    selected_feed_tag: str | None = None,
     search_query: str | None = None,
     kept_scope: str = "kept",
     archived: bool | None = None,
@@ -14721,6 +14828,7 @@ def list_entries_for_feeds(
     normalized_read_filter = normalize_read_filter(read_filter)
     normalized_star_only = normalize_star_only(star_only)
     normalized_selected_tag = normalize_tag_value(selected_tag)
+    normalized_selected_feed_tag = normalize_tag_value(selected_feed_tag)
     search_terms = search_terms_from_query(search_query)
     # site:<host> narrows to entries on that link host; it never goes to the
     # text-matching paths (SQL or haystack), only the link-host filter below.
@@ -15138,6 +15246,15 @@ def list_entries_for_feeds(
             _all_display_prefs = get_all_feed_display_prefs(_prefs_conn)
         _hide_unpremiered_global = youtube_hide_unpremiered_global()
 
+        # A feed-tag preview filter (clicking a suggested-tag chip in the entry
+        # pane): unlike normalized_selected_tag above, this is never pushed into
+        # reader's native fetch — it's a one-off narrowing of whatever the
+        # current view already fetched, not a persisted scope, so a single
+        # pre-fetched set + O(1) membership check is enough (no per-entry call).
+        feed_tag_keys: set[tuple[str, str]] | None = None
+        if normalized_selected_feed_tag:
+            feed_tag_keys = get_entry_ids_with_feed_tag(set(feed_urls), normalized_selected_feed_tag)
+
         light_records: list[dict] = []
         for entry in all_feed_entries:
             is_read = bool(entry.read)
@@ -15149,6 +15266,8 @@ def list_entries_for_feeds(
                 manual_tags_for_record = get_manual_tags_for_resource(reader, entry.resource_id)  # ty: ignore[unresolved-attribute]
                 if normalized_selected_tag not in manual_tags_for_record:
                     continue
+            if feed_tag_keys is not None and (entry.feed_url, entry.id) not in feed_tag_keys:
+                continue
             # Kept view keeps anything starred OR tagged (the unified keep axis).
             if normalized_star_only and (entry.feed_url, entry.id) not in kept_entries_set:
                 continue
@@ -23708,6 +23827,7 @@ def home(
     folder_id: int | None = None,
     list_feed_url: str | None = None,
     tag: str | None = None,
+    feed_tag: str | None = None,
     sort_by: str | None = None,
     sort_dir: str | None = None,
     read_filter: str | None = None,
@@ -23762,6 +23882,7 @@ def home(
             folder_id=folder_id,
             list_feed_url=list_feed_url,
             tag=tag,
+            feed_tag=feed_tag,
             sort_by=sort_by,
             sort_dir=sort_dir,
             read_filter=read_filter,
@@ -23797,6 +23918,7 @@ def _home_inner(
     folder_id: int | None = None,
     list_feed_url: str | None = None,
     tag: str | None = None,
+    feed_tag: str | None = None,
     sort_by: str | None = None,
     sort_dir: str | None = None,
     read_filter: str | None = None,
@@ -24023,6 +24145,7 @@ def _home_inner(
     filtered_feed_urls = filter_feed_urls(feed_urls, list_feed_url)
     selected_feed_url = list_feed_url
     selected_tag = normalize_tag_value(tag)
+    selected_feed_tag = normalize_tag_value(feed_tag)
     selected_query = normalize_search_query(q)
     legacy_saved_mode = (read_filter or "").strip().lower() == "saved"
     selected_read_filter = normalize_read_filter(read_filter)
@@ -24042,6 +24165,7 @@ def _home_inner(
     if selected_home:
         selected_feed_url = None
         selected_tag = None
+        selected_feed_tag = None
         filtered_feed_urls = set()
     selected_resume_read_filter = normalize_resume_read_filter(resume_read_filter)
     # Respect an explicit resume_read_filter provided by the caller. Only
@@ -24054,6 +24178,7 @@ def _home_inner(
         filtered_feed_urls = all_feed_urls
         selected_feed_url = None
         selected_tag = None
+        selected_feed_tag = None
         selected_star_only = False
 
     tag_start = time.perf_counter()
@@ -24243,6 +24368,7 @@ def _home_inner(
         read_filter=selected_read_filter,
         star_only=selected_star_only,
         selected_tag=selected_tag,
+        selected_feed_tag=selected_feed_tag,
         search_query=selected_query,
         # The Inbox is the to-do pile: stars only. Every other Saved node still
         # spans the whole kept set (starred OR tagged), because a tag is filing
@@ -24448,6 +24574,7 @@ def _home_inner(
         ),
         "selected_feed_url": selected_feed_url,
         "selected_tag": selected_tag,
+        "selected_feed_tag": selected_feed_tag,
         "selected_query": selected_query,
         "problematic_feeds": problematic_feeds,
         "problematic_feed_count": len(problematic_feeds),
@@ -26625,7 +26752,7 @@ def _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, se
                              dedup_window_hours, exclude_scope_ids, dedup_fuzzy_pct,
                              dedup_min_title_words, webhook_url, webhook_format, webhook_batch,
                              yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,
-                             yt_min_minutes, yt_max_minutes) -> JSONResponse:
+                             yt_min_minutes, yt_max_minutes, label="") -> JSONResponse:
     """Shared by /highlights/add and /highlights/edit — the saved rule, in the
     shape the client's rule list expects. *keyword* and *webhook_url* are
     expected already stripped."""
@@ -26645,7 +26772,8 @@ def _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, se
                          "yt_include_shorts": bool(yt_include_shorts),
                          "yt_mark_read": bool(yt_mark_read),
                          "yt_min_minutes": max(0, int(yt_min_minutes or 0)),
-                         "yt_max_minutes": max(0, int(yt_max_minutes or 0))})
+                         "yt_max_minutes": max(0, int(yt_max_minutes or 0)),
+                         "label": label.strip()})
 
 
 @app.post("/highlights/add")
@@ -26678,6 +26806,7 @@ def add_highlight_route(
     yt_mark_read: int = Form(1),
     yt_min_minutes: int = Form(0),
     yt_max_minutes: int = Form(0),
+    label: str = Form(""),
 ):
     keyword = keyword.strip()
     webhook_url = webhook_url.strip()
@@ -26693,13 +26822,13 @@ def add_highlight_route(
                               webhook_url, webhook_format, bool(webhook_batch),
                               yt_playlist_id, yt_playlist_title,
                               bool(yt_include_shorts), bool(yt_mark_read),
-                              yt_min_minutes, yt_max_minutes)
+                              yt_min_minutes, yt_max_minutes, label=label)
     return _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, search_in,
                                     delivery, email_to, batch_time, batch_count, cc_me, enabled,
                                     dedup_window_hours, exclude_scope_ids, dedup_fuzzy_pct,
                                     dedup_min_title_words, webhook_url, webhook_format, webhook_batch,
                                     yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,
-                                    yt_min_minutes, yt_max_minutes)
+                                    yt_min_minutes, yt_max_minutes, label=label)
 
 
 @app.post("/highlights/edit")
@@ -26733,6 +26862,7 @@ def edit_highlight_route(
     yt_mark_read: int = Form(1),
     yt_min_minutes: int = Form(0),
     yt_max_minutes: int = Form(0),
+    label: str = Form(""),
 ):
     """Atomic counterpart to the client's remove-then-add edit flow.
 
@@ -26775,13 +26905,13 @@ def edit_highlight_route(
                               webhook_url, webhook_format, bool(webhook_batch),
                               yt_playlist_id, yt_playlist_title,
                               bool(yt_include_shorts), bool(yt_mark_read),
-                              yt_min_minutes, yt_max_minutes, rule_uid)
+                              yt_min_minutes, yt_max_minutes, rule_uid, label)
     return _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, search_in,
                                     delivery, email_to, batch_time, batch_count, cc_me, enabled,
                                     dedup_window_hours, exclude_scope_ids, dedup_fuzzy_pct,
                                     dedup_min_title_words, webhook_url, webhook_format, webhook_batch,
                                     yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,
-                                    yt_min_minutes, yt_max_minutes)
+                                    yt_min_minutes, yt_max_minutes, label=label)
 
 
 @app.post("/highlights/remove")
@@ -26912,7 +27042,8 @@ def rules_dry_run_route(
                                       match_all_if_empty=(_is_yt or type in ("instapaper", "quire", "save_article")),
                                       exclude_shorts=(_is_yt and not yt_include_shorts),
                                       min_secs=(max(0, yt_min_minutes) * 60 if _is_yt else 0),
-                                      max_secs=(max(0, yt_max_minutes) * 60 if _is_yt else 0))
+                                      max_secs=(max(0, yt_max_minutes) * 60 if _is_yt else 0),
+                                      unread_only=(type == "mark_as_read"))
         else:
             return JSONResponse({"error": "unknown rule type"}, status_code=400)
     if "error" in result:
@@ -29316,6 +29447,19 @@ def deviantart_unsubscribe_unwatched_route(request: Request):
     return JSONResponse({"ok": True, "count": len(feed_urls)})
 
 
+@app.post("/deviantart/unwatched-viewed")
+def deviantart_mark_unwatched_viewed_route(request: Request):
+    """Clears the Integrations/DeviantArt tab dots — fired when the DeviantArt
+    sub-tab is actually opened, not just the parent Integrations tab (see
+    SETTING_DEVIANTART_UNWATCHED_DIRTY). The unwatched list itself is untouched;
+    this only tracks whether Josh has looked at it since it last changed."""
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_DEVIANTART_UNWATCHED_DIRTY, "0")
+    if is_async_action_request(request, "lectio-da-unwatched-viewed"):
+        return JSONResponse({"ok": True})
+    return RedirectResponse(url="/", status_code=303)
+
+
 @app.post("/deviantart/push-watchlist")
 def deviantart_push_watchlist_route():
     result = push_galleries_to_deviantart_watchlist()
@@ -29470,6 +29614,7 @@ def get_all_settings():
         "deviantart_username": get_runtime_setting(SETTING_DEVIANTART_USERNAME),
         "deviantart_sync_status": get_runtime_setting(SETTING_DEVIANTART_SYNC_STATUS),
         "deviantart_sync_detail": _load_da_sync_detail(),
+        "deviantart_unwatched_dirty": get_runtime_setting(SETTING_DEVIANTART_UNWATCHED_DIRTY) == "1",
         "deviantart_deactivated": _da_deactivated_list(),
         "deviantart_folder_name": _deviantart_folder_name(),
         "quire_client_id": quire_cid,

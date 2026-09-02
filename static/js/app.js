@@ -2788,6 +2788,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     const tagsHeaderBtn = document.getElementById('tags-header-btn');
     const TAGS_COLLAPSED_KEY = 'lectio-tags-collapsed';
     let problematicFeedsViewedThisSession = false;
+    let daUnwatchedViewedThisSession = false;
 
     function applyTagsCollapsed(collapsed) {
       if (!tagsTreeBlock) return;
@@ -2839,6 +2840,25 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         await fetch('/settings/problematic-feeds/viewed', {
           method: 'POST',
           headers: { 'X-Requested-With': 'lectio-problematic-feeds-viewed' },
+          credentials: 'same-origin',
+        });
+      } catch (_err) {
+        // ignore
+      }
+    }
+
+    async function markDeviantArtUnwatchedViewed() {
+      // Clear the dots the instant the deepest tab (DeviantArt) opens, rather
+      // than waiting on the round-trip — the unwatched list itself is
+      // untouched, so there's nothing to lose by clearing optimistically.
+      document.getElementById('settings-tab-dot-integrations')?.setAttribute('hidden', '');
+      document.getElementById('settings-tab-dot-deviantart')?.setAttribute('hidden', '');
+      if (daUnwatchedViewedThisSession) return;
+      daUnwatchedViewedThisSession = true;
+      try {
+        await fetch('/deviantart/unwatched-viewed', {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'lectio-da-unwatched-viewed' },
           credentials: 'same-origin',
         });
       } catch (_err) {
@@ -11855,8 +11875,17 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             badge.className = ruleType === 'highlight'
               ? `hl-rule-badge highlight-mark-${rule.color}`
               : 'hl-rule-badge';
-            badge.textContent = (!rule.keyword && (ruleType === 'youtube_playlist' || ruleType === 'instapaper' || ruleType === 'quire' || ruleType === 'save_article'))
+            const patternText = (!rule.keyword && (ruleType === 'youtube_playlist' || ruleType === 'instapaper' || ruleType === 'quire' || ruleType === 'save_article'))
               ? (ruleType === 'youtube_playlist' ? 'all videos' : 'all posts') : rule.keyword;
+            // A named rule shows its label instead of the raw pattern -- the
+            // whole point for a MAR rule whose keyword has grown into a long
+            // regex -- with the pattern still one hover away as a tooltip.
+            if (rule.label) {
+              badge.textContent = rule.label;
+              badge.title = patternText;
+            } else {
+              badge.textContent = patternText;
+            }
             row.appendChild(badge);
 
             if (rule.is_regex) {
@@ -12614,10 +12643,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           const matches = data.matches || [];
           const summary = document.createElement('div');
           summary.className = 'hl-rule-dryrun-summary';
+          // mark_as_read only ever acts on unread entries (see unread_only on
+          // _dry_run_pattern) -- saying "(read + unread)" when the scan was
+          // actually unread-only claimed a broader check than really happened.
+          const scopeLabel = data.unread_only ? 'unread entries' : 'entries (read + unread)';
           if (matches.length === 0) {
-            summary.textContent = 'No matches in last ' + (data.total_scanned || 0) + ' entries (read + unread)';
+            summary.textContent = 'No matches in last ' + (data.total_scanned || 0) + ' ' + scopeLabel;
           } else {
-            summary.textContent = data.total_matches + ' match' + (data.total_matches === 1 ? '' : 'es') + (data.truncated ? ' (showing first 20)' : '') + ' in last ' + (data.total_scanned || 0) + ' entries (read + unread)';
+            summary.textContent = data.total_matches + ' match' + (data.total_matches === 1 ? '' : 'es') + (data.truncated ? ' (showing first 20)' : '') + ' in last ' + (data.total_scanned || 0) + ' ' + scopeLabel;
           }
           panel.appendChild(summary);
           /* Why a tag filter found nothing. '-mac, +pc' reads as "drop Apple,
@@ -12758,6 +12791,19 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         patInput.rows = 2;
         patInput.value = prefill.keyword || '';
         draft.appendChild(patInput);
+
+        // Name (optional) — purely cosmetic, shown instead of the raw pattern
+        // in the rules list once set (with the pattern still one hover away
+        // as a tooltip). For a MAR rule whose keyword has grown into a long
+        // regex, this is the whole point.
+        const labelInput = document.createElement('input');
+        labelInput.type = 'text';
+        labelInput.className = 'hl-draft-label';
+        labelInput.placeholder = 'Name (optional)';
+        labelInput.maxLength = 200;
+        labelInput.autocomplete = 'off';
+        labelInput.value = prefill.label || '';
+        draft.appendChild(labelInput);
 
         // Regex toggle
         const regexBtn = document.createElement('button');
@@ -13603,7 +13649,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
                            is_regex: 0, type: 'deduplicate', search_in: 'title',
                            delivery: 'immediately', email_to: '', batch_time: '', batch_count: 0,
                            cc_me: 0, dedup_window_hours: windowHours, exclude_scope_ids: excludeIds,
-                           dedup_fuzzy_pct: fuzzyPct, dedup_min_title_words: minWords });
+                           dedup_fuzzy_pct: fuzzyPct, dedup_min_title_words: minWords,
+                           label: labelInput.value.trim() });
             return;
           }
 
@@ -13635,7 +13682,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
                          yt_include_shorts: ytShortsCheck.checked ? 1 : 0,
                          yt_mark_read: ytMarkCheck.checked ? 1 : 0,
                          yt_min_minutes: parseInt(ytMinInput.value || '0', 10) || 0,
-                         yt_max_minutes: parseInt(ytMaxInput.value || '0', 10) || 0 });
+                         yt_max_minutes: parseInt(ytMaxInput.value || '0', 10) || 0,
+                         label: labelInput.value.trim() });
         });
 
         return draft;
@@ -13659,6 +13707,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           yt_include_shorts: r.yt_include_shorts ? 1 : 0,
           yt_mark_read: (r.yt_mark_read !== undefined ? r.yt_mark_read : 1) ? 1 : 0,
           yt_min_minutes: r.yt_min_minutes || 0, yt_max_minutes: r.yt_max_minutes || 0,
+          label: r.label || '',
         });
       }
 
@@ -14233,6 +14282,13 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         const daActionStatus = document.getElementById('sett-da-action-status');
         if (daActionStatus && d.deviantart_sync_status) daActionStatus.textContent = d.deviantart_sync_status;
         renderDaSyncDetail(d.deviantart_sync_detail, daConnected, d.deviantart_deactivated);
+        // Yellow dot on Integrations + DeviantArt tabs when a sync just
+        // auto-paused a newly-unwatched artist; cleared only by actually
+        // opening the DeviantArt sub-tab (see the click handler below), not
+        // by this data load or by opening Integrations alone.
+        const daDirty = Boolean(d.deviantart_unwatched_dirty);
+        document.getElementById('settings-tab-dot-integrations')?.toggleAttribute('hidden', !daDirty);
+        document.getElementById('settings-tab-dot-deviantart')?.toggleAttribute('hidden', !daDirty);
         // Quire integration: creds, connection status, project picker, usage meter.
         v('sett-quire-id', d.quire_client_id);
         secretField('sett-quire-secret', d.quire_client_secret_set, d.quire_client_secret_masked);
@@ -15369,6 +15425,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         intTab.querySelectorAll('[data-int-panel]').forEach(panel => {
           panel.hidden = panel.getAttribute('data-int-panel') !== view;
         });
+        if (view === 'deviantart') void markDeviantArtUnwatchedViewed();
       });
     });
 
@@ -17664,6 +17721,33 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         });
       }
 
+      // Clicking the tag NAME itself (not the +) narrows the current view to
+      // posts carrying this feed tag — a lightweight server-side preview
+      // (list_entries_for_feeds' selected_feed_tag), not the persisted
+      // tag_filter rule the ▲/▼ buttons arm. Whatever's currently loaded
+      // (this folder/feed, sort, read filter) stays as-is; only feed_tag is
+      // added, so it composes with the current view rather than forcing a
+      // single-feed scope.
+      for (const nameButton of document.querySelectorAll('[data-feed-tag-filter]')) {
+        if (nameButton.dataset.boundClick) {
+          continue;
+        }
+        nameButton.dataset.boundClick = '1';
+        nameButton.addEventListener('click', () => {
+          const tag = nameButton.getAttribute('data-feed-tag-filter');
+          if (!tag) return;
+          const targetUrl = new URL(window.location.href);
+          targetUrl.searchParams.set('feed_tag', tag);
+          if (typeof loadScopePanesWithoutFullRefresh === 'function') {
+            loadScopePanesWithoutFullRefresh(targetUrl.toString()).catch(() => {
+              window.location.href = targetUrl.toString();
+            });
+          } else {
+            window.location.href = targetUrl.toString();
+          }
+        });
+      }
+
       // ▲/▼ toggle ±tag on this feed's Tag Filter rule. The rule is created
       // DISABLED so it can be tuned while browsing; it only marks entries
       // read once armed in Automation (then chip edits apply immediately).
@@ -17700,8 +17784,22 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             showToastMessage(nowActive
               ? `Filter: ${verb} #${tag} on this feed${armed}`
               : `Removed ${sign}${tag} from this feed's filter`);
-            // Re-render so chip states and the unread list reflect the rule.
-            loadEntryPaneWithoutFullRefresh(window.location.href, false);
+            // Re-render so chip states and the unread list reflect the rule --
+            // that replaces the whole pane, which silently re-collapsed "+N
+            // more" even though expanding it is meant to be one-way per
+            // triage (see the data-feed-tag-more handler above). Restore the
+            // expanded state afterward if it was open. Found 2026-09-02.
+            const suggestionsWrap = signButton.closest('.entry-tag-suggestions');
+            const wasExpanded = !!suggestionsWrap && !suggestionsWrap.querySelector('[data-feed-tag-more]');
+            await loadEntryPaneWithoutFullRefresh(window.location.href, false);
+            if (wasExpanded) {
+              const freshWrap = document.querySelector('.entry-tag-suggestions');
+              const moreBtn = freshWrap?.querySelector('[data-feed-tag-more]');
+              if (freshWrap && moreBtn) {
+                freshWrap.querySelectorAll('.is-extra-feed-tag').forEach((c) => { c.hidden = false; });
+                moreBtn.remove();
+              }
+            }
           } catch (err) {
             showToastMessage('Filter update failed: ' + (err.message || err));
             signButton.disabled = false;

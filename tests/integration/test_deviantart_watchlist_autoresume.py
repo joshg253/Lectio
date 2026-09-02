@@ -2,7 +2,9 @@
 waiting for a manual re-click: it schedules a background continuation honoring
 Retry-After (conservative fallback without one), caps resume rounds, refuses to
 run two syncs for the same user at once, and reports subscribed artists that
-are no longer watched (reconcile is report-only — no auto-unsubscribe)."""
+are no longer watched -- pausing (disable_feed) a newly-unwatched artist's
+feed once, never auto-unsubscribing, and never re-pausing one already reported
+(so a manual re-enable sticks)."""
 from __future__ import annotations
 
 import json
@@ -30,6 +32,12 @@ def configured(tmp_path, monkeypatch):
         legacy_starred=tmp_path / "starred.sqlite",
     )
     main.ensure_meta_schema()
+    # The app-settings cache is a process-wide dict keyed by user id, not by
+    # data dir -- a setting written in one test leaks into the next test's
+    # fresh tmp_path DB otherwise (found 2026-09-02, via a dirty-flag
+    # assertion that a prior test's leftover "1" silently defeated).
+    with main._app_settings_cache_lock:
+        main._app_settings_cache.clear()
     monkeypatch.setattr(main, "get_deviantart_user_token", lambda: "user-token")
     monkeypatch.setattr(main, "get_deviantart_credentials", lambda: ("cid", "secret"))
     monkeypatch.setattr(main, "get_runtime_setting", lambda key: "me")
@@ -37,6 +45,8 @@ def configured(tmp_path, monkeypatch):
     try:
         yield monkeypatch
     finally:
+        with main._app_settings_cache_lock:
+            main._app_settings_cache.clear()
         main.close_thread_db_pools()
         tenancy._layout = saved
 
@@ -154,6 +164,74 @@ def test_reconcile_reports_unwatched_artists(configured):
     assert result["added"] == 1
     assert result["unwatched"] == ["zoe"]
     assert "no longer watched" in _status()
+
+
+def test_reconcile_pauses_a_newly_unwatched_artists_feed(configured):
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO deviantart_feeds (id, username, feed_title, created_at) VALUES ('x', 'zoe', 'zoe', 'now')"
+        )
+    configured.setattr(deviantart_service, "list_watching", lambda tok, user: ["alice"])
+    fake, _ = _fake_create(fail_from=99, retry_after=None)
+    configured.setattr(deviantart_service, "create_deviantart_feed", fake)
+    disabled: list[str] = []
+    configured.setattr(main, "disable_feed", lambda url: disabled.append(url))
+
+    result = main.sync_deviantart_watchlist()
+
+    assert result["unwatched"] == ["zoe"]
+    assert disabled == [deviantart_service.feed_file_url("x")]
+    with main.get_meta_connection() as conn:
+        assert main.get_setting(conn, main.SETTING_DEVIANTART_UNWATCHED_DIRTY) == "1"
+
+
+def test_reconcile_does_not_repause_an_already_reported_artist(configured):
+    # zoe was already reported unwatched by a prior sync -- e.g. Josh saw it
+    # and re-enabled the feed by hand, deciding to keep following it live
+    # despite the unwatch. A later sync that still sees zoe as unwatched must
+    # not disable it again and undo that choice.
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO deviantart_feeds (id, username, feed_title, created_at) VALUES ('x', 'zoe', 'zoe', 'now')"
+        )
+        main.set_setting(conn, main.SETTING_DEVIANTART_SYNC_DETAIL,
+                          json.dumps({"failed": [], "unwatched": [{"username": "zoe"}]}))
+    # The `configured` fixture's get_runtime_setting patch is a blanket
+    # lambda key: "me" (fine for the username lookup it exists for), but that
+    # also breaks _load_da_sync_detail's read of the sync-detail setting just
+    # written above -- override it here to fall through to the real cache for
+    # any other key.
+    configured.setattr(
+        main, "get_runtime_setting",
+        lambda key, env_fallback="": (
+            "me" if key == main.SETTING_DEVIANTART_USERNAME else (main.get_cached_setting(key) or env_fallback)
+        ),
+    )
+    configured.setattr(deviantart_service, "list_watching", lambda tok, user: ["alice"])
+    fake, _ = _fake_create(fail_from=99, retry_after=None)
+    configured.setattr(deviantart_service, "create_deviantart_feed", fake)
+    disabled: list[str] = []
+    configured.setattr(main, "disable_feed", lambda url: disabled.append(url))
+
+    result = main.sync_deviantart_watchlist()
+
+    assert result["unwatched"] == ["zoe"]
+    assert disabled == []
+    with main.get_meta_connection() as conn:
+        # Nothing NEW was found this run, so the dirty flag (which drives the
+        # Settings tab dots) must not be set either.
+        assert main.get_setting(conn, main.SETTING_DEVIANTART_UNWATCHED_DIRTY) is None
+
+
+def test_unwatched_viewed_route_clears_the_dirty_flag(configured):
+    with main.get_meta_connection() as conn:
+        main.set_setting(conn, main.SETTING_DEVIANTART_UNWATCHED_DIRTY, "1")
+
+    result = main.deviantart_mark_unwatched_viewed_route(MagicMock(headers={}))
+
+    assert result.status_code == 303
+    with main.get_meta_connection() as conn:
+        assert main.get_setting(conn, main.SETTING_DEVIANTART_UNWATCHED_DIRTY) == "0"
 
 
 def test_reconcile_ignores_combined_watch_feed(configured):

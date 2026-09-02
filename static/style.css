@@ -1033,6 +1033,18 @@ body[data-single-mode="1"] #folders-collapse-btn {
   color: var(--accent);
   border-bottom-color: var(--accent);
 }
+.settings-tab-dot {
+  display: inline-block;
+  width: 0.45em;
+  height: 0.45em;
+  border-radius: 50%;
+  background: #e0a030;
+  margin-left: 0.35em;
+  vertical-align: middle;
+}
+
+.settings-tab-dot[hidden] { display: none; }
+
 .feeds-tab-count {
   display: inline-block;
   background: color-mix(in srgb, var(--muted) 20%, transparent);
@@ -2075,6 +2087,34 @@ button:hover, .button-link:hover {
 .toolbar-search-hidden {
   display: none;
 }
+
+.feed-tag-filter-active-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.feed-tag-filter-active-row .material-symbols-rounded {
+  font-size: 1rem;
+}
+
+.feed-tag-filter-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  padding: 0.15rem 0.3rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.feed-tag-filter-clear:hover { color: var(--ink); }
+.feed-tag-filter-clear .material-symbols-rounded { font-size: 1rem; }
 
 .sort-group {
   display: flex;
@@ -3751,6 +3791,21 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
 .feed-tag-filter-name {
   padding: 0 0.15em;
   align-self: center;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  /* Without this, some browsers' native <button> chrome (a blue-tinted
+     default control appearance) can show through under the color/background
+     override above -- this was a <span> until today, so nothing needed it
+     before. Found 2026-09-02 as "now-blue sugtagchips". */
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.feed-tag-filter-name:hover {
+  text-decoration: underline;
 }
 
 .feed-tag-filter-sign {
@@ -7719,6 +7774,17 @@ textarea.hl-draft-pattern {
   color: var(--ink, #222);
   flex-shrink: 0;
   max-width: 130px;
+}
+.hl-draft-label {
+  flex: 1 1 120px;
+  min-width: 80px;
+  max-width: 220px;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--line, #ccc);
+  border-radius: 4px;
+  font-size: 0.88rem;
+  background: var(--bg, #fff);
+  color: var(--ink, #222);
 }
 .hl-draft-save {
   padding: 0.3rem 0.7rem;
