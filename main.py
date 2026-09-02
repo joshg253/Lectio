@@ -15788,8 +15788,12 @@ def mark_entry_read_everywhere(feed_url: str, entry_id: str) -> None:
 
 def get_saved_unread_count() -> int:
     """Unread count across all kept (starred OR tagged) entries, for the sidebar's
-    Saved Articles badge. Kept sets are small (hundreds), so a per-feed IN query
-    against reader's entries table is cheap."""
+    Saved Articles badge. Batched into (feed, id) chunks rather than one query per
+    feed: kept sets are small in total but commonly span hundreds of distinct feeds
+    (529 on the live library), so a per-feed loop meant hundreds of sequential
+    round-trips on every home-route request — cheap at rest, but each round-trip
+    pays a bit more under concurrent refresh writes, and that compounds across
+    hundreds of them (see the home-route gap_block investigation, 2026-09-01)."""
     saved_by_feed: dict[str, set[str]] = {}
     with get_meta_connection() as conn:
         for row in conn.execute("SELECT feed_url, entry_id FROM saved_entries"):
@@ -15798,19 +15802,19 @@ def get_saved_unread_count() -> int:
         saved_by_feed.setdefault(feed, set()).add(eid)
     if not saved_by_feed:
         return 0
+    pairs = [(feed_url, eid) for feed_url, ids in saved_by_feed.items() for eid in ids]
     count = 0
     with get_reader() as reader:
         db = reader._storage.get_db()
-        for feed_url, ids in saved_by_feed.items():
-            ids_list = list(ids)
-            for i in range(0, len(ids_list), 900):
-                chunk = ids_list[i:i + 900]
-                placeholders = ",".join("?" for _ in chunk)
-                row = db.execute(
-                    f"SELECT COUNT(*) FROM entries WHERE feed = ? AND read = 0 AND id IN ({placeholders})",
-                    (feed_url, *chunk),
-                ).fetchone()
-                count += int(row[0] or 0)
+        for i in range(0, len(pairs), 900):
+            chunk = pairs[i:i + 900]
+            values_sql = ",".join("(?,?)" for _ in chunk)
+            params = [v for pair in chunk for v in pair]
+            row = db.execute(
+                f"SELECT COUNT(*) FROM entries WHERE read = 0 AND (feed, id) IN (VALUES {values_sql})",
+                params,
+            ).fetchone()
+            count += int(row[0] or 0)
     return count
 
 
@@ -24064,17 +24068,34 @@ def _home_inner(
     tag_block_ms = int((time.perf_counter() - tag_start) * 1000)
     LOGGER.info("[perf] home: tag_block=%dms", tag_block_ms)
 
+    gap_start = time.perf_counter()
     try:
+        _b1 = time.perf_counter()
         saved_unread_count = get_saved_unread_count()
+        unread_count_ms = int((time.perf_counter() - _b1) * 1000)
+        _b2 = time.perf_counter()
         saved_counts_by_folder = get_saved_counts_by_folder(folder_feed_urls_by_id)
+        counts_by_folder_ms = int((time.perf_counter() - _b2) * 1000)
+        _b3 = time.perf_counter()
         inbox_total = get_starred_inbox_total()
+        inbox_total_ms = int((time.perf_counter() - _b3) * 1000)
     except Exception as exc:  # noqa: BLE001 — badges only; never block the render
         LOGGER.warning("saved counts failed: %s", exc)
         saved_unread_count = 0
         saved_counts_by_folder = {}
         inbox_total = 0
+        unread_count_ms = counts_by_folder_ms = inbox_total_ms = -1
+    badges_ms = int((time.perf_counter() - gap_start) * 1000)
+    LOGGER.info(
+        "[perf] home: badges_detail unread_count=%dms counts_by_folder=%dms inbox_total=%dms",
+        unread_count_ms,
+        counts_by_folder_ms,
+        inbox_total_ms,
+    )
 
+    title_map_start = time.perf_counter()
     feed_title_map = get_feed_title_map()
+    title_map_ms = int((time.perf_counter() - title_map_start) * 1000)
     inactive_feeds = [
         {
             "feed_url": str(r["feed_url"]),
@@ -24174,6 +24195,14 @@ def _home_inner(
         limit = 250
 
     posts_start = time.perf_counter()
+    gap_ms = int((posts_start - gap_start) * 1000)
+    LOGGER.info(
+        "[perf] home: gap_block=%dms (badges=%dms title_map=%dms rest=%dms)",
+        gap_ms,
+        badges_ms,
+        title_map_ms,
+        gap_ms - badges_ms - title_map_ms,
+    )
     # Exclude disabled feeds from the entry list unless the user has selected a
     # specific feed directly (clicking it should still let you browse its content).
     # Star mode keeps them: stars are deliberate curation and the saved-folder
