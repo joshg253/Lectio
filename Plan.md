@@ -62,6 +62,15 @@ and DeviantArt integration calls included. So the region to instrument is now na
 tag_block and before `list_entries`'s own fetch begins** — add a tick there before theorizing
 further.
 
+**Instrumented 2026-09-01, not yet re-measured live.** New `[perf] home: gap_block=%dms
+(badges=%dms title_map=%dms rest=%dms)` log line (main.py, right before `posts_start`) splits this
+region into the two reader-touching calls (`get_saved_unread_count`/`get_saved_counts_by_folder`/
+`get_starred_inbox_total` as `badges`, `get_feed_title_map` as `title_map`) versus the pure-Python
+remainder (`rest` — inactive-feed sorting, the folder-tree loop, limit calc). If `badges`/`title_map`
+dominate during a concurrent refresh, that confirms the reader-DB-lock theory; if `rest` dominates
+instead, the culprit is elsewhere (GIL/CPU contention on the folder loop, contrary to the "already
+fixed to lazy" comment at that code). Needs a live capture during a refresh pass to read.
+
 **A second capture, same day, sharpens it further.** `GET /?folder_id=11&read_filter=unread` (a
 tiny folder — 16 feeds, 3 entries) logged `5498ms`, and its own follow-up chunk request logged
 `7075ms`, both while the same refresh pass was still running (a `minecraft.net` parse error and the

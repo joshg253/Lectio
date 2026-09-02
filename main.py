@@ -24064,6 +24064,7 @@ def _home_inner(
     tag_block_ms = int((time.perf_counter() - tag_start) * 1000)
     LOGGER.info("[perf] home: tag_block=%dms", tag_block_ms)
 
+    gap_start = time.perf_counter()
     try:
         saved_unread_count = get_saved_unread_count()
         saved_counts_by_folder = get_saved_counts_by_folder(folder_feed_urls_by_id)
@@ -24073,8 +24074,11 @@ def _home_inner(
         saved_unread_count = 0
         saved_counts_by_folder = {}
         inbox_total = 0
+    badges_ms = int((time.perf_counter() - gap_start) * 1000)
 
+    title_map_start = time.perf_counter()
     feed_title_map = get_feed_title_map()
+    title_map_ms = int((time.perf_counter() - title_map_start) * 1000)
     inactive_feeds = [
         {
             "feed_url": str(r["feed_url"]),
@@ -24174,6 +24178,14 @@ def _home_inner(
         limit = 250
 
     posts_start = time.perf_counter()
+    gap_ms = int((posts_start - gap_start) * 1000)
+    LOGGER.info(
+        "[perf] home: gap_block=%dms (badges=%dms title_map=%dms rest=%dms)",
+        gap_ms,
+        badges_ms,
+        title_map_ms,
+        gap_ms - badges_ms - title_map_ms,
+    )
     # Exclude disabled feeds from the entry list unless the user has selected a
     # specific feed directly (clicking it should still let you browse its content).
     # Star mode keeps them: stars are deliberate curation and the saved-folder
