@@ -24070,15 +24070,28 @@ def _home_inner(
 
     gap_start = time.perf_counter()
     try:
+        _b1 = time.perf_counter()
         saved_unread_count = get_saved_unread_count()
+        unread_count_ms = int((time.perf_counter() - _b1) * 1000)
+        _b2 = time.perf_counter()
         saved_counts_by_folder = get_saved_counts_by_folder(folder_feed_urls_by_id)
+        counts_by_folder_ms = int((time.perf_counter() - _b2) * 1000)
+        _b3 = time.perf_counter()
         inbox_total = get_starred_inbox_total()
+        inbox_total_ms = int((time.perf_counter() - _b3) * 1000)
     except Exception as exc:  # noqa: BLE001 — badges only; never block the render
         LOGGER.warning("saved counts failed: %s", exc)
         saved_unread_count = 0
         saved_counts_by_folder = {}
         inbox_total = 0
+        unread_count_ms = counts_by_folder_ms = inbox_total_ms = -1
     badges_ms = int((time.perf_counter() - gap_start) * 1000)
+    LOGGER.info(
+        "[perf] home: badges_detail unread_count=%dms counts_by_folder=%dms inbox_total=%dms",
+        unread_count_ms,
+        counts_by_folder_ms,
+        inbox_total_ms,
+    )
 
     title_map_start = time.perf_counter()
     feed_title_map = get_feed_title_map()
