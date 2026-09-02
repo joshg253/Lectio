@@ -4309,6 +4309,14 @@ def ensure_meta_schema() -> None:
                 "UPDATE highlight_keywords SET rule_uid = ? WHERE rowid = ?",
                 (secrets.token_hex(16), row["rowid"]),
             )
+        # Optional display name, purely cosmetic (never matched against, never
+        # part of the (scope, scope_id, keyword) identity) -- for a MAR rule
+        # whose keyword has grown into a long regex, the rules list can show
+        # this instead, with the pattern still one hover away as a tooltip.
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN label TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         # Dedup guard for the youtube_playlist rule: playlistItems.insert is not
         # idempotent, so record each (rule, entry) we've added to avoid re-adding the
         # same video on a later refresh (the cutoff window alone can re-match).
@@ -4984,7 +4992,7 @@ def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
         " exclude_scope_ids, sort_order,"
         " webhook_url, webhook_format, webhook_batch,"
         " yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
-        " yt_min_minutes, yt_max_minutes, rule_uid"
+        " yt_min_minutes, yt_max_minutes, rule_uid, label"
         " FROM highlight_keywords ORDER BY sort_order ASC, rowid ASC"
     ).fetchall()
     return [dict(r) for r in rows]
@@ -5135,6 +5143,7 @@ def merge_highlight_rule_group(
         template["webhook_url"], template["webhook_format"], bool(template["webhook_batch"]),
         template["yt_playlist_id"], template["yt_playlist_title"], bool(template["yt_include_shorts"]),
         bool(template["yt_mark_read"]), template["yt_min_minutes"], template["yt_max_minutes"],
+        label=str(template.get("label") or ""),
     )
     conn.execute(
         "UPDATE highlight_keywords SET sort_order = ?"
@@ -5247,6 +5256,7 @@ def merge_regex_convertible_rule_group(
         template["webhook_url"], template["webhook_format"], bool(template["webhook_batch"]),
         template["yt_playlist_id"], template["yt_playlist_title"], bool(template["yt_include_shorts"]),
         bool(template["yt_mark_read"]), template["yt_min_minutes"], template["yt_max_minutes"],
+        label=str(template.get("label") or ""),
     )
     conn.execute(
         "UPDATE highlight_keywords SET sort_order = ?"
@@ -5387,6 +5397,7 @@ def add_highlight_keyword(
     yt_min_minutes: int = 0,
     yt_max_minutes: int = 0,
     rule_uid: str = "",
+    label: str = "",
 ) -> None:
     if scope not in _HIGHLIGHT_VALID_SCOPES:
         raise ValueError(f"Invalid scope: {scope}")
@@ -5416,8 +5427,8 @@ def add_highlight_keyword(
         "  dedup_fuzzy_pct, dedup_min_title_words,"
         "  webhook_url, webhook_format, webhook_batch,"
         "  yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
-        "  yt_min_minutes, yt_max_minutes, rule_uid)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "  yt_min_minutes, yt_max_minutes, rule_uid, label)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0, 1 if enabled else 0,
          rule_type, search_in, delivery,
          email_to.strip(), batch_time.strip(), max(0, int(batch_count or 0)), 1 if cc_me else 0,
@@ -5427,7 +5438,7 @@ def add_highlight_keyword(
          yt_playlist_id.strip(), yt_playlist_title.strip(),
          1 if yt_include_shorts else 0, 1 if yt_mark_read else 0,
          max(0, int(yt_min_minutes or 0)), max(0, int(yt_max_minutes or 0)),
-         rule_uid.strip() or secrets.token_hex(16)),
+         rule_uid.strip() or secrets.token_hex(16), label.strip()),
     )
 
 
@@ -26712,7 +26723,7 @@ def _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, se
                              dedup_window_hours, exclude_scope_ids, dedup_fuzzy_pct,
                              dedup_min_title_words, webhook_url, webhook_format, webhook_batch,
                              yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,
-                             yt_min_minutes, yt_max_minutes) -> JSONResponse:
+                             yt_min_minutes, yt_max_minutes, label="") -> JSONResponse:
     """Shared by /highlights/add and /highlights/edit — the saved rule, in the
     shape the client's rule list expects. *keyword* and *webhook_url* are
     expected already stripped."""
@@ -26732,7 +26743,8 @@ def _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, se
                          "yt_include_shorts": bool(yt_include_shorts),
                          "yt_mark_read": bool(yt_mark_read),
                          "yt_min_minutes": max(0, int(yt_min_minutes or 0)),
-                         "yt_max_minutes": max(0, int(yt_max_minutes or 0))})
+                         "yt_max_minutes": max(0, int(yt_max_minutes or 0)),
+                         "label": label.strip()})
 
 
 @app.post("/highlights/add")
@@ -26765,6 +26777,7 @@ def add_highlight_route(
     yt_mark_read: int = Form(1),
     yt_min_minutes: int = Form(0),
     yt_max_minutes: int = Form(0),
+    label: str = Form(""),
 ):
     keyword = keyword.strip()
     webhook_url = webhook_url.strip()
@@ -26780,13 +26793,13 @@ def add_highlight_route(
                               webhook_url, webhook_format, bool(webhook_batch),
                               yt_playlist_id, yt_playlist_title,
                               bool(yt_include_shorts), bool(yt_mark_read),
-                              yt_min_minutes, yt_max_minutes)
+                              yt_min_minutes, yt_max_minutes, label=label)
     return _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, search_in,
                                     delivery, email_to, batch_time, batch_count, cc_me, enabled,
                                     dedup_window_hours, exclude_scope_ids, dedup_fuzzy_pct,
                                     dedup_min_title_words, webhook_url, webhook_format, webhook_batch,
                                     yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,
-                                    yt_min_minutes, yt_max_minutes)
+                                    yt_min_minutes, yt_max_minutes, label=label)
 
 
 @app.post("/highlights/edit")
@@ -26820,6 +26833,7 @@ def edit_highlight_route(
     yt_mark_read: int = Form(1),
     yt_min_minutes: int = Form(0),
     yt_max_minutes: int = Form(0),
+    label: str = Form(""),
 ):
     """Atomic counterpart to the client's remove-then-add edit flow.
 
@@ -26862,13 +26876,13 @@ def edit_highlight_route(
                               webhook_url, webhook_format, bool(webhook_batch),
                               yt_playlist_id, yt_playlist_title,
                               bool(yt_include_shorts), bool(yt_mark_read),
-                              yt_min_minutes, yt_max_minutes, rule_uid)
+                              yt_min_minutes, yt_max_minutes, rule_uid, label)
     return _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, search_in,
                                     delivery, email_to, batch_time, batch_count, cc_me, enabled,
                                     dedup_window_hours, exclude_scope_ids, dedup_fuzzy_pct,
                                     dedup_min_title_words, webhook_url, webhook_format, webhook_batch,
                                     yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,
-                                    yt_min_minutes, yt_max_minutes)
+                                    yt_min_minutes, yt_max_minutes, label=label)
 
 
 @app.post("/highlights/remove")

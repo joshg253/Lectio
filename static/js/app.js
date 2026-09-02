@@ -11875,8 +11875,17 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             badge.className = ruleType === 'highlight'
               ? `hl-rule-badge highlight-mark-${rule.color}`
               : 'hl-rule-badge';
-            badge.textContent = (!rule.keyword && (ruleType === 'youtube_playlist' || ruleType === 'instapaper' || ruleType === 'quire' || ruleType === 'save_article'))
+            const patternText = (!rule.keyword && (ruleType === 'youtube_playlist' || ruleType === 'instapaper' || ruleType === 'quire' || ruleType === 'save_article'))
               ? (ruleType === 'youtube_playlist' ? 'all videos' : 'all posts') : rule.keyword;
+            // A named rule shows its label instead of the raw pattern -- the
+            // whole point for a MAR rule whose keyword has grown into a long
+            // regex -- with the pattern still one hover away as a tooltip.
+            if (rule.label) {
+              badge.textContent = rule.label;
+              badge.title = patternText;
+            } else {
+              badge.textContent = patternText;
+            }
             row.appendChild(badge);
 
             if (rule.is_regex) {
@@ -12783,6 +12792,19 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         patInput.value = prefill.keyword || '';
         draft.appendChild(patInput);
 
+        // Name (optional) — purely cosmetic, shown instead of the raw pattern
+        // in the rules list once set (with the pattern still one hover away
+        // as a tooltip). For a MAR rule whose keyword has grown into a long
+        // regex, this is the whole point.
+        const labelInput = document.createElement('input');
+        labelInput.type = 'text';
+        labelInput.className = 'hl-draft-label';
+        labelInput.placeholder = 'Name (optional)';
+        labelInput.maxLength = 200;
+        labelInput.autocomplete = 'off';
+        labelInput.value = prefill.label || '';
+        draft.appendChild(labelInput);
+
         // Regex toggle
         const regexBtn = document.createElement('button');
         regexBtn.type = 'button';
@@ -13627,7 +13649,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
                            is_regex: 0, type: 'deduplicate', search_in: 'title',
                            delivery: 'immediately', email_to: '', batch_time: '', batch_count: 0,
                            cc_me: 0, dedup_window_hours: windowHours, exclude_scope_ids: excludeIds,
-                           dedup_fuzzy_pct: fuzzyPct, dedup_min_title_words: minWords });
+                           dedup_fuzzy_pct: fuzzyPct, dedup_min_title_words: minWords,
+                           label: labelInput.value.trim() });
             return;
           }
 
@@ -13659,7 +13682,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
                          yt_include_shorts: ytShortsCheck.checked ? 1 : 0,
                          yt_mark_read: ytMarkCheck.checked ? 1 : 0,
                          yt_min_minutes: parseInt(ytMinInput.value || '0', 10) || 0,
-                         yt_max_minutes: parseInt(ytMaxInput.value || '0', 10) || 0 });
+                         yt_max_minutes: parseInt(ytMaxInput.value || '0', 10) || 0,
+                         label: labelInput.value.trim() });
         });
 
         return draft;
@@ -13683,6 +13707,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           yt_include_shorts: r.yt_include_shorts ? 1 : 0,
           yt_mark_read: (r.yt_mark_read !== undefined ? r.yt_mark_read : 1) ? 1 : 0,
           yt_min_minutes: r.yt_min_minutes || 0, yt_max_minutes: r.yt_max_minutes || 0,
+          label: r.label || '',
         });
       }
 
@@ -17759,8 +17784,22 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             showToastMessage(nowActive
               ? `Filter: ${verb} #${tag} on this feed${armed}`
               : `Removed ${sign}${tag} from this feed's filter`);
-            // Re-render so chip states and the unread list reflect the rule.
-            loadEntryPaneWithoutFullRefresh(window.location.href, false);
+            // Re-render so chip states and the unread list reflect the rule --
+            // that replaces the whole pane, which silently re-collapsed "+N
+            // more" even though expanding it is meant to be one-way per
+            // triage (see the data-feed-tag-more handler above). Restore the
+            // expanded state afterward if it was open. Found 2026-09-02.
+            const suggestionsWrap = signButton.closest('.entry-tag-suggestions');
+            const wasExpanded = !!suggestionsWrap && !suggestionsWrap.querySelector('[data-feed-tag-more]');
+            await loadEntryPaneWithoutFullRefresh(window.location.href, false);
+            if (wasExpanded) {
+              const freshWrap = document.querySelector('.entry-tag-suggestions');
+              const moreBtn = freshWrap?.querySelector('[data-feed-tag-more]');
+              if (freshWrap && moreBtn) {
+                freshWrap.querySelectorAll('.is-extra-feed-tag').forEach((c) => { c.hidden = false; });
+                moreBtn.remove();
+              }
+            }
           } catch (err) {
             showToastMessage('Filter update failed: ' + (err.message || err));
             signButton.disabled = false;
