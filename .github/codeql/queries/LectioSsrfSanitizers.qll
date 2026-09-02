@@ -13,6 +13,12 @@
  *     *inside* these wrappers, so we treat every node inside them as sanitized.
  *   - `ensure_safe_outbound_url(x)` returns `x` only when it is safe (raising
  *     otherwise), so its return value is sanitized.
+ *   - `is_safe_outbound_url(x)` called directly as a guard clause (the common
+ *     shape outside url_guard.py itself: `if not is_safe_outbound_url(x): return`),
+ *     e.g. page_fetch.py's urllib TLS-fingerprint fallback, which doesn't go
+ *     through the `safe_*` wrappers because it needs a different HTTP client.
+ *     ~25 call sites use this exact idiom across the codebase, so it is modeled
+ *     as a barrier guard rather than dismissed per call site.
  */
 
 import python
@@ -46,5 +52,28 @@ class InsideOutboundWrapperSanitizer extends ServerSideRequestForgery::Sanitizer
 class EnsureSafeOutboundUrlSanitizer extends ServerSideRequestForgery::Sanitizer {
   EnsureSafeOutboundUrlSanitizer() {
     this = urlGuardModule().getMember("ensure_safe_outbound_url").getACall()
+  }
+}
+
+/**
+ * The argument to `is_safe_outbound_url(x)`, on the branch where the call
+ * returned true — i.e. `x` after a guard clause like
+ * `if not is_safe_outbound_url(x): return` (or the positive form,
+ * `if is_safe_outbound_url(x): ...`). Mirrors the stock SSRF query's own
+ * `ConstCompareAsSanitizerGuard` / `StringRestrictionSanitizerGuard` shape.
+ */
+private predicate isSafeOutboundUrlGuard(DataFlow::GuardNode g, ControlFlowNode node, boolean branch) {
+  exists(DataFlow::CallCfgNode call, DataFlow::Node arg |
+    call = urlGuardModule().getMember("is_safe_outbound_url").getACall() and
+    call.asCfgNode() = g and
+    arg = [call.getArg(0), call.getArgByName("url")] and
+    node = arg.asCfgNode() and
+    branch = true
+  )
+}
+
+class IsSafeOutboundUrlGuardSanitizer extends ServerSideRequestForgery::Sanitizer {
+  IsSafeOutboundUrlGuardSanitizer() {
+    this = DataFlow::BarrierGuard<isSafeOutboundUrlGuard/3>::getABarrierNode()
   }
 }
