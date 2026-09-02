@@ -169,20 +169,68 @@ CDN URL. So resolution ran and came back empty despite an obvious single candida
 in the content. Not investigated further — worth checking whether this is systemic across
 ArtStation entries or a one-off before digging into the resolver itself.
 
-### The re-fetch/save-article path has no proxy/FlareSolverr escalation, only feed refresh does
+### Shared proxy/FlareSolverr escalation for page fetches — SHIPPED 2026-08-31
 
-Raised 2026-08-31 on three tamriel-rebuilt.org entries (their feed only ships thin Drupal teaser
-summaries, no full content, `<img>` count 1/14/1) that "Refetch content" was supposed to fill in.
-All three came back `403 Forbidden` — confirmed live: an honest fetch, then the browser-UA retry
-`fetch_readability_article` already does, both refused. `_refresh_captured_article_for_current_user`
-never reaches for the proxy/Tailscale/FlareSolverr tiers `FeedRefreshService.update_feeds` has —
-those escalation callbacks are wired into the feed-refresh loop only (`services/feed_refresh.py`),
-not the single-article re-fetch/save path (`saved_articles_service.refresh_captured_article` /
-`fetch_readability_article`). A site whose FEED is reachable but whose ARTICLE PAGES are
-Cloudflare/bot-walled (this looks like exactly that shape) can never be helped by "Refetch content"
-no matter how many outbound-fetch tiers exist, because none of them are offered to it. Worth
-wiring the same escalation ladder into the re-fetch path — same shape as the feed-refresh one,
-just triggered from a single-article context instead of a batch.
+Closed both re-fetch and tag/lead-image gaps raised 2026-08-31 (tamriel-rebuilt.org 403s on
+"Refetch content"; gottadeal.com's Cloudflare-walled article pages blocking tag capture). New
+`services/page_fetch.py` (`PageFetcher`) runs a single-URL honest → browser → proxy → FlareSolverr
+ladder, deliberately separate from the feed-refresh flag-and-retry loop (see
+`docs/architecture/feeds.md` "Page fetches" for the full rationale — host-keyed in-memory
+escalation memory instead of a new table, no Tailscale tier, `max_tier` differs between the
+synchronous reader-view path and the always-backgrounded re-fetch path). Wired into
+`_fetch_page_html` (tags + lead images) and `fetch_readability_article`/`fetch_full_page_article`
+(re-fetch), sharing one `PageFetcher` instance so a host FlareSolverr solves for one path is known
+to the other. Settings → Feeds → Fetch Tiers gained a fourth section showing this ladder's state.
+
+**Still open, deliberately deferred (see the shipped commit's "non-goals"):**
+
+- **Broaden `extract_page_tags`'s recognized markup patterns** for reachable sites whose tag block
+  isn't recognized yet — smaller, incremental, same shape as the RebelMouse/Hugo/ArtStation cases
+  it already handles. Independent of the escalation ladder.
+  **Full survey done 2026-08-31** — all ~622 then-untagged feeds (by entry count, one representative
+  entry each, two passes). ~272 produced *some* tags across the two passes (mostly just from being
+  reachable at all now); 63 of those were YouTube's fixed UI-boilerplate `keywords` meta and are now
+  deliberately excluded as junk, not counted as real wins — see below. 6 new patterns added, each
+  confirmed against a real page: `og:article:tag` meta, `aria-label="...tagged with X"` anchors,
+  `itemprop="keywords"` anchors, a "Filed under:" cue alongside the existing "Posted ... in", a
+  space-separated (not comma-separated) `keywords` meta fallback, and raising the tag-anchor regex's
+  inner-content cap 120→500 chars (icon-decorated anchors were entirely invisible below the old cap).
+  Plus 2 false-positive fixes: `front`/`main` added to the URL-path stopwords (netbeans.apache.org's
+  own routing segments), and excluding youtube.com/youtu.be from page-tag scraping entirely (its
+  `keywords` meta is fixed, locale-translated chrome, not per-video — confirmed byte-identical across
+  63 unrelated channels). ~210 of the survey genuinely have no taxonomy on the page; ~107 are still
+  blocked (ArtStation is most of that — FlareSolverr solves the page but the tag widget needs more JS
+  than the solve waits for). Checked and deliberately NOT added: several JSON-LD/meta "keywords" hits
+  that were empty or from an unrelated single-page-app JSON blob, dozens of WordPress "Uncategorized"
+  defaults (already correctly filtered as junk), and a "tagged" hit that was body prose, not markup.
+  Site-by-site from here as new gaps turn up — no more broad surveys needed unless the untagged
+  count grows a lot.
+- **Persist `HostEscalationState`** to a `host_fetch_tiers` table if in-memory proves insufficient
+  in practice — the class already hides this behind its current five methods, so it's a drop-in.
+- **Consolidate `feed_discovery._get_with_escalation`** onto `PageFetcher` — a third, older copy of
+  "honest then browser UA" with its own header set; left alone to keep the ladder's own PR reviewable.
+- **Key `_autofetch_failed_hosts` on deepest-available-tier**, the same fix `HostEscalationState`'s
+  cooldown got, if it turns out to matter in practice.
+
+**Spot-checked live 2026-08-31/09-01** against the real proxy/FlareSolverr backends (configured via
+Administration, not `.env` — `gluetun`/`flaresolverr`/`tailscale` containers all genuinely running):
+
+- **gottadeal.com — fixed.** `queue_source_html_fetch` on a real entry: honest 403, browser 403,
+  **proxy 200** — tags captured (`['deals']`) where there were none before. Never needed FlareSolverr;
+  the escalation ladder correctly stopped once the proxy tier alone got through.
+- **tamriel-rebuilt.org — ladder works correctly, FlareSolverr itself can't solve this particular
+  challenge.** `_refresh_captured_article_for_current_user(..., ignore_cooldown=True)` on a real
+  entry: honest 403, browser 403, proxy 403 (still blocked even through the VPN exit), correctly
+  escalated to FlareSolverr (confirming `bot_challenge` recognized a real challenge here, unlike
+  gottadeal.com's plain block) — FlareSolverr's own container log shows it detected Cloudflare's
+  "Just a moment..." page and then genuinely timed out after 55s trying to solve it. Same failure
+  mode hit other unrelated sites in the same log window (mxlinux.org, neowin.net timeouts;
+  romhacking.net "IP is banned"), so this reads as FlareSolverr's own solve reliability on tough
+  Cloudflare challenges, not a bug in the new escalation code — it built the right request
+  (`{"cmd":"request.get","url":...,"proxy":{"url":"socks5://gluetun:1080"}}`, scheme correctly
+  normalized) and reported the failure cleanly rather than crashing. Not pursued further here; the
+  gap this item exists to close (no escalation offered at all) is closed regardless of whether
+  FlareSolverr wins every individual challenge.
 
 ### A thin post whose entire content is one image ends up looking empty
 
@@ -190,9 +238,8 @@ Also from tamriel-rebuilt.org (2026-08-31): entry 17652's summary is exactly one
 other text — the lead-image hoist strips that image out of the body once it becomes the hero,
 which is correct for a normal article (avoid showing the hero twice) but leaves NOTHING behind
 when the image was the entire post. Reads as "no img" even though the thumb/hero resolved
-correctly. Re-fetch can't help here either (see the item above — this site 403s it). Would need
-the hoist-and-strip step to check whether stripping would leave the body empty and skip the strip
-in that case; not done here.
+correctly. Would need the hoist-and-strip step to check whether stripping would leave the body
+empty and skip the strip in that case; not done here.
 
 ## Tier 2 — small, fast, independent wins
 
