@@ -67,7 +67,8 @@ def test_cache_miss_returns_empty(tmp_path):
 
 def test_fetch_page_escalates_to_browser_ua_on_503(tmp_path, monkeypatch):
     """paizo-style WAF: honest UA gets 503, browser UA succeeds. _fetch_page_html
-    must escalate (not give up) after the honest request is refused."""
+    (via the shared services/page_fetch.py ladder) must escalate — not give up —
+    after the honest request is refused."""
     import services.lead_images as li
 
     svc = _svc(tmp_path)
@@ -87,22 +88,24 @@ def test_fetch_page_escalates_to_browser_ua_on_503(tmp_path, monkeypatch):
     def fake_safe_get(client, url):
         ua = client.headers.get("user-agent", "")
         seen_uas.append(ua)
-        if ua == li._BROWSER_USER_AGENT:
+        if "Mozilla" in ua:
             return _Resp(200, "<html><body>ok</body></html>")
         return _Resp(503)
 
+    monkeypatch.setattr(li.url_guard, "is_safe_outbound_url", lambda url: True)
     monkeypatch.setattr(li.url_guard, "safe_get", fake_safe_get)
     result = svc._fetch_page_html("https://paizo.test/post")
     assert result is not None
     assert result[0] == "<html><body>ok</body></html>"
     # honest UA tried first, then escalated to the browser UA
     assert seen_uas[0] == svc._user_agent
-    assert li._BROWSER_USER_AGENT in seen_uas
+    assert any("Mozilla" in ua for ua in seen_uas)
 
 
 def test_waf_block_backs_off_after_double_refusal(tmp_path, monkeypatch):
-    """When a site (paizo) WAF-refuses both UAs, record a cooldown and stop
-    re-fetching so we don't hammer it / get the IP rate-limited."""
+    """When a site (paizo) WAF-refuses both UAs (no proxy/FlareSolverr
+    configured — none is, by default), record a cooldown and stop re-fetching
+    so we don't hammer it / get the IP rate-limited."""
     import services.lead_images as li
 
     svc = _svc(tmp_path)
@@ -121,11 +124,13 @@ def test_waf_block_backs_off_after_double_refusal(tmp_path, monkeypatch):
         calls["n"] += 1
         return _Resp()
 
+    monkeypatch.setattr(li.url_guard, "is_safe_outbound_url", lambda url: True)
     monkeypatch.setattr(li.url_guard, "safe_get", fake_safe_get)
     assert svc._fetch_page_html("https://paizo.test/post") is None
     first = calls["n"]
     assert first == 2  # tried honest + browser UA once
-    # second fetch is short-circuited by the cooldown — no new requests
+    # second fetch (same host, different path) is short-circuited by the
+    # cooldown — no new requests
     assert svc._fetch_page_html("https://paizo.test/post2") is None
     assert calls["n"] == first
 

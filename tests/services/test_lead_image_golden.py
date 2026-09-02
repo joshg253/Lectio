@@ -453,6 +453,7 @@ def test_pcgamer_backfill_replaces_flexi_with_og(tmp_path: Path, monkeypatch):
     # Monkeypatch source scrape to return the real OG image
     monkeypatch.setattr(service, "_fetch_source_lead_image", lambda _, **kw: PCGAMER_OG_URL)
     monkeypatch.setattr(service, "_fetch_feed_media_thumbnails", lambda _: {})
+    monkeypatch.setattr(service, "_fetch_page_html", lambda url, **kw: None)
 
     posts = [
         {

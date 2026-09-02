@@ -22,6 +22,10 @@ dependencies = [
     "uvicorn[standard]",
     "markdown>=3.10.2",
     "pysocks>=1.7.1",
+    # httpx's own SOCKS proxy support needs socksio specifically — pysocks
+    # above is a separate library that only requests/reader's session knows
+    # how to use, not something httpx's proxy= kwarg can consume.
+    "socksio>=1.0.0",
 ]
 
 [project.optional-dependencies]

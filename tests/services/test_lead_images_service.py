@@ -399,6 +399,10 @@ def test_fetch_and_store_lead_images_backfills_missing_inline(tmp_path: Path, mo
     service = _build_service(db_path, [entry])
 
     monkeypatch.setattr(service, "_fetch_source_lead_image", lambda _link, **kw: "https://cdn.example.com/source-hero.jpg")
+    # Caption backfill also calls _fetch_page_html — not what this test is
+    # about, so give it a no-network stub rather than letting it hit the
+    # real (test-suite-blocked) network.
+    monkeypatch.setattr(service, "_fetch_page_html", lambda url, **kw: None)
 
     service.fetch_and_store_lead_images_for_feed("https://example.com/feed.xml", force_retry_negative=True)
 
@@ -454,6 +458,7 @@ def test_negative_retry_window_retries_after_4h(tmp_path: Path):
     )
     service = _build_service(db_path, [entry])
     service._fetch_source_lead_image = lambda link, **kw: "https://cdn.example.com/late.jpg"
+    service._fetch_page_html = lambda url, **kw: None
 
     # Store NULL more than 4 hours ago.
     with _make_conn(db_path) as conn:
@@ -993,6 +998,7 @@ def test_backfill_webcomic_prefers_source_panel_over_enclosure(tmp_path: Path):
     full_panel = "https://www.everblue-comic.com/comics/x-full.jpg"
     calls: list[tuple] = []
     service._fetch_source_lead_image = lambda link, **kw: calls.append((link, kw)) or full_panel  # type: ignore[method-assign]
+    service._fetch_page_html = lambda url, **kw: None
     # Webcomic feeds must NOT fetch the feed XML for media thumbs.
     service._fetch_feed_media_thumbnails = lambda *a, **kw: (_ for _ in ()).throw(
         AssertionError("webcomic must skip _fetch_feed_media_thumbnails")
@@ -1410,6 +1416,7 @@ def test_detected_og_scrape_prefers_source_over_a_mid_body_image(tmp_path: Path,
     # Detected, NOT manually locked — the whole point of the regression.
     service.store_feed_strategy(feed, "og_scrape", manual=False)
     monkeypatch.setattr(service, "_fetch_source_lead_image", lambda *a, **k: og_img)
+    monkeypatch.setattr(service, "_fetch_page_html", lambda url, **kw: None)
 
     service.fetch_and_store_lead_images_for_feed(feed, force_retry_negative=True)
 
