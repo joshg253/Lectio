@@ -15,7 +15,7 @@ from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlparse, urlsp
 import feedparser
 import httpx
 
-from services import bluesky, svg_sanitize, tenancy, url_guard
+from services import bluesky, page_fetch, svg_sanitize, tenancy, url_guard
 from services.lead_image_plugins import DEFAULT_LEAD_IMAGE_PLUGINS, LeadImagePlugin
 from services.url_guard import is_safe_outbound_url
 
@@ -28,15 +28,6 @@ def _tag_name_of(open_tag: str) -> str:
     """The element name from a matched opening tag, lowercased ('' if unparsable)."""
     m = _TAG_NAME_RE.match(open_tag)
     return m.group(1).lower() if m else ""
-
-# Last-resort browser UA for source-page fetches that an honest UA gets WAF-refused
-# (HTTP 403/503, e.g. Cloudflare-gated paizo.com). Escalated only after the honest
-# request is actually refused — never preemptively.
-_BROWSER_USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-)
-
 
 
 def upgrade_image_size_param(url: str, rule: str | None) -> str:
@@ -685,11 +676,21 @@ class LeadImageService:
         cache: dict[tuple[str, str], str | None] | None = None,
         fetched_at_cache: dict[tuple[str, str], float] | None = None,
         plugins: tuple[LeadImagePlugin, ...] | None = None,
+        page_fetcher: page_fetch.PageFetcher | None = None,
     ) -> None:
         self._get_meta_connection = get_meta_connection
         self._get_reader = get_reader
         self._user_agent = user_agent
         self._extract_video_id = extract_video_id
+        # Defaults to a null-backend fetcher (proxy/FlareSolverr never
+        # configured) so a caller that doesn't wire one up in gets the exact
+        # honest->browser behavior this always had — main.py passes a real,
+        # tenancy-aware one shared with the saved-article re-fetch path (see
+        # services/page_fetch.py and Plan.md).
+        self._page_fetcher = page_fetcher if page_fetcher is not None else page_fetch.PageFetcher(
+            backends=lambda: page_fetch.FetchBackends(mode="off", proxy_url="", flaresolverr_url=""),
+            honest_user_agent=user_agent,
+        )
         self._cache = cache if cache is not None else {}
         self._fetched_at_cache = fetched_at_cache if fetched_at_cache is not None else {}
         self._alt_cache: dict[tuple[str, str], str | None] = {}
@@ -734,12 +735,6 @@ class LeadImageService:
         # Avoids a second HTTP request when extracting img alt text after lead image resolution.
         self._source_html_cache: OrderedDict[str, tuple[str, str]] = OrderedDict()
         self._SOURCE_HTML_CACHE_MAX = 8
-        # Domains that WAF-refused us (403/503 even with a browser UA, e.g. a
-        # Cloudflare JS challenge like paizo.com) → time.monotonic() until which to
-        # skip re-fetching. Prevents per-open re-scrape from hammering the site
-        # (which can get our IP rate-limited and break the feed fetch too).
-        self._waf_block_until: dict[str, float] = {}
-        self._WAF_BLOCK_COOLDOWN = 6 * 3600  # seconds
         # Events signalled when queue_source_html_fetch completes; lets the first-open entry
         # render wait briefly for caption text rather than deferring to the next open.
         self._source_html_fetch_events: dict[str, threading.Event] = {}
@@ -3518,94 +3513,21 @@ class LeadImageService:
 
         return result
 
-    _JS_COOKIE_CHALLENGE_RE: re.Pattern[str] = re.compile(
-        r'document\.cookie\s*=\s*["\']([^"\'=]+=[^"\']+)["\']',
-        re.IGNORECASE,
-    )
-
     def _fetch_page_html(self, url: str) -> tuple[str, str, bool] | None:
-        """Fetch a page, handling JS cookie challenges (e.g. BlueHost humans_XXXXX).
+        """Fetch a page via the shared escalation ladder (services/page_fetch.py:
+        honest -> browser -> proxy -> FlareSolverr identity).
 
         Returns (html, final_url, corp_restricted) or None on failure.
         corp_restricted is True when the response has Cross-Origin-Resource-Policy:
         same-site or same-origin, meaning browsers will block cross-origin image loads
         from this domain and images should not be used as lead-image candidates.
-        Falls back to urllib when the server disconnects on httpx (e.g. Tumblr
-        rejects httpx's TLS fingerprint but accepts stdlib connections).
         """
-        _use_urllib = False
-        _corp_restricted = False
-        # Respect a recent WAF refusal: don't re-hammer a domain that 403/503'd even
-        # with a browser UA (e.g. paizo's Cloudflare JS challenge). Repeated per-open
-        # scrapes would otherwise get our IP rate-limited and break the feed fetch too.
-        _domain = urlparse(url).netloc.lower()
-        if self._waf_block_until.get(_domain, 0.0) > time.monotonic():
-            return None
         try:
-            # Identify honestly by default; escalate to a browser UA only if the
-            # honest request is actually refused with a WAF status (403 Forbidden or
-            # 503, used by Cloudflare's "Just a moment" challenge — e.g. paizo.com).
-            # Never preemptive, so hosts happy to serve Lectio still see the honest UA.
-            response = None
-            for _ua in (self._user_agent, _BROWSER_USER_AGENT):
-                # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
-                with httpx.Client(follow_redirects=False, timeout=15.0, headers={"User-Agent": _ua}) as client:
-                    response = url_guard.safe_get(client, url)
-                    if response.status_code == 409:
-                        m = self._JS_COOKIE_CHALLENGE_RE.search(response.text)
-                        if m:
-                            cookie_str = m.group(1)
-                            if "=" in cookie_str:
-                                cname, cval = cookie_str.split("=", 1)
-                                parsed_host = urlparse(url)
-                                domain = parsed_host.netloc.removeprefix("www.")
-                                client.cookies.set(cname.strip(), cval.strip(), domain=domain)
-                            response = url_guard.safe_get(client, url)
-                    if response.status_code not in (403, 503):
-                        break  # served (or a non-WAF error) — don't escalate
-            # Still refused after escalating → the site is WAF-blocking us. Record a
-            # cooldown so we stop re-fetching it on every entry open.
-            if response is None:
-                return None
-            if response.status_code in (403, 503):
-                self._waf_block_until[_domain] = time.monotonic() + self._WAF_BLOCK_COOLDOWN
-                return None
-            response.raise_for_status()
-            _corp = response.headers.get("cross-origin-resource-policy", "").lower()
-            _corp_restricted = _corp in ("same-site", "same-origin")
-        except httpx.RemoteProtocolError:
-            _use_urllib = True
-        except Exception:
+            result = self._page_fetcher.fetch(url, timeout=15.0, refusal_statuses=frozenset({403, 503}))
+        except (page_fetch.PageFetchError, url_guard.UnsafeURLError):
             return None
-
-        if _use_urllib:
-            # urlopen follows redirects itself with no per-hop revalidation, unlike
-            # url_guard.safe_get above — a custom redirect handler closes that gap.
-            if not url_guard.is_safe_outbound_url(url):
-                return None
-            try:
-                import urllib.error as _uerr
-                import urllib.request as _ureq
-
-                class _SafeRedirectHandler(_ureq.HTTPRedirectHandler):
-                    def redirect_request(self, req, fp, code, msg, headers, newurl):
-                        if not url_guard.is_safe_outbound_url(newurl):
-                            raise _uerr.HTTPError(newurl, code, "Blocked unsafe redirect target", headers, fp)
-                        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-                _opener = _ureq.build_opener(_SafeRedirectHandler)
-                _req = _ureq.Request(url, headers={"User-Agent": self._user_agent})
-                with _opener.open(_req, timeout=10) as _resp:
-                    _html = _resp.read().decode("utf-8", errors="replace")
-                    _final = _resp.url
-                    _corp = _resp.headers.get("cross-origin-resource-policy", "").lower()
-                    _corp_restricted = _corp in ("same-site", "same-origin")
-                return self._strip_script_blocks(_html), _final, _corp_restricted
-            except Exception:
-                return None
-
-        assert response is not None
-        return self._strip_script_blocks(response.text), str(response.url), _corp_restricted
+        _corp = result.headers.get("cross-origin-resource-policy", "").lower()
+        return self._strip_script_blocks(result.html), result.final_url, _corp in ("same-site", "same-origin")
 
     # <img> tags written by JavaScript are not images on the page — they are
     # source code. monstersoupcomic's bookmark widget does

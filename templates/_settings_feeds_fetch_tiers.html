@@ -36,3 +36,32 @@
 {{ tier_section("Paid VPN proxy", "Feeds escalated to the gluetun proxy after a plain fetch was refused.", proxy_rows) }}
 {{ tier_section("Home IP (Tailscale)", "Feeds escalated further, past the proxy, to your home network's exit IP.", tailscale_rows) }}
 {{ tier_section("FlareSolverr", "Feeds needing a real headless-Chrome challenge solve (Cloudflare/DDoS-Guard) — routed through whichever of the above is also active for the feed.", flaresolverr_rows) }}
+
+{# Page fetches: tag/lead-image scraping and the saved-article re-fetch path
+   share one ladder (services/page_fetch.py) with the three feed tables above,
+   but its memory is per-HOST and in-memory (not persisted feed rows) — a
+   demand-driven single-URL fetch, not an hourly cron, so it's shown as its
+   own list rather than folded into the sections above. #}
+<div class="fetch-tier-section">
+  <h4 class="fetch-tier-title">Page fetches (this session) <span class="feeds-tab-count">{{ page_fetch_rows | length }}</span></h4>
+  <p class="muted fetch-tier-hint">Hosts the tag/lead-image scraper and saved-article re-fetch have escalated for, since the last restart — separate from the feed tables above.</p>
+  {% if page_fetch_rows %}
+  <ul class="problem-feed-list">
+    {% for row in page_fetch_rows %}
+    <li class="problem-feed-item">
+      <div class="problem-feed-row">
+        <span class="problem-feed-link" title="{{ row.host }}">{{ row.host }}</span>
+      </div>
+      <div class="problem-feed-meta">
+        <span>{% if row.learned_tier %}Last worked via: {{ row.learned_tier }}{% else %}No successful fetch yet{% endif %}</span>
+        {% if row.blocked %}
+        <span>Cooling down (past {{ row.blocked_after_tier }}{% if row.challenge %}, {{ row.challenge }}{% endif %})</span>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">None right now.</p>
+  {% endif %}
+</div>

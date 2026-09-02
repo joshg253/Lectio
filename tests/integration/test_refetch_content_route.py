@@ -15,7 +15,7 @@ def _build_app(monkeypatch, calls: list):
     app = FastAPI()
     app.post("/articles/refresh-content")(main.refresh_saved_article_content)
 
-    def fake_refresh(feed_url, entry_id, mode="readability", bump_received=None, date_choice=None):
+    def fake_refresh(feed_url, entry_id, mode="readability", bump_received=None, date_choice=None, ignore_cooldown=False):
         calls.append(date_choice)
         return {"ok": True, "refreshed": True, "extracted": True, "title": "T", "source_url": entry_id}
 
