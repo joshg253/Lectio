@@ -515,6 +515,33 @@ def test_merge_regex_convert_escapes_the_plain_keyword(env):
     assert not _re.search(rows[0]["keyword"], "Something else entirely")
 
 
+def test_merge_regex_convert_splits_a_plain_comma_list(env):
+    # Regression for the botched-merge bug found 2026-09-01: re.escape()-ing a
+    # plain keyword's WHOLE string turned "Pixel Watch, Ryobi, Google Pixel"
+    # into one dead literal requiring all three names adjacent with commas,
+    # instead of three alternatives. A comma in a plain keyword is an OR-term
+    # separator (split_keyword_terms), not literal text to preserve.
+    _add_rule("global", "", "Pixel Watch, Ryobi, Google Pixel", is_regex=False)
+    _add_rule("global", "", r"\bDell\b", is_regex=True)
+    with main.get_meta_connection() as conn:
+        result = main.merge_regex_convertible_rule_group(conn, "highlight", "global", "", "title")
+        conn.commit()
+        rows = conn.execute("SELECT keyword, is_regex FROM highlight_keywords WHERE scope = 'global'").fetchall()
+    assert result is not None
+    assert len(rows) == 1
+    keyword = rows[0]["keyword"]
+    # The bug produced "(Pixel\ Watch,\ Ryobi,\ Google\ Pixel)|(\bDell\b)" --
+    # one dead literal requiring all three names adjacent with commas. Each
+    # term must be its own alternative instead.
+    assert keyword == r"(Pixel\ Watch|Ryobi|Google\ Pixel)|(\bDell\b)"
+    import re as _re
+    assert _re.search(keyword, "New Pixel Watch announced")
+    assert _re.search(keyword, "Ryobi tools on sale")
+    assert _re.search(keyword, "Google Pixel 10 review")
+    assert _re.search(keyword, "Dell XPS refresh")
+    assert not _re.search(keyword, "Something else entirely")
+
+
 def test_merge_regex_convert_refuses_when_settings_mismatch(env):
     fid = _make_folder("Mixed")
     _add_rule("folder", str(fid), "a", is_regex=False, color="blue")

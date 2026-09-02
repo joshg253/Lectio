@@ -5185,7 +5185,13 @@ def merge_regex_convertible_rule_group(
         kw = str(r["keyword"] or "").strip()
         if not kw:
             continue
-        pattern = kw if r["is_regex"] else re.escape(kw)
+        # A plain keyword's commas are OR-term separators (split_keyword_terms),
+        # not literal text -- re.escape(kw) on the whole string turned "Pixel
+        # Watch, Ryobi, Google Pixel" into one dead literal requiring all three
+        # names adjacent with commas, instead of three alternatives. Escape each
+        # term individually, then alternate them, before this whole row becomes
+        # one outer (...) group below.
+        pattern = kw if r["is_regex"] else "|".join(re.escape(term) for term in split_keyword_terms(kw))
         if pattern not in seen_kw:
             seen_kw.append(pattern)
     merged_keyword = "|".join(f"({kw})" for kw in seen_kw)
@@ -10844,6 +10850,35 @@ def get_entry_keys_for_manual_tag(feed_urls: set[str], tag: str) -> set[tuple[st
     return keys
 
 
+def get_entry_ids_with_feed_tag(feed_urls: set[str], tag: str) -> set[tuple[str, str]]:
+    """(feed_url, entry_id) of entries carrying feed-provided tag *tag*
+    (entry_feed_tags, the publisher-shipped suggestions — not a manual tag),
+    restricted to *feed_urls*. Backs the entry pane's click-to-preview on a
+    suggested-tag chip: unlike the tag_filter automation rule, this is a
+    one-off read-path filter over whatever the current view already fetched,
+    not a persisted rule, so it lives in the meta DB (entry_feed_tags) and
+    normalizes at read time the same way the tag_filter matcher does (raw
+    stored values aren't pre-normalized)."""
+    keys: set[tuple[str, str]] = set()
+    if not feed_urls:
+        return keys
+    normalized = normalize_tag_value(tag)
+    if not normalized:
+        return keys
+    feed_list = list(feed_urls)
+    with get_meta_connection() as conn:
+        for i in range(0, len(feed_list), 900):
+            chunk = feed_list[i:i + 900]
+            ph = ",".join("?" for _ in chunk)
+            for row in conn.execute(
+                f"SELECT feed_url, entry_id, tag FROM entry_feed_tags WHERE feed_url IN ({ph})",
+                chunk,
+            ):
+                if normalize_tag_value(str(row["tag"])) == normalized:
+                    keys.add((str(row["feed_url"]), str(row["entry_id"])))
+    return keys
+
+
 def invalidate_tag_counts_cache() -> None:
     with tag_counts_cache_lock:
         tag_counts_cache.clear()
@@ -14707,6 +14742,7 @@ def list_entries_for_feeds(
     read_filter: str = "all",
     star_only: bool = False,
     selected_tag: str | None = None,
+    selected_feed_tag: str | None = None,
     search_query: str | None = None,
     kept_scope: str = "kept",
     archived: bool | None = None,
@@ -14721,6 +14757,7 @@ def list_entries_for_feeds(
     normalized_read_filter = normalize_read_filter(read_filter)
     normalized_star_only = normalize_star_only(star_only)
     normalized_selected_tag = normalize_tag_value(selected_tag)
+    normalized_selected_feed_tag = normalize_tag_value(selected_feed_tag)
     search_terms = search_terms_from_query(search_query)
     # site:<host> narrows to entries on that link host; it never goes to the
     # text-matching paths (SQL or haystack), only the link-host filter below.
@@ -15138,6 +15175,15 @@ def list_entries_for_feeds(
             _all_display_prefs = get_all_feed_display_prefs(_prefs_conn)
         _hide_unpremiered_global = youtube_hide_unpremiered_global()
 
+        # A feed-tag preview filter (clicking a suggested-tag chip in the entry
+        # pane): unlike normalized_selected_tag above, this is never pushed into
+        # reader's native fetch — it's a one-off narrowing of whatever the
+        # current view already fetched, not a persisted scope, so a single
+        # pre-fetched set + O(1) membership check is enough (no per-entry call).
+        feed_tag_keys: set[tuple[str, str]] | None = None
+        if normalized_selected_feed_tag:
+            feed_tag_keys = get_entry_ids_with_feed_tag(set(feed_urls), normalized_selected_feed_tag)
+
         light_records: list[dict] = []
         for entry in all_feed_entries:
             is_read = bool(entry.read)
@@ -15149,6 +15195,8 @@ def list_entries_for_feeds(
                 manual_tags_for_record = get_manual_tags_for_resource(reader, entry.resource_id)  # ty: ignore[unresolved-attribute]
                 if normalized_selected_tag not in manual_tags_for_record:
                     continue
+            if feed_tag_keys is not None and (entry.feed_url, entry.id) not in feed_tag_keys:
+                continue
             # Kept view keeps anything starred OR tagged (the unified keep axis).
             if normalized_star_only and (entry.feed_url, entry.id) not in kept_entries_set:
                 continue
@@ -23704,6 +23752,7 @@ def home(
     folder_id: int | None = None,
     list_feed_url: str | None = None,
     tag: str | None = None,
+    feed_tag: str | None = None,
     sort_by: str | None = None,
     sort_dir: str | None = None,
     read_filter: str | None = None,
@@ -23758,6 +23807,7 @@ def home(
             folder_id=folder_id,
             list_feed_url=list_feed_url,
             tag=tag,
+            feed_tag=feed_tag,
             sort_by=sort_by,
             sort_dir=sort_dir,
             read_filter=read_filter,
@@ -23793,6 +23843,7 @@ def _home_inner(
     folder_id: int | None = None,
     list_feed_url: str | None = None,
     tag: str | None = None,
+    feed_tag: str | None = None,
     sort_by: str | None = None,
     sort_dir: str | None = None,
     read_filter: str | None = None,
@@ -24019,6 +24070,7 @@ def _home_inner(
     filtered_feed_urls = filter_feed_urls(feed_urls, list_feed_url)
     selected_feed_url = list_feed_url
     selected_tag = normalize_tag_value(tag)
+    selected_feed_tag = normalize_tag_value(feed_tag)
     selected_query = normalize_search_query(q)
     legacy_saved_mode = (read_filter or "").strip().lower() == "saved"
     selected_read_filter = normalize_read_filter(read_filter)
@@ -24038,6 +24090,7 @@ def _home_inner(
     if selected_home:
         selected_feed_url = None
         selected_tag = None
+        selected_feed_tag = None
         filtered_feed_urls = set()
     selected_resume_read_filter = normalize_resume_read_filter(resume_read_filter)
     # Respect an explicit resume_read_filter provided by the caller. Only
@@ -24050,6 +24103,7 @@ def _home_inner(
         filtered_feed_urls = all_feed_urls
         selected_feed_url = None
         selected_tag = None
+        selected_feed_tag = None
         selected_star_only = False
 
     tag_start = time.perf_counter()
@@ -24214,6 +24268,7 @@ def _home_inner(
         read_filter=selected_read_filter,
         star_only=selected_star_only,
         selected_tag=selected_tag,
+        selected_feed_tag=selected_feed_tag,
         search_query=selected_query,
         # The Inbox is the to-do pile: stars only. Every other Saved node still
         # spans the whole kept set (starred OR tagged), because a tag is filing
@@ -24419,6 +24474,7 @@ def _home_inner(
         ),
         "selected_feed_url": selected_feed_url,
         "selected_tag": selected_tag,
+        "selected_feed_tag": selected_feed_tag,
         "selected_query": selected_query,
         "problematic_feeds": problematic_feeds,
         "problematic_feed_count": len(problematic_feeds),
