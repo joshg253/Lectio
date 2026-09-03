@@ -5862,12 +5862,21 @@ def get_all_reader_feed_urls(include_kept: bool = False) -> set[str]:
     Kept feeds (unsubscribed-but-retained for curation) are excluded by default
     so they don't resurface in the tree / All Feeds / Uncategorized / counts. The
     Saved/Kept view passes include_kept=True to browse them.
+
+    Goes through get_reader()'s pooled connection rather than a fresh
+    sqlite3.connect() per call -- the same anti-pattern fixed 2026-09-03 for
+    list_entries_for_feeds' sort paths (Plan.md Tier 1). This function is called
+    unconditionally on every home-route render (nested inside the
+    "structure_snapshot" perf tick, which is what was actually timing this, not
+    the cached snapshot lookup its name suggests) plus a dozen other call
+    sites, so a raw connection here paid file-open/schema-load cost, with a
+    shorter busy_timeout (5s vs 10s) than the pooled connection, on every
+    single request -- and was invisible to slow-SQL logging since a bare
+    sqlite3.connect() bypasses _TimedConnection entirely.
     """
-    conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
-    try:
-        urls = {str(r[0]) for r in conn.execute("SELECT url FROM feeds")}
-    finally:
-        conn.close()
+    with get_reader() as reader:
+        db = reader._storage.get_db()
+        urls = {str(r[0]) for r in db.execute("SELECT url FROM feeds")}
     if not include_kept:
         urls -= get_kept_feed_urls()
     return urls
@@ -24176,6 +24185,7 @@ def _home_inner(
         root_id = cast(int, snapshot["root_id"])
         folder_feed_urls_by_id = cast(dict[int, set[str]], snapshot["folder_feed_urls_by_id"])
         selected_folder_id = folder_id or root_id
+        _tick("structure_snapshot")
 
         # Derive the virtual "Uncategorized" folder: feeds the reader knows about
         # that live in no folder_feeds row. Copy the snapshot's per-folder maps
@@ -24199,7 +24209,7 @@ def _home_inner(
         folder_feed_urls_by_id[root_id] = all_feed_urls | _uncat_display_urls
         folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = _uncat_display_urls
         direct_feed_urls_by_folder[UNCATEGORIZED_FOLDER_ID] = sorted(_uncat_display_urls)
-        _tick("structure_snapshot")
+        _tick("uncategorized_derive")
 
         unread_counts_by_feed = get_unread_counts_by_feed()
         _tick("unread_counts")

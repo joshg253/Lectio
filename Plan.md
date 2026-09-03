@@ -364,6 +364,39 @@ a fix (candidates worth checking first once a caller shows up: anything in the p
 or `_run_automation_after_refresh` that runs unconditionally rather than only on an actual structural
 change).
 
+**Live capture 2026-09-03, after the caller-logging deploy — the caching theory was wrong, and the
+real bug was a labeling mistake.** Josh: "still many seconds to switch to Dev." Confirmed the browser
+side was ordinary hard-refreshes/new tabs, not Lectio's own manual Refresh button — ruling out
+self-inflicted refresh-contention as a confound. A fresh capture caught `meta.structure_snapshot=2594ms`
+again 45 minutes into steady-state (not a post-restart cold start) — **but zero
+`invalidate_meta_structure_cache` log lines fired anywhere in the preceding 60 minutes.** That's a
+clean negative result: the cache was never actually being invalidated, so "going cold under refresh
+contention" was the wrong theory entirely.
+
+Re-reading `_home_inner`'s timing code (`main.py:24107`, the `_tick()` closure) found the real bug:
+the `_tick("structure_snapshot")` call was placed *after* `get_all_reader_feed_urls()` and a block of
+derived-set building, not right after `get_meta_structure_snapshot(conn)` itself — so the tick's name
+described the cached snapshot lookup, but its *measurement window* actually included that unrelated
+call too. `get_all_reader_feed_urls` (`main.py:5854`) opened its own fresh
+`sqlite3.connect(reader_db_path, timeout=5.0)` on **every single home-route render, unconditionally**
+— the identical anti-pattern already fixed twice this session (`get_tagged_entry_keys`,
+`list_entries_for_feeds`' sort paths), just in a third location, mislabeled by a timing tick that
+made it look like a caching problem. This one is worse than the previous two in blast radius: it has
+no `len(feed_urls) > 32` gate at all, so it fires on literally every home-route request regardless of
+folder size, plus 11 other call sites elsewhere in main.py.
+
+**Fixed 2026-09-03**: `get_all_reader_feed_urls` now uses `reader._storage.get_db()` from
+`get_reader()`'s pooled connection. Split the mislabeled tick into two: `structure_snapshot` now wraps
+only `get_meta_structure_snapshot()` itself, and a new `uncategorized_derive` tick isolates
+`get_all_reader_feed_urls()` plus the Uncategorized-folder set-building that follows it — so a future
+capture attributes correctly instead of repeating this exact misdiagnosis. 2 new tests
+(`tests/integration/test_get_all_reader_feed_urls_pooled.py`): one guards against a fresh connection
+(would have failed on the old code), the other confirms `include_kept` behavior survived the rewrite.
+Full suite green (3925). **Not yet confirmed live** — needs a deploy and a real capture; if
+`structure_snapshot` (now correctly isolated) is still slow after this, the cache-cold-under-contention
+theory becomes worth revisiting for real, this time with a tick that actually measures what its name
+says.
+
 **Read Above/Below, same shape:**
 
 
