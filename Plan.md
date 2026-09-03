@@ -397,6 +397,31 @@ Full suite green (3925). **Not yet confirmed live** — needs a deploy and a rea
 theory becomes worth revisiting for real, this time with a tick that actually measures what its name
 says.
 
+**Confirmed live 2026-09-03 — resolved.** Josh clicked through several folders: "all seem to be about
+the same 1-2 seconds." A fresh log capture backs it up directly: every request in the window logged
+`meta_block` 9-49ms (down from 5-13*seconds*), `badges_detail` ~300-500ms, `posts_block` ~100-700ms
+(feed-count dependent), `template_stream` ~300-800ms — real, legitimate work, no lock-wait pathology
+anywhere. One request's `meta_block` did spike to 1664ms, and the split tick correctly attributed it
+to `uncategorized_derive` (not `structure_snapshot`) — the fix's own diagnostics working as intended,
+not a new problem. Total per-request now consistently lands at 1-2s, matching Josh's report and, not
+coincidentally, roughly what the very first entry in this item (2026-08-11, "median 700ms") described
+as the *good* case before any of this started.
+
+Two small residuals visible in the same capture, neither on the click path: a single-row
+`yt_quota_spend` write hit ~3.9s (background YouTube-quota tracking, its own long-known non-batched
+single-row shape, never sized as worth fixing), and one batched `entry_lead_images` `executemany`
+flush hit ~4.7s under heavy load — visible only because of the executemany-wrapping fix a few commits
+back, and exactly the intended trade-off: one commit occasionally waiting, not N commits compounding.
+Neither is user-visible. **This closes out the Tier 1 refresh-contention chain that started
+2026-08-11** — four real bugs found and fixed across two sessions (lead-image per-entry writes ×3
+shapes, hide-paywalled's missed batching, and three separate raw-reader-connection call sites), each
+confirmed by a live capture, several confirmed by Josh directly. Remaining open threads, none of them
+blocking: `entry_read_state` batching in the post-refresh automation pipeline was investigated and
+found to already be correctly batched everywhere except the one site fixed here; the ~17 other
+`sqlite3.connect(reader_db_path)` call sites elsewhere in main.py (deferred cleanup, noted above); and
+the Read Above/Below WAL/checkpoint-timing lead below, which was never confirmed as the same mechanism
+and may simply no longer matter now that the connection-pooling bugs are fixed.
+
 **Read Above/Below, same shape:**
 
 
