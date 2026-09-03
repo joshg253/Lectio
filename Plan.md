@@ -307,6 +307,39 @@ went — until then this reads as a lead, not a diagnosis: it could be slow Pyth
 template logic, or the same lock-wait mechanism as everything else in this item showing up in
 whichever settings lookup happens to run during a write.
 
+**Josh's own hypothesis, 2026-09-03: "something to do with sorting/filtering... maybe the default is
+structured for a different view to be fast."** Not quite the exact mechanism, but it pointed at the
+right code and turned up a real, well-scoped bug — fixed same day.
+
+`list_entries_for_feeds` has three shapes: a per-feed path for ≤32 feeds (goes through `get_reader()`'s
+pooled connection), and two "many feeds" SQL fast paths — one for `sort_dir=asc` (Josh's daily driver:
+Unread + oldest-first), one for `desc` — both gated on `len(feed_urls) > PER_FEED_QUERY_THRESHOLD`
+(32). **Both** many-feed paths, plus the `feed_site_map` favicon-host lookup just above them, opened a
+**fresh `sqlite3.connect(reader_db_path, timeout=5.0)` on every single request** instead of reusing
+`get_reader()`'s pooled, timed connection — the identical anti-pattern `get_tagged_entry_keys` was
+fixed for 2026-09-02, just never caught here. So it isn't that ASC is slower than DESC (both shared
+the bug equally); it's that **small views (≤32 feeds) never hit this code at all**, while any large
+folder — exactly where real browsing happens — paid full file-open/schema-load cost on every render,
+with a *shorter* busy_timeout (5s) than everywhere else (10s), and were completely invisible to
+slow-SQL logging since a bare `sqlite3.connect()` bypasses `_TimedConnection` entirely. A `sqlite3.connect(str(tenancy.reader_db_path())...)` grep turned up **20 occurrences** across main.py total —
+these 3 were fixed because they're squarely in the hot list-rendering path and directly explain this
+symptom; the other ~17 are scattered across less-hot routes and are a separate, deferred cleanup (see
+below), not part of this fix.
+
+**Fixed 2026-09-03**: all three call sites now do `reader._storage.get_db()` inside the existing
+`with get_reader() as reader:` block (row access switched from `sqlite3.Row` named lookup to
+positional, matching `get_tagged_entry_keys`'s established pattern — reader's pooled connection
+doesn't set a row_factory). 2 new tests (`tests/integration/test_list_entries_pooled_connection.py`):
+one asserts no fresh reader-DB connection is opened for either sort direction past the threshold
+(would have failed against the old code), the other confirms ASC/DESC still agree on membership after
+the rewrite. Full suite green (3923). **Not yet confirmed live** — needs a deploy and a real capture
+on a large folder during refresh contention.
+
+**Deferred, separate cleanup**: the other ~17 `sqlite3.connect(reader_db_path)` call sites elsewhere
+in main.py share the same anti-pattern (shorter busy_timeout, invisible to slow-SQL logging) but
+aren't in a request-path hot loop the way these three were — worth a systematic sweep at some point,
+not sized here.
+
 **Read Above/Below, same shape:**
 
 

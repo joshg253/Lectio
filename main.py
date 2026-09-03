@@ -15071,22 +15071,27 @@ def list_entries_for_feeds(
         fetch_start = time.perf_counter()
         # Build feed_url → site homepage URL map via direct SQL rather than
         # iterating all feed objects via reader. Keeps this O(feeds in view)
-        # instead of O(all feeds in the library).
+        # instead of O(all feeds in the library). Goes through get_reader()'s
+        # pooled, timed connection (10s busy_timeout) rather than a fresh
+        # sqlite3.connect(..., timeout=5.0) per request -- the same anti-pattern
+        # get_tagged_entry_keys was fixed for 2026-09-02 (Plan.md Tier 1), just
+        # never caught here: a raw connection pays file-open/schema-load cost on
+        # every render of a folder with many feeds, with a shorter busy_timeout
+        # than everywhere else, and was invisible to slow-SQL logging since a
+        # bare sqlite3.connect() bypasses _TimedConnection entirely. Row access
+        # is positional (not sqlite3.Row) -- reader's own pooled connection
+        # doesn't set a row_factory, same as get_tagged_entry_keys assumes.
         feed_site_map: dict[str, str | None] = {url: None for url in feed_urls}
         if feed_urls:
-            _sm_conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
-            _sm_conn.row_factory = sqlite3.Row
-            try:
-                _sm_list = list(feed_urls)
-                for _i in range(0, len(_sm_list), 999):
-                    _chunk = _sm_list[_i:_i + 999]
-                    _ph = ",".join("?" for _ in _chunk)
-                    for _row in _sm_conn.execute(
-                        f"SELECT url, link FROM feeds WHERE url IN ({_ph})", _chunk
-                    ).fetchall():
-                        feed_site_map[str(_row["url"])] = _row["link"] or None
-            finally:
-                _sm_conn.close()
+            _sm_db = reader._storage.get_db()
+            _sm_list = list(feed_urls)
+            for _i in range(0, len(_sm_list), 999):
+                _chunk = _sm_list[_i:_i + 999]
+                _ph = ",".join("?" for _ in _chunk)
+                for _row in _sm_db.execute(
+                    f"SELECT url, link FROM feeds WHERE url IN ({_ph})", _chunk
+                ).fetchall():
+                    feed_site_map[str(_row[0])] = _row[1] or None
 
         all_feed_entries: list[Any] = []
         fetch_limit = max(1, int(limit))
@@ -15225,43 +15230,42 @@ def list_entries_for_feeds(
             # a buffer-based global scan.
             read_sql = {None: "", True: " AND read = 1", False: " AND (read IS NULL OR read != 1)"}
             read_clause = read_sql.get(reader_read_filter, "")
+            # Pooled connection, not a fresh sqlite3.connect() per request -- see
+            # the feed_site_map comment above for the full rationale. Row access
+            # is positional for the same reason.
             try:
-                _rconn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
-                _rconn.row_factory = sqlite3.Row
-                try:
-                    if len(feed_urls) <= 999:
-                        _feed_list = list(feed_urls)
-                        _placeholders = ",".join("?" for _ in _feed_list)
-                        rows = _rconn.execute(
-                            f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
+                _rdb = reader._storage.get_db()
+                if len(feed_urls) <= 999:
+                    _feed_list = list(feed_urls)
+                    _placeholders = ",".join("?" for _ in _feed_list)
+                    rows = _rdb.execute(
+                        f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
+                        f" ORDER BY {_ENTRY_SORT_SQL} ASC LIMIT ?",
+                        _feed_list + [fetch_limit],
+                    ).fetchall()
+                else:
+                    # >999 feeds: SQLite's variable limit prevents a single IN clause.
+                    # A global scan without a feed filter picks up entries from feeds
+                    # outside feed_urls (e.g. import-synthesised feeds) and the Python
+                    # filter can discard the entire result window. Batch instead.
+                    _feed_list = list(feed_urls)
+                    batch_rows: list = []
+                    for _i in range(0, len(_feed_list), 999):
+                        _chunk = _feed_list[_i:_i + 999]
+                        _ph = ",".join("?" for _ in _chunk)
+                        chunk_rows = _rdb.execute(
+                            f"SELECT feed, id, {_ENTRY_SORT_SQL} AS sort_val FROM entries"
+                            f" WHERE feed IN ({_ph}){read_clause}"
                             f" ORDER BY {_ENTRY_SORT_SQL} ASC LIMIT ?",
-                            _feed_list + [fetch_limit],
+                            _chunk + [fetch_limit],
                         ).fetchall()
-                    else:
-                        # >999 feeds: SQLite's variable limit prevents a single IN clause.
-                        # A global scan without a feed filter picks up entries from feeds
-                        # outside feed_urls (e.g. import-synthesised feeds) and the Python
-                        # filter can discard the entire result window. Batch instead.
-                        _feed_list = list(feed_urls)
-                        batch_rows: list = []
-                        for _i in range(0, len(_feed_list), 999):
-                            _chunk = _feed_list[_i:_i + 999]
-                            _ph = ",".join("?" for _ in _chunk)
-                            chunk_rows = _rconn.execute(
-                                f"SELECT feed, id, {_ENTRY_SORT_SQL} AS sort_val FROM entries"
-                                f" WHERE feed IN ({_ph}){read_clause}"
-                                f" ORDER BY {_ENTRY_SORT_SQL} ASC LIMIT ?",
-                                _chunk + [fetch_limit],
-                            ).fetchall()
-                            batch_rows.extend(chunk_rows)
-                        batch_rows.sort(key=lambda r: r["sort_val"] or "")
-                        rows = batch_rows
-                finally:
-                    _rconn.close()
+                        batch_rows.extend(chunk_rows)
+                    batch_rows.sort(key=lambda r: r[2] or "")
+                    rows = batch_rows
                 for row in rows:
-                    if str(row["feed"]) not in feed_urls:
+                    if str(row[0]) not in feed_urls:
                         continue
-                    e = reader.get_entry((str(row["feed"]), str(row["id"])), None)
+                    e = reader.get_entry((str(row[0]), str(row[1])), None)
                     if e is not None:
                         all_feed_entries.append(e)
                     if len(all_feed_entries) >= fetch_limit:
@@ -15281,36 +15285,34 @@ def list_entries_for_feeds(
             read_sql = {None: "", True: " AND read = 1", False: " AND (read IS NULL OR read != 1)"}
             read_clause = read_sql.get(reader_read_filter, "")
             sort_col = "first_updated" if normalized_sort_by == "received" else _ENTRY_SORT_SQL
+            # Pooled connection, positional row access -- see the feed_site_map
+            # comment above for the full rationale.
             try:
-                _rconn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
-                _rconn.row_factory = sqlite3.Row
-                try:
-                    _feed_list = list(feed_urls)
-                    if len(_feed_list) <= 999:
-                        _placeholders = ",".join("?" for _ in _feed_list)
-                        rows = _rconn.execute(
-                            f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
+                _rdb = reader._storage.get_db()
+                _feed_list = list(feed_urls)
+                if len(_feed_list) <= 999:
+                    _placeholders = ",".join("?" for _ in _feed_list)
+                    rows = _rdb.execute(
+                        f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
+                        f" ORDER BY {sort_col} DESC LIMIT ?",
+                        _feed_list + [fetch_limit],
+                    ).fetchall()
+                else:
+                    batch_rows_desc: list = []
+                    for _i in range(0, len(_feed_list), 999):
+                        _chunk = _feed_list[_i:_i + 999]
+                        _ph = ",".join("?" for _ in _chunk)
+                        chunk_rows = _rdb.execute(
+                            f"SELECT feed, id, {sort_col} AS sort_val FROM entries"
+                            f" WHERE feed IN ({_ph}){read_clause}"
                             f" ORDER BY {sort_col} DESC LIMIT ?",
-                            _feed_list + [fetch_limit],
+                            _chunk + [fetch_limit],
                         ).fetchall()
-                    else:
-                        batch_rows_desc: list = []
-                        for _i in range(0, len(_feed_list), 999):
-                            _chunk = _feed_list[_i:_i + 999]
-                            _ph = ",".join("?" for _ in _chunk)
-                            chunk_rows = _rconn.execute(
-                                f"SELECT feed, id, {sort_col} AS sort_val FROM entries"
-                                f" WHERE feed IN ({_ph}){read_clause}"
-                                f" ORDER BY {sort_col} DESC LIMIT ?",
-                                _chunk + [fetch_limit],
-                            ).fetchall()
-                            batch_rows_desc.extend(chunk_rows)
-                        batch_rows_desc.sort(key=lambda r: r["sort_val"] or "", reverse=True)
-                        rows = batch_rows_desc[:fetch_limit]
-                finally:
-                    _rconn.close()
+                        batch_rows_desc.extend(chunk_rows)
+                    batch_rows_desc.sort(key=lambda r: r[2] or "", reverse=True)
+                    rows = batch_rows_desc[:fetch_limit]
                 for row in rows:
-                    e = reader.get_entry((str(row["feed"]), str(row["id"])), None)
+                    e = reader.get_entry((str(row[0]), str(row[1])), None)
                     if e is not None:
                         all_feed_entries.append(e)
                     if len(all_feed_entries) >= fetch_limit:
