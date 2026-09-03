@@ -10862,33 +10862,42 @@ def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, s
     Kept view's star-OR-tag set. When *feed_urls* is given, restrict to those feeds
     (chunked to stay under SQLite's variable limit); None scans the whole library.
 
-    Reads reader's ``entry_tags`` directly over a short-lived connection: it lives
-    in reader's DB (not the meta DB), reader's high-level API has no bulk tag-key
-    scan, and this mirrors the existing raw-connection reads in this module
-    (``feed_site_map``, ``_sorted_star_key_window``). Shared by the Kept view list,
-    per-folder counts, and the sidebar badge so the three stay consistent."""
+    Reads reader's ``entry_tags`` directly: it lives in reader's DB (not the meta
+    DB) and reader's high-level API has no bulk tag-key scan. Goes through
+    ``get_reader()``'s pooled connection (10s busy_timeout, wal_autocheckpoint
+    pragmas already applied by ``_LectioReaderStorage.setup_db``) rather than
+    opening a fresh ``sqlite3.connect`` per call — suspected 2026-09-01 as the
+    real cost behind the badges gap_block stall surviving the
+    get_saved_unread_count batching fix (see Plan.md's refresh-contention item):
+    a raw connection pays file-open/schema-load/mmap-setup on every call, and
+    under refresh writing to the same WAL file that cost compounds. Logged when
+    slow so a live stall pins the blame here or clears it. Shared by the Kept
+    view list, per-folder counts, and the sidebar badge so the three stay
+    consistent."""
     keys: set[tuple[str, str]] = set()
     like = f"{MANUAL_TAG_KEY_PREFIX}%"
+    _start = time.perf_counter()
     try:
-        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
-        try:
+        with get_reader() as reader:
+            db = reader._storage.get_db()
             if feed_urls is None:
-                for row in conn.execute("SELECT feed, id FROM entry_tags WHERE key LIKE ?", (like,)):
+                for row in db.execute("SELECT feed, id FROM entry_tags WHERE key LIKE ?", (like,)):
                     keys.add((str(row[0]), str(row[1])))
             else:
                 feed_list = list(feed_urls)
                 for i in range(0, len(feed_list), 900):
                     chunk = feed_list[i:i + 900]
                     ph = ",".join("?" for _ in chunk)
-                    for row in conn.execute(
+                    for row in db.execute(
                         f"SELECT feed, id FROM entry_tags WHERE key LIKE ? AND feed IN ({ph})",
                         [like, *chunk],
                     ):
                         keys.add((str(row[0]), str(row[1])))
-        finally:
-            conn.close()
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("get_tagged_entry_keys failed: %s", exc)
+    elapsed_ms = int((time.perf_counter() - _start) * 1000)
+    if elapsed_ms > 200:
+        LOGGER.info("[perf] get_tagged_entry_keys=%dms rows=%d scoped=%s", elapsed_ms, len(keys), feed_urls is not None)
     return keys
 
 
