@@ -3091,56 +3091,79 @@ _meta_conn_local = threading.local()
 # reader-DB one.
 _SLOW_SQL_MS = 250
 
+# "Read Above/Below" lead: elapsed_ms alone can't distinguish a genuinely slow
+# query from one that spent nearly all its wall time in SQLite's busy-handler
+# retry loop -- both look identical from outside. The progress handler fires
+# every _PROGRESS_HANDLER_N VM instructions *during execution*, not during the
+# busy-wait, so near-zero steps on a "slow" query is direct proof of lock-wait.
+# Read-only: the handler always returns 0, never aborting a statement.
+_PROGRESS_HANDLER_N = 1000
+
 
 class _TimedMetaCursor(sqlite3.Cursor):
     def execute(self, sql, parameters=()):
+        conn = cast("_TimedMetaConnection", self.connection)
+        conn._lectio_progress_steps = 0
         start = time.perf_counter()
         try:
             return super().execute(sql, parameters)
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d sql=%s",
-                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d progress_steps=%d sql=%s",
+                            int(elapsed_ms), conn._lectio_progress_steps, " ".join(str(sql).split())[:200])
 
     def executemany(self, sql, parameters):
+        conn = cast("_TimedMetaConnection", self.connection)
+        conn._lectio_progress_steps = 0
         start = time.perf_counter()
         try:
             return super().executemany(sql, parameters)
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d executemany sql=%s",
-                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d progress_steps=%d executemany sql=%s",
+                            int(elapsed_ms), conn._lectio_progress_steps, " ".join(str(sql).split())[:200])
 
 
 class _TimedMetaConnection(sqlite3.Connection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._lectio_progress_steps = 0
+        self.set_progress_handler(self._lectio_on_progress, _PROGRESS_HANDLER_N)
+
+    def _lectio_on_progress(self) -> int:
+        self._lectio_progress_steps += 1
+        return 0  # never abort the statement
+
     def cursor(self, factory=None):
         return super().cursor(factory or _TimedMetaCursor)
 
     def execute(self, sql, parameters=()):
+        self._lectio_progress_steps = 0
         start = time.perf_counter()
         try:
             return super().execute(sql, parameters)
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d sql=%s",
-                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d progress_steps=%d sql=%s",
+                            int(elapsed_ms), self._lectio_progress_steps, " ".join(str(sql).split())[:200])
 
     def executemany(self, sql, parameters):
         # Batched-write flush points (lead images, alt/title, entry_read_state)
         # use conn.executemany directly, bypassing the cursor above -- without
         # this override those calls were invisible to slow-SQL logging (Plan.md
         # Tier 1 refresh-contention item).
+        self._lectio_progress_steps = 0
         start = time.perf_counter()
         try:
             return super().executemany(sql, parameters)
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d executemany sql=%s",
-                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d progress_steps=%d executemany sql=%s",
+                            int(elapsed_ms), self._lectio_progress_steps, " ".join(str(sql).split())[:200])
 
 
 def get_meta_connection() -> sqlite3.Connection:

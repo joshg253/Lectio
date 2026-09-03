@@ -455,6 +455,34 @@ un-checkpointed WAL. Bigger and riskier than the fetch-path fix — it's a
 pragma/timing change affecting every read/write in the app, not just this one
 path, so it needs its own measurement pass before touching anything.
 
+**The measurement pass, started 2026-09-03.** Before touching any pragma, checked the live WAL file
+size directly: `/data/users/<uid>/lectio_reader.sqlite-wal` sat at ~805KB against a 1.18GB main file —
+right at the `wal_autocheckpoint=200` (~800KB) target, not ballooning. That's a real data point against
+the "un-checkpointed WAL" framing as literally stated: the WAL isn't sitting large and uncheckpointed:
+checkpointing is keeping up. It doesn't rule out WAL-layer contention, but it means the mechanism is
+more likely SQLite's ordinary single-writer serialization (refresh's writer thread and a foreground
+reader both wanting the same file at the same moment) than "reads are scanning a huge backlog."
+
+`elapsed_ms` alone can't tell a genuinely expensive query apart from one that spent nearly all its wall
+time sitting in SQLite's busy-handler retry loop — both look identical from outside, and this whole
+investigation had been inferring lock-wait from elapsed time plus circumstantial evidence (round
+single-row costs, concurrent refresh activity in the log) rather than proving it directly. Fixed:
+`_TimedConnection`/`_TimedCursor` (services/reader_api.py) and `_TimedMetaConnection`/`_TimedMetaCursor`
+(main.py) now also install a `sqlite3` progress handler (fires every 1000 VM instructions during
+statement *execution*, never during the busy-wait itself) and log `progress_steps` alongside
+`elapsed_ms` on every slow-SQL line. Read-only — the handler always returns 0, never aborts a
+statement. Verified twice locally: a real 5000-row insert+scan showed 22-50 steps (genuine work), and a
+deliberately forced lock (one connection holding `BEGIN IMMEDIATE` for 2s while a second, timed
+connection tried to write) logged `elapsed_ms=1731 progress_steps=0` — the clean, unambiguous lock-wait
+signature. No dedicated test added, following the precedent of the original execute-timing wrapper
+(pure diagnostic logging, no behavior change, verified manually). Full suite green (3925).
+
+**Not yet confirmed live** — needs a deploy and a real capture on the next `get_tagged_entry_keys`
+stall (or any other reader-DB slow_sql line). `progress_steps≈0` confirms genuine WAL-layer lock-wait
+and makes the checkpoint-proactiveness fix worth actually building; a meaningfully positive step count
+would mean the query itself is doing real, avoidable work (e.g., a full scan of `entry_tags` that could
+use an index) and redirect the fix entirely away from WAL/checkpoint tuning.
+
 **Re-fetch/extraction quality & staleness** — the article being read is broken or stale; directly in the way of triage.
 
 ### Entry pane doesn't refresh after a background auto-refetch-on-tag finishes

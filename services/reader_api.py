@@ -8,7 +8,7 @@ import sqlite3
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, cast
 
 import reader._storage._base as _reader_storage_base
 from reader import make_reader
@@ -31,53 +31,80 @@ LOGGER = logging.getLogger("lectio")
 # does as an import-time side effect here.
 _SLOW_SQL_MS = 250
 
+# Refresh-contention investigation (Plan.md Tier 1, "Read Above/Below" lead):
+# elapsed_ms alone can't tell a genuinely slow query apart from one that spent
+# nearly all its wall time sitting in SQLite's busy-handler retry loop waiting
+# for refresh's writer -- both look identical from the outside. sqlite3's
+# progress handler fires every _PROGRESS_HANDLER_N VM instructions *during
+# statement execution*, but not during the busy-wait itself, so counting
+# callbacks per statement gives a direct, unambiguous signal: near-zero steps
+# on a "slow" query is conclusive proof of lock-wait, not query cost. This is
+# read-only instrumentation -- the handler always returns 0 (never aborts a
+# statement) -- not a behavior change.
+_PROGRESS_HANDLER_N = 1000
+
 
 class _TimedCursor(sqlite3.Cursor):
     def execute(self, sql, parameters=()):
+        conn = cast("_TimedConnection", self.connection)
+        conn._lectio_progress_steps = 0
         start = time.perf_counter()
         try:
             return super().execute(sql, parameters)
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d sql=%s",
-                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d sql=%s",
+                            int(elapsed_ms), conn._lectio_progress_steps, " ".join(str(sql).split())[:200])
 
     def executemany(self, sql, parameters):
+        conn = cast("_TimedConnection", self.connection)
+        conn._lectio_progress_steps = 0
         start = time.perf_counter()
         try:
             return super().executemany(sql, parameters)
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d executemany sql=%s",
-                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d executemany sql=%s",
+                            int(elapsed_ms), conn._lectio_progress_steps, " ".join(str(sql).split())[:200])
 
 
 class _TimedConnection(sqlite3.Connection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._lectio_progress_steps = 0
+        self.set_progress_handler(self._lectio_on_progress, _PROGRESS_HANDLER_N)
+
+    def _lectio_on_progress(self) -> int:
+        self._lectio_progress_steps += 1
+        return 0  # never abort the statement
+
     def cursor(self, factory=None):
         return super().cursor(factory or _TimedCursor)
 
     def execute(self, sql, parameters=()):
+        self._lectio_progress_steps = 0
         start = time.perf_counter()
         try:
             return super().execute(sql, parameters)
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d sql=%s",
-                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d sql=%s",
+                            int(elapsed_ms), self._lectio_progress_steps, " ".join(str(sql).split())[:200])
 
     def executemany(self, sql, parameters):
         # See main._TimedMetaConnection.executemany -- same gap, same fix.
+        self._lectio_progress_steps = 0
         start = time.perf_counter()
         try:
             return super().executemany(sql, parameters)
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d executemany sql=%s",
-                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d executemany sql=%s",
+                            int(elapsed_ms), self._lectio_progress_steps, " ".join(str(sql).split())[:200])
 
 
 _reader_storage_base.CONNECTION_CLS = _TimedConnection  # ty: ignore[invalid-assignment]
