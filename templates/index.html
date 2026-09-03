@@ -1406,6 +1406,21 @@
     // Stamp the entry the document loaded on as index 0 — the floor.
     _origReplaceState(_stamp(history.state, 0), '', window.location.href);
 
+    // An article carries its list's own scope params (folder_id, list_feed_url,
+    // tag, q, sort_*, ...) alongside entry_id/feed_url — stripping the latter two
+    // recovers "the list this article lives in" without knowing the rest of the
+    // vocabulary. Returns null for a URL that was never an article (nothing to
+    // strip), so callers can fall back to the plain drawer-toggle behavior.
+    function deriveListUrl(url) {
+      try {
+        const u = new URL(url, window.location.origin);
+        if (!u.searchParams.has('entry_id')) return null;
+        u.searchParams.delete('entry_id');
+        u.searchParams.delete('feed_url');
+        return u.href;
+      } catch (e) { return null; }
+    }
+
     function armDrawerBack() {
       // Only ever one spare, only at the floor. Mid-stack there are real views
       // to walk back through and the spare would sit in front of them.
@@ -1413,9 +1428,17 @@
       // Prefer the last real scope visited over the bare current URL: this only
       // fires from the true floor, which on a repeat Back press (no tap in
       // between to re-drive a fresh scope load first) is the bootstrap landing
-      // URL, not whatever list the user actually still has on screen.
-      const armUrl = window.__lectioLastScopeUrl || window.location.href;
-      history.pushState({ lectioDrawerSpare: true, lectioPaneLevel: singlePaneLevel },
+      // URL, not whatever list the user actually still has on screen. Landing on
+      // an article directly (the resume-on-launch redirect's most common case —
+      // see window.__lectioResume above) leaves no real list in history at all;
+      // deriving one from the article's own scope params, rather than falling
+      // straight to the bare current URL, is what lets the landedOnSpare handler
+      // below load that list instead of just flipping open an empty drawer.
+      // Found live 2026-09-02: first Back from a resumed article opened the
+      // drawer over nothing rather than the article's own list.
+      const listUrl = deriveListUrl(window.location.href);
+      const armUrl = window.__lectioLastScopeUrl || listUrl || window.location.href;
+      history.pushState({ lectioDrawerSpare: true, lectioPaneLevel: singlePaneLevel, lectioListUrl: listUrl },
                         '', armUrl);
       drawerBackSpare = true;
     }
@@ -1529,6 +1552,24 @@
       // (the bootstrap case, before any scope has ever been visited and the
       // spare above it was consumed by this very pop): either way, the next
       // Back would otherwise leave the document, so flip the drawer instead.
+      // A resumed-straight-onto-an-article session (see window.__lectioResume)
+      // never rendered a real list, so there is nothing for a plain drawer
+      // toggle to reveal — load candidateListUrl's list pane instead when one
+      // is known, rather than opening the drawer over emptiness. When nothing
+      // is known (a bare/list floor with a real, already-rendered list or
+      // drawer behind it) this is exactly the old plain toggle.
+      function openDrawerOrList(candidateListUrl) {
+        if (candidateListUrl && typeof window.loadScopePanesWithoutFullRefresh === 'function') {
+          if (candidateListUrl !== window.location.href) {
+            history.replaceState(history.state, '', candidateListUrl);
+          }
+          setSinglePaneLevel(1);
+          window.loadScopePanesWithoutFullRefresh(candidateListUrl, false);
+        } else {
+          toggleDrawer();
+        }
+      }
+
       const landedOnSpare = Boolean(event.state && event.state.lectioDrawerSpare);
       if (hasDrawerLayout() && (landedOnSpare || landedAt === 0)) {
         event.stopImmediatePropagation();
@@ -1541,18 +1582,24 @@
           // scope before toggling, or the drawer opens over the right list but
           // the address bar and "active" folder both silently revert.
           const healUrl = window.__lectioLastScopeUrl;
-          if (healUrl && healUrl !== window.location.href) {
-            history.replaceState(event.state, '', healUrl);
+          if (healUrl) {
+            if (healUrl !== window.location.href) history.replaceState(event.state, '', healUrl);
+            toggleDrawer();
+            // Still the same spare entry, still sitting right where it was —
+            // no re-arm needed, nothing was consumed.
+          } else {
+            // No real scope was ever visited this session — only the spare's
+            // own derived list (see deriveListUrl/armDrawerBack), if any.
+            openDrawerOrList(event.state.lectioListUrl);
           }
-          toggleDrawer();
-          // Still the same spare entry, still sitting right where it was — no
-          // re-arm needed, nothing was consumed.
         } else {
-          // True floor, nothing armed above it yet: flip the drawer and re-arm
-          // in the same breath. Consuming one entry and pushing one back keeps
-          // the stack the same size, so this can run forever without growing
-          // history — and without ever running out of presses.
-          toggleDrawer();
+          // True floor, nothing armed above it yet: flip the drawer (or load
+          // the floor's own derived list — same resumed-onto-an-article gap
+          // as above, just without a spare in play to have carried it) and
+          // re-arm in the same breath. Consuming one entry and pushing one
+          // back keeps the stack the same size, so this can run forever
+          // without growing history — and without ever running out of presses.
+          openDrawerOrList(deriveListUrl(window.location.href));
           drawerBackSpare = false;
           armDrawerBack();
         }
