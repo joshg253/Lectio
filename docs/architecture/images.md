@@ -658,6 +658,21 @@ writer, DeviantArt/dev.to API seeding, the chunk-level `_do_backfill_entry_list`
 — still commits per call; only the per-feed backfill's loop was sized as a
 real, measured contributor (see Plan.md).
 
+**`store_entry_image_alt` got the same treatment 2026-09-03**, after a live
+capture showed it, not `store_entry_lead_image`, as the actual `slow_sql`
+offender post-fix (8.5s and 3.7s upserts — see Plan.md). It's a separate
+UPSERT on the same `entry_lead_images` row (different columns: `image_alt`/
+`image_title` instead of `image_url`), reached from 2 of the loop's branches
+via `_maybe_store_alt_from_cache` right after a source-page fetch resolves a
+caption. It takes its own optional `batch` param and its own
+`_flush_pending_image_alts`, flushed at the same 25-entry/`finally` points as
+the lead-image batch above but as an independent list — the two streams don't
+share a flush, so one running long doesn't delay the other. The
+boilerplate-title read (`_title_is_feed_boilerplate`) and its rare
+feed-wide clear (`_clear_feed_boilerplate_title`) stay synchronous:
+they touch *other* entries' rows, not the one being written, and aren't the
+per-entry volume driver.
+
 ## DeviantArt mature images: signed for minutes, cached for good
 
 DeviantArt serves images from wixmp with a signed JWT in the query string. Ordinary deviations are *usually* signed with no `exp` claim at all (which is not the same as permanent — see below); **mature** ones are signed for about **15 minutes** with a readable `exp`, and every variant (`content.src` and every thumb) shares the expiry — so there is no long-lived variant to prefer, and a stored URL is normally dead by the time the post is read, showing neither image nor thumbnail.

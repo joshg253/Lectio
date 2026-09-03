@@ -135,15 +135,49 @@ entries plus once more in a `finally` around the loop, so an early return or exc
 can't drop already-buffered rows -- only the last partial chunk (<=24 entries) is at risk on a hard
 crash, versus none before. Two new tests cover it: batching actually reduces meta-connection opens
 (30 entries -> well under 15), and a mid-loop exception still flushes what was buffered before it.
-Full suite green (3914). Only the per-feed backfill loop was touched -- `store_entry_image_alt` (the
-caption/alt write, a separate UPSERT on the same table, called from 2 of the loop's branches) still
-commits per call, so a source-lookup branch that finds a caption still costs 1 immediate commit down
-from 2 before batching only removed one of the two; not folded in here since its own
-boilerplate-detection logic reads before writing and deserves its own look, not a bolt-on.
-**Not yet confirmed live** -- needs a `make rebuild` deploy and a real capture during refresh
-contention to see whether the `entry_lead_images` stall specifically clears; if it's still slow
-after this, the lead moves back to shared WAL/lock contention (the Read Above/Below item's
-checkpoint-timing theory below) rather than this one write path.
+Full suite green (3914).
+
+**Confirmed live 2026-09-03, partial win.** Josh's own report after living with the deploy: "perf
+seems better, still a few seconds delay when switching between folders." A 6-hour log capture from
+the deployed container backs that up on both sides. Wins: only 4 `slow_sql db=meta` events (>250ms)
+in 6 hours, versus the near-continuous stream implied by the pre-fix capture above -- the dominant
+per-entry `entry_lead_images` write from the per-feed backfill loop is no longer the routine
+offender. Remaining: those 4 events are still real multi-second stalls (8542ms/3735ms/3335ms/3734ms),
+and `get_meta_structure_snapshot` (the folder/feed-tree cache every home render reads, `main.py:6129`)
+spiked to 3010ms and 5502ms in the same window when its cache was cold -- confirming the broader
+"whichever query is mid-flight when a writer holds the lock" theory rather than one fixable query.
+The 4 slow writes, by source:
+
+| elapsed | statement | source |
+|---|---|---|
+| 8542ms, 3735ms | `entry_lead_images` alt/title UPSERT | `store_entry_image_alt`, called from `_maybe_store_alt_from_cache` -- 2 of the just-batched loop's own branches, at the time still un-batched |
+| 3734ms | `entry_lead_images` image_url/fetched_at UPSERT, single-row shape | NOT the new `executemany` flush (its own `.execute` isn't even wrapped by the slow-SQL instrumentation, a gap in itself) -- one of the still-unbatched call sites: `_do_backfill_entry_list` (render-triggered chunk backfill, `services/lead_images.py`) or `persist_lead_image_async`'s single-writer background queue |
+| 3335ms | `entry_read_state` UPSERT | a completely different subsystem -- the post-refresh automation pipeline's mark-as-read writes (`main.py:7024-7908` range, per-entry commits same shape as the lead-image bug) or an ordinary user read-toggle caught mid-lock |
+
+Three candidate next steps were sized, ranked by how directly they extend what's already proven vs.
+how much new ground they cover; Josh picked #1.
+
+1. **Shipped 2026-09-03, same session.** `store_entry_image_alt` now takes the same optional `batch`
+   param and its own `_flush_pending_image_alts`, flushed at the same 25-entry/`finally` points as
+   the lead-image batch but as an independent list (see `docs/architecture/images.md`'s "Batched
+   meta-DB writes" for the full writeup). The boilerplate-title read/clear stays synchronous on
+   purpose -- it touches *other* entries' rows, not the one being written. Two new tests: 30 entries
+   with unique captions produce exactly 2 flushes per stream (not one commit per entry), and both the
+   URL and alt/title land correctly. Full suite green (3915). **Not yet confirmed live** -- needs
+   another deploy + capture window to see whether the alt-write stalls specifically stop recurring.
+2. **Batch `_do_backfill_entry_list`'s per-entry writes** -- same shape as the fix above (groups by
+   feed already) but a different, render-triggered call path with its own concurrency profile
+   (fires on ordinary browsing, not just refresh) -- worth its own look before assuming the same fix
+   applies cleanly. Not started.
+3. **Investigate `entry_read_state` write batching in the post-refresh automation pipeline** --
+   genuinely separate subsystem (main.py, not services/lead_images.py), unconfirmed whether it's
+   auto-mark-read-after-refresh or ordinary user activity; needs its own trace before sizing. Not
+   started.
+
+Also still open regardless of which of the above comes next: **wrap `executemany` in
+`_TimedMetaConnection`/`_TimedMetaCursor`**, not just `execute` -- both batched flushes (lead image
+and now alt/title) are currently invisible to the slow-SQL instrumentation, so a future stall inside
+either would look like silence, not a logged culprit.
 
 **A second capture, same day, sharpens it further.** `GET /?folder_id=11&read_filter=unread` (a
 tiny folder — 16 feeds, 3 entries) logged `5498ms`, and its own follow-up chunk request logged

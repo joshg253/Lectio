@@ -463,6 +463,70 @@ def test_fetch_and_store_lead_images_batches_meta_writes(tmp_path: Path):
     assert connection_opens < entry_count / 2
 
 
+def test_fetch_and_store_lead_images_batches_alt_writes(tmp_path: Path, monkeypatch):
+    """store_entry_image_alt's per-entry UPSERT (caption/title, a separate write
+    from the lead-image URL itself) must batch the same way -- it was the actual
+    slow_sql offender in the live 2026-09-03 capture (Plan.md Tier 1), left
+    un-batched by the first pass on purpose."""
+    db_path = tmp_path / "meta.sqlite"
+    feed_url = "https://example.com/feed.xml"
+    entry_count = 30
+    entries = [
+        _FakeEntry(
+            feed_url=feed_url,
+            entry_id=f"p-{i}",
+            link=f"https://example.com/article-{i}",
+            content_html="<p>no inline image</p>",
+        )
+        for i in range(entry_count)
+    ]
+    service = _build_service(db_path, entries)
+    monkeypatch.setattr(
+        service, "_fetch_source_lead_image", lambda link, **kw: f"https://cdn.example.com/hero-{link.rsplit('-', 1)[1]}.jpg"
+    )
+    # No title_text: a non-empty title would route through _title_is_feed_boilerplate,
+    # a real per-entry read unrelated to what this test is about (write batching).
+    monkeypatch.setattr(service, "fetch_entry_image_caption", lambda link, **kw: (f"alt-{link.rsplit('-', 1)[1]}", None))
+
+    lead_image_flushes = 0
+    real_flush_lead_images = service._flush_pending_lead_images
+
+    def counting_flush_lead_images(batch):
+        nonlocal lead_image_flushes
+        lead_image_flushes += 1
+        return real_flush_lead_images(batch)
+
+    alt_flushes = 0
+    real_flush_alts = service._flush_pending_image_alts
+
+    def counting_flush_alts(batch):
+        nonlocal alt_flushes
+        alt_flushes += 1
+        return real_flush_alts(batch)
+
+    service._flush_pending_lead_images = counting_flush_lead_images
+    service._flush_pending_image_alts = counting_flush_alts
+
+    service.fetch_and_store_lead_images_for_feed(feed_url, force_retry_negative=True)
+
+    with _make_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT entry_id, image_url, image_alt, image_title FROM entry_lead_images WHERE feed_url = ? ORDER BY entry_id",
+            (feed_url,),
+        ).fetchall()
+
+    assert {row["entry_id"] for row in rows} == {f"p-{i}" for i in range(entry_count)}
+    for row in rows:
+        i = row["entry_id"].split("-")[1]
+        assert row["image_url"] == f"https://cdn.example.com/hero-{i}.jpg"
+        assert row["image_alt"] == f"alt-{i}"
+        assert row["image_title"] is None
+    # One mid-loop chunk flush (at 25) plus one final flush in `finally`, for
+    # each of the two independent write streams -- not one commit per entry.
+    assert lead_image_flushes == 2
+    assert alt_flushes == 2
+
+
 def test_fetch_and_store_lead_images_flushes_pending_on_exception(tmp_path: Path, monkeypatch):
     """A mid-loop exception (below the batch-size flush threshold) must not lose
     the writes already buffered -- the `finally` around the per-entry loop is

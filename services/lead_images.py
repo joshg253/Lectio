@@ -1175,14 +1175,25 @@ class LeadImageService:
         entry_id: str,
         alt_text: str | None,
         title_text: str | None = None,
+        *,
+        batch: list[tuple[str, str, str | None, str | None, float]] | None = None,
     ) -> None:
-        """Persist alt and title text for an entry's lead image to DB and in-memory cache."""
+        """Persist alt and title text for an entry's lead image to DB and in-memory cache.
+
+        `batch`, when given, defers only the final per-entry UPSERT (same convention
+        as `store_entry_lead_image`'s `batch` param) -- the boilerplate-title
+        read/clear above stays synchronous since it touches other entries' rows and
+        is rare, not the per-entry volume driver.
+        """
         if title_text and self._title_is_feed_boilerplate(feed_url, entry_id, title_text):
             self._clear_feed_boilerplate_title(feed_url, title_text)
             title_text = None
         key = (feed_url, entry_id)
         self._alt_cache[key] = alt_text
         self._title_cache[key] = title_text
+        if batch is not None:
+            batch.append((feed_url, entry_id, alt_text, title_text, time.time()))
+            return
         try:
             with self._get_meta_connection() as conn:
                 conn.execute(
@@ -1197,6 +1208,27 @@ class LeadImageService:
                 )
         except Exception:
             pass
+
+    def _flush_pending_image_alts(self, batch: list[tuple[str, str, str | None, str | None, float]]) -> None:
+        """Commit a batch of deferred `store_entry_image_alt` rows in one transaction."""
+        if not batch:
+            return
+        try:
+            with self._get_meta_connection() as conn:
+                conn.executemany(
+                    """
+                    INSERT INTO entry_lead_images (feed_url, entry_id, image_url, image_alt, image_title, fetched_at)
+                    VALUES (?, ?, NULL, ?, ?, ?)
+                    ON CONFLICT(feed_url, entry_id) DO UPDATE SET
+                        image_alt = excluded.image_alt,
+                        image_title = excluded.image_title
+                    """,
+                    batch,
+                )
+        except Exception:
+            pass
+        finally:
+            batch.clear()
 
     def get_cached_lead_image_url(self, feed_url: str, entry_id: str) -> str | None:
         """Return the resolved lead-image URL for an entry (in-memory, DB read-through).
@@ -2067,8 +2099,11 @@ class LeadImageService:
         # Batch this feed's meta-DB writes instead of committing one per entry
         # (see store_entry_lead_image's docstring / Plan.md Tier 1) -- flushed
         # periodically below and always in the `finally` so an early return or
-        # an unexpected exception mid-loop can't drop buffered rows.
+        # an unexpected exception mid-loop can't drop buffered rows. Alt/caption
+        # writes (a separate UPSERT on the same table) get their own pending list
+        # since they land in fewer branches and use different columns.
         pending: list[tuple[str, str, str | None, float]] = []
+        pending_alts: list[tuple[str, str, str | None, str | None, float]] = []
         try:
             _found_inline, _found_media_rss, _found_og_scrape, need_redetect = self._backfill_feed_entries(
                 feed_url,
@@ -2080,9 +2115,11 @@ class LeadImageService:
                 strategy,
                 need_redetect,
                 pending,
+                pending_alts,
             )
         finally:
             self._flush_pending_lead_images(pending)
+            self._flush_pending_image_alts(pending_alts)
 
         # Store detected strategy based on what actually worked this cycle.
         if need_redetect:
@@ -2105,12 +2142,14 @@ class LeadImageService:
         strategy: str,
         need_redetect: bool,
         pending: list[tuple[str, str, str | None, float]],
+        pending_alts: list[tuple[str, str, str | None, str | None, float]],
     ) -> tuple[bool, bool, bool, bool]:
         """Per-entry loop body of fetch_and_store_lead_images_for_feed, split out so
-        the caller can guarantee `pending` is flushed via try/finally regardless of
-        how this returns. Returns (found_inline, found_media_rss, found_og_scrape,
-        need_redetect) -- need_redetect can flip False mid-loop (media_rss piggyback
-        detection) so the caller needs the final value, not just the one it passed in."""
+        the caller can guarantee `pending`/`pending_alts` are flushed via try/finally
+        regardless of how this returns. Returns (found_inline, found_media_rss,
+        found_og_scrape, need_redetect) -- need_redetect can flip False mid-loop
+        (media_rss piggyback detection) so the caller needs the final value, not
+        just the one it passed in."""
         positive_revalidated = 0
         feed_media_thumbs: dict[str, str] | None = None  # lazy: fetched once if needed
         _found_inline = False
@@ -2120,6 +2159,8 @@ class LeadImageService:
         for entry in entries:
             if len(pending) >= self._LEAD_IMAGE_WRITE_BATCH_SIZE:
                 self._flush_pending_lead_images(pending)
+            if len(pending_alts) >= self._LEAD_IMAGE_WRITE_BATCH_SIZE:
+                self._flush_pending_image_alts(pending_alts)
 
             feed_url_str = str(getattr(entry, "feed_url", "") or "")
             entry_id_str = str(getattr(entry, "id", "") or "")
@@ -2254,14 +2295,18 @@ class LeadImageService:
                 image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
                 if image_url:
                     _found_og_scrape = True
-                    self._maybe_store_alt_from_cache(feed_url_str, entry_id_str, entry_link, image_url, is_webcomic=is_wc)
+                    self._maybe_store_alt_from_cache(
+                        feed_url_str, entry_id_str, entry_link, image_url, is_webcomic=is_wc, alt_batch=pending_alts
+                    )
                 self.store_entry_lead_image(feed_url_str, entry_id_str, image_url, batch=pending)
                 time.sleep(0.15)
                 continue
             image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
             if image_url:
                 _found_og_scrape = True
-                self._maybe_store_alt_from_cache(feed_url_str, entry_id_str, entry_link, image_url, is_webcomic=is_wc)
+                self._maybe_store_alt_from_cache(
+                    feed_url_str, entry_id_str, entry_link, image_url, is_webcomic=is_wc, alt_batch=pending_alts
+                )
                 self.store_entry_lead_image(feed_url_str, entry_id_str, image_url, batch=pending)
             elif not inline:
                 # Source found nothing and there was no inline image — record the
@@ -3859,7 +3904,14 @@ class LeadImageService:
         return _finalize(None, _strip(alt_text), source_html)
 
     def _maybe_store_alt_from_cache(
-        self, feed_url: str, entry_id: str, entry_link: str, image_url: str, is_webcomic: bool = False
+        self,
+        feed_url: str,
+        entry_id: str,
+        entry_link: str,
+        image_url: str,
+        is_webcomic: bool = False,
+        *,
+        alt_batch: list[tuple[str, str, str | None, str | None, float]] | None = None,
     ) -> None:
         """If source HTML is in cache and alt not yet stored, extract and persist alt/title.
 
@@ -3871,7 +3923,7 @@ class LeadImageService:
         alt, title = self.fetch_entry_image_caption(
             entry_link, lead_image_url=image_url, is_webcomic=is_webcomic
         )
-        self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title)
+        self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title, batch=alt_batch)
 
     def _fetch_source_lead_image(self, entry_link: str, is_webcomic: bool = False) -> str | None:
         parsed = urlparse(entry_link)
