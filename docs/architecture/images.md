@@ -654,9 +654,22 @@ different threads still each hold the writer lock only for their own chunk's
 `executemany`, not for each other's.
 
 Everywhere else `store_entry_lead_image` is called — the async request-path
-writer, DeviantArt/dev.to API seeding, the chunk-level `_do_backfill_entry_list`
-— still commits per call; only the per-feed backfill's loop was sized as a
-real, measured contributor (see Plan.md).
+writer and DeviantArt/dev.to API seeding — still commits per call; the
+per-feed backfill's loop and the chunk-level backfill below were sized as
+real, measured contributors (see Plan.md).
+
+**The chunk-level backfill (`_do_backfill_entry_list`) got the same treatment
+2026-09-03.** It's the render-triggered counterpart to the per-feed backfill —
+called with whichever visible entries on a rendered page still lack a cached
+thumbnail — and shares the exact same per-entry-commit shape, just grouped by
+feed differently: one call can span many feeds' worth of entries (the chunk
+backfill semaphore already serializes *calls* to this method, but each call
+could still commit once per entry across every feed in that chunk). It builds
+the same two `pending`/`pending_alts` lists across its `for feed_url,
+entry_pairs in by_feed.items(): for entry_id, entry_link in entry_pairs:`
+double loop, flushing at the same 25-entry/`finally` points — a chunk
+spanning several feeds still only pays for a handful of `executemany` calls,
+not one per visible thumbnail.
 
 **`store_entry_image_alt` got the same treatment 2026-09-03**, after a live
 capture showed it, not `store_entry_lead_image`, as the actual `slow_sql`

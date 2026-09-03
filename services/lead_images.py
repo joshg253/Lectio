@@ -2373,50 +2373,68 @@ class LeadImageService:
         except Exception:
             pass
 
-        for feed_url, entry_pairs in by_feed.items():
-            strategy = strategies.get(feed_url, "unknown")
-            if strategy == "youtube":
-                continue
-
-            # One feedparser call per feed to grab any media:thumbnail/content.
-            feed_media = self._fetch_feed_media_thumbnails(feed_url)
-
-            for entry_id, entry_link in entry_pairs:
-                if not entry_link:
-                    continue
-                # Re-check cache — may have been populated by the regular backfill.
-                cached = self._cache.get((feed_url, entry_id))
-                if (
-                    cached
-                    and feed_url not in self._debug_bypass_feeds
-                    and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached)
-                ):
+        # Batch this chunk's meta-DB writes across every feed in it, same
+        # rationale/shape as fetch_and_store_lead_images_for_feed (Plan.md Tier 1).
+        # A rendered chunk can span many feeds' worth of entries in one call, and
+        # the chunk-backfill semaphore already serializes calls to this method, so
+        # per-entry commits here were still one lock acquisition per visible entry.
+        pending: list[tuple[str, str, str | None, float]] = []
+        pending_alts: list[tuple[str, str, str | None, str | None, float]] = []
+        try:
+            for feed_url, entry_pairs in by_feed.items():
+                strategy = strategies.get(feed_url, "unknown")
+                if strategy == "youtube":
                     continue
 
-                # Only use feed media thumbnails when not explicitly locked to og_scrape.
-                if strategy != "og_scrape":
-                    feed_thumb = feed_media.get(entry_link)
-                    if feed_thumb:
-                        self.store_entry_lead_image(feed_url, entry_id, feed_thumb)
-                        time.sleep(0.05)
+                # One feedparser call per feed to grab any media:thumbnail/content.
+                feed_media = self._fetch_feed_media_thumbnails(feed_url)
+
+                for entry_id, entry_link in entry_pairs:
+                    if len(pending) >= self._LEAD_IMAGE_WRITE_BATCH_SIZE:
+                        self._flush_pending_lead_images(pending)
+                    if len(pending_alts) >= self._LEAD_IMAGE_WRITE_BATCH_SIZE:
+                        self._flush_pending_image_alts(pending_alts)
+
+                    if not entry_link:
+                        continue
+                    # Re-check cache — may have been populated by the regular backfill.
+                    cached = self._cache.get((feed_url, entry_id))
+                    if (
+                        cached
+                        and feed_url not in self._debug_bypass_feeds
+                        and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached)
+                    ):
                         continue
 
-                # For inline/enclosure/none-classified feeds, source scraping won't help.
-                if strategy in ("inline", "artwork", "none", "enclosure"):
-                    continue
+                    # Only use feed media thumbnails when not explicitly locked to og_scrape.
+                    if strategy != "og_scrape":
+                        feed_thumb = feed_media.get(entry_link)
+                        if feed_thumb:
+                            self.store_entry_lead_image(feed_url, entry_id, feed_thumb, batch=pending)
+                            time.sleep(0.05)
+                            continue
 
-                is_wc = strategy == "webcomic" or self._is_feed_webcomic(feed_url)
-                image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
-                if not image_url:
-                    # Source page yielded nothing — e.g. a JS-only art portfolio
-                    # (ArtStation) with no og:image, or a feed whose strategy was
-                    # mis-detected. Fall back to the entry's own inline feed-content
-                    # image instead of caching a blank thumbnail.
-                    image_url = self._inline_from_reader(feed_url, entry_id)
-                if image_url:
-                    self._maybe_store_alt_from_cache(feed_url, entry_id, entry_link, image_url, is_webcomic=is_wc)
-                self.store_entry_lead_image(feed_url, entry_id, image_url)
-                time.sleep(0.15)
+                    # For inline/enclosure/none-classified feeds, source scraping won't help.
+                    if strategy in ("inline", "artwork", "none", "enclosure"):
+                        continue
+
+                    is_wc = strategy == "webcomic" or self._is_feed_webcomic(feed_url)
+                    image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
+                    if not image_url:
+                        # Source page yielded nothing — e.g. a JS-only art portfolio
+                        # (ArtStation) with no og:image, or a feed whose strategy was
+                        # mis-detected. Fall back to the entry's own inline feed-content
+                        # image instead of caching a blank thumbnail.
+                        image_url = self._inline_from_reader(feed_url, entry_id)
+                    if image_url:
+                        self._maybe_store_alt_from_cache(
+                            feed_url, entry_id, entry_link, image_url, is_webcomic=is_wc, alt_batch=pending_alts
+                        )
+                    self.store_entry_lead_image(feed_url, entry_id, image_url, batch=pending)
+                    time.sleep(0.15)
+        finally:
+            self._flush_pending_lead_images(pending)
+            self._flush_pending_image_alts(pending_alts)
 
     def _inline_from_reader(self, feed_url: str, entry_id: str) -> str | None:
         """Best-effort inline lead image from an entry's stored feed content.

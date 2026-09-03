@@ -163,21 +163,29 @@ how much new ground they cover; Josh picked #1.
    meta-DB writes" for the full writeup). The boilerplate-title read/clear stays synchronous on
    purpose -- it touches *other* entries' rows, not the one being written. Two new tests: 30 entries
    with unique captions produce exactly 2 flushes per stream (not one commit per entry), and both the
-   URL and alt/title land correctly. Full suite green (3915). **Not yet confirmed live** -- needs
-   another deploy + capture window to see whether the alt-write stalls specifically stop recurring.
-2. **Batch `_do_backfill_entry_list`'s per-entry writes** -- same shape as the fix above (groups by
-   feed already) but a different, render-triggered call path with its own concurrency profile
-   (fires on ordinary browsing, not just refresh) -- worth its own look before assuming the same fix
-   applies cleanly. Not started.
+   URL and alt/title land correctly. Full suite green (3915). **Confirmed live 2026-09-03** --
+   Josh, informally, after living with the deploy: "it's definitely feeling more responsive." No
+   fresh log capture taken yet to confirm the alt-write stalls specifically stopped recurring.
+2. **Shipped 2026-09-03, same day.** `_do_backfill_entry_list` (the render-triggered chunk backfill
+   -- fires on ordinary browsing whenever a rendered page has visible entries with no cached
+   thumbnail, not just during refresh) batches the same way: same `pending`/`pending_alts` shape,
+   same 25-entry/`finally` flush points, now wrapping its `for feed_url, entry_pairs in
+   by_feed.items(): for entry_id, entry_link in entry_pairs:` double loop so a chunk spanning
+   several feeds pays for a handful of `executemany` calls instead of one commit per visible
+   thumbnail. Two new tests mirror the per-feed ones (30 entries across 3 feeds in one call ->
+   exactly 2 flushes; an exception partway through one feed's group still persists an earlier
+   feed's already-buffered writes). Full suite green (3917). **Not yet confirmed live** -- this
+   path's concurrency profile (ordinary browsing, not refresh) hasn't been captured yet.
 3. **Investigate `entry_read_state` write batching in the post-refresh automation pipeline** --
    genuinely separate subsystem (main.py, not services/lead_images.py), unconfirmed whether it's
    auto-mark-read-after-refresh or ordinary user activity; needs its own trace before sizing. Not
    started.
 
 Also still open regardless of which of the above comes next: **wrap `executemany` in
-`_TimedMetaConnection`/`_TimedMetaCursor`**, not just `execute` -- both batched flushes (lead image
-and now alt/title) are currently invisible to the slow-SQL instrumentation, so a future stall inside
-either would look like silence, not a logged culprit.
+`_TimedMetaConnection`/`_TimedMetaCursor`**, not just `execute` -- all three batched flushes (lead
+image, alt/title, and the chunk-backfill's own copies of both) are currently invisible to the
+slow-SQL instrumentation, so a future stall inside any of them would look like silence, not a
+logged culprit.
 
 **A second capture, same day, sharpens it further.** `GET /?folder_id=11&read_filter=unread` (a
 tiny folder — 16 feeds, 3 entries) logged `5498ms`, and its own follow-up chunk request logged
