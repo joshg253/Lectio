@@ -3068,6 +3068,41 @@ class FeedInFolder:
 
 _meta_conn_local = threading.local()
 
+# Refresh-contention investigation (Plan.md Tier 1) -- see
+# services.reader_api's identical _TimedConnection for the full rationale.
+# Kept as a separate copy rather than importing reader_api's: it wall-clock-
+# times every statement issued over the META connection specifically, so a
+# slow meta_block gets its own "db=meta" tag distinguishing it from the
+# reader-DB one.
+_SLOW_SQL_MS = 250
+
+
+class _TimedMetaCursor(sqlite3.Cursor):
+    def execute(self, sql, parameters=()):
+        start = time.perf_counter()
+        try:
+            return super().execute(sql, parameters)
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if elapsed_ms > _SLOW_SQL_MS:
+                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d sql=%s",
+                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+
+
+class _TimedMetaConnection(sqlite3.Connection):
+    def cursor(self, factory=None):
+        return super().cursor(factory or _TimedMetaCursor)
+
+    def execute(self, sql, parameters=()):
+        start = time.perf_counter()
+        try:
+            return super().execute(sql, parameters)
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if elapsed_ms > _SLOW_SQL_MS:
+                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d sql=%s",
+                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+
 
 def get_meta_connection() -> sqlite3.Connection:
     """Per-(thread, user) persistent SQLite connection to the meta DB.
@@ -3095,7 +3130,7 @@ def get_meta_connection() -> sqlite3.Connection:
     conn = pool.get(uid)
     if conn is not None:
         return conn
-    conn = sqlite3.connect(str(tenancy.meta_db_path(uid)), timeout=10.0)
+    conn = sqlite3.connect(str(tenancy.meta_db_path(uid)), timeout=10.0, factory=_TimedMetaConnection)
     conn.row_factory = sqlite3.Row
     # WAL + busy_timeout so overlapping writers (e.g. background refresh writing
     # folder_feeds while a request persists a setting) wait briefly instead of
