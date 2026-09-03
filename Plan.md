@@ -125,11 +125,25 @@ instead of once per feed. Batching those writes — accumulate results in memory
 existing `time.sleep(0.05/0.15)` politeness delays and network fetches run, then one `executemany`
 in a single transaction per feed (or per some chunk size) — would cut the number of separate lock
 acquisitions from this one source by whatever the average per-feed entry count is, directly
-reducing contention without touching WAL/checkpoint settings or any read path. Sized but not
-implemented: the function has 12 store call sites across deeply nested early-`continue` control
-flow, and per-entry commits currently give each entry independent durability (a batch failure would
-lose the whole batch instead of just one entry) — a real behavior change worth its own pass, not a
-same-session bolt-on this deep into an already-long one.
+reducing contention without touching WAL/checkpoint settings or any read path.
+
+**Shipped 2026-09-03**: `store_entry_lead_image` takes an optional `batch` list (append instead of
+commit-immediately; cache update and the thumb-pin sink stay synchronous either way -- see
+`docs/architecture/images.md` "Batched meta-DB writes during the per-feed backfill" for the full
+mechanism), and `fetch_and_store_lead_images_for_feed` now flushes one `executemany` every 25
+entries plus once more in a `finally` around the loop, so an early return or exception mid-feed
+can't drop already-buffered rows -- only the last partial chunk (<=24 entries) is at risk on a hard
+crash, versus none before. Two new tests cover it: batching actually reduces meta-connection opens
+(30 entries -> well under 15), and a mid-loop exception still flushes what was buffered before it.
+Full suite green (3914). Only the per-feed backfill loop was touched -- `store_entry_image_alt` (the
+caption/alt write, a separate UPSERT on the same table, called from 2 of the loop's branches) still
+commits per call, so a source-lookup branch that finds a caption still costs 1 immediate commit down
+from 2 before batching only removed one of the two; not folded in here since its own
+boilerplate-detection logic reads before writing and deserves its own look, not a bolt-on.
+**Not yet confirmed live** -- needs a `make rebuild` deploy and a real capture during refresh
+contention to see whether the `entry_lead_images` stall specifically clears; if it's still slow
+after this, the lead moves back to shared WAL/lock contention (the Read Above/Below item's
+checkpoint-timing theory below) rather than this one write path.
 
 **A second capture, same day, sharpens it further.** `GET /?folder_id=11&read_filter=unread` (a
 tiny folder — 16 feeds, 3 entries) logged `5498ms`, and its own follow-up chunk request logged
