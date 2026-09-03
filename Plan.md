@@ -176,16 +176,30 @@ how much new ground they cover; Josh picked #1.
    exactly 2 flushes; an exception partway through one feed's group still persists an earlier
    feed's already-buffered writes). Full suite green (3917). **Not yet confirmed live** -- this
    path's concurrency profile (ordinary browsing, not refresh) hasn't been captured yet.
-3. **Investigate `entry_read_state` write batching in the post-refresh automation pipeline** --
-   genuinely separate subsystem (main.py, not services/lead_images.py), unconfirmed whether it's
-   auto-mark-read-after-refresh or ordinary user activity; needs its own trace before sizing. Not
-   started.
+3. **Shipped 2026-09-03, same day -- root cause found, not just "investigated."** Every OTHER
+   bulk mark-as-read path in main.py (`_mark_existing_shorts_read`, `_run_now_pattern`,
+   `_suppress_guid_churn`, the merge/undo/read-batch routes -- 8+ call sites) already collects
+   `(feed_url, entry_id)` pairs into a list and does one `conn.executemany` at the end. Exactly one
+   didn't: `_apply_hide_paywalled` (`main.py:8198`) called `upsert_entry_read_state` -- a single-row
+   `.execute()`, one meta-connection use per call -- inline inside its `for feed_u in targets: for
+   entry in reader.get_entries(...):` loop, the identical shape to the lead-image bug, just never
+   caught because its sibling `_apply_hide_shorts` was written correctly and nobody compared them.
+   A feed with many paywalled stubs (first time the pref is enabled, or a feed that publishes mostly
+   stubs) would commit once per stub during an active refresh pass. Fixed to match its sibling's
+   shape exactly: collect `to_mark` during the scan, `reader.mark_entry_as_read` per entry after (the
+   reader-DB side, unavoidably per-entry -- reader has no bulk API here), then one `executemany` for
+   the meta-DB side. 3 new tests (`tests/integration/test_hide_paywalled.py`): off leaves stubs
+   unread, on marks them read and persists `entry_read_state`, and 10 stub entries produce ≤2
+   meta-connection uses (the targets read + the one write) instead of 10. Full suite green (3920).
+   **Not yet confirmed live** -- needs a feed with a real paywalled backlog to trigger it, which is
+   rarer than the lead-image/alt paths (only fires once per newly-stubbed feed, not every refresh).
 
-Also still open regardless of which of the above comes next: **wrap `executemany` in
-`_TimedMetaConnection`/`_TimedMetaCursor`**, not just `execute` -- all three batched flushes (lead
-image, alt/title, and the chunk-backfill's own copies of both) are currently invisible to the
-slow-SQL instrumentation, so a future stall inside any of them would look like silence, not a
-logged culprit.
+**Also shipped 2026-09-03**: `_TimedMetaConnection`/`_TimedMetaCursor` (main.py) and
+`_TimedConnection`/`_TimedCursor` (services/reader_api.py) now wrap `executemany` the same way they
+already wrapped `execute` -- closes the visibility gap flagged above. All four batched-write flush
+points from this investigation (lead image, alt/title, chunk-backfill's copies of both, and now
+hide-paywalled) are visible to slow-SQL logging going forward; verified manually that a slow
+`executemany` logs with elapsed time and SQL text, same as `execute` always has.
 
 **A second capture, same day, sharpens it further.** `GET /?folder_id=11&read_filter=unread` (a
 tiny folder — 16 feeds, 3 entries) logged `5498ms`, and its own follow-up chunk request logged

@@ -3088,6 +3088,16 @@ class _TimedMetaCursor(sqlite3.Cursor):
                 LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d sql=%s",
                             int(elapsed_ms), " ".join(str(sql).split())[:200])
 
+    def executemany(self, sql, parameters):
+        start = time.perf_counter()
+        try:
+            return super().executemany(sql, parameters)
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if elapsed_ms > _SLOW_SQL_MS:
+                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d executemany sql=%s",
+                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+
 
 class _TimedMetaConnection(sqlite3.Connection):
     def cursor(self, factory=None):
@@ -3101,6 +3111,20 @@ class _TimedMetaConnection(sqlite3.Connection):
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
                 LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d sql=%s",
+                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+
+    def executemany(self, sql, parameters):
+        # Batched-write flush points (lead images, alt/title, entry_read_state)
+        # use conn.executemany directly, bypassing the cursor above -- without
+        # this override those calls were invisible to slow-SQL logging (Plan.md
+        # Tier 1 refresh-contention item).
+        start = time.perf_counter()
+        try:
+            return super().executemany(sql, parameters)
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if elapsed_ms > _SLOW_SQL_MS:
+                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d executemany sql=%s",
                             int(elapsed_ms), " ".join(str(sql).split())[:200])
 
 
@@ -8213,7 +8237,7 @@ def _apply_hide_paywalled(refreshed_feed_urls: set[str]) -> int:
             } & set(refreshed_feed_urls)
         if not targets:
             return 0
-        marked = 0
+        to_mark: list[tuple[str, str]] = []
         with get_reader() as reader:
             for feed_u in targets:
                 for entry in reader.get_entries(feed=feed_u, read=False):
@@ -8223,13 +8247,25 @@ def _apply_hide_paywalled(refreshed_feed_urls: set[str]) -> int:
                     elif entry.summary:
                         body = str(entry.summary)
                     if is_paywall_stub(body, str(entry.link or "")):
-                        reader.mark_entry_as_read((feed_u, entry.id))
-                        upsert_entry_read_state(feed_u, str(entry.id))
-                        marked += 1
-        if marked:
+                        to_mark.append((feed_u, str(entry.id)))
+            for feed_u, entry_id in to_mark:
+                reader.mark_entry_as_read((feed_u, entry_id))
+        if to_mark:
+            # One batched write instead of upsert_entry_read_state per entry --
+            # same fix, and same shape, as _mark_existing_shorts_read's sibling
+            # pass (see Plan.md Tier 1 refresh-contention item): a feed with many
+            # paywalled stubs was taking the meta writer lock once per entry
+            # during an active refresh pass instead of once per feed.
+            when = datetime.now().isoformat()
+            with get_meta_connection() as conn:
+                conn.executemany(
+                    "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
+                    " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
+                    [(fu, eid, when) for fu, eid in to_mark],
+                )
             invalidate_unread_counts_cache()
-            LOGGER.info("[automation] hide-paywalled marked %d stub(s) read", marked)
-        return marked
+            LOGGER.info("[automation] hide-paywalled marked %d stub(s) read", len(to_mark))
+        return len(to_mark)
     except Exception:
         LOGGER.exception("[automation] error applying hide-paywalled")
         return 0

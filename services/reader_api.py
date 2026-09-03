@@ -43,6 +43,16 @@ class _TimedCursor(sqlite3.Cursor):
                 LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d sql=%s",
                             int(elapsed_ms), " ".join(str(sql).split())[:200])
 
+    def executemany(self, sql, parameters):
+        start = time.perf_counter()
+        try:
+            return super().executemany(sql, parameters)
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if elapsed_ms > _SLOW_SQL_MS:
+                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d executemany sql=%s",
+                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+
 
 class _TimedConnection(sqlite3.Connection):
     def cursor(self, factory=None):
@@ -56,6 +66,17 @@ class _TimedConnection(sqlite3.Connection):
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
                 LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d sql=%s",
+                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+
+    def executemany(self, sql, parameters):
+        # See main._TimedMetaConnection.executemany -- same gap, same fix.
+        start = time.perf_counter()
+        try:
+            return super().executemany(sql, parameters)
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if elapsed_ms > _SLOW_SQL_MS:
+                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d executemany sql=%s",
                             int(elapsed_ms), " ".join(str(sql).split())[:200])
 
 
