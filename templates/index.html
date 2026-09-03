@@ -1565,6 +1565,17 @@
           }
           setSinglePaneLevel(1);
           window.loadScopePanesWithoutFullRefresh(candidateListUrl, false);
+          // Stand-in for the real-navigation stash at loadScopePanesWithoutFullRefresh's
+          // own `window.__lectioLastScopeUrl = url` (skipped here since pushHistory
+          // is false) — without it, the very next armDrawerBack() re-arm derives
+          // from window.location.href, which this call just rewrote to a list URL
+          // with no entry_id left to strip, so deriveListUrl returns null and the
+          // newly-armed spare has nothing to fall back to. That produced a working
+          // first Back (this article -> its list) immediately followed by a broken
+          // second one (open another article, Back opens the bare drawer instead
+          // of returning to the list) -- reported live 2026-09-03 as "back button
+          // ... seemed to be working for a bit."
+          window.__lectioLastScopeUrl = candidateListUrl;
         } else {
           toggleDrawer();
         }
@@ -1582,8 +1593,23 @@
           // scope before toggling, or the drawer opens over the right list but
           // the address bar and "active" folder both silently revert.
           const healUrl = window.__lectioLastScopeUrl;
-          if (healUrl) {
-            if (healUrl !== window.location.href) history.replaceState(event.state, '', healUrl);
+          if (healUrl && healUrl !== window.location.href) {
+            history.replaceState(event.state, '', healUrl);
+          }
+          if (singlePaneLevel === 2) {
+            // Landed on the spare with an article still on screen — either it
+            // was armed directly from one (see deriveListUrl/armDrawerBack), or
+            // it was re-armed after openDrawerOrList showed a list and the user
+            // then opened another article from it. toggleDrawer only flips
+            // between levels 0 and 1, so from level 2 it always lands on 0 (the
+            // bare drawer) never 1 (the list) — load the list for real instead,
+            // same as the true-floor branch below. Found live 2026-09-03: this
+            // is why Back "seemed to work for a bit" and then didn't — the
+            // FIRST cycle hits the no-healUrl branch below (openDrawerOrList
+            // already), but the heal path here was still the unconditional
+            // toggle from the pre-single-pane-aware version of this mechanism.
+            openDrawerOrList(healUrl || event.state.lectioListUrl);
+          } else if (healUrl) {
             toggleDrawer();
             // Still the same spare entry, still sitting right where it was —
             // no re-arm needed, nothing was consumed.

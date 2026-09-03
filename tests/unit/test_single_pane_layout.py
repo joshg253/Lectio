@@ -132,11 +132,37 @@ def test_the_spare_loads_the_derived_list_instead_of_an_empty_drawer():
     candidate URL (a real visited scope, or the article-derived fallback) is
     available, and only falls back to the bare toggle when neither exists."""
     assert "function openDrawerOrList(candidateListUrl)" in INDEX
-    block = INDEX[INDEX.index("function openDrawerOrList(candidateListUrl)"):][:500]
+    block = INDEX[INDEX.index("function openDrawerOrList(candidateListUrl)"):][:1500]
     assert "window.loadScopePanesWithoutFullRefresh(candidateListUrl, false);" in block
     assert "toggleDrawer();" in block
     assert "openDrawerOrList(event.state.lectioListUrl);" in INDEX
     assert "openDrawerOrList(deriveListUrl(window.location.href));" in INDEX
+
+
+def test_the_re_armed_spare_keeps_a_working_fallback_after_loading_a_list():
+    """openDrawerOrList rewrites window.location.href to the list URL it just
+    loaded, stripping entry_id — so an armDrawerBack() re-arm immediately after
+    (the true-floor branch does both in sequence) derives from a URL with
+    nothing left to strip and gets null. Without a stash, that re-armed spare's
+    lectioListUrl is null and healUrl unset, so the SECOND Back cycle (open
+    another article, Back) fell through to a blind toggleDrawer() instead of
+    the list. Found live 2026-09-03: Back "seemed to be working for a bit"
+    (the first cycle, handled elsewhere) and then didn't (every cycle after)."""
+    block = INDEX[INDEX.index("function openDrawerOrList(candidateListUrl)"):][:1500]
+    assert "window.__lectioLastScopeUrl = candidateListUrl;" in block
+
+
+def test_landing_on_the_spare_from_an_open_article_loads_the_list_not_the_drawer():
+    """toggleDrawer only flips between levels 0 and 1, so calling it while an
+    article (level 2) is on screen always lands on 0 (the bare drawer), never 1
+    (the list) — the healUrl branch pinned by
+    test_the_drawer_spare_heals_its_stale_url_instead_of_bouncing_to_home
+    predates single-pane's article-originated spare and never accounted for
+    landing on it from level 2."""
+    block = INDEX[INDEX.index("const healUrl = window.__lectioLastScopeUrl;"):][:1400]
+    assert "if (singlePaneLevel === 2) {" in block
+    assert "openDrawerOrList(healUrl || event.state.lectioListUrl);" in block
+    assert "} else if (healUrl) {" in block
 
 
 # ── CSS ──
