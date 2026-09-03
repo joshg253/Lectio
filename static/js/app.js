@@ -11427,6 +11427,11 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         if (scope === 'global') return 'All Feeds';
         const { folderNames, feedTitles } = hlScopeData();
         if (scope === 'folder') return folderNames[scopeId] || `Folder ${scopeId}`;
+        if (scope === 'folders') {
+          const ids = String(scopeId || '').split('\n').map(s => s.trim()).filter(Boolean);
+          if (ids.length <= 2) return ids.map(id => folderNames[id] || `Folder ${id}`).join(', ');
+          return `${ids.length} folders`;
+        }
         if (scope === 'feed') return feedTitles[scopeId] || scopeId;
         if (scope === 'feeds') {
           const urls = String(scopeId || '').split('\n').map(s => s.trim()).filter(Boolean);
@@ -11577,7 +11582,6 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             listEl.innerHTML = '<p class="hl-empty">No history yet — rules log entries when Run Now is used.</p>';
             return;
           }
-          const { folderNames, feedTitles } = hlScopeData();
           const typeLabels = { mark_as_read: 'Mark Read', deduplicate: 'Dedup', email_article: 'Email', webhook: 'Webhook', youtube_playlist: 'YT Playlist', instapaper: 'Instapaper', quire: 'Quire', highlight: 'Highlight', tag_filter: 'Tag Filter' };
           const methodLabels = { safe: 'Safe', slug: 'URL Slug', title: 'Title', both: 'Slug+Title', fuzzy: 'Fuzzy' };
           for (const row of data.history) {
@@ -11600,7 +11604,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             }
             const scopeEl = document.createElement('span');
             scopeEl.className = 'hl-rule-scope';
-            scopeEl.textContent = row.scope === 'global' ? 'All Feeds' : row.scope === 'folder' ? (folderNames[row.scope_id] || row.scope_id) : (feedTitles[row.scope_id] || row.scope_id);
+            scopeEl.textContent = hlScopeLabel(row.scope, row.scope_id);
             el.appendChild(scopeEl);
             const countEl = document.createElement('span');
             countEl.className = 'hl-history-count';
@@ -12840,14 +12844,21 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         allFolderOpt.value = '';
         allFolderOpt.textContent = 'All Feeds';
         folderSel.appendChild(allFolderOpt);
+        const folderOptions = [];
         for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item):not([data-virtual])')) {
+          const id = el.getAttribute('data-folder-id');
+          const name = el.getAttribute('data-folder-name');
+          folderOptions.push({ id, name });
           const opt = document.createElement('option');
-          opt.value = el.getAttribute('data-folder-id');
-          opt.textContent = el.getAttribute('data-folder-name');
+          opt.value = id;
+          opt.textContent = name;
           folderSel.appendChild(opt);
         }
+        const folderNameById = new Map(folderOptions.map(f => [f.id, f.name]));
         if (prefill.scope === 'folder') {
           folderSel.value = prefill.scope_id || '';
+        } else if (prefill.scope === 'folders') {
+          folderSel.value = String(prefill.scope_id || '').split('\n').map(s => s.trim()).filter(Boolean)[0] || '';
         } else if (prefill.scope === 'feed' || prefill.scope === 'feeds') {
           // Prefer the explicit folder_id passed in the prefill (from context menu data
           // attributes), falling back to a DOM lookup so editing existing rules still works.
@@ -12867,6 +12878,88 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           }
         }
         draft.appendChild(folderSel);
+
+        // Scope: additional folders — lets one rule cover several whole folders
+        // instead of duplicating it per folder (requested by Josh 2026-08-31,
+        // Plan.md "Up next"). Kept as its own "+ folder" picker beside the
+        // primary folderSel rather than converting folderSel itself to a
+        // multi-select: folderSel also drives the feed picker's candidate pool
+        // and the YT-playlist auto-scope logic elsewhere in this file, and
+        // rewriting every one of those read sites for a multi-value select was
+        // a much bigger, riskier change than this scope actually needs. Only
+        // meaningful when no individual feeds are picked (feed scope always
+        // wins — see draftScope below), so it hides once any are.
+        const selectedExtraFolderIds = new Set(
+          prefill.scope === 'folders'
+            ? String(prefill.scope_id || '').split('\n').map(s => s.trim()).filter(Boolean).slice(1)
+            : []
+        );
+        function getExtraFolderIds() { return [...selectedExtraFolderIds]; }
+
+        const extraFolderPick = document.createElement('div');
+        extraFolderPick.className = 'hl-extra-folder-pick';
+        const extraFolderChips = document.createElement('div');
+        extraFolderChips.className = 'hl-extra-folder-chips';
+        const extraFolderSearchWrap = document.createElement('div');
+        extraFolderSearchWrap.className = 'hl-token-input-wrap hl-extra-folder-search-wrap';
+        const extraFolderSearch = document.createElement('input');
+        extraFolderSearch.type = 'text';
+        extraFolderSearch.className = 'hl-token-input-field';
+        extraFolderSearch.placeholder = '+ another folder…';
+        extraFolderSearch.setAttribute('autocomplete', 'off');
+        const extraFolderDrop = document.createElement('div');
+        extraFolderDrop.className = 'hl-token-input-dropdown';
+        extraFolderDrop.hidden = true;
+        extraFolderSearchWrap.appendChild(extraFolderSearch);
+        extraFolderSearchWrap.appendChild(extraFolderDrop);
+        extraFolderPick.appendChild(extraFolderChips);
+        extraFolderPick.appendChild(extraFolderSearchWrap);
+
+        function renderExtraFolderChips() {
+          extraFolderChips.innerHTML = '';
+          for (const id of selectedExtraFolderIds) {
+            const tag = document.createElement('span');
+            tag.className = 'hl-folder-tag';
+            tag.textContent = folderNameById.get(id) || `Folder ${id}`;
+            const x = document.createElement('button');
+            x.type = 'button'; x.className = 'hl-folder-tag-remove'; x.textContent = '×';
+            x.setAttribute('aria-label', 'Remove');
+            x.addEventListener('click', e => {
+              e.stopPropagation();
+              selectedExtraFolderIds.delete(id);
+              renderExtraFolderChips(); renderExtraFolderDrop(); renderFeedChips();
+            });
+            tag.appendChild(x);
+            extraFolderChips.appendChild(tag);
+          }
+        }
+        function renderExtraFolderDrop() {
+          const q = extraFolderSearch.value.trim().toLowerCase();
+          extraFolderDrop.innerHTML = '';
+          const avail = folderOptions.filter(f =>
+            f.id !== folderSel.value && !selectedExtraFolderIds.has(f.id)
+            && (!q || f.name.toLowerCase().includes(q))
+          );
+          if (!avail.length) { extraFolderDrop.hidden = true; return; }
+          for (const f of avail.slice(0, 50)) {
+            const opt = document.createElement('div');
+            opt.className = 'hl-token-input-option';
+            opt.textContent = f.name;
+            opt.addEventListener('mousedown', e => {
+              e.preventDefault();
+              selectedExtraFolderIds.add(f.id);
+              extraFolderSearch.value = '';
+              renderExtraFolderChips(); renderExtraFolderDrop(); renderFeedChips(); extraFolderSearch.focus();
+            });
+            extraFolderDrop.appendChild(opt);
+          }
+          extraFolderDrop.hidden = false;
+        }
+        extraFolderSearch.addEventListener('focus', renderExtraFolderDrop);
+        extraFolderSearch.addEventListener('input', renderExtraFolderDrop);
+        extraFolderSearch.addEventListener('blur', () => { extraFolderDrop.hidden = true; });
+        renderExtraFolderChips();
+        draft.appendChild(extraFolderPick);
 
         // Scope: feed(s) — a searchable token picker (chips + find-as-you-type),
         // so it scales to thousands of feeds in one folder. No selection = whole
@@ -12934,10 +13027,15 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
 
         function renderFeedChips() {
           feedChips.innerHTML = '';
+          // A specific feed pick always wins over folder scope (see draftScope
+          // below), so the extra-folders picker is only meaningful with none.
+          extraFolderPick.style.display = selectedFeedUrls.size ? 'none' : '';
           if (!selectedFeedUrls.size) {
             const none = document.createElement('span');
             none.className = 'hl-feed-chips-empty';
-            none.textContent = folderSel.value ? 'All feeds in folder' : 'All feeds';
+            const folderCount = (folderSel.value ? 1 : 0) + selectedExtraFolderIds.size;
+            none.textContent = folderCount >= 2 ? `All feeds in ${folderCount} folders`
+              : folderSel.value ? 'All feeds in folder' : 'All feeds';
             feedChips.appendChild(none);
             return;
           }
@@ -12991,6 +13089,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         // Changing folder clears the (now out-of-scope) feed selection.
         folderSel.addEventListener('change', () => {
           selectedFeedUrls.clear();
+          // The new primary folder may already be sitting in the extras set —
+          // drop it there so it isn't listed twice.
+          selectedExtraFolderIds.delete(folderSel.value);
+          renderExtraFolderChips(); renderExtraFolderDrop();
           loadFolderFeeds(folderSel.value);
           renderFeedChips(); renderFeedDrop();
         });
@@ -13584,7 +13686,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           const feeds = getSelectedFeeds();
           if (feeds.length === 1) return { scope: 'feed', scope_id: feeds[0] };
           if (feeds.length >= 2)  return { scope: 'feeds', scope_id: feeds.join('\n') };
-          if (folderSel.value)    return { scope: 'folder', scope_id: folderSel.value };
+          const folderIds = [folderSel.value, ...getExtraFolderIds()].filter(Boolean);
+          if (folderIds.length >= 2) return { scope: 'folders', scope_id: folderIds.join('\n') };
+          if (folderIds.length === 1) return { scope: 'folder', scope_id: folderIds[0] };
           return { scope: 'global', scope_id: '' };
         }
 
@@ -15059,7 +15163,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         const matchRules = activeRules.filter(r =>
           r.scope === 'global' ||
           (r.scope === 'folder' && r.scope_id === folderIdStr) ||
-          (r.scope === 'feed' && r.scope_id === feedUrl)
+          (r.scope === 'folders' && String(r.scope_id || '').split('\n').map(s => s.trim()).includes(folderIdStr)) ||
+          (r.scope === 'feed' && r.scope_id === feedUrl) ||
+          (r.scope === 'feeds' && String(r.scope_id || '').split('\n').map(s => s.trim()).includes(feedUrl))
         );
         const titleRules = matchRules.filter(r => (r.search_in || 'title') !== 'body');
         highlightEl(postItem.querySelector('.post-title'), titleRules);
@@ -15073,7 +15179,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         const matchRules = activeRules.filter(r =>
           r.scope === 'global' ||
           (r.scope === 'folder' && r.scope_id === folderIdStr) ||
-          (r.scope === 'feed' && r.scope_id === feedUrl)
+          (r.scope === 'folders' && String(r.scope_id || '').split('\n').map(s => s.trim()).includes(folderIdStr)) ||
+          (r.scope === 'feed' && r.scope_id === feedUrl) ||
+          (r.scope === 'feeds' && String(r.scope_id || '').split('\n').map(s => s.trim()).includes(feedUrl))
         );
         const titleRules = matchRules.filter(r => (r.search_in || 'title') !== 'body');
         const bodyRules = matchRules.filter(r => { const s = r.search_in || 'title'; return s === 'body' || s === 'both'; });

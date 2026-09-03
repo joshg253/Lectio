@@ -8491,6 +8491,12 @@ textarea.hl-draft-pattern {
 .hl-token-input-more { color: var(--muted, #888); font-style: italic; cursor: default; }
 .hl-token-input-more:hover { background: none; }
 
+/* Rule-builder "+ another folder" picker: same chips-plus-typeahead shape as
+   the feed picker above, for scoping one rule to several whole folders. */
+.hl-extra-folder-pick { display: flex; flex-direction: column; gap: 0.3rem; flex: 1 1 180px; min-width: 160px; }
+.hl-extra-folder-chips { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
+.hl-extra-folder-search-wrap { min-height: auto; }
+
 /* Integrations: lay each section's fields out in a wrapping row (label above
    input per field), with full-width description/toggle/account rows. */
 .settings-section--inline { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem 0.75rem; }

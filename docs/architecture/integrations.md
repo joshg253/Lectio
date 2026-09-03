@@ -285,16 +285,28 @@ was already a solved problem.
   with no image returns 422 (Pinterest requires an image). The Pin button is rendered
   only when connected (`pinterest_connected` context flag); the board picker is a
   lightweight client-side menu fed by `/api/pinterest/boards`.
-- **Rule scope (incl. multi-feed)** — automation rules scope to `global` (all feeds),
-  `folder`, `feed` (one URL), or `feeds` (an explicit set; `scope_id` is the feed URLs
-  joined by newline — newline, not comma, since URLs can contain commas). Scope
-  resolution is centralized so every runner agrees: `resolve_rule_feed_urls(conn,
-  scope, scope_id)` returns the feed set (or `None` for global) for the bulk/dry-run
-  paths, and `feed_in_rule_scope(scope, scope_id, feed_url, folder_feed_urls)` is the
-  per-feed test the after-refresh runners use against each freshly-refreshed feed
-  (folder scopes pass a prefetched feed set for speed; `feeds`/`feed`/`global` don't
-  need it). Deduplicate accepts `global`/`folder`/`feeds` (the latter dedupes across a
-  selected set, resolved via `_resolve_dedup_feed_urls`) but rejects a single `feed`
-  — one feed can't cross-dedupe. The rule builder derives the scope from a
-  multi-select feed listbox: 0 selected = folder (or global if no folder), 1 =
-  `feed`, 2+ = `feeds`.
+- **Rule scope (incl. multi-feed and multi-folder)** — automation rules scope to
+  `global` (all feeds), `folder` (one id), `folders` (an explicit set of folder ids —
+  requested by Josh 2026-08-31, shipped 2026-09-02, `scope_id` is the ids joined by
+  newline), `feed` (one URL), or `feeds` (an explicit set of URLs, also newline-joined
+  — newline, not comma, since URLs can contain commas). Scope resolution is
+  centralized so every runner agrees: `resolve_rule_feed_urls(conn, scope, scope_id)`
+  returns the feed set (or `None` for global) for the bulk/dry-run paths, and
+  `feed_in_rule_scope(scope, scope_id, feed_url, folder_feed_urls)` is the per-feed
+  test the after-refresh runners use against each freshly-refreshed feed. `folder` and
+  `folders` share one prewarm/lookup path — `rule_scope_folder_ids(scope, scope_id)`
+  returns the folder id(s) either scope references (used to build the per-run
+  `folder_id -> feed set` prewarm map once per refresh tick) and
+  `rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)` unions the prefetched
+  sets for `feed_in_rule_scope`'s per-feed test; `feeds`/`feed`/`global` don't need
+  either. Deduplicate accepts `global`/`folder`/`folders`/`feeds` (the latter two
+  dedupe across a selected set, resolved via `_resolve_dedup_feed_urls`) but rejects a
+  single `feed` — one feed can't cross-dedupe. The rule builder derives scope from two
+  independent pickers: a feed multi-select listbox (0 selected = fall through to
+  folder scope, 1 = `feed`, 2+ = `feeds`) and, when no feeds are picked, a primary
+  folder `<select>` plus a separate "+ another folder" chips picker (0 folders =
+  global, 1 = `folder`, 2+ = `folders`) — kept as two pickers rather than converting
+  the folder `<select>` itself to multi-select, since that select also drives the feed
+  picker's candidate pool and the YouTube-playlist auto-scope logic elsewhere in
+  app.js and a multi-value rewrite of every one of those read sites was a much
+  bigger, riskier change than the feature needed.

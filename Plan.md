@@ -12,16 +12,6 @@ Within a tier, related items are clustered under a bold sub-heading; unrelated i
 Two standing watch-lists (CodeQL, Parked) moved to their own section at the end — nothing in them
 is scheduled, they're just what to check if a related symptom recurs.
 
-## Up next
-
-### Rule scope: allow selecting multiple folders, not just one
-
-Requested by Josh 2026-08-31; **earmarked 2026-09-02 for a dedicated new session** — promoted
-here so it isn't buried under Tier 4. A rule's scope currently picks a single feed or a single
-folder; there's no way to scope one rule to several folders at once without duplicating the rule
-per folder. Not investigated yet — needs a look at how scope is stored/matched today
-(`rule_scope`/`rule_scope_id`) before sizing the change.
-
 ## Tier 1 — actively impeding unread-clearing
 
 **Refresh-contention latency** — home-route stalls, post-refresh read-range slowness, the GIL-contention tally, and the post-restart startup flood are all the same investigation now; merged into one item below.
