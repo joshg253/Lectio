@@ -424,11 +424,15 @@ similar in spirit to the existing hide-Shorts/hide-unpremiered per-feed display 
 (`_DISPLAY_PREF_KEYS`). Not investigated — needs checking whether the feed data even distinguishes
 subscriber-only videos before sizing this.
 
-### Larger tag chips / "+^vx" sizing for a specific feed ("Surface")
+### NEXT UP (after the refresh-contention perf work wraps): bump the size of in-header buttons/tag chips
 
-"larger tags/'+^vx' for Surface" — cryptic as given; sounds like a request for bigger suggested-tag
-chips (or their controls) on a specific feed/folder (Microsoft Surface-related?) where the current
-size is hard to hit/read. Needs Josh to clarify exactly what and where before this is actionable.
+Clarified 2026-09-03 — supersedes the vaguer "larger tags/'+^vx' for Surface" report (2026-09-02,
+which read as feed-specific and was left unscoped for that reason). Not feed-specific: Josh wants
+the entry pane's post-header controls (the `+`/`-` tag-filter chips, suggested-tag chips, and
+whatever else lives in that row) sized up generally, across the app. Explicitly flagged as the next
+thing to pick up once the current refresh-contention perf thread (Tier 1) is done. Not scoped
+further yet — needs a look at the header markup/CSS to see whether this is a simple size-token bump
+or touches layout (chip-row wrapping, spacing against adjacent controls).
 
 ### Global ignored suggested-tags list, editable in Settings
 
