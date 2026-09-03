@@ -412,15 +412,26 @@ Two small residuals visible in the same capture, neither on the click path: a si
 single-row shape, never sized as worth fixing), and one batched `entry_lead_images` `executemany`
 flush hit ~4.7s under heavy load — visible only because of the executemany-wrapping fix a few commits
 back, and exactly the intended trade-off: one commit occasionally waiting, not N commits compounding.
-Neither is user-visible. **This closes out the Tier 1 refresh-contention chain that started
-2026-08-11** — four real bugs found and fixed across two sessions (lead-image per-entry writes ×3
-shapes, hide-paywalled's missed batching, and three separate raw-reader-connection call sites), each
-confirmed by a live capture, several confirmed by Josh directly. Remaining open threads, none of them
-blocking: `entry_read_state` batching in the post-refresh automation pipeline was investigated and
+Neither is user-visible. **This closes out the connection-pooling half of the Tier 1
+refresh-contention chain that started 2026-08-11** — four real bugs found and fixed across two
+sessions (lead-image per-entry writes ×3 shapes, hide-paywalled's missed batching, and three separate
+raw-reader-connection call sites), each confirmed by a live capture, several confirmed by Josh
+directly. `entry_read_state` batching in the post-refresh automation pipeline was investigated and
 found to already be correctly batched everywhere except the one site fixed here; the ~17 other
-`sqlite3.connect(reader_db_path)` call sites elsewhere in main.py (deferred cleanup, noted above); and
-the Read Above/Below WAL/checkpoint-timing lead below, which was never confirmed as the same mechanism
-and may simply no longer matter now that the connection-pooling bugs are fixed.
+`sqlite3.connect(reader_db_path)` call sites elsewhere in main.py remain a deferred cleanup (noted
+above).
+
+**Still open, confirmed the same day: the Read Above/Below WAL/checkpoint lead below is real and
+distinct.** Josh hit another delay (~7.8s) right after the fix above deployed. The new instrumentation
+did its job: `uncategorized_derive=53ms` confirms that fix is holding, isolating the actual cause as
+`get_tagged_entry_keys` again — `1168ms` (unscoped) + `2098ms` (scoped) in the same request, `db=reader`,
+alongside an elevated `template_stream=1846ms`, all while refresh's own per-feed queries were logging
+continuously in the same window. This is **not** a connection-pooling bug — `get_tagged_entry_keys` has
+used the pooled connection since 2026-09-02 — it's the genuine SQLite-file-level lock contention the
+Read Above/Below item below already describes: refresh's writer thread and a foreground reader thread
+serializing at the WAL layer. Not fixed here; this is the pragma/timing investigation already
+deliberately deferred below as its own, riskier pass — this capture is just fresh confirmation it's
+still live and worth picking up when there's appetite for a bigger, shared-connection-behavior change.
 
 **Read Above/Below, same shape:**
 
