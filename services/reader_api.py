@@ -2,16 +2,64 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import re
 import sqlite3
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypedDict
 
+import reader._storage._base as _reader_storage_base
 from reader import make_reader
 from reader._storage import Storage as _ReaderStorage
 
 from services import bot_challenge, flaresolverr, reader_sanitize
+
+LOGGER = logging.getLogger("lectio")
+
+# Refresh-contention investigation (Plan.md Tier 1): wall-clock-times every
+# statement reader executes and logs the slow ones with their SQL — a SELECT
+# that takes multiple seconds on its own can only mean it sat inside SQLite's
+# busy-handler retry loop for a write lock refresh was holding, since the
+# query itself is trivial. Confirms or rules out the lock-wait theory
+# directly instead of inferring it from block-level timing gaps.
+# CONNECTION_CLS is reader's own supported extension point (it swaps in a
+# DebugConnection there itself under READER_DEBUG_STORAGE) -- read fresh by
+# name from _base's module globals on every StorageBase.__init__, so this
+# patch just needs to land before the first make_reader() call, which it
+# does as an import-time side effect here.
+_SLOW_SQL_MS = 250
+
+
+class _TimedCursor(sqlite3.Cursor):
+    def execute(self, sql, parameters=()):
+        start = time.perf_counter()
+        try:
+            return super().execute(sql, parameters)
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if elapsed_ms > _SLOW_SQL_MS:
+                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d sql=%s",
+                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+
+
+class _TimedConnection(sqlite3.Connection):
+    def cursor(self, factory=None):
+        return super().cursor(factory or _TimedCursor)
+
+    def execute(self, sql, parameters=()):
+        start = time.perf_counter()
+        try:
+            return super().execute(sql, parameters)
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if elapsed_ms > _SLOW_SQL_MS:
+                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d sql=%s",
+                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+
+
+_reader_storage_base.CONNECTION_CLS = _TimedConnection  # ty: ignore[invalid-assignment]
 
 
 class _ExtraReaderKwargs(TypedDict, total=False):
