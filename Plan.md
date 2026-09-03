@@ -91,6 +91,46 @@ confirmed, the fix is likely on the WAL/checkpoint or refresh-transaction-granul
 Read Above/Below item's lead), not a rewrite of `get_saved_unread_count` — needs a plan before
 touching anything, this is a shared-connection-behavior change, not a local one.
 
+**Confirmed 2026-09-03, conclusively.** Both `busy_timeout`s were already 10000ms
+(`get_meta_connection`/`_LectioReaderStorage.setup_db`, main.py / services/reader_api.py) — that
+alone was suggestive (every observed stall fell under that 10s ceiling) but not proof. Shipped real
+instrumentation instead of inferring further: both connection classes now wall-clock-time every
+statement and log the slow ones with their SQL text (`_TimedMetaConnection` in main.py,
+`_TimedConnection` in services/reader_api.py, hooked in via reader's own `CONNECTION_CLS` extension
+point — the same one it uses for its `READER_DEBUG_STORAGE` debug mode). First live capture, during
+an ordinary refresh pass:
+
+| elapsed | db | statement |
+|---|---|---|
+| 7939ms | meta | `INSERT INTO entry_lead_images (...) ON CONFLICT ... DO UPDATE ...` (one row) |
+| 5837ms | meta | `INSERT INTO yt_quota_spend (day, units) VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET units = units + excluded.units` (one row) |
+| 5837ms | meta | the same `entry_lead_images` upsert, same instant, identical elapsed time |
+| 1744ms / 725ms / 614ms | reader | the home-route `list_entries_for_feeds` `WITH ids AS (...) ORDER BY recent_sort DESC` read |
+
+A single-row indexed upsert cannot take 5-8 real seconds of work — this is `SQLITE_BUSY` retry,
+full stop, and it hits both the meta DB and the reader DB. The two `entry_lead_images`/
+`yt_quota_spend` writes logging the *identical* elapsed time in the same instant is the tell for the
+mechanism, not just the symptom: this is **writer-vs-writer queueing**, not one long transaction
+blocking everyone. `get_meta_connection()` hands every thread its own persistent connection
+(refresh, the lead-image backfill, the lead-image async write-worker, YouTube quota tracking,
+foreground requests that write settings/badges) and SQLite allows exactly one writer at a time even
+in WAL mode — during an active refresh pass touching hundreds of feeds, several of these threads are
+committing small writes in the same window and stack up behind each other's `busy_timeout` waits.
+
+`services/lead_images.py`'s `fetch_and_store_lead_images_for_feed` is the biggest contributor by
+volume: it calls `store_entry_lead_image` (its own `with get_meta_connection() as conn:` block, one
+INSERT, commits on exit) from 12 different call sites in a per-entry loop, so a feed with many
+qualifying (unread/saved/tagged) entries acquires-and-releases the meta writer lock once per entry
+instead of once per feed. Batching those writes — accumulate results in memory while the loop's
+existing `time.sleep(0.05/0.15)` politeness delays and network fetches run, then one `executemany`
+in a single transaction per feed (or per some chunk size) — would cut the number of separate lock
+acquisitions from this one source by whatever the average per-feed entry count is, directly
+reducing contention without touching WAL/checkpoint settings or any read path. Sized but not
+implemented: the function has 12 store call sites across deeply nested early-`continue` control
+flow, and per-entry commits currently give each entry independent durability (a batch failure would
+lose the whole batch instead of just one entry) — a real behavior change worth its own pass, not a
+same-session bolt-on this deep into an already-long one.
+
 **A second capture, same day, sharpens it further.** `GET /?folder_id=11&read_filter=unread` (a
 tiny folder — 16 feeds, 3 entries) logged `5498ms`, and its own follow-up chunk request logged
 `7075ms`, both while the same refresh pass was still running (a `minecraft.net` parse error and the
