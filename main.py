@@ -36798,13 +36798,19 @@ async def instapaper_import(request: Request, instapaper_file: Annotated[UploadF
 def api_folder_feeds(folder_id: str = Query("")):
     """Feeds (url + display title) for the automation editor's feed picker.
 
-    Empty/non-numeric folder_id returns every feed. Server-backed on purpose:
-    the picker used to scrape the sidebar's feed links, which don't exist at
-    all in Saved mode — typing showed no feeds."""
+    *folder_id* is a single id or a comma-separated list (the rule builder's
+    folder picker is multi-select — the feed candidate pool is the union of
+    whatever folders are chosen there). Empty, or nothing numeric in the list,
+    returns every feed. Server-backed on purpose: the picker used to scrape
+    the sidebar's feed links, which don't exist at all in Saved mode — typing
+    showed no feeds."""
     titles = get_feed_title_map()
+    ids = [f for f in folder_id.split(",") if f.strip().lstrip("-").isdigit()]
     with get_meta_connection() as conn:
-        if folder_id.strip().lstrip("-").isdigit():
-            urls = get_folder_feed_urls(conn, int(folder_id))
+        if ids:
+            urls: set[str] = set()
+            for fid in ids:
+                urls |= get_folder_feed_urls(conn, int(fid))
         else:
             urls = get_all_feed_urls(conn)
     feeds = [

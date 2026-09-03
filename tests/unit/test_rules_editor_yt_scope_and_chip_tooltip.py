@@ -36,13 +36,13 @@ def test_switching_to_yt_playlist_rescopes_the_folder_picker():
     block = APP_JS[idx:idx + 600]
     assert "youtube_playlist" in block
     assert "window.YT_FOLDER_ID" in block
-    assert "loadFolderFeeds(folderSel.value)" in block
+    assert "loadFolderFeeds(getFolderIds())" in block
 
 
 def test_editing_an_unscoped_yt_playlist_rule_is_also_rescoped():
     """An existing rule saved with a real scope must be left exactly as saved
     — only the ambiguous global (no folder) case is narrowed."""
-    idx = APP_JS.index("if (typeSel.value === 'youtube_playlist' && !folderSel.value")
+    idx = APP_JS.index("if (typeSel.value === 'youtube_playlist' && !selectedFolderIds.size")
     block = APP_JS[idx:idx + 300]
     assert "window.YT_FOLDER_ID" in block
-    assert "loadFolderFeeds(folderSel.value)" in block
+    assert "loadFolderFeeds(getFolderIds())" in block

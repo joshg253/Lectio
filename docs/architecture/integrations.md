@@ -302,11 +302,17 @@ was already a solved problem.
   either. Deduplicate accepts `global`/`folder`/`folders`/`feeds` (the latter two
   dedupe across a selected set, resolved via `_resolve_dedup_feed_urls`) but rejects a
   single `feed` — one feed can't cross-dedupe. The rule builder derives scope from two
-  independent pickers: a feed multi-select listbox (0 selected = fall through to
-  folder scope, 1 = `feed`, 2+ = `feeds`) and, when no feeds are picked, a primary
-  folder `<select>` plus a separate "+ another folder" chips picker (0 folders =
-  global, 1 = `folder`, 2+ = `folders`) — kept as two pickers rather than converting
-  the folder `<select>` itself to multi-select, since that select also drives the feed
-  picker's candidate pool and the YouTube-playlist auto-scope logic elsewhere in
-  app.js and a multi-value rewrite of every one of those read sites was a much
-  bigger, riskier change than the feature needed.
+  independent token pickers, both the same chips-plus-typeahead shape (no `<select>`
+  involved in either — a first cut used a folder `<select>` plus a separate "+ folder"
+  chips row, simplified to one picker per Josh 2026-09-02): a folder picker
+  (`selectedFolderIds`; 0 = global, 1 = `folder`, 2+ = `folders`) and a feed picker
+  (`selectedFeedUrls`; explicit feed picks always win over folder scope — 0 = fall
+  through to folder scope, 1 = `feed`, 2+ = `feeds`). The feed picker's candidate pool
+  is server-fetched from `/api/folder-feeds?folder_id=` — empty for every feed, or a
+  comma-separated list of the selected folder ids for their union — and reloads via
+  `onFoldersChanged()` on every folder add/remove, pruning any explicit feed pick that
+  fell out of the narrowed set. Both pickers, and the "is this rule folder-scoped"
+  checks that key off them (dedup's exclude-folders row, tag_filter's vocabulary
+  fetch, the YouTube-playlist auto-scope override), live inside one draft-row-builder
+  closure in app.js, which is what keeps this a contained rewrite rather than a
+  file-wide one each time the picker shape changes.
