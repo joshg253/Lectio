@@ -4942,7 +4942,7 @@ def upsert_feed_thumb_strategy(conn: sqlite3.Connection, feed_url: str, strategy
 
 
 _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'})
-_HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed', 'feeds'})
+_HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed', 'feeds', 'folders'})
 
 
 _HIGHLIGHT_VALID_TYPES = {
@@ -5801,13 +5801,44 @@ def get_all_reader_feed_urls(include_kept: bool = False) -> set[str]:
 
 # A "feeds" rule scope targets an explicit set of feeds (not a whole folder). Its
 # scope_id is the feed URLs joined by newline (URLs may contain commas, so newline
-# is the safe separator). These helpers centralize parse + scope→feed-set + the
-# per-feed "is this feed in scope" check used by the after-refresh runners.
+# is the safe separator). "folders" is the same idea one level up: several whole
+# folders in one rule instead of duplicating the rule per folder (requested by
+# Josh 2026-08-31) — scope_id is the folder ids joined by newline. These helpers
+# centralize parse + scope→feed-set + the per-feed "is this feed in scope" check
+# used by the after-refresh runners.
 _FEEDS_SCOPE_SEP = "\n"
+_FOLDERS_SCOPE_SEP = "\n"
 
 
 def parse_feeds_scope_id(scope_id: str) -> list[str]:
     return [u.strip() for u in (scope_id or "").split(_FEEDS_SCOPE_SEP) if u.strip()]
+
+
+def parse_folders_scope_id(scope_id: str) -> list[int]:
+    return [int(s) for s in (scope_id or "").split(_FOLDERS_SCOPE_SEP) if s.strip().isdigit()]
+
+
+def rule_scope_folder_ids(scope: str, scope_id: str) -> set[int]:
+    """Folder id(s) a rule's scope references, for "folder" and "folders" alike —
+    the single choke point the after-refresh runners' folder-prewarm passes use so
+    a multi-folder rule's folders are fetched same as a single-folder rule's."""
+    if scope == "folder":
+        return {int(scope_id)} if str(scope_id or "").isdigit() else set()
+    if scope == "folders":
+        return set(parse_folders_scope_id(scope_id))
+    return set()
+
+
+def rule_scope_folder_feed_set(scope: str, scope_id: str, folder_feed_map: dict[int, set[str]]) -> set[str] | None:
+    """Prewarmed feed set for a folder-based rule scope (single folder or several),
+    for feed_in_rule_scope's per-feed test. None for non-folder scopes."""
+    ids = rule_scope_folder_ids(scope, scope_id)
+    if not ids:
+        return None
+    feed_urls: set[str] = set()
+    for fid in ids:
+        feed_urls |= folder_feed_map.get(fid, set())
+    return feed_urls
 
 
 def resolve_rule_feed_urls(conn: sqlite3.Connection, scope: str, scope_id: str) -> set[str] | None:
@@ -5819,6 +5850,11 @@ def resolve_rule_feed_urls(conn: sqlite3.Connection, scope: str, scope_id: str) 
             return get_folder_feed_urls(conn, int(scope_id))
         except (ValueError, TypeError):
             return set()
+    if scope == "folders":
+        feed_urls: set[str] = set()
+        for fid in parse_folders_scope_id(scope_id):
+            feed_urls |= get_folder_feed_urls(conn, fid)
+        return feed_urls
     if scope == "feed":
         return {scope_id} if scope_id else set()
     if scope == "feeds":
@@ -5831,7 +5867,7 @@ def feed_in_rule_scope(scope: str, scope_id: str, feed_url: str, folder_feed_url
     prefetched feed set for a folder-scoped rule (ignored for other scopes)."""
     if scope == "global":
         return True
-    if scope == "folder":
+    if scope in ("folder", "folders"):
         return feed_url in (folder_feed_urls or set())
     if scope == "feed":
         return scope_id == feed_url
@@ -6696,11 +6732,15 @@ def _resolve_dedup_feed_urls(
         except (ValueError, TypeError):
             return {"error": "invalid scope_id"}
         feed_urls = get_folder_feed_urls(conn, fid)
+    elif scope == "folders":
+        feed_urls = set()
+        for fid in parse_folders_scope_id(scope_id):
+            feed_urls |= get_folder_feed_urls(conn, fid)
     elif scope == "feeds":
         # Dedupe across an explicit set of selected feeds (>=2 needed; checked by caller).
         feed_urls = set(parse_feeds_scope_id(scope_id))
     else:
-        return {"error": "deduplicate rules require global, folder, or multi-feed scope"}
+        return {"error": "deduplicate rules require global, folder(s), or multi-feed scope"}
     if exclude_scope_ids:
         excluded: set[str] = set()
         for fid_str in exclude_scope_ids.split(","):
@@ -7032,6 +7072,8 @@ def _dry_run_pattern(
             int(scope_id)
         except (ValueError, TypeError):
             return {"error": "invalid scope_id"}
+    elif scope == "folders" and not parse_folders_scope_id(scope_id):
+        return {"error": "invalid scope_id"}
     feed_urls: set[str] | None = resolve_rule_feed_urls(conn, scope, scope_id)
 
     matches: list[dict] = []
@@ -7341,6 +7383,8 @@ def _run_now_pattern(
             int(scope_id)
         except (ValueError, TypeError):
             return {"error": "invalid scope_id"}
+    elif scope == "folders" and not parse_folders_scope_id(scope_id):
+        return {"error": "invalid scope_id"}
     feed_urls: set[str] | None = resolve_rule_feed_urls(conn, scope, scope_id)
 
     to_mark: list[tuple[str, str]] = []
@@ -7481,6 +7525,8 @@ def _run_tag_filter(
             int(scope_id)
         except (ValueError, TypeError):
             return {"error": "invalid scope_id"}
+    elif scope == "folders" and not parse_folders_scope_id(scope_id):
+        return {"error": "invalid scope_id"}
     feed_urls: set[str] | None = resolve_rule_feed_urls(conn, scope, scope_id)
 
     to_mark: list[tuple[str, str]] = []
@@ -8192,11 +8238,10 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
         # ── Read phase (no write lock held) ──────────────────────────────────
         with get_meta_connection() as conn:
             all_rules = get_highlight_keywords(conn)
-            folder_ids_needed = {
-                int(r["scope_id"]) for r in all_rules
-                if r.get("enabled") and r["scope"] == "folder"
-                and str(r.get("scope_id", "")).isdigit()
-            }
+            folder_ids_needed: set[int] = set()
+            for r in all_rules:
+                if r.get("enabled"):
+                    folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
             folder_feed_map: dict[int, set[str]] = {
                 fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
             }
@@ -8223,7 +8268,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
                 if rule_type == "mark_as_read":
                     for feed_url in refreshed_feed_urls:
-                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
                         in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
 
                         if not in_scope:
@@ -8236,7 +8281,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
                 elif rule_type == "tag_filter":
                     for feed_url in refreshed_feed_urls:
-                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
                         if not feed_in_rule_scope(scope, scope_id, feed_url, _folder_set):
                             continue
 
@@ -8252,15 +8297,12 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
                     if scope == "global":
                         in_scope = True
-                    elif scope == "folder":
-                        try:
-                            in_scope = bool(refreshed_feed_urls & folder_feed_map.get(int(scope_id), set()))
-                        except (ValueError, TypeError):
-                            in_scope = False
+                    elif scope in ("folder", "folders"):
+                        in_scope = bool(refreshed_feed_urls & (rule_scope_folder_feed_set(scope, scope_id, folder_feed_map) or set()))
                     elif scope == "feeds":
                         in_scope = bool(refreshed_feed_urls & set(parse_feeds_scope_id(scope_id)))
                     else:
-                        in_scope = False  # dedup requires global / folder / multi-feed scope
+                        in_scope = False  # dedup requires global / folder(s) / multi-feed scope
 
                     if not in_scope:
                         continue
@@ -8360,11 +8402,10 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
         with get_meta_connection() as conn:
             all_rules = get_highlight_keywords(conn)
             profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
-            folder_ids_needed = {
-                int(r["scope_id"]) for r in all_rules
-                if r.get("enabled") and r["scope"] == "folder"
-                and str(r.get("scope_id", "")).isdigit()
-            }
+            folder_ids_needed: set[int] = set()
+            for r in all_rules:
+                if r.get("enabled"):
+                    folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
             folder_feed_map: dict[int, set[str]] = {
                 fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
             }
@@ -8402,7 +8443,7 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
                     for feed_url in refreshed_feed_urls:
                         # Scope check
-                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
                         in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
                         if not in_scope:
                             continue
@@ -8497,11 +8538,10 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
         with get_meta_connection() as conn:
             all_rules = get_highlight_keywords(conn)
-            folder_ids_needed = {
-                int(r["scope_id"]) for r in all_rules
-                if r.get("enabled") and r["scope"] == "folder"
-                and str(r.get("scope_id", "")).isdigit()
-            }
+            folder_ids_needed: set[int] = set()
+            for r in all_rules:
+                if r.get("enabled"):
+                    folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
             folder_feed_map: dict[int, set[str]] = {
                 fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
             }
@@ -8532,7 +8572,7 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                     batch_articles: list[dict] = []
 
                     for feed_url in refreshed_feed_urls:
-                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
                         in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
                         if not in_scope:
                             continue
@@ -8619,10 +8659,10 @@ def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
         with get_meta_connection() as conn:
             all_rules = get_highlight_keywords(conn)
-            folder_ids_needed = {
-                int(r["scope_id"]) for r in all_rules
-                if r.get("enabled") and r["scope"] == "folder" and str(r.get("scope_id", "")).isdigit()
-            }
+            folder_ids_needed: set[int] = set()
+            for r in all_rules:
+                if r.get("enabled"):
+                    folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
             folder_feed_map: dict[int, set[str]] = {
                 fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
             }
@@ -8643,7 +8683,7 @@ def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 with get_reader() as reader:
                     feed_title_cache: dict[str, str] = {}
                     for feed_url in refreshed_feed_urls:
-                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
                         if not feed_in_rule_scope(scope, scope_id, feed_url, _folder_set):
                             continue
                         for entry in reader.get_entries(feed=feed_url):
@@ -8706,10 +8746,10 @@ def _run_save_article_rules_after_refresh(refreshed_feed_urls: set[str]) -> None
 
         with get_meta_connection() as conn:
             all_rules = get_highlight_keywords(conn)
-            folder_ids_needed = {
-                int(r["scope_id"]) for r in all_rules
-                if r.get("enabled") and r["scope"] == "folder" and str(r.get("scope_id", "")).isdigit()
-            }
+            folder_ids_needed: set[int] = set()
+            for r in all_rules:
+                if r.get("enabled"):
+                    folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
             folder_feed_map: dict[int, set[str]] = {
                 fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
             }
@@ -8730,7 +8770,7 @@ def _run_save_article_rules_after_refresh(refreshed_feed_urls: set[str]) -> None
                 with get_reader() as reader:
                     feed_title_cache: dict[str, str] = {}
                     for feed_url in refreshed_feed_urls:
-                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
                         if not feed_in_rule_scope(scope, scope_id, feed_url, _folder_set):
                             continue
                         for entry in reader.get_entries(feed=feed_url):
@@ -8790,10 +8830,10 @@ def _run_quire_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
         with get_meta_connection() as conn:
             all_rules = get_highlight_keywords(conn)
-            folder_ids_needed = {
-                int(r["scope_id"]) for r in all_rules
-                if r.get("enabled") and r["scope"] == "folder" and str(r.get("scope_id", "")).isdigit()
-            }
+            folder_ids_needed: set[int] = set()
+            for r in all_rules:
+                if r.get("enabled"):
+                    folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
             folder_feed_map: dict[int, set[str]] = {
                 fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
             }
@@ -8816,7 +8856,7 @@ def _run_quire_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 with get_reader() as reader:
                     feed_title_cache: dict[str, str] = {}
                     for feed_url in refreshed_feed_urls:
-                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
                         if not feed_in_rule_scope(scope, scope_id, feed_url, _folder_set):
                             continue
                         for entry in reader.get_entries(feed=feed_url):
@@ -8906,7 +8946,7 @@ def _apply_youtube_playlist_rules(
             with get_reader() as reader:
                 feed_title_cache: dict[str, str] = {}
                 for feed_url in refreshed_feed_urls:
-                    _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                    _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
                     in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
                     if not in_scope:
                         continue
@@ -9082,11 +9122,11 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
             ]
             if not yt_rules:
                 return
-            folder_feed_map: dict[int, set[str]] = {
-                int(r["scope_id"]): get_folder_feed_urls(conn, int(r["scope_id"]))
-                for r in yt_rules
-                if r["scope"] == "folder" and str(r.get("scope_id", "")).isdigit()
-            }
+            folder_feed_map: dict[int, set[str]] = {}
+            for r in yt_rules:
+                for fid in rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or "")):
+                    if fid not in folder_feed_map:
+                        folder_feed_map[fid] = get_folder_feed_urls(conn, fid)
 
         token = get_youtube_oauth_token()
         if not token:
@@ -11123,7 +11163,7 @@ _AUTOMATION_TYPE_LABELS = {
     "quire": "Add to Quire",
     "tag_filter": "Tag filter",
 }
-_AUTOMATION_SCOPE_LABELS = {"global": "All feeds", "folder": "Folder", "feed": "This feed", "feeds": "Selected feeds"}
+_AUTOMATION_SCOPE_LABELS = {"global": "All feeds", "folder": "Folder", "folders": "Folders", "feed": "This feed", "feeds": "Selected feeds"}
 
 
 def _automation_rule_detail(rule: dict) -> str:
@@ -11188,6 +11228,8 @@ def collect_feed_automations(conn, feed_url: str, folder_ids: list[int]) -> dict
             applies = feed_url in parse_feeds_scope_id(scope_id)
         elif scope == "folder":
             applies = scope_id.isdigit() and int(scope_id) in folder_id_set
+        elif scope == "folders":
+            applies = bool(folder_id_set & set(parse_folders_scope_id(scope_id)))
         else:
             applies = False
         if not applies:
@@ -36765,13 +36807,19 @@ async def instapaper_import(request: Request, instapaper_file: Annotated[UploadF
 def api_folder_feeds(folder_id: str = Query("")):
     """Feeds (url + display title) for the automation editor's feed picker.
 
-    Empty/non-numeric folder_id returns every feed. Server-backed on purpose:
-    the picker used to scrape the sidebar's feed links, which don't exist at
-    all in Saved mode — typing showed no feeds."""
+    *folder_id* is a single id or a comma-separated list (the rule builder's
+    folder picker is multi-select — the feed candidate pool is the union of
+    whatever folders are chosen there). Empty, or nothing numeric in the list,
+    returns every feed. Server-backed on purpose: the picker used to scrape
+    the sidebar's feed links, which don't exist at all in Saved mode — typing
+    showed no feeds."""
     titles = get_feed_title_map()
+    ids = [f for f in folder_id.split(",") if f.strip().lstrip("-").isdigit()]
     with get_meta_connection() as conn:
-        if folder_id.strip().lstrip("-").isdigit():
-            urls = get_folder_feed_urls(conn, int(folder_id))
+        if ids:
+            urls: set[str] = set()
+            for fid in ids:
+                urls |= get_folder_feed_urls(conn, int(fid))
         else:
             urls = get_all_feed_urls(conn)
     feeds = [

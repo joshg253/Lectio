@@ -11427,6 +11427,11 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         if (scope === 'global') return 'All Feeds';
         const { folderNames, feedTitles } = hlScopeData();
         if (scope === 'folder') return folderNames[scopeId] || `Folder ${scopeId}`;
+        if (scope === 'folders') {
+          const ids = String(scopeId || '').split('\n').map(s => s.trim()).filter(Boolean);
+          if (ids.length <= 2) return ids.map(id => folderNames[id] || `Folder ${id}`).join(', ');
+          return `${ids.length} folders`;
+        }
         if (scope === 'feed') return feedTitles[scopeId] || scopeId;
         if (scope === 'feeds') {
           const urls = String(scopeId || '').split('\n').map(s => s.trim()).filter(Boolean);
@@ -11577,7 +11582,6 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             listEl.innerHTML = '<p class="hl-empty">No history yet — rules log entries when Run Now is used.</p>';
             return;
           }
-          const { folderNames, feedTitles } = hlScopeData();
           const typeLabels = { mark_as_read: 'Mark Read', deduplicate: 'Dedup', email_article: 'Email', webhook: 'Webhook', youtube_playlist: 'YT Playlist', instapaper: 'Instapaper', quire: 'Quire', highlight: 'Highlight', tag_filter: 'Tag Filter' };
           const methodLabels = { safe: 'Safe', slug: 'URL Slug', title: 'Title', both: 'Slug+Title', fuzzy: 'Fuzzy' };
           for (const row of data.history) {
@@ -11600,7 +11604,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             }
             const scopeEl = document.createElement('span');
             scopeEl.className = 'hl-rule-scope';
-            scopeEl.textContent = row.scope === 'global' ? 'All Feeds' : row.scope === 'folder' ? (folderNames[row.scope_id] || row.scope_id) : (feedTitles[row.scope_id] || row.scope_id);
+            scopeEl.textContent = hlScopeLabel(row.scope, row.scope_id);
             el.appendChild(scopeEl);
             const countEl = document.createElement('span');
             countEl.className = 'hl-history-count';
@@ -12833,21 +12837,23 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         searchInSel.value = prefill.search_in || 'title';
         draft.appendChild(searchInSel);
 
-        // Scope: folder
-        const folderSel = document.createElement('select');
-        folderSel.className = 'hl-draft-select hl-folder-select';
-        const allFolderOpt = document.createElement('option');
-        allFolderOpt.value = '';
-        allFolderOpt.textContent = 'All Feeds';
-        folderSel.appendChild(allFolderOpt);
+        // Scope: folder(s) — a searchable token picker (chips + find-as-you-type),
+        // same shape as the feed picker just below rather than a <select> plus a
+        // separate "+ folder" chips row (that two-piece layout was the first cut
+        // of multi-folder scoping; simplified to one picker per Josh 2026-09-02).
+        // 0 selected = global, 1 = "folder", 2+ = "folders" (see draftScope). The
+        // feed picker's candidate pool narrows to the union of whatever's picked
+        // here (all feeds when nothing is), so changing this set reloads it.
+        const folderOptions = [];
         for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item):not([data-virtual])')) {
-          const opt = document.createElement('option');
-          opt.value = el.getAttribute('data-folder-id');
-          opt.textContent = el.getAttribute('data-folder-name');
-          folderSel.appendChild(opt);
+          folderOptions.push({ id: el.getAttribute('data-folder-id'), name: el.getAttribute('data-folder-name') });
         }
+        const folderNameById = new Map(folderOptions.map(f => [f.id, f.name]));
+        let _initialFolderIds = [];
         if (prefill.scope === 'folder') {
-          folderSel.value = prefill.scope_id || '';
+          _initialFolderIds = prefill.scope_id ? [String(prefill.scope_id)] : [];
+        } else if (prefill.scope === 'folders') {
+          _initialFolderIds = String(prefill.scope_id || '').split('\n').map(s => s.trim()).filter(Boolean);
         } else if (prefill.scope === 'feed' || prefill.scope === 'feeds') {
           // Prefer the explicit folder_id passed in the prefill (from context menu data
           // attributes), falling back to a DOM lookup so editing existing rules still works.
@@ -12856,17 +12862,89 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             ? String(prefill.scope_id || '').split('\n').map(s => s.trim()).filter(Boolean)[0]
             : prefill.scope_id;
           if (prefill.folder_id) {
-            folderSel.value = String(prefill.folder_id);
+            _initialFolderIds = [String(prefill.folder_id)];
           } else {
             for (const el of document.querySelectorAll('.feed-link[data-feed-url]')) {
               if (el.getAttribute('data-feed-url') === firstFeed) {
-                folderSel.value = el.getAttribute('data-folder-id') || '';
+                const fid = el.getAttribute('data-folder-id');
+                if (fid) _initialFolderIds = [fid];
                 break;
               }
             }
           }
         }
-        draft.appendChild(folderSel);
+        const selectedFolderIds = new Set(_initialFolderIds);
+        function getFolderIds() { return [...selectedFolderIds]; }
+
+        const folderPick = document.createElement('div');
+        folderPick.className = 'hl-folder-pick';
+        const folderChips = document.createElement('div');
+        folderChips.className = 'hl-folder-chips';
+        const folderSearchWrap = document.createElement('div');
+        folderSearchWrap.className = 'hl-token-input-wrap hl-folder-search-wrap';
+        const folderSearch = document.createElement('input');
+        folderSearch.type = 'text';
+        folderSearch.className = 'hl-token-input-field';
+        folderSearch.placeholder = 'Type to add folders… (none = all feeds)';
+        folderSearch.setAttribute('autocomplete', 'off');
+        const folderDrop = document.createElement('div');
+        folderDrop.className = 'hl-token-input-dropdown';
+        folderDrop.hidden = true;
+        folderSearchWrap.appendChild(folderSearch);
+        folderSearchWrap.appendChild(folderDrop);
+        folderPick.appendChild(folderChips);
+        folderPick.appendChild(folderSearchWrap);
+
+        function renderFolderChips() {
+          folderChips.innerHTML = '';
+          if (!selectedFolderIds.size) {
+            const none = document.createElement('span');
+            none.className = 'hl-feed-chips-empty';
+            none.textContent = 'All Feeds';
+            folderChips.appendChild(none);
+            return;
+          }
+          for (const id of selectedFolderIds) {
+            const tag = document.createElement('span');
+            tag.className = 'hl-folder-tag';
+            tag.textContent = folderNameById.get(id) || `Folder ${id}`;
+            const x = document.createElement('button');
+            x.type = 'button'; x.className = 'hl-folder-tag-remove'; x.textContent = '×';
+            x.setAttribute('aria-label', 'Remove');
+            x.addEventListener('click', e => {
+              e.stopPropagation();
+              selectedFolderIds.delete(id);
+              onFoldersChanged();
+            });
+            tag.appendChild(x);
+            folderChips.appendChild(tag);
+          }
+        }
+        function renderFolderDrop() {
+          const q = folderSearch.value.trim().toLowerCase();
+          folderDrop.innerHTML = '';
+          const avail = folderOptions.filter(f => !selectedFolderIds.has(f.id) && (!q || f.name.toLowerCase().includes(q)));
+          if (!avail.length) { folderDrop.hidden = true; return; }
+          for (const f of avail.slice(0, 50)) {
+            const opt = document.createElement('div');
+            opt.className = 'hl-token-input-option';
+            opt.textContent = f.name;
+            opt.addEventListener('mousedown', e => {
+              e.preventDefault();
+              selectedFolderIds.add(f.id);
+              folderSearch.value = '';
+              onFoldersChanged();
+              folderSearch.focus();
+            });
+            folderDrop.appendChild(opt);
+          }
+          folderDrop.hidden = false;
+        }
+        folderSearch.addEventListener('focus', renderFolderDrop);
+        folderSearch.addEventListener('input', renderFolderDrop);
+        folderSearch.addEventListener('blur', () => { folderDrop.hidden = true; });
+        renderFolderChips();
+        draft.appendChild(folderPick);
 
         // Scope: feed(s) — a searchable token picker (chips + find-as-you-type),
         // so it scales to thousands of feeds in one folder. No selection = whole
@@ -12877,18 +12955,20 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           : prefill.scope === 'feeds' ? String(prefill.scope_id || '').split('\n').map(s => s.trim()).filter(Boolean)
           : []
         );
-        let folderFeeds = [];                  // [{url,title}] for the current folder (or all feeds)
+        let folderFeeds = [];                  // [{url,title}] for the selected folder(s) (or all feeds)
         const feedTitleByUrl = new Map();
         let _feedLoadSeq = 0;
-        async function loadFolderFeeds(folderId) {
+        async function loadFolderFeeds(folderIds) {
           folderFeeds = [];
           feedTitleByUrl.clear();
           const seq = ++_feedLoadSeq;
+          const ids = folderIds || [];
+          const idsParam = ids.join(',');
           // Server-backed: the sidebar renders no feed links at all in Saved
           // mode (and collapsed folders may be missing), so DOM scraping came
-          // up empty. Empty folderId = search across all feeds.
+          // up empty. No ids = search across all feeds; several = their union.
           try {
-            const resp = await fetch('/api/folder-feeds?folder_id=' + encodeURIComponent(folderId || ''), { credentials: 'same-origin' });
+            const resp = await fetch('/api/folder-feeds?folder_id=' + encodeURIComponent(idsParam), { credentials: 'same-origin' });
             const data = await resp.json();
             if (seq !== _feedLoadSeq) return;  // a newer folder selection won
             for (const f of (data.feeds || [])) {
@@ -12898,7 +12978,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               }
             }
           } catch (_e) {
-            for (const el of document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(folderId || '')}"]`)) {
+            const want = ids.length
+              ? `.feed-link[data-folder-id="${ids.map(id => CSS.escape(id)).join('"], .feed-link[data-folder-id="')}"]`
+              : '.feed-link[data-feed-url]';
+            for (const el of document.querySelectorAll(want)) {
               const url = el.getAttribute('data-feed-url');
               if (url && !feedTitleByUrl.has(url)) {
                 const title = el.textContent.trim();
@@ -12907,6 +12990,13 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               }
             }
             folderFeeds.sort((a, b) => a.title.localeCompare(b.title));
+          }
+          // Drop any explicit feed pick that fell out of the narrowed candidate
+          // set (e.g. a folder it belonged to was removed from the picker above).
+          if (ids.length) {
+            for (const url of [...selectedFeedUrls]) {
+              if (!feedTitleByUrl.has(url)) selectedFeedUrls.delete(url);
+            }
           }
           renderFeedChips();
           if (document.activeElement === feedSearch) renderFeedDrop();
@@ -12934,10 +13024,21 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
 
         function renderFeedChips() {
           feedChips.innerHTML = '';
+          // The folder picker stays visible and editable even once specific
+          // feeds are picked — it still narrows the feed picker's candidate
+          // pool (see loadFolderFeeds), so folders need to stay addable and
+          // removable alongside feed picks, not disappear as if cleared.
+          // Explicit feed picks still win over folder scope for what actually
+          // gets SAVED (see draftScope below) — only the search pool is
+          // shared. Previously hid the folder picker whenever any feed was
+          // picked, which read as the folders having been wiped rather than
+          // just superseded. Found live 2026-09-02.
           if (!selectedFeedUrls.size) {
             const none = document.createElement('span');
             none.className = 'hl-feed-chips-empty';
-            none.textContent = folderSel.value ? 'All feeds in folder' : 'All feeds';
+            const folderCount = selectedFolderIds.size;
+            none.textContent = folderCount >= 2 ? `All feeds in ${folderCount} folders`
+              : folderCount === 1 ? 'All feeds in folder' : 'All feeds';
             feedChips.appendChild(none);
             return;
           }
@@ -12986,14 +13087,19 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         feedSearch.addEventListener('input', renderFeedDrop);
         feedSearch.addEventListener('blur', () => { feedDrop.hidden = true; });
 
-        loadFolderFeeds(folderSel.value);
+        loadFolderFeeds(getFolderIds());
         renderFeedChips();
-        // Changing folder clears the (now out-of-scope) feed selection.
-        folderSel.addEventListener('change', () => {
-          selectedFeedUrls.clear();
-          loadFolderFeeds(folderSel.value);
-          renderFeedChips(); renderFeedDrop();
-        });
+        // The folder picker's add/remove handlers call this — reload the feed
+        // candidate pool against the new folder set (pruning any explicit feed
+        // pick that fell out of scope, handled inside loadFolderFeeds itself),
+        // and re-sync the controls that key off "is this rule folder-scoped"
+        // (dedup's exclude-folders row, the tag_filter vocabulary fetch).
+        function onFoldersChanged() {
+          renderFolderChips(); renderFolderDrop();
+          loadFolderFeeds(getFolderIds());
+          syncTypeControls();
+          loadTagVocab();
+        }
         draft.appendChild(feedPick);
 
         // Match method (Deduplicate only)
@@ -13515,7 +13621,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           const isTagFilter = t === 'tag_filter';
           const isBatch = isEmail && deliverySel.value === 'batch';
           const dedupNeedsWindow = isDedup && !['slug', 'safe'].includes(matchMethodSel.value);
-          const isGlobalDedup = isDedup && !folderSel.value;
+          const isGlobalDedup = isDedup && !selectedFolderIds.size;
           patInput.style.display = isDedup ? 'none' : '';
           regexBtn.style.display = (isDedup || isTagFilter) ? 'none' : '';
           searchInSel.style.display = (isDedup || isTagFilter) ? 'none' : '';
@@ -13550,15 +13656,15 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         // folder scope (global) still gets narrowed rather than showing every
         // feed in the library. A rule that already has a real scope is left
         // exactly as saved — only the unscoped case is ambiguous enough to fix.
-        if (typeSel.value === 'youtube_playlist' && !folderSel.value && window.YT_FOLDER_ID != null) {
-          folderSel.value = String(window.YT_FOLDER_ID);
-          loadFolderFeeds(folderSel.value);
+        if (typeSel.value === 'youtube_playlist' && !selectedFolderIds.size && window.YT_FOLDER_ID != null) {
+          selectedFolderIds.add(String(window.YT_FOLDER_ID));
+          renderFolderChips();
+          loadFolderFeeds(getFolderIds());
           renderFeedChips();
         }
         typeSel.addEventListener('change', syncTypeControls);
         deliverySel.addEventListener('change', syncTypeControls);
         matchMethodSel.addEventListener('change', syncTypeControls);
-        folderSel.addEventListener('change', syncTypeControls);
 
         // "Add to YT Playlist" only ever makes sense against YouTube feeds, so
         // switching TO this type re-scopes the feed picker to the YT folder —
@@ -13567,11 +13673,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         // so editing an existing rule's already-chosen scope is never
         // clobbered. Raised 2026-08-30.
         typeSel.addEventListener('change', () => {
-          if (typeSel.value === 'youtube_playlist' && window.YT_FOLDER_ID != null
-              && folderSel.value !== String(window.YT_FOLDER_ID)) {
-            folderSel.value = String(window.YT_FOLDER_ID);
+          const ytFolderId = window.YT_FOLDER_ID != null ? String(window.YT_FOLDER_ID) : null;
+          if (typeSel.value === 'youtube_playlist' && ytFolderId != null
+              && !(selectedFolderIds.size === 1 && selectedFolderIds.has(ytFolderId))) {
+            selectedFolderIds.clear();
+            selectedFolderIds.add(ytFolderId);
+            renderFolderChips();
             selectedFeedUrls.clear();
-            loadFolderFeeds(folderSel.value);
+            loadFolderFeeds(getFolderIds());
             renderFeedChips();
             renderFeedDrop();
           }
@@ -13584,7 +13693,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           const feeds = getSelectedFeeds();
           if (feeds.length === 1) return { scope: 'feed', scope_id: feeds[0] };
           if (feeds.length >= 2)  return { scope: 'feeds', scope_id: feeds.join('\n') };
-          if (folderSel.value)    return { scope: 'folder', scope_id: folderSel.value };
+          const folderIds = getFolderIds();
+          if (folderIds.length >= 2) return { scope: 'folders', scope_id: folderIds.join('\n') };
+          if (folderIds.length === 1) return { scope: 'folder', scope_id: folderIds[0] };
           return { scope: 'global', scope_id: '' };
         }
 
@@ -13622,26 +13733,21 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         window.attachTagAutocomplete?.(patInput, () => tagVocab.tags, { separator: ',' });
         patInput.addEventListener('focus', loadTagVocab);
         typeSel.addEventListener('change', loadTagVocab);
-        folderSel.addEventListener('change', loadTagVocab);
 
         cancelBtn.addEventListener('click', hlHideDraft);
         patInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveBtn.click(); } });
 
         saveBtn.addEventListener('click', async () => {
           const ruleType = typeSel.value || 'highlight';
-          const folderId = folderSel.value || '';
 
           if (ruleType === 'deduplicate') {
             const matchMethod = matchMethodSel.value || 'slug';
             const windowHours = (parseInt(windowHoursInput.value || '7', 10) || 7) * 24;
             const dedupFeeds = getSelectedFeeds();
-            // 2+ selected feeds → dedupe across just those; else folder/global.
+            // 2+ selected feeds → dedupe across just those; else folder(s)/global.
             // A single selected feed can't cross-dedupe — guide the user.
             if (dedupFeeds.length === 1) { window.alert('Select at least two feeds to deduplicate between them (or none for the whole folder).'); return; }
-            let scope, scopeId;
-            if (dedupFeeds.length >= 2) { scope = 'feeds'; scopeId = dedupFeeds.join('\n'); }
-            else if (folderId)         { scope = 'folder'; scopeId = folderId; }
-            else                       { scope = 'global'; scopeId = ''; }
+            const { scope, scope_id: scopeId } = draftScope();
             const excludeIds = getExcludeIds();
             const fuzzyPct = Math.max(50, Math.min(100, parseInt(fuzzyPctInput.value || '80', 10) || 80));
             const minWords = Math.max(3, Math.min(10, parseInt(minWordsInput.value || '5', 10) || 5));
@@ -15059,7 +15165,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         const matchRules = activeRules.filter(r =>
           r.scope === 'global' ||
           (r.scope === 'folder' && r.scope_id === folderIdStr) ||
-          (r.scope === 'feed' && r.scope_id === feedUrl)
+          (r.scope === 'folders' && String(r.scope_id || '').split('\n').map(s => s.trim()).includes(folderIdStr)) ||
+          (r.scope === 'feed' && r.scope_id === feedUrl) ||
+          (r.scope === 'feeds' && String(r.scope_id || '').split('\n').map(s => s.trim()).includes(feedUrl))
         );
         const titleRules = matchRules.filter(r => (r.search_in || 'title') !== 'body');
         highlightEl(postItem.querySelector('.post-title'), titleRules);
@@ -15073,7 +15181,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         const matchRules = activeRules.filter(r =>
           r.scope === 'global' ||
           (r.scope === 'folder' && r.scope_id === folderIdStr) ||
-          (r.scope === 'feed' && r.scope_id === feedUrl)
+          (r.scope === 'folders' && String(r.scope_id || '').split('\n').map(s => s.trim()).includes(folderIdStr)) ||
+          (r.scope === 'feed' && r.scope_id === feedUrl) ||
+          (r.scope === 'feeds' && String(r.scope_id || '').split('\n').map(s => s.trim()).includes(feedUrl))
         );
         const titleRules = matchRules.filter(r => (r.search_in || 'title') !== 'body');
         const bodyRules = matchRules.filter(r => { const s = r.search_in || 'title'; return s === 'body' || s === 'both'; });

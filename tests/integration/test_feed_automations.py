@@ -105,6 +105,63 @@ def test_feeds_scoped_rule_applies_to_member_feed(meta):
     assert none == []
 
 
+def _make_folder(name) -> int:
+    root = main.get_root_folder_id(main.get_meta_connection())
+    conn = main.get_meta_connection()
+    conn.execute("INSERT INTO folders (name, parent_id) VALUES (?, ?)", (name, root))
+    fid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.commit()
+    return int(fid)
+
+
+def _add_feed_to_folder(feed_url, folder_id):
+    conn = main.get_meta_connection()
+    conn.execute("INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (folder_id, feed_url))
+    conn.commit()
+
+
+def test_parse_folders_scope_id():
+    assert main.parse_folders_scope_id("7\n42") == [7, 42]
+    assert main.parse_folders_scope_id(" 7 \n\n42\nnope\n") == [7, 42]
+    assert main.parse_folders_scope_id("") == []
+
+
+def test_folders_scope_resolves_union_of_folders(meta):
+    f1, f2 = _make_folder("Dev"), _make_folder("News")
+    _add_feed_to_folder(FEED, f1)
+    _add_feed_to_folder(OTHER_FEED, f2)
+
+    urls = main.resolve_rule_feed_urls(meta, "folders", f"{f1}\n{f2}")
+    assert urls == {FEED, OTHER_FEED}
+
+
+def test_folders_scope_dedup_resolves_union(meta):
+    f1, f2 = _make_folder("Dev"), _make_folder("News")
+    _add_feed_to_folder(FEED, f1)
+    _add_feed_to_folder(OTHER_FEED, f2)
+
+    urls = main._resolve_dedup_feed_urls(meta, "folders", f"{f1}\n{f2}")
+    assert urls == {FEED, OTHER_FEED}
+
+
+def test_feed_in_rule_scope_folders():
+    folder_feed_map = {7: {FEED}, 42: {OTHER_FEED}}
+    folder_set = main.rule_scope_folder_feed_set("folders", "7\n42", folder_feed_map)
+    assert main.feed_in_rule_scope("folders", "7\n42", FEED, folder_set)
+    assert main.feed_in_rule_scope("folders", "7\n42", OTHER_FEED, folder_set)
+    assert not main.feed_in_rule_scope("folders", "7\n42", "https://nope.test/feed", folder_set)
+
+
+def test_folders_scoped_rule_applies_to_member_feed(meta):
+    main.add_highlight_keyword(meta, "folders", "7\n42", "x", "yellow", rule_type="highlight", enabled=1)
+
+    applies = main.collect_feed_automations(meta, FEED, folder_ids=[42])["rules"]
+    assert any(r["scope_label"] == "Folders" for r in applies)
+    # A feed whose folders don't intersect the rule's set sees no rule.
+    none = main.collect_feed_automations(meta, FEED, folder_ids=[99])["rules"]
+    assert none == []
+
+
 def test_youtube_playlist_rule_detail_and_label(meta):
     main.add_highlight_keyword(meta, "feed", FEED, "", "yellow", rule_type="youtube_playlist",
                                enabled=1, yt_playlist_id="PL1", yt_playlist_title="TV Queue",
