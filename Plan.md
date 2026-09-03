@@ -340,6 +340,30 @@ in main.py share the same anti-pattern (shorter busy_timeout, invisible to slow-
 aren't in a request-path hot loop the way these three were — worth a systematic sweep at some point,
 not sized here.
 
+**Live capture 2026-09-03, after the pooled-connection fix above deployed.** Josh: "still many
+seconds to switch to Dev." Genuinely good news mixed with the next lead: 3 consecutive requests to
+the same folder in a 45s window logged `6532ms` / `1421ms` / `6692ms` — the middle one is now
+authentically fast (`meta_block=11ms`, everything else <400ms each, `template_stream=328ms`,
+confirming both the write-batching and the ASC/DESC pooled-connection fixes are working as intended
+when the cache is warm) — but the two slow ones both show the **entire** delay concentrated in one
+place: `meta_block=4999ms`/`5282ms`, and inside that, `meta.structure_snapshot=4964ms`/`5268ms` —
+`get_meta_structure_snapshot`'s cached folder/feed-tree bundle (`main.py:6129`) going fully cold and
+paying its 5-query rebuild cost under refresh contention, twice in under a minute. Its own docstring
+says the cache should invalidate "only on explicit user mutations" (subscribe/unsubscribe, folder
+changes) — Josh was just clicking between folders, not managing feeds, so something is invalidating
+it far more often than that design assumes, landing this expensive rebuild right in the middle of
+ordinary browsing during refresh.
+
+**Instrumented, not yet diagnosed, 2026-09-03**: 37 call sites call `invalidate_meta_structure_cache()`
+— rather than manually audit all of them, the function now logs its immediate caller's
+file/line/function name on every call, so the next live occurrence names the actual code path firing
+during a routine refresh pass instead of a guess. `ctx_block`/`template_stream` from the previous
+capture never fired in this one (both requests' non-meta-block time was already trivial), so that
+lead is provisionally cleared — needs a deploy and a real capture to name the caller before sizing
+a fix (candidates worth checking first once a caller shows up: anything in the per-feed refresh loop
+or `_run_automation_after_refresh` that runs unconditionally rather than only on an actual structural
+change).
+
 **Read Above/Below, same shape:**
 
 

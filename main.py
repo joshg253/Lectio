@@ -14,6 +14,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import sys
 import tempfile
 import threading
 import time
@@ -2074,6 +2075,20 @@ _meta_structure_cache = _PerUserDict()
 def invalidate_meta_structure_cache() -> None:
     with _meta_structure_lock:
         _meta_structure_cache.clear()
+    # Refresh-contention investigation (Plan.md Tier 1): this cache is designed
+    # to invalidate only on explicit user mutations (subscribe/unsubscribe,
+    # folder changes, feed disable/enable) -- a 2026-09-03 live capture showed
+    # it going cold roughly every 30-45s during ordinary browsing (no such
+    # action taken), each miss costing 5+ real seconds of get_meta_structure_snapshot's
+    # 5-query rebuild under refresh contention. There are 37 call sites; rather
+    # than audit them all, log the caller so the next occurrence says which one
+    # actually fired during a routine refresh pass.
+    try:
+        caller = sys._getframe(1)
+        LOGGER.info("[perf] invalidate_meta_structure_cache from %s:%d (%s)",
+                    caller.f_code.co_filename, caller.f_lineno, caller.f_code.co_name)
+    except Exception:
+        pass
 
 
 def invalidate_unread_counts_cache() -> None:
