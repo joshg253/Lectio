@@ -501,11 +501,37 @@ each chunk's fetch loop (before the next chunk's `execute()` resets it), and log
 in its own `[perf] get_tagged_entry_keys=%dms rows=%d scoped=%s progress_steps=%d` line. This answers
 the original question directly for the one function most implicated in this whole lead, without
 touching the generic wrapper (a broader fix for every iterator-style read elsewhere in the codebase
-would be a much bigger, unscoped change). Full suite green (3925). **Not yet confirmed live** — needs
-a deploy and the next `get_tagged_entry_keys` stall to read a real `progress_steps` number: ≈0 confirms
-genuine WAL-layer lock-wait and makes the checkpoint-proactiveness fix worth building; a meaningfully
-positive count means the query itself is doing real, avoidable work (a full scan of `entry_tags` that
-could use an index) and redirects the fix entirely away from WAL/checkpoint tuning.
+would be a much bigger, unscoped change). Full suite green (3925).
+
+**Live capture 2026-09-03 — conclusive.** Seven `get_tagged_entry_keys` calls across several stalls,
+grouped by which of the two queries (unscoped vs. scoped) ran:
+
+| scoped | progress_steps | elapsed_ms observed |
+|---|---|---|
+| False | 116 (every time) | 212, 793, 1280, 1630 |
+| True | 555 (every time) | 215, 2132, 2157 |
+
+The real work done is **identical** for a given query — `progress_steps` never varies — while elapsed
+time swings 5-10x for that exact same work. That mismatch is the direct proof: the extra 1-2s in the
+slow cases is pure SQLite lock-wait, not query cost, and it rules out the other live hypothesis (a
+missing index or bad query plan) outright, since the query's own cost is small and constant. Refined
+the mechanism while confirming it: the live WAL file was already small and well-checkpointed
+(~805KB/1.18GB, checked earlier this item) even under the old, more aggressive `wal_autocheckpoint=200`
+— so it isn't "reads scan a bloated WAL," it's that checkpointing that often, continuously through a
+long refresh pass, is itself a recurring small opportunity for a reader to collide with the writer.
+
+**Shipped 2026-09-03, with Josh's go-ahead.** `wal_autocheckpoint` raised 200 → 1000 (SQLite's own
+default) on both the reader-DB connection (`_LectioReaderStorage.setup_db`, services/reader_api.py)
+and the meta-DB connection (`get_meta_connection`, main.py) — kept in sync since both share the theory,
+matching how their two `_Timed*Connection` classes have always been kept in sync. The WebSub
+connection's own `wal_autocheckpoint=200` was deliberately left alone: separate, low-traffic DB, no
+evidence it's involved. Trade-off: checkpointing 5x less often means the WAL file can grow larger
+between restarts (previously capped ~800KB, now up to ~4MB) — fully reversible if that turns out to
+matter more than the contention it's meant to reduce. Updated the one test that pinned the old value
+(`tests/services/test_reader_storage.py`). Full suite green (3925). **Not yet confirmed live** — needs
+a deploy and a fresh capture on the next `get_tagged_entry_keys` (or similar) stall to see whether the
+wall-clock time now tracks the constant `progress_steps` more closely instead of swinging 5-10x above
+it.
 
 **Re-fetch/extraction quality & staleness** — the article being read is broken or stale; directly in the way of triage.
 
