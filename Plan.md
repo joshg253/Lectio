@@ -275,6 +275,38 @@ contention before this item can be marked resolved. If it's still slow after thi
 back to shared WAL/lock contention (the Read Above/Below item's checkpoint-timing theory below)
 rather than any one call site.
 
+**Live capture 2026-09-03, after the meta-DB write-batching work above.** Josh reported "serious
+delay" on `GET /?folder_id=9&read_filter=unread` — access log confirms `12961ms`. Two findings:
+
+1. **`get_tagged_entry_keys` is NOT cleared** by the 2026-09-02 pooled-connection fix — it logged
+   `1078ms` (unscoped, 15,742 rows) and, in the same request, `2038ms` (scoped, 15,579 rows) for
+   `get_saved_unread_count` and `get_saved_counts_by_folder` respectively. The pooled connection
+   removed the *per-call connection-open* cost, but this is `db=reader`, not `db=meta` — refresh
+   writes to the reader DB constantly (that's its whole job), so a `SELECT ... WHERE key LIKE ?`
+   landing mid-write is exactly the same `SQLITE_BUSY`-retry mechanism already proven for the meta
+   DB, just never directly measured on the reader DB's read side before. This is the same shape as
+   the Read Above/Below item below, not a new mechanism — one more data point for that WAL/checkpoint
+   lead, not a call site to patch.
+2. **A second, previously invisible gap, likely bigger than the first.** Summing every instrumented
+   block (`meta_block` 111ms + `tag_block` 59ms + `gap_block` 5580ms + `posts_block` 1232ms) accounts
+   for only ~6982ms of the request's 12961ms — **~5979ms with no timing of its own**, after
+   `posts_block` finishes and before the response is fully sent. `_home_inner` builds its template
+   context dict (a dozen+ settings/integration-status lookups: `is_email_configured`,
+   `*_oauth_connected` x4, `is_instapaper_configured`, `is_quire_configured`,
+   `get_all_manual_tag_names`, `get_push_active_feed_urls`, `unsubscribed_feed_urls_among`, …) and
+   then hands a **lazy** Jinja `TemplateStream` to `StreamingResponse` — `.stream()` itself does no
+   rendering; the actual per-post Jinja evaluation (250 posts here) happens only as the stream is
+   drained, which is *after* `_home_inner` returns, so none of it was ever inside a measured block.
+
+**Instrumented, not yet fixed, 2026-09-03**: two new ticks bracket this previously-dark region —
+`[perf] home: ctx_block=%dms` (context-dict build, >100ms only) right before the template call, and
+`[perf] home: template_stream=%dms` (>100ms only) wrapping the stream generator so its render+send
+time is attributed correctly even though it runs after the handler function returns. Needs a
+`make rebuild` deploy and a real capture to say which of the two (or both) is where the ~6s actually
+went — until then this reads as a lead, not a diagnosis: it could be slow Python-side per-post
+template logic, or the same lock-wait mechanism as everything else in this item showing up in
+whichever settings lookup happens to run during a write.
+
 **Read Above/Below, same shape:**
 
 

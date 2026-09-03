@@ -24557,6 +24557,14 @@ def _home_inner(
 
     posts_block_ms = int((time.perf_counter() - posts_start) * 1000)
     LOGGER.info("[perf] home: posts_block=%dms", posts_block_ms)
+    # Refresh-contention investigation (Plan.md Tier 1): a 2026-09-03 live capture
+    # (folder_id=9, 12961ms total) accounted for only ~7s across meta/tag/gap/posts
+    # blocks -- ~6s was unattributed, after posts_block and before the response
+    # finished sending. ctx_block below times the context-dict build (settings/
+    # integration-status lookups between here and the template call); the
+    # StreamingResponse wrapper further down times the Jinja render/stream itself,
+    # since .stream() is lazy and actually runs after this function returns.
+    _ctx_start = time.perf_counter()
 
     # Prioritize lead-image backfill for entries currently visible in this chunk.
     # Fire-and-forget: returns immediately; semaphore prevents concurrent pile-up.
@@ -24762,12 +24770,28 @@ def _home_inner(
         # is a bookmarklet-created Saved Articles feed) — the toolbar must render.
         "no_feeds": len(all_feed_urls) == 0 and len(all_reader_feed_urls) == 0,
     }
+    ctx_block_ms = int((time.perf_counter() - _ctx_start) * 1000)
+    if ctx_block_ms > 100:
+        LOGGER.info("[perf] home: ctx_block=%dms", ctx_block_ms)
     _stream = templates.env.get_template("index.html").stream(_tmpl_ctx)
     _stream.enable_buffering(50)
+
+    def _timed_stream():
+        # See the ctx_block comment above: .stream() is lazy, so the actual
+        # Jinja render (and its DB/Python work per post) happens as this
+        # generator is drained by StreamingResponse, after _home_inner returns.
+        _render_start = time.perf_counter()
+        try:
+            yield from _stream
+        finally:
+            render_ms = int((time.perf_counter() - _render_start) * 1000)
+            if render_ms > 100:
+                LOGGER.info("[perf] home: template_stream=%dms", render_ms)
+
     # Stateful, per-user HTML: never let a browser or CDN edge (Cloudflare
     # fronts at least one deployment) cache it per-URL — a stale cached page
     # ships stale inline JS and resurrects long-fixed bugs.
-    return StreamingResponse(_stream, media_type="text/html", headers={"Cache-Control": "no-store"})
+    return StreamingResponse(_timed_stream(), media_type="text/html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/dev/feeds/email-match.xml")
