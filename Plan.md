@@ -154,6 +154,27 @@ is one CPU-hungry thread, not many.
 | 2026-08-30 | `GET /?folder_id=1&read_filter=unread&list_feed_url=...jsnover.com...` | 9216ms | ~9 min after the same restart — still elevated a bit past the 5-7-min band, so the window isn't a sharp cutoff |
 | 2026-09-02 | [entry pane, play.nobleknight.com](https://lectio.catfork.win/?folder_id=23&sort_dir=desc&read_filter=unread&feed_url=https%3A%2F%2Fplay.nobleknight.com%2Ffeed&entry_id=https%3A%2F%2Fplay.nobleknight.com%2F%3Fp%3D19266) | "really long time to open" | Not measured server-side yet — flagged by Josh, not chased in-session. Same folder (23) as the 2026-08-23 cluster above |
 
+**Follow-up on the "prime suspect" above, from git history (2026-09-01 commits e1eb580/7e792ab —
+shipped but never written up here, so re-recording it now).** The `get_saved_unread_count` batching
+fix landed (533 round-trips → 12) but did **not** resolve the stall — badges stayed 5-7s under
+refresh contention with the new code confirmed running, so raw round-trip *count* wasn't the
+mechanism. The timing was split into three sub-calls (`unread_count`/`counts_by_folder`/
+`inbox_total`) to localize further, and suspicion moved to `get_tagged_entry_keys` (main.py:10860,
+called from both `get_saved_unread_count` and `get_saved_counts_by_folder`): it opened its own
+`sqlite3.connect(reader_db_path, timeout=5.0)` per call instead of going through `get_reader()`'s
+pooled connection — the exact anti-pattern `get_meta_connection()`'s own docstring already
+identified as expensive under concurrency (file-open/schema-load/mmap-setup paid per call instead of
+once per thread), and a plain connect-timeout rather than the pooled connection's
+`PRAGMA busy_timeout=10000`.
+
+**Fixed 2026-09-02:** `get_tagged_entry_keys` now reads through `get_reader()._storage.get_db()`
+like the rest of this module's reader-DB reads, with its own `[perf] get_tagged_entry_keys=%dms`
+log (fires only when >200ms) so the next live stall either pins the blame here directly or clears
+it. Not yet confirmed live — needs a `make rebuild` deploy and a real capture during refresh
+contention before this item can be marked resolved. If it's still slow after this, the lead moves
+back to shared WAL/lock contention (the Read Above/Below item's checkpoint-timing theory below)
+rather than any one call site.
+
 **Read Above/Below, same shape:**
 
 
