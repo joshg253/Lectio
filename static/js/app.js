@@ -13024,9 +13024,15 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
 
         function renderFeedChips() {
           feedChips.innerHTML = '';
-          // A specific feed pick always wins over folder scope (see draftScope
-          // below), so the folder picker is only meaningful with none picked.
-          folderPick.style.display = selectedFeedUrls.size ? 'none' : '';
+          // The folder picker stays visible and editable even once specific
+          // feeds are picked — it still narrows the feed picker's candidate
+          // pool (see loadFolderFeeds), so folders need to stay addable and
+          // removable alongside feed picks, not disappear as if cleared.
+          // Explicit feed picks still win over folder scope for what actually
+          // gets SAVED (see draftScope below) — only the search pool is
+          // shared. Previously hid the folder picker whenever any feed was
+          // picked, which read as the folders having been wiped rather than
+          // just superseded. Found live 2026-09-02.
           if (!selectedFeedUrls.size) {
             const none = document.createElement('span');
             none.className = 'hl-feed-chips-empty';
