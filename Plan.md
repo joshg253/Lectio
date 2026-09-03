@@ -12,16 +12,6 @@ Within a tier, related items are clustered under a bold sub-heading; unrelated i
 Two standing watch-lists (CodeQL, Parked) moved to their own section at the end — nothing in them
 is scheduled, they're just what to check if a related symptom recurs.
 
-## Up next
-
-### Rule scope: allow selecting multiple folders, not just one
-
-Requested by Josh 2026-08-31; **earmarked 2026-09-02 for a dedicated new session** — promoted
-here so it isn't buried under Tier 4. A rule's scope currently picks a single feed or a single
-folder; there's no way to scope one rule to several folders at once without duplicating the rule
-per folder. Not investigated yet — needs a look at how scope is stored/matched today
-(`rule_scope`/`rule_scope_id`) before sizing the change.
-
 ## Tier 1 — actively impeding unread-clearing
 
 **Refresh-contention latency** — home-route stalls, post-refresh read-range slowness, the GIL-contention tally, and the post-restart startup flood are all the same investigation now; merged into one item below.
@@ -153,6 +143,27 @@ is one CPU-hungry thread, not many.
 | 2026-08-30 | `GET /?folder_id=1&read_filter=unread` | 9786ms | ~7 min after a restart — **confirms** the 2026-08-23 5-7-min-post-restart correlation rather than just suggesting it. Same tag_block→list_entries gap (~5.8s, `meta_block=75ms`+`tag_block=0ms` at :37.4, `list_entries` fetch not starting until ~:43.2) |
 | 2026-08-30 | `GET /?folder_id=1&read_filter=unread&list_feed_url=...jsnover.com...` | 9216ms | ~9 min after the same restart — still elevated a bit past the 5-7-min band, so the window isn't a sharp cutoff |
 | 2026-09-02 | [entry pane, play.nobleknight.com](https://lectio.catfork.win/?folder_id=23&sort_dir=desc&read_filter=unread&feed_url=https%3A%2F%2Fplay.nobleknight.com%2Ffeed&entry_id=https%3A%2F%2Fplay.nobleknight.com%2F%3Fp%3D19266) | "really long time to open" | Not measured server-side yet — flagged by Josh, not chased in-session. Same folder (23) as the 2026-08-23 cluster above |
+
+**Follow-up on the "prime suspect" above, from git history (2026-09-01 commits e1eb580/7e792ab —
+shipped but never written up here, so re-recording it now).** The `get_saved_unread_count` batching
+fix landed (533 round-trips → 12) but did **not** resolve the stall — badges stayed 5-7s under
+refresh contention with the new code confirmed running, so raw round-trip *count* wasn't the
+mechanism. The timing was split into three sub-calls (`unread_count`/`counts_by_folder`/
+`inbox_total`) to localize further, and suspicion moved to `get_tagged_entry_keys` (main.py:10860,
+called from both `get_saved_unread_count` and `get_saved_counts_by_folder`): it opened its own
+`sqlite3.connect(reader_db_path, timeout=5.0)` per call instead of going through `get_reader()`'s
+pooled connection — the exact anti-pattern `get_meta_connection()`'s own docstring already
+identified as expensive under concurrency (file-open/schema-load/mmap-setup paid per call instead of
+once per thread), and a plain connect-timeout rather than the pooled connection's
+`PRAGMA busy_timeout=10000`.
+
+**Fixed 2026-09-02:** `get_tagged_entry_keys` now reads through `get_reader()._storage.get_db()`
+like the rest of this module's reader-DB reads, with its own `[perf] get_tagged_entry_keys=%dms`
+log (fires only when >200ms) so the next live stall either pins the blame here directly or clears
+it. Not yet confirmed live — needs a `make rebuild` deploy and a real capture during refresh
+contention before this item can be marked resolved. If it's still slow after this, the lead moves
+back to shared WAL/lock contention (the Read Above/Below item's checkpoint-timing theory below)
+rather than any one call site.
 
 **Read Above/Below, same shape:**
 
@@ -304,18 +315,6 @@ still invite unsubscribing the wrong feed.
 
 **Field reports, 2026-09-02 — flagged, not investigated unless noted**
 
-### Suggested-tag chips render blue — likely a regression from today's clickable-name change
-
-The chip name (`.feed-tag-filter-name`) went from a plain `<span>` to a `<button>` today (see
-"click a suggested tag to filter the view", git history) so it could be clickable. Checked while
-triaging this report: the app has a global `button { background: var(--accent); color: white; ... }`
-reset (`static/style.css` ~line 1915) that every bare `<button>` picks up unless overridden.
-`.feed-tag-filter-name`'s own rule does override background/color/border explicitly, and by CSS
-specificity a class selector should win over a bare-tag one — so on paper this shouldn't be blue.
-Not fully explained: possibly a browser default `-webkit-appearance`/`appearance` control style
-leaking through underneath (not overridden), possibly something else. Needs an actual visual check
-in a browser, not just reading the CSS.
-
 ### Global Note (?) — posts list scrolls way up sometimes
 
 "open note? posts list scrolls way up sometimes" — vague as reported, not reproduced. Sounds like
@@ -328,14 +327,6 @@ Feature idea, not scoped: a library-wide setting to hide YouTube videos that are
 similar in spirit to the existing hide-Shorts/hide-unpremiered per-feed display prefs
 (`_DISPLAY_PREF_KEYS`). Not investigated — needs checking whether the feed data even distinguishes
 subscriber-only videos before sizing this.
-
-### Suggested-tag chips: "+N more" collapses back when any ▲/▼ is toggled
-
-"suggtags collapses when ^v any" — toggling a tag_filter include/exclude sign on ONE chip appears to
-re-collapse the "+N more" expanded state for the whole row (the pane re-renders after a ▲/▼ click,
-per the existing `_maybe_autofetch_on_keep`-adjacent code path, and the expand/collapse state is
-presumably client-side-only and lost on re-render). Not investigated. Same feature area as the
-blue-chip report above — worth looking at both together.
 
 ### Larger tag chips / "+^vx" sizing for a specific feed ("Surface")
 
@@ -419,6 +410,18 @@ tumblrs, norfolkwinters, crispian-jago, owenyoung myfeed) — sort or
 unsubscribe manually.
 
 ## Tier 4 — real features, not blocking anything today
+
+### Backblaze B2 support for backups
+
+Requested by Josh 2026-09-03. `scripts/backup_databases.py` (`VACUUM INTO`, size-aware retention —
+see its own docstring) only ever writes to `$LECTIO_DATA_DIR/backups` on local disk today; nothing
+ships a copy off-host. B2 is S3-compatible, so this is likely a `boto3`/`s3fs`-style upload step
+after the existing local backup completes (upload each newly-written file, prune remotely to match
+local retention or keep its own schedule), plus new env vars for the bucket/key/application key —
+mirror `.env`/`.env.example` per the usual convention. Not sized yet — needs a look at whether to
+reuse the existing local-retention pruning logic for the remote side or keep them independent (remote
+retention probably wants to be longer-lived than local, since off-host is the actual disaster-recovery
+copy).
 
 ### Soundslice tab-player embeds are permanently blocked by the content owner's own domain allowlist
 
