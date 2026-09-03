@@ -635,6 +635,30 @@ Remaining follow-ups:
 - freeCodeCamp per-tag Ghost RSS (`/news/tag/<slug>/rss/`) remains a fallback
   if include-list recall from the main feed's window is insufficient.
 
+### Post-header tag-filter chips don't reflect a folder/global-scoped rule
+
+Found 2026-09-03: Josh promoted a batch of per-feed `tag_filter` rules to folder scope (hand-editing
+each rule's scope in the rule builder — there's no dedicated "promote" action). The automation
+itself keeps working fine — folder scope is fully supported by the after-refresh pipeline
+(`main.py:8317-8326` resolves each refreshed feed against the folder's feed set and applies the
+rule's spec per feed). What breaks is the entry pane's `+`/`-` tag chips: `get_feed_tag_filter_rule`
+(`main.py:7698`) explicitly filters `scope = 'feed'` and ignores folder/global rules by design (its
+own docstring says so, and always has — this isn't a regression from the promotion, just a gap the
+promotion exposed). So for a feed now covered only by a folder rule: the chips render **unlit** even
+though the folder rule is actively filtering that feed, and clicking one **creates a brand-new,
+separate, disabled per-feed rule** instead of editing the folder rule — silently forking the config
+rather than merging into it.
+
+Not fixed. The real shape of a fix is probably a small **scope hierarchy** the chip lookup walks —
+feed rule wins if present, else the covering folder rule, else a global rule — and the chip UI would
+need to show *which* level is currently governing a tag (a feed-level override sitting on top of a
+folder-level filter is a different situation than the folder rule alone) rather than just lit/unlit.
+`toggle_feed_tag_filter` would also need a decision for what "click a chip when only a folder rule
+covers this feed" should do — edit the folder rule (affects every other feed in it), or explicitly
+create a feed-level override/exception on top (closer to today's behavior, but currently happens
+silently with no indication that's what's occurring). Needs its own design pass, not sized further
+here.
+
 ### Article cleanup — Phase 2: promote a removal into a per-feed rule
 
 Phase 1 shipped 2026-07-24: the pane's **Clean up article** (🧹) removes elements
