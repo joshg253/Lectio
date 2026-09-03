@@ -106,7 +106,63 @@ def test_the_drawer_spare_heals_its_stale_url_instead_of_bouncing_to_home():
     # armDrawerBack itself prefers the last real scope too, for the rarer
     # press-Back-twice-with-no-tap-between case that pops all the way to the
     # true floor and re-arms from there instead of from the spare.
-    assert "const armUrl = window.__lectioLastScopeUrl || window.location.href;" in INDEX
+    assert "const armUrl = window.__lectioLastScopeUrl || listUrl || window.location.href;" in INDEX
+
+
+def test_landing_directly_on_an_article_derives_its_list_instead_of_the_bare_drawer():
+    """The resume-on-launch redirect (window.__lectioResume) can land the floor
+    itself on an article, with no list ever fetched this session — the old
+    fallback chain (__lectioLastScopeUrl, unset here, then the article's own
+    URL) armed the spare with nothing useful, so the first Back opened an empty
+    drawer instead of the article's own list. deriveListUrl recovers that list
+    from the article's own scope params (folder_id, list_feed_url, tag, q, ...)
+    by stripping just entry_id/feed_url. Found live 2026-09-02 as "Back from
+    open article opens folders list ... first Back should just go to the list"."""
+    assert "function deriveListUrl(url)" in INDEX
+    block = INDEX[INDEX.index("function deriveListUrl(url)"):][:400]
+    assert "u.searchParams.delete('entry_id');" in block
+    assert "u.searchParams.delete('feed_url');" in block
+    assert "const listUrl = deriveListUrl(window.location.href);" in INDEX
+
+
+def test_the_spare_loads_the_derived_list_instead_of_an_empty_drawer():
+    """toggleDrawer only flips singlePaneLevel — it never fetches anything, so
+    opening it over a session that never rendered a real list showed nothing
+    behind it. openDrawerOrList loads the list pane instead whenever a
+    candidate URL (a real visited scope, or the article-derived fallback) is
+    available, and only falls back to the bare toggle when neither exists."""
+    assert "function openDrawerOrList(candidateListUrl)" in INDEX
+    block = INDEX[INDEX.index("function openDrawerOrList(candidateListUrl)"):][:1500]
+    assert "window.loadScopePanesWithoutFullRefresh(candidateListUrl, false);" in block
+    assert "toggleDrawer();" in block
+    assert "openDrawerOrList(event.state.lectioListUrl);" in INDEX
+    assert "openDrawerOrList(deriveListUrl(window.location.href));" in INDEX
+
+
+def test_the_re_armed_spare_keeps_a_working_fallback_after_loading_a_list():
+    """openDrawerOrList rewrites window.location.href to the list URL it just
+    loaded, stripping entry_id — so an armDrawerBack() re-arm immediately after
+    (the true-floor branch does both in sequence) derives from a URL with
+    nothing left to strip and gets null. Without a stash, that re-armed spare's
+    lectioListUrl is null and healUrl unset, so the SECOND Back cycle (open
+    another article, Back) fell through to a blind toggleDrawer() instead of
+    the list. Found live 2026-09-03: Back "seemed to be working for a bit"
+    (the first cycle, handled elsewhere) and then didn't (every cycle after)."""
+    block = INDEX[INDEX.index("function openDrawerOrList(candidateListUrl)"):][:1500]
+    assert "window.__lectioLastScopeUrl = candidateListUrl;" in block
+
+
+def test_landing_on_the_spare_from_an_open_article_loads_the_list_not_the_drawer():
+    """toggleDrawer only flips between levels 0 and 1, so calling it while an
+    article (level 2) is on screen always lands on 0 (the bare drawer), never 1
+    (the list) — the healUrl branch pinned by
+    test_the_drawer_spare_heals_its_stale_url_instead_of_bouncing_to_home
+    predates single-pane's article-originated spare and never accounted for
+    landing on it from level 2."""
+    block = INDEX[INDEX.index("const healUrl = window.__lectioLastScopeUrl;"):][:1400]
+    assert "if (singlePaneLevel === 2) {" in block
+    assert "openDrawerOrList(healUrl || event.state.lectioListUrl);" in block
+    assert "} else if (healUrl) {" in block
 
 
 # ── CSS ──
@@ -612,3 +668,21 @@ def test_context_menus_stay_below_the_toast_and_popup_menu_layer():
     """Above the panes, not above everything — a bare 9999 is how the next
     overlay ends up underneath something it should cover."""
     assert _z_of(".context-menu {") < 1000
+
+
+def test_a_modal_outranks_the_whole_phone_overlay_band():
+    """Every .action-modal (Settings included) sat at z-index 80 — below the
+    entire 250-341 phone/medium overlay band — so opening one while the folder
+    drawer was on screen painted it behind the drawer. Found live 2026-09-02 as
+    "settings opens behind folder list". #unsub-migrate-modal, opened from
+    inside another action-modal, must stay one above the shared base or it
+    paints behind its own parent."""
+    base = _z_of(".action-modal {")
+    for marker in ('body[data-layout-mode="single"] .pane-folders {',
+                   'body[data-layout-mode="medium"] .pane-folders {',
+                   ".medium-pane-backdrop {",
+                   ".topbar-menu {",
+                   ".context-menu {",
+                   ".context-submenu {"):
+        assert base > _z_of(marker), marker
+    assert _z_of("#unsub-migrate-modal {") > base

@@ -4994,7 +4994,15 @@ body.resizing {
 .action-modal {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  /* Above the whole phone/medium overlay band (backdrops 250/290, folder
+     drawer 260/300, .topbar-menu 320, context-menu/submenu 340/341 — see the
+     .context-menu comment for the full band) rather than below all of it at
+     the old 80: any modal (Settings included) opened while that drawer is on
+     screen painted behind it. Found live 2026-09-02 as "settings opens behind
+     folder list". #unsub-migrate-modal still needs its own bump above THIS,
+     for the same reason it always has — a modal opened from inside another
+     modal, both now living up here instead of down at 80. */
+  z-index: 350;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5008,13 +5016,12 @@ body.resizing {
 
 /* The unsubscribe confirmation is launched from inside the Feed Properties
    modal (and elsewhere) while that modal stays open. All .action-modal share
-   z-index: 80, so DOM order would otherwise paint Feed Properties (later in the
-   DOM) over this warning. Bump it so the nested confirmation always sits on top
-   of whatever launched it — and, since it's also reachable via a long-press on
-   a feed in the phone folder drawer (z-index: 300, see .pane-folders above),
-   above that too, or it painted behind the drawer it was opened from. */
+   one z-index (350, see .action-modal above), so DOM order would otherwise
+   paint Feed Properties (later in the DOM) over this warning. Bump it one
+   above the shared base so the nested confirmation always sits on top of
+   whatever launched it. */
 #unsub-migrate-modal {
-  z-index: 310;
+  z-index: 351;
 }
 
 .action-modal-panel {
