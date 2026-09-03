@@ -477,11 +477,35 @@ connection tried to write) logged `elapsed_ms=1731 progress_steps=0` — the cle
 signature. No dedicated test added, following the precedent of the original execute-timing wrapper
 (pure diagnostic logging, no behavior change, verified manually). Full suite green (3925).
 
-**Not yet confirmed live** — needs a deploy and a real capture on the next `get_tagged_entry_keys`
-stall (or any other reader-DB slow_sql line). `progress_steps≈0` confirms genuine WAL-layer lock-wait
-and makes the checkpoint-proactiveness fix worth actually building; a meaningfully positive step count
-would mean the query itself is doing real, avoidable work (e.g., a full scan of `entry_tags` that could
-use an index) and redirect the fix entirely away from WAL/checkpoint tuning.
+**Live capture 2026-09-03 — informative, but exposed a gap in the diagnostic itself.** Josh: "decent
+delay going from one feed to another." The capture landed dozens of `slow_sql db=reader` lines from
+refresh's own per-feed listing query (`WITH ids AS (...) ORDER BY recent_sort DESC ...`), and every
+single one showed **substantial, elapsed-proportional `progress_steps`** (121-345, roughly tracking
+250-470ms elapsed) — that's the clean *opposite* signature from lock-wait: real, unavoidable query
+cost, not busy-retry. One outlier (`elapsed_ms=250 progress_steps=0`) landed in the exact window as a
+`get_tagged_entry_keys` call, but is a different query text — inconclusive on its own, and `db.execute()`
+is a separate connection per thread, so it doesn't tell us anything about `get_tagged_entry_keys`
+directly. And `get_tagged_entry_keys` itself — measured at `1239ms`/`2263ms` in this same capture,
+same as every time before — **never once produced its own `slow_sql` line at all**, despite being
+exactly the function this whole diagnostic pass was built to interrogate.
+
+Root cause of the gap: `db.execute()` on a plain `SELECT` only prepares the statement (fast); the
+actual scan happens lazily as `get_tagged_entry_keys`'s own `for row in db.execute(...):` loop calls
+`fetchone()` row by row — outside the wrapped `execute()` call's timing entirely. The progress-handler
+*counter* keeps accumulating correctly through that iteration (verified: a 20k-row scan-and-fetch loop
+racked up 140 steps after the loop finished, confirmed independently of any single `execute()` call's
+own timing) — the generic wrapper just never reads it at the right moment for this call shape.
+
+**Fixed 2026-09-03**: `get_tagged_entry_keys` now reads `db._lectio_progress_steps` itself, right after
+each chunk's fetch loop (before the next chunk's `execute()` resets it), and logs the accumulated total
+in its own `[perf] get_tagged_entry_keys=%dms rows=%d scoped=%s progress_steps=%d` line. This answers
+the original question directly for the one function most implicated in this whole lead, without
+touching the generic wrapper (a broader fix for every iterator-style read elsewhere in the codebase
+would be a much bigger, unscoped change). Full suite green (3925). **Not yet confirmed live** — needs
+a deploy and the next `get_tagged_entry_keys` stall to read a real `progress_steps` number: ≈0 confirms
+genuine WAL-layer lock-wait and makes the checkpoint-proactiveness fix worth building; a meaningfully
+positive count means the query itself is doing real, avoidable work (a full scan of `entry_tags` that
+could use an index) and redirects the fix entirely away from WAL/checkpoint tuning.
 
 **Re-fetch/extraction quality & staleness** — the article being read is broken or stale; directly in the way of triage.
 

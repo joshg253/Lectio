@@ -11035,12 +11035,26 @@ def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, s
     keys: set[tuple[str, str]] = set()
     like = f"{MANUAL_TAG_KEY_PREFIX}%"
     _start = time.perf_counter()
+    # Refresh-contention investigation (Plan.md Tier 1, Read Above/Below lead):
+    # this query's own SLOW_SQL logging never fires, even when this function
+    # measures 1-2s+ -- db.execute() for a plain SELECT only prepares the
+    # statement and does not eagerly fetch, so the real scan happens lazily
+    # during the `for row in ...:` iteration below, outside the wrapped
+    # execute() call's timing. _lectio_progress_steps (set by _TimedConnection)
+    # is a connection-level counter that keeps accumulating through that
+    # iteration though, since the progress handler fires on every VDBE step
+    # regardless of which Python call triggered it -- reading it right after
+    # each chunk's loop finishes (before the next chunk's execute() resets it)
+    # gives an accurate total, answering directly whether a slow call here is
+    # genuine scan cost or SQLite lock-wait.
+    _progress_steps = 0
     try:
         with get_reader() as reader:
             db = reader._storage.get_db()
             if feed_urls is None:
                 for row in db.execute("SELECT feed, id FROM entry_tags WHERE key LIKE ?", (like,)):
                     keys.add((str(row[0]), str(row[1])))
+                _progress_steps += getattr(db, "_lectio_progress_steps", 0)
             else:
                 feed_list = list(feed_urls)
                 for i in range(0, len(feed_list), 900):
@@ -11051,11 +11065,13 @@ def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, s
                         [like, *chunk],
                     ):
                         keys.add((str(row[0]), str(row[1])))
+                    _progress_steps += getattr(db, "_lectio_progress_steps", 0)
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("get_tagged_entry_keys failed: %s", exc)
     elapsed_ms = int((time.perf_counter() - _start) * 1000)
     if elapsed_ms > 200:
-        LOGGER.info("[perf] get_tagged_entry_keys=%dms rows=%d scoped=%s", elapsed_ms, len(keys), feed_urls is not None)
+        LOGGER.info("[perf] get_tagged_entry_keys=%dms rows=%d scoped=%s progress_steps=%d",
+                    elapsed_ms, len(keys), feed_urls is not None, _progress_steps)
     return keys
 
 
