@@ -615,9 +615,60 @@ stakes failure mode for a self-hosted feed reader.
 **Shipped 2026-09-03, with Josh's go-ahead.** `PRAGMA synchronous=NORMAL` added to both the reader-DB
 connection (`_LectioReaderStorage.setup_db`) and the meta-DB connection (`get_meta_connection`),
 verified applied (`PRAGMA synchronous` reads back `1`/NORMAL on both). WebSub connection left alone —
-same reasoning as the checkpoint change, separate low-traffic DB. Full suite green (3925). **Not yet
-confirmed live** — needs a deploy and a fresh capture to see whether commit-time fsync latency was
-actually the missing piece.
+same reasoning as the checkpoint change, separate low-traffic DB. Full suite green (3925).
+
+**Live capture 2026-09-03, ~6s (down from ~10-17s but still not the 1-2s target).** Improvement, but
+the same near-zero-`progress_steps` signature persisted regardless. Ruled out the only other
+`wal_checkpoint(TRUNCATE)` call sites in the app (the truly blocking kind, unlike automatic passive
+checkpoints) as the cause: both are gated to the 3am daily-maintenance window, checked live
+(`maintenance_hour=3`, `maintenance_last_ran_at` = that morning) — nowhere near these afternoon/evening
+captures.
+
+**Root cause found and PROVEN, 2026-09-03 — it was never SQLite lock-wait.** The "near-zero
+progress_steps" signature was real, but its cause was misdiagnosed all day: `sqlite3`'s progress
+handler doesn't fire if the thread isn't scheduled at all, and neither does genuine SQLite lock-wait
+distinguish itself from that in this diagnostic — the earlier "template_stream stays normal" argument
+for ruling out GIL starvation was flawed (it only shows sequential steps *within one thread*, which
+says nothing about whether *other* threads were starved concurrently). Installed `py-spy` (via
+`uv tool install py-spy`, isolated from the project) and used `sudo` to ptrace directly into the live
+container's Python process — confirmed working with a single `py-spy dump`, then ran a 0.5s-interval
+sampling loop and asked Josh to reproduce the flow live. Correlated the exact stall
+(`GET /?folder_id=2&read_filter=unread`, 4662ms) against the samples covering that precise window:
+
+**Thread 1035 showed `(active+gil)` — genuinely holding the GIL, not just "active" like every other
+thread — continuously from the start of the stall through at least 4.2 seconds later, the entire time
+stuck inside feedparser's pure-Python SGML sanitizer** (`feedparser/sanitizer.py:883 _sanitize_html` →
+`feedparser/html.py feed` → `feedparser_sgmllib goahead`/`parse_starttag`/`finish_starttag`). Four
+consecutive samples in the middle of this span couldn't even get a stack trace (`py-spy: Bad address`
+reading `PyCodeObject`) — consistent with the interpreter being in a tight, uninterrupted loop the
+whole time, not idle. Every other thread — including the one servicing the foreground request, and
+refresh's own *other* SQL work (`Thread 53`, stuck in a different `paginated_query`) — sat waiting for
+the GIL that entire time. This is not SQLite contention at all; it's one feed's malformed/complex HTML
+content taking multiple seconds to parse in a slow, pure-Python fallback path that holds the GIL
+almost continuously while doing it.
+
+Confirmed feedparser really does still run this path despite Lectio's own
+`SanitizingFeedparserParser` passing `sanitize_html=False` to `feedparser.parse()`
+(`services/reader_sanitize.py`) specifically to avoid feedparser's destructive sanitizer — `sanitize_html`
+gates exactly one call site (`feedparser/mixin.py:585`), so the flag is doing what it's supposed to for
+sanitization *output*, but `feedparser/html.py`'s `BaseHTMLProcessor` (the same sgmllib-based lenient
+parser `HTMLSanitizer` subclasses) is also feedparser's general malformed-HTML/XML recovery mechanism
+— the "feed recovered via loose parser" warnings already logged constantly throughout every refresh
+pass are entries taking exactly this slow path, `sanitize_html` flag or not. Not yet traced to the
+exact single trigger (which entry, which feed) since it varies every cycle — the mechanism, not one
+bad feed, is the finding.
+
+**Not fixed yet — this needs its own design pass**, same as the earlier (now largely superseded)
+WAL/checkpoint lead was flagged as needing before its own experiments: candidates worth weighing
+(none attempted): a size/complexity guard before handing content to the slow path, isolating
+feed-processing in a separate OS process so the GIL doesn't matter across the boundary (a real
+architecture change), or investigating whether a faster HTML-repair library could substitute for
+feedparser's sgmllib fallback specifically for pathological content. The two SQLite pragma changes
+made earlier today (`synchronous=NORMAL`; `wal_autocheckpoint` already reverted) are not wrong to keep
+— `synchronous=NORMAL` is sound regardless per SQLite's own WAL-mode guidance — but neither was ever
+the actual fix for this symptom, and the "near-zero progress_steps" diagnostic built for this
+investigation, while valuable for what it proved, cannot itself distinguish SQLite lock-wait from GIL
+starvation — a lesson worth keeping for the next contention hunt.
 
 **Re-fetch/extraction quality & staleness** — the article being read is broken or stale; directly in the way of triage.
 
