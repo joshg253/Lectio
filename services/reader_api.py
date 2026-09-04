@@ -3,12 +3,13 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import re
 import sqlite3
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, cast
 
 import reader._storage._base as _reader_storage_base
 from reader import make_reader
@@ -31,35 +32,101 @@ LOGGER = logging.getLogger("lectio")
 # does as an import-time side effect here.
 _SLOW_SQL_MS = 250
 
+# Refresh-contention investigation (Plan.md Tier 1, "Read Above/Below" lead):
+# elapsed_ms alone can't tell a genuinely slow query apart from one that spent
+# nearly all its wall time sitting in SQLite's busy-handler retry loop waiting
+# for refresh's writer -- both look identical from the outside. sqlite3's
+# progress handler fires every _PROGRESS_HANDLER_N VM instructions *during
+# statement execution*, but not during the busy-wait itself, so counting
+# callbacks per statement gives a direct, unambiguous signal: near-zero steps
+# on a "slow" query is conclusive proof of lock-wait, not query cost. This is
+# read-only instrumentation -- the handler always returns 0 (never aborts a
+# statement) -- not a behavior change.
+_PROGRESS_HANDLER_N = 1000
+
 
 class _TimedCursor(sqlite3.Cursor):
     def execute(self, sql, parameters=()):
+        conn = cast("_TimedConnection", self.connection)
+        conn._lectio_progress_steps = 0
+        self._lectio_sql = sql
         start = time.perf_counter()
         try:
             return super().execute(sql, parameters)
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d sql=%s",
-                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d sql=%s",
+                            int(elapsed_ms), conn._lectio_progress_steps, " ".join(str(sql).split())[:200])
+
+    def executemany(self, sql, parameters):
+        conn = cast("_TimedConnection", self.connection)
+        conn._lectio_progress_steps = 0
+        start = time.perf_counter()
+        try:
+            return super().executemany(sql, parameters)
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if elapsed_ms > _SLOW_SQL_MS:
+                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d executemany sql=%s",
+                            int(elapsed_ms), conn._lectio_progress_steps, " ".join(str(sql).split())[:200])
+
+    def fetchall(self):
+        # `execute()` above only times statement *preparation*; a plain SELECT
+        # doesn't eagerly scan, so the real cost of `conn.execute(...).fetchall()`
+        # (the dominant read pattern in this codebase) happened here, previously
+        # invisible to slow-SQL logging entirely -- found 2026-09-03 chasing a
+        # live stall that traced back to exactly this shape (Plan.md Tier 1).
+        # Separate before/after progress-step snapshot so this doesn't double
+        # count whatever execute() already attributed to itself.
+        conn = cast("_TimedConnection", self.connection)
+        steps_before = conn._lectio_progress_steps
+        start = time.perf_counter()
+        try:
+            return super().fetchall()
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if elapsed_ms > _SLOW_SQL_MS:
+                sql = getattr(self, "_lectio_sql", "?")
+                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d fetchall sql=%s",
+                            int(elapsed_ms), conn._lectio_progress_steps - steps_before, " ".join(str(sql).split())[:200])
 
 
 class _TimedConnection(sqlite3.Connection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._lectio_progress_steps = 0
+        self.set_progress_handler(self._lectio_on_progress, _PROGRESS_HANDLER_N)
+
+    def _lectio_on_progress(self) -> int:
+        self._lectio_progress_steps += 1
+        return 0  # never abort the statement
+
     def cursor(self, factory=None):
         return super().cursor(factory or _TimedCursor)
 
     def execute(self, sql, parameters=()):
-        start = time.perf_counter()
-        try:
-            return super().execute(sql, parameters)
-        finally:
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d sql=%s",
-                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+        # Delegate to self.cursor() rather than the sqlite3.Connection.execute()
+        # shortcut directly: the shortcut returns a bare sqlite3.Cursor (verified
+        # -- it does not route through the overridden cursor() factory at all),
+        # so `conn.execute(...).fetchall()` was silently bypassing _TimedCursor's
+        # fetchall() override above. Going through self.cursor().execute(...)
+        # guarantees callers always get a _TimedCursor back.
+        return self.cursor().execute(sql, parameters)
+
+    def executemany(self, sql, parameters):
+        return self.cursor().executemany(sql, parameters)
 
 
-_reader_storage_base.CONNECTION_CLS = _TimedConnection  # ty: ignore[invalid-assignment]
+# Off by default: the progress handler fires every _PROGRESS_HANDLER_N VM
+# instructions on every statement, and the timing wrapper adds a
+# perf_counter() pair per call -- real, if small, overhead on every single
+# reader-DB query, all the time, not worth paying outside an active
+# investigation (Plan.md Tier 1 refresh-contention item). Flip on with
+# LECTIO_PERF_DEBUG=1 when chasing a live stall; mirrors main.py's own flag
+# (read independently here since services must not import main).
+if os.getenv("LECTIO_PERF_DEBUG", "0") == "1":
+    _reader_storage_base.CONNECTION_CLS = _TimedConnection  # ty: ignore[invalid-assignment]
 
 
 class _ExtraReaderKwargs(TypedDict, total=False):
@@ -92,7 +159,22 @@ _reader_storage_setup_db = _ReaderStorage.setup_db
 class _LectioReaderStorage(_ReaderStorage):
     """reader Storage subclass that tugs WAL auto-checkpoint to 200 pages
     (~800 KB) on every new connection so the WAL file never balloons to
-    tens of MB between restarts."""
+    tens of MB between restarts.
+
+    Raised 200 -> 1000 2026-09-03, then reverted the same day (Plan.md Tier 1,
+    Read Above/Below lead): the experiment traded a bigger WAL for 5x fewer
+    checkpoints on the theory that checkpoint frequency was the contention
+    source, but a live capture right after deploy showed the reader-DB stalls
+    unchanged or worse, and a follow-up capture (once conn.execute(...).fetchall()
+    was fixed to actually report progress_steps -- see that commit) showed
+    near-zero real work across MANY different queries in both DBs, not just
+    the one this experiment targeted. That breadth argues against
+    checkpoint-frequency as the mechanism -- reverted rather than kept on a
+    change that added a real tradeoff (larger WAL) with no shown benefit,
+    pending further diagnosis of whether this is genuine SQLite lock-wait or
+    GIL/CPU-scheduling starvation from refresh's own CPU-heavy work (the
+    progress-handler diagnostic can't fully distinguish the two: neither
+    fires if the thread isn't scheduled at all)."""
 
     @staticmethod
     def setup_db(db: sqlite3.Connection) -> None:
@@ -105,6 +187,18 @@ class _LectioReaderStorage(_ReaderStorage):
             # briefly contend the reader DB; without this a losing opener errors
             # out (a recurring flaky-CI signature) instead of retrying.
             db.execute("PRAGMA busy_timeout=10000")
+            # synchronous=NORMAL 2026-09-03 (Plan.md Tier 1, Read Above/Below
+            # lead), replacing SQLite's compiled-in FULL default: the live DB
+            # was found running FULL, which fsyncs on every commit even in WAL
+            # mode. Refresh commits roughly once per feed (thousands of times
+            # per pass) -- SQLite's own docs recommend NORMAL for WAL-mode
+            # apps specifically because WAL mode already only *needs* a sync at
+            # checkpoint boundaries, not per-commit, with no corruption risk
+            # either way; the only difference is a theoretical loss of the
+            # single most recent commit if the OS itself crashes (not an app
+            # crash, and not the checkpoint-frequency mechanism already tried
+            # and reverted). Cheap to test, cheap to revert.
+            db.execute("PRAGMA synchronous=NORMAL")
         except Exception:
             pass
 

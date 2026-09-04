@@ -125,11 +125,81 @@ instead of once per feed. Batching those writes — accumulate results in memory
 existing `time.sleep(0.05/0.15)` politeness delays and network fetches run, then one `executemany`
 in a single transaction per feed (or per some chunk size) — would cut the number of separate lock
 acquisitions from this one source by whatever the average per-feed entry count is, directly
-reducing contention without touching WAL/checkpoint settings or any read path. Sized but not
-implemented: the function has 12 store call sites across deeply nested early-`continue` control
-flow, and per-entry commits currently give each entry independent durability (a batch failure would
-lose the whole batch instead of just one entry) — a real behavior change worth its own pass, not a
-same-session bolt-on this deep into an already-long one.
+reducing contention without touching WAL/checkpoint settings or any read path.
+
+**Shipped 2026-09-03**: `store_entry_lead_image` takes an optional `batch` list (append instead of
+commit-immediately; cache update and the thumb-pin sink stay synchronous either way -- see
+`docs/architecture/images.md` "Batched meta-DB writes during the per-feed backfill" for the full
+mechanism), and `fetch_and_store_lead_images_for_feed` now flushes one `executemany` every 25
+entries plus once more in a `finally` around the loop, so an early return or exception mid-feed
+can't drop already-buffered rows -- only the last partial chunk (<=24 entries) is at risk on a hard
+crash, versus none before. Two new tests cover it: batching actually reduces meta-connection opens
+(30 entries -> well under 15), and a mid-loop exception still flushes what was buffered before it.
+Full suite green (3914).
+
+**Confirmed live 2026-09-03, partial win.** Josh's own report after living with the deploy: "perf
+seems better, still a few seconds delay when switching between folders." A 6-hour log capture from
+the deployed container backs that up on both sides. Wins: only 4 `slow_sql db=meta` events (>250ms)
+in 6 hours, versus the near-continuous stream implied by the pre-fix capture above -- the dominant
+per-entry `entry_lead_images` write from the per-feed backfill loop is no longer the routine
+offender. Remaining: those 4 events are still real multi-second stalls (8542ms/3735ms/3335ms/3734ms),
+and `get_meta_structure_snapshot` (the folder/feed-tree cache every home render reads, `main.py:6129`)
+spiked to 3010ms and 5502ms in the same window when its cache was cold -- confirming the broader
+"whichever query is mid-flight when a writer holds the lock" theory rather than one fixable query.
+The 4 slow writes, by source:
+
+| elapsed | statement | source |
+|---|---|---|
+| 8542ms, 3735ms | `entry_lead_images` alt/title UPSERT | `store_entry_image_alt`, called from `_maybe_store_alt_from_cache` -- 2 of the just-batched loop's own branches, at the time still un-batched |
+| 3734ms | `entry_lead_images` image_url/fetched_at UPSERT, single-row shape | NOT the new `executemany` flush (its own `.execute` isn't even wrapped by the slow-SQL instrumentation, a gap in itself) -- one of the still-unbatched call sites: `_do_backfill_entry_list` (render-triggered chunk backfill, `services/lead_images.py`) or `persist_lead_image_async`'s single-writer background queue |
+| 3335ms | `entry_read_state` UPSERT | a completely different subsystem -- the post-refresh automation pipeline's mark-as-read writes (`main.py:7024-7908` range, per-entry commits same shape as the lead-image bug) or an ordinary user read-toggle caught mid-lock |
+
+Three candidate next steps were sized, ranked by how directly they extend what's already proven vs.
+how much new ground they cover; Josh picked #1.
+
+1. **Shipped 2026-09-03, same session.** `store_entry_image_alt` now takes the same optional `batch`
+   param and its own `_flush_pending_image_alts`, flushed at the same 25-entry/`finally` points as
+   the lead-image batch but as an independent list (see `docs/architecture/images.md`'s "Batched
+   meta-DB writes" for the full writeup). The boilerplate-title read/clear stays synchronous on
+   purpose -- it touches *other* entries' rows, not the one being written. Two new tests: 30 entries
+   with unique captions produce exactly 2 flushes per stream (not one commit per entry), and both the
+   URL and alt/title land correctly. Full suite green (3915). **Confirmed live 2026-09-03** --
+   Josh, informally, after living with the deploy: "it's definitely feeling more responsive." No
+   fresh log capture taken yet to confirm the alt-write stalls specifically stopped recurring.
+2. **Shipped 2026-09-03, same day.** `_do_backfill_entry_list` (the render-triggered chunk backfill
+   -- fires on ordinary browsing whenever a rendered page has visible entries with no cached
+   thumbnail, not just during refresh) batches the same way: same `pending`/`pending_alts` shape,
+   same 25-entry/`finally` flush points, now wrapping its `for feed_url, entry_pairs in
+   by_feed.items(): for entry_id, entry_link in entry_pairs:` double loop so a chunk spanning
+   several feeds pays for a handful of `executemany` calls instead of one commit per visible
+   thumbnail. Two new tests mirror the per-feed ones (30 entries across 3 feeds in one call ->
+   exactly 2 flushes; an exception partway through one feed's group still persists an earlier
+   feed's already-buffered writes). Full suite green (3917). **Not yet confirmed live** -- this
+   path's concurrency profile (ordinary browsing, not refresh) hasn't been captured yet.
+3. **Shipped 2026-09-03, same day -- root cause found, not just "investigated."** Every OTHER
+   bulk mark-as-read path in main.py (`_mark_existing_shorts_read`, `_run_now_pattern`,
+   `_suppress_guid_churn`, the merge/undo/read-batch routes -- 8+ call sites) already collects
+   `(feed_url, entry_id)` pairs into a list and does one `conn.executemany` at the end. Exactly one
+   didn't: `_apply_hide_paywalled` (`main.py:8198`) called `upsert_entry_read_state` -- a single-row
+   `.execute()`, one meta-connection use per call -- inline inside its `for feed_u in targets: for
+   entry in reader.get_entries(...):` loop, the identical shape to the lead-image bug, just never
+   caught because its sibling `_apply_hide_shorts` was written correctly and nobody compared them.
+   A feed with many paywalled stubs (first time the pref is enabled, or a feed that publishes mostly
+   stubs) would commit once per stub during an active refresh pass. Fixed to match its sibling's
+   shape exactly: collect `to_mark` during the scan, `reader.mark_entry_as_read` per entry after (the
+   reader-DB side, unavoidably per-entry -- reader has no bulk API here), then one `executemany` for
+   the meta-DB side. 3 new tests (`tests/integration/test_hide_paywalled.py`): off leaves stubs
+   unread, on marks them read and persists `entry_read_state`, and 10 stub entries produce ≤2
+   meta-connection uses (the targets read + the one write) instead of 10. Full suite green (3920).
+   **Not yet confirmed live** -- needs a feed with a real paywalled backlog to trigger it, which is
+   rarer than the lead-image/alt paths (only fires once per newly-stubbed feed, not every refresh).
+
+**Also shipped 2026-09-03**: `_TimedMetaConnection`/`_TimedMetaCursor` (main.py) and
+`_TimedConnection`/`_TimedCursor` (services/reader_api.py) now wrap `executemany` the same way they
+already wrapped `execute` -- closes the visibility gap flagged above. All four batched-write flush
+points from this investigation (lead image, alt/title, chunk-backfill's copies of both, and now
+hide-paywalled) are visible to slow-SQL logging going forward; verified manually that a slow
+`executemany` logs with elapsed time and SQL text, same as `execute` always has.
 
 **A second capture, same day, sharpens it further.** `GET /?folder_id=11&read_filter=unread` (a
 tiny folder — 16 feeds, 3 entries) logged `5498ms`, and its own follow-up chunk request logged
@@ -205,6 +275,164 @@ contention before this item can be marked resolved. If it's still slow after thi
 back to shared WAL/lock contention (the Read Above/Below item's checkpoint-timing theory below)
 rather than any one call site.
 
+**Live capture 2026-09-03, after the meta-DB write-batching work above.** Josh reported "serious
+delay" on `GET /?folder_id=9&read_filter=unread` — access log confirms `12961ms`. Two findings:
+
+1. **`get_tagged_entry_keys` is NOT cleared** by the 2026-09-02 pooled-connection fix — it logged
+   `1078ms` (unscoped, 15,742 rows) and, in the same request, `2038ms` (scoped, 15,579 rows) for
+   `get_saved_unread_count` and `get_saved_counts_by_folder` respectively. The pooled connection
+   removed the *per-call connection-open* cost, but this is `db=reader`, not `db=meta` — refresh
+   writes to the reader DB constantly (that's its whole job), so a `SELECT ... WHERE key LIKE ?`
+   landing mid-write is exactly the same `SQLITE_BUSY`-retry mechanism already proven for the meta
+   DB, just never directly measured on the reader DB's read side before. This is the same shape as
+   the Read Above/Below item below, not a new mechanism — one more data point for that WAL/checkpoint
+   lead, not a call site to patch.
+2. **A second, previously invisible gap, likely bigger than the first.** Summing every instrumented
+   block (`meta_block` 111ms + `tag_block` 59ms + `gap_block` 5580ms + `posts_block` 1232ms) accounts
+   for only ~6982ms of the request's 12961ms — **~5979ms with no timing of its own**, after
+   `posts_block` finishes and before the response is fully sent. `_home_inner` builds its template
+   context dict (a dozen+ settings/integration-status lookups: `is_email_configured`,
+   `*_oauth_connected` x4, `is_instapaper_configured`, `is_quire_configured`,
+   `get_all_manual_tag_names`, `get_push_active_feed_urls`, `unsubscribed_feed_urls_among`, …) and
+   then hands a **lazy** Jinja `TemplateStream` to `StreamingResponse` — `.stream()` itself does no
+   rendering; the actual per-post Jinja evaluation (250 posts here) happens only as the stream is
+   drained, which is *after* `_home_inner` returns, so none of it was ever inside a measured block.
+
+**Instrumented, not yet fixed, 2026-09-03**: two new ticks bracket this previously-dark region —
+`[perf] home: ctx_block=%dms` (context-dict build, >100ms only) right before the template call, and
+`[perf] home: template_stream=%dms` (>100ms only) wrapping the stream generator so its render+send
+time is attributed correctly even though it runs after the handler function returns. Needs a
+`make rebuild` deploy and a real capture to say which of the two (or both) is where the ~6s actually
+went — until then this reads as a lead, not a diagnosis: it could be slow Python-side per-post
+template logic, or the same lock-wait mechanism as everything else in this item showing up in
+whichever settings lookup happens to run during a write.
+
+**Josh's own hypothesis, 2026-09-03: "something to do with sorting/filtering... maybe the default is
+structured for a different view to be fast."** Not quite the exact mechanism, but it pointed at the
+right code and turned up a real, well-scoped bug — fixed same day.
+
+`list_entries_for_feeds` has three shapes: a per-feed path for ≤32 feeds (goes through `get_reader()`'s
+pooled connection), and two "many feeds" SQL fast paths — one for `sort_dir=asc` (Josh's daily driver:
+Unread + oldest-first), one for `desc` — both gated on `len(feed_urls) > PER_FEED_QUERY_THRESHOLD`
+(32). **Both** many-feed paths, plus the `feed_site_map` favicon-host lookup just above them, opened a
+**fresh `sqlite3.connect(reader_db_path, timeout=5.0)` on every single request** instead of reusing
+`get_reader()`'s pooled, timed connection — the identical anti-pattern `get_tagged_entry_keys` was
+fixed for 2026-09-02, just never caught here. So it isn't that ASC is slower than DESC (both shared
+the bug equally); it's that **small views (≤32 feeds) never hit this code at all**, while any large
+folder — exactly where real browsing happens — paid full file-open/schema-load cost on every render,
+with a *shorter* busy_timeout (5s) than everywhere else (10s), and were completely invisible to
+slow-SQL logging since a bare `sqlite3.connect()` bypasses `_TimedConnection` entirely. A `sqlite3.connect(str(tenancy.reader_db_path())...)` grep turned up **20 occurrences** across main.py total —
+these 3 were fixed because they're squarely in the hot list-rendering path and directly explain this
+symptom; the other ~17 are scattered across less-hot routes and are a separate, deferred cleanup (see
+below), not part of this fix.
+
+**Fixed 2026-09-03**: all three call sites now do `reader._storage.get_db()` inside the existing
+`with get_reader() as reader:` block (row access switched from `sqlite3.Row` named lookup to
+positional, matching `get_tagged_entry_keys`'s established pattern — reader's pooled connection
+doesn't set a row_factory). 2 new tests (`tests/integration/test_list_entries_pooled_connection.py`):
+one asserts no fresh reader-DB connection is opened for either sort direction past the threshold
+(would have failed against the old code), the other confirms ASC/DESC still agree on membership after
+the rewrite. Full suite green (3923). **Not yet confirmed live** — needs a deploy and a real capture
+on a large folder during refresh contention.
+
+**Deferred, separate cleanup**: the other ~17 `sqlite3.connect(reader_db_path)` call sites elsewhere
+in main.py share the same anti-pattern (shorter busy_timeout, invisible to slow-SQL logging) but
+aren't in a request-path hot loop the way these three were — worth a systematic sweep at some point,
+not sized here.
+
+**Live capture 2026-09-03, after the pooled-connection fix above deployed.** Josh: "still many
+seconds to switch to Dev." Genuinely good news mixed with the next lead: 3 consecutive requests to
+the same folder in a 45s window logged `6532ms` / `1421ms` / `6692ms` — the middle one is now
+authentically fast (`meta_block=11ms`, everything else <400ms each, `template_stream=328ms`,
+confirming both the write-batching and the ASC/DESC pooled-connection fixes are working as intended
+when the cache is warm) — but the two slow ones both show the **entire** delay concentrated in one
+place: `meta_block=4999ms`/`5282ms`, and inside that, `meta.structure_snapshot=4964ms`/`5268ms` —
+`get_meta_structure_snapshot`'s cached folder/feed-tree bundle (`main.py:6129`) going fully cold and
+paying its 5-query rebuild cost under refresh contention, twice in under a minute. Its own docstring
+says the cache should invalidate "only on explicit user mutations" (subscribe/unsubscribe, folder
+changes) — Josh was just clicking between folders, not managing feeds, so something is invalidating
+it far more often than that design assumes, landing this expensive rebuild right in the middle of
+ordinary browsing during refresh.
+
+**Instrumented, not yet diagnosed, 2026-09-03**: 37 call sites call `invalidate_meta_structure_cache()`
+— rather than manually audit all of them, the function now logs its immediate caller's
+file/line/function name on every call, so the next live occurrence names the actual code path firing
+during a routine refresh pass instead of a guess. `ctx_block`/`template_stream` from the previous
+capture never fired in this one (both requests' non-meta-block time was already trivial), so that
+lead is provisionally cleared — needs a deploy and a real capture to name the caller before sizing
+a fix (candidates worth checking first once a caller shows up: anything in the per-feed refresh loop
+or `_run_automation_after_refresh` that runs unconditionally rather than only on an actual structural
+change).
+
+**Live capture 2026-09-03, after the caller-logging deploy — the caching theory was wrong, and the
+real bug was a labeling mistake.** Josh: "still many seconds to switch to Dev." Confirmed the browser
+side was ordinary hard-refreshes/new tabs, not Lectio's own manual Refresh button — ruling out
+self-inflicted refresh-contention as a confound. A fresh capture caught `meta.structure_snapshot=2594ms`
+again 45 minutes into steady-state (not a post-restart cold start) — **but zero
+`invalidate_meta_structure_cache` log lines fired anywhere in the preceding 60 minutes.** That's a
+clean negative result: the cache was never actually being invalidated, so "going cold under refresh
+contention" was the wrong theory entirely.
+
+Re-reading `_home_inner`'s timing code (`main.py:24107`, the `_tick()` closure) found the real bug:
+the `_tick("structure_snapshot")` call was placed *after* `get_all_reader_feed_urls()` and a block of
+derived-set building, not right after `get_meta_structure_snapshot(conn)` itself — so the tick's name
+described the cached snapshot lookup, but its *measurement window* actually included that unrelated
+call too. `get_all_reader_feed_urls` (`main.py:5854`) opened its own fresh
+`sqlite3.connect(reader_db_path, timeout=5.0)` on **every single home-route render, unconditionally**
+— the identical anti-pattern already fixed twice this session (`get_tagged_entry_keys`,
+`list_entries_for_feeds`' sort paths), just in a third location, mislabeled by a timing tick that
+made it look like a caching problem. This one is worse than the previous two in blast radius: it has
+no `len(feed_urls) > 32` gate at all, so it fires on literally every home-route request regardless of
+folder size, plus 11 other call sites elsewhere in main.py.
+
+**Fixed 2026-09-03**: `get_all_reader_feed_urls` now uses `reader._storage.get_db()` from
+`get_reader()`'s pooled connection. Split the mislabeled tick into two: `structure_snapshot` now wraps
+only `get_meta_structure_snapshot()` itself, and a new `uncategorized_derive` tick isolates
+`get_all_reader_feed_urls()` plus the Uncategorized-folder set-building that follows it — so a future
+capture attributes correctly instead of repeating this exact misdiagnosis. 2 new tests
+(`tests/integration/test_get_all_reader_feed_urls_pooled.py`): one guards against a fresh connection
+(would have failed on the old code), the other confirms `include_kept` behavior survived the rewrite.
+Full suite green (3925). **Not yet confirmed live** — needs a deploy and a real capture; if
+`structure_snapshot` (now correctly isolated) is still slow after this, the cache-cold-under-contention
+theory becomes worth revisiting for real, this time with a tick that actually measures what its name
+says.
+
+**Confirmed live 2026-09-03 — resolved.** Josh clicked through several folders: "all seem to be about
+the same 1-2 seconds." A fresh log capture backs it up directly: every request in the window logged
+`meta_block` 9-49ms (down from 5-13*seconds*), `badges_detail` ~300-500ms, `posts_block` ~100-700ms
+(feed-count dependent), `template_stream` ~300-800ms — real, legitimate work, no lock-wait pathology
+anywhere. One request's `meta_block` did spike to 1664ms, and the split tick correctly attributed it
+to `uncategorized_derive` (not `structure_snapshot`) — the fix's own diagnostics working as intended,
+not a new problem. Total per-request now consistently lands at 1-2s, matching Josh's report and, not
+coincidentally, roughly what the very first entry in this item (2026-08-11, "median 700ms") described
+as the *good* case before any of this started.
+
+Two small residuals visible in the same capture, neither on the click path: a single-row
+`yt_quota_spend` write hit ~3.9s (background YouTube-quota tracking, its own long-known non-batched
+single-row shape, never sized as worth fixing), and one batched `entry_lead_images` `executemany`
+flush hit ~4.7s under heavy load — visible only because of the executemany-wrapping fix a few commits
+back, and exactly the intended trade-off: one commit occasionally waiting, not N commits compounding.
+Neither is user-visible. **This closes out the connection-pooling half of the Tier 1
+refresh-contention chain that started 2026-08-11** — four real bugs found and fixed across two
+sessions (lead-image per-entry writes ×3 shapes, hide-paywalled's missed batching, and three separate
+raw-reader-connection call sites), each confirmed by a live capture, several confirmed by Josh
+directly. `entry_read_state` batching in the post-refresh automation pipeline was investigated and
+found to already be correctly batched everywhere except the one site fixed here; the ~17 other
+`sqlite3.connect(reader_db_path)` call sites elsewhere in main.py remain a deferred cleanup (noted
+above).
+
+**Still open, confirmed the same day: the Read Above/Below WAL/checkpoint lead below is real and
+distinct.** Josh hit another delay (~7.8s) right after the fix above deployed. The new instrumentation
+did its job: `uncategorized_derive=53ms` confirms that fix is holding, isolating the actual cause as
+`get_tagged_entry_keys` again — `1168ms` (unscoped) + `2098ms` (scoped) in the same request, `db=reader`,
+alongside an elevated `template_stream=1846ms`, all while refresh's own per-feed queries were logging
+continuously in the same window. This is **not** a connection-pooling bug — `get_tagged_entry_keys` has
+used the pooled connection since 2026-09-02 — it's the genuine SQLite-file-level lock contention the
+Read Above/Below item below already describes: refresh's writer thread and a foreground reader thread
+serializing at the WAL layer. Not fixed here; this is the pragma/timing investigation already
+deliberately deferred below as its own, riskier pass — this capture is just fresh confirmation it's
+still live and worth picking up when there's appetite for a bigger, shared-connection-behavior change.
+
 **Read Above/Below, same shape:**
 
 
@@ -226,6 +454,239 @@ more proactive after a refresh pass, so reads shortly after don't inherit an
 un-checkpointed WAL. Bigger and riskier than the fetch-path fix — it's a
 pragma/timing change affecting every read/write in the app, not just this one
 path, so it needs its own measurement pass before touching anything.
+
+**The measurement pass, started 2026-09-03.** Before touching any pragma, checked the live WAL file
+size directly: `/data/users/<uid>/lectio_reader.sqlite-wal` sat at ~805KB against a 1.18GB main file —
+right at the `wal_autocheckpoint=200` (~800KB) target, not ballooning. That's a real data point against
+the "un-checkpointed WAL" framing as literally stated: the WAL isn't sitting large and uncheckpointed:
+checkpointing is keeping up. It doesn't rule out WAL-layer contention, but it means the mechanism is
+more likely SQLite's ordinary single-writer serialization (refresh's writer thread and a foreground
+reader both wanting the same file at the same moment) than "reads are scanning a huge backlog."
+
+`elapsed_ms` alone can't tell a genuinely expensive query apart from one that spent nearly all its wall
+time sitting in SQLite's busy-handler retry loop — both look identical from outside, and this whole
+investigation had been inferring lock-wait from elapsed time plus circumstantial evidence (round
+single-row costs, concurrent refresh activity in the log) rather than proving it directly. Fixed:
+`_TimedConnection`/`_TimedCursor` (services/reader_api.py) and `_TimedMetaConnection`/`_TimedMetaCursor`
+(main.py) now also install a `sqlite3` progress handler (fires every 1000 VM instructions during
+statement *execution*, never during the busy-wait itself) and log `progress_steps` alongside
+`elapsed_ms` on every slow-SQL line. Read-only — the handler always returns 0, never aborts a
+statement. Verified twice locally: a real 5000-row insert+scan showed 22-50 steps (genuine work), and a
+deliberately forced lock (one connection holding `BEGIN IMMEDIATE` for 2s while a second, timed
+connection tried to write) logged `elapsed_ms=1731 progress_steps=0` — the clean, unambiguous lock-wait
+signature. No dedicated test added, following the precedent of the original execute-timing wrapper
+(pure diagnostic logging, no behavior change, verified manually). Full suite green (3925).
+
+**Live capture 2026-09-03 — informative, but exposed a gap in the diagnostic itself.** Josh: "decent
+delay going from one feed to another." The capture landed dozens of `slow_sql db=reader` lines from
+refresh's own per-feed listing query (`WITH ids AS (...) ORDER BY recent_sort DESC ...`), and every
+single one showed **substantial, elapsed-proportional `progress_steps`** (121-345, roughly tracking
+250-470ms elapsed) — that's the clean *opposite* signature from lock-wait: real, unavoidable query
+cost, not busy-retry. One outlier (`elapsed_ms=250 progress_steps=0`) landed in the exact window as a
+`get_tagged_entry_keys` call, but is a different query text — inconclusive on its own, and `db.execute()`
+is a separate connection per thread, so it doesn't tell us anything about `get_tagged_entry_keys`
+directly. And `get_tagged_entry_keys` itself — measured at `1239ms`/`2263ms` in this same capture,
+same as every time before — **never once produced its own `slow_sql` line at all**, despite being
+exactly the function this whole diagnostic pass was built to interrogate.
+
+Root cause of the gap: `db.execute()` on a plain `SELECT` only prepares the statement (fast); the
+actual scan happens lazily as `get_tagged_entry_keys`'s own `for row in db.execute(...):` loop calls
+`fetchone()` row by row — outside the wrapped `execute()` call's timing entirely. The progress-handler
+*counter* keeps accumulating correctly through that iteration (verified: a 20k-row scan-and-fetch loop
+racked up 140 steps after the loop finished, confirmed independently of any single `execute()` call's
+own timing) — the generic wrapper just never reads it at the right moment for this call shape.
+
+**Fixed 2026-09-03**: `get_tagged_entry_keys` now reads `db._lectio_progress_steps` itself, right after
+each chunk's fetch loop (before the next chunk's `execute()` resets it), and logs the accumulated total
+in its own `[perf] get_tagged_entry_keys=%dms rows=%d scoped=%s progress_steps=%d` line. This answers
+the original question directly for the one function most implicated in this whole lead, without
+touching the generic wrapper (a broader fix for every iterator-style read elsewhere in the codebase
+would be a much bigger, unscoped change). Full suite green (3925).
+
+**Live capture 2026-09-03 — conclusive.** Seven `get_tagged_entry_keys` calls across several stalls,
+grouped by which of the two queries (unscoped vs. scoped) ran:
+
+| scoped | progress_steps | elapsed_ms observed |
+|---|---|---|
+| False | 116 (every time) | 212, 793, 1280, 1630 |
+| True | 555 (every time) | 215, 2132, 2157 |
+
+The real work done is **identical** for a given query — `progress_steps` never varies — while elapsed
+time swings 5-10x for that exact same work. That mismatch is the direct proof: the extra 1-2s in the
+slow cases is pure SQLite lock-wait, not query cost, and it rules out the other live hypothesis (a
+missing index or bad query plan) outright, since the query's own cost is small and constant. Refined
+the mechanism while confirming it: the live WAL file was already small and well-checkpointed
+(~805KB/1.18GB, checked earlier this item) even under the old, more aggressive `wal_autocheckpoint=200`
+— so it isn't "reads scan a bloated WAL," it's that checkpointing that often, continuously through a
+long refresh pass, is itself a recurring small opportunity for a reader to collide with the writer.
+
+**Shipped 2026-09-03, with Josh's go-ahead.** `wal_autocheckpoint` raised 200 → 1000 (SQLite's own
+default) on both the reader-DB connection (`_LectioReaderStorage.setup_db`, services/reader_api.py)
+and the meta-DB connection (`get_meta_connection`, main.py) — kept in sync since both share the theory,
+matching how their two `_Timed*Connection` classes have always been kept in sync. The WebSub
+connection's own `wal_autocheckpoint=200` was deliberately left alone: separate, low-traffic DB, no
+evidence it's involved. Trade-off: checkpointing 5x less often means the WAL file can grow larger
+between restarts (previously capped ~800KB, now up to ~4MB) — fully reversible if that turns out to
+matter more than the contention it's meant to reduce. Updated the one test that pinned the old value
+(`tests/services/test_reader_storage.py`). Full suite green (3925).
+
+**Live capture 2026-09-03, right after deploy — inconclusive on the pragma, but found a second,
+bigger instrumentation gap.** Josh: fresh tab, All then NSFW, ~10s. Genuinely mixed evidence on
+`wal_autocheckpoint`: dozens of refresh's own per-feed queries logged 250-470ms with real,
+elapsed-proportional `progress_steps` (unaffected either way — that cost is inherent to the query, not
+lock-wait). But the NSFW-folder request itself spent ~5.8s in `meta_block`, entirely inside
+`uncategorized_derive=3166ms` and `global_note=2328ms` — and **neither produced any `slow_sql` line at
+all**, the same silence `get_tagged_entry_keys` used to show before its dedicated fix.
+
+Root cause, found by testing the assumption directly: `conn.execute(sql).fetchall()` — the single most
+common read pattern in this codebase — was **never actually going through `_TimedConnection`/
+`_TimedMetaConnection`'s cursor override**. Verified empirically: `sqlite3.Connection.execute()`'s
+built-in shortcut does not call the Python-level `cursor()` method at all, so it returns a bare
+`sqlite3.Cursor`, and `.fetchall()` on that bare cursor was invisible to every timing/progress-step
+instrument added this session. `get_tagged_entry_keys`'s explicit `for row in db.execute(...):` loop
+happened to dodge this (direct iteration on the cursor `execute()` itself returns still hits the
+override), which is why fixing it one-off worked — but it also meant the fix looked broader than it
+was. `get_all_reader_feed_urls`'s `{... for r in db.execute(...)}` and the `inactive_feed_rows`
+`conn.execute(...).fetchall()` query behind the "global_note" tick both hit the *real*, more common gap.
+
+**Fixed 2026-09-03, generically this time.** `_TimedConnection.execute()`/`executemany()` (reader) and
+`_TimedMetaConnection.execute()`/`executemany()` (meta) now delegate through `self.cursor()` instead of
+the built-in shortcut, guaranteeing every `conn.execute(...)` call returns a real `_TimedCursor`/
+`_TimedMetaCursor`. Both cursor classes gained a `fetchall()` override, logging its own
+`elapsed_ms`/`progress_steps` (a before/after delta, so it doesn't double-count whatever `execute()`
+already attributed) tagged `fetchall` in the log line — covering the dominant `conn.execute(...).fetchall()`
+pattern across the whole app in one place, not just the specific functions that happened to get hit.
+`get_all_reader_feed_urls` additionally got the same one-off treatment as `get_tagged_entry_keys` for
+its direct-iteration comprehension. Verified manually (chained `execute().fetchall()` now logs the
+fetch phase's real step count separately from execute()'s; the forced-lock regression test from the
+previous fix still shows the clean `progress_steps=0` signature after the restructure). Direct
+iteration via bare `for row in cursor:` without `.fetchall()` remains a known, narrower gap — not
+touched, same reasoning as before. Full suite green (3925).
+
+**Live capture 2026-09-03, same flow, worse — but finally conclusive.** Josh: "same flow, even longer
+to open NSFW." With `fetchall()` finally instrumented, the numbers came through clean and damning:
+
+| function/query | elapsed_ms | progress_steps |
+|---|---|---|
+| `get_all_reader_feed_urls` | 4775 | **6** |
+| `highlight_keywords` fetchall | 1205 | **3** |
+| `get_tagged_entry_keys` (unscoped) | 926 | 116 (matches known baseline exactly) |
+| `get_tagged_entry_keys` (scoped) | 1459 | 555 (matches known baseline exactly) |
+| `deleted_entries` fetchall (same query, two captures) | 546 / 993 | 142 / 142 |
+| `entry_lead_images` `SELECT *` fetchall (control case) | 510 | 1295 — genuine scan cost, correctly *not* flagged as lock-wait |
+
+Near-zero-to-small, *constant* `progress_steps` against wildly larger elapsed time, across five
+unrelated queries touching both DBs — this is no longer one function's quirk, it's pervasive. The
+`entry_lead_images` row is the control that proves the diagnostic still tells the two apart correctly
+when a query *is* doing real work. Total request time: ~17s, worse than any capture yet, right after
+the `wal_autocheckpoint=1000` deploy — this specific change was not helping.
+
+**Raised, and answered, one real doubt about the diagnostic itself**: near-zero `progress_steps` proves
+"not genuine query execution," but the progress handler *also* can't fire if the thread simply isn't
+scheduled at all — so this signature alone can't fully distinguish SQLite busy-handler lock-wait from
+GIL/CPU-scheduling starvation caused by refresh's own CPU-heavy work (lxml/feedparser). Resolved this
+without new tooling, from data already on hand: if GIL/CPU starvation were the dominant mechanism, pure
+Python/Jinja work in the *same* requests (`template_stream`) should show comparably severe blowups —
+and across every capture this session, `template_stream` stayed in a normal 150-800ms range while SQL
+calls in the same requests were hitting 5-10x their own baseline. That asymmetry — the damage is
+specific to SQL calls, not general to the thread's Python execution — is real evidence for genuine
+SQLite-level contention as the dominant mechanism, with at most the previously-measured modest (~2x)
+GIL contribution as a secondary factor.
+
+**`wal_autocheckpoint` reverted 1000 → 200, per Josh's call.** No shown benefit (this capture was worse,
+not better) against a real tradeoff (larger WAL between restarts) — not worth keeping on a hunch once
+the evidence argued against checkpoint frequency as the mechanism (the stalls span far more queries
+than that experiment ever targeted). `tests/services/test_reader_storage.py` reverted alongside it.
+
+**New lead, better-grounded: `PRAGMA synchronous`.** Checked the live DBs directly — both reader and
+meta connections were running SQLite's compiled-in `FULL` (2), never explicitly set to `NORMAL`
+anywhere in this codebase for either. In WAL mode, `FULL` fsyncs on every commit; `NORMAL` only syncs
+at checkpoint boundaries, with the *same* corruption-safety guarantee — the only difference is a
+theoretical loss of the single most recent commit if the OS itself crashes (not an app crash). Refresh
+commits roughly once per feed, thousands of times per pass; if each one pays a blocking `fsync()`, that
+is real, cumulative I/O-bound lock-hold time on a mechanism never previously examined. This is also
+already an established pattern elsewhere in this codebase: `thumb_cache`/`img_cache`/
+`youtube_video_duration` all explicitly set `synchronous=NORMAL` ("durability not critical"), while
+`ensure_starred_archive_schema` explicitly keeps `FULL` ("archive content is irreplaceable if the
+source goes down") — reader/meta DB data is more valuable than a disposable cache but nowhere near
+that bar; losing a few seconds of very recent read-state/tag changes on an actual OS crash is a low
+stakes failure mode for a self-hosted feed reader.
+
+**Shipped 2026-09-03, with Josh's go-ahead.** `PRAGMA synchronous=NORMAL` added to both the reader-DB
+connection (`_LectioReaderStorage.setup_db`) and the meta-DB connection (`get_meta_connection`),
+verified applied (`PRAGMA synchronous` reads back `1`/NORMAL on both). WebSub connection left alone —
+same reasoning as the checkpoint change, separate low-traffic DB. Full suite green (3925).
+
+**Live capture 2026-09-03, ~6s (down from ~10-17s but still not the 1-2s target).** Improvement, but
+the same near-zero-`progress_steps` signature persisted regardless. Ruled out the only other
+`wal_checkpoint(TRUNCATE)` call sites in the app (the truly blocking kind, unlike automatic passive
+checkpoints) as the cause: both are gated to the 3am daily-maintenance window, checked live
+(`maintenance_hour=3`, `maintenance_last_ran_at` = that morning) — nowhere near these afternoon/evening
+captures.
+
+**Root cause found and PROVEN, 2026-09-03 — it was never SQLite lock-wait.** The "near-zero
+progress_steps" signature was real, but its cause was misdiagnosed all day: `sqlite3`'s progress
+handler doesn't fire if the thread isn't scheduled at all, and neither does genuine SQLite lock-wait
+distinguish itself from that in this diagnostic — the earlier "template_stream stays normal" argument
+for ruling out GIL starvation was flawed (it only shows sequential steps *within one thread*, which
+says nothing about whether *other* threads were starved concurrently). Installed `py-spy` (via
+`uv tool install py-spy`, isolated from the project) and used `sudo` to ptrace directly into the live
+container's Python process — confirmed working with a single `py-spy dump`, then ran a 0.5s-interval
+sampling loop and asked Josh to reproduce the flow live. Correlated the exact stall
+(`GET /?folder_id=2&read_filter=unread`, 4662ms) against the samples covering that precise window:
+
+**Thread 1035 showed `(active+gil)` — genuinely holding the GIL, not just "active" like every other
+thread — continuously from the start of the stall through at least 4.2 seconds later, the entire time
+stuck inside feedparser's pure-Python SGML sanitizer** (`feedparser/sanitizer.py:883 _sanitize_html` →
+`feedparser/html.py feed` → `feedparser_sgmllib goahead`/`parse_starttag`/`finish_starttag`). Four
+consecutive samples in the middle of this span couldn't even get a stack trace (`py-spy: Bad address`
+reading `PyCodeObject`) — consistent with the interpreter being in a tight, uninterrupted loop the
+whole time, not idle. Every other thread — including the one servicing the foreground request, and
+refresh's own *other* SQL work (`Thread 53`, stuck in a different `paginated_query`) — sat waiting for
+the GIL that entire time. This is not SQLite contention at all; it's one feed's malformed/complex HTML
+content taking multiple seconds to parse in a slow, pure-Python fallback path that holds the GIL
+almost continuously while doing it.
+
+Confirmed feedparser really does still run this path despite Lectio's own
+`SanitizingFeedparserParser` passing `sanitize_html=False` to `feedparser.parse()`
+(`services/reader_sanitize.py`) specifically to avoid feedparser's destructive sanitizer — `sanitize_html`
+gates exactly one call site (`feedparser/mixin.py:585`), so the flag is doing what it's supposed to for
+sanitization *output*, but `feedparser/html.py`'s `BaseHTMLProcessor` (the same sgmllib-based lenient
+parser `HTMLSanitizer` subclasses) is also feedparser's general malformed-HTML/XML recovery mechanism
+— the "feed recovered via loose parser" warnings already logged constantly throughout every refresh
+pass are entries taking exactly this slow path, `sanitize_html` flag or not. Not yet traced to the
+exact single trigger (which entry, which feed) since it varies every cycle — the mechanism, not one
+bad feed, is the finding.
+
+**Not fixed yet — this needs its own design pass**, same as the earlier (now largely superseded)
+WAL/checkpoint lead was flagged as needing before its own experiments: candidates worth weighing
+(none attempted): a size/complexity guard before handing content to the slow path, isolating
+feed-processing in a separate OS process so the GIL doesn't matter across the boundary (a real
+architecture change), or investigating whether a faster HTML-repair library could substitute for
+feedparser's sgmllib fallback specifically for pathological content. The two SQLite pragma changes
+made earlier today (`synchronous=NORMAL`; `wal_autocheckpoint` already reverted) are not wrong to keep
+— `synchronous=NORMAL` is sound regardless per SQLite's own WAL-mode guidance — but neither was ever
+the actual fix for this symptom, and the "near-zero progress_steps" diagnostic built for this
+investigation, while valuable for what it proved, cannot itself distinguish SQLite lock-wait from GIL
+starvation — a lesson worth keeping for the next contention hunt.
+
+**Wrap-up 2026-09-03: what stayed, what didn't.** Reviewed the whole day's changes explicitly with
+Josh rather than leaving it implicit. Kept: all four connection-pooling/batching bug fixes (proven,
+independent of the GIL finding), all the diagnostic infrastructure (it's what found the real cause),
+and `synchronous=NORMAL` (sound on its own merits, Josh's call to keep despite not being the fix).
+`wal_autocheckpoint` stays reverted (already undone, no benefit shown).
+
+**Instrumentation gated behind `LECTIO_PERF_DEBUG` (default off)**, per Josh noticing the obvious
+follow-up: the progress-handler + timing wrapper adds a `sqlite3` progress-handler callback every 1000
+VM instructions plus a `perf_counter()` pair to *every single query* on both DBs, all the time — real,
+if small, overhead not worth paying outside an active investigation. `services/reader_api.py` now only
+installs `_TimedConnection` as reader's `CONNECTION_CLS` when the env var is set (verified: `reader.
+_storage._base.CONNECTION_CLS` is the plain default without it, `_TimedConnection` with it);
+`get_meta_connection()` in main.py picks `_TimedMetaConnection` vs. plain `sqlite3.Connection` as its
+connection factory the same way. Both read the flag independently (services must not import main).
+Documented in `.env`/`.env.example` alongside the other debug toggles. No dedicated test, following
+the precedent already set for this instrumentation (diagnostic-only in effect, verified manually both
+directions). Full suite green (3925, running with the flag off as usual).
 
 **Re-fetch/extraction quality & staleness** — the article being read is broken or stale; directly in the way of triage.
 
@@ -368,11 +829,15 @@ similar in spirit to the existing hide-Shorts/hide-unpremiered per-feed display 
 (`_DISPLAY_PREF_KEYS`). Not investigated — needs checking whether the feed data even distinguishes
 subscriber-only videos before sizing this.
 
-### Larger tag chips / "+^vx" sizing for a specific feed ("Surface")
+### NEXT UP (after the refresh-contention perf work wraps): bump the size of in-header buttons/tag chips
 
-"larger tags/'+^vx' for Surface" — cryptic as given; sounds like a request for bigger suggested-tag
-chips (or their controls) on a specific feed/folder (Microsoft Surface-related?) where the current
-size is hard to hit/read. Needs Josh to clarify exactly what and where before this is actionable.
+Clarified 2026-09-03 — supersedes the vaguer "larger tags/'+^vx' for Surface" report (2026-09-02,
+which read as feed-specific and was left unscoped for that reason). Not feed-specific: Josh wants
+the entry pane's post-header controls (the `+`/`-` tag-filter chips, suggested-tag chips, and
+whatever else lives in that row) sized up generally, across the app. Explicitly flagged as the next
+thing to pick up once the current refresh-contention perf thread (Tier 1) is done. Not scoped
+further yet — needs a look at the header markup/CSS to see whether this is a simple size-token bump
+or touches layout (chip-row wrapping, spacing against adjacent controls).
 
 ### Global ignored suggested-tags list, editable in Settings
 
@@ -578,6 +1043,30 @@ Remaining follow-ups:
   client-side on `tag_list`.
 - freeCodeCamp per-tag Ghost RSS (`/news/tag/<slug>/rss/`) remains a fallback
   if include-list recall from the main feed's window is insufficient.
+
+### Post-header tag-filter chips don't reflect a folder/global-scoped rule
+
+Found 2026-09-03: Josh promoted a batch of per-feed `tag_filter` rules to folder scope (hand-editing
+each rule's scope in the rule builder — there's no dedicated "promote" action). The automation
+itself keeps working fine — folder scope is fully supported by the after-refresh pipeline
+(`main.py:8317-8326` resolves each refreshed feed against the folder's feed set and applies the
+rule's spec per feed). What breaks is the entry pane's `+`/`-` tag chips: `get_feed_tag_filter_rule`
+(`main.py:7698`) explicitly filters `scope = 'feed'` and ignores folder/global rules by design (its
+own docstring says so, and always has — this isn't a regression from the promotion, just a gap the
+promotion exposed). So for a feed now covered only by a folder rule: the chips render **unlit** even
+though the folder rule is actively filtering that feed, and clicking one **creates a brand-new,
+separate, disabled per-feed rule** instead of editing the folder rule — silently forking the config
+rather than merging into it.
+
+Not fixed. The real shape of a fix is probably a small **scope hierarchy** the chip lookup walks —
+feed rule wins if present, else the covering folder rule, else a global rule — and the chip UI would
+need to show *which* level is currently governing a tag (a feed-level override sitting on top of a
+folder-level filter is a different situation than the folder rule alone) rather than just lit/unlit.
+`toggle_feed_tag_filter` would also need a decision for what "click a chip when only a folder rule
+covers this feed" should do — edit the folder rule (affects every other feed in it), or explicitly
+create a feed-level override/exception on top (closer to today's behavior, but currently happens
+silently with no indication that's what's occurring). Needs its own design pass, not sized further
+here.
 
 ### Article cleanup — Phase 2: promote a removal into a per-feed rule
 

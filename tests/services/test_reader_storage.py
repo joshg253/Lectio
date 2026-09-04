@@ -29,7 +29,11 @@ def test_make_reader_accepts_lectio_storage(tmp_path):
 
 
 def test_wal_autocheckpoint_applied(tmp_path):
-    """_LectioReaderStorage.setup_db sets wal_autocheckpoint=200 on each connection."""
+    """_LectioReaderStorage.setup_db sets wal_autocheckpoint=200 on each connection.
+
+    Briefly raised to 1000 2026-09-03 as a refresh-contention experiment, then
+    reverted the same day when it showed no benefit (Plan.md Tier 1, Read
+    Above/Below lead). See _LectioReaderStorage's docstring."""
     db_path = tmp_path / "wal.sqlite"
     conn = sqlite3.connect(str(db_path))
     try:

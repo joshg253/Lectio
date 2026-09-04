@@ -4,6 +4,8 @@ import sqlite3
 import threading
 from pathlib import Path
 
+import pytest
+
 from services.lead_images import LeadImageService
 
 
@@ -414,6 +416,241 @@ def test_fetch_and_store_lead_images_backfills_missing_inline(tmp_path: Path, mo
 
     assert row is not None
     assert row["image_url"] == "https://cdn.example.com/source-hero.jpg"
+
+
+def test_fetch_and_store_lead_images_batches_meta_writes(tmp_path: Path):
+    """The per-feed backfill loop must not commit one meta-DB transaction per
+    entry (Plan.md Tier 1 refresh-contention item) -- it should batch writes and
+    flush in chunks of _LEAD_IMAGE_WRITE_BATCH_SIZE, not one at a time."""
+    db_path = tmp_path / "meta.sqlite"
+    feed_url = "https://example.com/feed.xml"
+    entry_count = 30  # > _LEAD_IMAGE_WRITE_BATCH_SIZE (25), so a mid-loop flush fires too
+    entries = [
+        _FakeEntry(
+            feed_url=feed_url,
+            entry_id=f"p-{i}",
+            link=f"https://example.com/article-{i}",
+            content_html=f'<p>x</p><img src="https://cdn.example.com/inline-{i}.jpg" />',
+        )
+        for i in range(entry_count)
+    ]
+    service = _build_service(db_path, entries)
+
+    connection_opens = 0
+    real_get_meta_connection = service._get_meta_connection
+
+    def counting_get_meta_connection():
+        nonlocal connection_opens
+        connection_opens += 1
+        return real_get_meta_connection()
+
+    service._get_meta_connection = counting_get_meta_connection
+
+    service.fetch_and_store_lead_images_for_feed(feed_url, force_retry_negative=True)
+
+    with _make_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT entry_id, image_url FROM entry_lead_images WHERE feed_url = ? ORDER BY entry_id",
+            (feed_url,),
+        ).fetchall()
+
+    assert {row["entry_id"] for row in rows} == {f"p-{i}" for i in range(entry_count)}
+    for row in rows:
+        i = row["entry_id"].split("-")[1]
+        assert row["image_url"] == f"https://cdn.example.com/inline-{i}.jpg"
+    # Batched: far fewer connection opens than one per entry (saved_entry_ids +
+    # get_feed_strategy + two write flushes [25, then 5] + store_feed_strategy).
+    assert connection_opens < entry_count / 2
+
+
+def test_fetch_and_store_lead_images_batches_alt_writes(tmp_path: Path, monkeypatch):
+    """store_entry_image_alt's per-entry UPSERT (caption/title, a separate write
+    from the lead-image URL itself) must batch the same way -- it was the actual
+    slow_sql offender in the live 2026-09-03 capture (Plan.md Tier 1), left
+    un-batched by the first pass on purpose."""
+    db_path = tmp_path / "meta.sqlite"
+    feed_url = "https://example.com/feed.xml"
+    entry_count = 30
+    entries = [
+        _FakeEntry(
+            feed_url=feed_url,
+            entry_id=f"p-{i}",
+            link=f"https://example.com/article-{i}",
+            content_html="<p>no inline image</p>",
+        )
+        for i in range(entry_count)
+    ]
+    service = _build_service(db_path, entries)
+    monkeypatch.setattr(
+        service, "_fetch_source_lead_image", lambda link, **kw: f"https://cdn.example.com/hero-{link.rsplit('-', 1)[1]}.jpg"
+    )
+    # No title_text: a non-empty title would route through _title_is_feed_boilerplate,
+    # a real per-entry read unrelated to what this test is about (write batching).
+    monkeypatch.setattr(service, "fetch_entry_image_caption", lambda link, **kw: (f"alt-{link.rsplit('-', 1)[1]}", None))
+
+    lead_image_flushes = 0
+    real_flush_lead_images = service._flush_pending_lead_images
+
+    def counting_flush_lead_images(batch):
+        nonlocal lead_image_flushes
+        lead_image_flushes += 1
+        return real_flush_lead_images(batch)
+
+    alt_flushes = 0
+    real_flush_alts = service._flush_pending_image_alts
+
+    def counting_flush_alts(batch):
+        nonlocal alt_flushes
+        alt_flushes += 1
+        return real_flush_alts(batch)
+
+    service._flush_pending_lead_images = counting_flush_lead_images
+    service._flush_pending_image_alts = counting_flush_alts
+
+    service.fetch_and_store_lead_images_for_feed(feed_url, force_retry_negative=True)
+
+    with _make_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT entry_id, image_url, image_alt, image_title FROM entry_lead_images WHERE feed_url = ? ORDER BY entry_id",
+            (feed_url,),
+        ).fetchall()
+
+    assert {row["entry_id"] for row in rows} == {f"p-{i}" for i in range(entry_count)}
+    for row in rows:
+        i = row["entry_id"].split("-")[1]
+        assert row["image_url"] == f"https://cdn.example.com/hero-{i}.jpg"
+        assert row["image_alt"] == f"alt-{i}"
+        assert row["image_title"] is None
+    # One mid-loop chunk flush (at 25) plus one final flush in `finally`, for
+    # each of the two independent write streams -- not one commit per entry.
+    assert lead_image_flushes == 2
+    assert alt_flushes == 2
+
+
+def test_do_backfill_entry_list_batches_meta_writes_across_feeds(tmp_path: Path, monkeypatch):
+    """_do_backfill_entry_list (the render-triggered chunk backfill) processes a
+    rendered chunk that can span many feeds in one call; it must batch its
+    meta-DB writes the same way the per-feed refresh backfill does, not commit
+    once per visible entry (Plan.md Tier 1)."""
+    db_path = tmp_path / "meta.sqlite"
+    feed_count = 3
+    entries_per_feed = 10  # 30 total, > _LEAD_IMAGE_WRITE_BATCH_SIZE (25)
+    service = _build_service(db_path, [])
+    monkeypatch.setattr(
+        service,
+        "_fetch_feed_media_thumbnails",
+        lambda feed_url: {
+            f"https://example.com/{feed_url}/article-{i}": f"https://cdn.example.com/{feed_url}-{i}.jpg"
+            for i in range(entries_per_feed)
+        },
+    )
+
+    posts = [
+        {
+            "feed_url": f"feed-{f}",
+            "id": f"p-{f}-{i}",
+            "link": f"https://example.com/feed-{f}/article-{i}",
+        }
+        for f in range(feed_count)
+        for i in range(entries_per_feed)
+    ]
+
+    lead_image_flushes = 0
+    real_flush_lead_images = service._flush_pending_lead_images
+
+    def counting_flush_lead_images(batch):
+        nonlocal lead_image_flushes
+        lead_image_flushes += 1
+        return real_flush_lead_images(batch)
+
+    service._flush_pending_lead_images = counting_flush_lead_images
+
+    service._do_backfill_entry_list(posts)
+
+    with _make_conn(db_path) as conn:
+        rows = conn.execute("SELECT feed_url, entry_id, image_url FROM entry_lead_images ORDER BY feed_url, entry_id").fetchall()
+
+    assert {(row["feed_url"], row["entry_id"]) for row in rows} == {
+        (f"feed-{f}", f"p-{f}-{i}") for f in range(feed_count) for i in range(entries_per_feed)
+    }
+    for row in rows:
+        f, i = row["entry_id"].split("-")[1:]
+        assert row["image_url"] == f"https://cdn.example.com/feed-{f}-{i}.jpg"
+    # One mid-chunk flush (at 25) plus one final flush in `finally` -- not one
+    # commit per entry across the 30 entries spanning 3 feeds.
+    assert lead_image_flushes == 2
+
+
+def test_fetch_and_store_lead_images_flushes_pending_on_exception(tmp_path: Path, monkeypatch):
+    """A mid-loop exception (below the batch-size flush threshold) must not lose
+    the writes already buffered -- the `finally` around the per-entry loop is
+    what guarantees that, not just the periodic chunk flush."""
+    db_path = tmp_path / "meta.sqlite"
+    feed_url = "https://example.com/feed.xml"
+    entries = [
+        _FakeEntry(
+            feed_url=feed_url,
+            entry_id=f"p-{i}",
+            link=f"https://example.com/article-{i}",
+            content_html=f'<p>x</p><img src="https://cdn.example.com/inline-{i}.jpg" />',
+        )
+        for i in range(5)
+    ]
+    service = _build_service(db_path, entries)
+
+    real_extract = service.extract_entry_thumbnail_url
+    calls = 0
+
+    def flaky_extract(entry, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            raise RuntimeError("boom")
+        return real_extract(entry, **kwargs)
+
+    monkeypatch.setattr(service, "extract_entry_thumbnail_url", flaky_extract)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        service.fetch_and_store_lead_images_for_feed(feed_url, force_retry_negative=True)
+
+    with _make_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT entry_id FROM entry_lead_images WHERE feed_url = ?",
+            (feed_url,),
+        ).fetchall()
+
+    # The 3 entries processed before the raise were buffered, not yet
+    # individually committed -- they must still have reached the DB.
+    assert {row["entry_id"] for row in rows} == {"p-0", "p-1", "p-2"}
+
+
+def test_do_backfill_entry_list_flushes_pending_on_exception(tmp_path: Path, monkeypatch):
+    """Same finally-flush guarantee as the per-feed backfill, but for the
+    chunk-level path: an exception partway through one feed's group must not
+    lose writes already buffered from a feed processed earlier in the same
+    call."""
+    db_path = tmp_path / "meta.sqlite"
+    service = _build_service(db_path, [])
+
+    def fake_media_thumbnails(feed_url):
+        if feed_url == "feed-0":
+            return {f"https://example.com/feed-0/article-{i}": f"https://cdn.example.com/feed-0-{i}.jpg" for i in range(5)}
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(service, "_fetch_feed_media_thumbnails", fake_media_thumbnails)
+
+    posts = [
+        {"feed_url": "feed-0", "id": f"p-0-{i}", "link": f"https://example.com/feed-0/article-{i}"} for i in range(5)
+    ] + [{"feed_url": "feed-1", "id": "p-1-0", "link": "https://example.com/feed-1/article-0"}]
+
+    with pytest.raises(RuntimeError, match="boom"):
+        service._do_backfill_entry_list(posts)
+
+    with _make_conn(db_path) as conn:
+        rows = conn.execute("SELECT feed_url, entry_id FROM entry_lead_images").fetchall()
+
+    # feed-0's 5 entries were buffered before feed-1 raised -- still persisted.
+    assert {(row["feed_url"], row["entry_id"]) for row in rows} == {("feed-0", f"p-0-{i}") for i in range(5)}
 
 
 def test_negative_retry_window_skips_recent_null(tmp_path: Path):

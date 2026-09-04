@@ -682,6 +682,10 @@ class LeadImageService:
     _POSITIVE_REVALIDATE_PER_FEED_LIMIT = 12
     # Re-detect feed strategy weekly (or when still 'unknown')
     _STRATEGY_REDETECT_AFTER_SECONDS = 7 * 24 * 3600
+    # Refresh-contention investigation (Plan.md Tier 1): flush the per-feed
+    # backfill's batched meta-DB writes every N entries rather than only once at
+    # the end, bounding both memory and how much a crash mid-feed could lose.
+    _LEAD_IMAGE_WRITE_BATCH_SIZE = 25
 
     def __init__(
         self,
@@ -1171,14 +1175,25 @@ class LeadImageService:
         entry_id: str,
         alt_text: str | None,
         title_text: str | None = None,
+        *,
+        batch: list[tuple[str, str, str | None, str | None, float]] | None = None,
     ) -> None:
-        """Persist alt and title text for an entry's lead image to DB and in-memory cache."""
+        """Persist alt and title text for an entry's lead image to DB and in-memory cache.
+
+        `batch`, when given, defers only the final per-entry UPSERT (same convention
+        as `store_entry_lead_image`'s `batch` param) -- the boilerplate-title
+        read/clear above stays synchronous since it touches other entries' rows and
+        is rare, not the per-entry volume driver.
+        """
         if title_text and self._title_is_feed_boilerplate(feed_url, entry_id, title_text):
             self._clear_feed_boilerplate_title(feed_url, title_text)
             title_text = None
         key = (feed_url, entry_id)
         self._alt_cache[key] = alt_text
         self._title_cache[key] = title_text
+        if batch is not None:
+            batch.append((feed_url, entry_id, alt_text, title_text, time.time()))
+            return
         try:
             with self._get_meta_connection() as conn:
                 conn.execute(
@@ -1193,6 +1208,27 @@ class LeadImageService:
                 )
         except Exception:
             pass
+
+    def _flush_pending_image_alts(self, batch: list[tuple[str, str, str | None, str | None, float]]) -> None:
+        """Commit a batch of deferred `store_entry_image_alt` rows in one transaction."""
+        if not batch:
+            return
+        try:
+            with self._get_meta_connection() as conn:
+                conn.executemany(
+                    """
+                    INSERT INTO entry_lead_images (feed_url, entry_id, image_url, image_alt, image_title, fetched_at)
+                    VALUES (?, ?, NULL, ?, ?, ?)
+                    ON CONFLICT(feed_url, entry_id) DO UPDATE SET
+                        image_alt = excluded.image_alt,
+                        image_title = excluded.image_title
+                    """,
+                    batch,
+                )
+        except Exception:
+            pass
+        finally:
+            batch.clear()
 
     def get_cached_lead_image_url(self, feed_url: str, entry_id: str) -> str | None:
         """Return the resolved lead-image URL for an entry (in-memory, DB read-through).
@@ -1226,14 +1262,57 @@ class LeadImageService:
         self._cache[(feed_url, entry_id)] = url
         return url
 
-    def store_entry_lead_image(self, feed_url: str, entry_id: str, image_url: str | None) -> None:
-        """Persist a discovered (or absent) lead image to DB and in-memory cache."""
+    def store_entry_lead_image(
+        self,
+        feed_url: str,
+        entry_id: str,
+        image_url: str | None,
+        *,
+        batch: list[tuple[str, str, str | None, float]] | None = None,
+    ) -> None:
+        """Persist a discovered (or absent) lead image to DB and in-memory cache.
+
+        `batch`, when given, defers the meta-DB write: the row is appended
+        instead of committed immediately, and the caller is responsible for
+        flushing it via `_flush_pending_lead_images`. Used by the per-feed
+        backfill loop, which processes many entries in a row and would
+        otherwise take the meta connection's writer lock once per entry (see
+        Plan.md Tier 1's refresh-contention item). Cache and thumb-pin
+        behavior are unaffected either way.
+        """
         fetched_at = time.time()
         self._cache[(feed_url, entry_id)] = image_url
         self._fetched_at_cache[(feed_url, entry_id)] = fetched_at
+        if batch is not None:
+            batch.append((feed_url, entry_id, image_url, fetched_at))
+        else:
+            try:
+                with self._get_meta_connection() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(feed_url, entry_id) DO UPDATE SET
+                            image_url = excluded.image_url,
+                            fetched_at = excluded.fetched_at
+                        """,
+                        (feed_url, entry_id, image_url, fetched_at),
+                    )
+            except Exception:
+                pass
+        if image_url and self._thumb_pin_sink is not None:
+            try:
+                self._thumb_pin_sink(feed_url, entry_id, image_url)
+            except Exception:
+                LOGGER.warning("thumb-pin sink failed for %s/%s", feed_url, entry_id, exc_info=True)
+
+    def _flush_pending_lead_images(self, batch: list[tuple[str, str, str | None, float]]) -> None:
+        """Commit a batch of deferred `store_entry_lead_image` rows in one transaction."""
+        if not batch:
+            return
         try:
             with self._get_meta_connection() as conn:
-                conn.execute(
+                conn.executemany(
                     """
                     INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at)
                     VALUES (?, ?, ?, ?)
@@ -1241,15 +1320,12 @@ class LeadImageService:
                         image_url = excluded.image_url,
                         fetched_at = excluded.fetched_at
                     """,
-                    (feed_url, entry_id, image_url, fetched_at),
+                    batch,
                 )
         except Exception:
             pass
-        if image_url and self._thumb_pin_sink is not None:
-            try:
-                self._thumb_pin_sink(feed_url, entry_id, image_url)
-            except Exception:
-                LOGGER.warning("thumb-pin sink failed for %s/%s", feed_url, entry_id, exc_info=True)
+        finally:
+            batch.clear()
 
     def _write_worker_loop(self) -> None:
         """Drain queued request-path writes, each under its captured tenancy."""
@@ -2011,8 +2087,6 @@ class LeadImageService:
             saved_entry_ids = set()
 
         now = time.time()
-        positive_revalidated = 0
-        feed_media_thumbs: dict[str, str] | None = None  # lazy: fetched once if needed
 
         # Load stored strategy; skip YouTube and manually-locked none feeds entirely.
         strategy, detected_at, manual = self.get_feed_strategy(feed_url)
@@ -2022,12 +2096,72 @@ class LeadImageService:
         if strategy == "none" and manual:
             return
 
-        # Track which methods actually yield images so we can store/update strategy.
+        # Batch this feed's meta-DB writes instead of committing one per entry
+        # (see store_entry_lead_image's docstring / Plan.md Tier 1) -- flushed
+        # periodically below and always in the `finally` so an early return or
+        # an unexpected exception mid-loop can't drop buffered rows. Alt/caption
+        # writes (a separate UPSERT on the same table) get their own pending list
+        # since they land in fewer branches and use different columns.
+        pending: list[tuple[str, str, str | None, float]] = []
+        pending_alts: list[tuple[str, str, str | None, str | None, float]] = []
+        try:
+            _found_inline, _found_media_rss, _found_og_scrape, need_redetect = self._backfill_feed_entries(
+                feed_url,
+                entries,
+                reader,
+                saved_entry_ids,
+                now,
+                force_retry_negative,
+                strategy,
+                need_redetect,
+                pending,
+                pending_alts,
+            )
+        finally:
+            self._flush_pending_lead_images(pending)
+            self._flush_pending_image_alts(pending_alts)
+
+        # Store detected strategy based on what actually worked this cycle.
+        if need_redetect:
+            if _found_media_rss:
+                self.store_feed_strategy(feed_url, "media_rss")
+            elif _found_og_scrape:
+                self.store_feed_strategy(feed_url, "og_scrape")
+            elif _found_inline:
+                self.store_feed_strategy(feed_url, "inline")
+            # else: leave as 'unknown' — feed may have no images at all
+
+    def _backfill_feed_entries(
+        self,
+        feed_url: str,
+        entries: list,
+        reader,
+        saved_entry_ids: set[str],
+        now: float,
+        force_retry_negative: bool,
+        strategy: str,
+        need_redetect: bool,
+        pending: list[tuple[str, str, str | None, float]],
+        pending_alts: list[tuple[str, str, str | None, str | None, float]],
+    ) -> tuple[bool, bool, bool, bool]:
+        """Per-entry loop body of fetch_and_store_lead_images_for_feed, split out so
+        the caller can guarantee `pending`/`pending_alts` are flushed via try/finally
+        regardless of how this returns. Returns (found_inline, found_media_rss,
+        found_og_scrape, need_redetect) -- need_redetect can flip False mid-loop
+        (media_rss piggyback detection) so the caller needs the final value, not
+        just the one it passed in."""
+        positive_revalidated = 0
+        feed_media_thumbs: dict[str, str] | None = None  # lazy: fetched once if needed
         _found_inline = False
         _found_media_rss = False
         _found_og_scrape = False
 
         for entry in entries:
+            if len(pending) >= self._LEAD_IMAGE_WRITE_BATCH_SIZE:
+                self._flush_pending_lead_images(pending)
+            if len(pending_alts) >= self._LEAD_IMAGE_WRITE_BATCH_SIZE:
+                self._flush_pending_image_alts(pending_alts)
+
             feed_url_str = str(getattr(entry, "feed_url", "") or "")
             entry_id_str = str(getattr(entry, "id", "") or "")
             if not feed_url_str or not entry_id_str:
@@ -2066,10 +2200,10 @@ class LeadImageService:
                         source_image = self._plugin_or_source_lead_image(
                             entry, entry_link, is_webcomic=self._is_feed_webcomic(feed_url))
                         if source_image:
-                            self.store_entry_lead_image(feed_url_str, entry_id_str, source_image)
+                            self.store_entry_lead_image(feed_url_str, entry_id_str, source_image, batch=pending)
                         else:
                             # Keep existing image but advance fetch time to avoid repeated stale retries.
-                            self.store_entry_lead_image(feed_url_str, entry_id_str, cached)
+                            self.store_entry_lead_image(feed_url_str, entry_id_str, cached, batch=pending)
                         positive_revalidated += 1
                         time.sleep(0.15)
                         continue
@@ -2082,7 +2216,7 @@ class LeadImageService:
                 _found_inline = True
                 # Always persist the inline image so fast_only=True lookups at
                 # render time find it in the cache without re-parsing the entry.
-                self.store_entry_lead_image(feed_url_str, entry_id_str, inline)
+                self.store_entry_lead_image(feed_url_str, entry_id_str, inline, batch=pending)
                 # On an og_scrape feed the source page is the authoritative image
                 # source — fall through even when an inline image exists (e.g. an
                 # album cover) so we can find the real hero image.
@@ -2137,7 +2271,7 @@ class LeadImageService:
                 feed_thumb = feed_media_thumbs.get(entry_link)
                 if feed_thumb:
                     _found_media_rss = True
-                    self.store_entry_lead_image(feed_url_str, entry_id_str, feed_thumb)
+                    self.store_entry_lead_image(feed_url_str, entry_id_str, feed_thumb, batch=pending)
                     time.sleep(0.05)
                     continue
 
@@ -2148,7 +2282,7 @@ class LeadImageService:
                 # here would blank a perfectly good panel.
                 plugin_image = self._plugin_or_source_lead_image(
                     entry, entry_link, is_webcomic=strategy == "webcomic")
-                self.store_entry_lead_image(feed_url_str, entry_id_str, plugin_image)
+                self.store_entry_lead_image(feed_url_str, entry_id_str, plugin_image, batch=pending)
                 time.sleep(0.05)
                 continue
             # For feeds whose images are reliably inline, source scraping rarely
@@ -2161,15 +2295,19 @@ class LeadImageService:
                 image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
                 if image_url:
                     _found_og_scrape = True
-                    self._maybe_store_alt_from_cache(feed_url_str, entry_id_str, entry_link, image_url, is_webcomic=is_wc)
-                self.store_entry_lead_image(feed_url_str, entry_id_str, image_url)
+                    self._maybe_store_alt_from_cache(
+                        feed_url_str, entry_id_str, entry_link, image_url, is_webcomic=is_wc, alt_batch=pending_alts
+                    )
+                self.store_entry_lead_image(feed_url_str, entry_id_str, image_url, batch=pending)
                 time.sleep(0.15)
                 continue
             image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
             if image_url:
                 _found_og_scrape = True
-                self._maybe_store_alt_from_cache(feed_url_str, entry_id_str, entry_link, image_url, is_webcomic=is_wc)
-                self.store_entry_lead_image(feed_url_str, entry_id_str, image_url)
+                self._maybe_store_alt_from_cache(
+                    feed_url_str, entry_id_str, entry_link, image_url, is_webcomic=is_wc, alt_batch=pending_alts
+                )
+                self.store_entry_lead_image(feed_url_str, entry_id_str, image_url, batch=pending)
             elif not inline:
                 # Source found nothing and there was no inline image — record the
                 # negative result. But when we fell through here from an og_scrape
@@ -2177,18 +2315,10 @@ class LeadImageService:
                 # transient source miss must NOT overwrite that good image with
                 # None — otherwise brand-new posts (whose og:image isn't generated
                 # yet at first fetch) lose their thumbnail until the 4h retry.
-                self.store_entry_lead_image(feed_url_str, entry_id_str, None)
+                self.store_entry_lead_image(feed_url_str, entry_id_str, None, batch=pending)
             time.sleep(0.15)
 
-        # Store detected strategy based on what actually worked this cycle.
-        if need_redetect:
-            if _found_media_rss:
-                self.store_feed_strategy(feed_url, "media_rss")
-            elif _found_og_scrape:
-                self.store_feed_strategy(feed_url, "og_scrape")
-            elif _found_inline:
-                self.store_feed_strategy(feed_url, "inline")
-            # else: leave as 'unknown' — feed may have no images at all
+        return _found_inline, _found_media_rss, _found_og_scrape, need_redetect
 
     # ------------------------------------------------------------------
     # Chunk-level visible-entry backfill
@@ -2243,50 +2373,68 @@ class LeadImageService:
         except Exception:
             pass
 
-        for feed_url, entry_pairs in by_feed.items():
-            strategy = strategies.get(feed_url, "unknown")
-            if strategy == "youtube":
-                continue
-
-            # One feedparser call per feed to grab any media:thumbnail/content.
-            feed_media = self._fetch_feed_media_thumbnails(feed_url)
-
-            for entry_id, entry_link in entry_pairs:
-                if not entry_link:
-                    continue
-                # Re-check cache — may have been populated by the regular backfill.
-                cached = self._cache.get((feed_url, entry_id))
-                if (
-                    cached
-                    and feed_url not in self._debug_bypass_feeds
-                    and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached)
-                ):
+        # Batch this chunk's meta-DB writes across every feed in it, same
+        # rationale/shape as fetch_and_store_lead_images_for_feed (Plan.md Tier 1).
+        # A rendered chunk can span many feeds' worth of entries in one call, and
+        # the chunk-backfill semaphore already serializes calls to this method, so
+        # per-entry commits here were still one lock acquisition per visible entry.
+        pending: list[tuple[str, str, str | None, float]] = []
+        pending_alts: list[tuple[str, str, str | None, str | None, float]] = []
+        try:
+            for feed_url, entry_pairs in by_feed.items():
+                strategy = strategies.get(feed_url, "unknown")
+                if strategy == "youtube":
                     continue
 
-                # Only use feed media thumbnails when not explicitly locked to og_scrape.
-                if strategy != "og_scrape":
-                    feed_thumb = feed_media.get(entry_link)
-                    if feed_thumb:
-                        self.store_entry_lead_image(feed_url, entry_id, feed_thumb)
-                        time.sleep(0.05)
+                # One feedparser call per feed to grab any media:thumbnail/content.
+                feed_media = self._fetch_feed_media_thumbnails(feed_url)
+
+                for entry_id, entry_link in entry_pairs:
+                    if len(pending) >= self._LEAD_IMAGE_WRITE_BATCH_SIZE:
+                        self._flush_pending_lead_images(pending)
+                    if len(pending_alts) >= self._LEAD_IMAGE_WRITE_BATCH_SIZE:
+                        self._flush_pending_image_alts(pending_alts)
+
+                    if not entry_link:
+                        continue
+                    # Re-check cache — may have been populated by the regular backfill.
+                    cached = self._cache.get((feed_url, entry_id))
+                    if (
+                        cached
+                        and feed_url not in self._debug_bypass_feeds
+                        and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached)
+                    ):
                         continue
 
-                # For inline/enclosure/none-classified feeds, source scraping won't help.
-                if strategy in ("inline", "artwork", "none", "enclosure"):
-                    continue
+                    # Only use feed media thumbnails when not explicitly locked to og_scrape.
+                    if strategy != "og_scrape":
+                        feed_thumb = feed_media.get(entry_link)
+                        if feed_thumb:
+                            self.store_entry_lead_image(feed_url, entry_id, feed_thumb, batch=pending)
+                            time.sleep(0.05)
+                            continue
 
-                is_wc = strategy == "webcomic" or self._is_feed_webcomic(feed_url)
-                image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
-                if not image_url:
-                    # Source page yielded nothing — e.g. a JS-only art portfolio
-                    # (ArtStation) with no og:image, or a feed whose strategy was
-                    # mis-detected. Fall back to the entry's own inline feed-content
-                    # image instead of caching a blank thumbnail.
-                    image_url = self._inline_from_reader(feed_url, entry_id)
-                if image_url:
-                    self._maybe_store_alt_from_cache(feed_url, entry_id, entry_link, image_url, is_webcomic=is_wc)
-                self.store_entry_lead_image(feed_url, entry_id, image_url)
-                time.sleep(0.15)
+                    # For inline/enclosure/none-classified feeds, source scraping won't help.
+                    if strategy in ("inline", "artwork", "none", "enclosure"):
+                        continue
+
+                    is_wc = strategy == "webcomic" or self._is_feed_webcomic(feed_url)
+                    image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
+                    if not image_url:
+                        # Source page yielded nothing — e.g. a JS-only art portfolio
+                        # (ArtStation) with no og:image, or a feed whose strategy was
+                        # mis-detected. Fall back to the entry's own inline feed-content
+                        # image instead of caching a blank thumbnail.
+                        image_url = self._inline_from_reader(feed_url, entry_id)
+                    if image_url:
+                        self._maybe_store_alt_from_cache(
+                            feed_url, entry_id, entry_link, image_url, is_webcomic=is_wc, alt_batch=pending_alts
+                        )
+                    self.store_entry_lead_image(feed_url, entry_id, image_url, batch=pending)
+                    time.sleep(0.15)
+        finally:
+            self._flush_pending_lead_images(pending)
+            self._flush_pending_image_alts(pending_alts)
 
     def _inline_from_reader(self, feed_url: str, entry_id: str) -> str | None:
         """Best-effort inline lead image from an entry's stored feed content.
@@ -3774,7 +3922,14 @@ class LeadImageService:
         return _finalize(None, _strip(alt_text), source_html)
 
     def _maybe_store_alt_from_cache(
-        self, feed_url: str, entry_id: str, entry_link: str, image_url: str, is_webcomic: bool = False
+        self,
+        feed_url: str,
+        entry_id: str,
+        entry_link: str,
+        image_url: str,
+        is_webcomic: bool = False,
+        *,
+        alt_batch: list[tuple[str, str, str | None, str | None, float]] | None = None,
     ) -> None:
         """If source HTML is in cache and alt not yet stored, extract and persist alt/title.
 
@@ -3786,7 +3941,7 @@ class LeadImageService:
         alt, title = self.fetch_entry_image_caption(
             entry_link, lead_image_url=image_url, is_webcomic=is_webcomic
         )
-        self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title)
+        self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title, batch=alt_batch)
 
     def _fetch_source_lead_image(self, entry_link: str, is_webcomic: bool = False) -> str | None:
         parsed = urlparse(entry_link)

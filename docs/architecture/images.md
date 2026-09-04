@@ -628,6 +628,64 @@ and no thumbnail. Comparison is now on host+path (`_same_file_key`); the cached
 URL is still *served* untouched, cache-buster and all, since rewriting it is the
 ComicControl mistake `_promote_known_thumbnail` documents.
 
+## Batched meta-DB writes during the per-feed backfill
+
+`fetch_and_store_lead_images_for_feed` (the refresh-time backfill, one call per
+feed) used to call `store_entry_lead_image` once per qualifying entry, each
+call opening its own meta-DB transaction and committing on exit. Under a
+concurrent refresh pass, dozens of these single-row commits stack up behind
+other threads' writes on the same per-thread meta connection (`get_meta_connection`
+hands out one persistent connection per thread, and SQLite allows exactly one
+writer at a time even in WAL mode) — see Plan.md Tier 1's refresh-contention
+item, where a live capture caught a single-row `entry_lead_images` upsert
+taking 5.8-7.9s of pure `SQLITE_BUSY` retry.
+
+`store_entry_lead_image` now takes an optional `batch` list: when given, it
+appends `(feed_url, entry_id, image_url, fetched_at)` instead of writing
+immediately (cache update and the thumb-pin sink call are unaffected — see
+above). `fetch_and_store_lead_images_for_feed` passes its own `pending` list
+to every call, flushing it via one `executemany` (`_flush_pending_lead_images`)
+every `_LEAD_IMAGE_WRITE_BATCH_SIZE` (25) entries, and always once more in a
+`finally` around the loop so an early return or an unexpected exception
+mid-feed can't drop already-buffered rows — only the last partial chunk (at
+most 24 entries) is at risk on a hard crash, versus none before. This is a
+per-feed batch, not a global one: two feeds backfilling concurrently in
+different threads still each hold the writer lock only for their own chunk's
+`executemany`, not for each other's.
+
+Everywhere else `store_entry_lead_image` is called — the async request-path
+writer and DeviantArt/dev.to API seeding — still commits per call; the
+per-feed backfill's loop and the chunk-level backfill below were sized as
+real, measured contributors (see Plan.md).
+
+**The chunk-level backfill (`_do_backfill_entry_list`) got the same treatment
+2026-09-03.** It's the render-triggered counterpart to the per-feed backfill —
+called with whichever visible entries on a rendered page still lack a cached
+thumbnail — and shares the exact same per-entry-commit shape, just grouped by
+feed differently: one call can span many feeds' worth of entries (the chunk
+backfill semaphore already serializes *calls* to this method, but each call
+could still commit once per entry across every feed in that chunk). It builds
+the same two `pending`/`pending_alts` lists across its `for feed_url,
+entry_pairs in by_feed.items(): for entry_id, entry_link in entry_pairs:`
+double loop, flushing at the same 25-entry/`finally` points — a chunk
+spanning several feeds still only pays for a handful of `executemany` calls,
+not one per visible thumbnail.
+
+**`store_entry_image_alt` got the same treatment 2026-09-03**, after a live
+capture showed it, not `store_entry_lead_image`, as the actual `slow_sql`
+offender post-fix (8.5s and 3.7s upserts — see Plan.md). It's a separate
+UPSERT on the same `entry_lead_images` row (different columns: `image_alt`/
+`image_title` instead of `image_url`), reached from 2 of the loop's branches
+via `_maybe_store_alt_from_cache` right after a source-page fetch resolves a
+caption. It takes its own optional `batch` param and its own
+`_flush_pending_image_alts`, flushed at the same 25-entry/`finally` points as
+the lead-image batch above but as an independent list — the two streams don't
+share a flush, so one running long doesn't delay the other. The
+boilerplate-title read (`_title_is_feed_boilerplate`) and its rare
+feed-wide clear (`_clear_feed_boilerplate_title`) stay synchronous:
+they touch *other* entries' rows, not the one being written, and aren't the
+per-entry volume driver.
+
 ## DeviantArt mature images: signed for minutes, cached for good
 
 DeviantArt serves images from wixmp with a signed JWT in the query string. Ordinary deviations are *usually* signed with no `exp` claim at all (which is not the same as permanent — see below); **mature** ones are signed for about **15 minutes** with a readable `exp`, and every variant (`content.src` and every thumb) shares the expiry — so there is no long-lived variant to prefer, and a stored URL is normally dead by the time the post is read, showing neither image nor thumbnail.
@@ -660,7 +718,10 @@ there (`set_thumb_pin_sink`, wired in `main.py` at import time — the same
 shape as `set_page_tag_sink`) sees every candidate exactly once, without
 `services/lead_images.py` importing anything from `main` (the fetch/cache
 code has to live in `main.py`, where `httpx`/`url_guard`/`img_cache` already
-live; services must not import main).
+live; services must not import main). The cache update and this sink call are
+always synchronous; only the meta-DB write can be deferred (`batch=` — see
+"Batched meta-DB writes" below), so the pin still fires the moment a signed
+URL is seen regardless of when its row actually commits.
 
 **Detection is host-agnostic.** `_url_is_signed` reuses
 `_IMG_CACHE_VOLATILE_PARAMS` — the same query-param set `_img_cache_key_url`

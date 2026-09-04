@@ -14,6 +14,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import sys
 import tempfile
 import threading
 import time
@@ -654,6 +655,13 @@ def _static_asset_version() -> str:
 
 STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION") or _static_asset_version()
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
+# Gates the slow-SQL timing/progress-step instrumentation (Plan.md Tier 1
+# refresh-contention item) on both the meta and reader DB connections. Off by
+# default: a sqlite3 progress handler fires every 1000 VM instructions on
+# every statement, and the timing wrapper adds a perf_counter() pair per call
+# -- real, if small, overhead on every single query, all the time, not worth
+# paying outside an active investigation. Flip on when chasing a live stall.
+LECTIO_PERF_DEBUG = os.getenv("LECTIO_PERF_DEBUG", "0") == "1"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -2074,6 +2082,20 @@ _meta_structure_cache = _PerUserDict()
 def invalidate_meta_structure_cache() -> None:
     with _meta_structure_lock:
         _meta_structure_cache.clear()
+    # Refresh-contention investigation (Plan.md Tier 1): this cache is designed
+    # to invalidate only on explicit user mutations (subscribe/unsubscribe,
+    # folder changes, feed disable/enable) -- a 2026-09-03 live capture showed
+    # it going cold roughly every 30-45s during ordinary browsing (no such
+    # action taken), each miss costing 5+ real seconds of get_meta_structure_snapshot's
+    # 5-query rebuild under refresh contention. There are 37 call sites; rather
+    # than audit them all, log the caller so the next occurrence says which one
+    # actually fired during a routine refresh pass.
+    try:
+        caller = sys._getframe(1)
+        LOGGER.info("[perf] invalidate_meta_structure_cache from %s:%d (%s)",
+                    caller.f_code.co_filename, caller.f_lineno, caller.f_code.co_name)
+    except Exception:
+        pass
 
 
 def invalidate_unread_counts_cache() -> None:
@@ -3076,32 +3098,90 @@ _meta_conn_local = threading.local()
 # reader-DB one.
 _SLOW_SQL_MS = 250
 
+# "Read Above/Below" lead: elapsed_ms alone can't distinguish a genuinely slow
+# query from one that spent nearly all its wall time in SQLite's busy-handler
+# retry loop -- both look identical from outside. The progress handler fires
+# every _PROGRESS_HANDLER_N VM instructions *during execution*, not during the
+# busy-wait, so near-zero steps on a "slow" query is direct proof of lock-wait.
+# Read-only: the handler always returns 0, never aborting a statement.
+_PROGRESS_HANDLER_N = 1000
+
 
 class _TimedMetaCursor(sqlite3.Cursor):
     def execute(self, sql, parameters=()):
+        conn = cast("_TimedMetaConnection", self.connection)
+        conn._lectio_progress_steps = 0
+        self._lectio_sql = sql
         start = time.perf_counter()
         try:
             return super().execute(sql, parameters)
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d sql=%s",
-                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d progress_steps=%d sql=%s",
+                            int(elapsed_ms), conn._lectio_progress_steps, " ".join(str(sql).split())[:200])
+
+    def executemany(self, sql, parameters):
+        conn = cast("_TimedMetaConnection", self.connection)
+        conn._lectio_progress_steps = 0
+        start = time.perf_counter()
+        try:
+            return super().executemany(sql, parameters)
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if elapsed_ms > _SLOW_SQL_MS:
+                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d progress_steps=%d executemany sql=%s",
+                            int(elapsed_ms), conn._lectio_progress_steps, " ".join(str(sql).split())[:200])
+
+    def fetchall(self):
+        # `execute()` above only times statement *preparation*; a plain SELECT
+        # doesn't eagerly scan, so the real cost of `conn.execute(...).fetchall()`
+        # (the dominant read pattern in this codebase) happened here, previously
+        # invisible to slow-SQL logging entirely -- found 2026-09-03 chasing a
+        # live stall that traced back to exactly this shape (Plan.md Tier 1).
+        # Separate before/after progress-step snapshot so this doesn't double
+        # count whatever execute() already attributed to itself.
+        conn = cast("_TimedMetaConnection", self.connection)
+        steps_before = conn._lectio_progress_steps
+        start = time.perf_counter()
+        try:
+            return super().fetchall()
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if elapsed_ms > _SLOW_SQL_MS:
+                sql = getattr(self, "_lectio_sql", "?")
+                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d progress_steps=%d fetchall sql=%s",
+                            int(elapsed_ms), conn._lectio_progress_steps - steps_before, " ".join(str(sql).split())[:200])
 
 
 class _TimedMetaConnection(sqlite3.Connection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._lectio_progress_steps = 0
+        self.set_progress_handler(self._lectio_on_progress, _PROGRESS_HANDLER_N)
+
+    def _lectio_on_progress(self) -> int:
+        self._lectio_progress_steps += 1
+        return 0  # never abort the statement
+
     def cursor(self, factory=None):
         return super().cursor(factory or _TimedMetaCursor)
 
     def execute(self, sql, parameters=()):
-        start = time.perf_counter()
-        try:
-            return super().execute(sql, parameters)
-        finally:
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d sql=%s",
-                            int(elapsed_ms), " ".join(str(sql).split())[:200])
+        # Delegate to self.cursor() rather than the sqlite3.Connection.execute()
+        # shortcut directly: the shortcut returns a bare sqlite3.Cursor (verified
+        # -- it does not route through the overridden cursor() factory at all),
+        # so `conn.execute(...).fetchall()` -- the dominant read pattern in this
+        # module -- was silently bypassing _TimedMetaCursor's fetchall() override
+        # above. Going through self.cursor().execute(...) guarantees callers
+        # always get a _TimedMetaCursor back.
+        return self.cursor().execute(sql, parameters)
+
+    def executemany(self, sql, parameters):
+        # Batched-write flush points (lead images, alt/title, entry_read_state)
+        # use conn.executemany directly -- routed through self.cursor() for the
+        # same reason execute() is above.
+        return self.cursor().executemany(sql, parameters)
 
 
 def get_meta_connection() -> sqlite3.Connection:
@@ -3130,7 +3210,8 @@ def get_meta_connection() -> sqlite3.Connection:
     conn = pool.get(uid)
     if conn is not None:
         return conn
-    conn = sqlite3.connect(str(tenancy.meta_db_path(uid)), timeout=10.0, factory=_TimedMetaConnection)
+    _meta_factory = _TimedMetaConnection if LECTIO_PERF_DEBUG else sqlite3.Connection
+    conn = sqlite3.connect(str(tenancy.meta_db_path(uid)), timeout=10.0, factory=_meta_factory)
     conn.row_factory = sqlite3.Row
     # WAL + busy_timeout so overlapping writers (e.g. background refresh writing
     # folder_feeds while a request persists a setting) wait briefly instead of
@@ -3139,7 +3220,18 @@ def get_meta_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=10000")
     # Keep WAL small: checkpoint at 200 pages (~800KB) rather than the default
     # 1000 pages so the file never balloons to tens of MB between restarts.
+    # Raised to 1000 and reverted same day, 2026-09-03 (Plan.md Tier 1, Read
+    # Above/Below lead) -- see services/reader_api.py's _LectioReaderStorage
+    # docstring for the full writeup: the experiment showed no benefit (a live
+    # capture right after deploy was worse, not better) and a follow-up
+    # capture found near-zero real work across many different queries in both
+    # DBs, arguing against checkpoint frequency as the mechanism.
     conn.execute("PRAGMA wal_autocheckpoint=200")
+    # synchronous=NORMAL 2026-09-03 (Plan.md Tier 1, Read Above/Below lead),
+    # replacing SQLite's compiled-in FULL default -- see
+    # services/reader_api.py's _LectioReaderStorage docstring for the full
+    # writeup; kept in sync here since both connections share the theory.
+    conn.execute("PRAGMA synchronous=NORMAL")
     pool[uid] = conn
     return conn
 
@@ -5823,12 +5915,32 @@ def get_all_reader_feed_urls(include_kept: bool = False) -> set[str]:
     Kept feeds (unsubscribed-but-retained for curation) are excluded by default
     so they don't resurface in the tree / All Feeds / Uncategorized / counts. The
     Saved/Kept view passes include_kept=True to browse them.
+
+    Goes through get_reader()'s pooled connection rather than a fresh
+    sqlite3.connect() per call -- the same anti-pattern fixed 2026-09-03 for
+    list_entries_for_feeds' sort paths (Plan.md Tier 1). This function is called
+    unconditionally on every home-route render (nested inside the
+    "structure_snapshot" perf tick, which is what was actually timing this, not
+    the cached snapshot lookup its name suggests) plus a dozen other call
+    sites, so a raw connection here paid file-open/schema-load cost, with a
+    shorter busy_timeout (5s vs 10s) than the pooled connection, on every
+    single request -- and was invisible to slow-SQL logging since a bare
+    sqlite3.connect() bypasses _TimedConnection entirely.
+
+    Logged with its own progress_steps when slow, same reasoning as
+    get_tagged_entry_keys: the `{... for r in db.execute(...)}` comprehension
+    fetches lazily, so a plain execute()-level timer would only ever see the
+    prepare cost, not the real scan -- confirmed live 2026-09-03 when this
+    function measured 3166ms with nothing logged to explain it.
     """
-    conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
-    try:
-        urls = {str(r[0]) for r in conn.execute("SELECT url FROM feeds")}
-    finally:
-        conn.close()
+    with get_reader() as reader:
+        db = reader._storage.get_db()
+        _start = time.perf_counter()
+        urls = {str(r[0]) for r in db.execute("SELECT url FROM feeds")}
+        _elapsed_ms = int((time.perf_counter() - _start) * 1000)
+        if _elapsed_ms > 200:
+            LOGGER.info("[perf] get_all_reader_feed_urls=%dms rows=%d progress_steps=%d",
+                        _elapsed_ms, len(urls), getattr(db, "_lectio_progress_steps", 0))
     if not include_kept:
         urls -= get_kept_feed_urls()
     return urls
@@ -8213,7 +8325,7 @@ def _apply_hide_paywalled(refreshed_feed_urls: set[str]) -> int:
             } & set(refreshed_feed_urls)
         if not targets:
             return 0
-        marked = 0
+        to_mark: list[tuple[str, str]] = []
         with get_reader() as reader:
             for feed_u in targets:
                 for entry in reader.get_entries(feed=feed_u, read=False):
@@ -8223,13 +8335,25 @@ def _apply_hide_paywalled(refreshed_feed_urls: set[str]) -> int:
                     elif entry.summary:
                         body = str(entry.summary)
                     if is_paywall_stub(body, str(entry.link or "")):
-                        reader.mark_entry_as_read((feed_u, entry.id))
-                        upsert_entry_read_state(feed_u, str(entry.id))
-                        marked += 1
-        if marked:
+                        to_mark.append((feed_u, str(entry.id)))
+            for feed_u, entry_id in to_mark:
+                reader.mark_entry_as_read((feed_u, entry_id))
+        if to_mark:
+            # One batched write instead of upsert_entry_read_state per entry --
+            # same fix, and same shape, as _mark_existing_shorts_read's sibling
+            # pass (see Plan.md Tier 1 refresh-contention item): a feed with many
+            # paywalled stubs was taking the meta writer lock once per entry
+            # during an active refresh pass instead of once per feed.
+            when = datetime.now().isoformat()
+            with get_meta_connection() as conn:
+                conn.executemany(
+                    "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
+                    " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
+                    [(fu, eid, when) for fu, eid in to_mark],
+                )
             invalidate_unread_counts_cache()
-            LOGGER.info("[automation] hide-paywalled marked %d stub(s) read", marked)
-        return marked
+            LOGGER.info("[automation] hide-paywalled marked %d stub(s) read", len(to_mark))
+        return len(to_mark)
     except Exception:
         LOGGER.exception("[automation] error applying hide-paywalled")
         return 0
@@ -10952,12 +11076,26 @@ def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, s
     keys: set[tuple[str, str]] = set()
     like = f"{MANUAL_TAG_KEY_PREFIX}%"
     _start = time.perf_counter()
+    # Refresh-contention investigation (Plan.md Tier 1, Read Above/Below lead):
+    # this query's own SLOW_SQL logging never fires, even when this function
+    # measures 1-2s+ -- db.execute() for a plain SELECT only prepares the
+    # statement and does not eagerly fetch, so the real scan happens lazily
+    # during the `for row in ...:` iteration below, outside the wrapped
+    # execute() call's timing. _lectio_progress_steps (set by _TimedConnection)
+    # is a connection-level counter that keeps accumulating through that
+    # iteration though, since the progress handler fires on every VDBE step
+    # regardless of which Python call triggered it -- reading it right after
+    # each chunk's loop finishes (before the next chunk's execute() resets it)
+    # gives an accurate total, answering directly whether a slow call here is
+    # genuine scan cost or SQLite lock-wait.
+    _progress_steps = 0
     try:
         with get_reader() as reader:
             db = reader._storage.get_db()
             if feed_urls is None:
                 for row in db.execute("SELECT feed, id FROM entry_tags WHERE key LIKE ?", (like,)):
                     keys.add((str(row[0]), str(row[1])))
+                _progress_steps += getattr(db, "_lectio_progress_steps", 0)
             else:
                 feed_list = list(feed_urls)
                 for i in range(0, len(feed_list), 900):
@@ -10968,11 +11106,13 @@ def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, s
                         [like, *chunk],
                     ):
                         keys.add((str(row[0]), str(row[1])))
+                    _progress_steps += getattr(db, "_lectio_progress_steps", 0)
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("get_tagged_entry_keys failed: %s", exc)
     elapsed_ms = int((time.perf_counter() - _start) * 1000)
     if elapsed_ms > 200:
-        LOGGER.info("[perf] get_tagged_entry_keys=%dms rows=%d scoped=%s", elapsed_ms, len(keys), feed_urls is not None)
+        LOGGER.info("[perf] get_tagged_entry_keys=%dms rows=%d scoped=%s progress_steps=%d",
+                    elapsed_ms, len(keys), feed_urls is not None, _progress_steps)
     return keys
 
 
@@ -15035,22 +15175,27 @@ def list_entries_for_feeds(
         fetch_start = time.perf_counter()
         # Build feed_url → site homepage URL map via direct SQL rather than
         # iterating all feed objects via reader. Keeps this O(feeds in view)
-        # instead of O(all feeds in the library).
+        # instead of O(all feeds in the library). Goes through get_reader()'s
+        # pooled, timed connection (10s busy_timeout) rather than a fresh
+        # sqlite3.connect(..., timeout=5.0) per request -- the same anti-pattern
+        # get_tagged_entry_keys was fixed for 2026-09-02 (Plan.md Tier 1), just
+        # never caught here: a raw connection pays file-open/schema-load cost on
+        # every render of a folder with many feeds, with a shorter busy_timeout
+        # than everywhere else, and was invisible to slow-SQL logging since a
+        # bare sqlite3.connect() bypasses _TimedConnection entirely. Row access
+        # is positional (not sqlite3.Row) -- reader's own pooled connection
+        # doesn't set a row_factory, same as get_tagged_entry_keys assumes.
         feed_site_map: dict[str, str | None] = {url: None for url in feed_urls}
         if feed_urls:
-            _sm_conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
-            _sm_conn.row_factory = sqlite3.Row
-            try:
-                _sm_list = list(feed_urls)
-                for _i in range(0, len(_sm_list), 999):
-                    _chunk = _sm_list[_i:_i + 999]
-                    _ph = ",".join("?" for _ in _chunk)
-                    for _row in _sm_conn.execute(
-                        f"SELECT url, link FROM feeds WHERE url IN ({_ph})", _chunk
-                    ).fetchall():
-                        feed_site_map[str(_row["url"])] = _row["link"] or None
-            finally:
-                _sm_conn.close()
+            _sm_db = reader._storage.get_db()
+            _sm_list = list(feed_urls)
+            for _i in range(0, len(_sm_list), 999):
+                _chunk = _sm_list[_i:_i + 999]
+                _ph = ",".join("?" for _ in _chunk)
+                for _row in _sm_db.execute(
+                    f"SELECT url, link FROM feeds WHERE url IN ({_ph})", _chunk
+                ).fetchall():
+                    feed_site_map[str(_row[0])] = _row[1] or None
 
         all_feed_entries: list[Any] = []
         fetch_limit = max(1, int(limit))
@@ -15189,43 +15334,42 @@ def list_entries_for_feeds(
             # a buffer-based global scan.
             read_sql = {None: "", True: " AND read = 1", False: " AND (read IS NULL OR read != 1)"}
             read_clause = read_sql.get(reader_read_filter, "")
+            # Pooled connection, not a fresh sqlite3.connect() per request -- see
+            # the feed_site_map comment above for the full rationale. Row access
+            # is positional for the same reason.
             try:
-                _rconn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
-                _rconn.row_factory = sqlite3.Row
-                try:
-                    if len(feed_urls) <= 999:
-                        _feed_list = list(feed_urls)
-                        _placeholders = ",".join("?" for _ in _feed_list)
-                        rows = _rconn.execute(
-                            f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
+                _rdb = reader._storage.get_db()
+                if len(feed_urls) <= 999:
+                    _feed_list = list(feed_urls)
+                    _placeholders = ",".join("?" for _ in _feed_list)
+                    rows = _rdb.execute(
+                        f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
+                        f" ORDER BY {_ENTRY_SORT_SQL} ASC LIMIT ?",
+                        _feed_list + [fetch_limit],
+                    ).fetchall()
+                else:
+                    # >999 feeds: SQLite's variable limit prevents a single IN clause.
+                    # A global scan without a feed filter picks up entries from feeds
+                    # outside feed_urls (e.g. import-synthesised feeds) and the Python
+                    # filter can discard the entire result window. Batch instead.
+                    _feed_list = list(feed_urls)
+                    batch_rows: list = []
+                    for _i in range(0, len(_feed_list), 999):
+                        _chunk = _feed_list[_i:_i + 999]
+                        _ph = ",".join("?" for _ in _chunk)
+                        chunk_rows = _rdb.execute(
+                            f"SELECT feed, id, {_ENTRY_SORT_SQL} AS sort_val FROM entries"
+                            f" WHERE feed IN ({_ph}){read_clause}"
                             f" ORDER BY {_ENTRY_SORT_SQL} ASC LIMIT ?",
-                            _feed_list + [fetch_limit],
+                            _chunk + [fetch_limit],
                         ).fetchall()
-                    else:
-                        # >999 feeds: SQLite's variable limit prevents a single IN clause.
-                        # A global scan without a feed filter picks up entries from feeds
-                        # outside feed_urls (e.g. import-synthesised feeds) and the Python
-                        # filter can discard the entire result window. Batch instead.
-                        _feed_list = list(feed_urls)
-                        batch_rows: list = []
-                        for _i in range(0, len(_feed_list), 999):
-                            _chunk = _feed_list[_i:_i + 999]
-                            _ph = ",".join("?" for _ in _chunk)
-                            chunk_rows = _rconn.execute(
-                                f"SELECT feed, id, {_ENTRY_SORT_SQL} AS sort_val FROM entries"
-                                f" WHERE feed IN ({_ph}){read_clause}"
-                                f" ORDER BY {_ENTRY_SORT_SQL} ASC LIMIT ?",
-                                _chunk + [fetch_limit],
-                            ).fetchall()
-                            batch_rows.extend(chunk_rows)
-                        batch_rows.sort(key=lambda r: r["sort_val"] or "")
-                        rows = batch_rows
-                finally:
-                    _rconn.close()
+                        batch_rows.extend(chunk_rows)
+                    batch_rows.sort(key=lambda r: r[2] or "")
+                    rows = batch_rows
                 for row in rows:
-                    if str(row["feed"]) not in feed_urls:
+                    if str(row[0]) not in feed_urls:
                         continue
-                    e = reader.get_entry((str(row["feed"]), str(row["id"])), None)
+                    e = reader.get_entry((str(row[0]), str(row[1])), None)
                     if e is not None:
                         all_feed_entries.append(e)
                     if len(all_feed_entries) >= fetch_limit:
@@ -15245,36 +15389,34 @@ def list_entries_for_feeds(
             read_sql = {None: "", True: " AND read = 1", False: " AND (read IS NULL OR read != 1)"}
             read_clause = read_sql.get(reader_read_filter, "")
             sort_col = "first_updated" if normalized_sort_by == "received" else _ENTRY_SORT_SQL
+            # Pooled connection, positional row access -- see the feed_site_map
+            # comment above for the full rationale.
             try:
-                _rconn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
-                _rconn.row_factory = sqlite3.Row
-                try:
-                    _feed_list = list(feed_urls)
-                    if len(_feed_list) <= 999:
-                        _placeholders = ",".join("?" for _ in _feed_list)
-                        rows = _rconn.execute(
-                            f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
+                _rdb = reader._storage.get_db()
+                _feed_list = list(feed_urls)
+                if len(_feed_list) <= 999:
+                    _placeholders = ",".join("?" for _ in _feed_list)
+                    rows = _rdb.execute(
+                        f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
+                        f" ORDER BY {sort_col} DESC LIMIT ?",
+                        _feed_list + [fetch_limit],
+                    ).fetchall()
+                else:
+                    batch_rows_desc: list = []
+                    for _i in range(0, len(_feed_list), 999):
+                        _chunk = _feed_list[_i:_i + 999]
+                        _ph = ",".join("?" for _ in _chunk)
+                        chunk_rows = _rdb.execute(
+                            f"SELECT feed, id, {sort_col} AS sort_val FROM entries"
+                            f" WHERE feed IN ({_ph}){read_clause}"
                             f" ORDER BY {sort_col} DESC LIMIT ?",
-                            _feed_list + [fetch_limit],
+                            _chunk + [fetch_limit],
                         ).fetchall()
-                    else:
-                        batch_rows_desc: list = []
-                        for _i in range(0, len(_feed_list), 999):
-                            _chunk = _feed_list[_i:_i + 999]
-                            _ph = ",".join("?" for _ in _chunk)
-                            chunk_rows = _rconn.execute(
-                                f"SELECT feed, id, {sort_col} AS sort_val FROM entries"
-                                f" WHERE feed IN ({_ph}){read_clause}"
-                                f" ORDER BY {sort_col} DESC LIMIT ?",
-                                _chunk + [fetch_limit],
-                            ).fetchall()
-                            batch_rows_desc.extend(chunk_rows)
-                        batch_rows_desc.sort(key=lambda r: r["sort_val"] or "", reverse=True)
-                        rows = batch_rows_desc[:fetch_limit]
-                finally:
-                    _rconn.close()
+                        batch_rows_desc.extend(chunk_rows)
+                    batch_rows_desc.sort(key=lambda r: r[2] or "", reverse=True)
+                    rows = batch_rows_desc[:fetch_limit]
                 for row in rows:
-                    e = reader.get_entry((str(row["feed"]), str(row["id"])), None)
+                    e = reader.get_entry((str(row[0]), str(row[1])), None)
                     if e is not None:
                         all_feed_entries.append(e)
                     if len(all_feed_entries) >= fetch_limit:
@@ -24123,6 +24265,7 @@ def _home_inner(
         root_id = cast(int, snapshot["root_id"])
         folder_feed_urls_by_id = cast(dict[int, set[str]], snapshot["folder_feed_urls_by_id"])
         selected_folder_id = folder_id or root_id
+        _tick("structure_snapshot")
 
         # Derive the virtual "Uncategorized" folder: feeds the reader knows about
         # that live in no folder_feeds row. Copy the snapshot's per-folder maps
@@ -24146,7 +24289,7 @@ def _home_inner(
         folder_feed_urls_by_id[root_id] = all_feed_urls | _uncat_display_urls
         folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = _uncat_display_urls
         direct_feed_urls_by_folder[UNCATEGORIZED_FOLDER_ID] = sorted(_uncat_display_urls)
-        _tick("structure_snapshot")
+        _tick("uncategorized_derive")
 
         unread_counts_by_feed = get_unread_counts_by_feed()
         _tick("unread_counts")
@@ -24521,6 +24664,14 @@ def _home_inner(
 
     posts_block_ms = int((time.perf_counter() - posts_start) * 1000)
     LOGGER.info("[perf] home: posts_block=%dms", posts_block_ms)
+    # Refresh-contention investigation (Plan.md Tier 1): a 2026-09-03 live capture
+    # (folder_id=9, 12961ms total) accounted for only ~7s across meta/tag/gap/posts
+    # blocks -- ~6s was unattributed, after posts_block and before the response
+    # finished sending. ctx_block below times the context-dict build (settings/
+    # integration-status lookups between here and the template call); the
+    # StreamingResponse wrapper further down times the Jinja render/stream itself,
+    # since .stream() is lazy and actually runs after this function returns.
+    _ctx_start = time.perf_counter()
 
     # Prioritize lead-image backfill for entries currently visible in this chunk.
     # Fire-and-forget: returns immediately; semaphore prevents concurrent pile-up.
@@ -24726,12 +24877,28 @@ def _home_inner(
         # is a bookmarklet-created Saved Articles feed) — the toolbar must render.
         "no_feeds": len(all_feed_urls) == 0 and len(all_reader_feed_urls) == 0,
     }
+    ctx_block_ms = int((time.perf_counter() - _ctx_start) * 1000)
+    if ctx_block_ms > 100:
+        LOGGER.info("[perf] home: ctx_block=%dms", ctx_block_ms)
     _stream = templates.env.get_template("index.html").stream(_tmpl_ctx)
     _stream.enable_buffering(50)
+
+    def _timed_stream():
+        # See the ctx_block comment above: .stream() is lazy, so the actual
+        # Jinja render (and its DB/Python work per post) happens as this
+        # generator is drained by StreamingResponse, after _home_inner returns.
+        _render_start = time.perf_counter()
+        try:
+            yield from _stream
+        finally:
+            render_ms = int((time.perf_counter() - _render_start) * 1000)
+            if render_ms > 100:
+                LOGGER.info("[perf] home: template_stream=%dms", render_ms)
+
     # Stateful, per-user HTML: never let a browser or CDN edge (Cloudflare
     # fronts at least one deployment) cache it per-URL — a stale cached page
     # ships stale inline JS and resurrects long-fixed bugs.
-    return StreamingResponse(_stream, media_type="text/html", headers={"Cache-Control": "no-store"})
+    return StreamingResponse(_timed_stream(), media_type="text/html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/dev/feeds/email-match.xml")
