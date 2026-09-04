@@ -48,6 +48,7 @@ class _TimedCursor(sqlite3.Cursor):
     def execute(self, sql, parameters=()):
         conn = cast("_TimedConnection", self.connection)
         conn._lectio_progress_steps = 0
+        self._lectio_sql = sql
         start = time.perf_counter()
         try:
             return super().execute(sql, parameters)
@@ -69,6 +70,26 @@ class _TimedCursor(sqlite3.Cursor):
                 LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d executemany sql=%s",
                             int(elapsed_ms), conn._lectio_progress_steps, " ".join(str(sql).split())[:200])
 
+    def fetchall(self):
+        # `execute()` above only times statement *preparation*; a plain SELECT
+        # doesn't eagerly scan, so the real cost of `conn.execute(...).fetchall()`
+        # (the dominant read pattern in this codebase) happened here, previously
+        # invisible to slow-SQL logging entirely -- found 2026-09-03 chasing a
+        # live stall that traced back to exactly this shape (Plan.md Tier 1).
+        # Separate before/after progress-step snapshot so this doesn't double
+        # count whatever execute() already attributed to itself.
+        conn = cast("_TimedConnection", self.connection)
+        steps_before = conn._lectio_progress_steps
+        start = time.perf_counter()
+        try:
+            return super().fetchall()
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if elapsed_ms > _SLOW_SQL_MS:
+                sql = getattr(self, "_lectio_sql", "?")
+                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d fetchall sql=%s",
+                            int(elapsed_ms), conn._lectio_progress_steps - steps_before, " ".join(str(sql).split())[:200])
+
 
 class _TimedConnection(sqlite3.Connection):
     def __init__(self, *args, **kwargs):
@@ -84,27 +105,16 @@ class _TimedConnection(sqlite3.Connection):
         return super().cursor(factory or _TimedCursor)
 
     def execute(self, sql, parameters=()):
-        self._lectio_progress_steps = 0
-        start = time.perf_counter()
-        try:
-            return super().execute(sql, parameters)
-        finally:
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d sql=%s",
-                            int(elapsed_ms), self._lectio_progress_steps, " ".join(str(sql).split())[:200])
+        # Delegate to self.cursor() rather than the sqlite3.Connection.execute()
+        # shortcut directly: the shortcut returns a bare sqlite3.Cursor (verified
+        # -- it does not route through the overridden cursor() factory at all),
+        # so `conn.execute(...).fetchall()` was silently bypassing _TimedCursor's
+        # fetchall() override above. Going through self.cursor().execute(...)
+        # guarantees callers always get a _TimedCursor back.
+        return self.cursor().execute(sql, parameters)
 
     def executemany(self, sql, parameters):
-        # See main._TimedMetaConnection.executemany -- same gap, same fix.
-        self._lectio_progress_steps = 0
-        start = time.perf_counter()
-        try:
-            return super().executemany(sql, parameters)
-        finally:
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d executemany sql=%s",
-                            int(elapsed_ms), self._lectio_progress_steps, " ".join(str(sql).split())[:200])
+        return self.cursor().executemany(sql, parameters)
 
 
 _reader_storage_base.CONNECTION_CLS = _TimedConnection  # ty: ignore[invalid-assignment]

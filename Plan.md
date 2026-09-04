@@ -528,10 +528,43 @@ connection's own `wal_autocheckpoint=200` was deliberately left alone: separate,
 evidence it's involved. Trade-off: checkpointing 5x less often means the WAL file can grow larger
 between restarts (previously capped ~800KB, now up to ~4MB) — fully reversible if that turns out to
 matter more than the contention it's meant to reduce. Updated the one test that pinned the old value
-(`tests/services/test_reader_storage.py`). Full suite green (3925). **Not yet confirmed live** — needs
-a deploy and a fresh capture on the next `get_tagged_entry_keys` (or similar) stall to see whether the
-wall-clock time now tracks the constant `progress_steps` more closely instead of swinging 5-10x above
-it.
+(`tests/services/test_reader_storage.py`). Full suite green (3925).
+
+**Live capture 2026-09-03, right after deploy — inconclusive on the pragma, but found a second,
+bigger instrumentation gap.** Josh: fresh tab, All then NSFW, ~10s. Genuinely mixed evidence on
+`wal_autocheckpoint`: dozens of refresh's own per-feed queries logged 250-470ms with real,
+elapsed-proportional `progress_steps` (unaffected either way — that cost is inherent to the query, not
+lock-wait). But the NSFW-folder request itself spent ~5.8s in `meta_block`, entirely inside
+`uncategorized_derive=3166ms` and `global_note=2328ms` — and **neither produced any `slow_sql` line at
+all**, the same silence `get_tagged_entry_keys` used to show before its dedicated fix.
+
+Root cause, found by testing the assumption directly: `conn.execute(sql).fetchall()` — the single most
+common read pattern in this codebase — was **never actually going through `_TimedConnection`/
+`_TimedMetaConnection`'s cursor override**. Verified empirically: `sqlite3.Connection.execute()`'s
+built-in shortcut does not call the Python-level `cursor()` method at all, so it returns a bare
+`sqlite3.Cursor`, and `.fetchall()` on that bare cursor was invisible to every timing/progress-step
+instrument added this session. `get_tagged_entry_keys`'s explicit `for row in db.execute(...):` loop
+happened to dodge this (direct iteration on the cursor `execute()` itself returns still hits the
+override), which is why fixing it one-off worked — but it also meant the fix looked broader than it
+was. `get_all_reader_feed_urls`'s `{... for r in db.execute(...)}` and the `inactive_feed_rows`
+`conn.execute(...).fetchall()` query behind the "global_note" tick both hit the *real*, more common gap.
+
+**Fixed 2026-09-03, generically this time.** `_TimedConnection.execute()`/`executemany()` (reader) and
+`_TimedMetaConnection.execute()`/`executemany()` (meta) now delegate through `self.cursor()` instead of
+the built-in shortcut, guaranteeing every `conn.execute(...)` call returns a real `_TimedCursor`/
+`_TimedMetaCursor`. Both cursor classes gained a `fetchall()` override, logging its own
+`elapsed_ms`/`progress_steps` (a before/after delta, so it doesn't double-count whatever `execute()`
+already attributed) tagged `fetchall` in the log line — covering the dominant `conn.execute(...).fetchall()`
+pattern across the whole app in one place, not just the specific functions that happened to get hit.
+`get_all_reader_feed_urls` additionally got the same one-off treatment as `get_tagged_entry_keys` for
+its direct-iteration comprehension. Verified manually (chained `execute().fetchall()` now logs the
+fetch phase's real step count separately from execute()'s; the forced-lock regression test from the
+previous fix still shows the clean `progress_steps=0` signature after the restructure). Direct
+iteration via bare `for row in cursor:` without `.fetchall()` remains a known, narrower gap — not
+touched, same reasoning as before. Full suite green (3925). **Not yet confirmed live** — needs a
+deploy and a fresh capture to finally get real numbers for `uncategorized_derive`/`global_note` (or
+whatever query is actually behind them) and, separately, to see whether the `wal_autocheckpoint` change
+measurably helped once the diagnostic can actually see the queries it's supposed to be judging.
 
 **Re-fetch/extraction quality & staleness** — the article being read is broken or stale; directly in the way of triage.
 
