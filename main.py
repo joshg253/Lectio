@@ -3210,17 +3210,15 @@ def get_meta_connection() -> sqlite3.Connection:
     # immediately failing with "database is locked".
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=10000")
-    # wal_autocheckpoint raised 200 -> 1000 (SQLite's own default) 2026-09-03
-    # (Plan.md Tier 1, Read Above/Below lead): a progress-handler diagnostic
-    # proved a slow get_tagged_entry_keys call was pure lock-wait, not query
-    # cost, and the live WAL was already small and well-checkpointed even at
-    # the old 200 -- so checkpointing this often, continuously through a long
-    # refresh pass, looked like the actual source of contention, not WAL size.
-    # See services/reader_api.py's _LectioReaderStorage docstring for the full
-    # writeup; kept in sync here since both connections share the theory.
-    # Trades a larger WAL between restarts (was capped ~800KB, now ~4MB) for
-    # 5x fewer checkpoint attempts during a refresh pass. Reversible.
-    conn.execute("PRAGMA wal_autocheckpoint=1000")
+    # Keep WAL small: checkpoint at 200 pages (~800KB) rather than the default
+    # 1000 pages so the file never balloons to tens of MB between restarts.
+    # Raised to 1000 and reverted same day, 2026-09-03 (Plan.md Tier 1, Read
+    # Above/Below lead) -- see services/reader_api.py's _LectioReaderStorage
+    # docstring for the full writeup: the experiment showed no benefit (a live
+    # capture right after deploy was worse, not better) and a follow-up
+    # capture found near-zero real work across many different queries in both
+    # DBs, arguing against checkpoint frequency as the mechanism.
+    conn.execute("PRAGMA wal_autocheckpoint=200")
     pool[uid] = conn
     return conn
 

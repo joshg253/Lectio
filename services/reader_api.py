@@ -148,28 +148,30 @@ _reader_storage_setup_db = _ReaderStorage.setup_db
 
 
 class _LectioReaderStorage(_ReaderStorage):
-    """reader Storage subclass that sets WAL auto-checkpoint on every new
-    connection.
+    """reader Storage subclass that tugs WAL auto-checkpoint to 200 pages
+    (~800 KB) on every new connection so the WAL file never balloons to
+    tens of MB between restarts.
 
-    Raised 200 -> 1000 (SQLite's own default) pages 2026-09-03 (Plan.md Tier 1,
-    Read Above/Below lead): a progress-handler diagnostic proved a slow
-    get_tagged_entry_keys call was pure SQLite lock-wait, not query cost --
-    identical real work (progress_steps) took 212-1630ms depending on refresh
-    contention. The live WAL file was already small and well-checkpointed
-    (~805KB against a 1.18GB main file) even at the old, more aggressive 200,
-    so the theory shifted from "reads scan a bloated WAL" to "checkpointing
-    this often, continuously through a long refresh pass, is itself a
-    recurring small opportunity for a reader to collide with the writer."
-    Trades a larger WAL between restarts (previously capped ~800KB, now
-    ~4MB) for 5x fewer checkpoint attempts during a refresh pass. Reversible
-    single-pragma experiment -- revert to 200 if it doesn't measurably help,
-    or if the larger WAL file becomes its own problem."""
+    Raised 200 -> 1000 2026-09-03, then reverted the same day (Plan.md Tier 1,
+    Read Above/Below lead): the experiment traded a bigger WAL for 5x fewer
+    checkpoints on the theory that checkpoint frequency was the contention
+    source, but a live capture right after deploy showed the reader-DB stalls
+    unchanged or worse, and a follow-up capture (once conn.execute(...).fetchall()
+    was fixed to actually report progress_steps -- see that commit) showed
+    near-zero real work across MANY different queries in both DBs, not just
+    the one this experiment targeted. That breadth argues against
+    checkpoint-frequency as the mechanism -- reverted rather than kept on a
+    change that added a real tradeoff (larger WAL) with no shown benefit,
+    pending further diagnosis of whether this is genuine SQLite lock-wait or
+    GIL/CPU-scheduling starvation from refresh's own CPU-heavy work (the
+    progress-handler diagnostic can't fully distinguish the two: neither
+    fires if the thread isn't scheduled at all)."""
 
     @staticmethod
     def setup_db(db: sqlite3.Connection) -> None:
         _reader_storage_setup_db(db)
         try:
-            db.execute("PRAGMA wal_autocheckpoint=1000")
+            db.execute("PRAGMA wal_autocheckpoint=200")
             # Wait (up to 10s) for a lock instead of failing instantly with
             # "database is locked" — matches the meta connections. Concurrent
             # writers (background refresh, FTS index build, startup backfills)
