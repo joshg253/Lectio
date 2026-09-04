@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import re
 import sqlite3
 import time
@@ -117,7 +118,15 @@ class _TimedConnection(sqlite3.Connection):
         return self.cursor().executemany(sql, parameters)
 
 
-_reader_storage_base.CONNECTION_CLS = _TimedConnection  # ty: ignore[invalid-assignment]
+# Off by default: the progress handler fires every _PROGRESS_HANDLER_N VM
+# instructions on every statement, and the timing wrapper adds a
+# perf_counter() pair per call -- real, if small, overhead on every single
+# reader-DB query, all the time, not worth paying outside an active
+# investigation (Plan.md Tier 1 refresh-contention item). Flip on with
+# LECTIO_PERF_DEBUG=1 when chasing a live stall; mirrors main.py's own flag
+# (read independently here since services must not import main).
+if os.getenv("LECTIO_PERF_DEBUG", "0") == "1":
+    _reader_storage_base.CONNECTION_CLS = _TimedConnection  # ty: ignore[invalid-assignment]
 
 
 class _ExtraReaderKwargs(TypedDict, total=False):

@@ -655,6 +655,13 @@ def _static_asset_version() -> str:
 
 STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION") or _static_asset_version()
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
+# Gates the slow-SQL timing/progress-step instrumentation (Plan.md Tier 1
+# refresh-contention item) on both the meta and reader DB connections. Off by
+# default: a sqlite3 progress handler fires every 1000 VM instructions on
+# every statement, and the timing wrapper adds a perf_counter() pair per call
+# -- real, if small, overhead on every single query, all the time, not worth
+# paying outside an active investigation. Flip on when chasing a live stall.
+LECTIO_PERF_DEBUG = os.getenv("LECTIO_PERF_DEBUG", "0") == "1"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -3203,7 +3210,8 @@ def get_meta_connection() -> sqlite3.Connection:
     conn = pool.get(uid)
     if conn is not None:
         return conn
-    conn = sqlite3.connect(str(tenancy.meta_db_path(uid)), timeout=10.0, factory=_TimedMetaConnection)
+    _meta_factory = _TimedMetaConnection if LECTIO_PERF_DEBUG else sqlite3.Connection
+    conn = sqlite3.connect(str(tenancy.meta_db_path(uid)), timeout=10.0, factory=_meta_factory)
     conn.row_factory = sqlite3.Row
     # WAL + busy_timeout so overlapping writers (e.g. background refresh writing
     # folder_feeds while a request persists a setting) wait briefly instead of

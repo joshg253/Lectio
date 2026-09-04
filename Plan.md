@@ -670,6 +670,24 @@ the actual fix for this symptom, and the "near-zero progress_steps" diagnostic b
 investigation, while valuable for what it proved, cannot itself distinguish SQLite lock-wait from GIL
 starvation — a lesson worth keeping for the next contention hunt.
 
+**Wrap-up 2026-09-03: what stayed, what didn't.** Reviewed the whole day's changes explicitly with
+Josh rather than leaving it implicit. Kept: all four connection-pooling/batching bug fixes (proven,
+independent of the GIL finding), all the diagnostic infrastructure (it's what found the real cause),
+and `synchronous=NORMAL` (sound on its own merits, Josh's call to keep despite not being the fix).
+`wal_autocheckpoint` stays reverted (already undone, no benefit shown).
+
+**Instrumentation gated behind `LECTIO_PERF_DEBUG` (default off)**, per Josh noticing the obvious
+follow-up: the progress-handler + timing wrapper adds a `sqlite3` progress-handler callback every 1000
+VM instructions plus a `perf_counter()` pair to *every single query* on both DBs, all the time — real,
+if small, overhead not worth paying outside an active investigation. `services/reader_api.py` now only
+installs `_TimedConnection` as reader's `CONNECTION_CLS` when the env var is set (verified: `reader.
+_storage._base.CONNECTION_CLS` is the plain default without it, `_TimedConnection` with it);
+`get_meta_connection()` in main.py picks `_TimedMetaConnection` vs. plain `sqlite3.Connection` as its
+connection factory the same way. Both read the flag independently (services must not import main).
+Documented in `.env`/`.env.example` alongside the other debug toggles. No dedicated test, following
+the precedent already set for this instrumentation (diagnostic-only in effect, verified manually both
+directions). Full suite green (3925, running with the flag off as usual).
+
 **Re-fetch/extraction quality & staleness** — the article being read is broken or stale; directly in the way of triage.
 
 ### Entry pane doesn't refresh after a background auto-refetch-on-tag finishes
