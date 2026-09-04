@@ -35,6 +35,7 @@ class _FakeEntry:
         link: str,
         summary: str | None = None,
         content_html: str | None = None,
+        read: bool = False,
     ):
         self.feed_url = feed_url
         self.id = entry_id
@@ -42,6 +43,7 @@ class _FakeEntry:
         self.summary = summary
         self._content_html = content_html
         self.enclosures: tuple | list = ()
+        self.read = read
 
     def get_content(self, prefer_summary: bool = False):
         if self._content_html is None:
@@ -49,9 +51,31 @@ class _FakeEntry:
         return _FakeContent(self._content_html)
 
 
+class _FakeStorage:
+    """Stands in for reader._storage -- just enough to serve the manual-tag bulk
+    query (entry_tags table), with a call counter to pin the batching (one query
+    per feed, not one per entry)."""
+
+    def __init__(self, tag_rows: list[tuple[str, str, str]]):
+        self.get_db_calls = 0
+        self._conn = sqlite3.connect(":memory:")
+        self._conn.execute("CREATE TABLE entry_tags (id TEXT, feed TEXT, key TEXT, value TEXT)")
+        self._conn.executemany(
+            "INSERT INTO entry_tags (id, feed, key, value) VALUES (?, ?, ?, '')",
+            tag_rows,
+        )
+        self._conn.commit()
+
+    def get_db(self):
+        self.get_db_calls += 1
+        return self._conn
+
+
 class _FakeReader:
-    def __init__(self, entries):
+    def __init__(self, entries, tag_rows: list[tuple[str, str, str]] | None = None):
         self._entries = entries
+        if tag_rows is not None:
+            self._storage = _FakeStorage(tag_rows)
 
     def get_entries(self, feed: str):
         return list(self._entries)
@@ -93,13 +117,15 @@ def _make_conn(db_path: Path):
     return conn
 
 
-def _build_service(db_path: Path, entries: list[_FakeEntry]):
+def _build_service(db_path: Path, entries: list[_FakeEntry], tag_rows: list[tuple[str, str, str]] | None = None):
     def get_meta_connection():
         return _make_conn(db_path)
 
+    fake_reader = _FakeReader(entries, tag_rows=tag_rows)
+
     return LeadImageService(
         get_meta_connection=get_meta_connection,
-        get_reader=lambda: _ReaderCtx(_FakeReader(entries)),
+        get_reader=lambda: _ReaderCtx(fake_reader),
         user_agent="LectioTest/1.0",
         extract_video_id=lambda link: "ABCDEFGHIJK" if "youtube.com/watch?v=" in link else None,
     )
@@ -388,6 +414,90 @@ def test_warm_cache_drops_placeholder_urls(tmp_path: Path):
         ).fetchone()
 
     assert row is None
+
+
+def test_manual_tagged_read_entry_is_still_backfilled(tmp_path: Path, monkeypatch):
+    """A read, unsaved entry carrying a manual tag must still be eligible for background
+    thumbnail backfill. This previously always evaluated false -- the check used a
+    nonexistent 'tag:lectio:' prefix instead of the real key format ('lectio.manual_tag.'),
+    silently skipping every manually tagged read entry -- in addition to costing one
+    reader.get_tags() round trip per read/unsaved entry every refresh cycle."""
+    db_path = tmp_path / "meta.sqlite"
+    feed_url = "https://example.com/feed.xml"
+    entry = _FakeEntry(
+        feed_url=feed_url,
+        entry_id="p-5",
+        link="https://example.com/article",
+        content_html="<p>no images here</p>",
+        read=True,
+    )
+    service = _build_service(db_path, [entry], tag_rows=[("p-5", feed_url, "lectio.manual_tag.keep")])
+
+    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda _link, **kw: "https://cdn.example.com/hero.jpg")
+    monkeypatch.setattr(service, "_fetch_page_html", lambda url, **kw: None)
+
+    service.fetch_and_store_lead_images_for_feed(feed_url, force_retry_negative=True)
+
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT image_url FROM entry_lead_images WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, "p-5"),
+        ).fetchone()
+
+    assert row is not None
+    assert row["image_url"] == "https://cdn.example.com/hero.jpg"
+
+
+def test_read_unsaved_untagged_entry_is_skipped(tmp_path: Path):
+    """Sanity check the other side of the eligibility filter: read, unsaved, and no
+    manual tag means no background backfill work, even with an inline image present."""
+    db_path = tmp_path / "meta.sqlite"
+    feed_url = "https://example.com/feed.xml"
+    entry = _FakeEntry(
+        feed_url=feed_url,
+        entry_id="p-6",
+        link="https://example.com/article",
+        content_html='<p>x</p><img src="https://cdn.example.com/inline.jpg" />',
+        read=True,
+    )
+    service = _build_service(db_path, [entry])
+
+    service.fetch_and_store_lead_images_for_feed(feed_url, force_retry_negative=True)
+
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT image_url FROM entry_lead_images WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, "p-6"),
+        ).fetchone()
+
+    assert row is None
+
+
+def test_manual_tag_lookup_is_one_query_per_feed_not_per_entry(tmp_path: Path, monkeypatch):
+    """The manual-tag check must be a single bulk query per feed (Plan.md Tier 1
+    refresh-contention item), not one reader.get_tags() round trip per entry --
+    confirmed live via py-spy as the dominant GIL-holding cost during refresh."""
+    db_path = tmp_path / "meta.sqlite"
+    feed_url = "https://example.com/feed.xml"
+    entries = [
+        _FakeEntry(
+            feed_url=feed_url,
+            entry_id=f"p-{i}",
+            link=f"https://example.com/article-{i}",
+            content_html="<p>no images here</p>",
+            read=True,
+        )
+        for i in range(10)
+    ]
+    service = _build_service(db_path, entries, tag_rows=[])
+
+    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda _link, **kw: None)
+    monkeypatch.setattr(service, "_fetch_page_html", lambda url, **kw: None)
+
+    service.fetch_and_store_lead_images_for_feed(feed_url, force_retry_negative=True)
+
+    with service._get_reader() as reader:
+        assert reader._storage.get_db_calls == 1
 
 
 def test_fetch_and_store_lead_images_backfills_missing_inline(tmp_path: Path, monkeypatch):

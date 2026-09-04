@@ -686,6 +686,26 @@ feed-wide clear (`_clear_feed_boilerplate_title`) stay synchronous:
 they touch *other* entries' rows, not the one being written, and aren't the
 per-entry volume driver.
 
+## Manual-tag eligibility check: bulk per feed, not per entry
+
+The per-feed backfill loop restricts background thumbnail refresh to entries a user still cares
+about: unread, saved, or manually tagged (see `_backfill_feed_entries`'s per-entry loop). The
+manual-tag check (`_entry_has_manual_tags`, since removed) called `reader.get_tags(resource_id)`
+once per read/unsaved entry — every refresh cycle, for every feed with any read history. Two bugs
+in one: it checked for a tag-key prefix (`tag:lectio:`) that nothing ever wrote — the real prefix
+is `lectio.manual_tag.` (`main.MANUAL_TAG_KEY_PREFIX`, mirrored privately in
+`services/saved_articles.py`) — so the check always evaluated false and silently skipped every
+manually-tagged read entry from the feature it exists for; and it cost one query per entry via
+reader's own SQL query-builder (`reader/_storage/_sql_utils.py`, which rebuilds fragments through
+`textwrap.dedent` on every call), which a live `py-spy` capture during a real refresh pass caught
+as the dominant GIL-holding cost in the whole request-serving process (82% of sampled
+`(active+gil)` stacks — see Plan.md Tier 1's refresh-contention item).
+
+Fixed to one bulk query per feed, alongside the existing `saved_entry_ids` precompute in
+`fetch_and_store_lead_images_for_feed`: `SELECT DISTINCT id FROM entry_tags WHERE feed = ? AND
+key LIKE 'lectio.manual_tag.%'` against `reader._storage.get_db()`, building a `set[str]` checked
+with an O(1) membership test in the per-entry loop instead of a round trip per entry.
+
 ## DeviantArt mature images: signed for minutes, cached for good
 
 DeviantArt serves images from wixmp with a signed JWT in the query string. Ordinary deviations are *usually* signed with no `exp` claim at all (which is not the same as permanent — see below); **mature** ones are signed for about **15 minutes** with a readable `exp`, and every variant (`content.src` and every thumb) shares the expiry — so there is no long-lived variant to prefer, and a stored URL is normally dead by the time the post is read, showing neither image nor thumbnail.

@@ -21,6 +21,10 @@ from services.url_guard import is_safe_outbound_url
 
 LOGGER = logging.getLogger(__name__)
 
+# Mirrors main.py's MANUAL_TAG_KEY_PREFIX (and services/saved_articles.py's private copy) --
+# not imported to avoid a main.py <-> services dependency.
+_MANUAL_TAG_KEY_PREFIX = "lectio.manual_tag."
+
 _TAG_NAME_RE = re.compile(r"<\s*([A-Za-z][\w-]*)")
 
 
@@ -2086,6 +2090,16 @@ class LeadImageService:
         except Exception:
             saved_entry_ids = set()
 
+        manual_tagged_ids: set[str] = set()
+        try:
+            rows = reader._storage.get_db().execute(
+                "SELECT DISTINCT id FROM entry_tags WHERE feed = ? AND key LIKE ?",
+                (feed_url, _MANUAL_TAG_KEY_PREFIX + "%"),
+            ).fetchall()
+            manual_tagged_ids = {str(row[0]) for row in rows}
+        except Exception:
+            manual_tagged_ids = set()
+
         now = time.time()
 
         # Load stored strategy; skip YouTube and manually-locked none feeds entirely.
@@ -2110,6 +2124,7 @@ class LeadImageService:
                 entries,
                 reader,
                 saved_entry_ids,
+                manual_tagged_ids,
                 now,
                 force_retry_negative,
                 strategy,
@@ -2137,6 +2152,7 @@ class LeadImageService:
         entries: list,
         reader,
         saved_entry_ids: set[str],
+        manual_tagged_ids: set[str],
         now: float,
         force_retry_negative: bool,
         strategy: str,
@@ -2169,9 +2185,7 @@ class LeadImageService:
 
             is_unread = not bool(getattr(entry, "read", False))
             is_saved = entry_id_str in saved_entry_ids
-            is_manual_tagged = False
-            if not is_unread and not is_saved:
-                is_manual_tagged = self._entry_has_manual_tags(reader, entry)
+            is_manual_tagged = entry_id_str in manual_tagged_ids
 
             # Restrict background thumbnail refresh to entries users still care
             # about in active views: unread, saved, or manually tagged.
@@ -2455,33 +2469,6 @@ class LeadImageService:
             return self.extract_entry_thumbnail_url(entry, include_source_lookup=False)
         except Exception:
             return None
-
-    def _extract_tag_key(self, tag_record: object) -> str | None:
-        if isinstance(tag_record, tuple):
-            if len(tag_record) == 0:
-                return None
-            return str(tag_record[0])
-        if isinstance(tag_record, str):
-            return tag_record
-        key = getattr(tag_record, "key", None)
-        if key is None:
-            return None
-        return str(key)
-
-    def _entry_has_manual_tags(self, reader: Any, entry: object) -> bool:
-        manual_prefix = "tag:lectio:"
-        resource_id = getattr(entry, "resource_id", None)
-        if not resource_id:
-            return False
-        try:
-            tags = reader.get_tags(resource_id)
-        except Exception:
-            return False
-        for tag_record in tags:
-            key = self._extract_tag_key(tag_record)
-            if key and key.startswith(manual_prefix):
-                return True
-        return False
 
     # Inline decorative-image class patterns — never lead images in any context.
     # Applied unconditionally in _extract_first_image_url_from_html so feed-content
@@ -3607,7 +3594,10 @@ class LeadImageService:
             with httpx.Client(follow_redirects=False, timeout=self._FEED_FETCH_TIMEOUT_SECONDS) as client:
                 response = url_guard.safe_get(client, feed_url, headers={"User-Agent": self._user_agent})
             response.raise_for_status()
-            parsed = feedparser.parse(response.content)
+            # Only media:thumbnail/media:content URLs are read below (element attributes, not
+            # sanitized HTML), so both feedparser flags are pure overhead here -- measured ~6x
+            # slower per byte with them on. Off matches reader_sanitize's ingest parse args.
+            parsed = feedparser.parse(response.content, sanitize_html=False, resolve_relative_uris=False)
         except Exception:
             return {}
 
