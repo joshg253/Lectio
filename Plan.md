@@ -561,10 +561,63 @@ its direct-iteration comprehension. Verified manually (chained `execute().fetcha
 fetch phase's real step count separately from execute()'s; the forced-lock regression test from the
 previous fix still shows the clean `progress_steps=0` signature after the restructure). Direct
 iteration via bare `for row in cursor:` without `.fetchall()` remains a known, narrower gap — not
-touched, same reasoning as before. Full suite green (3925). **Not yet confirmed live** — needs a
-deploy and a fresh capture to finally get real numbers for `uncategorized_derive`/`global_note` (or
-whatever query is actually behind them) and, separately, to see whether the `wal_autocheckpoint` change
-measurably helped once the diagnostic can actually see the queries it's supposed to be judging.
+touched, same reasoning as before. Full suite green (3925).
+
+**Live capture 2026-09-03, same flow, worse — but finally conclusive.** Josh: "same flow, even longer
+to open NSFW." With `fetchall()` finally instrumented, the numbers came through clean and damning:
+
+| function/query | elapsed_ms | progress_steps |
+|---|---|---|
+| `get_all_reader_feed_urls` | 4775 | **6** |
+| `highlight_keywords` fetchall | 1205 | **3** |
+| `get_tagged_entry_keys` (unscoped) | 926 | 116 (matches known baseline exactly) |
+| `get_tagged_entry_keys` (scoped) | 1459 | 555 (matches known baseline exactly) |
+| `deleted_entries` fetchall (same query, two captures) | 546 / 993 | 142 / 142 |
+| `entry_lead_images` `SELECT *` fetchall (control case) | 510 | 1295 — genuine scan cost, correctly *not* flagged as lock-wait |
+
+Near-zero-to-small, *constant* `progress_steps` against wildly larger elapsed time, across five
+unrelated queries touching both DBs — this is no longer one function's quirk, it's pervasive. The
+`entry_lead_images` row is the control that proves the diagnostic still tells the two apart correctly
+when a query *is* doing real work. Total request time: ~17s, worse than any capture yet, right after
+the `wal_autocheckpoint=1000` deploy — this specific change was not helping.
+
+**Raised, and answered, one real doubt about the diagnostic itself**: near-zero `progress_steps` proves
+"not genuine query execution," but the progress handler *also* can't fire if the thread simply isn't
+scheduled at all — so this signature alone can't fully distinguish SQLite busy-handler lock-wait from
+GIL/CPU-scheduling starvation caused by refresh's own CPU-heavy work (lxml/feedparser). Resolved this
+without new tooling, from data already on hand: if GIL/CPU starvation were the dominant mechanism, pure
+Python/Jinja work in the *same* requests (`template_stream`) should show comparably severe blowups —
+and across every capture this session, `template_stream` stayed in a normal 150-800ms range while SQL
+calls in the same requests were hitting 5-10x their own baseline. That asymmetry — the damage is
+specific to SQL calls, not general to the thread's Python execution — is real evidence for genuine
+SQLite-level contention as the dominant mechanism, with at most the previously-measured modest (~2x)
+GIL contribution as a secondary factor.
+
+**`wal_autocheckpoint` reverted 1000 → 200, per Josh's call.** No shown benefit (this capture was worse,
+not better) against a real tradeoff (larger WAL between restarts) — not worth keeping on a hunch once
+the evidence argued against checkpoint frequency as the mechanism (the stalls span far more queries
+than that experiment ever targeted). `tests/services/test_reader_storage.py` reverted alongside it.
+
+**New lead, better-grounded: `PRAGMA synchronous`.** Checked the live DBs directly — both reader and
+meta connections were running SQLite's compiled-in `FULL` (2), never explicitly set to `NORMAL`
+anywhere in this codebase for either. In WAL mode, `FULL` fsyncs on every commit; `NORMAL` only syncs
+at checkpoint boundaries, with the *same* corruption-safety guarantee — the only difference is a
+theoretical loss of the single most recent commit if the OS itself crashes (not an app crash). Refresh
+commits roughly once per feed, thousands of times per pass; if each one pays a blocking `fsync()`, that
+is real, cumulative I/O-bound lock-hold time on a mechanism never previously examined. This is also
+already an established pattern elsewhere in this codebase: `thumb_cache`/`img_cache`/
+`youtube_video_duration` all explicitly set `synchronous=NORMAL` ("durability not critical"), while
+`ensure_starred_archive_schema` explicitly keeps `FULL` ("archive content is irreplaceable if the
+source goes down") — reader/meta DB data is more valuable than a disposable cache but nowhere near
+that bar; losing a few seconds of very recent read-state/tag changes on an actual OS crash is a low
+stakes failure mode for a self-hosted feed reader.
+
+**Shipped 2026-09-03, with Josh's go-ahead.** `PRAGMA synchronous=NORMAL` added to both the reader-DB
+connection (`_LectioReaderStorage.setup_db`) and the meta-DB connection (`get_meta_connection`),
+verified applied (`PRAGMA synchronous` reads back `1`/NORMAL on both). WebSub connection left alone —
+same reasoning as the checkpoint change, separate low-traffic DB. Full suite green (3925). **Not yet
+confirmed live** — needs a deploy and a fresh capture to see whether commit-time fsync latency was
+actually the missing piece.
 
 **Re-fetch/extraction quality & staleness** — the article being read is broken or stale; directly in the way of triage.
 

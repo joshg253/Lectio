@@ -178,6 +178,18 @@ class _LectioReaderStorage(_ReaderStorage):
             # briefly contend the reader DB; without this a losing opener errors
             # out (a recurring flaky-CI signature) instead of retrying.
             db.execute("PRAGMA busy_timeout=10000")
+            # synchronous=NORMAL 2026-09-03 (Plan.md Tier 1, Read Above/Below
+            # lead), replacing SQLite's compiled-in FULL default: the live DB
+            # was found running FULL, which fsyncs on every commit even in WAL
+            # mode. Refresh commits roughly once per feed (thousands of times
+            # per pass) -- SQLite's own docs recommend NORMAL for WAL-mode
+            # apps specifically because WAL mode already only *needs* a sync at
+            # checkpoint boundaries, not per-commit, with no corruption risk
+            # either way; the only difference is a theoretical loss of the
+            # single most recent commit if the OS itself crashes (not an app
+            # crash, and not the checkpoint-frequency mechanism already tried
+            # and reverted). Cheap to test, cheap to revert.
+            db.execute("PRAGMA synchronous=NORMAL")
         except Exception:
             pass
 

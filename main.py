@@ -3219,6 +3219,11 @@ def get_meta_connection() -> sqlite3.Connection:
     # capture found near-zero real work across many different queries in both
     # DBs, arguing against checkpoint frequency as the mechanism.
     conn.execute("PRAGMA wal_autocheckpoint=200")
+    # synchronous=NORMAL 2026-09-03 (Plan.md Tier 1, Read Above/Below lead),
+    # replacing SQLite's compiled-in FULL default -- see
+    # services/reader_api.py's _LectioReaderStorage docstring for the full
+    # writeup; kept in sync here since both connections share the theory.
+    conn.execute("PRAGMA synchronous=NORMAL")
     pool[uid] = conn
     return conn
 
