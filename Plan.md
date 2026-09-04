@@ -14,7 +14,7 @@ is scheduled, they're just what to check if a related symptom recurs.
 
 ## Tier 1 — actively impeding unread-clearing
 
-**Refresh-contention latency** — see below. Mostly fixed; one root cause (feedparser's GIL-holding sanitizer path) remains open.
+**Refresh-contention latency** — see below. Mostly fixed; still watching for a residual stall.
 
 ### Refresh-contention latency (home route) — RESOLVED except for one open root cause
 
@@ -23,7 +23,7 @@ peaking at 7.2s, always mid-refresh). Full investigation history (many live capt
 ends, a wrong-then-corrected theory) is in git log around 2026-09-03 if the detail is ever
 needed again — condensed here to what's still actionable.
 
-**Four real bugs found and fixed, each confirmed live and/or by test:**
+**Five real bugs found and fixed, each confirmed live and/or by test:**
 1. `services/lead_images.py`'s per-feed lead-image backfill, its alt/title-caption writes, and
    the render-triggered chunk backfill all committed one meta-DB transaction *per entry*
    instead of batching. Now flush via `executemany` every 25 entries (see
@@ -37,36 +37,44 @@ needed again — condensed here to what's still actionable.
    pattern remain elsewhere in main.py, off the request hot path — a deferred sweep, not sized.
 4. A perf-timing tick (`structure_snapshot`) was measuring the wrong code region, making bug #3
    look like a caching problem for a while before the mislabeling itself was found and split.
+5. `_entry_has_manual_tags` (`services/lead_images.py`) checked tag keys against a prefix
+   (`tag:lectio:`) that was never actually written — the real prefix is `lectio.manual_tag.`
+   (`main.MANUAL_TAG_KEY_PREFIX`) — so it always evaluated false, silently skipping every
+   manually-tagged read entry from background thumbnail backfill since the feature shipped.
+   It also cost one uncached `reader.get_tags()` round trip per read/unsaved entry, every
+   refresh cycle. A second live py-spy pass (2026-09-03, below) caught this as the dominant
+   GIL-holding cost during refresh. Fixed to a single bulk query per feed against reader's
+   `entry_tags` table with the correct prefix — one query instead of one per entry, and the
+   manual-tag check actually works now. `services/lead_images.py:_fetch_feed_media_thumbnails`
+   also had its own duplicate per-cycle `feedparser.parse()` call (fetching the live feed again
+   just to read `media:thumbnail`) running with feedparser's *default* `sanitize_html=True` —
+   measured ~6x slower per byte than the ingest parse and the only call site able to reach
+   `feedparser/sanitizer.py` at all. Passed `sanitize_html=False, resolve_relative_uris=False`
+   to match ingest, since only element attributes are read from the result.
 
-**Diagnostic infrastructure added along the way** (both `_TimedConnection`/`_TimedMetaConnection`
-classes, `services/reader_api.py` and `main.py`): slow-SQL timing on `execute`/`executemany`/
-`fetchall` (the `.fetchall()` case needed `execute()` routed through `self.cursor()` instead of
-sqlite3's own shortcut, which silently returns an un-instrumented cursor), plus a `sqlite3`
-progress-handler that distinguishes genuine query cost from a thread not getting scheduled
-(near-zero VM steps despite high elapsed time). **Gated behind `LECTIO_PERF_DEBUG` (default
-off)** — adds real per-query overhead, not worth paying outside an active investigation.
+**Diagnostic infrastructure added along the way** (`_TimedConnection`/`_TimedMetaConnection` in
+`services/reader_api.py`/`main.py`): slow-SQL timing plus a `sqlite3` progress-handler that tells
+genuine query cost apart from a thread not getting scheduled. **Gated behind `LECTIO_PERF_DEBUG`
+(default off)** — real per-query overhead, only worth paying mid-investigation.
 
-**The actual root cause, proven 2026-09-03 (the four fixes above got it from ~10-17s down to
-~6s, but not to a normal 1-2s):** not SQLite at all. `progress_steps` near zero on a "slow"
-query can't distinguish SQLite lock-wait from GIL starvation — neither fires if the thread
-just isn't scheduled. Installed `py-spy` (`uv tool install py-spy`, isolated) and used `sudo`
-to ptrace directly into the live container's process, sampling thread stacks every 0.5s while
-reproducing a live stall. One thread showed `(active+gil)` — genuinely holding the GIL, not
-merely "active" like every other thread — continuously for 4+ seconds straight, stuck inside
-**feedparser's pure-Python SGML sanitizer / malformed-HTML recovery path**
-(`feedparser/sanitizer.py` → `feedparser_sgmllib`). Every other thread, including the one
-servicing the request, sat starved of the interpreter lock the entire time. Confirmed this
-runs even though `services/reader_sanitize.py` passes `sanitize_html=False` to
-`feedparser.parse()` — that flag gates feedparser's own destructive sanitizer *output*, but the
-same sgmllib-based lenient parser is also feedparser's general malformed-content recovery
-mechanism, independent of the flag (the "feed recovered via loose parser" warnings already
-logged on every refresh pass are entries taking exactly this slow path). Varies by feed/cycle,
-not one bad feed — the mechanism is the finding.
+**Root cause, via three live `py-spy` passes (`uv tool install py-spy`, `sudo`-ptraced into the
+container, sampling every 0.5s during a real refresh):** the first pass's leaf frame was misread
+as feedparser's SGML sanitizer — wrong (that path needs `sanitize_html=True`, which ingest never
+sets); it was actually bug 5's `lead_images.py:3610` call, the one site that did default to
+`True`. Once that call and bug 5's per-entry `reader.get_tags()` calls were fixed, a clean pass
+(real refresh running, well past container startup) showed active+GIL samples down from 95/~360
+(26%) to 36/336 (11%), the longest single-thread GIL hold down from ~8.5s to ~2s, and bug 5's
+signature gone entirely (0/36). Zero feedparser/sgml frames across all three passes — the
+size-guard/subprocess-isolation mitigations considered early on target a mechanism that never
+actually showed up live, so they were never built. Remaining GIL time (67% of the much smaller
+total) was `services/html_sanitize.py`'s BeautifulSoup-based sanitizer.
 
-**Not fixed — needs its own design pass.** Candidates, none attempted: a size/complexity guard
-before handing content to the slow path, isolating feed-processing in a separate OS process so
-the GIL doesn't matter across the boundary (a real architecture change), or a faster HTML-repair
-library to substitute for feedparser's sgmllib fallback on pathological content.
+**`html_sanitize.py` follow-up.** Profiled against 393 real entry bodies: ~26% of its time was
+one avoidable inefficiency (`tag.find_parent(["svg", "math"])` walking every tag's ancestor chain
+even when the document has neither) — fixed with a precheck, ~27% faster. Benchmarked `lxml` vs
+`html.parser` for the same function: only a 1.2-1.4x win and some output differences, but all
+provably invisible at render time (see the function's own docstring for why) — confirmed via a
+temporary side-by-side dev feed, then **switched to `lxml`** and removed the comparison scaffolding.
 
 **Two SQLite pragma experiments tried along the way, both resolved:** `wal_autocheckpoint`
 (200→1000, reverted — no shown benefit against a real tradeoff) and `PRAGMA synchronous`
@@ -209,6 +217,23 @@ correctly. Would need the hoist-and-strip step to check whether stripping would 
 empty and skip the strip in that case; not done here.
 
 ## Tier 2 — small, fast, independent wins
+
+### Manual single-feed "Refresh" can silently no-op for up to an hour
+
+Found 2026-09-04 while iterating on a dev feed. `services/feed_refresh.py`'s `update_feeds(...,
+bypass_backoff=True)` (used by the `/refresh/feed` route, i.e. the sidebar's per-feed "Refresh")
+deliberately does not override `reader`'s own `update_after` field, on the documented theory that
+it "reflects the server's own Retry-After/Cache-Control — a real instruction from the site" (not
+just Lectio's own pacing). Traced into `reader`'s source (`_update/__init__.py:next_update_after`)
+and that's not quite right: `reader` sets a baseline `update_after` of "next round interval
+boundary" (looked like 60 minutes here) on *every* successful update, unconditionally — only
+extends it further if the server explicitly asks for longer. So for any feed with no real
+caching headers, a deliberate "Refresh" click does nothing for up to an hour after the last
+fetch, with no error or explanation. Likely affects real feeds too, not just dev ones — worth
+sizing: probably means `bypass_backoff=True` should also ignore reader's own default-interval
+`update_after` specifically (distinguishing it from a genuine HTTP-derived one), but that has
+politeness implications for real feed servers ([[good-web-citizen]] memory), so didn't change it
+unilaterally. Confirm the actual default interval reader uses before touching this.
 
 **Navigation/UX papercuts** — no design work needed, just haven't been built.
 
@@ -1027,6 +1052,17 @@ excluding stock `py/reflective-xss` repo-wide is a heavier trade than excluding
 Genuinely nothing to do here until one of these recurs or a lead turns up —
 not scheduled, just watched.
 
+- **5 tests fail locally as of 2026-09-04, unrelated to whatever's being worked on.**
+  `test_security_fixes.py::test_probe_url_blocks_loopback` /
+  `test_probe_url_blocks_cloud_metadata`, `test_page_fetch.py::test_unsafe_url_propagates_without_any_attempt`,
+  `test_miniflux_api.py::test_categories_empty`, `test_entry_detail_characterization.py::test_inject_source_images_gallery`
+  — all fail with `RuntimeError: outbound network blocked in tests` (conftest.py's
+  `_block_outbound_network` guard firing) or a `"blocked"` vs `"error"` status
+  mismatch downstream of the same thing. Confirmed via `git stash` that this
+  reproduces on the last clean commit too, so it isn't a regression from any
+  recent change — smells like sandboxed-shell networking behavior in this
+  particular dev environment rather than a real code bug. Check whether it
+  reproduces in real CI before spending time on it; if CI is clean, it's local-only.
 - **makeuseof re-fetch returns white images.** Seen once during testing
   2026-08-06 and never investigated. Waiting on a second sighting rather than
   hunting it cold — Josh will flag it if it recurs.
