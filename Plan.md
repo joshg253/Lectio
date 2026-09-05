@@ -260,15 +260,42 @@ similar in spirit to the existing hide-Shorts/hide-unpremiered per-feed display 
 (`_DISPLAY_PREF_KEYS`). Not investigated — needs checking whether the feed data even distinguishes
 subscriber-only videos before sizing this.
 
-### NEXT UP (after the refresh-contention perf work wraps): bump the size of in-header buttons/tag chips
+### Entry-pane header row too small for touch on a Surface Pro — fix shipped 2026-09-04, awaiting live confirmation
 
-Clarified 2026-09-03 — supersedes the vaguer "larger tags/'+^vx' for Surface" report (2026-09-02,
-which read as feed-specific and was left unscoped for that reason). Not feed-specific: Josh wants
-the entry pane's post-header controls (the `+`/`-` tag-filter chips, suggested-tag chips, and
-whatever else lives in that row) sized up generally, across the app. Explicitly flagged as the next
-thing to pick up once the current refresh-contention perf thread (Tier 1) is done. Not scoped
-further yet — needs a look at the header markup/CSS to see whether this is a simple size-token bump
-or touches layout (chip-row wrapping, spacing against adjacent controls).
+Clarified 2026-09-03, root-caused and fixed 2026-09-04 — supersedes both the vaguer "larger
+tags/'+^vx' for Surface" report (2026-09-02) and the "NEXT UP: bump the size of in-header
+buttons/tag chips" framing (that read as a blanket size-token bump; it's actually a touch-detection
+bug, not a base-size problem). Every size in the entry-pane header row (read/unread toggle,
+save/star toggle, tag-add button, tag chips, filter signs) is already correctly gated behind
+`body[data-compact-article="1"]` in `static/style.css` — the CSS was never the issue.
+
+The bug was in the JS that decides when to set that attribute (`templates/index.html`
+~1139-1160, `compactArticle`): it only ever went compact in `layoutMode === 'single'` (phone-width)
+or `'medium'` *and* `navigator.userAgentData.mobile`. A maximized Surface Pro browser window is
+wide enough to land in `layoutMode === 'wide'` (>1100px) — a mode the touch check never even ran
+in — and `userAgentData.mobile` is always `false` on Windows (and doesn't exist at all in Firefox,
+which is what Josh's Surface runs), so even `'medium'` would have rejected it. Phone was always
+compact unconditionally (why it "looked great"); mouse-desktop correctly never was; touch-primary
+Surface Pro fell through both gates.
+
+**Fixed**: `compactArticle` now also applies in `'wide'`, and drops the `userAgentData.mobile`
+requirement — `(pointer: coarse) and (hover: none)` alone decides it. Verified with Playwright at
+1368×912 (Surface Pro 6's effective size at 2736×1824 @ 200% scaling): a touch-emulated context sets
+`data-compact-article="1"`, a mouse-only context at the identical viewport does not — no regression
+for real desktop/mouse use. Tests updated in `tests/unit/test_single_pane_layout.py`
+(`test_touch_detection_is_pointer_and_hover_together`, `test_wide_layout_also_goes_compact_for_touch`).
+
+**Open risk, not yet confirmed live**: `pointer`/`hover` media queries reflect Windows' own
+laptop-vs-tablet *mode* determination (tied to whether the Type Cover keyboard is attached/folded),
+not which input Josh is actually using moment-to-moment — so if the keyboard were attached and
+working, Chromium/Firefox might still report `pointer: fine`/`hover: hover` even while tapping the
+screen, and this fix wouldn't fire. Josh's current Type Cover (a replacement unit) has stopped
+working, which plausibly means Windows already treats the device as keyboardless and the fix works
+as shipped — but this needs confirming on the actual hardware, not just Playwright's touch emulation.
+Josh floated a manual toggle as a fallback if the automatic detection still doesn't catch it; it
+would need to be a **per-device** override (localStorage, not a per-user Settings row) — he wants
+small on his desktop and compact only on the Surface, same account both places. Not built — only
+worth it if the automatic fix doesn't hold up live.
 
 ### Global ignored suggested-tags list, editable in Settings
 
@@ -286,6 +313,68 @@ Not scoped: needs a new setting (JSON list or a small table), a check at chip-re
 folder's "Mark Read" bulk action should cover: just the entries currently rendered/loaded in the
 list, or also anything newer that hasn't been fetched into view yet. Not resolved — needs Josh to
 say which behavior he actually wants (and whether the two already differ today) before scoping.
+
+### Suggested-tag chip color — RESOLVED, was already fixed 2026-09-02
+
+"dont like now blue suugtagchips" (jotted 2026-09-02, surfaced from the Global Note 2026-09-04) —
+same day, commit 38040e2 already fixed this: `.feed-tag-filter-name` (the tag-name span-turned-button
+in a feed-tag-filter-chip) needed `appearance: none` or some browsers' native `<button>` chrome (a
+blue-tinted default control look) showed through the color/background override. Confirmed the CSS
+fix is live in `static/style.css` (~line 3798) with a comment citing this exact report. No further
+action — the note just predates when it was checked off.
+
+### "More…" suggested-tags panel re-collapses on add-tag (+) or remove (×), not on ▲/▼ anymore
+
+"more... suggtags collapses when ^v any" (jotted 2026-09-02) — the ▲/▼ (include/exclude filter
+sign) case this describes was fixed same day, same commit (38040e2): toggling a sign re-renders the
+whole pane via `loadEntryPaneWithoutFullRefresh`, which used to silently re-collapse "+N more"; the
+handler (`static/js/app.js` ~17900) now remembers whether it was expanded and re-expands after the
+re-render.
+
+**But the fix is scoped to that one handler — checked 2026-09-04, still open:** the "+" add-tag chip
+(clicking `[data-tag-suggestion]`, which submits `entry-tags-form`) and the "×" per-post tag-remove
+button both also call `loadEntryPaneWithoutFullRefresh` on success (`static/js/app.js` ~17724 and
+~17920) and neither carries the same expanded-state save/restore. So "More…" still collapses today
+whenever a suggested tag is added or a tag is removed — just not via ▲/▼ anymore. Same fix shape as
+the existing one, applied to the other two call sites.
+
+### An entry takes a really long time to open — inconclusive, no repro caught
+
+[entry](https://play.nobleknight.com/?p=19266) (feed:
+[play.nobleknight.com/feed](https://play.nobleknight.com/feed)) — checked 2026-09-04: the stored
+entry is unremarkable (21KB content, 4 `<img>`, no huge tables/embeds). `_derive_article_lead_image`
+(main.py ~16556) is cache-only (`include_source_lookup=False`) so it isn't the old sync-lead-image-
+fetch theory. No `[perf] entry_pane` slow-path log line for this feed in the current log window
+(may have rotated past whenever Josh actually saw it). Still needs a live repro — next time it's
+slow, check the entry-pane response time in the browser network tab and/or grep
+`[perf] entry_pane`/`[perf] entry_detail` around that timestamp.
+
+### A misfile.com entry doesn't load at all — inconclusive, server-side data looks fine
+
+[entry](https://www.misfile.com/hell-high/9426) (feed:
+[misfile.com/hell-high/rss](https://www.misfile.com/hell-high/rss)) — checked 2026-09-04: this entry
+is shaped identically to the feed's other 98 entries (thin `<a><img>New comic!...` summary, no
+`<content>` — normal for this webcomic, not a parsing failure). The lead image resolved to a real,
+non-cached-negative URL (`.../comics/1788467221-page1528.jpg`), and both that image, the
+`/comicsthumbs/` thumbnail, the article page, and the feed itself all fetched 200 directly via curl.
+One anomaly in the log: a one-off "recovered via loose parser despite CharacterEncodingOverride:
+declared utf-8, parsed as MacRoman" warning fired for this feed on today's refresh — but the entry's
+title/summary/author came through as clean ASCII, so it doesn't look connected. Nothing server-side
+explains "not loading" — needs a live repro (blank pane? spinner? console error?) before it's
+actionable further.
+
+### A quuxplusone entry has unrendered inline math markup — CONFIRMED
+
+[entry](https://quuxplusone.github.io/blog/2026/08/05/colourfields) (feed:
+[quuxplusone.github.io/blog/feed.xml](https://quuxplusone.github.io/blog/feed.xml)) — checked
+2026-09-04, root cause found: the post uses inline math written as `\(n\times n\)` /
+`\(\lceil n/2\rceil^2 + 1\)`, meant to be typeset client-side by the source site's MathJax/KaTeX.
+Lectio's stored content keeps the raw delimiter text as-is (confirmed via `reader.get_entries()` —
+the literal `\(...\)` sits right in the sanitized HTML), so the article pane shows the raw LaTeX
+source instead of rendered math. Not a sanitizer bug — nothing strips or mangles it, it's just never
+typeset. A real fix means either running a math-typesetting pass (MathJax/KaTeX) over entry content
+at render time, or leaving it as a known gap for math-heavy blogs (this is the first report of this
+particular shape; unclear how common it is across other feeds before sizing the work).
 
 ## Tier 3 — maintenance backlog, ready to run
 
