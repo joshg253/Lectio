@@ -550,6 +550,34 @@ body[data-compact-article="1"] .entry-tags-row:has(.entry-tag-add-button[aria-ex
   margin-top: 0.15rem;
 }
 
+/* On a touch-primary tablet/desktop (Surface Pro and the like) there is no back
+   button and no camera cutout to centre the middle group against, so the
+   phone's 1fr/auto/1fr grid above just leaves an empty gap where the back
+   button would be and the primary actions look adrift in the middle instead of
+   anchored to anything. Left-align them instead: fall back to a plain wrapping
+   flex row, keep the reader/web/tab/share group pinned to the far right with
+   margin-left: auto, and let the opened tag chips continue right after the tag
+   button on the same line rather than drop to a full-width row beneath
+   everything -- wrapping to a line of their own only if the row runs out of
+   room. Found 2026-09-04, right after the touch-detection fix above let a
+   Surface Pro reach compact mode at all. */
+body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-pane-alt-actions {
+  margin-left: auto;
+}
+
+body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tags-extra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0;
+}
+
 /* Larger than the desktop's mouse-sized glyphs. Applied to the row, so both
    groups move together and cannot drift apart. */
 body[data-compact-article="1"] .entry-tags-row .material-symbols-rounded {
@@ -559,13 +587,19 @@ body[data-compact-article="1"] .entry-tags-row .material-symbols-rounded {
 /* One box for every button in the row, so the pitch is identical in both groups
    by construction. Zeroing the middle group's padding got them to 26.8px and
    26.4px — closer, but still not equal, because the buttons themselves were 22px
-   and 21.6px wide. Matching gaps only match if the boxes between them do. */
+   and 21.6px wide. Matching gaps only match if the boxes between them do.
+   Height is pinned to 1.95rem to match .sort-pill (the posts-list filter/sort
+   buttons) rather than whatever the icon size and padding happened to add up
+   to -- the two rows sit close together on a Surface Pro and read as one
+   control strip, so their button heights need to agree by construction too,
+   not by accident. Found 2026-09-04. */
 body[data-compact-article="1"] .entry-primary-actions button,
 body[data-compact-article="1"] .entry-tags-row .entry-source-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 1.75rem;
+  height: 1.95rem;
   padding-left: 0;
   padding-right: 0;
 }

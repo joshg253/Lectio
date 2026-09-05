@@ -260,7 +260,7 @@ similar in spirit to the existing hide-Shorts/hide-unpremiered per-feed display 
 (`_DISPLAY_PREF_KEYS`). Not investigated — needs checking whether the feed data even distinguishes
 subscriber-only videos before sizing this.
 
-### Entry-pane header row too small for touch on a Surface Pro — fix shipped 2026-09-04, awaiting live confirmation
+### Entry-pane header row too small for touch on a Surface Pro — CONFIRMED FIXED live 2026-09-04
 
 Clarified 2026-09-03, root-caused and fixed 2026-09-04 — supersedes both the vaguer "larger
 tags/'+^vx' for Surface" report (2026-09-02) and the "NEXT UP: bump the size of in-header
@@ -285,17 +285,32 @@ requirement — `(pointer: coarse) and (hover: none)` alone decides it. Verified
 for real desktop/mouse use. Tests updated in `tests/unit/test_single_pane_layout.py`
 (`test_touch_detection_is_pointer_and_hover_together`, `test_wide_layout_also_goes_compact_for_touch`).
 
-**Open risk, not yet confirmed live**: `pointer`/`hover` media queries reflect Windows' own
-laptop-vs-tablet *mode* determination (tied to whether the Type Cover keyboard is attached/folded),
-not which input Josh is actually using moment-to-moment — so if the keyboard were attached and
-working, Chromium/Firefox might still report `pointer: fine`/`hover: hover` even while tapping the
-screen, and this fix wouldn't fire. Josh's current Type Cover (a replacement unit) has stopped
-working, which plausibly means Windows already treats the device as keyboardless and the fix works
-as shipped — but this needs confirming on the actual hardware, not just Playwright's touch emulation.
-Josh floated a manual toggle as a fallback if the automatic detection still doesn't catch it; it
-would need to be a **per-device** override (localStorage, not a per-user Settings row) — he wants
-small on his desktop and compact only on the Surface, same account both places. Not built — only
-worth it if the automatic fix doesn't hold up live.
+**Confirmed live on the actual Surface Pro 6** (a replacement Type Cover currently isn't working,
+which plausibly means Windows already reports the device as keyboardless rather than "laptop mode"
+— consistent with the automatic `pointer`/`hover` detection working with no manual-toggle fallback
+needed). Real device runs Firefox at 2736×1824 @ 200% scaling (1368×912 effective, matching the
+Playwright test above).
+
+**Follow-up, same session, also shipped 2026-09-04** — two more Surface-specific rough edges found
+once compact mode actually started applying there:
+
+- **Centering looked wrong outside phone width.** The header row's `1fr auto 1fr` grid deliberately
+  centers the read/star/tag group against the phone's camera cutout (see the CSS comment) — sound
+  reasoning on a phone, but on a Surface (no back button, no cutout) it just left an empty gap on
+  the left with the buttons floating in the middle. Fixed with a
+  `body[data-compact-article="1"]:not([data-layout-mode="single"])` override: the row falls back to
+  a plain wrapping flex row (left-aligned primary actions), `.entry-pane-alt-actions` gets
+  `margin-left: auto` to stay pinned right, and the opened tag chips continue inline right after the
+  tag button instead of forced onto a full-width row beneath everything — wrapping to their own line
+  only when they don't fit. Single-pane (phone) is untouched (`:not(...)` excludes it).
+- **Button height didn't match `.sort-pill`** (the posts-list filter/sort buttons, fixed at
+  `1.95rem` everywhere, phone included). The compact header buttons had no explicit height — width
+  was pinned to `1.75rem` but height was whatever the icon size and padding happened to add up to,
+  close to but not exactly `1.95rem`. Pinned explicitly so the two rows (which sit right on top of
+  each other on a Surface) read as one control strip rather than two slightly-mismatched ones.
+
+Verified visually via Playwright screenshots at 1368×912 touch-emulated: buttons left-aligned,
+alt-actions pinned right, tag chips opening inline and wrapping correctly when they overflow.
 
 ### Global ignored suggested-tags list, editable in Settings
 
