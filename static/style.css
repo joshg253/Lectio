@@ -550,6 +550,63 @@ body[data-compact-article="1"] .entry-tags-row:has(.entry-tag-add-button[aria-ex
   margin-top: 0.15rem;
 }
 
+/* On a touch-primary tablet/desktop (Surface Pro and the like) there is no back
+   button and no camera cutout to centre the middle group against, so the
+   phone's 1fr/auto/1fr grid above just leaves an empty gap where the back
+   button would be and the primary actions look adrift in the middle instead of
+   anchored to anything. Left-align them instead, and let the opened tag chips
+   continue right after the tag button rather than drop to a full-width row
+   beneath everything -- while Reader/Web/Open-tab/Share/Note
+   (.entry-pane-alt-actions) stays pinned to the row's top-right corner no
+   matter how many chips there are.
+
+   Three earlier attempts didn't hold up:
+     1. Plain flex with alt-actions last in DOM/flex order and margin-left:
+        auto -- broke as soon as enough chips wrapped past one line, since
+        alt-actions is only placed after every chip is, so it landed wherever
+        the chip flow happened to run out.
+     2. float: right on alt-actions -- avoided overlap, but a float can never
+        rise ABOVE its point of insertion in the flow. With a page's worth of
+        chips preceding it in the DOM (found on real gottadeal.com entries),
+        it still got pushed down to wherever that flow ended.
+     3. order: 1 on alt-actions (between primary-actions at 0 and the chips at
+        2), still with margin-left: auto -- order controls VISUAL sequence as
+        well as processing sequence, so this put alt-actions between primary-
+        actions and the chips instead of at the row's right edge, and the auto
+        margin only had the chips' width left to push against, landing
+        alt-actions somewhere mid-row instead of flush right.
+
+   None of flex's own sequencing can give an item both "always ends up on line
+   1" AND "always renders at the true right edge" when a variable, possibly
+   very long amount of content needs to flow between them. So alt-actions
+   leaves the flex flow entirely: position: absolute, pinned top-right of the
+   row (which is position: relative for this). The row's own padding-right is
+   widened to leave room for it -- on every wrapped line, not only the first,
+   which is the one deliberate compromise here (a small permanent gutter on
+   line 2+ that nothing actually needs) in exchange for never again depending
+   on insertion order or a float's own quirks. .entry-primary-actions and each
+   chip (dissolved via display: contents on .entry-tags-extra /
+   .entry-tag-suggestions, same as elsewhere in this file) are plain flex
+   items filling that narrowed width and wrapping normally. Found 2026-09-04,
+   after two rounds of this not holding up on real entries. */
+body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  position: relative;
+  padding-right: 9rem;
+}
+
+body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-pane-alt-actions {
+  position: absolute;
+  top: 0.25rem;
+  right: var(--phone-gutter, 0.85rem);
+}
+
+body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tags-extra {
+  display: contents;
+}
+
 /* Larger than the desktop's mouse-sized glyphs. Applied to the row, so both
    groups move together and cannot drift apart. */
 body[data-compact-article="1"] .entry-tags-row .material-symbols-rounded {
@@ -559,13 +616,19 @@ body[data-compact-article="1"] .entry-tags-row .material-symbols-rounded {
 /* One box for every button in the row, so the pitch is identical in both groups
    by construction. Zeroing the middle group's padding got them to 26.8px and
    26.4px — closer, but still not equal, because the buttons themselves were 22px
-   and 21.6px wide. Matching gaps only match if the boxes between them do. */
+   and 21.6px wide. Matching gaps only match if the boxes between them do.
+   Height is pinned to 1.95rem to match .sort-pill (the posts-list filter/sort
+   buttons) rather than whatever the icon size and padding happened to add up
+   to -- the two rows sit close together on a Surface Pro and read as one
+   control strip, so their button heights need to agree by construction too,
+   not by accident. Found 2026-09-04. */
 body[data-compact-article="1"] .entry-primary-actions button,
 body[data-compact-article="1"] .entry-tags-row .entry-source-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 1.75rem;
+  height: 1.95rem;
   padding-left: 0;
   padding-right: 0;
 }
@@ -650,10 +713,13 @@ body[data-compact-article="1"][data-entry-tags-open="1"] .feed-tag-filter-sign {
   align-items: center;
   justify-content: center;
   /* The reason they were pulled from the phone in the first place. 2.25rem is
-     a thumb target; the glyphs themselves stay small enough to read as marks
-     rather than buttons. */
+     a thumb target width; the glyphs themselves stay small enough to read as
+     marks rather than buttons. Height is pinned to the same 1.95rem as the
+     header row's own buttons (see .entry-primary-actions button above) rather
+     than a separately-chosen 2.25rem -- the suggested-tag pills sat visibly
+     taller than everything else in the row. Found 2026-09-04. */
   min-width: 2.25rem;
-  min-height: 2.25rem;
+  min-height: 1.95rem;
   padding: 0 0.25em;
   opacity: 0.85;
 }

@@ -260,16 +260,6 @@ similar in spirit to the existing hide-Shorts/hide-unpremiered per-feed display 
 (`_DISPLAY_PREF_KEYS`). Not investigated — needs checking whether the feed data even distinguishes
 subscriber-only videos before sizing this.
 
-### NEXT UP (after the refresh-contention perf work wraps): bump the size of in-header buttons/tag chips
-
-Clarified 2026-09-03 — supersedes the vaguer "larger tags/'+^vx' for Surface" report (2026-09-02,
-which read as feed-specific and was left unscoped for that reason). Not feed-specific: Josh wants
-the entry pane's post-header controls (the `+`/`-` tag-filter chips, suggested-tag chips, and
-whatever else lives in that row) sized up generally, across the app. Explicitly flagged as the next
-thing to pick up once the current refresh-contention perf thread (Tier 1) is done. Not scoped
-further yet — needs a look at the header markup/CSS to see whether this is a simple size-token bump
-or touches layout (chip-row wrapping, spacing against adjacent controls).
-
 ### Global ignored suggested-tags list, editable in Settings
 
 Distinct from the existing per-(feed, tag) dismissal (`suppressed_feed_tags`, × on a chip, undo at
@@ -286,6 +276,44 @@ Not scoped: needs a new setting (JSON list or a small table), a check at chip-re
 folder's "Mark Read" bulk action should cover: just the entries currently rendered/loaded in the
 list, or also anything newer that hasn't been fetched into view yet. Not resolved — needs Josh to
 say which behavior he actually wants (and whether the two already differ today) before scoping.
+
+### An entry takes a really long time to open — inconclusive, no repro caught
+
+[entry](https://play.nobleknight.com/?p=19266) (feed:
+[play.nobleknight.com/feed](https://play.nobleknight.com/feed)) — checked 2026-09-04: the stored
+entry is unremarkable (21KB content, 4 `<img>`, no huge tables/embeds). `_derive_article_lead_image`
+(main.py ~16556) is cache-only (`include_source_lookup=False`) so it isn't the old sync-lead-image-
+fetch theory. No `[perf] entry_pane` slow-path log line for this feed in the current log window
+(may have rotated past whenever Josh actually saw it). Still needs a live repro — next time it's
+slow, check the entry-pane response time in the browser network tab and/or grep
+`[perf] entry_pane`/`[perf] entry_detail` around that timestamp.
+
+### A misfile.com entry doesn't load at all — inconclusive, server-side data looks fine
+
+[entry](https://www.misfile.com/hell-high/9426) (feed:
+[misfile.com/hell-high/rss](https://www.misfile.com/hell-high/rss)) — checked 2026-09-04: this entry
+is shaped identically to the feed's other 98 entries (thin `<a><img>New comic!...` summary, no
+`<content>` — normal for this webcomic, not a parsing failure). The lead image resolved to a real,
+non-cached-negative URL (`.../comics/1788467221-page1528.jpg`), and both that image, the
+`/comicsthumbs/` thumbnail, the article page, and the feed itself all fetched 200 directly via curl.
+One anomaly in the log: a one-off "recovered via loose parser despite CharacterEncodingOverride:
+declared utf-8, parsed as MacRoman" warning fired for this feed on today's refresh — but the entry's
+title/summary/author came through as clean ASCII, so it doesn't look connected. Nothing server-side
+explains "not loading" — needs a live repro (blank pane? spinner? console error?) before it's
+actionable further.
+
+### A quuxplusone entry has unrendered inline math markup — CONFIRMED
+
+[entry](https://quuxplusone.github.io/blog/2026/08/05/colourfields) (feed:
+[quuxplusone.github.io/blog/feed.xml](https://quuxplusone.github.io/blog/feed.xml)) — checked
+2026-09-04, root cause found: the post uses inline math written as `\(n\times n\)` /
+`\(\lceil n/2\rceil^2 + 1\)`, meant to be typeset client-side by the source site's MathJax/KaTeX.
+Lectio's stored content keeps the raw delimiter text as-is (confirmed via `reader.get_entries()` —
+the literal `\(...\)` sits right in the sanitized HTML), so the article pane shows the raw LaTeX
+source instead of rendered math. Not a sanitizer bug — nothing strips or mangles it, it's just never
+typeset. A real fix means either running a math-typesetting pass (MathJax/KaTeX) over entry content
+at render time, or leaving it as a known gap for math-heavy blogs (this is the first report of this
+particular shape; unclear how common it is across other feeds before sizing the work).
 
 ## Tier 3 — maintenance backlog, ready to run
 

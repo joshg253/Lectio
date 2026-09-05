@@ -837,7 +837,7 @@
         </div>
       </div>
       {% endif %}
-      <div class="posts {% if not posts and not selected_home and not is_chunk_delta_fetch %}posts-empty{% endif %}" data-chunk-size="10">
+      <div class="posts {% if not posts and not selected_home and not is_chunk_delta_fetch %}posts-empty{% endif %}" data-chunk-size="{{ chunk_size }}" data-next-chunk="{{ next_chunk }}">
         {% if not posts and not selected_home and not is_chunk_delta_fetch %}
         <div class="empty-state-message muted">No posts match this filter.</div>
         {% endif %}
@@ -1138,7 +1138,9 @@
       }
       // A rotated phone is "medium" mode but still ~390px tall, where the desktop
       // header stack is taller than the article itself. A narrow desktop window is
-      // also medium and has height to spare.
+      // also medium and has height to spare. A maximized touchscreen 2-in-1
+      // (Surface Pro and the like) is often "wide" outright — plenty of width,
+      // but the header controls are still finger targets, not mouse targets.
       //
       // There is no reliable "is this a phone" bit, so this asks about the thing
       // that actually matters — is vertical space tight, and is this a finger:
@@ -1148,16 +1150,16 @@
       //     compact header is just as welcome);
       //   * (pointer: coarse) AND (hover: none) means touch is the PRIMARY input.
       //     Both halves matter: a touchscreen laptop reports coarse but still
-      //     hovers, and would otherwise be treated as a phone;
-      //   * navigator.userAgentData.mobile is the most direct signal of the three
-      //     but exists only in Chromium, so it can confirm and never decide.
+      //     hovers, and would otherwise be treated as a phone. This alone is
+      //     sufficient — requiring navigator.userAgentData.mobile on top of it
+      //     (as this used to) excludes touch-primary Windows 2-in-1s entirely,
+      //     since Windows never reports "mobile" there even in tablet mode.
       const SHORT_VIEWPORT = 560;
       const touchPrimary = Boolean(window.matchMedia
         && window.matchMedia('(pointer: coarse) and (hover: none)').matches);
-      const uaMobile = Boolean(navigator.userAgentData && navigator.userAgentData.mobile);
       const compactArticle = layoutMode === 'single'
-        || (layoutMode === 'medium'
-            && (window.innerHeight <= SHORT_VIEWPORT || (touchPrimary && uaMobile)));
+        || ((layoutMode === 'medium' || layoutMode === 'wide')
+            && (window.innerHeight <= SHORT_VIEWPORT || touchPrimary));
       if (compactArticle) {
         bodyEl.setAttribute('data-compact-article', '1');
       } else {

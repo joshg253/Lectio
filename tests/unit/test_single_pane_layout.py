@@ -597,18 +597,33 @@ def test_the_signal_is_short_viewport_first():
     assert "window.innerHeight <= SHORT_VIEWPORT" in block
 
 
-def test_touch_detection_requires_both_halves():
+def test_touch_detection_is_pointer_and_hover_together():
     """A touchscreen laptop reports (pointer: coarse) but still hovers, and would
-    otherwise be treated as a phone. userAgentData.mobile is the most direct signal
-    of the three but is Chromium-only, so it confirms and never decides."""
+    otherwise be treated as a phone -- both halves together are the signal on
+    their own. Requiring navigator.userAgentData.mobile on top of it (as this
+    used to) excluded every touch-primary Windows 2-in-1 outright, since Windows
+    never reports "mobile" there even in tablet mode."""
     block = INDEX[INDEX.index("const SHORT_VIEWPORT"):][:900]
     assert "(pointer: coarse) and (hover: none)" in block
-    assert "touchPrimary && uaMobile" in block
+    assert "uaMobile" not in INDEX
+    assert "const compactArticle" in INDEX
+    compact_block = INDEX[INDEX.index("const compactArticle"):][:400]
+    assert "userAgentData" not in compact_block
+    assert "touchPrimary &&" not in compact_block
+
+
+def test_wide_layout_also_goes_compact_for_touch():
+    """A maximized touch-primary 2-in-1 (Surface Pro and the like) is often
+    'wide' by width alone, so the touch/short-viewport check must reach 'wide'
+    too, not just 'medium' -- purely-mouse use is what keeps 'wide' small, not
+    the layout mode itself."""
+    block = INDEX[INDEX.index("const compactArticle"):][:400]
+    assert "layoutMode === 'wide'" in block
 
 
 def test_a_tall_narrow_window_keeps_the_desktop_header():
-    """Medium mode alone must not trigger it: a 1000x900 window is medium and has
-    all the height it needs."""
+    """Medium (or wide) mode alone must not trigger it: a 1000x900 window is
+    medium and has all the height it needs, and isn't touch-primary."""
     block = INDEX[INDEX.index("const compactArticle"):][:400]
     assert "layoutMode === 'medium'" in block
     assert "layoutMode === 'medium')" not in block          # never medium on its own

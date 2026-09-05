@@ -3902,6 +3902,23 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         }
 
         if (maybeUrl && maybeUrl.searchParams.has('chunk') && maybeUrl.searchParams.has('chunk_delta') && pushHistory === false) {
+          // Carry the fresh data-next-chunk value onto the LIVE .posts element
+          // (which persists across this whole incremental-load path -- see
+          // below) so the next revealNextChunk() call in setupPostChunks asks
+          // for the right chunk. Done before the early return too: an empty
+          // delta still means "the server moved its own limit/cursor forward,"
+          // and letting the attribute go stale would reopen the exact stuck
+          // loop this plumbing exists to prevent.
+          try {
+            const nextNextChunk = nextPostsPane.querySelector('.posts')?.getAttribute('data-next-chunk');
+            const liveNextChunkEl = currentPostsPane.querySelector('.posts');
+            if (nextNextChunk && liveNextChunkEl) {
+              liveNextChunkEl.setAttribute('data-next-chunk', nextNextChunk);
+            }
+          } catch (e) {
+            // ignore
+          }
+
           const appended = Array.from(nextPostsPane.querySelectorAll('.post-item'));
           if (appended.length === 0) {
             // nothing new; avoid replacing pane which would scroll to top
@@ -16808,6 +16825,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
 
       const chunkSize = Number.parseInt(postsContainer.getAttribute('data-chunk-size') || '10', 10) || 10;
       let visibleCount = chunkSize;
+      // Tracks the highest server chunk actually requested so far -- see the
+      // data-next-chunk comment in revealNextChunk below for why this isn't
+      // derived from the rendered item count.
+      let lastRequestedChunk = 0;
 
       function getPostItems() {
         return Array.from(postsContainer.querySelectorAll('.post-item'));
@@ -16862,7 +16883,22 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           if (postsChunkLoading) return;
           try {
             const url = new URL(normalizeScopeUrl(activeScopeUrl || window.location.href), window.location.origin);
-            const next = Math.max(1, Math.floor(items.length / chunkSize) + 1);
+            // The chunk to request next comes from the server (data-next-chunk
+            // on .posts), computed there from how many entries it actually
+            // asked reader for -- NOT from how many ended up rendered here,
+            // which can be fewer after per-entry filtering (read state,
+            // hide-unpremiered, tag narrowing) and used to round back down to
+            // the SAME chunk forever, re-fetching (and deduplicating away) the
+            // identical top slice on every retry. Found 2026-09-05: a single
+            // filtered entry among an "All" (2179-feed) initial 10-item chunk
+            // was enough to get permanently stuck. lastRequestedChunk is a
+            // belt-and-suspenders floor -- never re-request a chunk already
+            // asked for, even if the attribute were somehow stale.
+            const serverNext = Number.parseInt(postsContainer.getAttribute('data-next-chunk') || '', 10);
+            const next = Number.isFinite(serverNext) && serverNext > lastRequestedChunk
+              ? serverNext
+              : lastRequestedChunk + 1;
+            lastRequestedChunk = next;
             url.searchParams.set('chunk', String(next));
             // Ask the server to return only the delta items for this chunk
             // so the client can append a fixed-size batch instead of a
@@ -16930,8 +16966,13 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           return;
         }
 
+        // A few screens' worth of lead, not just the last ~180px, so the next
+        // batch is usually already in place by the time it's needed instead
+        // of the list visibly running out and pausing. Josh: "start loading a
+        // tiny bit earlier so not an abrupt stop at each [chunk]." Found
+        // 2026-09-05, same session as the chunk-loading fix above.
         const remaining = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
-        if (remaining < 180) {
+        if (remaining < 600) {
           revealNextChunk();
         }
       }
@@ -17715,6 +17756,28 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       entryTagAddBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
     }
 
+    // A tag action (add, remove, or toggle a feed-tag filter sign) re-renders
+    // the whole pane via loadEntryPaneWithoutFullRefresh, which silently
+    // re-collapses "+N more" even though expanding it is meant to be one-way
+    // per triage (see the data-feed-tag-more handler above). Every action that
+    // touches tags shares this capture/restore pair so the expanded state
+    // survives the re-render regardless of which one fired. Found 2026-09-02
+    // for the sign toggle; the add-tag and remove-tag actions had the same gap
+    // and went unnoticed until 2026-09-04.
+    function captureSuggestedTagsExpanded() {
+      const wrap = document.querySelector('.entry-tag-suggestions');
+      return !!wrap && !wrap.querySelector('[data-feed-tag-more]');
+    }
+    function restoreSuggestedTagsExpanded(wasExpanded) {
+      if (!wasExpanded) return;
+      const wrap = document.querySelector('.entry-tag-suggestions');
+      const moreBtn = wrap?.querySelector('[data-feed-tag-more]');
+      if (wrap && moreBtn) {
+        wrap.querySelectorAll('.is-extra-feed-tag').forEach((c) => { c.hidden = false; });
+        moreBtn.remove();
+      }
+    }
+
     function bindEntryTagInteractions() {
       refreshEntryTagRefs();
       setEntryTagsExpandedState(Boolean(entryTagsForm && !entryTagsForm.hasAttribute('hidden')));
@@ -17767,7 +17830,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             if (data.ok) {
               entryTagsInput.value = '';
               syncKeptFromTagResponse(entryTagsForm, data);
-              loadEntryPaneWithoutFullRefresh(window.location.href, false);
+              const wasExpanded = captureSuggestedTagsExpanded();
+              await loadEntryPaneWithoutFullRefresh(window.location.href, false);
+              restoreSuggestedTagsExpanded(wasExpanded);
             } else {
               showToastMessage(data.error || 'Failed to save tags.');
             }
@@ -17895,21 +17960,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               ? `Filter: ${verb} #${tag} on this feed${armed}`
               : `Removed ${sign}${tag} from this feed's filter`);
             // Re-render so chip states and the unread list reflect the rule --
-            // that replaces the whole pane, which silently re-collapsed "+N
-            // more" even though expanding it is meant to be one-way per
-            // triage (see the data-feed-tag-more handler above). Restore the
-            // expanded state afterward if it was open. Found 2026-09-02.
-            const suggestionsWrap = signButton.closest('.entry-tag-suggestions');
-            const wasExpanded = !!suggestionsWrap && !suggestionsWrap.querySelector('[data-feed-tag-more]');
+            // see captureSuggestedTagsExpanded's comment above.
+            const wasExpanded = captureSuggestedTagsExpanded();
             await loadEntryPaneWithoutFullRefresh(window.location.href, false);
-            if (wasExpanded) {
-              const freshWrap = document.querySelector('.entry-tag-suggestions');
-              const moreBtn = freshWrap?.querySelector('[data-feed-tag-more]');
-              if (freshWrap && moreBtn) {
-                freshWrap.querySelectorAll('.is-extra-feed-tag').forEach((c) => { c.hidden = false; });
-                moreBtn.remove();
-              }
-            }
+            restoreSuggestedTagsExpanded(wasExpanded);
           } catch (err) {
             showToastMessage('Filter update failed: ' + (err.message || err));
             signButton.disabled = false;
@@ -17952,7 +18006,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             const data = await resp.json();
             if (data.ok) {
               syncKeptFromTagResponse(entryTagsForm, data);
-              loadEntryPaneWithoutFullRefresh(window.location.href, false);
+              const wasExpanded = captureSuggestedTagsExpanded();
+              await loadEntryPaneWithoutFullRefresh(window.location.href, false);
+              restoreSuggestedTagsExpanded(wasExpanded);
             } else {
               removeBtn.disabled = false;
               showToastMessage(data.error || 'Failed to remove tag.');
