@@ -558,53 +558,52 @@ body[data-compact-article="1"] .entry-tags-row:has(.entry-tag-add-button[aria-ex
    continue right after the tag button rather than drop to a full-width row
    beneath everything.
 
-   A plain wrapping flex row (tried first) got this half right but broke once
-   there were enough chips to wrap past one line: .entry-pane-alt-actions comes
-   LAST in DOM/flex order, so it landed wherever the chip flow happened to run
-   out -- often stranded on its own line sharing space with the tags-form,
-   nowhere near a predictable spot. Reader/Web/Open-tab/Share/Note are a fixed
-   destination, not part of what's wrapping, so they get floated to a pinned
-   top-right corner instead: the row drops flex for plain block layout, the
-   primary actions and every chip become ordinary inline-level boxes, and they
-   wrap AROUND the float exactly like text wraps around an image -- narrower on
-   the lines beside it, full width again once past its bottom -- rather than
-   being scheduled after it in one flex sequence. Found 2026-09-04, right after
-   the touch-detection fix above let a Surface Pro reach compact mode at all. */
+   Two earlier attempts didn't hold up on a real, heavily-tagged entry
+   (gottadeal.com's, 2026-09-04):
+     1. Plain flex with .entry-pane-alt-actions last in DOM/flex order and
+        margin-left: auto -- broke as soon as enough chips wrapped past one
+        line, since alt-actions is only placed after every chip is, so it
+        landed wherever the chip flow happened to run out.
+     2. float: right on alt-actions -- avoided overlap, but a float can never
+        rise ABOVE its point of insertion in the flow. With a page's worth of
+        chips preceding it in the DOM, it still got pushed down to wherever
+        that flow ended, same symptom Josh saw again.
+
+   The fix is `order`, not source position: alt-actions gets order: 1 (right
+   after primary-actions' order: 0), so the wrap algorithm places it on the
+   FIRST line before it ever considers a single chip -- regardless of how many
+   follow in the DOM. .entry-tags-extra dissolves (display: contents) so each
+   chip is its OWN flex item at order: 2, individually packed into whatever
+   line-1 space remains after primary-actions + alt-actions, then wrapping to
+   full-width lines of their own below -- alt-actions having already claimed
+   its spot, it never competes for those later lines. `order` reshuffles
+   layout only, not DOM/tab order, so keyboard/reading order is unaffected. */
 body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row {
-  display: block;
-}
-
-/* Clearfix: without it the row's own height collapses to zero, since a float
-   is taken out of normal flow and doesn't contribute to its parent's height
-   on its own. */
-body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row::after {
-  content: "";
-  display: table;
-  clear: both;
-}
-
-body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-pane-alt-actions {
-  float: right;
-  margin-left: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-primary-actions {
-  display: inline-flex;
-  vertical-align: middle;
+  order: 0;
 }
 
-/* Dissolves the wrapper so every chip inside (each already inline-flex; see
-   .entry-tag-chip-wrap / .feed-tag-filter-chip) wraps on its own in the row's
-   shared inline flow, the same reason .entry-tag-suggestions is display:
-   contents elsewhere in this file -- an atomic box here would face the exact
-   DOM-order problem this whole block exists to avoid. */
+body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-pane-alt-actions {
+  order: 1;
+  margin-left: auto;
+}
+
 body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tags-extra {
   display: contents;
 }
 
-body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-form {
-  display: inline-flex;
-  vertical-align: middle;
+body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tag-chip-wrap,
+body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .feed-tag-filter-chip,
+body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tags-form {
+  /* display: contents (on .entry-tags-extra and .entry-tag-suggestions, both
+     already dissolved) produces no box of its own, so `order` set there would
+     be ignored -- it has to land on the actual rendered elements. */
+  order: 2;
 }
 
 /* Larger than the desktop's mouse-sized glyphs. Applied to the row, so both
