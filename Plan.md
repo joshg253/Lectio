@@ -291,26 +291,46 @@ which plausibly means Windows already reports the device as keyboardless rather 
 needed). Real device runs Firefox at 2736×1824 @ 200% scaling (1368×912 effective, matching the
 Playwright test above).
 
-**Follow-up, same session, also shipped 2026-09-04** — two more Surface-specific rough edges found
-once compact mode actually started applying there:
+**Follow-up, same session, also shipped 2026-09-04** — several more Surface-specific rough edges
+found once compact mode actually started applying there:
 
 - **Centering looked wrong outside phone width.** The header row's `1fr auto 1fr` grid deliberately
   centers the read/star/tag group against the phone's camera cutout (see the CSS comment) — sound
   reasoning on a phone, but on a Surface (no back button, no cutout) it just left an empty gap on
-  the left with the buttons floating in the middle. Fixed with a
-  `body[data-compact-article="1"]:not([data-layout-mode="single"])` override: the row falls back to
-  a plain wrapping flex row (left-aligned primary actions), `.entry-pane-alt-actions` gets
-  `margin-left: auto` to stay pinned right, and the opened tag chips continue inline right after the
-  tag button instead of forced onto a full-width row beneath everything — wrapping to their own line
-  only when they don't fit. Single-pane (phone) is untouched (`:not(...)` excludes it).
+  the left with the buttons floating in the middle. Scoped a
+  `body[data-compact-article="1"]:not([data-layout-mode="single"])` override so single-pane (phone)
+  stays untouched; see the next point for how it evolved.
+- **Reader/Web/Open-tab/Share/Note (`.entry-pane-alt-actions`) landed in the wrong place once tags
+  wrapped past one line.** First attempt: a plain wrapping flex row with `margin-left: auto` on
+  alt-actions. That looked right for a couple of tags, but alt-actions comes LAST in DOM/flex order,
+  so once enough chips wrapped past one line, it got scheduled wherever the chip flow happened to
+  run out — stranded sharing a line with the tags-form, nowhere predictable. Josh: "have the tags
+  row break once it gets to the Reader/Web/Share/Note buttons instead of making those break."
+  Reworked to float instead of flex: `.entry-tags-row` drops to plain block layout, `.entry-pane-
+  alt-actions` gets `float: right`, and `.entry-primary-actions` / each tag chip / `.entry-tags-form`
+  become ordinary inline-level boxes (chips were already `inline-flex`; `.entry-tag-suggestions` was
+  already `display: contents` for the same reason elsewhere in this file) — they wrap AROUND the
+  float exactly like text wraps around an image, narrower on the lines beside it, full width again
+  below it, rather than being scheduled after it in one flex sequence. A `::after { clear: both }`
+  clearfix keeps the row's own height from collapsing (floats don't contribute to a parent's height
+  on their own). Bonus: chips now pack more per line too, since they use the row's real available
+  width instead of being sized as their own separate flex sub-box.
 - **Button height didn't match `.sort-pill`** (the posts-list filter/sort buttons, fixed at
   `1.95rem` everywhere, phone included). The compact header buttons had no explicit height — width
   was pinned to `1.75rem` but height was whatever the icon size and padding happened to add up to,
   close to but not exactly `1.95rem`. Pinned explicitly so the two rows (which sit right on top of
   each other on a Surface) read as one control strip rather than two slightly-mismatched ones.
+- **Suggested-tag pills (the feed's own tags, with ▲▼+× signs) were visibly taller than everything
+  else** once the row buttons above were pinned to `1.95rem` — their `min-height` was a separately
+  chosen `2.25rem`. Matched to `1.95rem` too; the `2.25rem` thumb-target width stayed as-is (that
+  one's about horizontal reach, not height).
 
-Verified visually via Playwright screenshots at 1368×912 touch-emulated: buttons left-aligned,
-alt-actions pinned right, tag chips opening inline and wrapping correctly when they overflow.
+Verified visually via Playwright screenshots at 1368×912 touch-emulated (including a stress case
+with 9 manual tags + 4 suggested tags, enough to force multiple wrapped lines): alt-actions stays
+put as one group with chip content wrapping around it rather than displacing it, button heights
+measured identical (31.19px) across the header row, `.sort-pill`, and suggested-tag pills. Phone
+layout re-confirmed unchanged (`.entry-tags-row` still computes to `display: grid` under
+`layoutMode="single"`).
 
 ### Global ignored suggested-tags list, editable in Settings
 

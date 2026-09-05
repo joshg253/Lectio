@@ -554,28 +554,57 @@ body[data-compact-article="1"] .entry-tags-row:has(.entry-tag-add-button[aria-ex
    button and no camera cutout to centre the middle group against, so the
    phone's 1fr/auto/1fr grid above just leaves an empty gap where the back
    button would be and the primary actions look adrift in the middle instead of
-   anchored to anything. Left-align them instead: fall back to a plain wrapping
-   flex row, keep the reader/web/tab/share group pinned to the far right with
-   margin-left: auto, and let the opened tag chips continue right after the tag
-   button on the same line rather than drop to a full-width row beneath
-   everything -- wrapping to a line of their own only if the row runs out of
-   room. Found 2026-09-04, right after the touch-detection fix above let a
-   Surface Pro reach compact mode at all. */
+   anchored to anything. Left-align them instead, and let the opened tag chips
+   continue right after the tag button rather than drop to a full-width row
+   beneath everything.
+
+   A plain wrapping flex row (tried first) got this half right but broke once
+   there were enough chips to wrap past one line: .entry-pane-alt-actions comes
+   LAST in DOM/flex order, so it landed wherever the chip flow happened to run
+   out -- often stranded on its own line sharing space with the tags-form,
+   nowhere near a predictable spot. Reader/Web/Open-tab/Share/Note are a fixed
+   destination, not part of what's wrapping, so they get floated to a pinned
+   top-right corner instead: the row drops flex for plain block layout, the
+   primary actions and every chip become ordinary inline-level boxes, and they
+   wrap AROUND the float exactly like text wraps around an image -- narrower on
+   the lines beside it, full width again once past its bottom -- rather than
+   being scheduled after it in one flex sequence. Found 2026-09-04, right after
+   the touch-detection fix above let a Surface Pro reach compact mode at all. */
 body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row {
-  display: flex;
-  flex-wrap: wrap;
+  display: block;
+}
+
+/* Clearfix: without it the row's own height collapses to zero, since a float
+   is taken out of normal flow and doesn't contribute to its parent's height
+   on its own. */
+body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row::after {
+  content: "";
+  display: table;
+  clear: both;
 }
 
 body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-pane-alt-actions {
-  margin-left: auto;
+  float: right;
+  margin-left: 0.5rem;
 }
 
+body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-primary-actions {
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+/* Dissolves the wrapper so every chip inside (each already inline-flex; see
+   .entry-tag-chip-wrap / .feed-tag-filter-chip) wraps on its own in the row's
+   shared inline flow, the same reason .entry-tag-suggestions is display:
+   contents elsewhere in this file -- an atomic box here would face the exact
+   DOM-order problem this whole block exists to avoid. */
 body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tags-extra {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.3rem;
-  margin-top: 0;
+  display: contents;
+}
+
+body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-form {
+  display: inline-flex;
+  vertical-align: middle;
 }
 
 /* Larger than the desktop's mouse-sized glyphs. Applied to the row, so both
@@ -684,10 +713,13 @@ body[data-compact-article="1"][data-entry-tags-open="1"] .feed-tag-filter-sign {
   align-items: center;
   justify-content: center;
   /* The reason they were pulled from the phone in the first place. 2.25rem is
-     a thumb target; the glyphs themselves stay small enough to read as marks
-     rather than buttons. */
+     a thumb target width; the glyphs themselves stay small enough to read as
+     marks rather than buttons. Height is pinned to the same 1.95rem as the
+     header row's own buttons (see .entry-primary-actions button above) rather
+     than a separately-chosen 2.25rem -- the suggested-tag pills sat visibly
+     taller than everything else in the row. Found 2026-09-04. */
   min-width: 2.25rem;
-  min-height: 2.25rem;
+  min-height: 1.95rem;
   padding: 0 0.25em;
   opacity: 0.85;
 }
