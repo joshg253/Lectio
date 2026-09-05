@@ -301,7 +301,7 @@ found once compact mode actually started applying there:
   `body[data-compact-article="1"]:not([data-layout-mode="single"])` override so single-pane (phone)
   stays untouched; see the next point for how it evolved.
 - **Reader/Web/Open-tab/Share/Note (`.entry-pane-alt-actions`) landed in the wrong place once tags
-  wrapped past one line.** Two attempts didn't hold up:
+  wrapped past one line.** Three attempts didn't hold up:
   1. Plain wrapping flex with `margin-left: auto` on alt-actions — broke as soon as enough chips
      wrapped past one line, since alt-actions comes LAST in DOM/flex order and only gets placed
      after every chip is, so it landed wherever the chip flow happened to run out.
@@ -310,19 +310,23 @@ found once compact mode actually started applying there:
      Josh found two real gottadeal.com entries (heavily tagged deal posts) where it still pushed the
      icons down — a float can never rise ABOVE its point of insertion in the flow, so with a
      page's worth of chips preceding it in the DOM, it still ends up wherever that flow ran out.
-     Same symptom as attempt 1, just delayed further.
+  3. `order: 1` on alt-actions (between primary-actions at `order: 0` and the chips at `order: 2`),
+     still with `margin-left: auto` — `order` controls VISUAL sequence, not just which line an item
+     lands on, so this put alt-actions *between* primary-actions and the chips instead of at the
+     row's right edge, and the auto margin only had the chips' width left to push against, landing
+     it somewhere mid-row ("squished the suggtags to the right of the right-icons, now ~centered,"
+     per Josh, plus the tags-form got crowded into wrapping early since less room was left for it).
 
-  Actual fix: `order`, not source position. `.entry-tags-row` stays flex; `.entry-primary-actions`
-  gets `order: 0`, `.entry-pane-alt-actions` gets `order: 1` (still `margin-left: auto`) — so the
-  wrap algorithm places alt-actions on the FIRST line right after primary-actions, before it ever
-  considers a single chip, regardless of how many follow in the DOM. `.entry-tags-extra` dissolves
-  (`display: contents`) so each chip becomes its own flex item at `order: 2`, individually packed
-  into whatever line-1 space remains after primary-actions + alt-actions, then wrapping to
-  full-width lines of their own below — alt-actions having already claimed its spot on line 1, it
-  never competes for those later lines no matter how many chips there are. `order` reshuffles
-  layout only, not DOM/tab order, so keyboard/reading order is unaffected. Verified with a stress
-  case (19 tags across 9 wrapped lines): alt-actions' top offset measured identical to
-  primary-actions' the whole time.
+  None of flex's own sequencing can give an item both "always ends up on line 1" and "always renders
+  at the true right edge" when a variable amount of content needs to flow between them. Actual fix:
+  alt-actions leaves the flex flow entirely. `position: absolute`, pinned top-right of the row (which
+  is `position: relative` for this); the row's own `padding-right` is widened to `9rem` to reserve
+  room for it — on every wrapped line, not only the first, which is the one deliberate compromise
+  here (a small permanent gutter on line 2+ that nothing there actually needs) in exchange for never
+  again depending on insertion order or a float's own quirks. `.entry-primary-actions` and each chip
+  (dissolved via `display: contents`, as before) are plain flex items filling that narrowed width and
+  wrapping normally. Verified with the 19-tag/9-line stress case: alt-actions' top offset measured
+  identical to primary-actions' throughout, and its rect never overlapped any wrapped chip line.
 - **Button height didn't match `.sort-pill`** (the posts-list filter/sort buttons, fixed at
   `1.95rem` everywhere, phone included). The compact header buttons had no explicit height — width
   was pinned to `1.75rem` but height was whatever the icon size and padding happened to add up to,
