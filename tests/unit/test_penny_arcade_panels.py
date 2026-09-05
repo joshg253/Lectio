@@ -114,3 +114,35 @@ def test_a_host_with_no_plugin_opinion_still_scans(monkeypatch):
 
     assert "real-comic.png" in out
     assert hero is None
+
+
+def test_a_body_that_already_had_its_own_image_is_not_rescanned(monkeypatch):
+    """misfile.com's case: the body opens with the comic, _strip_lead_image_opener
+    removes it as a duplicate of the already-resolved lead (correctly shown as the
+    hero), leaving no <img> behind -- identical, post-strip, to mahonoir's body that
+    never had one. Without body_had_image this re-fetched the source page for a
+    panel that was already resolved, on every single open, racing the same-URL
+    background fetch get_entry_detail's embed-recovery step already queued."""
+    import main
+
+    scanned = []
+
+    def _boom(link, is_webcomic=False):
+        scanned.append(link)
+        return "https://www.misfile.com/comics/should-not-be-fetched.jpg"
+
+    monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image", _boom)
+    monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
+    monkeypatch.setattr(
+        main.lead_image_service, "_plugin_should_skip_source_lookup",
+        lambda *, entry_link: False)
+
+    entry = type("E", (), {"link": "https://www.misfile.com/hell-high/9426"})()
+    lead = "https://www.misfile.com/comics/1788467221-page1528.jpg"
+    body = '<p><a href="https://www.misfile.com/hell-high/9426"><br/>New comic!</a><br/>Today\'s News:<br/></p>'
+    out, hero = main._inject_webcomic_panel_into_bodyless_entry(
+        body, entry, "f", lead, body_had_image=True)
+
+    assert out == body, "the text-only body should be left exactly as-is"
+    assert hero == lead, "the already-resolved lead must stay the hero, not be dropped"
+    assert not scanned, "a body that already had its own image must not be re-scanned"

@@ -17746,7 +17746,7 @@ def _collapse_block_spacers(content_html):
 _HAS_IMG_RE = re.compile(r"<img\b", re.IGNORECASE)
 
 
-def _inject_webcomic_panel_into_bodyless_entry(content_html, entry, feed_url: str, lead_image_url):
+def _inject_webcomic_panel_into_bodyless_entry(content_html, entry, feed_url: str, lead_image_url, body_had_image: bool = False):
     """Put the comic in the article when a webcomic feed ships a body without one.
 
     mahonoir.com's feed carries no image at all — only a "The post … appeared
@@ -17765,10 +17765,22 @@ def _inject_webcomic_panel_into_bodyless_entry(content_html, entry, feed_url: st
     of its own — because it costs a source-page fetch on the render path. The
     fetch is served from `_source_html_cache` when the same page was already
     pulled this session.
+
+    ``body_had_image`` (checked BEFORE `_strip_lead_image_opener` ran) tells
+    the mahonoir case (never had a picture) apart from misfile.com's: its body
+    opens with the comic already, `_strip_lead_image_opener` matches it against
+    the resolved lead and removes it as a duplicate — the body looks identical
+    to mahonoir's afterwards (no `<img>` either way) even though the article
+    already has its comic, correctly shown as the hero. Without this flag every
+    open of an entry like that re-fetched the source page for a panel that was
+    already resolved, wastefully and in a race with the same-URL background
+    fetch `_inject_recovered_source_embeds` queues earlier in get_entry_detail.
     """
     if not feed_url or not lead_image_service._is_feed_webcomic(feed_url):
         return content_html, lead_image_url
     if content_html and _HAS_IMG_RE.search(content_html):
+        return content_html, lead_image_url
+    if body_had_image:
         return content_html, lead_image_url
     link = str(getattr(entry, "link", "") or "")
     if not link.startswith(("http://", "https://")):
@@ -18921,6 +18933,11 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # has no image". That None used to be what got persisted to
         # entry_lead_images, which is where the LIST reads its thumbnail from.
         _resolved_lead_for_cache = lead_image_url
+        # Captured before the strip: distinguishes "body never had a picture"
+        # (mahonoir) from "body had one and it was just deduped against the
+        # lead" (misfile.com) for the webcomic injector below — both look
+        # identical AFTER the strip (no <img> left either way).
+        _body_had_image_before_strip = bool(content_html and _HAS_IMG_RE.search(content_html))
         content_html, lead_image_url = _strip_lead_image_opener(
             content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article
         )
@@ -18928,7 +18945,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # to _strip_lead_image_opener as the body's opener and it would be
         # removed again.
         content_html, lead_image_url = _inject_webcomic_panel_into_bodyless_entry(
-            content_html, entry, str(entry.feed_url), lead_image_url
+            content_html, entry, str(entry.feed_url), lead_image_url,
+            body_had_image=_body_had_image_before_strip,
         )
         content_html, lead_image_url = _inject_tapas_episode_panels(
             content_html, entry, str(entry.feed_url), lead_image_url

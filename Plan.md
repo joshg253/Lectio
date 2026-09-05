@@ -279,33 +279,6 @@ fetch theory. No `[perf] entry_pane` slow-path log line for this feed in the cur
 slow, check the entry-pane response time in the browser network tab and/or grep
 `[perf] entry_pane`/`[perf] entry_detail` around that timestamp.
 
-### A misfile.com entry doesn't load at all — inconclusive, server-side data looks fine
-
-[entry](https://www.misfile.com/hell-high/9426) (feed:
-[misfile.com/hell-high/rss](https://www.misfile.com/hell-high/rss)) — checked 2026-09-04: this entry
-is shaped identically to the feed's other 98 entries (thin `<a><img>New comic!...` summary, no
-`<content>` — normal for this webcomic, not a parsing failure). The lead image resolved to a real,
-non-cached-negative URL (`.../comics/1788467221-page1528.jpg`), and both that image, the
-`/comicsthumbs/` thumbnail, the article page, and the feed itself all fetched 200 directly via curl.
-One anomaly in the log: a one-off "recovered via loose parser despite CharacterEncodingOverride:
-declared utf-8, parsed as MacRoman" warning fired for this feed on today's refresh — but the entry's
-title/summary/author came through as clean ASCII, so it doesn't look connected. Nothing server-side
-explains "not loading" — needs a live repro (blank pane? spinner? console error?) before it's
-actionable further.
-
-### A quuxplusone entry has unrendered inline math markup — CONFIRMED
-
-[entry](https://quuxplusone.github.io/blog/2026/08/05/colourfields) (feed:
-[quuxplusone.github.io/blog/feed.xml](https://quuxplusone.github.io/blog/feed.xml)) — checked
-2026-09-04, root cause found: the post uses inline math written as `\(n\times n\)` /
-`\(\lceil n/2\rceil^2 + 1\)`, meant to be typeset client-side by the source site's MathJax/KaTeX.
-Lectio's stored content keeps the raw delimiter text as-is (confirmed via `reader.get_entries()` —
-the literal `\(...\)` sits right in the sanitized HTML), so the article pane shows the raw LaTeX
-source instead of rendered math. Not a sanitizer bug — nothing strips or mangles it, it's just never
-typeset. A real fix means either running a math-typesetting pass (MathJax/KaTeX) over entry content
-at render time, or leaving it as a known gap for math-heavy blogs (this is the first report of this
-particular shape; unclear how common it is across other feeds before sizing the work).
-
 ## Tier 3 — maintenance backlog, ready to run
 
 ### Redirecting feeds — 128 candidates ready, awaiting Josh's own `--apply` run
@@ -365,6 +338,37 @@ tumblrs, norfolkwinters, crispian-jago, owenyoung myfeed) — sort or
 unsubscribe manually.
 
 ## Tier 4 — real features, not blocking anything today
+
+### Unrendered inline math markup (KaTeX) — CONFIRMED, sized 2026-09-05
+
+[entry](https://quuxplusone.github.io/blog/2026/08/05/colourfields) (feed:
+[quuxplusone.github.io/blog/feed.xml](https://quuxplusone.github.io/blog/feed.xml)) — checked
+2026-09-04, root cause found: the post uses inline math written as `\(n\times n\)` /
+`\(\lceil n/2\rceil^2 + 1\)`, meant to be typeset client-side by the source site's MathJax/KaTeX.
+Lectio's stored content keeps the raw delimiter text as-is (confirmed via `reader.get_entries()` —
+the literal `\(...\)` sits right in the sanitized HTML), so the article pane shows the raw LaTeX
+source instead of rendered math. Not a sanitizer bug — nothing strips or mangles it, it's just never
+typeset.
+
+**Prevalence checked 2026-09-05** (live library, `\(...\)`-style delimiters only): 7 feeds carry
+entries with real inline math — matthewrocklin.com/blog (6), oneraynyday.github.io (17),
+mathspp.com/blog (2), andrewkelley.me (1), andreinc.net (1), blog.ncase.me (1), her.esy.fun (1) —
+plus quuxplusone itself. All 7 use `\(\)`/`\[\]` delimiters, none use bare `$...$` (good — `$` alone
+collides with plain-text prices/currency and would need excluding anyway).
+
+**Sizing: client-side KaTeX (recommended) over server-side typesetting.** KaTeX's `auto-render`
+extension scans a DOM subtree for `\(\)`/`\[\]` (and optionally `$$...$$`, deliberately not bare
+`$`) and typesets in place — no content-pipeline or sanitizer change, since the delimiters already
+survive untouched. Vendor KaTeX's JS+CSS+fonts locally (~300-400KB, one-time, matching this
+project's no-CDN-dependency pattern — nothing here calls out to a CDN today), call
+`renderMathInElement()` on the entry-pane container from the same JS path that already runs
+post-render cleanup (`cleanup.js`) whenever an entry opens. Server-side (MathJax-on-Node or a Python
+LaTeX renderer) would add a whole new runtime dependency for 8 feeds' worth of entries — not
+justified next to a small, purpose-built, self-hosted client bundle already invoked exactly once per
+render. Open question before building: Read Mode mirrors the regular app's data model and only
+differs in paging/presentation, so it likely needs the same KaTeX treatment for parity — check what
+the Supernote's e-ink browser actually does with the added JS/fonts before assuming that holds. Not
+started.
 
 ### Backblaze B2 support for backups
 
