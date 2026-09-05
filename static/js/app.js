@@ -17715,6 +17715,28 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       entryTagAddBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
     }
 
+    // A tag action (add, remove, or toggle a feed-tag filter sign) re-renders
+    // the whole pane via loadEntryPaneWithoutFullRefresh, which silently
+    // re-collapses "+N more" even though expanding it is meant to be one-way
+    // per triage (see the data-feed-tag-more handler above). Every action that
+    // touches tags shares this capture/restore pair so the expanded state
+    // survives the re-render regardless of which one fired. Found 2026-09-02
+    // for the sign toggle; the add-tag and remove-tag actions had the same gap
+    // and went unnoticed until 2026-09-04.
+    function captureSuggestedTagsExpanded() {
+      const wrap = document.querySelector('.entry-tag-suggestions');
+      return !!wrap && !wrap.querySelector('[data-feed-tag-more]');
+    }
+    function restoreSuggestedTagsExpanded(wasExpanded) {
+      if (!wasExpanded) return;
+      const wrap = document.querySelector('.entry-tag-suggestions');
+      const moreBtn = wrap?.querySelector('[data-feed-tag-more]');
+      if (wrap && moreBtn) {
+        wrap.querySelectorAll('.is-extra-feed-tag').forEach((c) => { c.hidden = false; });
+        moreBtn.remove();
+      }
+    }
+
     function bindEntryTagInteractions() {
       refreshEntryTagRefs();
       setEntryTagsExpandedState(Boolean(entryTagsForm && !entryTagsForm.hasAttribute('hidden')));
@@ -17767,7 +17789,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             if (data.ok) {
               entryTagsInput.value = '';
               syncKeptFromTagResponse(entryTagsForm, data);
-              loadEntryPaneWithoutFullRefresh(window.location.href, false);
+              const wasExpanded = captureSuggestedTagsExpanded();
+              await loadEntryPaneWithoutFullRefresh(window.location.href, false);
+              restoreSuggestedTagsExpanded(wasExpanded);
             } else {
               showToastMessage(data.error || 'Failed to save tags.');
             }
@@ -17895,21 +17919,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               ? `Filter: ${verb} #${tag} on this feed${armed}`
               : `Removed ${sign}${tag} from this feed's filter`);
             // Re-render so chip states and the unread list reflect the rule --
-            // that replaces the whole pane, which silently re-collapsed "+N
-            // more" even though expanding it is meant to be one-way per
-            // triage (see the data-feed-tag-more handler above). Restore the
-            // expanded state afterward if it was open. Found 2026-09-02.
-            const suggestionsWrap = signButton.closest('.entry-tag-suggestions');
-            const wasExpanded = !!suggestionsWrap && !suggestionsWrap.querySelector('[data-feed-tag-more]');
+            // see captureSuggestedTagsExpanded's comment above.
+            const wasExpanded = captureSuggestedTagsExpanded();
             await loadEntryPaneWithoutFullRefresh(window.location.href, false);
-            if (wasExpanded) {
-              const freshWrap = document.querySelector('.entry-tag-suggestions');
-              const moreBtn = freshWrap?.querySelector('[data-feed-tag-more]');
-              if (freshWrap && moreBtn) {
-                freshWrap.querySelectorAll('.is-extra-feed-tag').forEach((c) => { c.hidden = false; });
-                moreBtn.remove();
-              }
-            }
+            restoreSuggestedTagsExpanded(wasExpanded);
           } catch (err) {
             showToastMessage('Filter update failed: ' + (err.message || err));
             signButton.disabled = false;
@@ -17952,7 +17965,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             const data = await resp.json();
             if (data.ok) {
               syncKeptFromTagResponse(entryTagsForm, data);
-              loadEntryPaneWithoutFullRefresh(window.location.href, false);
+              const wasExpanded = captureSuggestedTagsExpanded();
+              await loadEntryPaneWithoutFullRefresh(window.location.href, false);
+              restoreSuggestedTagsExpanded(wasExpanded);
             } else {
               removeBtn.disabled = false;
               showToastMessage(data.error || 'Failed to remove tag.');

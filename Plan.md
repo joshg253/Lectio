@@ -369,20 +369,22 @@ blue-tinted default control look) showed through the color/background override. 
 fix is live in `static/style.css` (~line 3798) with a comment citing this exact report. No further
 action — the note just predates when it was checked off.
 
-### "More…" suggested-tags panel re-collapses on add-tag (+) or remove (×), not on ▲/▼ anymore
+### "More…" suggested-tags panel re-collapses on add-tag (+) or remove (×) — FIXED 2026-09-04
 
 "more... suggtags collapses when ^v any" (jotted 2026-09-02) — the ▲/▼ (include/exclude filter
 sign) case this describes was fixed same day, same commit (38040e2): toggling a sign re-renders the
-whole pane via `loadEntryPaneWithoutFullRefresh`, which used to silently re-collapse "+N more"; the
-handler (`static/js/app.js` ~17900) now remembers whether it was expanded and re-expands after the
-re-render.
+whole pane via `loadEntryPaneWithoutFullRefresh`, which used to silently re-collapse "+N more"; that
+handler remembered whether it was expanded and re-expanded after the re-render, but the fix was
+scoped to that one handler — the "+" add-tag chip (submits `entry-tags-form`) and the "×" per-post
+tag-remove button both also call `loadEntryPaneWithoutFullRefresh` on success and neither carried
+the same save/restore, so "More…" still collapsed on those two actions.
 
-**But the fix is scoped to that one handler — checked 2026-09-04, still open:** the "+" add-tag chip
-(clicking `[data-tag-suggestion]`, which submits `entry-tags-form`) and the "×" per-post tag-remove
-button both also call `loadEntryPaneWithoutFullRefresh` on success (`static/js/app.js` ~17724 and
-~17920) and neither carries the same expanded-state save/restore. So "More…" still collapses today
-whenever a suggested tag is added or a tag is removed — just not via ▲/▼ anymore. Same fix shape as
-the existing one, applied to the other two call sites.
+Extracted the shared logic into `captureSuggestedTagsExpanded()` / `restoreSuggestedTagsExpanded()`
+(`static/js/app.js`, right before `bindEntryTagInteractions`) and wired all three call sites —
+add-tag submit, per-post tag remove, and the original sign toggle (simplified to use the same
+helpers instead of its own inline copy) — through them. Verified live with Playwright for all three
+actions: expand "+N more", then add a suggested tag / remove a manual tag / toggle a ▲/▼ sign, and
+confirm the "more" button doesn't reappear and the extra chips stay visible in each case.
 
 ### An entry takes a really long time to open — inconclusive, no repro caught
 
