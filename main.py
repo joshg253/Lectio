@@ -570,7 +570,7 @@ AUTO_REFRESH_OPTION_MINUTES = (0, 5, 15, 30, 60, 360, 720)
 SCHEDULER_POLL_SECONDS = 30
 DEFAULT_SORT_BY = "post"
 DEFAULT_SORT_DIR = "asc"
-CHUNK_SIZE = 10
+CHUNK_SIZE = 20
 # feed_fetch_history retention configured via the Administration panel.
 READABILITY_USER_AGENT = "Lectio/0.1 (+https://localhost)"
 # Honest identifier for outbound fetches — names the app and links to the repo,
@@ -24858,6 +24858,7 @@ def _home_inner(
         "inactive_feed_count": len(inactive_feeds),
         "posts": posts,
         "next_chunk": next_chunk,
+        "chunk_size": CHUNK_SIZE,
         # An empty *delta* chunk means "no more to load" (infinite-scroll end),
         # not "nothing matches" — the empty-state message must only render on
         # a full/initial fetch, or it would get appended below real posts.

@@ -53,6 +53,18 @@ attempts fought unrelated per-user settings-cache/tenancy plumbing in the throwa
 environment rather than telling me anything new about the fix itself; stopped once the mechanism was
 independently confirmed both ways above.
 
+**Confirmed working live** by Josh, same day. Two follow-up tuning requests, same session:
+- `CHUNK_SIZE` bumped 10 → 20 (`main.py`). `data-chunk-size` on `.posts` (`templates/index.html`)
+  now reads `{{ chunk_size }}` from the template context instead of a hardcoded `"10"` literal, so
+  it can never drift from the real constant again — the exact class of bug this whole fix was about,
+  just for chunk *size* instead of chunk *number*. `tests/integration/test_saved_inbox_chunking.py`'s
+  own local `CHUNK` constant now reads `main.CHUNK_SIZE` too (it hardcoded a separate copy of 10; a
+  bump would otherwise have silently broken it against the real route's slicing).
+- The scroll-triggered reveal threshold (`maybeRevealOnScroll`) widened from 180px to 600px of
+  remaining scroll — starts fetching a few screens early instead of right at the visible end, so a
+  batch is usually already in place before it's needed rather than the list visibly running out and
+  pausing ("start loading a tiny bit earlier so not an abrupt stop at each chunk").
+
 ### Refresh-contention latency (home route) — RESOLVED except for one open root cause
 
 Reported 2026-08-11 as "serious delay browsing" (home requests: median 700ms, 9% over 3s,

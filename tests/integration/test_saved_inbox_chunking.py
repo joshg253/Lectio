@@ -17,8 +17,11 @@ import main
 from services import tenancy
 
 FEED = "https://example.test/feed"
-STAR_COUNT = 30
-CHUNK = 10
+# Tracks main.CHUNK_SIZE rather than a hardcoded copy so this suite can't drift
+# out of sync with it the way the route's own data-chunk-size template literal
+# once did (see Plan.md's phone-infinite-scroll fix, 2026-09-05).
+CHUNK = main.CHUNK_SIZE
+STAR_COUNT = CHUNK * 3
 
 
 @pytest.fixture

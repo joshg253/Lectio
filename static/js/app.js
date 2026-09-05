@@ -16966,8 +16966,13 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           return;
         }
 
+        // A few screens' worth of lead, not just the last ~180px, so the next
+        // batch is usually already in place by the time it's needed instead
+        // of the list visibly running out and pausing. Josh: "start loading a
+        // tiny bit earlier so not an abrupt stop at each [chunk]." Found
+        // 2026-09-05, same session as the chunk-loading fix above.
         const remaining = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
-        if (remaining < 180) {
+        if (remaining < 600) {
           revealNextChunk();
         }
       }
