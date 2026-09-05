@@ -16,6 +16,43 @@ is scheduled, they're just what to check if a related symptom recurs.
 
 **Refresh-contention latency** — see below. Mostly fixed; still watching for a residual stall.
 
+### Phone infinite-scroll permanently stuck on the first chunk — FIXED 2026-09-05
+
+Reported by Josh: "viewing FEEDS->All on my phone, only the first chunk loads." Confirmed against
+the live production log for the actual incident (folder_id=1 = root/"All", 2179 feeds): every
+`chunk=1&chunk_delta=1` request repeated identically every ~2-3s for over a minute, `entries_fetched=10`
+but `entries_processed=9` every time — never advancing.
+
+**Root cause**: the client computed the next server chunk to request as
+`floor(renderedItemCount / 10) + 1` — but the rendered count can be *less* than what the server
+actually fetched, because per-entry filters (hide-unpremiered YouTube, tag narrowing, star/kept
+mismatch, etc.) run *after* the raw fetch and can drop entries the SQL-level query didn't. Fetching
+10, rendering 9, gives `floor(9/10)+1 = 1` — the SAME chunk as before, forever. Every retry re-fetches
+the identical top slice; the client's own duplicate-detection correctly recognizes them as already on
+screen and appends nothing; since nothing ever changes, nothing stops the retry loop. General bug,
+not specific to "All" — it only needs one filtered-out entry to land in the current window, which is
+just far likelier across 2179 feeds than in a small folder (confirmed: other folders work fine for
+Josh).
+
+**Fix**: stop deriving the next chunk from rendered item count. `main.py`'s home route now computes
+`next_chunk = (limit // CHUNK_SIZE) + 1` — from `limit`, what it actually asked reader for, immune to
+downstream filtering — and renders it as `data-next-chunk` on `.posts` (`templates/index.html`).
+`static/js/app.js`'s `revealNextChunk` reads that attribute instead of back-computing it, tracking a
+`lastRequestedChunk` floor as a belt-and-suspenders guard against ever re-requesting the same chunk.
+The chunk-delta merge path (the same function that appends new `.post-item`s into the live `.posts`
+element without replacing it) now also carries the fresh `data-next-chunk` value onto that live
+element after every merge, so the tracked value advances correctly across repeated incremental loads,
+not just the initial one.
+
+Verified: (1) a controlled mock proving the decoupling itself — a page with only 9 rendered
+`.post-item`s but `data-next-chunk="2"` renders correctly instead of computing "1" from the item
+count; (2) a real end-to-end round trip with no regression in the normal (no-drop) case — 250→260
+items, `data-next-chunk` 26→27, via genuine network fetches, phone viewport. Did not reproduce the
+*exact* production trigger (an unpremiered-YouTube entry inside the chunk window) live end-to-end —
+attempts fought unrelated per-user settings-cache/tenancy plumbing in the throwaway verify
+environment rather than telling me anything new about the fix itself; stopped once the mechanism was
+independently confirmed both ways above.
+
 ### Refresh-contention latency (home route) — RESOLVED except for one open root cause
 
 Reported 2026-08-11 as "serious delay browsing" (home requests: median 700ms, 9% over 3s,

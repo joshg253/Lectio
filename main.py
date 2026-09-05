@@ -24548,6 +24548,18 @@ def _home_inner(
     except Exception:
         limit = 250
 
+    # The chunk the client should ask for next, based on how many entries we
+    # actually asked reader for (`limit`) -- NOT on how many ended up rendered
+    # after per-entry filtering (read state, hide-unpremiered, tag narrowing,
+    # etc). Those two counts can differ by even one entry, and the client used
+    # to derive "next chunk" from the rendered count, which rounds back down to
+    # the SAME chunk whenever a filter drops anything from an otherwise-full
+    # window -- infinite-scroll got permanently stuck re-fetching (and
+    # deduplicating away) the identical top slice forever. Found 2026-09-05:
+    # a single filtered-out entry among an "All" (2179-feed) single-pane
+    # initial chunk (10 items) was enough to trigger it every time.
+    next_chunk = (limit // CHUNK_SIZE) + 1
+
     posts_start = time.perf_counter()
     gap_ms = int((posts_start - gap_start) * 1000)
     LOGGER.info(
@@ -24845,6 +24857,7 @@ def _home_inner(
         "inactive_feeds": inactive_feeds,
         "inactive_feed_count": len(inactive_feeds),
         "posts": posts,
+        "next_chunk": next_chunk,
         # An empty *delta* chunk means "no more to load" (infinite-scroll end),
         # not "nothing matches" — the empty-state message must only render on
         # a full/initial fetch, or it would get appended below real posts.

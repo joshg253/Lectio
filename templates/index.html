@@ -837,7 +837,7 @@
         </div>
       </div>
       {% endif %}
-      <div class="posts {% if not posts and not selected_home and not is_chunk_delta_fetch %}posts-empty{% endif %}" data-chunk-size="10">
+      <div class="posts {% if not posts and not selected_home and not is_chunk_delta_fetch %}posts-empty{% endif %}" data-chunk-size="10" data-next-chunk="{{ next_chunk }}">
         {% if not posts and not selected_home and not is_chunk_delta_fetch %}
         <div class="empty-state-message muted">No posts match this filter.</div>
         {% endif %}

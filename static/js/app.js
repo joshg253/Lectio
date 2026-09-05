@@ -3902,6 +3902,23 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         }
 
         if (maybeUrl && maybeUrl.searchParams.has('chunk') && maybeUrl.searchParams.has('chunk_delta') && pushHistory === false) {
+          // Carry the fresh data-next-chunk value onto the LIVE .posts element
+          // (which persists across this whole incremental-load path -- see
+          // below) so the next revealNextChunk() call in setupPostChunks asks
+          // for the right chunk. Done before the early return too: an empty
+          // delta still means "the server moved its own limit/cursor forward,"
+          // and letting the attribute go stale would reopen the exact stuck
+          // loop this plumbing exists to prevent.
+          try {
+            const nextNextChunk = nextPostsPane.querySelector('.posts')?.getAttribute('data-next-chunk');
+            const liveNextChunkEl = currentPostsPane.querySelector('.posts');
+            if (nextNextChunk && liveNextChunkEl) {
+              liveNextChunkEl.setAttribute('data-next-chunk', nextNextChunk);
+            }
+          } catch (e) {
+            // ignore
+          }
+
           const appended = Array.from(nextPostsPane.querySelectorAll('.post-item'));
           if (appended.length === 0) {
             // nothing new; avoid replacing pane which would scroll to top
@@ -16808,6 +16825,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
 
       const chunkSize = Number.parseInt(postsContainer.getAttribute('data-chunk-size') || '10', 10) || 10;
       let visibleCount = chunkSize;
+      // Tracks the highest server chunk actually requested so far -- see the
+      // data-next-chunk comment in revealNextChunk below for why this isn't
+      // derived from the rendered item count.
+      let lastRequestedChunk = 0;
 
       function getPostItems() {
         return Array.from(postsContainer.querySelectorAll('.post-item'));
@@ -16862,7 +16883,22 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           if (postsChunkLoading) return;
           try {
             const url = new URL(normalizeScopeUrl(activeScopeUrl || window.location.href), window.location.origin);
-            const next = Math.max(1, Math.floor(items.length / chunkSize) + 1);
+            // The chunk to request next comes from the server (data-next-chunk
+            // on .posts), computed there from how many entries it actually
+            // asked reader for -- NOT from how many ended up rendered here,
+            // which can be fewer after per-entry filtering (read state,
+            // hide-unpremiered, tag narrowing) and used to round back down to
+            // the SAME chunk forever, re-fetching (and deduplicating away) the
+            // identical top slice on every retry. Found 2026-09-05: a single
+            // filtered entry among an "All" (2179-feed) initial 10-item chunk
+            // was enough to get permanently stuck. lastRequestedChunk is a
+            // belt-and-suspenders floor -- never re-request a chunk already
+            // asked for, even if the attribute were somehow stale.
+            const serverNext = Number.parseInt(postsContainer.getAttribute('data-next-chunk') || '', 10);
+            const next = Number.isFinite(serverNext) && serverNext > lastRequestedChunk
+              ? serverNext
+              : lastRequestedChunk + 1;
+            lastRequestedChunk = next;
             url.searchParams.set('chunk', String(next));
             // Ask the server to return only the delta items for this chunk
             // so the client can append a fixed-size batch instead of a
