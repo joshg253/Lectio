@@ -207,15 +207,6 @@ Administration, not `.env` — `gluetun`/`flaresolverr`/`tailscale` containers a
   gap this item exists to close (no escalation offered at all) is closed regardless of whether
   FlareSolverr wins every individual challenge.
 
-### A thin post whose entire content is one image ends up looking empty
-
-Also from tamriel-rebuilt.org (2026-08-31): entry 17652's summary is exactly one `<img>` and no
-other text — the lead-image hoist strips that image out of the body once it becomes the hero,
-which is correct for a normal article (avoid showing the hero twice) but leaves NOTHING behind
-when the image was the entire post. Reads as "no img" even though the thumb/hero resolved
-correctly. Would need the hoist-and-strip step to check whether stripping would leave the body
-empty and skip the strip in that case; not done here.
-
 ## Tier 2 — small, fast, independent wins
 
 ### Manual single-feed "Refresh" can silently no-op for up to an hour
