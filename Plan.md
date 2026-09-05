@@ -16,55 +16,6 @@ is scheduled, they're just what to check if a related symptom recurs.
 
 **Refresh-contention latency** — see below. Mostly fixed; still watching for a residual stall.
 
-### Phone infinite-scroll permanently stuck on the first chunk — FIXED 2026-09-05
-
-Reported by Josh: "viewing FEEDS->All on my phone, only the first chunk loads." Confirmed against
-the live production log for the actual incident (folder_id=1 = root/"All", 2179 feeds): every
-`chunk=1&chunk_delta=1` request repeated identically every ~2-3s for over a minute, `entries_fetched=10`
-but `entries_processed=9` every time — never advancing.
-
-**Root cause**: the client computed the next server chunk to request as
-`floor(renderedItemCount / 10) + 1` — but the rendered count can be *less* than what the server
-actually fetched, because per-entry filters (hide-unpremiered YouTube, tag narrowing, star/kept
-mismatch, etc.) run *after* the raw fetch and can drop entries the SQL-level query didn't. Fetching
-10, rendering 9, gives `floor(9/10)+1 = 1` — the SAME chunk as before, forever. Every retry re-fetches
-the identical top slice; the client's own duplicate-detection correctly recognizes them as already on
-screen and appends nothing; since nothing ever changes, nothing stops the retry loop. General bug,
-not specific to "All" — it only needs one filtered-out entry to land in the current window, which is
-just far likelier across 2179 feeds than in a small folder (confirmed: other folders work fine for
-Josh).
-
-**Fix**: stop deriving the next chunk from rendered item count. `main.py`'s home route now computes
-`next_chunk = (limit // CHUNK_SIZE) + 1` — from `limit`, what it actually asked reader for, immune to
-downstream filtering — and renders it as `data-next-chunk` on `.posts` (`templates/index.html`).
-`static/js/app.js`'s `revealNextChunk` reads that attribute instead of back-computing it, tracking a
-`lastRequestedChunk` floor as a belt-and-suspenders guard against ever re-requesting the same chunk.
-The chunk-delta merge path (the same function that appends new `.post-item`s into the live `.posts`
-element without replacing it) now also carries the fresh `data-next-chunk` value onto that live
-element after every merge, so the tracked value advances correctly across repeated incremental loads,
-not just the initial one.
-
-Verified: (1) a controlled mock proving the decoupling itself — a page with only 9 rendered
-`.post-item`s but `data-next-chunk="2"` renders correctly instead of computing "1" from the item
-count; (2) a real end-to-end round trip with no regression in the normal (no-drop) case — 250→260
-items, `data-next-chunk` 26→27, via genuine network fetches, phone viewport. Did not reproduce the
-*exact* production trigger (an unpremiered-YouTube entry inside the chunk window) live end-to-end —
-attempts fought unrelated per-user settings-cache/tenancy plumbing in the throwaway verify
-environment rather than telling me anything new about the fix itself; stopped once the mechanism was
-independently confirmed both ways above.
-
-**Confirmed working live** by Josh, same day. Two follow-up tuning requests, same session:
-- `CHUNK_SIZE` bumped 10 → 20 (`main.py`). `data-chunk-size` on `.posts` (`templates/index.html`)
-  now reads `{{ chunk_size }}` from the template context instead of a hardcoded `"10"` literal, so
-  it can never drift from the real constant again — the exact class of bug this whole fix was about,
-  just for chunk *size* instead of chunk *number*. `tests/integration/test_saved_inbox_chunking.py`'s
-  own local `CHUNK` constant now reads `main.CHUNK_SIZE` too (it hardcoded a separate copy of 10; a
-  bump would otherwise have silently broken it against the real route's slicing).
-- The scroll-triggered reveal threshold (`maybeRevealOnScroll`) widened from 180px to 600px of
-  remaining scroll — starts fetching a few screens early instead of right at the visible end, so a
-  batch is usually already in place before it's needed rather than the list visibly running out and
-  pausing ("start loading a tiny bit earlier so not an abrupt stop at each chunk").
-
 ### Refresh-contention latency (home route) — RESOLVED except for one open root cause
 
 Reported 2026-08-11 as "serious delay browsing" (home requests: median 700ms, 9% over 3s,
@@ -309,89 +260,6 @@ similar in spirit to the existing hide-Shorts/hide-unpremiered per-feed display 
 (`_DISPLAY_PREF_KEYS`). Not investigated — needs checking whether the feed data even distinguishes
 subscriber-only videos before sizing this.
 
-### Entry-pane header row too small for touch on a Surface Pro — CONFIRMED FIXED live 2026-09-04
-
-Clarified 2026-09-03, root-caused and fixed 2026-09-04 — supersedes both the vaguer "larger
-tags/'+^vx' for Surface" report (2026-09-02) and the "NEXT UP: bump the size of in-header
-buttons/tag chips" framing (that read as a blanket size-token bump; it's actually a touch-detection
-bug, not a base-size problem). Every size in the entry-pane header row (read/unread toggle,
-save/star toggle, tag-add button, tag chips, filter signs) is already correctly gated behind
-`body[data-compact-article="1"]` in `static/style.css` — the CSS was never the issue.
-
-The bug was in the JS that decides when to set that attribute (`templates/index.html`
-~1139-1160, `compactArticle`): it only ever went compact in `layoutMode === 'single'` (phone-width)
-or `'medium'` *and* `navigator.userAgentData.mobile`. A maximized Surface Pro browser window is
-wide enough to land in `layoutMode === 'wide'` (>1100px) — a mode the touch check never even ran
-in — and `userAgentData.mobile` is always `false` on Windows (and doesn't exist at all in Firefox,
-which is what Josh's Surface runs), so even `'medium'` would have rejected it. Phone was always
-compact unconditionally (why it "looked great"); mouse-desktop correctly never was; touch-primary
-Surface Pro fell through both gates.
-
-**Fixed**: `compactArticle` now also applies in `'wide'`, and drops the `userAgentData.mobile`
-requirement — `(pointer: coarse) and (hover: none)` alone decides it. Verified with Playwright at
-1368×912 (Surface Pro 6's effective size at 2736×1824 @ 200% scaling): a touch-emulated context sets
-`data-compact-article="1"`, a mouse-only context at the identical viewport does not — no regression
-for real desktop/mouse use. Tests updated in `tests/unit/test_single_pane_layout.py`
-(`test_touch_detection_is_pointer_and_hover_together`, `test_wide_layout_also_goes_compact_for_touch`).
-
-**Confirmed live on the actual Surface Pro 6** (a replacement Type Cover currently isn't working,
-which plausibly means Windows already reports the device as keyboardless rather than "laptop mode"
-— consistent with the automatic `pointer`/`hover` detection working with no manual-toggle fallback
-needed). Real device runs Firefox at 2736×1824 @ 200% scaling (1368×912 effective, matching the
-Playwright test above).
-
-**Follow-up, same session, also shipped 2026-09-04** — several more Surface-specific rough edges
-found once compact mode actually started applying there:
-
-- **Centering looked wrong outside phone width.** The header row's `1fr auto 1fr` grid deliberately
-  centers the read/star/tag group against the phone's camera cutout (see the CSS comment) — sound
-  reasoning on a phone, but on a Surface (no back button, no cutout) it just left an empty gap on
-  the left with the buttons floating in the middle. Scoped a
-  `body[data-compact-article="1"]:not([data-layout-mode="single"])` override so single-pane (phone)
-  stays untouched; see the next point for how it evolved.
-- **Reader/Web/Open-tab/Share/Note (`.entry-pane-alt-actions`) landed in the wrong place once tags
-  wrapped past one line.** Three attempts didn't hold up:
-  1. Plain wrapping flex with `margin-left: auto` on alt-actions — broke as soon as enough chips
-     wrapped past one line, since alt-actions comes LAST in DOM/flex order and only gets placed
-     after every chip is, so it landed wherever the chip flow happened to run out.
-  2. `float: right` on alt-actions instead of flex, with everything else turned into ordinary
-     inline-level boxes wrapping around it like text around an image. Looked right in testing, but
-     Josh found two real gottadeal.com entries (heavily tagged deal posts) where it still pushed the
-     icons down — a float can never rise ABOVE its point of insertion in the flow, so with a
-     page's worth of chips preceding it in the DOM, it still ends up wherever that flow ran out.
-  3. `order: 1` on alt-actions (between primary-actions at `order: 0` and the chips at `order: 2`),
-     still with `margin-left: auto` — `order` controls VISUAL sequence, not just which line an item
-     lands on, so this put alt-actions *between* primary-actions and the chips instead of at the
-     row's right edge, and the auto margin only had the chips' width left to push against, landing
-     it somewhere mid-row ("squished the suggtags to the right of the right-icons, now ~centered,"
-     per Josh, plus the tags-form got crowded into wrapping early since less room was left for it).
-
-  None of flex's own sequencing can give an item both "always ends up on line 1" and "always renders
-  at the true right edge" when a variable amount of content needs to flow between them. Actual fix:
-  alt-actions leaves the flex flow entirely. `position: absolute`, pinned top-right of the row (which
-  is `position: relative` for this); the row's own `padding-right` is widened to `9rem` to reserve
-  room for it — on every wrapped line, not only the first, which is the one deliberate compromise
-  here (a small permanent gutter on line 2+ that nothing there actually needs) in exchange for never
-  again depending on insertion order or a float's own quirks. `.entry-primary-actions` and each chip
-  (dissolved via `display: contents`, as before) are plain flex items filling that narrowed width and
-  wrapping normally. Verified with the 19-tag/9-line stress case: alt-actions' top offset measured
-  identical to primary-actions' throughout, and its rect never overlapped any wrapped chip line.
-- **Button height didn't match `.sort-pill`** (the posts-list filter/sort buttons, fixed at
-  `1.95rem` everywhere, phone included). The compact header buttons had no explicit height — width
-  was pinned to `1.75rem` but height was whatever the icon size and padding happened to add up to,
-  close to but not exactly `1.95rem`. Pinned explicitly so the two rows (which sit right on top of
-  each other on a Surface) read as one control strip rather than two slightly-mismatched ones.
-- **Suggested-tag pills (the feed's own tags, with ▲▼+× signs) were visibly taller than everything
-  else** once the row buttons above were pinned to `1.95rem` — their `min-height` was a separately
-  chosen `2.25rem`. Matched to `1.95rem` too; the `2.25rem` thumb-target width stayed as-is (that
-  one's about horizontal reach, not height).
-
-Verified visually via Playwright screenshots at 1368×912 touch-emulated, up to the 19-tag/9-line
-stress case above: alt-actions stays pinned to line 1 regardless of tag count, button heights
-measured identical (31.19px) across the header row, `.sort-pill`, and suggested-tag pills. Phone
-layout re-confirmed unchanged (`.entry-tags-row` still computes to `display: grid` under
-`layoutMode="single"`).
-
 ### Global ignored suggested-tags list, editable in Settings
 
 Distinct from the existing per-(feed, tag) dismissal (`suppressed_feed_tags`, × on a chip, undo at
@@ -408,32 +276,6 @@ Not scoped: needs a new setting (JSON list or a small table), a check at chip-re
 folder's "Mark Read" bulk action should cover: just the entries currently rendered/loaded in the
 list, or also anything newer that hasn't been fetched into view yet. Not resolved — needs Josh to
 say which behavior he actually wants (and whether the two already differ today) before scoping.
-
-### Suggested-tag chip color — RESOLVED, was already fixed 2026-09-02
-
-"dont like now blue suugtagchips" (jotted 2026-09-02, surfaced from the Global Note 2026-09-04) —
-same day, commit 38040e2 already fixed this: `.feed-tag-filter-name` (the tag-name span-turned-button
-in a feed-tag-filter-chip) needed `appearance: none` or some browsers' native `<button>` chrome (a
-blue-tinted default control look) showed through the color/background override. Confirmed the CSS
-fix is live in `static/style.css` (~line 3798) with a comment citing this exact report. No further
-action — the note just predates when it was checked off.
-
-### "More…" suggested-tags panel re-collapses on add-tag (+) or remove (×) — FIXED 2026-09-04
-
-"more... suggtags collapses when ^v any" (jotted 2026-09-02) — the ▲/▼ (include/exclude filter
-sign) case this describes was fixed same day, same commit (38040e2): toggling a sign re-renders the
-whole pane via `loadEntryPaneWithoutFullRefresh`, which used to silently re-collapse "+N more"; that
-handler remembered whether it was expanded and re-expanded after the re-render, but the fix was
-scoped to that one handler — the "+" add-tag chip (submits `entry-tags-form`) and the "×" per-post
-tag-remove button both also call `loadEntryPaneWithoutFullRefresh` on success and neither carried
-the same save/restore, so "More…" still collapsed on those two actions.
-
-Extracted the shared logic into `captureSuggestedTagsExpanded()` / `restoreSuggestedTagsExpanded()`
-(`static/js/app.js`, right before `bindEntryTagInteractions`) and wired all three call sites —
-add-tag submit, per-post tag remove, and the original sign toggle (simplified to use the same
-helpers instead of its own inline copy) — through them. Verified live with Playwright for all three
-actions: expand "+N more", then add a suggested tag / remove a manual tag / toggle a ▲/▼ sign, and
-confirm the "more" button doesn't reappear and the extra chips stay visible in each case.
 
 ### An entry takes a really long time to open — inconclusive, no repro caught
 

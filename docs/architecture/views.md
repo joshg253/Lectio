@@ -326,6 +326,62 @@ folder opened a menu painted behind the list it came from. Pick the band, not a
 number, and never reach for 9999 — that is how the *next* overlay ends up
 underneath something it should cover.
 
+## Touch-sized controls are a separate axis from layout width
+
+The entry pane's header row (read/star/tag toggles, tag chips, Reader/Web/Share/Note) has two
+independent size profiles: mouse-sized (default) and touch-sized (`body[data-compact-
+article="1"]`, larger throughout). Which one applies is not the same question as which layout
+mode (wide/medium/single) is active — a maximized touch-primary 2-in-1 (Surface Pro and the like)
+is routinely `layoutMode: 'wide'`, and a short/landscape phone in `'medium'` still needs touch
+sizing.
+
+`compactArticle` (`templates/index.html`) always applies in `'single'` (phone-width — there is no
+reliable "is this a phone" signal, so single-pane doubles as one), and additionally in
+`'medium'`/`'wide'` when either the viewport is short (`SHORT_VIEWPORT`, 560px — a landscape
+phone or a short desktop window, where the desktop header stack out-heights the article) or
+`(pointer: coarse) and (hover: none)` — touch is the *primary* input, not merely present. That
+pointer/hover pair is sufficient on its own: an earlier version also required
+`navigator.userAgentData.mobile`, which is always `false` on Windows (and doesn't exist in
+Firefox at all) — every touch-primary Windows 2-in-1 fell through the check entirely, in every
+layout mode, until this was found and dropped (2026-09-04, a Surface Pro 6 report).
+
+One residual gap: `pointer`/`hover` reflect the OS's own laptop-vs-tablet mode determination
+(tied to whether a 2-in-1's keyboard is attached/detected), not which input a person is actually
+using moment-to-moment. A device with an attached-but-nonfunctional keyboard reads as
+keyboardless and the detection works; a genuinely-working attached keyboard could make the device
+report `pointer: fine`/`hover: hover` even while someone taps the touchscreen. No fix attempted —
+no report of it happening yet.
+
+### The header row layout for touch mode: three failed attempts before the fix held
+
+Once compact mode applies to something wider than a phone, the header row needs a different
+layout: no back button, no camera-cutout to center against, so the read/star/tag group
+left-aligns instead, and Reader/Web/Open-tab/Share/Note (`.entry-pane-alt-actions`) has to stay
+pinned to the row's top-right corner *regardless of how many tag chips are open* — a post can
+carry anywhere from zero tags to dozens.
+
+Three flex-based attempts didn't hold up under a real, heavily-tagged entry:
+1. Plain wrapping flex, alt-actions last in DOM order with `margin-left: auto`. Works until
+   enough chips wrap past one line — alt-actions is only placed once every chip already has been,
+   so it lands wherever the chip flow happens to run out.
+2. `float: right` on alt-actions instead, with everything else turned into ordinary inline-level
+   boxes that wrap around it like text around an image. Avoids overlap, but a float can never rise
+   *above* its point of insertion in the flow — with a page's worth of chips preceding it in the
+   DOM, it still ends up pushed down to wherever that flow ends.
+3. `order: 1` on alt-actions (between primary-actions at `order: 0` and the chips at `order: 2`),
+   still with `margin-left: auto`. `order` reorders the flex algorithm's placement sequence, not
+   just which line something lands on — this put alt-actions *between* the buttons and the chips
+   visually, with the auto-margin only having the chips' remaining width to push against, landing
+   it somewhere mid-row instead of at the edge.
+
+No amount of flex sequencing can give one item both "always on the first line" and "always at the
+true visual edge" when a variable amount of content needs to flow between them. The fix takes
+alt-actions out of the flex flow entirely: `position: absolute`, pinned to the row's top-right
+corner (the row itself `position: relative`), with the row's own `padding-right` widened to
+reserve room for it — deliberately on every wrapped line, not only the first, trading a small
+permanent empty gutter on later lines for never again depending on insertion order or a float's
+own quirks.
+
 ## Folder tree & the Uncategorized folder
 
 Folders live in the meta DB (`folders` + `folder_feeds`); the reader owns the
@@ -674,3 +730,35 @@ normal chunk size until everything already present in the DOM was shown — the 
 further server fetch ever following it once you'd scrolled through it. Both call sites now just use
 `postsContainer`/`postsInnerEl` (`.posts`) unconditionally — no single-pane branch, since the
 branch's premise was never true.
+
+## The client can't derive "which chunk is next" from what actually rendered
+
+Follow-up to the section above, found 2026-09-05 from "FEEDS->All only loads the first chunk,
+forever" — a real, general bug in the chunking mechanism itself, once the scroll-target fix above
+made it possible to actually retry.
+
+The client used to compute the next server chunk as `floor(renderedItemCount / CHUNK_SIZE) + 1`.
+That's only correct if the rendered count always exactly matches what the server fetched for that
+chunk — but per-entry filters (hide-unpremiered YouTube, tag narrowing, a star/kept mismatch) run
+*after* the raw fetch and can drop entries the SQL-level query didn't exclude. Fetch 10, render 9
+(one filtered out), and `floor(9/10)+1 = 1` — the *same* chunk as before, forever. Every retry
+re-fetches the identical top slice; the client's own duplicate-detection correctly recognizes them
+as already on-screen and appends nothing new; nothing ever detects zero progress to stop the retry
+loop. It only takes one filtered-out entry landing in the current chunk window — far more likely
+across a library of thousands of feeds ("All") than in a small folder, which is why it surfaced
+there first, but the bug isn't specific to scope size.
+
+Fixed by not deriving the next chunk from render count at all: the server already knows exactly
+how many raw entries it asked `reader` for (`limit`), immune to whatever gets filtered out
+downstream, so it computes `next_chunk = (limit // CHUNK_SIZE) + 1` itself and ships it as
+`data-next-chunk` on `.posts`. The client reads that instead of back-computing it, with a
+`lastRequestedChunk` floor as a last-resort guard against ever re-requesting a chunk already asked
+for. The chunk-delta merge path (which appends new items into the live `.posts` element without
+replacing it — see above) carries the fresh `data-next-chunk` value onto that live element after
+every merge, so it keeps advancing across repeated incremental loads and not just the first one.
+
+`CHUNK_SIZE` and the scroll-trigger's lead distance are both tunable in one place each
+(`main.py`'s `CHUNK_SIZE`, `app.js`'s `maybeRevealOnScroll` threshold) — `data-chunk-size` on
+`.posts` reads `CHUNK_SIZE` from the template context rather than carrying its own hardcoded copy,
+for the same reason `data-next-chunk` exists: two numbers that must agree cannot be allowed to
+drift by being written twice.
