@@ -239,6 +239,30 @@ A deliberate exception to the pane-swap lifecycle: the entry view is swapped via
 hands the track to it. Player state is transient client-side only, with playback
 speed persisted to `localStorage`.
 
+### Inline LaTeX math (KaTeX) — the first vendored frontend dependency
+
+Math-heavy blogs (quuxplusone.github.io and others) ship `\(...\)`/`\[...\]`
+delimiters meant for their own site's client-side MathJax/KaTeX; Lectio stores
+that text as-is (nothing to sanitize — it's just text) so the article pane used
+to show raw LaTeX source. `renderMathInEntryPane` (app.js) runs KaTeX's
+`auto-render` over `.entry-content`/`.entry-readability-content` on every entry
+open (both the AJAX pane swap and the first full page load), guarded by a plain
+substring check first since most entries have no math at all.
+
+KaTeX (JS + CSS + woff2 fonts only, ~600KB) is vendored under
+`static/vendor/katex-<version>/` rather than pulled from a CDN — matching this
+project's self-hosted stance (works offline, no third-party origin sees every
+article a user opens) — and version-pinned by directory name instead of the
+`?v={{ static_asset_version }}` query-string scheme every other static asset
+uses, since a vendored release never changes in place; bumping KaTeX means a new
+directory and a template path update, not touching the hash.
+
+Delimiters are `\(\)`/`\[\]` only, deliberately not bare `$...$`: none of the
+feeds this was checked against use it, and a lone `$` collides with plain-text
+prices. Read Mode (`read_mode.html`) does not include this — it's a separate
+template that doesn't load `app.js` — so a math-heavy saved article still shows
+raw LaTeX there; unaddressed, tracked in Plan.md.
+
 ## Page weight: lazy HTML fragments
 
 At thousands of feeds, any template section that renders a row per feed is
