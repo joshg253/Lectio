@@ -43,6 +43,26 @@ Per-user OAuth destinations, quotas and the automation that drives them.
   targets **every** refreshed YouTube feed (URL contains `youtube.com/feeds/videos.xml`)
   regardless of the per-feed pref — one source of truth, no drift as feeds come/go via
   sync. A Short is detected by `/shorts/` in the entry link (`_is_youtube_short`).
+- **Hide members-only videos (global, per-user)** — same shape as Hide Shorts
+  (`feed_display_prefs.hide_members_only` per-feed, `yt_hide_members_only_global` /
+  `youtube_hide_members_only_global()` targeting every refreshed YouTube feed), but a
+  different cost class: membership status isn't in the `videos.list` response the
+  duration/premiere checks already ride on for free — the Data API has no field for
+  it, and the `members` endpoint only works for a channel you own (confirmed via
+  YouTube's own docs before building this). Detection instead fetches the video's own
+  watch page and checks for `BADGE_STYLE_TYPE_MEMBERS_ONLY`, the style constant its
+  `ytInitialData` JSON uses for the "Members only" badge — confirmed live against a
+  real members-only video reported by a user (a public "early access for members"
+  video that appears in the RSS feed during its members-only window, unlike a video
+  gated for good, which the feed excludes entirely — so there is a real, if narrower,
+  case to hide). `YouTubeDurationService.get_cached_members_only`/
+  `fetch_and_cache_members_only` cache the result in `youtube_video_duration
+  .members_only` **permanently once checked** — no retry timer like the duration
+  negative-cache, since a page fetch isn't free and each video is only ever checked
+  once per the hide-members-only pass (an entry stays in the unread loop, and
+  therefore gets re-offered a check, only until it's marked read or a check
+  succeeds). A fetch failure caches nothing, leaving the row for the next refresh to
+  retry rather than pinning a wrong answer.
 - **YouTube embed host (per-user)** — both `youtube.com` and `youtube-nocookie.com`
   are allowlisted; which one a YouTube *embed* uses is the viewer's choice, applied
   at **render** (not ingest, since sanitization bakes content into each user's

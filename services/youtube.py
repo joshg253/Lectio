@@ -46,6 +46,12 @@ class YouTubeDurationService:
         # same videos.list call as duration. "upcoming" means the video hasn't
         # premiered yet.
         self._live_cache: dict[str, tuple[str | None, str | None]] = {}
+        # video_id -> is members-only. Unlike the two caches above this is NOT
+        # populated by videos.list (the Data API has no field for it) -- only by
+        # fetch_and_cache_members_only, which scrapes the video's own watch page.
+        # Absent (not False) means "never checked", so a check costs a fetch
+        # once per video, ever, not on some retry schedule.
+        self._members_only_cache: dict[str, bool] = {}
         # Resolves the API key per call — in multi mode this returns the current
         # user's key (with env fallback); None falls back to the env var.
         self._api_key_provider = api_key_provider
@@ -60,12 +66,14 @@ class YouTubeDurationService:
         with self._get_durations_connection() as conn:
             rows = conn.execute(
                 "SELECT video_id, duration_seconds, duration_display,"
-                " live_broadcast_content, scheduled_start_time FROM youtube_video_duration"
+                " live_broadcast_content, scheduled_start_time, members_only FROM youtube_video_duration"
             ).fetchall()
         for row in rows:
             video_id = str(row["video_id"])
             self._cache[video_id] = (row["duration_seconds"], row["duration_display"])
             self._live_cache[video_id] = (row["live_broadcast_content"], row["scheduled_start_time"])
+            if row["members_only"] is not None:
+                self._members_only_cache[video_id] = bool(row["members_only"])
 
     def extract_video_id(self, link: str) -> str | None:
         match = self._YT_VID_PATTERN.search(link)
@@ -100,6 +108,69 @@ class YouTubeDurationService:
             return db_value
 
         return (None, None)
+
+    def get_cached_members_only(self, video_id: str) -> bool | None:
+        """Return True/False if this video's members-only status has already
+        been checked, or None if it has never been fetched. Unlike duration and
+        live status, a None here is NOT retried on any schedule — a fetch is a
+        full watch-page request, not a free ride on the duration API call, so
+        the caller (fetch_and_cache_members_only) decides when that cost is
+        worth paying (opt-in feeds only, one entry at a time)."""
+        cached = self._members_only_cache.get(video_id)
+        if cached is not None:
+            return cached
+        return self._get_members_only_db(video_id)
+
+    def _get_members_only_db(self, video_id: str) -> bool | None:
+        with self._get_durations_connection() as conn:
+            row = conn.execute(
+                "SELECT members_only FROM youtube_video_duration WHERE video_id = ?",
+                (video_id,),
+            ).fetchone()
+        if row is None or row["members_only"] is None:
+            return None
+        value = bool(row["members_only"])
+        self._members_only_cache[video_id] = value
+        return value
+
+    def fetch_and_cache_members_only(self, video_id: str) -> bool | None:
+        """Fetch video_id's watch page, detect its "Members only" badge, and
+        persist the result so it is never fetched again. Returns None (and
+        caches nothing) on a fetch failure, so a transient network error simply
+        leaves the video uncached for the next caller to retry — there is no
+        separate negative-retry timer to maintain.
+
+        Detection matches on BADGE_STYLE_TYPE_MEMBERS_ONLY, the style constant
+        YouTube's own watch-page JSON (ytInitialData) uses for the "Members
+        only" badge on a video's title/metadata — confirmed live against a real
+        members-only video. Deliberately a plain substring check rather than a
+        JSON parse: ytInitialData is a multi-hundred-KB blob with no stable
+        schema Google documents, and every other page-scrape in this codebase
+        (bot-challenge detection, embed recovery) takes the same regex/substring
+        approach for exactly that reason.
+        """
+        try:
+            response = httpx.get(
+                f"https://www.youtube.com/watch?v={video_id}",
+                headers={"User-Agent": self._user_agent},
+                timeout=10.0,
+                follow_redirects=True,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError:
+            return None
+        is_members_only = "BADGE_STYLE_TYPE_MEMBERS_ONLY" in response.text
+        self._members_only_cache[video_id] = is_members_only
+        with self._get_durations_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO youtube_video_duration (video_id, members_only, fetched_at)
+                VALUES (?, ?, datetime('now'))
+                ON CONFLICT(video_id) DO UPDATE SET members_only = excluded.members_only
+                """,
+                (video_id, int(is_members_only)),
+            )
+        return is_members_only
 
     def refresh_upcoming_videos(self) -> int:
         """Re-poll every video still cached as "upcoming", regardless of which
