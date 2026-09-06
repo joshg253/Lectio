@@ -157,6 +157,7 @@
     };
   </script>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@0..1" />
+  <link rel="stylesheet" href="/static/vendor/katex-0.18.6/katex.min.css" />
   <link rel="stylesheet" href="/static/style.css?v={{ static_asset_version }}" />
   <style>
     .entry-pane-title-link { -webkit-line-clamp: 5 !important; }
@@ -2226,6 +2227,8 @@
 
   <!-- Existing manual-tag names, for tag-input autocomplete (see attachTagAutocomplete). -->
   <script id="lectio-tag-names" type="application/json">{{ all_tag_names | tojson }}</script>
+  <script src="/static/vendor/katex-0.18.6/katex.min.js"></script>
+  <script src="/static/vendor/katex-0.18.6/auto-render.min.js"></script>
   <script src="/static/js/app.js?v={{ static_asset_version }}"></script>
   <script src="/static/js/cleanup.js?v={{ static_asset_version }}"></script>
 

@@ -339,36 +339,15 @@ unsubscribe manually.
 
 ## Tier 4 — real features, not blocking anything today
 
-### Unrendered inline math markup (KaTeX) — CONFIRMED, sized 2026-09-05
+### Read Mode doesn't typeset inline LaTeX math
 
-[entry](https://quuxplusone.github.io/blog/2026/08/05/colourfields) (feed:
-[quuxplusone.github.io/blog/feed.xml](https://quuxplusone.github.io/blog/feed.xml)) — checked
-2026-09-04, root cause found: the post uses inline math written as `\(n\times n\)` /
-`\(\lceil n/2\rceil^2 + 1\)`, meant to be typeset client-side by the source site's MathJax/KaTeX.
-Lectio's stored content keeps the raw delimiter text as-is (confirmed via `reader.get_entries()` —
-the literal `\(...\)` sits right in the sanitized HTML), so the article pane shows the raw LaTeX
-source instead of rendered math. Not a sanitizer bug — nothing strips or mangles it, it's just never
-typeset.
-
-**Prevalence checked 2026-09-05** (live library, `\(...\)`-style delimiters only): 7 feeds carry
-entries with real inline math — matthewrocklin.com/blog (6), oneraynyday.github.io (17),
-mathspp.com/blog (2), andrewkelley.me (1), andreinc.net (1), blog.ncase.me (1), her.esy.fun (1) —
-plus quuxplusone itself. All 7 use `\(\)`/`\[\]` delimiters, none use bare `$...$` (good — `$` alone
-collides with plain-text prices/currency and would need excluding anyway).
-
-**Sizing: client-side KaTeX (recommended) over server-side typesetting.** KaTeX's `auto-render`
-extension scans a DOM subtree for `\(\)`/`\[\]` (and optionally `$$...$$`, deliberately not bare
-`$`) and typesets in place — no content-pipeline or sanitizer change, since the delimiters already
-survive untouched. Vendor KaTeX's JS+CSS+fonts locally (~300-400KB, one-time, matching this
-project's no-CDN-dependency pattern — nothing here calls out to a CDN today), call
-`renderMathInElement()` on the entry-pane container from the same JS path that already runs
-post-render cleanup (`cleanup.js`) whenever an entry opens. Server-side (MathJax-on-Node or a Python
-LaTeX renderer) would add a whole new runtime dependency for 8 feeds' worth of entries — not
-justified next to a small, purpose-built, self-hosted client bundle already invoked exactly once per
-render. Open question before building: Read Mode mirrors the regular app's data model and only
-differs in paging/presentation, so it likely needs the same KaTeX treatment for parity — check what
-the Supernote's e-ink browser actually does with the added JS/fonts before assuming that holds. Not
-started.
+Regular-pane math rendering (KaTeX) shipped 2026-09-05 — see
+`docs/architecture/views.md` "Inline LaTeX math (KaTeX)". Read Mode
+(`read_mode.html`) is a separate template that doesn't load `app.js`, so a
+math-heavy saved article still shows raw `\(...\)` source there. Not sized —
+needs the same `renderMathInElement` wiring in Read Mode's own JS, plus a check
+of what the vendored KaTeX JS/fonts actually cost on the Supernote's e-ink
+browser before assuming parity is worth it there.
 
 ### Backblaze B2 support for backups
 
