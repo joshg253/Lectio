@@ -540,6 +540,18 @@ sense of, and the feed's own text is better than a thin substitute. It is also
 what keeps a webcomic feed — whose page is one image and no prose — on the
 gallery path it already relies on.
 
+**The caller gates on the body already being thin, too — added 2026-09-06.**
+Both paths above exist for a body with 0 images (paizo) or 1 (a webcomic's
+gallery-append case); neither exists for a normal, image-rich post, but nothing
+stopped `get_entry_detail` from calling `_source_article_body` regardless once
+a feed's `inject_source_images` pref was on. On a fast host that's merely
+wasted work; on play.nobleknight.com, which needs FlareSolverr to pass its bot
+challenge, it turned into a 6+ second synchronous render for a post that
+already had four images in place — reported live as "missing lead img & thumb,
+takes a long time to load" (the images were there; the render was just slow
+enough to look stuck). The call site now skips both paths outright once
+`content_html` already has 2+ `<img>` tags.
+
 ## Image bytes: the dimension cap is not a size cap
 
 `/api/img` downscales a cached image to `LECTIO_IMG_CACHE_MAX_DIM` (3840) on the

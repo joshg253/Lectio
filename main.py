@@ -19210,7 +19210,21 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         # Source-page image gallery (opt-in per feed) — runs before the hotlink/
         # no-referrer pass below so injected images are proxied/referrer-stripped too.
-        if _disp.get("inject_source_images") and entry.link:
+        # Gated on the body actually being thin on images: both paths exist for
+        # a feed whose posts carry 0 (paizo-style prose) or 1 (a webcomic's
+        # gallery-append case) image of their own, per _source_article_body's
+        # own docstring — not for a normal, image-rich post. Without this check
+        # every entry on an inject_source_images feed paid a synchronous
+        # source-page fetch regardless, which is merely wasted work on a fast
+        # host but, on one that needs FlareSolverr to pass its bot challenge
+        # (play.nobleknight.com), turned into a 6+ second render for a post
+        # that already had four images in place — reported live as "missing
+        # lead img & thumb, takes a long time to load" (the images WERE there;
+        # the render was just slow enough to look stuck).
+        if (
+            _disp.get("inject_source_images") and entry.link
+            and len(re.findall(r"<img\b", content_html or "", re.IGNORECASE)) < 2
+        ):
             # Prefer the source article itself: it carries the images IN PLACE.
             # The gallery append remains the fallback for pages readability
             # cannot make sense of, so a feed already relying on it (a webcomic

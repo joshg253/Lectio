@@ -274,6 +274,32 @@ def test_no_gallery_when_pref_off(env, monkeypatch):
     assert "source-gallery" not in (d["content_html"] or "")
 
 
+def test_no_source_fetch_when_body_already_has_images(env, monkeypatch):
+    """inject_source_images exists for a body that's missing pictures (0) or
+    missing their placement (1, the webcomic-gallery case) -- not for a normal,
+    image-rich post. Regression, reported live on play.nobleknight.com: every
+    entry on a feed with this pref on paid a synchronous source-page fetch
+    regardless of its own image count, which turned into a 6+ second render on
+    a host needing FlareSolverr to pass its bot challenge, for a post that
+    already had four images in place."""
+    _add(content=(
+        '<p>Some intro text, not an image opener.</p>'
+        '<p><img src="https://ex.test/a.jpg"></p>'
+        '<p><img src="https://ex.test/b.jpg"></p>'
+    ), link="https://site.test/post")
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, FEED, "inject_source_images", 1)
+
+    def _boom(*a, **k):
+        raise AssertionError("must not fetch the source page for an image-rich body")
+
+    monkeypatch.setattr(main, "_source_article_body", _boom)
+    monkeypatch.setattr(main.lead_image_service, "extract_source_gallery_urls", _boom)
+
+    d = _detail()
+    assert "a.jpg" in d["content_html"] and "b.jpg" in d["content_html"]
+
+
 # --- missing entry ---------------------------------------------------------
 
 def test_missing_entry_returns_orphan_or_none(env):
