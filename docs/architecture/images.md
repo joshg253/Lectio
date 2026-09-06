@@ -100,6 +100,26 @@ Four refinements worth knowing:
   cache-gate drops a *stale cached* statcounter URL without a DB rewrite. When a
   lead is rejected, its alt is suppressed too (`_TRIVIAL_ALT_TEXTS`), so an entry
   whose only image was a share button shows neither thumbnail nor junk caption.
+- **A related-block wrapper needs BOTH a matchable tag and a matchable
+  attribute.** `_RELATED_BLOCK_OPEN_RE` only strips `<div|section|aside|nav|ul>`
+  by class name — gamersguildusa.com's Shopify theme renders its "Blog posts"
+  row as `<article id="shopify-section-...__blogs_row" class="shopify-section">`,
+  neither a tag the regex looked at nor a class it recognized, so the widget
+  survived and several unrelated entries all resolved to whichever post it
+  happened to feature at scrape time. `article` is now in the tag set, and an
+  `id` containing `shopify-section` plus a blog-listing token is now a second,
+  independent way in — reported live 2026-09-06.
+- **A filename dimension marker is only trustworthy paired with a check for a
+  LARGER one nearby.** `_URL_DIMENSION_RE`/`_TINY_DIM_RE` read any `WxH` token
+  in a path as pixels, but Shopify names crop *presets* the same way — `_4x3_`,
+  `_4x5_` — genuinely tiny by that reading, and `_TINY_DIM_RE`'s check ran
+  unconditionally with no such counterweight. Query-string dimensions
+  (`?width=&height=`) are now resolved before any filename scan runs at all —
+  skipping it outright when they're already known — and the remaining tiny-dim
+  path scan now also stands down when a large dimension appears elsewhere in
+  the same path, mirroring the reasoning the later small-vs-large path scan
+  already used. Same live report: the correct og:image and the article's own
+  body image were both getting rejected this way.
 
 **4. Inline feed content.** The render-triggered chunk backfill does source
 fetches for `og_scrape`/`webcomic`/`unknown`; when that yields nothing it falls

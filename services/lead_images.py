@@ -517,7 +517,8 @@ class LeadImageService:
     # The per-image site-chrome check only looks ~500 chars back, so images deep
     # in a long related list escape it; stripping the whole container is reliable.
     _RELATED_BLOCK_OPEN_RE = re.compile(
-        r'<(div|section|aside|nav|ul)\b[^>]*\bclass=["\'][^"\']*'
+        r'<(div|section|aside|nav|ul|article)\b[^>]*'
+        r'(?:\bclass=["\'][^"\']*'
         r'(?:related[-_]content|related[-_]posts|recent[-_]posts|more[-_]posts|'
         r'you[-_]might|you[-_]may|see[-_]also|read[-_]next|post[-_]nav|'
         # c-sharpcorner renders a "Recommended Videos" widget (class
@@ -536,8 +537,18 @@ class LeadImageService:
         # featured image is rendered by `wp-block-post-featured-image` directly
         # under <article>, NOT inside a Query Loop, so stripping these is safe
         # and stops a sibling post's thumbnail from winning (e.g. karlkerschl.com).
-        r'wp-block-query)'
-        r'[^"\']*["\'][^>]*>',
+        r'wp-block-query)[^"\']*["\']'
+        # Shopify's "Online Store 2.0" section-id convention names the section
+        # after its purpose (`shopify-section-template--<id>__blogs_row`).
+        # gamersguildusa.com's article pages render a "Blog posts" recommendation
+        # row this way with no matching class name to hook — every one of its
+        # card thumbnails is another, unrelated post. Reported live: a cosplay
+        # article's resolved lead image turned out to be a completely different
+        # "Forks & Boards" post's card, shared by several other entries scraped
+        # in the same run — they'd all picked up whichever post this row
+        # happened to feature at scrape time, not their own image.
+        r'|\bid=["\'][^"\']*shopify-section[^"\']*(?:blogs?[-_]?row|related[-_]?blogs?|recent[-_]?blogs?|blog[-_]?(?:list|grid|posts))[^"\']*["\']'
+        r')[^>]*>',
         re.IGNORECASE,
     )
     # Allow Blogger/Google CDN URLs where the extension is followed by a size
@@ -3301,6 +3312,34 @@ class LeadImageService:
         parsed = urlparse(image_url)
         if parsed.scheme not in {"http", "https"}:
             return False
+        # Query-string dimensions (Shopify/Jetpack-style ?width=&height=) are
+        # authoritative for this specific request when present, resolved before
+        # any filename-based dimension sniffing runs below (_TINY_DIM_RE and the
+        # later path-dimension scan) so neither can second-guess them. Both scan
+        # for a bare WxH token in the PATH, and a crop-preset name like Shopify's
+        # "_4x3_"/"_4x5_" (aspect ratio, not pixels) reads as a literal 4x3 or
+        # 4x5 image — tiny enough for _TINY_DIM_RE to reject outright. Confirmed
+        # live on gamersguildusa.com: an og:image already sized 600x500 by its
+        # own ?width=&height= was rejected this way, and the body-scan fallback
+        # that kicked in instead (combined with an unstripped "recent posts"
+        # widget, fixed separately) picked a different, unrelated post's image.
+        if width is None or height is None:
+            _early_query = parsed.query.lower()
+            _qw = _qh = None
+            for _m in re.finditer(r"(?:^|&)(?:w|width)=([0-9]{1,4})(?:&|$)", _early_query):
+                try:
+                    _qw = int(_m.group(1))
+                except ValueError:
+                    pass
+                break
+            for _m in re.finditer(r"(?:^|&)(?:h|height)=([0-9]{1,4})(?:&|$)", _early_query):
+                try:
+                    _qh = int(_m.group(1))
+                except ValueError:
+                    pass
+                break
+            if _qw is not None and _qh is not None:
+                width, height = _qw, _qh
         # DeviantArt's image CDN (wixmp) serves authoritative deviation images via
         # long auto-generated filenames/UUIDs that trip the junk/avatar/ad heuristics
         # with false positives (e.g. "…profile…" in a title, "ad87" in a UUID). We
@@ -3350,13 +3389,31 @@ class LeadImageService:
             return False
         if self._SITE_CHROME_DOMAIN_PATTERNS.search(parsed.netloc):
             return False
-        _path_no_qs = parsed.path.lower()
-        for _m in self._TINY_DIM_RE.finditer(_path_no_qs):
-            try:
-                if int(_m.group(1)) <= 10 and int(_m.group(2)) <= 10:
-                    return False
-            except ValueError:
-                pass
+        # Skip once real dimensions are already known (declared or resolved from
+        # the query string above) — a filename token this scans for is only
+        # meaningful as a dimension guess when nothing more authoritative exists.
+        if width is None or height is None:
+            _path_no_qs = parsed.path.lower()
+            for _m in self._TINY_DIM_RE.finditer(_path_no_qs):
+                try:
+                    if int(_m.group(1)) <= 10 and int(_m.group(2)) <= 10:
+                        # ...unless a real, large dimension appears elsewhere in
+                        # the same path — an aspect-ratio crop-preset token like
+                        # "_4x5_"/"_4x3_" reads as 4x5/4x3 pixels here, but a
+                        # served-size token later in the same filename
+                        # ("..._4x5_...600x600.png") says the actual image is
+                        # nowhere near that tiny. Same reasoning the later
+                        # small-vs-large path scan already applies; this earlier,
+                        # stricter check just wasn't wired to it.
+                        if not any(
+                            int(_lg.group(1)) >= self._LEAD_IMAGE_MIN_WIDTH
+                            and int(_lg.group(2)) >= self._LEAD_IMAGE_MIN_HEIGHT
+                            for _lg in list(self._URL_DIMENSION_RE.finditer(_path_no_qs))
+                            + list(self._PATH_SIZE_SEGMENT_RE.finditer(_path_no_qs))
+                        ):
+                            return False
+                except ValueError:
+                    pass
 
         if not skip_logo_patterns and self._LOGO_URL_PATTERNS.search(image_url):
             # Allow logo-pattern URLs when the path encodes a large enough dimension —

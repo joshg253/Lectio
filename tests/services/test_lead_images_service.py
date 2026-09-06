@@ -1203,6 +1203,52 @@ def test_webcomic_panel_skips_query_loop_sibling_posts(tmp_path: Path):
     assert service._extract_webcomic_alt_text(html) is None
 
 
+def test_shopify_blog_posts_row_is_stripped_before_scanning(tmp_path: Path):
+    """gamersguildusa.com renders a "Blog posts" recommendation row on every
+    article page as `<article id="shopify-section-...__blogs_row" class="shopify-
+    section">`, with no class name any existing related-post pattern matches.
+    Regression, reported live: several unrelated entries (a cosplay-supplies post
+    among them) all resolved to whichever OTHER post that row happened to feature
+    at scrape time, because its card thumbnails won the body scan."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    page = "https://www.gamersguildusa.com/blogs/news/cosplay-products-are-coming-soon"
+    body_img = (
+        "https://cdn.shopify.com/s/files/1/0565/9705/3645/files/"
+        "CosplayComingSoon_4x5_ce6091b6-ea05-4036-afe4-967ed9b49cb8_600x600.png"
+    )
+    html = (
+        "<html><body>"
+        f'<p><img src="{body_img}" style="float: right;"></p>'
+        '<article id="shopify-section-template--20583778713805__blogs_row" class="shopify-section">'
+        '<header><h1>Blog posts</h1></header><ul class="l4ne landscape w33"><li><figure><picture>'
+        '<img data-src="https://www.gamersguildusa.com/cdn/shop/articles/Sept_LTO_Blog_1.png">'
+        "</picture></figure></li></ul></article>"
+        "</body></html>"
+    )
+    url = service._extract_preferred_source_image_url(html, page, page)
+    assert url == body_img
+    assert "Sept_LTO_Blog_1" not in (url or "")
+
+
+def test_og_image_query_dimensions_beat_a_misleading_aspect_ratio_filename(tmp_path: Path):
+    """Shopify names crop presets in the filename itself ("_4x3_", "_4x5_" —
+    aspect ratio, not pixels) while giving the REAL served size in the query
+    string (?width=&height=). Regression, reported live: an og:image sized
+    600x500 by its own query string was rejected as a "tiny 4x3 image" because
+    a naive filename scan misread "_4x3_" as literal dimensions, before the
+    query string was ever consulted — so a page whose real dimensions were
+    already known still fell through to a body-scan fallback."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    url = (
+        "http://www.gamersguildusa.com/cdn/shop/articles/"
+        "CosplayComingSoon_4x3_1a15d919-9934-4802-8766-d11603d1b610.png"
+        "?crop=center&height=500&v=1788365944&width=600"
+    )
+    assert service._is_image_url_acceptable(
+        url, None, None, allow_extensionless=True, skip_logo_patterns=True
+    ) is True
+
+
 def test_webcomic_alt_prefers_img_title_over_og_description(tmp_path: Path):
     """The hover-text punchline on the main comic <img title="..."> must win over
     og:description, which on SMBC is just the post title (regression: SMBC)."""
