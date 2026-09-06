@@ -41,6 +41,7 @@ def _make_db_conn(db_path: Path):
             duration_display TEXT,
             live_broadcast_content TEXT,
             scheduled_start_time TEXT,
+            members_only INTEGER,
             fetched_at TEXT
         )
         """
@@ -387,3 +388,140 @@ def test_refresh_upcoming_videos_no_rows_is_a_noop(tmp_path: Path):
         api_key_provider=lambda: "fake-key",
     )
     assert service.refresh_upcoming_videos() == 0
+
+
+class _FakeResponse:
+    """No failing status is ever exercised via this fake -- fetch failures are
+    tested via a raising httpx.get instead (see the fetch-failure test below),
+    matching how a real connection error surfaces, not a 4xx/5xx response."""
+    def __init__(self, text: str):
+        self.text = text
+
+    def raise_for_status(self):
+        pass
+
+
+def test_get_cached_members_only_is_none_when_never_checked(tmp_path: Path):
+    service = YouTubeDurationService(
+        get_durations_connection=lambda: _make_db_conn(tmp_path / "yt.sqlite"),
+        get_reader=lambda: _ReaderCtx(_FakeReader([])),
+        user_agent="LectioTest/1.0",
+    )
+    assert service.get_cached_members_only("ABCDEFGHIJK") is None
+
+
+def test_get_cached_members_only_falls_back_to_db(tmp_path: Path):
+    db_path = tmp_path / "yt.sqlite"
+
+    def get_meta_connection():
+        return _make_db_conn(db_path)
+
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO youtube_video_duration(video_id, members_only, fetched_at) VALUES (?, 1, datetime('now'))",
+            ("ABCDEFGHIJK",),
+        )
+
+    service = YouTubeDurationService(
+        get_durations_connection=get_meta_connection,
+        get_reader=lambda: _ReaderCtx(_FakeReader([])),
+        user_agent="LectioTest/1.0",
+    )
+    assert service.get_cached_members_only("ABCDEFGHIJK") is True
+
+
+def test_fetch_and_cache_members_only_detects_the_real_badge(tmp_path: Path, monkeypatch):
+    """The exact badge style YouTube's own watch-page JSON uses for a "Members
+    only" video, confirmed live against a real members-only video."""
+    db_path = tmp_path / "yt.sqlite"
+    html = (
+        '{"badges":[{"metadataBadgeRenderer":{"icon":{"iconType":"SPONSORSHIP_STAR"},'
+        '"style":"BADGE_STYLE_TYPE_MEMBERS_ONLY","label":"Members only"}}]}'
+    )
+    monkeypatch.setattr("services.youtube.httpx.get", lambda *a, **kw: _FakeResponse(html))
+
+    service = YouTubeDurationService(
+        get_durations_connection=lambda: _make_db_conn(db_path),
+        get_reader=lambda: _ReaderCtx(_FakeReader([])),
+        user_agent="LectioTest/1.0",
+    )
+    assert service.fetch_and_cache_members_only("ABCDEFGHIJK") is True
+    assert service.get_cached_members_only("ABCDEFGHIJK") is True
+    with service._get_durations_connection() as conn:
+        row = conn.execute(
+            "SELECT members_only FROM youtube_video_duration WHERE video_id = ?",
+            ("ABCDEFGHIJK",),
+        ).fetchone()
+    assert row["members_only"] == 1
+
+
+def test_fetch_and_cache_members_only_false_for_a_normal_video(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "yt.sqlite"
+    monkeypatch.setattr("services.youtube.httpx.get", lambda *a, **kw: _FakeResponse("<html>a normal video page</html>"))
+
+    service = YouTubeDurationService(
+        get_durations_connection=lambda: _make_db_conn(db_path),
+        get_reader=lambda: _ReaderCtx(_FakeReader([])),
+        user_agent="LectioTest/1.0",
+    )
+    assert service.fetch_and_cache_members_only("ABCDEFGHIJK") is False
+    assert service.get_cached_members_only("ABCDEFGHIJK") is False
+
+
+def test_fetch_and_cache_members_only_leaves_no_trace_on_fetch_failure(tmp_path: Path, monkeypatch):
+    """A transient network error must not cache a wrong answer -- the next
+    caller (the next refresh's hide-members-only pass) gets to retry, since
+    there is no separate negative-retry timer for this cache."""
+    db_path = tmp_path / "yt.sqlite"
+
+    def _boom(*a, **kw):
+        raise __import__("httpx").ConnectError("boom")
+
+    monkeypatch.setattr("services.youtube.httpx.get", _boom)
+
+    service = YouTubeDurationService(
+        get_durations_connection=lambda: _make_db_conn(db_path),
+        get_reader=lambda: _ReaderCtx(_FakeReader([])),
+        user_agent="LectioTest/1.0",
+    )
+    assert service.fetch_and_cache_members_only("ABCDEFGHIJK") is None
+    assert service.get_cached_members_only("ABCDEFGHIJK") is None
+    with service._get_durations_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM youtube_video_duration WHERE video_id = ?",
+            ("ABCDEFGHIJK",),
+        ).fetchone()
+    assert row is None
+
+
+def test_fetch_and_cache_members_only_preserves_existing_duration_row(tmp_path: Path, monkeypatch):
+    """A video's duration is usually cached first; checking members-only later
+    must not clobber duration_seconds/duration_display on the same row."""
+    db_path = tmp_path / "yt.sqlite"
+
+    def get_meta_connection():
+        return _make_db_conn(db_path)
+
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO youtube_video_duration(video_id, duration_seconds, duration_display, fetched_at)"
+            " VALUES (?, 360, '6:00', datetime('now'))",
+            ("ABCDEFGHIJK",),
+        )
+    html = '{"style":"BADGE_STYLE_TYPE_MEMBERS_ONLY"}'
+    monkeypatch.setattr("services.youtube.httpx.get", lambda *a, **kw: _FakeResponse(html))
+
+    service = YouTubeDurationService(
+        get_durations_connection=get_meta_connection,
+        get_reader=lambda: _ReaderCtx(_FakeReader([])),
+        user_agent="LectioTest/1.0",
+    )
+    assert service.fetch_and_cache_members_only("ABCDEFGHIJK") is True
+    with get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT duration_seconds, duration_display, members_only FROM youtube_video_duration WHERE video_id = ?",
+            ("ABCDEFGHIJK",),
+        ).fetchone()
+    assert row["duration_seconds"] == 360
+    assert row["duration_display"] == "6:00"
+    assert row["members_only"] == 1
