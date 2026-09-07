@@ -163,3 +163,57 @@ def test_unrelated_feed_never_queries_locked_until(configured):
         _seed_entry(reader, feed_url=OTHER_FEED, entry_id="e1", published=OLD)
     ids = {e["id"] for e in main.list_entries_for_feeds({OTHER_FEED}, limit=100)}
     assert ids == {"e1"}
+
+
+def test_unread_count_excludes_locked_comic_hidden_via_per_feed_pref(configured):
+    """Reported live 2026-09-06: cad-comic's unread badge kept counting a
+    post hide_locked_comics correctly hid from the visible list."""
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=FEED, entry_id="locked", published=OLD)
+        _seed_entry(reader, feed_url=FEED, entry_id="normal", published=OLD)
+    _seed_locked_until(FEED, "locked", time.time() + 86400 * 30)
+
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, FEED, "hide_locked_comics", 1)
+
+    counts = main._compute_unread_counts_by_feed()
+    assert counts.get(FEED) == 1
+
+
+def test_unread_count_excludes_locked_comic_via_global_setting(configured):
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=FEED, entry_id="locked", published=OLD)
+        _seed_entry(reader, feed_url=FEED, entry_id="normal", published=OLD)
+    _seed_locked_until(FEED, "locked", time.time() + 86400 * 30)
+
+    with main.get_meta_connection() as conn:
+        main.set_setting(conn, main.SETTING_HIDE_LOCKED_COMICS_GLOBAL, "1")
+
+    counts = main._compute_unread_counts_by_feed()
+    assert counts.get(FEED) == 1
+
+
+def test_unread_count_unaffected_when_pref_off(configured):
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=FEED, entry_id="locked", published=OLD)
+        _seed_entry(reader, feed_url=FEED, entry_id="normal", published=OLD)
+    _seed_locked_until(FEED, "locked", time.time() + 86400 * 30)
+
+    counts = main._compute_unread_counts_by_feed()
+    assert counts.get(FEED) == 2
+
+
+def test_unread_count_unaffected_once_unlock_date_passes(configured):
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=FEED, entry_id="now-unlocked", published=OLD)
+    _seed_locked_until(FEED, "now-unlocked", time.time() - 3600)
+
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, FEED, "hide_locked_comics", 1)
+
+    counts = main._compute_unread_counts_by_feed()
+    assert counts.get(FEED) == 1

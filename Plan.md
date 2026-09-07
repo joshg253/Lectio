@@ -239,6 +239,16 @@ the predicate into the SQL query itself (a join against `entry_lead_images`/dura
 or over-fetching and iterating until enough entries pass the filter; both are query-layer surgery
 bigger than a review-response fixup, so not attempted here.
 
+### hide_unpremiered has the same unread-count-badge leak hide_locked_comics just got fixed for
+
+Reported live 2026-09-06 for `hide_locked_comics` — cad-comic's unread badge kept counting a post
+the render-time filter correctly hid from the list, because `_compute_unread_counts_by_feed`'s SQL
+count has no idea any hide_* filter exists. Fixed for locked comics via
+`_subtract_hidden_locked_comics_from_counts` (see docs/architecture/images.md). `hide_unpremiered`
+(YouTube's "don't show yet" filter, same shape) has the identical gap and has not been reported —
+not fixed here since it wasn't asked for, but the fix would be the same pattern: a companion
+subtract-from-counts pass keyed off whatever YouTube stores for upcoming-video status.
+
 ## Tier 2 — small, fast, independent wins
 
 ### Manual single-feed "Refresh" can silently no-op for up to an hour
