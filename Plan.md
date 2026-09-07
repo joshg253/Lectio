@@ -207,6 +207,24 @@ Administration, not `.env` — `gluetun`/`flaresolverr`/`tailscale` containers a
   gap this item exists to close (no escalation offered at all) is closed regardless of whether
   FlareSolverr wins every individual challenge.
 
+### play.nobleknight.com images still 403 despite FlareSolverr cookie reuse
+
+Cookie reuse shipped 2026-09-06 (see docs/architecture/feeds.md) specifically to fix this host's
+images (article pages needed FlareSolverr; images 403'd even with a full realistic browser header
+set). Verified live it does NOT fully solve it: FlareSolverr's solve of the article page returns
+only a `__cf_bm` cookie, never `cf_clearance` — confirmed by tracing `flaresolverr.solve`'s raw
+response — and presenting `__cf_bm` to the `/app/uploads/...` image path still gets Cloudflare's
+"Just a moment..." 403 page. `__cf_bm` is a bot-scoring cookie set on every request regardless;
+`cf_clearance` (the actual challenge-passed credential) apparently isn't required for THIS host's
+article pages at all, so the solve never produces one — meaning there is no cookie available that
+would unlock the images either. This host's image path most likely checks something a cookie can't
+carry (TLS/JA3 fingerprint), which only a real browser connection satisfies — FlareSolverr can't
+help further since it renders pages, not arbitrary binary responses, so it has no way to hand back
+image bytes at all. The cookie-reuse mechanism itself is real and confirmed working in principle
+(unit-tested); it simply doesn't reach far enough for a host whose protection is stronger than a
+cookie check. No further fix attempted here — would need routing individual images through a real
+browser instance per-request, a much bigger undertaking than this feature.
+
 ## Tier 2 — small, fast, independent wins
 
 ### Manual single-feed "Refresh" can silently no-op for up to an hour
