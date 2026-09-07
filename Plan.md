@@ -207,19 +207,6 @@ Administration, not `.env` — `gluetun`/`flaresolverr`/`tailscale` containers a
   gap this item exists to close (no escalation offered at all) is closed regardless of whether
   FlareSolverr wins every individual challenge.
 
-### cad-comic.com "img not loading" — not a bug, the strip is genuinely paywall-locked
-
-[entry](https://cad-comic.com/comic/hunting-p24/) — checked 2026-09-06: the cached lead image is a
-`cad-comic.com/comic-image/<id>/?token=...&expires=<epoch>` URL, and the token had expired (curled
-it directly: 403). Looked like the DeviantArt-style "signed URL went stale before anyone read it"
-class of bug at first, but the live page tells a different story — CAD's WordPress theme renders a
-"This Comic is Locked" block for this specific strip ("currently exclusive to $3+ supporters...
-Unlocks for everyone in 134 days"), and the image genuinely isn't being served to a non-supporter
-at all right now. Re-fetching gets nothing better; there is no fresher URL to resign to. A real
-improvement here would be detecting the locked-view markup and showing a "supporter-exclusive,
-unlocks &lt;date&gt;" placeholder instead of a broken image icon — not attempted, since it's a
-narrower cosmetic win than the false-alarm this originally looked like.
-
 ## Tier 2 — small, fast, independent wins
 
 ### Manual single-feed "Refresh" can silently no-op for up to an hour

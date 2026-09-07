@@ -904,6 +904,26 @@ imported by both `reader_api.py` (feeds) and `page_fetch.py` (pages).
 - **Settings → Feeds → Fetch Tiers gained a fourth section** for
   `HostEscalationState.snapshot()`, shown separately from the three feed
   tables above (different key, different lifetime).
+- **A FlareSolverr solve's cookies are captured and reused — added
+  2026-09-06.** `services/flaresolverr.py`'s `Solution` now carries
+  `cookies` (name, value, expiry) parsed straight from FlareSolverr's `/v1`
+  response; `HostEscalationState` stores them per `(user, host)` alongside
+  the learned tier, with a 30-minute fallback expiry for a cookie whose own
+  `expiry` is absent. Two consumers: `PageFetcher.fetch()` itself presents
+  them on the honest/browser tiers (and skips the "known to need
+  flaresolverr → jump straight there" shortcut while they're still fresh,
+  since an honest-with-cookies attempt is worth trying before paying for
+  another shared solve), and `cookies_for_host()` exposes them to a caller
+  outside the ladder entirely — the `/api/img` proxy, which needs this for a
+  reason unique to it: FlareSolverr renders *pages*, so it has no way to hand
+  back an image's raw bytes, meaning an image behind the same WAF as its
+  article can *only* ever load by riding the article fetch's cookies, never
+  by solving the image URL itself. Found chasing a live report
+  (play.nobleknight.com: article pages needed FlareSolverr, but the images
+  still 403'd even with a full realistic browser header set — a WAF-cookie
+  check, not a header or Referer one). Domain-scoped by nature (Cloudflare
+  et al set the cookie for the host, not the specific URL solved), which is
+  what makes reuse across different URLs on the same host valid at all.
 
 
 ## Suggesting a replacement for a feed on a known dead-end host

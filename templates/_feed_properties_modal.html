@@ -197,6 +197,13 @@
               <input type="checkbox" id="feed-prop-hide-paywalled" class="feed-prop-checkbox" />
               <span>Hide subscriber-only posts (auto-mark as read at fetch time)</span>
             </label>
+            {# For a webcomic gated behind a supporter tier (cad-comic.com and
+               the like) until a stated unlock date -- shown here rather than
+               under YouTube options above since it isn't YouTube-specific. #}
+            <label class="feed-prop-toggle-row">
+              <input type="checkbox" id="feed-prop-hide-locked-comics" class="feed-prop-checkbox" />
+              <span>Hide strips locked behind a supporter tier until their unlock date</span>
+            </label>
           </div>
       </div>
       <div id="feed-prop-tab-tuning" class="feed-prop-tab-panel" hidden>

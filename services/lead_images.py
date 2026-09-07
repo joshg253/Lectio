@@ -9,6 +9,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 
@@ -2445,6 +2446,13 @@ class LeadImageService:
 
                     is_wc = strategy == "webcomic" or self._is_feed_webcomic(feed_url)
                     image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
+                    if is_wc:
+                        # Free: reuses the page HTML the fetch just above cached,
+                        # rather than a second request. Runs even when no panel
+                        # image was found — a genuinely locked strip's page has no
+                        # real comic to extract, which is exactly the case this
+                        # exists to catch.
+                        self.check_and_cache_webcomic_lock(feed_url, entry_id, entry_link)
                     if not image_url:
                         # Source page yielded nothing — e.g. a JS-only art portfolio
                         # (ArtStation) with no og:image, or a feed whose strategy was
@@ -2882,6 +2890,62 @@ class LeadImageService:
         score += self._plugin_source_score_adjustment(source_url=source_url, attrs=attrs, resolved_url=resolved_url)
 
         return score
+
+    # cad-comic.com's WordPress theme marks a supporter-exclusive strip with
+    # class="single-comic-locked" on its wrapper, and states the unlock date in
+    # plain text nearby — confirmed live 2026-09-06 against a real locked strip
+    # ("This Comic is Locked ... currently exclusive to $3+ supporters ...
+    # Unlocks for everyone in 134 days (January 17, 2027)"). Reported as a lead
+    # image failure (a genuinely inaccessible image, not a stale/expired URL)
+    # before the actual cause was found.
+    _WEBCOMIC_LOCK_RE = re.compile(r'class=["\'][^"\']*\bsingle-comic-locked\b', re.IGNORECASE)
+    _WEBCOMIC_UNLOCK_DATE_RE = re.compile(
+        r'class=["\']unlock-date-text["\'][^>]*>\s*\(([^)]+)\)', re.IGNORECASE
+    )
+
+    def _extract_webcomic_lock_until(self, html_text: str) -> float | None:
+        """Epoch seconds this webcomic strip unlocks at, or None if it isn't
+        locked at all. A locked page whose unlock date doesn't parse (theme
+        change, unexpected phrasing) gets a 30-day fallback recheck window
+        instead of being treated as permanently unlocked OR permanently
+        hidden — the date text is free-form English, not a machine format,
+        so this can't be assumed stable long-term.
+        """
+        if not self._WEBCOMIC_LOCK_RE.search(html_text):
+            return None
+        m = self._WEBCOMIC_UNLOCK_DATE_RE.search(html_text)
+        if m:
+            try:
+                dt = datetime.strptime(m.group(1).strip(), "%B %d, %Y").replace(tzinfo=timezone.utc)
+                return dt.timestamp()
+            except ValueError:
+                pass
+        return time.time() + 30 * 86400
+
+    def check_and_cache_webcomic_lock(self, feed_url: str, entry_id: str, entry_link: str) -> None:
+        """Detect and persist whether entry_link's webcomic strip is currently
+        locked, reusing the page HTML _fetch_source_lead_image already cached
+        for the lead image — no extra fetch. hide_locked_comics' render-time
+        filter reads entry_lead_images.locked_until directly; comparing it to
+        "now" at read time is what lets a strip stop being hidden the moment
+        its own stated unlock date passes, with no periodic recheck job."""
+        cached = self._source_html_cache.get(entry_link)
+        if cached is None:
+            return
+        _final_url, source_html = cached
+        locked_until = self._extract_webcomic_lock_until(source_html)
+        try:
+            with self._get_meta_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at, locked_until)
+                    VALUES (?, ?, NULL, ?, ?)
+                    ON CONFLICT(feed_url, entry_id) DO UPDATE SET locked_until = excluded.locked_until
+                    """,
+                    (feed_url, entry_id, time.time(), locked_until),
+                )
+        except Exception:
+            pass
 
     def _extract_webcomic_panel_image(self, html_text: str, base_url: str, source_url: str) -> str | None:
         """Return the main comic-panel image for a webcomic source page, or None.

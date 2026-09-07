@@ -211,6 +211,49 @@ def test_honest_image_not_retried_with_referer(monkeypatch):
     assert calls["n"] == 1  # single honest fetch, no retry
 
 
+def test_flaresolverr_cookies_reused_for_image_fetch(monkeypatch):
+    """A host whose article page needed FlareSolverr to pass a WAF challenge
+    leaves domain-scoped cookies on file (services/page_fetch.py) -- the img
+    proxy presents them on its own fetch, since FlareSolverr itself has no way
+    to hand back an image's raw bytes and a plain request without the cookie
+    would just 403 again."""
+    main.page_fetcher._state.record_cookies(
+        main.page_fetcher._user_id(), "waf.test", (("cf_clearance", "solved-token", None),), now=time.time(),
+    )
+
+    captured_kwargs = []
+    orig_build = url_guard.build_async_client
+
+    def _capturing_build(**kwargs):
+        captured_kwargs.append(kwargs)
+        return orig_build(**{k: v for k, v in kwargs.items() if k != "cookies"})
+
+    monkeypatch.setattr(url_guard, "build_async_client", _capturing_build)
+    _stub_fetch(monkeypatch, _png_bytes(20, 20))
+    with _client() as client:
+        r = client.get("/api/img", params={"u": "https://waf.test/pic.png"})
+    assert r.status_code == 200
+    assert any(kw.get("cookies") == {"cf_clearance": "solved-token"} for kw in captured_kwargs)
+
+
+def test_no_stored_cookies_means_no_cookies_kwarg(monkeypatch):
+    """A host with nothing on file must not pass an empty cookies= kwarg --
+    the ordinary path should look identical to before this feature existed."""
+    captured_kwargs = []
+    orig_build = url_guard.build_async_client
+
+    def _capturing_build(**kwargs):
+        captured_kwargs.append(kwargs)
+        return orig_build(**kwargs)
+
+    monkeypatch.setattr(url_guard, "build_async_client", _capturing_build)
+    _stub_fetch(monkeypatch, _png_bytes(20, 20))
+    with _client() as client:
+        r = client.get("/api/img", params={"u": "https://plain.test/pic.png"})
+    assert r.status_code == 200
+    assert all("cookies" not in kw for kw in captured_kwargs)
+
+
 def test_hit_bumps_last_accessed(monkeypatch):
     _stub_fetch(monkeypatch, _png_bytes(20, 20))
     with _client() as client:

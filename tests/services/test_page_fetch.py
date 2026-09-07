@@ -27,7 +27,7 @@ def _patch_build_client(monkeypatch, handler, captured=None):
     def _factory(**kwargs):
         if captured is not None:
             captured.append(dict(kwargs))
-        safe_kwargs = {k: v for k, v in kwargs.items() if k in ("headers", "timeout")}
+        safe_kwargs = {k: v for k, v in kwargs.items() if k in ("headers", "timeout", "cookies")}
         return httpx.Client(transport=transport, **safe_kwargs)
 
     monkeypatch.setattr(url_guard, "build_client", _factory)
@@ -162,6 +162,77 @@ def test_flaresolverr_attempted_on_cloudflare_challenge_marker(monkeypatch):
     assert result.html == "<html>solved</html>"
     assert len(solve_calls) == 1
     assert solve_calls[0][1] == "https://example.com/page"
+
+
+def test_flaresolverr_cookies_are_captured_and_reused(monkeypatch):
+    """A flaresolverr solve's cookies (e.g. a Cloudflare cf_clearance) get
+    stored per-host, and the NEXT fetch for that host presents them on its
+    honest attempt -- letting a plain request pass a WAF check a real browser
+    already cleared, without spending another shared solve."""
+    def fake_solve(endpoint, target_url, **kw):
+        return flaresolverr.Solution(
+            html="<html>solved</html>", status=200, url=target_url,
+            cookies=(("cf_clearance", "abc123", None),),
+        )
+
+    monkeypatch.setattr(flaresolverr, "solve", fake_solve)
+
+    seen_cookies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_cookies.append(request.headers.get("cookie"))
+        if "cf_clearance=abc123" in (request.headers.get("cookie") or ""):
+            return httpx.Response(200, text="<html>ok</html>", headers={"content-type": "text/html"})
+        return httpx.Response(403, text=CLOUDFLARE_BODY, headers={"content-type": "text/html"})
+
+    _patch_build_client(monkeypatch, handler)
+    backends = page_fetch.FetchBackends(mode="as_needed", proxy_url="", flaresolverr_url="http://flaresolverr:8191/v1")
+    state = page_fetch.HostEscalationState()
+    fetcher = _fetcher(backends=backends, state=state)
+
+    first = fetcher.fetch("https://example.com/page")
+    assert first.tier == "flaresolverr"
+    assert state.cookies_for("u1", "example.com", now=0.0) == {"cf_clearance": "abc123"}
+
+    # A fresh fetch to the SAME host now succeeds on the honest tier alone --
+    # the stored cookie was enough, no second solve needed.
+    solve_calls = []
+    monkeypatch.setattr(flaresolverr, "solve", lambda *a, **kw: solve_calls.append(1))
+    second = fetcher.fetch("https://example.com/other-page")
+    assert second.tier == "honest"
+    assert "cf_clearance=abc123" in (seen_cookies[-1] or "")
+    assert not solve_calls
+
+
+def test_cookies_for_host_exposed_for_external_callers(monkeypatch):
+    """PageFetcher.cookies_for_host is how a caller outside the ladder (the
+    img proxy) reuses a solve's cookies without going through fetch() itself."""
+    def fake_solve(endpoint, target_url, **kw):
+        return flaresolverr.Solution(
+            html="<html>solved</html>", status=200, url=target_url,
+            cookies=(("cf_clearance", "xyz789", None),),
+        )
+
+    monkeypatch.setattr(flaresolverr, "solve", fake_solve)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text=CLOUDFLARE_BODY, headers={"content-type": "text/html"})
+
+    _patch_build_client(monkeypatch, handler)
+    backends = page_fetch.FetchBackends(mode="as_needed", proxy_url="", flaresolverr_url="http://flaresolverr:8191/v1")
+    fetcher = _fetcher(backends=backends)
+
+    assert fetcher.cookies_for_host("https://example.com/anything") == {}
+    fetcher.fetch("https://example.com/page")
+    assert fetcher.cookies_for_host("https://example.com/some-image.jpg") == {"cf_clearance": "xyz789"}
+
+
+def test_expired_cookies_are_not_reused():
+    state = page_fetch.HostEscalationState()
+    state.record_cookies("u1", "example.com", (("session", "old", None),), now=100.0)
+    # The default 30-minute fallback for a cookie with no explicit expiry.
+    assert state.cookies_for("u1", "example.com", now=100.0 + 1800 + 1) == {}
+    assert state.cookies_for("u1", "example.com", now=100.0 + 100) == {"session": "old"}
 
 
 def test_flaresolverr_origin_status_propagates_through_pagefetcherror(monkeypatch):

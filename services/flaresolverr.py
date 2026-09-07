@@ -32,11 +32,22 @@ _FLARESOLVERR_PRE_RE = re.compile(rb"<pre[^>]*>(.*)</pre>", re.IGNORECASE | re.D
 class Solution:
     """A parsed FlareSolverr /v1 'solution' envelope. ``html`` is Chrome's
     rendered outerHTML as-is — a feed caller still needs unwrap_view_source
-    on top of it; a page caller can use it directly."""
+    on top of it; a page caller can use it directly.
+
+    ``cookies`` are the real browser's session after solving whatever
+    challenge stood in the way (name -> (value, expires_at_epoch_or_None)) —
+    domain-scoped, not URL-scoped, so a challenge solved for one page's HTML
+    grants the same access to that page's own images/assets. Letting a plain
+    follow-up request present them is what makes a source-page fetch through
+    FlareSolverr also unblock the img proxy for that host, instead of every
+    single image needing its own (impossible — FlareSolverr renders pages,
+    not arbitrary binary responses) solve.
+    """
 
     html: str
     status: int | None
     url: str
+    cookies: tuple[tuple[str, str, float | None], ...] = ()
 
 
 def build_request_body(url: str, *, proxy_url: str | None = None, max_timeout_ms: int = 55_000) -> dict[str, object]:
@@ -64,10 +75,28 @@ def parse_envelope(payload: dict, request_url: str) -> Solution:
             request_url,
         )
     origin_status = solution.get("status")
+    raw_cookies = solution.get("cookies") or []
+    cookies: list[tuple[str, str, float | None]] = []
+    if isinstance(raw_cookies, list):
+        for c in raw_cookies:
+            if not isinstance(c, dict):
+                continue
+            name, value = c.get("name"), c.get("value")
+            if not name or value is None:
+                continue
+            # FlareSolverr (mirroring Selenium's cookie shape) uses "expiry" —
+            # absent or -1 means a session cookie, which is exactly what a
+            # Cloudflare cf_clearance cookie isn't, so this is nearly always
+            # present in practice. Missing entirely gets a short, safe default
+            # applied by the caller rather than being treated as forever.
+            expiry = c.get("expiry")
+            expires_at = float(expiry) if isinstance(expiry, (int, float)) and expiry > 0 else None
+            cookies.append((str(name), str(value), expires_at))
     return Solution(
         html=str(solution.get("response") or ""),
         status=origin_status if isinstance(origin_status, int) else None,
         url=str(solution.get("url") or request_url),
+        cookies=tuple(cookies),
     )
 
 
