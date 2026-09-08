@@ -3033,7 +3033,11 @@ class _CachedStaticFiles(StaticFiles):
     """StaticFiles that sends a long-lived Cache-Control header.
 
     Safe because every <link>/<script> URL includes a `?v={STATIC_ASSET_VERSION}`
-    cache-buster — bump the version to invalidate.
+    cache-buster — bump the version to invalidate. Vendored third-party assets
+    under static/vendor/<lib>-<version>/ (e.g. KaTeX) are the exception: they
+    carry no `?v=` query param at all, since a vendored release is immutable —
+    a version bump there means a new directory name, not a hash recompute, so
+    the long-lived cache header is still safe without the query-string scheme.
     """
 
     async def get_response(self, path: str, scope):
