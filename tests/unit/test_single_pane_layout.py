@@ -91,6 +91,19 @@ def test_scope_to_scope_navigation_replaces_the_list_entry_instead_of_stacking()
     assert APP_JS.count("history.replaceState(nextState, '', url);") == 2  # here, and the entry-pane precedent
 
 
+def test_scope_to_scope_replace_reads_history_state_not_the_visual_pane_level():
+    """onScopeList used to gate on the visual data-single-pane-level DOM attribute.
+    The "Show folders" button (data-single-back="0") flips that attribute to peek
+    at the tree without touching history at all, so folder1 -> hamburger -> folder2
+    fooled onScopeList into False right when it mattered, pushed folder2's entry on
+    top of folder1's still-real one instead of replacing it, and phone Back landed
+    on folder1 instead of the folder list. history.state.lectioScopePane (stamped
+    on every real scope load, just above) survives that peek since nothing
+    navigated, so it is the signal to read instead."""
+    assert "Boolean(history.state && history.state.lectioScopePane)" in APP_JS
+    assert "data-single-pane-level') === '1'" not in APP_JS
+
+
 def test_the_drawer_spare_heals_its_stale_url_instead_of_bouncing_to_home():
     """A sibling scope swap (folder A -> folder B) replaces the REAL list entry
     in place, never the drawer's history spare sitting below it — you cannot

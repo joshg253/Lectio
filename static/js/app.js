@@ -3817,15 +3817,22 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       // Same idea as loadEntryPaneWithoutFullRefresh's currentUrlHasEntry: are we
       // already standing on a real scope-level list, about to be swapped for a
       // sibling (another folder/feed/tag), rather than drilling in from the
-      // drawer or an article? The pane level is the right signal, not the URL's
-      // query params — the drawer's own history "spare" (see armDrawerBack in
-      // index.html) can carry scope-shaped params too once healed, and replacing
-      // THAT entry instead of pushing a fresh one would destroy the drawer/Back
-      // mechanism entirely.
+      // drawer or an article? Read history.state's own lectioScopePane flag
+      // (stamped below whenever a real scope load pushes/replaces), not the
+      // visual pane-level DOM attribute — the "Show folders" button flips that
+      // attribute to peek at the tree without touching history at all, which
+      // used to make this false right after a folder1 -> hamburger -> folder2
+      // tap and stack folder2's entry on top of folder1's real one instead of
+      // replacing it, so phone Back landed on folder1 instead of the folder
+      // list. history.state stays accurate through that peek since nothing
+      // navigated. Still excludes the drawer's history "spare" (see
+      // armDrawerBack in index.html), which can carry scope-shaped params too
+      // once healed, and replacing THAT entry instead of pushing a fresh one
+      // would destroy the drawer/Back mechanism entirely.
       let onScopeList = false;
       try {
         onScopeList = Boolean(window.isSingleMode && window.isSingleMode())
-          && document.body.getAttribute('data-single-pane-level') === '1'
+          && Boolean(history.state && history.state.lectioScopePane)
           && !(history.state && history.state.lectioDrawerSpare);
       } catch (_e) {
         onScopeList = false;

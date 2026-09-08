@@ -77,3 +77,18 @@ def test_caption_pref_auto_runs_suppression(monkeypatch):
     assert main._apply_caption_source_pref("x", {"caption_source": "auto"}, _entry(), "<p>c</p>") is None
     monkeypatch.setattr(main, "should_show_caption", lambda *a, **k: True)
     assert main._apply_caption_source_pref("x", {"caption_source": "auto"}, _entry(), "<p>c</p>") == "x"
+
+
+# --- should_show_caption -----------------------------------------------------
+
+def test_show_caption_suppresses_a_genuinely_visible_figcaption():
+    html = '<img src="https://x.test/a.jpg"><figcaption>a clever joke</figcaption>'
+    assert main.should_show_caption("a clever joke", entry_title="T", content_html=html, pref=-1) is False
+
+
+def test_show_caption_keeps_hovertext_that_only_lives_in_an_attribute():
+    # xkcd-style body: the whole entry is one <img> whose own alt/title carry the
+    # hovertext. That text is a raw substring of content_html but is not visible
+    # without a hover — unlike a rendered <figcaption>, it must not be suppressed.
+    html = '<img src="https://xkcd.test/c.png" alt="a clever joke" title="a clever joke">'
+    assert main.should_show_caption("a clever joke", entry_title="T", content_html=html, pref=-1) is True
