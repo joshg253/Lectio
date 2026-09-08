@@ -239,6 +239,18 @@ the predicate into the SQL query itself (a join against `entry_lead_images`/dura
 or over-fetching and iterating until enough entries pass the filter; both are query-layer surgery
 bigger than a review-response fixup, so not attempted here.
 
+### Locked-webcomic placeholder UX — idea only, not attempted
+
+cad-comic.com's "img not loading" report (2026-09-06) turned out not to be a Lectio bug: the
+specific strip is genuinely paywalled behind a $3+ supporter lock for another ~134 days from that
+date, confirmed by fetching the live page directly and finding its own "This Comic is Locked"
+markup — there is no fresher URL to resolve to. `hide_locked_comics` (shipped the same day) covers
+this for anyone willing to hide the post outright, but for a reader who wants to keep seeing it in
+the list without opting into that, the thumb/lead-image slot is currently just broken/blank. A
+placeholder graphic or "locked" badge instead of a broken image would read better, but needs a
+detection signal to key off (the same lock-page markup the report above used to confirm it) and
+hasn't been sized.
+
 ### hide_unpremiered has the same unread-count-badge leak hide_locked_comics just got fixed for
 
 Reported live 2026-09-06 for `hide_locked_comics` — cad-comic's unread badge kept counting a post
