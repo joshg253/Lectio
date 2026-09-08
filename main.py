@@ -19061,6 +19061,14 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # lead" (misfile.com) for the webcomic injector below — both look
         # identical AFTER the strip (no <img> left either way).
         _body_had_image_before_strip = bool(content_html and _HAS_IMG_RE.search(content_html))
+        # Same idea, but a count rather than a bool: the inject_source_images gate
+        # further below judges "is this body already image-rich" against whatever
+        # <img> count remains AFTER this strip removes a matching lead-image opener
+        # -- so a normal image-rich post (lead + one more body image) reads as only
+        # one remaining image post-strip and wrongly re-triggers the expensive
+        # source-page fetch this gate exists to avoid. The gate takes max(this,
+        # its own later count) so a strip never makes an already-rich post look thin.
+        _body_img_count_before_strip = len(re.findall(r"<img\b", content_html or "", re.IGNORECASE))
         content_html, lead_image_url = _strip_lead_image_opener(
             content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article
         )
@@ -19223,7 +19231,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # the render was just slow enough to look stuck).
         if (
             _disp.get("inject_source_images") and entry.link
-            and len(re.findall(r"<img\b", content_html or "", re.IGNORECASE)) < 2
+            and max(_body_img_count_before_strip, len(re.findall(r"<img\b", content_html or "", re.IGNORECASE))) < 2
         ):
             # Prefer the source article itself: it carries the images IN PLACE.
             # The gallery append remains the fallback for pages readability
