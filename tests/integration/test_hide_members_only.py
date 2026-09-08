@@ -170,3 +170,32 @@ def test_non_youtube_feeds_are_never_checked(env, monkeypatch):
     marked = main._apply_hide_members_only({NON_YT_FEED})
     assert marked == 0
     assert _read(NON_YT_FEED, "e1") in (False, None)
+
+
+def test_non_youtube_feed_with_the_pref_set_is_not_scanned_in_a_mixed_batch(env, monkeypatch):
+    """hide_members_only is a plain feed_display_prefs column with no host
+    constraint -- the Feed Properties checkbox only being shown on YouTube feeds
+    doesn't stop the value existing on a non-YouTube one (a bulk settings-copy, a
+    stray API call). A mixed refresh batch containing a real YouTube feed used to
+    let that pass the `refreshed_feed_urls & members_only_urls` filter and scan
+    the non-YouTube feed's own entries too -- any entry.link that happened to
+    parse as a YouTube watch URL would get a real fetch and, if flagged, marked
+    read on a feed the user never opted in for."""
+    _add_video_entry(FEED, "v1", "NORMALVIDEO")
+    reader = main.get_reader()
+    reader.add_entry({
+        "feed_url": NON_YT_FEED,
+        "id": "e1",
+        "title": "A regular post that happens to link to a video",
+        "link": "https://www.youtube.com/watch?v=MEMBERONLY1",
+        "content": [{"value": "<p>text</p>", "type": "text/html"}],
+        "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+    })
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, NON_YT_FEED, "hide_members_only", 1)
+    monkeypatch.setattr(main.youtube_duration_service, "get_cached_members_only", lambda vid: True)
+
+    marked = main._apply_hide_members_only({FEED, NON_YT_FEED})
+
+    assert marked == 0
+    assert _read(NON_YT_FEED, "e1") in (False, None)
