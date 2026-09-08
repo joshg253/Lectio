@@ -146,3 +146,37 @@ def test_a_body_that_already_had_its_own_image_is_not_rescanned(monkeypatch):
     assert out == body, "the text-only body should be left exactly as-is"
     assert hero == lead, "the already-resolved lead must stay the hero, not be dropped"
     assert not scanned, "a body that already had its own image must not be re-scanned"
+
+
+def test_body_had_image_does_not_suppress_injection_when_lead_is_hidden(monkeypatch):
+    """Same misfile.com shape, but show_lead_image_in_article is off for this feed.
+
+    _strip_lead_image_opener strips a matching opener even when that preference is
+    off (it means "never show this image at the top," feed-supplied opener
+    included) and returns lead_image_url unchanged for the list-thumbnail cache --
+    but nothing renders it as a hero. body_had_image=True alone used to skip the
+    webcomic panel fetch here too, on the same "already shown as the hero"
+    reasoning that only holds when the hero actually renders -- leaving the
+    article with no comic visible at all."""
+    import main
+
+    scanned = []
+
+    def _fake_scan(link, is_webcomic=False):
+        scanned.append(link)
+        return "https://www.misfile.com/comics/real-comic.png"
+
+    monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image", _fake_scan)
+    monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
+    monkeypatch.setattr(
+        main.lead_image_service, "_plugin_should_skip_source_lookup",
+        lambda *, entry_link: False)
+
+    entry = type("E", (), {"link": "https://www.misfile.com/hell-high/9426"})()
+    lead = "https://www.misfile.com/comics/1788467221-page1528.jpg"
+    body = '<p><a href="https://www.misfile.com/hell-high/9426"><br/>New comic!</a><br/>Today\'s News:<br/></p>'
+    out, hero = main._inject_webcomic_panel_into_bodyless_entry(
+        body, entry, "f", lead, body_had_image=True, show_lead_in_article=False)
+
+    assert scanned, "the comic must still be fetched when nothing will render the hero"
+    assert "real-comic.png" in out
