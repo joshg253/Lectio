@@ -52,6 +52,18 @@ def test_opener_equals_lead_is_stripped(monkeypatch):
     assert lead == LEAD               # still shown at top
 
 
+def test_thin_post_whose_only_content_is_the_lead_image_keeps_the_body(monkeypatch):
+    """tamriel-rebuilt.org entries whose entire summary is one <img> and no other
+    text: stripping the opener as usual would leave the body empty, so the post
+    read as blank even though the thumb/hero resolved fine. Leave the image in
+    the body instead of blanking it; the redundant top hero is dropped instead
+    (same outcome as a mid-article occurrence)."""
+    monkeypatch.setattr(main.lead_image_service, "get_feed_strategy", lambda u: ("auto", 0.0, False))
+    content, lead = _strip(f'<p><img src="{LEAD}"></p>')
+    assert LEAD in (content or "")
+    assert lead is None
+
+
 def test_lead_buried_midarticle_drops_separate_lead(monkeypatch):
     # Non-artwork: author placed the image mid-article → show it in place, no top lead.
     monkeypatch.setattr(main.lead_image_service, "get_feed_strategy", lambda u: ("auto", 0.0, False))
@@ -153,3 +165,16 @@ def test_a_br_between_an_image_and_following_text_survives():
 def test_a_br_before_an_image_is_dropped_too():
     out = main._collapse_block_spacers('<div>text</div><br/><img src="a.jpg"/>')
     assert "<br" not in out
+
+
+def test_a_br_nested_in_inline_wrappers_between_two_spans_survives():
+    """bitmapbooks.com's "system-name heading" shape: a bold name, then a <br>
+    wrapped in <i><span>, then the body text in another <span> -- all inside one
+    <p>. The <br> is the only thing separating the name from the prose, but its
+    immediate parent (the innermost <span>) has no siblings of its own, which
+    used to read as "edge of the block" and get it dropped along with its empty
+    <i>/<span> wrappers."""
+    html = ('<p><span><strong>Magnavox Odyssey</strong></span>'
+            '<i><span><br/></span></i>'
+            '<span>The console that started it all.</span></p>')
+    assert main._collapse_block_spacers(html) == html

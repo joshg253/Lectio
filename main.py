@@ -17676,6 +17676,36 @@ def _collapse_block_spacers(content_html):
 
     soup = BeautifulSoup(content_html, "html.parser")
 
+    def _neighbour(node, forward: bool):
+        # Walk outward past inline wrappers (span/i/b/strong/em/...) when the
+        # current level runs out of siblings, so an element nested a few inline
+        # tags deep -- e.g. bitmapbooks.com's
+        # <strong>Name</strong><i><span><br/></span></i><span>text</span> --
+        # is judged against the enclosing real block, not the edge of its
+        # innermost wrapper. Only stop climbing at an actual block tag (or the
+        # root), which is a genuine block boundary.
+        current = node
+        while True:
+            sib = current.next_sibling if forward else current.previous_sibling
+            while sib is not None and isinstance(sib, NavigableString) and not sib.strip():
+                sib = sib.next_sibling if forward else sib.previous_sibling
+            if sib is not None:
+                return sib
+            parent = current.parent
+            if parent is None or getattr(parent, "name", None) in _REAL_BLOCK_TAGS:
+                return None
+            current = parent
+
+    def _is_boundary(el) -> bool:
+        # None = the edge of the enclosing block, so sitting first/last is a
+        # boundary too. A neighbouring <br> counts as a boundary so a run at a
+        # block edge clears out one pass at a time.
+        prev, nxt = _neighbour(el, False), _neighbour(el, True)
+        prev_edge = prev is None or getattr(prev, "name", None) in _REAL_BLOCK_TAGS
+        next_edge = (nxt is None or getattr(nxt, "name", None) in _REAL_BLOCK_TAGS
+                     or getattr(nxt, "name", None) == "br")
+        return prev_edge and next_edge
+
     def _is_spacer_only(el) -> bool:
         if el.name not in _BLOCK_SPACER_TAGS:
             return False
@@ -17683,7 +17713,13 @@ def _collapse_block_spacers(content_html):
             return False
         if el.find(["img", "svg", "iframe", "video", "audio", "table"]) is not None:
             return False
-        return el.find("br") is not None
+        if el.find("br") is None:
+            return False
+        # An empty inline wrapper (span/i/b/...) holding only a <br> can also sit
+        # mid-paragraph, between two real chunks of text -- bitmapbooks.com's
+        # system-name headings do this. Only treat it as spacing, not a line
+        # break the author wanted kept, when it's actually at a block boundary.
+        return _is_boundary(el)
 
     # Innermost first, so <div><i><br/></i></div> collapses all the way out
     # rather than leaving the now-empty wrapper behind.
@@ -17700,19 +17736,7 @@ def _collapse_block_spacers(content_html):
     for br in list(soup.find_all("br")) + list(soup.find_all("br")):
         if getattr(br, "decomposed", False):
             continue
-        def _neighbour(node, forward: bool):
-            sib = node.next_sibling if forward else node.previous_sibling
-            while sib is not None and isinstance(sib, NavigableString) and not sib.strip():
-                sib = sib.next_sibling if forward else sib.previous_sibling
-            return sib
-        prev, nxt = _neighbour(br, False), _neighbour(br, True)
-        # None = the edge of the parent block, so a leading/trailing break is
-        # padding too. A neighbouring <br> counts as a boundary so a run at a
-        # block edge clears out one pass at a time.
-        prev_edge = prev is None or getattr(prev, "name", None) in _REAL_BLOCK_TAGS
-        next_edge = (nxt is None or getattr(nxt, "name", None) in _REAL_BLOCK_TAGS
-                     or getattr(nxt, "name", None) == "br")
-        if prev_edge and next_edge:
+        if _is_boundary(br):
             br.decompose()
 
     out = str(soup).strip()
@@ -18041,12 +18065,19 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
         # touching sibling figures or anchored link text ("New comic!").
         _bs4_stripped = _bs4_strip_opener(content_html, lead_image_url)
         if _bs4_stripped is not None:
-            content_html = _bs4_stripped or None
-            if content_html:
-                content_html = re.sub(
+            _stripped_content = _bs4_stripped or None
+            if _stripped_content:
+                _stripped_content = re.sub(
                     r"^(?:\s*(?:<p\b[^>]*>\s*(?:&nbsp;\s*)*</p>|<br\s*/?>\s*))+",
-                    "", content_html, flags=re.IGNORECASE,
+                    "", _stripped_content, flags=re.IGNORECASE,
                 ).strip() or None
+            if _stripped_content:
+                content_html = _stripped_content
+            # else: stripping would leave the body empty -- the image WAS the
+            # entire post (tamriel-rebuilt.org summary-only entries: one <img>,
+            # no other text). Leave the opener in place instead of blanking the
+            # body; the lead-in-content check below then drops the now-redundant
+            # separate hero, so the post shows its one image instead of nothing.
         else:
             # lead_image_url isn't in the opener's <img> src. Two very different
             # situations look identical here, and stripping is only right for one:
