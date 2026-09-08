@@ -5703,7 +5703,14 @@ def should_show_caption(caption: str | None, *, entry_title: str | None, content
     if entry_title and stripped.lower() == entry_title.strip().lower():
         return False
     if content_html and stripped in content_html:
-        return False
+        # Cheap check above can false-positive on attribute text: a webcomic's own
+        # <img alt="hovertext" title="hovertext"> makes the hovertext a raw substring
+        # of content_html even though it is invisible without a hover — not "already
+        # shown" the way a rendered <figcaption> is. Confirm against visible text only.
+        from bs4 import BeautifulSoup
+
+        if stripped in BeautifulSoup(content_html, "html.parser").get_text():
+            return False
     return True
 
 

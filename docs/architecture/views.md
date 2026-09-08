@@ -160,6 +160,22 @@ back arrow labelled with the folder name; at the folder list it is the hamburger
 Two controls rather than one that changes meaning — a button reading "Folders"
 that does not open Folders is worse than either.
 
+**A third, previously unreachable bug: the hamburger button itself can fool
+`onScopeList`.** It flips `data-single-pane-level` back to 0 (peek at the folder
+list) without any history operation — no push, no replace, nothing armed or
+consumed. `onScopeList` used to read that same DOM attribute to decide
+replace-vs-push, so folder1 → hamburger → folder2 evaluated it as `false` (level
+was 0, not 1) even though folder1's real entry was still sitting on top of the
+stack, unconsumed. Folder2 got pushed on top of it instead of replacing it, and
+phone Back landed on folder1 rather than the folder list — reported 2026-09-08.
+The pane-level attribute is a *display* signal and the hamburger button is
+allowed to change it without navigating; `onScopeList` needs a *history* signal
+instead. `loadScopePanesWithoutFullRefresh` already stamps `lectioScopePane: true`
+into `history.state` on every real scope load, for no reason but symmetry with
+`lectioDrawerSpare` — reading that instead of the DOM attribute means a
+display-only peek at the folder list can no longer desync the check, since
+nothing about `history.state` changes until something actually navigates.
+
 ### Off-site links never open in the reading tab
 
 Following a link in place loses your position, and on a phone Back no longer

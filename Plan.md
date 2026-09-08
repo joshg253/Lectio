@@ -239,6 +239,18 @@ the predicate into the SQL query itself (a join against `entry_lead_images`/dura
 or over-fetching and iterating until enough entries pass the filter; both are query-layer surgery
 bigger than a review-response fixup, so not attempted here.
 
+### Locked-webcomic placeholder UX — idea only, not attempted
+
+cad-comic.com's "img not loading" report (2026-09-06) turned out not to be a Lectio bug: the
+specific strip is genuinely paywalled behind a $3+ supporter lock for another ~134 days from that
+date, confirmed by fetching the live page directly and finding its own "This Comic is Locked"
+markup — there is no fresher URL to resolve to. `hide_locked_comics` (shipped the same day) covers
+this for anyone willing to hide the post outright, but for a reader who wants to keep seeing it in
+the list without opting into that, the thumb/lead-image slot is currently just broken/blank. A
+placeholder graphic or "locked" badge instead of a broken image would read better, but needs a
+detection signal to key off (the same lock-page markup the report above used to confirm it) and
+hasn't been sized.
+
 ### hide_unpremiered has the same unread-count-badge leak hide_locked_comics just got fixed for
 
 Reported live 2026-09-06 for `hide_locked_comics` — cad-comic's unread badge kept counting a post
@@ -330,6 +342,29 @@ slow, check the entry-pane response time in the browser network tab and/or grep
 `[perf] entry_pane`/`[perf] entry_detail` around that timestamp.
 
 ## Tier 3 — maintenance backlog, ready to run
+
+### Off-site backups to Backblaze B2 — scoped 2026-09-08, not started
+
+Josh asked for a quick look into shipping backups to B2 "for next," i.e. scope now, build next
+session. Current state, checked live:
+
+- `scripts/backup_databases.py` (VACUUM INTO, size-aware retention) exists and works, but nothing
+  schedules it — no crontab entry, no systemd timer. Last run was 2026-08-14; nothing since.
+- Its output at `data/backups/` is 17G on the same disk as everything else, all three stale
+  generations from that one 2026-08-14 run — this is local-only, not off-site, and is itself
+  part of what pushes the 72G disk toward the 98%-full incidents in [[docker-disk-pressure]].
+- No `rclone` or `b2` CLI installed; no B2 keys/bucket in `.env` or `.env.example`; nothing
+  B2-related anywhere in the repo. Clean slate — this would be new infrastructure, not wiring up
+  something half-built.
+
+Shape of the work, not yet decided: (1) get the existing backup script actually scheduled again
+(cron or systemd timer) since it isn't running at all right now, (2) pick a shipping mechanism —
+`rclone` with a B2 remote is the standard fit (S3-compatible API, has a `--min-free`-style
+bandwidth/retry story), (3) decide retention on the B2 side separately from local (B2 storage is
+cheap; keeping more generations off-site than the 25G local cap allows is probably the point),
+(4) decide whether local `data/backups/` should shrink once off-site copies exist, since local
+backups occupy disk that's already tight. Needs a B2 bucket + application key from Josh before
+any of this can actually run.
 
 ### Redirecting feeds — 128 candidates ready, awaiting Josh's own `--apply` run
 

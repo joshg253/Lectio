@@ -153,6 +153,25 @@ each tenant's own table while the render path consults only the shared cache, so
 warming against the default tenant alone leaves every other user blank until
 backfill catches up.
 
+### Caption auto-suppress vs. hover-text-as-attribute
+
+`should_show_caption`'s "auto" heuristic (`main.py`) suppresses a caption already
+visible in the body — a `<figcaption>` restating it, say — via a plain substring
+check against `content_html`. For a webcomic whose entire body is one
+`<img alt="hovertext" title="hovertext">` (xkcd and similar), that same hovertext
+is a raw substring of `content_html` purely because it lives in the tag's own
+attributes, even though nothing renders it without a hover — the opposite of
+"already visible," and the exact case the caption-injection feature exists to
+surface for touch readers with no hover at all. The substring check can't tell
+attribute text from a real text node, so it suppressed the caption outright;
+reported live 2026-09-08 across both a fresh and older xkcd entries, meaning this
+was a render-time bug, not a bad cache — `entry_lead_images.image_alt`/`image_title`
+were correct the whole time, `_apply_caption_source_pref` just threw the caption
+away every time it ran. Fixed by only trusting the substring hit once confirmed
+against `BeautifulSoup(content_html, "html.parser").get_text()` — real visible
+text, not the raw markup — kept behind the existing substring check so the common
+case (no match at all) never pays for a parse.
+
 ### Webcomics: the panel beats the publisher's own og:image
 
 Many webcomic CMSes set one generic site banner as `og:image` on every page, so
