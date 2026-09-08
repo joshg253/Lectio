@@ -19061,6 +19061,14 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # lead" (misfile.com) for the webcomic injector below — both look
         # identical AFTER the strip (no <img> left either way).
         _body_had_image_before_strip = bool(content_html and _HAS_IMG_RE.search(content_html))
+        # Same idea, but a count rather than a bool: the inject_source_images gate
+        # further below judges "is this body already image-rich" against whatever
+        # <img> count remains AFTER this strip removes a matching lead-image opener
+        # -- so a normal image-rich post (lead + one more body image) reads as only
+        # one remaining image post-strip and wrongly re-triggers the expensive
+        # source-page fetch this gate exists to avoid. The gate takes max(this,
+        # its own later count) so a strip never makes an already-rich post look thin.
+        _body_img_count_before_strip = len(re.findall(r"<img\b", content_html or "", re.IGNORECASE))
         content_html, lead_image_url = _strip_lead_image_opener(
             content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article
         )
@@ -19210,7 +19218,21 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         # Source-page image gallery (opt-in per feed) — runs before the hotlink/
         # no-referrer pass below so injected images are proxied/referrer-stripped too.
-        if _disp.get("inject_source_images") and entry.link:
+        # Gated on the body actually being thin on images: both paths exist for
+        # a feed whose posts carry 0 (paizo-style prose) or 1 (a webcomic's
+        # gallery-append case) image of their own, per _source_article_body's
+        # own docstring — not for a normal, image-rich post. Without this check
+        # every entry on an inject_source_images feed paid a synchronous
+        # source-page fetch regardless, which is merely wasted work on a fast
+        # host but, on one that needs FlareSolverr to pass its bot challenge
+        # (play.nobleknight.com), turned into a 6+ second render for a post
+        # that already had four images in place — reported live as "missing
+        # lead img & thumb, takes a long time to load" (the images WERE there;
+        # the render was just slow enough to look stuck).
+        if (
+            _disp.get("inject_source_images") and entry.link
+            and max(_body_img_count_before_strip, len(re.findall(r"<img\b", content_html or "", re.IGNORECASE))) < 2
+        ):
             # Prefer the source article itself: it carries the images IN PLACE.
             # The gallery append remains the fallback for pages readability
             # cannot make sense of, so a feed already relying on it (a webcomic

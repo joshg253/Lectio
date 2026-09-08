@@ -274,6 +274,66 @@ def test_no_gallery_when_pref_off(env, monkeypatch):
     assert "source-gallery" not in (d["content_html"] or "")
 
 
+def test_no_source_fetch_when_body_already_has_images(env, monkeypatch):
+    """inject_source_images exists for a body that's missing pictures (0) or
+    missing their placement (1, the webcomic-gallery case) -- not for a normal,
+    image-rich post. Regression, reported live on play.nobleknight.com: every
+    entry on a feed with this pref on paid a synchronous source-page fetch
+    regardless of its own image count, which turned into a 6+ second render on
+    a host needing FlareSolverr to pass its bot challenge, for a post that
+    already had four images in place."""
+    _add(content=(
+        '<p>Some intro text, not an image opener.</p>'
+        '<p><img src="https://ex.test/a.jpg"></p>'
+        '<p><img src="https://ex.test/b.jpg"></p>'
+    ), link="https://site.test/post")
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, FEED, "inject_source_images", 1)
+
+    def _boom(*a, **k):
+        raise AssertionError("must not fetch the source page for an image-rich body")
+
+    monkeypatch.setattr(main, "_source_article_body", _boom)
+    monkeypatch.setattr(main.lead_image_service, "extract_source_gallery_urls", _boom)
+
+    d = _detail()
+    assert "a.jpg" in d["content_html"] and "b.jpg" in d["content_html"]
+
+
+def test_no_source_fetch_when_lead_strip_leaves_one_image_but_body_had_two(env, monkeypatch):
+    """Regression: the gate used to count <img> tags AFTER _strip_lead_image_opener
+    already removed a matching lead-image opener from the body, so a normal,
+    image-rich post (lead image + one more body image) read as only one remaining
+    image post-strip and wrongly re-triggered the same expensive source-page fetch
+    this gate exists to avoid -- on any post shaped exactly like the common case,
+    not just the thin-body one. The gate must judge richness from the count
+    BEFORE that strip, not after."""
+    # Prose kept well over 120 visible chars so the *separate*, unrelated
+    # "source-scraped lead + thumbnail-wrapper body" heuristic further down
+    # _strip_lead_image_opener (short remaining text -> strip the lone leftover
+    # image too) does not also fire and mask what this test is checking.
+    _add(content=(
+        '<img src="https://ex.test/lead.jpg">'
+        '<p>Some real prose sits in between the two pictures here, long enough that '
+        'this body reads as a genuine image-rich article rather than a thin thumbnail '
+        'wrapper around a single small picture.</p>'
+        '<img src="https://ex.test/second.jpg">'
+    ), link="https://site.test/post",
+        enclosures=[{"href": "https://ex.test/lead.jpg", "type": "image/jpeg", "length": 200000}])
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, FEED, "inject_source_images", 1)
+
+    def _boom(*a, **k):
+        raise AssertionError("must not fetch the source page for an image-rich body")
+
+    monkeypatch.setattr(main, "_source_article_body", _boom)
+    monkeypatch.setattr(main.lead_image_service, "extract_source_gallery_urls", _boom)
+
+    d = _detail()
+    assert d["lead_image_url"] and "lead.jpg" in d["lead_image_url"]
+    assert "second.jpg" in d["content_html"]
+
+
 # --- missing entry ---------------------------------------------------------
 
 def test_missing_entry_returns_orphan_or_none(env):

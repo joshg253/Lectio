@@ -207,6 +207,19 @@ Administration, not `.env` — `gluetun`/`flaresolverr`/`tailscale` containers a
   gap this item exists to close (no escalation offered at all) is closed regardless of whether
   FlareSolverr wins every individual challenge.
 
+### cad-comic.com "img not loading" — not a bug, the strip is genuinely paywall-locked
+
+[entry](https://cad-comic.com/comic/hunting-p24/) — checked 2026-09-06: the cached lead image is a
+`cad-comic.com/comic-image/<id>/?token=...&expires=<epoch>` URL, and the token had expired (curled
+it directly: 403). Looked like the DeviantArt-style "signed URL went stale before anyone read it"
+class of bug at first, but the live page tells a different story — CAD's WordPress theme renders a
+"This Comic is Locked" block for this specific strip ("currently exclusive to $3+ supporters...
+Unlocks for everyone in 134 days"), and the image genuinely isn't being served to a non-supporter
+at all right now. Re-fetching gets nothing better; there is no fresher URL to resign to. A real
+improvement here would be detecting the locked-view markup and showing a "supporter-exclusive,
+unlocks &lt;date&gt;" placeholder instead of a broken image icon — not attempted, since it's a
+narrower cosmetic win than the false-alarm this originally looked like.
+
 ## Tier 2 — small, fast, independent wins
 
 ### Manual single-feed "Refresh" can silently no-op for up to an hour
@@ -238,18 +251,26 @@ still invite unsubscribing the wrong feed.
 
 **Field reports, 2026-09-02 — flagged, not investigated unless noted**
 
-### Global Note (?) — posts list scrolls way up sometimes
+### On-screen-keyboard popup scrolls the post list to the top — still not reproduced
 
-"open note? posts list scrolls way up sometimes" — vague as reported, not reproduced. Sounds like
-opening the Global Note (or some other panel) occasionally yanks the post list's scroll position.
-Needs a repro before it's actionable — ask Josh what exactly triggers it next time it happens.
+Restated 2026-09-06, more specifically this time: "Surface kb popup squishes browser window and
+scrolls list way up" — likely the same report as the original vague "open note? posts list scrolls
+way up sometimes" (below), now with a trigger (a touch device's on-screen keyboard appearing,
+which on Surface can visibly resize the browser window itself, not just an overlay). Tried to
+reproduce in Playwright with a touch-emulated context: scrolled the post list, then (a) shrank the
+viewport height outright (simulating the window "squish"), (b) opened the Global Note panel, (c)
+focused its textarea, and (d) shrank the viewport while the textarea was focused. `.posts`'
+`scrollTop` never moved in any of the four, and `ensureViewportFilled`'s resize handler
+(`static/js/app.js`, the plausible suspect — a resize-triggered chunk check that can escalate to a
+full `loadScopePanesWithoutFullRefresh` if it misjudges the list as exhausted) never fired a
+network request either. Chromium's viewport-resize emulation likely doesn't match what a real
+Surface's on-screen keyboard actually does to `window`/`visualViewport` — needs either a screen
+recording from the device itself, or the exact input box being focused when it happens, before
+another attempt is worth it.
 
-### Global "hide subscriber-only" toggle for YouTube
-
-Feature idea, not scoped: a library-wide setting to hide YouTube videos that are members/subscriber-only,
-similar in spirit to the existing hide-Shorts/hide-unpremiered per-feed display prefs
-(`_DISPLAY_PREF_KEYS`). Not investigated — needs checking whether the feed data even distinguishes
-subscriber-only videos before sizing this.
+Original report, still the same underlying suspicion: "open note? posts list scrolls way up
+sometimes" — sounds like opening the Global Note (or some other panel) occasionally yanks the post
+list's scroll position.
 
 ### Global ignored suggested-tags list, editable in Settings
 
