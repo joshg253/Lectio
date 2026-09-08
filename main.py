@@ -6434,23 +6434,35 @@ def _subtract_hidden_locked_comics_from_counts(reader_conn: sqlite3.Connection, 
                 }
                 if not per_feed_feeds:
                     return
-                _ph = ",".join("?" for _ in per_feed_feeds)
-                rows = mconn.execute(
-                    f"SELECT feed_url, entry_id FROM entry_lead_images"
-                    f" WHERE locked_until > ? AND feed_url IN ({_ph})",
-                    [time.time(), *per_feed_feeds],
-                ).fetchall()
+                _feed_list = list(per_feed_feeds)
+                rows = []
+                for _i in range(0, len(_feed_list), 999):
+                    _chunk = _feed_list[_i:_i + 999]
+                    _ph = ",".join("?" for _ in _chunk)
+                    rows.extend(mconn.execute(
+                        f"SELECT feed_url, entry_id FROM entry_lead_images"
+                        f" WHERE locked_until > ? AND feed_url IN ({_ph})",
+                        [time.time(), *_chunk],
+                    ).fetchall())
         if not rows:
             return
         by_feed: dict[str, list[str]] = {}
         for feed_url, entry_id in rows:
             by_feed.setdefault(str(feed_url), []).append(str(entry_id))
         for feed_url, entry_ids in by_feed.items():
-            _ph = ",".join("?" for _ in entry_ids)
-            hidden_unread = reader_conn.execute(
-                f"SELECT COUNT(*) FROM entries WHERE feed = ? AND read = 0 AND id IN ({_ph})",
-                [feed_url, *entry_ids],
-            ).fetchone()[0]
+            # Chunked: an unchunked IN binds one parameter per currently-locked
+            # entry on this feed (plus the feed_url) and, past SQLite's variable
+            # limit, raises -- which the except below would then swallow for the
+            # WHOLE function, silently reverting every feed's badge to its raw
+            # unread total, not just this one feed's.
+            hidden_unread = 0
+            for _i in range(0, len(entry_ids), 900):
+                _chunk = entry_ids[_i:_i + 900]
+                _ph = ",".join("?" for _ in _chunk)
+                hidden_unread += reader_conn.execute(
+                    f"SELECT COUNT(*) FROM entries WHERE feed = ? AND read = 0 AND id IN ({_ph})",
+                    [feed_url, *_chunk],
+                ).fetchone()[0]
             if hidden_unread:
                 counts[feed_url] = max(0, counts.get(feed_url, 0) - hidden_unread)
     except Exception:

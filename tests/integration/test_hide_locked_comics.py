@@ -206,6 +206,37 @@ def test_unread_count_unaffected_when_pref_off(configured):
     assert counts.get(FEED) == 2
 
 
+def test_unread_count_excludes_many_locked_comics_past_sqlite_bind_limit(configured):
+    """The per-feed `id IN (...)` subtract query used to bind one parameter per
+    currently-locked entry on that feed with no chunking -- past SQLite's
+    variable limit it would raise, and the broad except around the whole
+    function would then silently revert EVERY feed's badge to its raw unread
+    total, not just the one feed with the large locked set. This build's SQLite
+    (3.50, default limit 32766) won't actually trip that at 1200 params, so this
+    can't reproduce the crash itself -- it pins the chunk-and-sum loop's own
+    correctness instead (every chunk's count must accumulate, not just the
+    last one queried), which a lower-limit SQLite build would otherwise fail
+    silently and unactionably."""
+    n = 1200
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        for i in range(n):
+            _seed_entry(reader, feed_url=FEED, entry_id=f"locked-{i}", published=OLD)
+        _seed_entry(reader, feed_url=FEED, entry_id="normal", published=OLD)
+    with main.get_meta_connection() as conn:
+        conn.executemany(
+            "INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at, locked_until)"
+            " VALUES (?, ?, NULL, ?, ?)",
+            [(FEED, f"locked-{i}", time.time(), time.time() + 86400 * 30) for i in range(n)],
+        )
+        conn.commit()
+        main.upsert_feed_display_pref(conn, FEED, "hide_locked_comics", 1)
+
+    counts = main._compute_unread_counts_by_feed()
+
+    assert counts.get(FEED) == 1, "the query must not raise, and must subtract every locked entry"
+
+
 def test_unread_count_unaffected_once_unlock_date_passes(configured):
     with main.get_reader() as reader:
         reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
