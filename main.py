@@ -15632,13 +15632,21 @@ def list_entries_for_feeds(
         ):
             try:
                 with get_meta_connection() as _lock_conn:
-                    _ph = ",".join("?" for _ in feed_urls)
-                    for _row in _lock_conn.execute(
-                        f"SELECT feed_url, entry_id, locked_until FROM entry_lead_images"
-                        f" WHERE feed_url IN ({_ph}) AND locked_until IS NOT NULL",
-                        list(feed_urls),
-                    ).fetchall():
-                        _locked_until_map[(str(_row[0]), str(_row[1]))] = float(_row[2])
+                    # Chunked, same as the feed-site query above: an unchunked IN
+                    # raises past SQLite's bind-parameter limit for a large scope
+                    # (e.g. "all feeds"), and the broad except below would then
+                    # silently disable the filter for the whole view rather than
+                    # just failing to load a few feeds' worth of rows.
+                    _lock_feed_list = list(feed_urls)
+                    for _i in range(0, len(_lock_feed_list), 999):
+                        _chunk = _lock_feed_list[_i:_i + 999]
+                        _ph = ",".join("?" for _ in _chunk)
+                        for _row in _lock_conn.execute(
+                            f"SELECT feed_url, entry_id, locked_until FROM entry_lead_images"
+                            f" WHERE feed_url IN ({_ph}) AND locked_until IS NOT NULL",
+                            _chunk,
+                        ).fetchall():
+                            _locked_until_map[(str(_row[0]), str(_row[1]))] = float(_row[2])
             except Exception:
                 LOGGER.exception("[hide-locked-comics] failed to load locked_until map")
 

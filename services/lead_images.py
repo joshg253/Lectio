@@ -2945,7 +2945,13 @@ class LeadImageService:
                     (feed_url, entry_id, time.time(), locked_until),
                 )
         except Exception:
-            pass
+            # A swallowed failure here isn't neutral: detection already ran (the
+            # locked_until value is known), so silently dropping the write just
+            # means the render-time filter shows a locked strip it should have
+            # hidden, with nothing logged to explain why. Logged, not retried --
+            # the next open re-derives locked_until from the same cached HTML
+            # (or a fresh fetch) and tries the write again.
+            LOGGER.exception("[hide-locked-comics] failed to persist locked_until feed=%s entry=%s", feed_url, entry_id)
 
     def _extract_webcomic_panel_image(self, html_text: str, base_url: str, source_url: str) -> str | None:
         """Return the main comic-panel image for a webcomic source page, or None.

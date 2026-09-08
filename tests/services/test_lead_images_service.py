@@ -3020,3 +3020,29 @@ def test_check_and_cache_webcomic_lock_noop_without_cached_html(tmp_path: Path):
             ("https://cad-comic.com/feed/", "e3"),
         ).fetchone()
     assert row is None
+
+
+def test_check_and_cache_webcomic_lock_logs_a_persist_failure(tmp_path: Path, monkeypatch, caplog):
+    """A DB failure while persisting locked_until isn't neutral: detection already
+    ran, so silently swallowing the write just means the render-time filter shows
+    a locked strip it should have hidden, with nothing to explain why. Must be
+    logged rather than a bare `except: pass`."""
+    import logging
+
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    link = "https://cad-comic.com/comic/hunting-p25/"
+    service._source_html_cache[link] = (link, _CAD_COMIC_LOCKED_HTML)
+
+    class _BoomConn:
+        def __enter__(self):
+            raise RuntimeError("meta db unavailable")
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(service, "_get_meta_connection", lambda: _BoomConn())
+
+    with caplog.at_level(logging.ERROR):
+        service.check_and_cache_webcomic_lock("https://cad-comic.com/feed/", "e4", link)
+
+    assert any("locked_until" in r.message for r in caplog.records)

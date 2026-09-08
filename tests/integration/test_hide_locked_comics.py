@@ -126,6 +126,35 @@ def test_pref_off_leaves_locked_comic_visible(configured):
     assert ids == {"locked"}
 
 
+def test_locked_until_lookup_is_chunked_past_sqlite_bind_limit(configured):
+    """The entry_lead_images lookup used to bind one SQLite parameter per feed in
+    scope with no chunking, unlike the near-identical feed-site query beside it --
+    a scope wider than SQLite's variable limit raises OperationalError there, and
+    the broad `except Exception` around the whole query would then silently
+    disable the locked-comic filter for the entire view, not just the feeds past
+    the limit. This build's SQLite (3.50, default limit 32766) won't actually
+    trip that past 1500 params, so this can't reproduce the crash itself -- it
+    pins the chunk-and-merge loop's own correctness instead (results from every
+    chunk must still end up in the map, not just the last one queried), which a
+    lower-limit SQLite build would otherwise fail silently and unactionably."""
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=FEED, entry_id="locked", published=OLD)
+        _seed_entry(reader, feed_url=FEED, entry_id="normal", published=OLD)
+    _seed_locked_until(FEED, "locked", time.time() + 86400 * 30)
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, FEED, "hide_locked_comics", 1)
+
+    # Padding entries that exist only in the `feed_urls` scope passed to the
+    # query -- not in reader -- to push the IN clause well past SQLite's default
+    # 999-parameter limit while keeping the test fast.
+    padding = {f"https://padding-{i}.test/feed" for i in range(1500)}
+
+    ids = {e["id"] for e in main.list_entries_for_feeds({FEED} | padding, limit=100)}
+
+    assert ids == {"normal"}, "the query must not raise, and must still catch the locked entry"
+
+
 def test_unrelated_feed_never_queries_locked_until(configured):
     """No webcomic feed with the pref on anywhere in scope -- the batch query
     must not even run (and definitely must not hide anything)."""
