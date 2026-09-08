@@ -460,6 +460,12 @@ SETTING_YT_HIDE_UNPREMIERED_GLOBAL = "yt_hide_unpremiered_global"
 # entries that have never been checked before (see youtube_video_duration's
 # members_only column).
 SETTING_YT_HIDE_MEMBERS_ONLY_GLOBAL = "yt_hide_members_only_global"
+# Global per-user toggle: hide a webcomic strip a publisher has locked behind a
+# supporter tier (cad-comic.com and the like) until its own stated unlock date,
+# across ALL webcomic feeds, regardless of the per-feed hide_locked_comics pref.
+# Not YouTube-specific — see LeadImageService.check_and_cache_webcomic_lock.
+# Off ("0") by default.
+SETTING_HIDE_LOCKED_COMICS_GLOBAL = "hide_locked_comics_global"
 # Daily YouTube Data API quota cap (units). Google's default is 10,000/day; make it
 # a setting in case a higher quota is granted.
 SETTING_YT_QUOTA_CAP = "yt_quota_cap"
@@ -823,6 +829,13 @@ def youtube_hide_members_only_global() -> bool:
     """Per-user: auto-mark members-only videos read on ALL YouTube feeds at
     refresh (overrides the per-feed pref). Off by default."""
     return get_runtime_setting(SETTING_YT_HIDE_MEMBERS_ONLY_GLOBAL, "0") == "1"
+
+
+def hide_locked_comics_global() -> bool:
+    """Per-user: hide a supporter-locked webcomic strip on ALL webcomic feeds
+    until its own stated unlock date (overrides the per-feed pref). Off by
+    default."""
+    return get_runtime_setting(SETTING_HIDE_LOCKED_COMICS_GLOBAL, "0") == "1"
 
 
 def _pacific_today() -> str:
@@ -4103,6 +4116,17 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE entry_lead_images ADD COLUMN thumb_crop TEXT")
         except Exception:
             pass
+        # A webcomic page like cad-comic.com's can mark a strip as locked to
+        # paying supporters until a stated date — captured from the SAME
+        # source-page fetch already made for the lead image (see
+        # LeadImageService.check_and_cache_webcomic_lock), so hide_locked_comics
+        # costs nothing extra to detect. NULL/absent means "not locked" or
+        # "never checked"; a real value in the past means it has since unlocked,
+        # so no periodic re-check job is needed — the date does the expiring.
+        try:
+            conn.execute("ALTER TABLE entry_lead_images ADD COLUMN locked_until REAL")
+        except Exception:
+            pass
         try:
             conn.execute("ALTER TABLE feed_strategy_cache ADD COLUMN image_alt TEXT")
         except Exception:
@@ -4756,6 +4780,13 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_members_only INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+        # Locked webcomic strips: a publisher (cad-comic.com and the like) can
+        # gate a strip behind a supporter tier until a stated date. Not
+        # YouTube-specific — see LeadImageService.check_and_cache_webcomic_lock.
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_locked_comics INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         # Paywalled/subscriber-only posts: a Substack paid post ships a body that
         # is nothing but a "Read more" link back to itself, so it can be spotted
         # without any explicit marker (Substack provides none).
@@ -4995,7 +5026,8 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 _DISPLAY_PREF_KEYS = frozenset({
     "show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption",
-    "hide_shorts", "hide_unpremiered", "hide_members_only", "hide_paywalled", "inject_source_images",
+    "hide_shorts", "hide_unpremiered", "hide_members_only", "hide_paywalled", "hide_locked_comics",
+    "inject_source_images",
 })
 # Pre-built UPDATE statements (one per column) so conn.execute() never receives an f-string.
 _DISPLAY_PREF_COLS: dict[str, str] = {k: k for k in _DISPLAY_PREF_KEYS}
@@ -5006,6 +5038,7 @@ _DISPLAY_PREF_SQLS: dict[str, str] = {
 _DISPLAY_PREF_DEFAULTS: dict = {
     "show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1,
     "show_image_caption": -1, "hide_shorts": 0, "hide_unpremiered": 0, "hide_members_only": 0, "hide_paywalled": 0,
+    "hide_locked_comics": 0,
     "inject_source_images": 0, "feed_thumbnail_url": None, "thumb_crop": "cover",
     "thumb_strategy": None, "smart_min_scale": None, "fill_zoom": None,
 }
@@ -11699,6 +11732,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "hide_shorts": bool(_disp.get("hide_shorts", 0)),
             "hide_unpremiered": bool(_disp.get("hide_unpremiered", 0)),
             "hide_members_only": bool(_disp.get("hide_members_only", 0)),
+            "hide_locked_comics": bool(_disp.get("hide_locked_comics", 0)),
             "hide_paywalled": bool(_disp.get("hide_paywalled", 0)),
             "inject_source_images": bool(_disp.get("inject_source_images", 0)),
             "feed_thumbnail_url": _disp.get("feed_thumbnail_url") or None,
@@ -15585,6 +15619,36 @@ def list_entries_for_feeds(
         with get_meta_connection() as _prefs_conn:
             _all_display_prefs = get_all_feed_display_prefs(_prefs_conn)
         _hide_unpremiered_global = youtube_hide_unpremiered_global()
+        _hide_locked_comics_global = hide_locked_comics_global()
+
+        # Batch-loaded once, same rationale as _all_display_prefs above — a
+        # per-entry query here would be an N+1 over every webcomic entry in
+        # the view. Only worth the query at all when at least one feed in
+        # scope could actually be gated: the global toggle, or a webcomic feed
+        # with the per-feed pref on.
+        _locked_until_map: dict[tuple[str, str], float] = {}
+        if _hide_locked_comics_global or any(
+            _all_display_prefs.get(fu, _DISPLAY_PREF_DEFAULTS).get("hide_locked_comics") for fu in feed_urls
+        ):
+            try:
+                with get_meta_connection() as _lock_conn:
+                    # Chunked, same as the feed-site query above: an unchunked IN
+                    # raises past SQLite's bind-parameter limit for a large scope
+                    # (e.g. "all feeds"), and the broad except below would then
+                    # silently disable the filter for the whole view rather than
+                    # just failing to load a few feeds' worth of rows.
+                    _lock_feed_list = list(feed_urls)
+                    for _i in range(0, len(_lock_feed_list), 999):
+                        _chunk = _lock_feed_list[_i:_i + 999]
+                        _ph = ",".join("?" for _ in _chunk)
+                        for _row in _lock_conn.execute(
+                            f"SELECT feed_url, entry_id, locked_until FROM entry_lead_images"
+                            f" WHERE feed_url IN ({_ph}) AND locked_until IS NOT NULL",
+                            _chunk,
+                        ).fetchall():
+                            _locked_until_map[(str(_row[0]), str(_row[1]))] = float(_row[2])
+            except Exception:
+                LOGGER.exception("[hide-locked-comics] failed to load locked_until map")
 
         # A feed-tag preview filter (clicking a suggested-tag chip in the entry
         # pane): unlike normalized_selected_tag above, this is never pushed into
@@ -15637,6 +15701,17 @@ def list_entries_for_feeds(
                 )
                 if _feed_hide_unpremiered and _is_youtube_unpremiered(entry):
                     continue
+            # Same exemption and shape as hide_unpremiered above, for a
+            # webcomic strip a publisher has locked behind a supporter tier
+            # (cad-comic.com and the like) until a stated date.
+            if normalized_read_filter != "starred" and _locked_until_map:
+                _feed_hide_locked = _hide_locked_comics_global or bool(
+                    _all_display_prefs.get(entry.feed_url, _DISPLAY_PREF_DEFAULTS).get("hide_locked_comics")
+                )
+                if _feed_hide_locked:
+                    _locked_until = _locked_until_map.get((str(entry.feed_url), str(entry.id)))
+                    if _locked_until is not None and _locked_until > time.time():
+                        continue
             published_dt = entry_effective_date(entry)
             read_dt = read_state_map.get((entry.feed_url, entry.id))
             if read_dt is None:
@@ -17921,6 +17996,12 @@ def _inject_webcomic_panel_into_bodyless_entry(
             # mahonoir and friends: nothing usable was resolved (the feed's
             # enclosure is a share card), so the page really is the only source.
             panel = lead_image_service._fetch_source_lead_image(link, is_webcomic=True)
+            # Free: reuses the page HTML the fetch just above cached. Catches a
+            # newly-locked strip (cad-comic.com and the like) at render time
+            # rather than waiting for the next backfill pass over this feed.
+            _entry_id = getattr(entry, "id", None)
+            if _entry_id:
+                lead_image_service.check_and_cache_webcomic_lock(feed_url, str(_entry_id), link)
     except Exception:  # noqa: BLE001 — an article without its comic beats a 500
         LOGGER.warning("[webcomic] panel injection failed for %s", link, exc_info=True)
         return content_html, lead_image_url
@@ -30011,6 +30092,7 @@ def get_all_settings():
         "yt_hide_shorts_global": youtube_hide_shorts_global(),
         "yt_hide_unpremiered_global": youtube_hide_unpremiered_global(),
         "yt_hide_members_only_global": youtube_hide_members_only_global(),
+        "hide_locked_comics_global": hide_locked_comics_global(),
         "yt_quota": get_yt_quota_status(),
         "yt_quota_cap": youtube_quota_cap(),
         "star_send_instapaper": get_runtime_setting(SETTING_STAR_SEND_INSTAPAPER, "0") == "1",
@@ -30133,6 +30215,7 @@ async def save_all_settings(request: Request):
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
         SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL,
         SETTING_YT_HIDE_UNPREMIERED_GLOBAL, SETTING_YT_HIDE_MEMBERS_ONLY_GLOBAL, SETTING_YT_QUOTA_CAP,
+        SETTING_HIDE_LOCKED_COMICS_GLOBAL,
         SETTING_YT_OAUTH_CLIENT_ID, SETTING_YT_OAUTH_CLIENT_SECRET,
         SETTING_STAR_SEND_INSTAPAPER, SETTING_STAR_SEND_YT_PLAYLIST,
         SETTING_STAR_SEND_YT_PLAYLIST_TITLE, SETTING_STAR_SEND_EMAIL,
@@ -37531,7 +37614,16 @@ async def api_img_proxy(u: str) -> Response:
     try:
         # follow_redirects=False so safe_get_async controls (and re-validates)
         # each hop instead of httpx silently bouncing to an internal address.
-        async with url_guard.build_async_client(timeout=12.0) as client:
+        # A WAF challenge (Cloudflare and the like) a page fetch already solved
+        # via FlareSolverr for this same host leaves domain-scoped cookies
+        # behind (services/page_fetch.py) — presenting them here can pass the
+        # same check a plain image fetch could never clear on its own, since
+        # FlareSolverr itself has no way to hand back arbitrary binary bytes.
+        client_kwargs: dict[str, object] = {"timeout": 12.0}
+        stored_cookies = page_fetcher.cookies_for_host(u)
+        if stored_cookies:
+            client_kwargs["cookies"] = stored_cookies
+        async with url_guard.build_async_client(**client_kwargs) as client:
             headers = {"User-Agent": READABILITY_USER_AGENT}
             resp = await url_guard.safe_get_async(client, u, headers=headers)
             # Hotlink protection: some hosts serve a 403 (often text/html) for an

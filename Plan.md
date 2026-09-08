@@ -207,18 +207,37 @@ Administration, not `.env` — `gluetun`/`flaresolverr`/`tailscale` containers a
   gap this item exists to close (no escalation offered at all) is closed regardless of whether
   FlareSolverr wins every individual challenge.
 
-### cad-comic.com "img not loading" — not a bug, the strip is genuinely paywall-locked
+### play.nobleknight.com images still 403 despite FlareSolverr cookie reuse
 
-[entry](https://cad-comic.com/comic/hunting-p24/) — checked 2026-09-06: the cached lead image is a
-`cad-comic.com/comic-image/<id>/?token=...&expires=<epoch>` URL, and the token had expired (curled
-it directly: 403). Looked like the DeviantArt-style "signed URL went stale before anyone read it"
-class of bug at first, but the live page tells a different story — CAD's WordPress theme renders a
-"This Comic is Locked" block for this specific strip ("currently exclusive to $3+ supporters...
-Unlocks for everyone in 134 days"), and the image genuinely isn't being served to a non-supporter
-at all right now. Re-fetching gets nothing better; there is no fresher URL to resign to. A real
-improvement here would be detecting the locked-view markup and showing a "supporter-exclusive,
-unlocks &lt;date&gt;" placeholder instead of a broken image icon — not attempted, since it's a
-narrower cosmetic win than the false-alarm this originally looked like.
+Cookie reuse shipped 2026-09-06 (see docs/architecture/feeds.md) specifically to fix this host's
+images (article pages needed FlareSolverr; images 403'd even with a full realistic browser header
+set). Verified live it does NOT fully solve it: FlareSolverr's solve of the article page returns
+only a `__cf_bm` cookie, never `cf_clearance` — confirmed by tracing `flaresolverr.solve`'s raw
+response — and presenting `__cf_bm` to the `/app/uploads/...` image path still gets Cloudflare's
+"Just a moment..." 403 page. `__cf_bm` is a bot-scoring cookie set on every request regardless;
+`cf_clearance` (the actual challenge-passed credential) apparently isn't required for THIS host's
+article pages at all, so the solve never produces one — meaning there is no cookie available that
+would unlock the images either. This host's image path most likely checks something a cookie can't
+carry (TLS/JA3 fingerprint), which only a real browser connection satisfies — FlareSolverr can't
+help further since it renders pages, not arbitrary binary responses, so it has no way to hand back
+image bytes at all. The cookie-reuse mechanism itself is real and confirmed working in principle
+(unit-tested); it simply doesn't reach far enough for a host whose protection is stronger than a
+cookie check. No further fix attempted here — would need routing individual images through a real
+browser instance per-request, a much bigger undertaking than this feature.
+
+### hide_locked_comics/hide_unpremiered can under-fill a page — pre-existing gap, not this PR's scope
+
+Flagged by Sourcery review on the `hide_locked_comics` PR, but the same shape already existed for
+`hide_unpremiered` since it shipped, unrelated to this feature. `list_entries_for_feeds`'s fast
+path fetches only `limit` rows from reader (`_light_entries_from_sql`) BEFORE the per-entry
+hide-filter loop runs; a locked/unpremiered entry occupying part of that fetched window is then
+dropped by the filter with nothing behind it to backfill the slot, so a page can render shorter
+than `limit` even when older, unlocked/aired entries exist beyond the initial SQL window. Narrow in
+practice — needs enough currently-gated entries clustered inside one fetch window to be visible at
+all — which is likely why it went unnoticed for `hide_unpremiered`. A real fix means either pushing
+the predicate into the SQL query itself (a join against `entry_lead_images`/duration-cache state)
+or over-fetching and iterating until enough entries pass the filter; both are query-layer surgery
+bigger than a review-response fixup, so not attempted here.
 
 ## Tier 2 — small, fast, independent wins
 

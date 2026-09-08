@@ -204,6 +204,36 @@ files are often generated a second apart, so a naive directory swap keeps the
 timestamp-stripped filename matches, falling back to the directory swap only when
 no lead is cached.
 
+### A locked strip: `hide_locked_comics` — added 2026-09-06
+
+Some webcomic publishers (cad-comic.com) gate a strip behind a supporter tier
+for a stated window — "This Comic is Locked ... exclusive to $3+ supporters
+... Unlocks for everyone in 134 days (January 17, 2027)". Reported live as a
+lead-image failure (a `comic-image/<id>/?token=...&expires=<epoch>` URL that
+403'd) that looked at first like a DeviantArt-style expired-signed-URL bug —
+it wasn't: the image is genuinely inaccessible right now, and there is no
+fresher URL to resign to.
+
+`LeadImageService._extract_webcomic_lock_until` checks for
+`class="single-comic-locked"` and, alongside it, an `unlock-date-text` element
+holding the plain-English unlock date. `check_and_cache_webcomic_lock`
+persists the parsed date as `entry_lead_images.locked_until` (epoch seconds) —
+**reusing the page HTML `_fetch_source_lead_image` already cached for the
+lead image**, so detection costs nothing extra, and runs even when no panel
+image was found (a locked page has no real comic to extract, which is exactly
+the case this exists to catch). A locked page whose date text doesn't parse
+gets a 30-day fallback window rather than being read as unlocked or hidden
+forever — the date is free-form English, not a machine format.
+
+The render-time filter (`hide_locked_comics` per-feed, `hide_locked_comics_
+global` overriding it for every feed, same shape as `hide_unpremiered`) drops
+an entry while `locked_until > now()`. No periodic recheck job is needed —
+unlike YouTube's "upcoming" status, which has no self-expiring signal and
+needs `refresh_upcoming_videos()` polling it, a locked comic's own stated date
+does the expiring: the very next list render after it passes shows the strip
+again on its own. The starred filter is exempt, same as `hide_unpremiered`'s
+— starring is deliberate "track this."
+
 ### Galleries rank nothing, so they need their own filters
 
 `extract_source_gallery_urls` collects *every* acceptable image in document order

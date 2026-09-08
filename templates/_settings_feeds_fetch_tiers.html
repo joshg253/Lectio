@@ -57,6 +57,9 @@
         {% if row.blocked %}
         <span>Cooling down (past {{ row.blocked_after_tier }}{% if row.challenge %}, {{ row.challenge }}{% endif %})</span>
         {% endif %}
+        {% if row.has_cookies %}
+        <span title="A flaresolverr solve's cookies are cached for this host, so a plain fetch (e.g. the image proxy) can reuse them">Solve cookies cached</span>
+        {% endif %}
       </div>
     </li>
     {% endfor %}

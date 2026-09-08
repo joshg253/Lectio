@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -100,6 +101,7 @@ def _make_conn(db_path: Path):
             image_alt TEXT,
             image_title TEXT,
             fetched_at REAL,
+            locked_until REAL,
             PRIMARY KEY(feed_url, entry_id)
         )
         """
@@ -2920,3 +2922,127 @@ def test_joanwestenberg_end_to_end_picks_the_real_content_image(tmp_path: Path):
     thumb = service.extract_entry_thumbnail_url(entry)
 
     assert thumb == _JW_REAL_IMAGE
+
+
+# --- webcomic lock detection (cad-comic.com and similar) -------------------
+
+_CAD_COMIC_LOCKED_HTML = """
+<html><body><article>
+<div class="comicpage">
+<div class="single-comic-locked">
+<div class="locked-overlay">
+<h2 class="locked-title">This Comic is Locked</h2>
+<p class="locked-message">This comic is currently exclusive to <strong>$3+ supporters</strong>.</p>
+<div class="unlock-timer">
+<p class="timer-text">Unlocks for everyone in 134 days</p>
+<p class="unlock-date-text">(January 17, 2027)</p>
+</div>
+</div>
+</div>
+</div>
+</article></body></html>
+"""
+
+
+def test_extract_webcomic_lock_until_parses_the_real_unlock_date(tmp_path: Path):
+    """Confirmed live 2026-09-06 against a real cad-comic.com locked strip."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    import datetime as _dt
+    locked_until = service._extract_webcomic_lock_until(_CAD_COMIC_LOCKED_HTML)
+    assert locked_until is not None
+    assert _dt.datetime.fromtimestamp(locked_until, _dt.timezone.utc) == _dt.datetime(2027, 1, 17, tzinfo=_dt.timezone.utc)
+
+
+def test_extract_webcomic_lock_until_none_for_a_normal_page(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    normal_html = "<html><body><article><img src=\"https://ex.test/panel.png\"></article></body></html>"
+    assert service._extract_webcomic_lock_until(normal_html) is None
+
+
+def test_extract_webcomic_lock_until_falls_back_when_date_unparseable(tmp_path: Path):
+    """A locked page whose date text doesn't match the expected format still
+    gets a real (not None) recheck window, rather than being treated as
+    unlocked or hidden forever."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    html = '<div class="single-comic-locked">Unlocks eventually, no date given</div>'
+    locked_until = service._extract_webcomic_lock_until(html)
+    assert locked_until is not None
+    assert locked_until > time.time()
+
+
+def test_check_and_cache_webcomic_lock_persists_locked_until(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    link = "https://cad-comic.com/comic/hunting-p24/"
+    service._source_html_cache[link] = (link, _CAD_COMIC_LOCKED_HTML)
+
+    service.check_and_cache_webcomic_lock("https://cad-comic.com/feed/", "e1", link)
+
+    with service._get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT locked_until FROM entry_lead_images WHERE feed_url = ? AND entry_id = ?",
+            ("https://cad-comic.com/feed/", "e1"),
+        ).fetchone()
+    assert row is not None
+    assert row["locked_until"] is not None
+
+
+def test_check_and_cache_webcomic_lock_clears_when_unlocked(tmp_path: Path):
+    """A strip that was locked and has since unlocked must not keep a stale
+    locked_until on its row -- the next check (piggybacked on the routine
+    lead-image resolution) overwrites it with NULL."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    link = "https://cad-comic.com/comic/hunting-p20/"
+    feed_url, entry_id = "https://cad-comic.com/feed/", "e2"
+
+    service._source_html_cache[link] = (link, _CAD_COMIC_LOCKED_HTML)
+    service.check_and_cache_webcomic_lock(feed_url, entry_id, link)
+
+    unlocked_html = "<html><body><article><img src=\"https://cad-comic.com/panel.png\"></article></body></html>"
+    service._source_html_cache[link] = (link, unlocked_html)
+    service.check_and_cache_webcomic_lock(feed_url, entry_id, link)
+
+    with service._get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT locked_until FROM entry_lead_images WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        ).fetchone()
+    assert row["locked_until"] is None
+
+
+def test_check_and_cache_webcomic_lock_noop_without_cached_html(tmp_path: Path):
+    """No page HTML cached yet (the lead-image fetch this piggybacks on hasn't
+    run) -- must not raise, must not write a row."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    service.check_and_cache_webcomic_lock("https://cad-comic.com/feed/", "e3", "https://cad-comic.com/comic/never-fetched/")
+    with service._get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM entry_lead_images WHERE feed_url = ? AND entry_id = ?",
+            ("https://cad-comic.com/feed/", "e3"),
+        ).fetchone()
+    assert row is None
+
+
+def test_check_and_cache_webcomic_lock_logs_a_persist_failure(tmp_path: Path, monkeypatch, caplog):
+    """A DB failure while persisting locked_until isn't neutral: detection already
+    ran, so silently swallowing the write just means the render-time filter shows
+    a locked strip it should have hidden, with nothing to explain why. Must be
+    logged rather than a bare `except: pass`."""
+    import logging
+
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    link = "https://cad-comic.com/comic/hunting-p25/"
+    service._source_html_cache[link] = (link, _CAD_COMIC_LOCKED_HTML)
+
+    class _BoomConn:
+        def __enter__(self):
+            raise RuntimeError("meta db unavailable")
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(service, "_get_meta_connection", lambda: _BoomConn())
+
+    with caplog.at_level(logging.ERROR):
+        service.check_and_cache_webcomic_lock("https://cad-comic.com/feed/", "e4", link)
+
+    assert any("locked_until" in r.message for r in caplog.records)

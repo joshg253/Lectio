@@ -30,7 +30,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -124,6 +124,9 @@ class _Attempt:
     headers: Mapping[str, str]
     response: httpx.Response | None
     error: Exception | None = None
+    # Only ever populated by the flaresolverr tier — a real browser's cookies
+    # after solving whatever stood in the way. See HostEscalationState.
+    cookies: tuple[tuple[str, str, float | None], ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -150,6 +153,12 @@ class _HostState:
     blocked_until: float = 0.0
     blocked_after_tier: FetchTier = "honest"
     challenge: str | None = None
+    # A flaresolverr solve's cookies, reusable by a plain request to the same
+    # host until cookies_expire_at. Domain-scoped by nature (Cloudflare et al
+    # set them for the host, not the specific URL solved), which is what lets
+    # the img proxy benefit from a solve the source-page fetch already paid for.
+    cookies: dict[str, str] = field(default_factory=dict)
+    cookies_expire_at: float = 0.0
 
 
 class HostEscalationState:
@@ -187,6 +196,39 @@ class HostEscalationState:
         st = self._get(uid, host)
         return st.challenge if st else None
 
+    def cookies_for(self, uid: str, host: str, *, now: float) -> dict[str, str]:
+        """Cookies from this host's last flaresolverr solve, or {} if none are
+        on file or they've expired. A plain honest/browser request that
+        presents them can pass the same challenge a real browser already
+        solved — often true for a domain-scoped WAF cookie like Cloudflare's
+        cf_clearance, without spending another (expensive, shared) solve."""
+        st = self._get(uid, host)
+        if st is None or not st.cookies:
+            return {}
+        if st.cookies_expire_at and st.cookies_expire_at <= now:
+            return {}
+        return dict(st.cookies)
+
+    def record_cookies(
+        self, uid: str, host: str, cookies: tuple[tuple[str, str, float | None], ...], *, now: float
+    ) -> None:
+        if not cookies:
+            return
+        with self._lock:
+            key = (uid, host)
+            st = self._by_key.get(key) or _HostState()
+            st.cookies = {name: value for name, value, _ in cookies}
+            # The soonest of any cookie's own expiry, defaulting absent ones to
+            # a conservative 30 minutes — long enough to cover the img-proxy
+            # requests that follow moments after the page that triggered the
+            # solve, short enough that a genuinely expired clearance cookie
+            # doesn't get presented as if it still worked for hours.
+            explicit = [exp for _, _, exp in cookies if exp is not None]
+            st.cookies_expire_at = min(explicit) if explicit else now + 1800
+            self._by_key[key] = st
+            self._by_key.move_to_end(key)
+            self._evict_locked()
+
     def is_blocked(self, uid: str, host: str, *, best_available: FetchTier, now: float) -> bool:
         st = self._get(uid, host)
         if st is None or st.blocked_until <= now:
@@ -221,6 +263,7 @@ class HostEscalationState:
         the 'Page fetches' section of the Fetch Tiers panel."""
         with self._lock:
             now = time.monotonic()
+            now_wall = time.time()
             return [
                 {
                     "user_id": uid,
@@ -229,6 +272,8 @@ class HostEscalationState:
                     "blocked": st.blocked_until > now,
                     "blocked_after_tier": st.blocked_after_tier,
                     "challenge": st.challenge,
+                    # Never the values themselves — this is a diagnostics panel.
+                    "has_cookies": bool(st.cookies) and st.cookies_expire_at > now_wall,
                 }
                 for (uid, host), st in self._by_key.items()
             ]
@@ -298,6 +343,19 @@ class PageFetcher:
         # waiting behind someone else's 55s solve is worse than falling back.
         self._flaresolverr_semaphore = threading.Semaphore(1)
 
+    def cookies_for_host(self, url: str) -> dict[str, str]:
+        """Cookies from this host's last flaresolverr solve (via fetch(), by
+        anyone — the page-fetch that resolved an entry's lead image or body,
+        say), or {} if there's nothing on file or it's expired. For a caller
+        that isn't going through the full ladder itself, e.g. the img proxy:
+        a page already solved through FlareSolverr for its HTML can leave
+        cookies that also unblock a plain fetch of that page's own images,
+        since the underlying WAF check is domain-scoped, not URL-scoped.
+        """
+        uid = self._user_id()
+        host = urlparse(url).netloc.lower()
+        return self._state.cookies_for(uid, host, now=time.time())
+
     def fetch(
         self,
         url: str,
@@ -327,9 +385,19 @@ class PageFetcher:
                 message=f"page fetch skipped for {url!r} — {host} is in cooldown",
             )
 
+        # A prior flaresolverr solve for this host may still be good — presenting
+        # its cookies can pass a domain-scoped WAF check (Cloudflare cf_clearance
+        # and the like) without spending another shared browser solve.
+        stored_cookies = self._state.cookies_for(uid, host, now=time.time())
+
         tiers: list[FetchTier] = _tier_order(backends, max_tier)
         learned = None if ignore_cooldown else self._state.learned_tier(uid, host)
-        if learned == "flaresolverr" and "flaresolverr" in tiers:
+        # The learned-tier shortcut skips straight to flaresolverr for a host
+        # known to need it — right when nothing has changed, wasteful once
+        # this host's last solve left cookies that are still fresh: an honest
+        # attempt presenting them is worth trying before paying for another
+        # shared solve, so the reorder is skipped while cookies are on file.
+        if learned == "flaresolverr" and "flaresolverr" in tiers and not stored_cookies:
             tiers = [t for t in tiers if t == "flaresolverr"] + [t for t in tiers if t != "flaresolverr"]
 
         honest_headers = {"User-Agent": self._honest_user_agent, **(headers or {})}
@@ -349,8 +417,11 @@ class PageFetcher:
                 proxy_url=backends.proxy_url,
                 flaresolverr_url=backends.flaresolverr_url,
                 timeout=timeout,
+                cookies=stored_cookies,
             )
             best = _pick_better(best, attempt)
+            if attempt.cookies:
+                self._state.record_cookies(uid, host, attempt.cookies, now=time.time())
             if attempt.status is not None and attempt.headers:
                 c = bot_challenge.detect_challenge_headers(attempt.headers)
                 if not c and attempt.html:
@@ -398,17 +469,23 @@ class PageFetcher:
         proxy_url: str,
         flaresolverr_url: str,
         timeout: float,
+        cookies: Mapping[str, str] | None = None,
     ) -> _Attempt:
         if tier == "flaresolverr":
             return self._attempt_flaresolverr(url, flaresolverr_url=flaresolverr_url, proxy_url=proxy_url)
         headers = honest_headers if tier == "honest" else browser_headers
         proxy = proxy_url if tier == "proxy" else None
-        return self._attempt_httpx(tier, url, headers=headers, proxy=proxy, timeout=timeout)
+        return self._attempt_httpx(tier, url, headers=headers, proxy=proxy, timeout=timeout, cookies=cookies)
 
-    def _attempt_httpx(self, tier: FetchTier, url: str, *, headers: Mapping[str, str], proxy: str | None, timeout: float) -> _Attempt:
+    def _attempt_httpx(
+        self, tier: FetchTier, url: str, *, headers: Mapping[str, str], proxy: str | None, timeout: float,
+        cookies: Mapping[str, str] | None = None,
+    ) -> _Attempt:
         client_kwargs: dict[str, object] = {"timeout": timeout, "headers": dict(headers)}
         if proxy:
             client_kwargs["proxy"] = proxy
+        if cookies:
+            client_kwargs["cookies"] = dict(cookies)
         try:
             with url_guard.build_client(**client_kwargs) as client:
                 response = url_guard.safe_get(client, url)
@@ -496,6 +573,7 @@ class PageFetcher:
         return _Attempt(
             tier="flaresolverr", status=status, html=solution.html, final_url=solution.url,
             headers={}, response=httpx.Response(status_code=status), error=None,
+            cookies=solution.cookies,
         )
 
 

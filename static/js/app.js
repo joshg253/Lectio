@@ -3307,6 +3307,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     const feedPropHideUnpremiered = document.getElementById('feed-prop-hide-unpremiered');
     const feedPropHideMembersOnly = document.getElementById('feed-prop-hide-members-only');
     const feedPropHidePaywalled = document.getElementById('feed-prop-hide-paywalled');
+    const feedPropHideLockedComics = document.getElementById('feed-prop-hide-locked-comics');
     const feedPropFlushBatchBtn = document.getElementById('feed-prop-flush-batch-btn');
     const feedPropFlushBatchStatus = document.getElementById('feed-prop-flush-batch-status');
     document.querySelectorAll('[data-feed-prop-tab]').forEach(btn => {
@@ -5679,6 +5680,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       if (feedPropHideUnpremiered) feedPropHideUnpremiered.checked = false;
       if (feedPropHideMembersOnly) feedPropHideMembersOnly.checked = false;
       if (feedPropHidePaywalled) feedPropHidePaywalled.checked = false;
+      if (feedPropHideLockedComics) feedPropHideLockedComics.checked = false;
       const _thumbSourceSelect = document.getElementById('feed-prop-thumb-source');
       if (_thumbSourceSelect) { _thumbSourceSelect.value = ''; _thumbSourceSelect.dataset.feedUrl = feedUrl; delete _thumbSourceSelect.dataset.savedThumbUrl; }
       const _thumbCustomRow = document.getElementById('feed-prop-thumb-custom-row');
@@ -5853,6 +5855,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         if (feedPropHidePaywalled) {
           feedPropHidePaywalled.checked = !!data.hide_paywalled;
           feedPropHidePaywalled.dataset.feedUrl = feedUrl;
+        }
+        if (feedPropHideLockedComics) {
+          feedPropHideLockedComics.checked = !!data.hide_locked_comics;
+          feedPropHideLockedComics.dataset.feedUrl = feedUrl;
         }
         if (feedPropHideShorts) {
           feedPropHideShorts.checked = !!data.hide_shorts;
@@ -7655,6 +7661,26 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           : 'Subscriber-only posts will be left unread.');
       } catch (e) {
         feedPropHidePaywalled.checked = !feedPropHidePaywalled.checked;
+        showToastMessage('Could not save that setting.');
+      }
+    });
+
+    feedPropHideLockedComics?.addEventListener('change', async () => {
+      const feedUrl = feedPropHideLockedComics.dataset.feedUrl;
+      if (!feedUrl) return;
+      try {
+        const r = await saveDisplayPref(feedUrl, 'hide_locked_comics',
+                                        feedPropHideLockedComics.checked ? 1 : 0);
+        if (!r?.ok) throw new Error(r?.error || 'save failed');
+        // Lock status is only known once a strip's source page has been
+        // fetched at least once (piggybacked on the lead-image resolution
+        // that already happens for it) -- applies from there, not swept
+        // synchronously here.
+        showToastMessage(feedPropHideLockedComics.checked
+          ? 'Locked strips will be hidden as their status is checked.'
+          : 'Locked strips will be shown.');
+      } catch (e) {
+        feedPropHideLockedComics.checked = !feedPropHideLockedComics.checked;
         showToastMessage('Could not save that setting.');
       }
     });
@@ -14321,6 +14347,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         { const el = document.getElementById('sett-yt-hide-shorts'); if (el) el.checked = !!d.yt_hide_shorts_global; }
         { const el = document.getElementById('sett-yt-hide-unpremiered'); if (el) el.checked = !!d.yt_hide_unpremiered_global; }
         { const el = document.getElementById('sett-yt-hide-members-only'); if (el) el.checked = !!d.yt_hide_members_only_global; }
+        { const el = document.getElementById('sett-hide-locked-comics'); if (el) el.checked = !!d.hide_locked_comics_global; }
         {
           const el = document.getElementById('sett-yt-quota');
           const q = d.yt_quota;
@@ -14665,6 +14692,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             yt_hide_shorts_global: (document.getElementById('sett-yt-hide-shorts')?.checked ? '1' : '0'),
             yt_hide_unpremiered_global: (document.getElementById('sett-yt-hide-unpremiered')?.checked ? '1' : '0'),
             yt_hide_members_only_global: (document.getElementById('sett-yt-hide-members-only')?.checked ? '1' : '0'),
+            hide_locked_comics_global: (document.getElementById('sett-hide-locked-comics')?.checked ? '1' : '0'),
             instapaper_username: g('sett-ip-user'),
             instapaper_password: g('sett-ip-pass'),
             yt_oauth_client_id: g('sett-yt-oauth-client-id'),
