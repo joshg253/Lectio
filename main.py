@@ -6389,8 +6389,10 @@ def _compute_unread_counts_by_feed() -> dict[str, int]:
         rows = conn.execute(
             "SELECT feed, COUNT(*) FROM entries WHERE read=0 GROUP BY feed"
         ).fetchall()
+        counts = {str(row[0]): int(row[1]) for row in rows}
+        _subtract_hidden_locked_comics_from_counts(conn, counts)
         conn.close()
-        return {str(row[0]): int(row[1]) for row in rows}
+        return counts
     except Exception:
         LOGGER.exception("_compute_unread_counts_by_feed direct SQL failed, falling back")
         counts: dict[str, int] = {}
@@ -6398,6 +6400,73 @@ def _compute_unread_counts_by_feed() -> dict[str, int]:
             for feed in reader.get_feeds():
                 counts[feed.url] = reader.get_entry_counts(feed=feed.url, read=False).total or 0
         return counts
+
+
+def _subtract_hidden_locked_comics_from_counts(reader_conn: sqlite3.Connection, counts: dict[str, int]) -> None:
+    """A locked comic hide_locked_comics keeps out of the list must not
+    inflate the unread badge either — reported live 2026-09-06 as "shows an
+    unread for the hidden post, nothing visible in the feed." Mirrors the
+    render-time filter's own condition (locked_until in the future), just
+    computed as a count-adjustment instead of a per-entry skip, since this
+    function only has feed-level totals to work with.
+
+    Two databases, two queries: entry_lead_images.locked_until lives in the
+    meta DB, read state lives in reader_conn (already open on the reader DB) —
+    nothing here can be a single SQL JOIN. The locked set is normally tiny
+    (a handful of feeds at most), so this costs one small meta-DB query plus
+    one reader-DB query per feed that actually has a currently-locked entry,
+    not a scan of everything.
+    """
+    try:
+        global_hide = hide_locked_comics_global()
+        with get_meta_connection() as mconn:
+            if global_hide:
+                rows = mconn.execute(
+                    "SELECT feed_url, entry_id FROM entry_lead_images WHERE locked_until > ?",
+                    (time.time(),),
+                ).fetchall()
+            else:
+                per_feed_feeds = {
+                    str(r["feed_url"])
+                    for r in mconn.execute(
+                        "SELECT feed_url FROM feed_display_prefs WHERE hide_locked_comics = 1"
+                    ).fetchall()
+                }
+                if not per_feed_feeds:
+                    return
+                _feed_list = list(per_feed_feeds)
+                rows = []
+                for _i in range(0, len(_feed_list), 999):
+                    _chunk = _feed_list[_i:_i + 999]
+                    _ph = ",".join("?" for _ in _chunk)
+                    rows.extend(mconn.execute(
+                        f"SELECT feed_url, entry_id FROM entry_lead_images"
+                        f" WHERE locked_until > ? AND feed_url IN ({_ph})",
+                        [time.time(), *_chunk],
+                    ).fetchall())
+        if not rows:
+            return
+        by_feed: dict[str, list[str]] = {}
+        for feed_url, entry_id in rows:
+            by_feed.setdefault(str(feed_url), []).append(str(entry_id))
+        for feed_url, entry_ids in by_feed.items():
+            # Chunked: an unchunked IN binds one parameter per currently-locked
+            # entry on this feed (plus the feed_url) and, past SQLite's variable
+            # limit, raises -- which the except below would then swallow for the
+            # WHOLE function, silently reverting every feed's badge to its raw
+            # unread total, not just this one feed's.
+            hidden_unread = 0
+            for _i in range(0, len(entry_ids), 900):
+                _chunk = entry_ids[_i:_i + 900]
+                _ph = ",".join("?" for _ in _chunk)
+                hidden_unread += reader_conn.execute(
+                    f"SELECT COUNT(*) FROM entries WHERE feed = ? AND read = 0 AND id IN ({_ph})",
+                    [feed_url, *_chunk],
+                ).fetchone()[0]
+            if hidden_unread:
+                counts[feed_url] = max(0, counts.get(feed_url, 0) - hidden_unread)
+    except Exception:
+        LOGGER.exception("[hide-locked-comics] failed to subtract hidden counts from unread totals")
 
 
 # Newest-post-per-feed is derived from a full GROUP BY over the reader entries

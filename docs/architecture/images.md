@@ -234,6 +234,16 @@ does the expiring: the very next list render after it passes shows the strip
 again on its own. The starred filter is exempt, same as `hide_unpremiered`'s
 — starring is deliberate "track this."
 
+The per-feed unread badge is computed by a separate SQL path
+(`_compute_unread_counts_by_feed` in main.py) that has no reason to know about
+`entry_lead_images` at all — reported live as "shows an unread for the hidden
+post, nothing visible in the feed." `_subtract_hidden_locked_comics_from_counts`
+runs a small follow-up query against the (still-locked) rows the pref covers
+and subtracts any that are unread from that feed's raw total, rather than
+teaching the count query itself to join across the reader and meta databases.
+`hide_unpremiered` has the identical gap and hasn't been reported — noted in
+`Plan.md`, not fixed here.
+
 ### Galleries rank nothing, so they need their own filters
 
 `extract_source_gallery_urls` collects *every* acceptable image in document order
