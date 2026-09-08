@@ -452,6 +452,14 @@ SETTING_YT_HIDE_SHORTS_GLOBAL = "yt_hide_shorts_global"
 # (liveBroadcastContent == "upcoming") across ALL YouTube feeds, regardless of
 # the per-feed hide_unpremiered pref. Off ("0") by default.
 SETTING_YT_HIDE_UNPREMIERED_GLOBAL = "yt_hide_unpremiered_global"
+# Global per-user toggle: auto-mark members-only videos read across ALL YouTube
+# feeds at refresh, regardless of the per-feed hide_members_only pref. Off
+# ("0") by default. Detection has a real per-video cost (a watch-page fetch —
+# unlike hide_shorts/hide_unpremiered, membership status isn't in the Data API
+# response already fetched for duration/premiere status), so it only runs for
+# entries that have never been checked before (see youtube_video_duration's
+# members_only column).
+SETTING_YT_HIDE_MEMBERS_ONLY_GLOBAL = "yt_hide_members_only_global"
 # Daily YouTube Data API quota cap (units). Google's default is 10,000/day; make it
 # a setting in case a higher quota is granted.
 SETTING_YT_QUOTA_CAP = "yt_quota_cap"
@@ -809,6 +817,12 @@ def youtube_hide_unpremiered_global() -> bool:
     """Per-user: hide not-yet-premiered videos on ALL YouTube feeds (overrides the
     per-feed pref). Off by default."""
     return get_runtime_setting(SETTING_YT_HIDE_UNPREMIERED_GLOBAL, "0") == "1"
+
+
+def youtube_hide_members_only_global() -> bool:
+    """Per-user: auto-mark members-only videos read on ALL YouTube feeds at
+    refresh (overrides the per-feed pref). Off by default."""
+    return get_runtime_setting(SETTING_YT_HIDE_MEMBERS_ONLY_GLOBAL, "0") == "1"
 
 
 def _pacific_today() -> str:
@@ -3406,6 +3420,16 @@ def ensure_yt_duration_schema() -> None:
             conn.execute("ALTER TABLE youtube_video_duration ADD COLUMN scheduled_start_time TEXT")
         except Exception:
             pass
+        # Members-only status: NOT in the videos.list response the other columns
+        # ride along on for free — the Data API has no field for it, and the
+        # "members" endpoint only works for channels you own. Detected instead
+        # by fetching the video's own watch page and checking for its
+        # BADGE_STYLE_TYPE_MEMBERS_ONLY badge. NULL = never checked, so a check
+        # only costs a fetch once per video, ever (see fetch_and_cache_members_only).
+        try:
+            conn.execute("ALTER TABLE youtube_video_duration ADD COLUMN members_only INTEGER")
+        except Exception:
+            pass
 
 
 def get_starred_archive_connection() -> sqlite3.Connection:
@@ -4722,6 +4746,16 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_unpremiered INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+        # Members-only videos: detected via the "Members only" badge on the
+        # video's own watch page (see youtube_video_duration.members_only) --
+        # unlike hide_shorts/hide_unpremiered this isn't in the Data API
+        # response already fetched for duration, so it costs a real per-video
+        # page fetch and is opt-in like hide_paywalled rather than free like
+        # its YouTube siblings.
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_members_only INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         # Paywalled/subscriber-only posts: a Substack paid post ships a body that
         # is nothing but a "Read more" link back to itself, so it can be spotted
         # without any explicit marker (Substack provides none).
@@ -4961,7 +4995,7 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 _DISPLAY_PREF_KEYS = frozenset({
     "show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption",
-    "hide_shorts", "hide_unpremiered", "hide_paywalled", "inject_source_images",
+    "hide_shorts", "hide_unpremiered", "hide_members_only", "hide_paywalled", "inject_source_images",
 })
 # Pre-built UPDATE statements (one per column) so conn.execute() never receives an f-string.
 _DISPLAY_PREF_COLS: dict[str, str] = {k: k for k in _DISPLAY_PREF_KEYS}
@@ -4971,7 +5005,7 @@ _DISPLAY_PREF_SQLS: dict[str, str] = {
 }
 _DISPLAY_PREF_DEFAULTS: dict = {
     "show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1,
-    "show_image_caption": -1, "hide_shorts": 0, "hide_unpremiered": 0, "hide_paywalled": 0,
+    "show_image_caption": -1, "hide_shorts": 0, "hide_unpremiered": 0, "hide_members_only": 0, "hide_paywalled": 0,
     "inject_source_images": 0, "feed_thumbnail_url": None, "thumb_crop": "cover",
     "thumb_strategy": None, "smart_min_scale": None, "fill_zoom": None,
 }
@@ -8363,6 +8397,78 @@ def _apply_hide_paywalled(refreshed_feed_urls: set[str]) -> int:
         return 0
 
 
+def _apply_hide_members_only(refreshed_feed_urls: set[str]) -> int:
+    """Auto-mark members-only videos read on YouTube feeds that have
+    hide-members-only enabled (per-feed pref, or every refreshed YouTube feed
+    when the global toggle is on).
+
+    Unlike hide-shorts/hide-unpremiered, membership status isn't in the
+    videos.list response duration/premiere detection already fetched — the
+    Data API has no field for it — so each never-before-checked video costs a
+    real watch-page fetch (fetch_and_cache_members_only). That's still bounded:
+    a video is only ever checked once (the result is cached permanently), and
+    only for entries on feeds that opted in.
+    """
+    def _is_yt_host(u: str) -> bool:
+        host = urlparse(u).hostname or ""
+        return host == "youtube.com" or host.endswith(".youtube.com")
+
+    if not any(_is_yt_host(u) for u in refreshed_feed_urls):
+        return 0
+    try:
+        with get_meta_connection() as conn:
+            members_only_urls = {
+                str(r["feed_url"])
+                for r in conn.execute(
+                    "SELECT feed_url FROM feed_display_prefs WHERE hide_members_only = 1"
+                ).fetchall()
+            }
+        # Scoped to YouTube hosts even for the per-feed pref: hide_members_only is a
+        # plain feed_display_prefs column with no host constraint of its own, and the
+        # Feed Properties checkbox only being shown on YouTube feeds doesn't stop the
+        # value existing on a non-YouTube one (a bulk settings-copy, a stray API call).
+        # Without this, a mixed refresh batch scans that feed's entries too, and any
+        # entry.link that happens to parse as a YouTube URL gets a real watch-page
+        # fetch and, if flagged, marked read -- on a feed the user never opted in.
+        targets = {u for u in (refreshed_feed_urls & members_only_urls) if _is_yt_host(u)}
+        if youtube_hide_members_only_global():
+            targets = targets | {
+                u for u in refreshed_feed_urls if "youtube.com/feeds/videos.xml" in u
+            }
+        if not targets:
+            return 0
+        to_mark: list[tuple[str, str]] = []
+        with get_reader() as reader:
+            for feed_u in targets:
+                for entry in reader.get_entries(feed=feed_u, read=False):
+                    video_id = youtube_duration_service.extract_video_id(str(entry.link or ""))
+                    if not video_id:
+                        continue
+                    is_members_only = youtube_duration_service.get_cached_members_only(video_id)
+                    if is_members_only is None:
+                        is_members_only = youtube_duration_service.fetch_and_cache_members_only(video_id)
+                    if is_members_only:
+                        to_mark.append((feed_u, str(entry.id)))
+            for feed_u, entry_id in to_mark:
+                reader.mark_entry_as_read((feed_u, entry_id))
+        if to_mark:
+            # One batched write instead of upsert_entry_read_state per entry --
+            # same fix, and same shape, as _apply_hide_paywalled's sibling pass.
+            when = datetime.now().isoformat()
+            with get_meta_connection() as conn:
+                conn.executemany(
+                    "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
+                    " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
+                    [(fu, eid, when) for fu, eid in to_mark],
+                )
+            invalidate_unread_counts_cache()
+            LOGGER.info("[automation] hide-members-only marked %d video(s) read", len(to_mark))
+        return len(to_mark)
+    except Exception:
+        LOGGER.exception("[automation] error applying hide-members-only")
+        return 0
+
+
 def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
     """Run enabled mark_as_read, deduplicate, email_article, and hide-shorts for refreshed feeds."""
     if not refreshed_feed_urls:
@@ -8397,6 +8503,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
     _apply_hide_shorts(refreshed_feed_urls)
     _apply_hide_paywalled(refreshed_feed_urls)
+    _apply_hide_members_only(refreshed_feed_urls)
     try:
         # ── Read phase (no write lock held) ──────────────────────────────────
         with get_meta_connection() as conn:
@@ -11591,6 +11698,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "caption_source": _disp.get("caption_source") or "auto",
             "hide_shorts": bool(_disp.get("hide_shorts", 0)),
             "hide_unpremiered": bool(_disp.get("hide_unpremiered", 0)),
+            "hide_members_only": bool(_disp.get("hide_members_only", 0)),
             "hide_paywalled": bool(_disp.get("hide_paywalled", 0)),
             "inject_source_images": bool(_disp.get("inject_source_images", 0)),
             "feed_thumbnail_url": _disp.get("feed_thumbnail_url") or None,
@@ -29880,6 +29988,7 @@ def get_all_settings():
         "yt_embed_account_features": youtube_embed_account_features_enabled(),
         "yt_hide_shorts_global": youtube_hide_shorts_global(),
         "yt_hide_unpremiered_global": youtube_hide_unpremiered_global(),
+        "yt_hide_members_only_global": youtube_hide_members_only_global(),
         "yt_quota": get_yt_quota_status(),
         "yt_quota_cap": youtube_quota_cap(),
         "star_send_instapaper": get_runtime_setting(SETTING_STAR_SEND_INSTAPAPER, "0") == "1",
@@ -30001,7 +30110,7 @@ async def save_all_settings(request: Request):
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
         SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL,
-        SETTING_YT_HIDE_UNPREMIERED_GLOBAL, SETTING_YT_QUOTA_CAP,
+        SETTING_YT_HIDE_UNPREMIERED_GLOBAL, SETTING_YT_HIDE_MEMBERS_ONLY_GLOBAL, SETTING_YT_QUOTA_CAP,
         SETTING_YT_OAUTH_CLIENT_ID, SETTING_YT_OAUTH_CLIENT_SECRET,
         SETTING_STAR_SEND_INSTAPAPER, SETTING_STAR_SEND_YT_PLAYLIST,
         SETTING_STAR_SEND_YT_PLAYLIST_TITLE, SETTING_STAR_SEND_EMAIL,

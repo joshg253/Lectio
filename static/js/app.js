@@ -3305,6 +3305,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     const feedPropDevSection = document.getElementById('feed-prop-dev-section');
     const feedPropHideShorts = document.getElementById('feed-prop-hide-shorts');
     const feedPropHideUnpremiered = document.getElementById('feed-prop-hide-unpremiered');
+    const feedPropHideMembersOnly = document.getElementById('feed-prop-hide-members-only');
     const feedPropHidePaywalled = document.getElementById('feed-prop-hide-paywalled');
     const feedPropFlushBatchBtn = document.getElementById('feed-prop-flush-batch-btn');
     const feedPropFlushBatchStatus = document.getElementById('feed-prop-flush-batch-status');
@@ -5676,6 +5677,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       if (feedPropShowInArticle) feedPropShowInArticle.checked = true;
       if (feedPropHideShorts) feedPropHideShorts.checked = false;
       if (feedPropHideUnpremiered) feedPropHideUnpremiered.checked = false;
+      if (feedPropHideMembersOnly) feedPropHideMembersOnly.checked = false;
       if (feedPropHidePaywalled) feedPropHidePaywalled.checked = false;
       const _thumbSourceSelect = document.getElementById('feed-prop-thumb-source');
       if (_thumbSourceSelect) { _thumbSourceSelect.value = ''; _thumbSourceSelect.dataset.feedUrl = feedUrl; delete _thumbSourceSelect.dataset.savedThumbUrl; }
@@ -5859,6 +5861,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         if (feedPropHideUnpremiered) {
           feedPropHideUnpremiered.checked = !!data.hide_unpremiered;
           feedPropHideUnpremiered.dataset.feedUrl = feedUrl;
+        }
+        if (feedPropHideMembersOnly) {
+          feedPropHideMembersOnly.checked = !!data.hide_members_only;
+          feedPropHideMembersOnly.dataset.feedUrl = feedUrl;
         }
         if (feedPropFlushBatchBtn) feedPropFlushBatchBtn.dataset.feedUrl = feedUrl;
         if (feedPropFlushBatchStatus) feedPropFlushBatchStatus.textContent = '';
@@ -7677,6 +7683,25 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         try { await refreshCurrentFeedOrFolder(); } catch (e) { console.error('hide-unpremiered: view refresh failed', e); }
       }
       catch (e) { feedPropHideUnpremiered.checked = !feedPropHideUnpremiered.checked; }
+    });
+
+    feedPropHideMembersOnly?.addEventListener('change', async () => {
+      const feedUrl = feedPropHideMembersOnly.dataset.feedUrl;
+      if (!feedUrl) return;
+      try {
+        const r = await saveDisplayPref(feedUrl, 'hide_members_only',
+                                        feedPropHideMembersOnly.checked ? 1 : 0);
+        if (!r?.ok) throw new Error(r?.error || 'save failed');
+        // Detection needs a per-video page fetch, so (like hide-paywalled, unlike
+        // hide-shorts) this applies going forward from the next fetch rather than
+        // sweeping the existing backlog synchronously here.
+        showToastMessage(feedPropHideMembersOnly.checked
+          ? 'Members-only videos will be marked read starting with the next fetch.'
+          : 'Members-only videos will be left unread.');
+      } catch (e) {
+        feedPropHideMembersOnly.checked = !feedPropHideMembersOnly.checked;
+        showToastMessage('Could not save that setting.');
+      }
     });
 
     document.getElementById('feed-prop-devto-save')?.addEventListener('click', async () => {
@@ -14295,6 +14320,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         { const el = document.getElementById('sett-yt-account-features'); if (el) el.checked = !!d.yt_embed_account_features; }
         { const el = document.getElementById('sett-yt-hide-shorts'); if (el) el.checked = !!d.yt_hide_shorts_global; }
         { const el = document.getElementById('sett-yt-hide-unpremiered'); if (el) el.checked = !!d.yt_hide_unpremiered_global; }
+        { const el = document.getElementById('sett-yt-hide-members-only'); if (el) el.checked = !!d.yt_hide_members_only_global; }
         {
           const el = document.getElementById('sett-yt-quota');
           const q = d.yt_quota;
@@ -14638,6 +14664,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             yt_embed_account_features: (document.getElementById('sett-yt-account-features')?.checked ? '1' : '0'),
             yt_hide_shorts_global: (document.getElementById('sett-yt-hide-shorts')?.checked ? '1' : '0'),
             yt_hide_unpremiered_global: (document.getElementById('sett-yt-hide-unpremiered')?.checked ? '1' : '0'),
+            yt_hide_members_only_global: (document.getElementById('sett-yt-hide-members-only')?.checked ? '1' : '0'),
             instapaper_username: g('sett-ip-user'),
             instapaper_password: g('sett-ip-pass'),
             yt_oauth_client_id: g('sett-yt-oauth-client-id'),
