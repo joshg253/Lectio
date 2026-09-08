@@ -8423,7 +8423,14 @@ def _apply_hide_members_only(refreshed_feed_urls: set[str]) -> int:
                     "SELECT feed_url FROM feed_display_prefs WHERE hide_members_only = 1"
                 ).fetchall()
             }
-        targets = refreshed_feed_urls & members_only_urls
+        # Scoped to YouTube hosts even for the per-feed pref: hide_members_only is a
+        # plain feed_display_prefs column with no host constraint of its own, and the
+        # Feed Properties checkbox only being shown on YouTube feeds doesn't stop the
+        # value existing on a non-YouTube one (a bulk settings-copy, a stray API call).
+        # Without this, a mixed refresh batch scans that feed's entries too, and any
+        # entry.link that happens to parse as a YouTube URL gets a real watch-page
+        # fetch and, if flagged, marked read -- on a feed the user never opted in.
+        targets = {u for u in (refreshed_feed_urls & members_only_urls) if _is_yt_host(u)}
         if youtube_hide_members_only_global():
             targets = targets | {
                 u for u in refreshed_feed_urls if "youtube.com/feeds/videos.xml" in u
