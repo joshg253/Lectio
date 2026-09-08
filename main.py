@@ -18009,7 +18009,10 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
     Extracted from get_entry_detail. When the lead image is shown at the top:
     - if the body opens with that image, strip the opener (BS4 to remove empty
       ancestor containers cleanly; regex fallback when the opener is a *different*
-      image, e.g. a thumbnail placeholder vs the full-size lead);
+      image, e.g. a thumbnail placeholder vs the full-size lead) — UNLESS the
+      opener is the post's entire content, in which case stripping it would leave
+      an empty body: the opener stays in place instead, and the separate lead is
+      suppressed the same way the "appears later in the body" case below is;
     - if the lead image appears later in the body, drop the separate lead (show it in
       place) — except artwork feeds, where it's hoisted to the top instead;
     - Tumblr size-variant dedup (same media hash, different size suffix);
