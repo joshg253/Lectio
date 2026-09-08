@@ -4353,6 +4353,31 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       menu.removeAttribute('hidden');
     });
 
+    // Some blogs (quuxplusone.github.io and similar) write inline math meant
+    // for the source site's own client-side MathJax/KaTeX -- Lectio stores the
+    // raw `\(...\)`/`\[...\]` delimiters as-is (nothing to sanitize, they are
+    // just text), so without this the article pane shows literal LaTeX source.
+    // Bare `$...$` is deliberately not a delimiter here: none of the feeds this
+    // was checked against use it, and it collides with plain-text prices.
+    // Quick substring test before calling into KaTeX's own tree walk -- most
+    // entries have no math at all, and this skips the walk entirely for them.
+    function renderMathInEntryPane(root) {
+      if (!root || typeof window.renderMathInElement !== 'function') return;
+      const content = root.querySelector('.entry-content, .entry-readability-content');
+      if (!content || (!content.textContent.includes('\\(') && !content.textContent.includes('\\['))) return;
+      try {
+        window.renderMathInElement(content, {
+          delimiters: [
+            { left: '\\[', right: '\\]', display: true },
+            { left: '\\(', right: '\\)', display: false },
+          ],
+          throwOnError: false,
+        });
+      } catch (e) {
+        console.error('[lectio] KaTeX render failed (leaving raw text):', e);
+      }
+    }
+
     // Cap portrait (taller-than-wide) article images to the configured width so
     // tall images (e.g. Standard Ebooks book covers) don't render huge; wide
     // images keep the base max-width:100% rule. 0/unset disables.
@@ -4531,6 +4556,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           () => bindPostListInteractions(),
           () => { if (_ytAccountFeaturesEnabled) enhanceYoutubeEmbeds(nextPane); },
           () => applyPortraitImageCap(nextPane),
+          () => renderMathInEntryPane(nextPane),
           () => { if (typeof window.bindSwipeGestures === 'function') window.bindSwipeGestures(); },
           () => { if (typeof applyHighlights === 'function') applyHighlights(); },
           () => markActivePostByUrl(url),
@@ -8548,6 +8574,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     bindEntryPaneInteractions();
     try { if (_ytAccountFeaturesEnabled) enhanceYoutubeEmbeds(document.querySelector('.pane-entry')); } catch (e) {}
     try { applyPortraitImageCap(document.querySelector('.pane-entry')); } catch (e) {}
+    try { renderMathInEntryPane(document.querySelector('.pane-entry')); } catch (e) {}
     if (_ytAccountFeaturesEnabled) _ytResumeBatchJobOnLoad();
 
     // --- Post multi-select (checkboxes) -----------------------------------
