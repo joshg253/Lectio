@@ -343,28 +343,23 @@ slow, check the entry-pane response time in the browser network tab and/or grep
 
 ## Tier 3 — maintenance backlog, ready to run
 
-### Off-site backups to Backblaze B2 — scoped 2026-09-08, not started
+### Off-site backups to Backblaze B2 — DONE 2026-09-08
 
-Josh asked for a quick look into shipping backups to B2 "for next," i.e. scope now, build next
-session. Current state, checked live:
+`scripts/ship_backups_to_b2.py` runs `rclone move` after `backup_databases.py`, shipping new
+backups to a B2 bucket and clearing them locally on success (verified-upload-before-delete;
+nothing is ever removed before it's confirmed off-host). No local generations are kept at all —
+Josh's call, since B2 is now the archive and the backup footprint is small enough to sit close to
+B2's free 10GB tier, so there was no cost pressure to also hold copies on the tight local disk
+(see [[docker-disk-pressure]]). `deploy/systemd/lectio-backup.{service,timer}` runs both scripts
+daily (`Persistent=true`, so a run missed while the VPS is down fires once at next boot instead of
+silently skipping — the previous unscheduled setup went quiet for weeks with no alert). Env vars
+`LECTIO_B2_BUCKET` / `LECTIO_B2_KEY_ID` / `LECTIO_B2_APPLICATION_KEY` in `.env`/`.env.example`.
 
-- `scripts/backup_databases.py` (VACUUM INTO, size-aware retention) exists and works, but nothing
-  schedules it — no crontab entry, no systemd timer. Last run was 2026-08-14; nothing since.
-- Its output at `data/backups/` is 17G on the same disk as everything else, all three stale
-  generations from that one 2026-08-14 run — this is local-only, not off-site, and is itself
-  part of what pushes the 72G disk toward the 98%-full incidents in [[docker-disk-pressure]].
-- No `rclone` or `b2` CLI installed; no B2 keys/bucket in `.env` or `.env.example`; nothing
-  B2-related anywhere in the repo. Clean slate — this would be new infrastructure, not wiring up
-  something half-built.
-
-Shape of the work, not yet decided: (1) get the existing backup script actually scheduled again
-(cron or systemd timer) since it isn't running at all right now, (2) pick a shipping mechanism —
-`rclone` with a B2 remote is the standard fit (S3-compatible API, has a `--min-free`-style
-bandwidth/retry story), (3) decide retention on the B2 side separately from local (B2 storage is
-cheap; keeping more generations off-site than the 25G local cap allows is probably the point),
-(4) decide whether local `data/backups/` should shrink once off-site copies exist, since local
-backups occupy disk that's already tight. Needs a B2 bucket + application key from Josh before
-any of this can actually run.
+Installed and enabled live 2026-09-08: timer active, next run ~00:10 nightly. First real run
+pruned the two oldest of three stale local generations from the 2026-08-14 gap first (Josh's
+call, to keep the initial upload leaner), then shipped 14 files / 12.7GB total to B2 — a hair over
+the 10GB free tier (~$0.02/GB-month overage, cents not dollars) and confirmed present in the
+bucket via `rclone lsf`/`rclone size`. Local `data/backups/` is empty after each run by design.
 
 ### Redirecting feeds — 128 candidates ready, awaiting Josh's own `--apply` run
 
@@ -433,18 +428,6 @@ math-heavy saved article still shows raw `\(...\)` source there. Not sized —
 needs the same `renderMathInElement` wiring in Read Mode's own JS, plus a check
 of what the vendored KaTeX JS/fonts actually cost on the Supernote's e-ink
 browser before assuming parity is worth it there.
-
-### Backblaze B2 support for backups
-
-Requested by Josh 2026-09-03. `scripts/backup_databases.py` (`VACUUM INTO`, size-aware retention —
-see its own docstring) only ever writes to `$LECTIO_DATA_DIR/backups` on local disk today; nothing
-ships a copy off-host. B2 is S3-compatible, so this is likely a `boto3`/`s3fs`-style upload step
-after the existing local backup completes (upload each newly-written file, prune remotely to match
-local retention or keep its own schedule), plus new env vars for the bucket/key/application key —
-mirror `.env`/`.env.example` per the usual convention. Not sized yet — needs a look at whether to
-reuse the existing local-retention pruning logic for the remote side or keep them independent (remote
-retention probably wants to be longer-lived than local, since off-host is the actual disaster-recovery
-copy).
 
 ### Soundslice tab-player embeds are permanently blocked by the content owner's own domain allowlist
 

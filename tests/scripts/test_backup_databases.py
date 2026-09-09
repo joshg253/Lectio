@@ -20,7 +20,7 @@ def _make_real_sqlite_db(path: Path, marker_value: str) -> None:
         conn.close()
 
 
-def test_backup_one_writes_consistent_copy(tmp_path: Path):
+def test_backup_one_writes_into_a_stamp_named_folder(tmp_path: Path):
     src = tmp_path / "test.sqlite"
     _make_real_sqlite_db(src, "hello-backup")
     dest_dir = tmp_path / "backups"
@@ -29,7 +29,7 @@ def test_backup_one_writes_consistent_copy(tmp_path: Path):
     result = backup_databases.backup_one(src, "test", dest_dir, "20260504-120000")
 
     assert result is not None and result.exists()
-    assert "20260504-120000" in result.name
+    assert result == dest_dir / "20260504-120000" / "test.sqlite"
     conn = sqlite3.connect(str(result))
     try:
         assert conn.execute("SELECT value FROM marker").fetchone()[0] == "hello-backup"
@@ -54,17 +54,15 @@ def test_discover_sources_includes_auth_and_per_user_dbs(tmp_path: Path):
 def test_prune_old_keeps_n_most_recent(tmp_path: Path):
     dest_dir = tmp_path / "backups"
     dest_dir.mkdir()
-    stem = "lectio_meta"
     for ts in ["20260101-000000", "20260102-000000", "20260103-000000",
                "20260104-000000", "20260105-000000"]:
-        (dest_dir / f"{stem}.{ts}.sqlite3").write_bytes(b"\x00" * 16)
+        gen_dir = dest_dir / ts
+        gen_dir.mkdir()
+        (gen_dir / "lectio_meta.sqlite3").write_bytes(b"\x00" * 16)
 
-    backup_databases.prune_old(dest_dir, [stem], keep=2)
+    backup_databases.prune_old(dest_dir, keep=2)
 
-    assert sorted(p.name for p in dest_dir.iterdir()) == [
-        f"{stem}.20260104-000000.sqlite3",
-        f"{stem}.20260105-000000.sqlite3",
-    ]
+    assert sorted(p.name for p in dest_dir.iterdir()) == ["20260104-000000", "20260105-000000"]
 
 
 # ── size-aware retention ──────────────────────────────────────────────────────
@@ -92,11 +90,13 @@ def test_parse_size_rejects_garbage(bad):
 
 
 def _gen(dest_dir: Path, stamp: str, stems: list[str], size: int) -> None:
+    gen_dir = dest_dir / stamp
+    gen_dir.mkdir(exist_ok=True)
     for stem in stems:
-        (dest_dir / f"{stem}.{stamp}.sqlite").write_bytes(b"\x00" * size)
+        (gen_dir / f"{stem}.sqlite").write_bytes(b"\x00" * size)
 
 
-def test_generations_group_by_timestamp(tmp_path: Path):
+def test_generations_group_by_directory(tmp_path: Path):
     """A generation is only useful whole — a reader DB without its meta DB from
     the same instant is not a restore point."""
     d = tmp_path / "b"
@@ -105,7 +105,7 @@ def test_generations_group_by_timestamp(tmp_path: Path):
     _gen(d, "20260101-000000", stems, 8)
     _gen(d, "20260102-000000", stems, 8)
 
-    gens = backup_databases.generations(d, stems)
+    gens = backup_databases.generations(d)
 
     assert [stamp for stamp, _ in gens] == ["20260102-000000", "20260101-000000"]
     assert all(len(paths) == 2 for _s, paths in gens)
@@ -119,12 +119,9 @@ def test_prune_by_budget_drops_oldest_generations(tmp_path: Path):
         _gen(d, stamp, stems, 100)
 
     # Budget fits two generations of 100 bytes.
-    backup_databases.prune_old(d, stems, keep=0, max_bytes=250)
+    backup_databases.prune_old(d, keep=0, max_bytes=250)
 
-    assert sorted(p.name for p in d.iterdir()) == [
-        "lectio_meta.20260102-000000.sqlite",
-        "lectio_meta.20260103-000000.sqlite",
-    ]
+    assert sorted(p.name for p in d.iterdir()) == ["20260102-000000", "20260103-000000"]
 
 
 def test_budget_never_deletes_the_newest_generation(tmp_path: Path):
@@ -136,9 +133,9 @@ def test_budget_never_deletes_the_newest_generation(tmp_path: Path):
     _gen(d, "20260101-000000", stems, 500)
     _gen(d, "20260102-000000", stems, 500)
 
-    backup_databases.prune_old(d, stems, keep=0, max_bytes=1)
+    backup_databases.prune_old(d, keep=0, max_bytes=1)
 
-    assert [p.name for p in d.iterdir()] == ["lectio_meta.20260102-000000.sqlite"]
+    assert [p.name for p in d.iterdir()] == ["20260102-000000"]
 
 
 def test_count_and_budget_compose(tmp_path: Path):
@@ -149,12 +146,9 @@ def test_count_and_budget_compose(tmp_path: Path):
         _gen(d, stamp, stems, 100)
 
     # keep=3 drops the oldest; the 250-byte budget then drops one more.
-    backup_databases.prune_old(d, stems, keep=3, max_bytes=250)
+    backup_databases.prune_old(d, keep=3, max_bytes=250)
 
-    assert sorted(p.name for p in d.iterdir()) == [
-        "lectio_meta.20260103-000000.sqlite",
-        "lectio_meta.20260104-000000.sqlite",
-    ]
+    assert sorted(p.name for p in d.iterdir()) == ["20260103-000000", "20260104-000000"]
 
 
 def test_prune_is_a_noop_when_within_both_limits(tmp_path: Path):
@@ -163,6 +157,6 @@ def test_prune_is_a_noop_when_within_both_limits(tmp_path: Path):
     stems = ["lectio_meta"]
     _gen(d, "20260101-000000", stems, 10)
 
-    backup_databases.prune_old(d, stems, keep=3, max_bytes=1024)
+    backup_databases.prune_old(d, keep=3, max_bytes=1024)
 
     assert len(list(d.iterdir())) == 1

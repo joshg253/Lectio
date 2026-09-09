@@ -1,0 +1,13 @@
+[Unit]
+Description=Lectio: back up databases and ship them to Backblaze B2
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/lectio
+EnvironmentFile=/opt/lectio/.env
+Environment=LECTIO_DATA_DIR=/opt/lectio/data
+ExecStart=/opt/lectio/.venv/bin/uv run scripts/backup_databases.py
+ExecStart=/opt/lectio/.venv/bin/uv run scripts/ship_backups_to_b2.py
