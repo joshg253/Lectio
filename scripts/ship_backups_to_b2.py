@@ -51,7 +51,7 @@ def rclone_env(key_id: str, application_key: str) -> dict[str, str]:
 
 
 def ship(src_dir: Path, bucket: str, key_id: str, application_key: str, dry_run: bool = False) -> int:
-    cmd = ["rclone", "move", str(src_dir), f"{_REMOTE}:{bucket}/backups", "--checksum"]
+    cmd = ["rclone", "move", str(src_dir), f"{_REMOTE}:{bucket}/backups", "--checksum", "--delete-empty-src-dirs"]
     if dry_run:
         cmd.append("--dry-run")
     return subprocess.run(cmd, env=rclone_env(key_id, application_key)).returncode

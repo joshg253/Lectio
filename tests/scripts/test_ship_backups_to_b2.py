@@ -30,7 +30,7 @@ def test_ship_invokes_rclone_move_with_checksum(tmp_path: Path, monkeypatch: pyt
     rc = ship_backups_to_b2.ship(tmp_path, "my-bucket", "key-id", "secret")
 
     assert rc == 0
-    assert captured["cmd"] == ["rclone", "move", str(tmp_path), "lectiob2:my-bucket/backups", "--checksum"]
+    assert captured["cmd"] == ["rclone", "move", str(tmp_path), "lectiob2:my-bucket/backups", "--checksum", "--delete-empty-src-dirs"]
     assert captured["env"]["RCLONE_CONFIG_LECTIOB2_ACCOUNT"] == "key-id"
 
 
