@@ -8,6 +8,12 @@ app UI, not the API or CDN. So we fetch the images straight from the public
 AT Protocol API using the post's ``at://`` URI (which the RSS feed stores as the
 entry id/guid) and surface them as the entry's lead image + article content.
 
+A video post (``app.bsky.embed.video``) has no ``images`` list, just a static
+``thumbnail`` and an HLS ``playlist`` — we only surface the thumbnail here, as a
+plain lead image. There is no video playback and, deliberately, no "this is a
+video" indicator on it yet (see Plan.md); a viewer only learns it's a video by
+clicking through to bsky.app.
+
 No auth is required and no label is honored at this layer — the feed subscription
 is the user's explicit opt-in to that account's posts.
 """
@@ -68,6 +74,10 @@ def _images_from_embed(embed: object, out: list[str]) -> None:
                     out.append(str(url))
     elif etype.startswith("app.bsky.embed.recordWithMedia"):
         _images_from_embed(embed.get("media"), out)
+    elif etype.startswith("app.bsky.embed.video"):
+        thumb = embed.get("thumbnail")
+        if thumb:
+            out.append(str(thumb))
 
 
 def _images_from_post(post: dict) -> list[str]:
@@ -79,7 +89,8 @@ def _images_from_post(post: dict) -> list[str]:
 
 
 def fetch_post_images(at_uri: str | None) -> list[str]:
-    """Return the CDN image URLs for a Bluesky post given its ``at://`` URI.
+    """Return the CDN image URLs for a Bluesky post given its ``at://`` URI —
+    a video post's static thumbnail counts as an "image" here too.
 
     Cached in-memory for an hour. Returns [] on any error or for a post with no
     images (e.g. text-only or external-link embeds)."""

@@ -38,6 +38,37 @@ def test_images_from_record_with_media():
     assert bluesky._images_from_post(post) == ["https://cdn.bsky.app/x"]
 
 
+def test_images_from_video_embed_uses_thumbnail():
+    # Real shape from public.api.bsky.app/xrpc/app.bsky.feed.getPosts.
+    post = {
+        "embed": {
+            "$type": "app.bsky.embed.video#view",
+            "cid": "bafkreie2suur674fjn6ek4ab3jdm26mx64lvakbf7nuvjalgcbrci2xv2e",
+            "playlist": "https://video.bsky.app/watch/did%3Aplc%3Aabc/x/playlist.m3u8",
+            "thumbnail": "https://video.bsky.app/watch/did%3Aplc%3Aabc/x/thumbnail.jpg",
+        }
+    }
+    assert bluesky._images_from_post(post) == ["https://video.bsky.app/watch/did%3Aplc%3Aabc/x/thumbnail.jpg"]
+
+
+def test_images_from_video_embed_with_no_thumbnail():
+    post = {"embed": {"$type": "app.bsky.embed.video#view"}}
+    assert bluesky._images_from_post(post) == []
+
+
+def test_images_from_record_with_media_video():
+    post = {
+        "embed": {
+            "$type": "app.bsky.embed.recordWithMedia#view",
+            "media": {
+                "$type": "app.bsky.embed.video#view",
+                "thumbnail": "https://video.bsky.app/watch/did%3Aplc%3Aabc/y/thumbnail.jpg",
+            },
+        }
+    }
+    assert bluesky._images_from_post(post) == ["https://video.bsky.app/watch/did%3Aplc%3Aabc/y/thumbnail.jpg"]
+
+
 def test_images_dedup_and_empty():
     assert bluesky._images_from_post({}) == []
     assert bluesky._images_from_post({"embed": {"$type": "app.bsky.embed.external#view"}}) == []
