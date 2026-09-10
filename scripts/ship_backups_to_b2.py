@@ -7,8 +7,12 @@ upload leaves the local backups in place for the next run to retry, so nothing
 is ever deleted before it is safely off-host.
 
 No local generations are kept on purpose: B2 is the archive, and Lectio's
-backup footprint is small enough to sit comfortably in B2's free 10GB tier, so
-there's no cost pressure to also keep copies on the VPS's disk.
+backup footprint is small enough to sit comfortably in B2's free 10GB tier —
+except one user's starred archive alone is ~6GB, so a single generation blows
+past that on its own. Remote retention (`--keep`, default 1) prunes older
+generations after a successful ship, so B2 usage stays around one generation's
+size instead of growing every night. Pruning only ever runs after the new
+generation is confirmed shipped, so a failed upload never leaves zero backups.
 
 Requires the `rclone` binary on PATH and three env vars:
   LECTIO_B2_BUCKET             bucket name
@@ -16,12 +20,13 @@ Requires the `rclone` binary on PATH and three env vars:
   LECTIO_B2_APPLICATION_KEY    application key secret
 
 Usage:
-    LECTIO_DATA_DIR=/data uv run scripts/ship_backups_to_b2.py [--src <dir>] [--dry-run]
+    LECTIO_DATA_DIR=/data uv run scripts/ship_backups_to_b2.py [--src <dir>] [--keep <N>] [--dry-run]
 
   --src      Local backup directory to ship. Defaults to $LECTIO_DATA_DIR/backups
              (the same default `backup_databases.py` writes to).
+  --keep     Keep the N most recent generations on the remote (default 1).
   --dry-run  Pass through to `rclone move --dry-run` — reports what would move
-             without moving or deleting anything.
+             without moving or deleting anything, and skips remote pruning.
 """
 
 from __future__ import annotations
@@ -57,9 +62,44 @@ def ship(src_dir: Path, bucket: str, key_id: str, application_key: str, dry_run:
     return subprocess.run(cmd, env=rclone_env(key_id, application_key)).returncode
 
 
+def remote_generations(bucket: str, key_id: str, application_key: str) -> list[str]:
+    """Generation-stamp folders under backups/ on the remote, newest first."""
+    result = subprocess.run(
+        ["rclone", "lsf", f"{_REMOTE}:{bucket}/backups", "--dirs-only"],
+        env=rclone_env(key_id, application_key), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"could not list remote generations (exit {result.returncode}): {result.stderr.strip()}",
+              file=sys.stderr)
+        return []
+    stamps = [line.strip().rstrip("/") for line in result.stdout.splitlines() if line.strip()]
+    return sorted(stamps, reverse=True)
+
+
+def prune_remote(bucket: str, key_id: str, application_key: str, keep: int) -> None:
+    """Delete all but the newest `keep` generations on the remote.
+
+    Best-effort: a listing or delete failure is reported but doesn't fail the
+    run, since shipping the new generation — the critical part — already
+    succeeded by the time this runs.
+    """
+    stamps = remote_generations(bucket, key_id, application_key)
+    for stamp in stamps[keep:]:
+        result = subprocess.run(
+            ["rclone", "purge", f"{_REMOTE}:{bucket}/backups/{stamp}"],
+            env=rclone_env(key_id, application_key), capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            print(f"pruned remote generation: {stamp}")
+        else:
+            print(f"failed to prune remote generation {stamp} (exit {result.returncode}): {result.stderr.strip()}",
+                  file=sys.stderr)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--src", default=str(DEFAULT_SRC), help="Local backup directory to ship.")
+    parser.add_argument("--keep", type=int, default=1, help="Keep N most recent generations on the remote.")
     parser.add_argument("--dry-run", action="store_true", help="Report what would move; move nothing.")
     args = parser.parse_args()
 
@@ -86,6 +126,10 @@ def main() -> int:
     rc = ship(src_dir, bucket, key_id, application_key, dry_run=args.dry_run)
     if rc != 0:
         print(f"rclone move failed (exit {rc}) — local backups left in place for retry.", file=sys.stderr)
+        return rc
+
+    if not args.dry_run and args.keep > 0:
+        prune_remote(bucket, key_id, application_key, args.keep)
     return rc
 
 
