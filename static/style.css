@@ -692,19 +692,33 @@ body[data-compact-article="1"] .entry-tags-row .single-back-btn {
    for the desktop tree, and the +/- filter triangles are too small to hit.
    Both objections are about the chips being *always* on screen at desktop size;
    see the data-entry-tags-open block below, which brings them back for the one
-   moment they are the thing you came for, at a size you can hit. */
+   moment they are the thing you came for, at a size you can hit.
+   The author byline row is a different case (Josh, 2026-09-10): there's room
+   for it even on a phone, so its ▲▼ stay visible unconditionally in compact
+   mode instead of being tied to the tags-open state — see the
+   .author-filter-signs rule below, sized the same thumb-target way. */
 body[data-compact-article="1"] .entry-tag-suggestions,
 body[data-compact-article="1"] .entry-tags-row-sep,
-body[data-compact-article="1"] .author-filter-signs,
 body[data-compact-article="1"] .feed-tag-filter-sign {
   display: none;
+}
+body[data-compact-article="1"] .author-filter-signs .feed-tag-filter-sign {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Same thumb-target sizing as the tags-open reveal below, chosen for the
+     same reason: 99% finger use there, mouse-scale glyphs aren't hittable. */
+  min-width: 2.25rem;
+  min-height: 1.95rem;
+  padding: 0 0.25em;
+  opacity: 0.85;
+  font-size: 0.9em;
 }
 
 /* Tapping Tag opens the input on its own row; the feed's own tags belong there,
    since adding one is the same action the input is for. Scoped to the open
-   state so the row is unchanged while reading.
-   The author filter signs and the row separator stay hidden: they are not part
-   of tagging, and this row is already tight. */
+   state so the row is unchanged while reading. The row separator stays
+   hidden: it's not part of tagging, and this row is already tight. */
 body[data-compact-article="1"][data-entry-tags-open="1"] .entry-tag-suggestions {
   display: contents;
 }
