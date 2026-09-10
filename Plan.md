@@ -282,6 +282,17 @@ unilaterally. Confirm the actual default interval reader uses before touching th
 
 **Navigation/UX papercuts** — no design work needed, just haven't been built.
 
+### Bluesky video posts show a plain thumbnail with no "this is a video" indicator
+
+Fixed 2026-09-10: `services/bluesky.py` now surfaces a video post's static `thumbnail` as
+the lead image (it was falling through entirely — `app.bsky.embed.video` has no `images`
+list, so the entry body was empty apart from the caption). But there's no video playback
+(the `playlist` HLS URL is ignored) and no visual cue that the "photo" is actually a video
+— a viewer only finds out by clicking through to bsky.app. A small ▶ badge overlay on the
+lead image (gated on a new `is_video` flag threaded from `bluesky.py` through to the
+template) would fix the indicator cheaply; real playback is a separate, bigger feature.
+Deliberately deferred — Josh's call, not asked for yet.
+
 ### New subscription missing from feed tree — UX idea remaining
 
 Root-cause code bug already fixed (2026-07-08: re-adding a feed that existed
