@@ -37531,6 +37531,22 @@ def _maybe_shrink_oversized_image(raw: bytes, content_type: str, budget: int) ->
         return raw, content_type
 
 
+def _sniff_image_content_type(raw: bytes) -> str | None:
+    """Identify real image bytes Pillow can decode, regardless of what
+    Content-Type the server declared. Some CDNs (video.bsky.app's BunnyCDN-
+    served video thumbnails, found 2026-09-11) serve a real JPEG as
+    application/octet-stream — /thumb already tolerates this by decoding
+    first and never checking the header; this gives /api/img the same
+    tolerance instead of 422ing on an honest image. None on anything Pillow
+    can't open."""
+    try:
+        img = _PILImage.open(io.BytesIO(raw))
+        fmt = (img.format or "").upper()
+    except Exception:
+        return None
+    return _PILImage.MIME.get(fmt) or (f"image/{fmt.lower()}" if fmt else None)
+
+
 def _maybe_downscale_image(raw: bytes, max_dim: int) -> tuple[bytes, str | None]:
     """Downscale so the longest side is <= max_dim, preserving aspect ratio and
     never upscaling. Returns (bytes, content_type). The content_type is None when
@@ -37722,9 +37738,12 @@ async def api_img_proxy(u: str) -> Response:
     except Exception:
         return Response(status_code=502)
     content_type = resp.headers.get("content-type", "")
-    if not content_type.startswith("image/"):
-        return Response(status_code=422)
     body = resp.content
+    if not content_type.startswith("image/"):
+        sniffed = _sniff_image_content_type(body)
+        if sniffed is None:
+            return Response(status_code=422)
+        content_type = sniffed
     cache_ctrl = resp.headers.get("cache-control", _IMG_CACHE_CONTROL)
     if len(body) > _IMG_CACHE_MAX_BYTES:
         # Too large to cache/re-encode; pass the original through untouched so it

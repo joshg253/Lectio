@@ -7,8 +7,11 @@ stubbed so the test does no network or DNS I/O.
 """
 from __future__ import annotations
 
+import io
+
 import httpx
 import pytest
+from PIL import Image
 from starlette.testclient import TestClient
 
 import main
@@ -51,6 +54,36 @@ def test_non_image_content_type_returns_422(monkeypatch):
     monkeypatch.setattr(url_guard, "safe_get_async", _html)
     with _client() as client:
         r = client.get("/api/img", params={"u": "https://pub.test/page"})
+    assert r.status_code == 422
+
+
+def test_octet_stream_real_image_bytes_sniffed_and_served(monkeypatch):
+    """Some CDNs (video.bsky.app's BunnyCDN-served video thumbnails) serve a
+    real image under a generic Content-Type. The declared header alone would
+    422 an honest image, so a failed header check falls back to sniffing the
+    actual bytes with Pillow before giving up (mirrors /thumb, which never
+    trusted the header to begin with)."""
+    buf = io.BytesIO()
+    Image.new("RGB", (10, 10), (200, 40, 40)).save(buf, format="JPEG")
+    jpeg_bytes = buf.getvalue()
+
+    async def _octet_stream(*a, **k):
+        return httpx.Response(200, headers={"content-type": "application/octet-stream"}, content=jpeg_bytes)
+
+    monkeypatch.setattr(url_guard, "safe_get_async", _octet_stream)
+    with _client() as client:
+        r = client.get("/api/img", params={"u": "https://pub.test/thumbnail.jpg"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("image/jpeg")
+
+
+def test_octet_stream_non_image_bytes_still_returns_422(monkeypatch):
+    async def _octet_stream(*a, **k):
+        return httpx.Response(200, headers={"content-type": "application/octet-stream"}, content=b"not an image")
+
+    monkeypatch.setattr(url_guard, "safe_get_async", _octet_stream)
+    with _client() as client:
+        r = client.get("/api/img", params={"u": "https://pub.test/mystery.bin"})
     assert r.status_code == 422
 
 
