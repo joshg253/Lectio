@@ -125,6 +125,16 @@ existing tag-response payload flagging that a background re-fetch was kicked off
 polling or re-fetching itself once it's done, rather than the user having to discover the trick of
 clicking away and back.
 
+**Scoped 2026-09-11.** `_maybe_autofetch_on_keep` (main.py:34574) launches a detached
+`threading.Thread` with no job record at all — nothing like the `_refetch_jobs`/
+`_yt_playlist_batch_jobs` per-user `_PerUserDict` job-tracking pattern already used for the
+Refetch-All and YouTube-playlist bulk flows (main.py:29796/35475), which the pane's own JS already
+knows how to poll-and-toast for (see [[bg-job-polling-toast-confirmed]]). Fix shape: give this call
+site the same job-record shape (feed_url/entry_id keyed, not a bulk job id), have the tag/star route
+response include a flag when a background auto-refetch was kicked off, and have the open pane poll a
+small status endpoint until the job resolves, then re-render just that pane's content — reusing the
+existing polling/toast plumbing rather than inventing a new mechanism. Not built.
+
 ### An ArtStation entry with a body image still resolved to no lead image
 
 Noticed 2026-08-30: a list-view thumbnail missing on an ArtStation feed entry. Checked
@@ -132,17 +142,55 @@ Noticed 2026-08-30: a list-view thumbnail missing on an ArtStation feed entry. C
 complete) but `image_url`/`image_alt`/`image_title`/`thumb_crop` are all NULL, even though the
 entry's stored body has exactly one `<img>`, a normal (non-signed-looking) `cdnb.artstation.com`
 CDN URL. So resolution ran and came back empty despite an obvious single candidate sitting right
-in the content. Not investigated further — worth checking whether this is systemic across
-ArtStation entries or a one-off before digging into the resolver itself.
+in the content.
+
+**Scoped 2026-09-11.** Reproduced real ArtStation RSS markup (`<a href="...cdnb.artstation.com/
+.../large/....jpg?ts"><img src="same-url" alt=""/></a>`) directly against `LeadImageService`
+(`services/lead_images.py`): it resolves fine — `_is_image_url_acceptable` (line 3358) accepts it
+and both `extract_entry_thumbnail_url` and `resolve_entry_lead_image_url` return the image. So
+there is no blanket cdnb.artstation.com denylist, no dimension-floor rejection of that URL shape,
+and no ArtStation-specific special case in the generic path today — the `strategy='artwork'` tag
+(`main.py:26781 _auto_tag_artwork_feeds`) only gates the source-page scrape
+(`_fetch_source_lead_image`), not the inline `<img>` scan (`_extract_first_image_url_from_html`,
+lead_images.py:2503), which always runs.
+
+Most likely explanation: a **stale cached negative that never revalidates**. The backfill only
+retries entries that are unread/saved/tagged (lead_images.py:2204) and gates negative-result
+retries behind a 4h window (`_NEGATIVE_RETRY_SECONDS`, line 670) — so a since-read entry's one-time
+transient failure (network hiccup, ArtStation CDN not fully synced yet on first crawl) can persist
+as a NULL row indefinitely even though the body clearly has a good candidate now. Less likely: a
+silently-swallowed exception in one of the broad `except Exception: pass` blocks in
+`_extract_entry_thumbnail_url_inner` (lines 1633-1707), or a markup variant this entry has that the
+repro didn't (alt/title text tripping `_has_avatar_hint`/`_AD_ALT_PATTERNS`). To confirm: pull this
+entry's actual stored `content` from the reader DB and run it directly through
+`resolve_entry_lead_image_url`/`extract_entry_thumbnail_url` — that will show which of the three it
+is. Not fixed yet; still worth checking whether it's systemic across ArtStation entries (stale
+negatives would predict yes) or a one-off.
 
 ### A Bluesky entry has a thumb but no lead image
 
-Flagged 2026-09-02, not investigated:
+Flagged 2026-09-02:
 [entry](https://lectio.catfork.win/?folder_id=6&read_filter=unread&feed_url=https%3A%2F%2Fbsky.app%2Fprofile%2Fdid%3Aplc%3Ae2ehcohu3lrobwew5gzqd7vp%2Frss&entry_id=at%3A%2F%2Fdid%3Aplc%3Ae2ehcohu3lrobwew5gzqd7vp%2Fapp.bsky.feed.post%2F3muab5zxz4k2a)
 — a thumbnail resolved and shows in the list, but the entry pane shows no lead image. Opposite
-shape from the usual "no thumb" reports; worth checking whether the thumb and lead-image resolvers
-disagree on this entry, or whether Bluesky's `at://` post feeds need their own handling (same
-family as the DeviantArt/webcomic per-source lead-image work already in git history).
+shape from the usual "no thumb" reports.
+
+**Root-caused 2026-09-11, not fixed.** Both the thumb and the lead image are computed from the
+same source (`extract_entry_thumbnail_url`'s bsky branch, `services/lead_images.py:1606-1609`,
+`bsky_imgs[0]` via `services/bluesky.py:fetch_post_images`) — they don't disagree. What kills the
+pane's copy is `_strip_lead_image_opener` (`main.py:18298`). `get_entry_detail` (main.py:18886)
+builds `content_html`, then for bsky feeds appends the recovered image as a plain `<p><img
+src="..."></p>` (main.py:18901-18913) — Lectio's own injection, since Bluesky posts carry no `<img>`
+in their real body. `_strip_lead_image_opener` then sees that same URL already sitting in
+`content_html` (because Lectio itself just put it there) and, since bsky's feed strategy isn't
+`"artwork"`, takes the generic "the author already placed this image in the flow, don't duplicate
+it as a hero" branch (main.py:18412-18425) and nulls `lead_image_url` — treating Lectio's own
+recovery injection as if it were authored placement.
+
+Fix shape: exclude self-injected bsky `<img>`s from that dedup check (e.g. skip the strip when the
+image came from the bsky-recovery append rather than the entry's real stored content), so the same
+URL can be both the hero and (harmlessly) present in the body. Not attempted — needs to confirm
+`lead_image_url` is non-None right before main.py:18412 for this entry first, then decide whether to
+key the exclusion on strategy or on tracking which images came from the bsky append itself.
 
 ### Shared proxy/FlareSolverr escalation for page fetches — SHIPPED 2026-08-31
 
@@ -258,8 +306,18 @@ the render-time filter correctly hid from the list, because `_compute_unread_cou
 count has no idea any hide_* filter exists. Fixed for locked comics via
 `_subtract_hidden_locked_comics_from_counts` (see docs/architecture/images.md). `hide_unpremiered`
 (YouTube's "don't show yet" filter, same shape) has the identical gap and has not been reported —
-not fixed here since it wasn't asked for, but the fix would be the same pattern: a companion
-subtract-from-counts pass keyed off whatever YouTube stores for upcoming-video status.
+not fixed here since it wasn't asked for.
+
+**Scoped 2026-09-11.** Same pattern, one real complication: locked-comics' companion function gets
+its answer from one indexed meta-DB column (`entry_lead_images.locked_until`), a straight query. YT
+premiere status has no equivalent column keyed by `(feed_url, entry_id)` — `_youtube_unpremiered_video_id`
+(main.py:8093) works by extracting a video id out of the entry's *link* and checking
+`youtube_video_duration.live_status == "upcoming"` (via `youtube_duration_service.get_cached_live_status`).
+So a `_subtract_hidden_unpremiered_from_counts` companion can't do a single join the way the
+locked-comics one does — it has to pull each unread entry's `(feed_url, link)` for feeds where
+`hide_unpremiered` (or the global toggle) is on, extract the video id per entry, and check its cached
+live-status, mirroring `_is_youtube_unpremiered`'s own logic rather than a column filter. Same
+global-vs-per-feed branching as the locked-comics version otherwise. Not built.
 
 ## Tier 2 — small, fast, independent wins
 
@@ -282,16 +340,20 @@ unilaterally. Confirm the actual default interval reader uses before touching th
 
 **Navigation/UX papercuts** — no design work needed, just haven't been built.
 
-### Bluesky video posts show a plain thumbnail with no "this is a video" indicator
+### Bluesky video posts show a plain thumbnail with no "this is a video" indicator — playback DONE 2026-09-11
 
-Fixed 2026-09-10: `services/bluesky.py` now surfaces a video post's static `thumbnail` as
-the lead image (it was falling through entirely — `app.bsky.embed.video` has no `images`
-list, so the entry body was empty apart from the caption). But there's no video playback
-(the `playlist` HLS URL is ignored) and no visual cue that the "photo" is actually a video
-— a viewer only finds out by clicking through to bsky.app. A small ▶ badge overlay on the
-lead image (gated on a new `is_video` flag threaded from `bluesky.py` through to the
-template) would fix the indicator cheaply; real playback is a separate, bigger feature.
-Deliberately deferred — Josh's call, not asked for yet.
+Fixed 2026-09-10: `services/bluesky.py` surfaces a video post's static `thumbnail` as the lead
+image (it was falling through entirely — `app.bsky.embed.video` has no `images` list).
+
+**Real inline playback shipped 2026-09-11** (see docs/architecture/views.md "Bluesky video
+playback"): the entry pane now renders an actual `<video controls poster="{thumb}"
+data-bsky-hls-src="{playlist}">` instead of a static image. Safari plays the HLS `playlist`
+natively; everyone else lazy-loads a vendored `hls.js` (`static/vendor/hls.js-1.7.3/`) the first
+time a pane actually has one of these — not loaded unconditionally, unlike KaTeX. No proxy needed
+(`video.bsky.app` sends `access-control-allow-origin: *`). No autoplay — click-to-play, thumbnail
+as poster. The ▶-badge idea is now moot (a poster + native play control already signals "this is a
+video"), so not built separately. Read Mode doesn't get this (no `app.js` there, same gap as
+KaTeX) — tracked alongside the KaTeX Read Mode item above, not separately.
 
 ### New subscription missing from feed tree — UX idea remaining
 

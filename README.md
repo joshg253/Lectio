@@ -96,7 +96,8 @@ short version:
   separate host feed), and images kept at the author's layout and a sane size.
   Inline LaTeX math (`\(...\)`/`\[...\]`, as math-heavy blogs ship for their own
   MathJax/KaTeX) is typeset in the article pane via a bundled KaTeX, not left
-  showing as raw source.
+  showing as raw source. Bluesky's RSS is text/image-only, so images (and video
+  posts, with real inline HLS playback) are recovered from the AT Protocol API.
 - **Automation.** Highlight, mark-as-read, tag-filter, deduplicate, and
   send-to-destination rules (Instapaper, Pinterest, Reddit, Quire, email,
   YouTube playlists, webhooks) at any scope, with dry-run and run history.

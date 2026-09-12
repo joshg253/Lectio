@@ -80,3 +80,73 @@ def test_images_dedup_and_empty():
 def test_fetch_post_images_rejects_non_at_uri():
     assert bluesky.fetch_post_images("") == []
     assert bluesky.fetch_post_images("https://bsky.app/x") == []
+
+
+def test_fetch_post_video_rejects_non_at_uri():
+    assert bluesky.fetch_post_video("") is None
+    assert bluesky.fetch_post_video("https://bsky.app/x") is None
+
+
+def test_video_from_embed():
+    embed = {
+        "$type": "app.bsky.embed.video#view",
+        "thumbnail": "https://video.bsky.app/watch/did%3Aplc%3Aabc/x/thumbnail.jpg",
+        "playlist": "https://video.bsky.app/watch/did%3Aplc%3Aabc/x/playlist.m3u8",
+    }
+    assert bluesky._video_from_embed(embed) == {
+        "thumbnail": "https://video.bsky.app/watch/did%3Aplc%3Aabc/x/thumbnail.jpg",
+        "playlist": "https://video.bsky.app/watch/did%3Aplc%3Aabc/x/playlist.m3u8",
+    }
+
+
+def test_video_from_embed_missing_playlist_or_thumbnail():
+    assert bluesky._video_from_embed({"$type": "app.bsky.embed.video#view", "thumbnail": "t"}) is None
+    assert bluesky._video_from_embed({"$type": "app.bsky.embed.video#view", "playlist": "p"}) is None
+    assert bluesky._video_from_embed({"$type": "app.bsky.embed.video#view"}) is None
+
+
+def test_video_from_embed_non_video_returns_none():
+    assert bluesky._video_from_embed({"$type": "app.bsky.embed.images#view"}) is None
+    assert bluesky._video_from_embed(None) is None
+
+
+def test_video_from_record_with_media():
+    embed = {
+        "$type": "app.bsky.embed.recordWithMedia#view",
+        "media": {
+            "$type": "app.bsky.embed.video#view",
+            "thumbnail": "https://video.bsky.app/watch/did%3Aplc%3Aabc/y/thumbnail.jpg",
+            "playlist": "https://video.bsky.app/watch/did%3Aplc%3Aabc/y/playlist.m3u8",
+        },
+    }
+    assert bluesky._video_from_embed(embed) == {
+        "thumbnail": "https://video.bsky.app/watch/did%3Aplc%3Aabc/y/thumbnail.jpg",
+        "playlist": "https://video.bsky.app/watch/did%3Aplc%3Aabc/y/playlist.m3u8",
+    }
+
+
+def test_fetch_post_images_and_video_share_one_fetch(monkeypatch):
+    """fetch_post_images and fetch_post_video must not each hit the API separately
+    for the same at:// URI -- they share _fetch_post's cache."""
+    calls = []
+
+    def fake_fetch_post(at_uri):
+        calls.append(at_uri)
+        return {
+            "embed": {
+                "$type": "app.bsky.embed.video#view",
+                "thumbnail": "https://video.bsky.app/watch/did%3Aplc%3Aabc/z/thumbnail.jpg",
+                "playlist": "https://video.bsky.app/watch/did%3Aplc%3Aabc/z/playlist.m3u8",
+            }
+        }
+
+    monkeypatch.setattr(bluesky, "_fetch_post", fake_fetch_post)
+    at_uri = "at://did:plc:abc/app.bsky.feed.post/z"
+    images = bluesky.fetch_post_images(at_uri)
+    video = bluesky.fetch_post_video(at_uri)
+    assert images == ["https://video.bsky.app/watch/did%3Aplc%3Aabc/z/thumbnail.jpg"]
+    assert video == {
+        "thumbnail": "https://video.bsky.app/watch/did%3Aplc%3Aabc/z/thumbnail.jpg",
+        "playlist": "https://video.bsky.app/watch/did%3Aplc%3Aabc/z/playlist.m3u8",
+    }
+    assert calls == [at_uri, at_uri]  # each public function calls _fetch_post once; caching itself is _fetch_post's job

@@ -18902,15 +18902,28 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # AT Protocol API, incl. content-labeled posts) so the article shows them.
         # The list thumbnail is handled separately in extract_entry_thumbnail_url.
         if bluesky.is_bsky_feed(str(entry.feed_url)):
-            _bsky_imgs = bluesky.fetch_post_images(str(entry.id))
-            if _bsky_imgs:
-                _existing = content_html or ""
-                _add = "".join(
-                    f'<p><img src="{html.escape(u, quote=True)}" loading="lazy"'
-                    f' referrerpolicy="no-referrer" style="max-width:100%;height:auto;"></p>'
-                    for u in _bsky_imgs if u not in _existing
+            _existing = content_html or ""
+            _bsky_video = bluesky.fetch_post_video(str(entry.id))
+            if _bsky_video:
+                # A real <video> instead of a static thumb: data-bsky-hls-src is
+                # picked up by app.js's initBskyVideoPlayers, which attaches
+                # native HLS (Safari) or lazy-loads vendored hls.js for everyone
+                # else. poster keeps today's thumbnail as the pre-play frame.
+                content_html = _existing + (
+                    f'<p><video controls preload="none" playsinline'
+                    f' poster="{html.escape(_bsky_video["thumbnail"], quote=True)}"'
+                    f' data-bsky-hls-src="{html.escape(_bsky_video["playlist"], quote=True)}"'
+                    f' style="max-width:100%;"></video></p>'
                 )
-                content_html = _existing + _add
+            else:
+                _bsky_imgs = bluesky.fetch_post_images(str(entry.id))
+                if _bsky_imgs:
+                    _add = "".join(
+                        f'<p><img src="{html.escape(u, quote=True)}" loading="lazy"'
+                        f' referrerpolicy="no-referrer" style="max-width:100%;height:auto;"></p>'
+                        for u in _bsky_imgs if u not in _existing
+                    )
+                    content_html = _existing + _add
 
         # Has this body been hand-cleaned in the pane? Gates "Revert cleanup" in
         # the UI, and suppresses the embed recovery below — re-adding an embed

@@ -279,6 +279,33 @@ prices. Read Mode (`read_mode.html`) does not include this — it's a separate
 template that doesn't load `app.js` — so a math-heavy saved article still shows
 raw LaTeX there; unaddressed, tracked in Plan.md.
 
+### Bluesky video playback (hls.js) — lazy-loaded, not always-on like KaTeX
+
+Extends the Bluesky image recovery above (see "Content sources"): a video post
+(`app.bsky.embed.video`) has a static `thumbnail` and an HLS `playlist`, no
+`images` list. `get_entry_detail` (main.py) renders these as a real
+`<video controls preload="none" poster="{thumbnail}"
+data-bsky-hls-src="{playlist}">` instead of a static `<img>`.
+
+`video.bsky.app` sends `access-control-allow-origin: *`, so the browser can
+fetch the manifest/segments directly — no proxy needed. Safari plays HLS
+natively (`video.canPlayType('application/vnd.apple.mpegurl')`); every other
+browser needs `hls.js`, vendored under `static/vendor/hls.js-<version>/`
+following the KaTeX precedent above (self-hosted, directory-pinned). Unlike
+KaTeX, it is **not** loaded unconditionally — `initBskyVideoPlayers` (app.js)
+only injects the `<script>` tag the first time a pane actually contains one of
+these `<video data-bsky-hls-src>` elements, since paying ~600KB on every entry
+pane for a feature that applies to one platform's video posts isn't worth it
+(see "Page weight" below). `fetch_post_images` and `fetch_post_video`
+(services/bluesky.py) share one cached AT Protocol API fetch per post so
+resolving both the list thumbnail and the pane's video costs one request, not
+two.
+
+No autoplay — click-to-play, thumbnail as the poster frame. Read Mode has the
+same gap as KaTeX above (no `app.js`), so a saved Bluesky video article still
+shows only the static thumbnail there; tracked in Plan.md alongside the KaTeX
+one rather than fixed separately.
+
 ## Page weight: lazy HTML fragments
 
 At thousands of feeds, any template section that renders a row per feed is

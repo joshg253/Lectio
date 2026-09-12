@@ -4387,6 +4387,44 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       }
     }
 
+    // Bluesky video posts render as <video data-bsky-hls-src="...m3u8">
+    // (see get_entry_detail in main.py). Safari plays HLS natively; everyone
+    // else needs hls.js, which is NOT loaded unconditionally like KaTeX --
+    // it's only worth the ~600KB the first time a pane actually has one of
+    // these videos, not on every entry pane.
+    let _hlsJsLoadPromise = null;
+    function _loadHlsJs() {
+      if (!_hlsJsLoadPromise) {
+        _hlsJsLoadPromise = new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = '/static/vendor/hls.js-1.7.3/hls.min.js';
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error('hls.js failed to load'));
+          document.head.appendChild(script);
+        });
+      }
+      return _hlsJsLoadPromise;
+    }
+
+    function initBskyVideoPlayers(root) {
+      if (!root) return;
+      const videos = root.querySelectorAll('video[data-bsky-hls-src]');
+      videos.forEach((video) => {
+        const src = video.dataset.bskyHlsSrc;
+        delete video.dataset.bskyHlsSrc; // don't re-process on the next pane-render pass
+        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          video.src = src; // Safari: native HLS, no library needed
+          return;
+        }
+        _loadHlsJs().then(() => {
+          if (!window.Hls || !window.Hls.isSupported()) return; // no HLS path available; poster-only fallback
+          const hls = new window.Hls();
+          hls.loadSource(src);
+          hls.attachMedia(video);
+        }).catch((e) => console.error('[lectio] hls.js load failed:', e));
+      });
+    }
+
     // Cap portrait (taller-than-wide) article images to the configured width so
     // tall images (e.g. Standard Ebooks book covers) don't render huge; wide
     // images keep the base max-width:100% rule. 0/unset disables.
@@ -4566,6 +4604,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           () => { if (_ytAccountFeaturesEnabled) enhanceYoutubeEmbeds(nextPane); },
           () => applyPortraitImageCap(nextPane),
           () => renderMathInEntryPane(nextPane),
+          () => initBskyVideoPlayers(nextPane),
           () => { if (typeof window.bindSwipeGestures === 'function') window.bindSwipeGestures(); },
           () => { if (typeof applyHighlights === 'function') applyHighlights(); },
           () => markActivePostByUrl(url),
@@ -8633,6 +8672,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     try { if (_ytAccountFeaturesEnabled) enhanceYoutubeEmbeds(document.querySelector('.pane-entry')); } catch (e) {}
     try { applyPortraitImageCap(document.querySelector('.pane-entry')); } catch (e) {}
     try { renderMathInEntryPane(document.querySelector('.pane-entry')); } catch (e) {}
+    try { initBskyVideoPlayers(document.querySelector('.pane-entry')); } catch (e) {}
     if (_ytAccountFeaturesEnabled) _ytResumeBatchJobOnLoad();
 
     // --- Post multi-select (checkboxes) -----------------------------------
