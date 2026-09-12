@@ -1387,16 +1387,36 @@ class StarredArchiveService:
                     LOGGER.debug("readability extract failed for %s: %s", entry_link, exc)
 
         # 3. Collect every distinct image URL referenced anywhere we know about.
+        #
+        # Deliberately NOT source_html here: that's the whole fetched page
+        # (nav, sidebar, related-posts widgets, footer), not the article, and
+        # scanning it for <img> tags archived every image on the page -- most
+        # never rendered anywhere a saved article is shown. Reported live
+        # 2026-09-12: a Dropbox blog post whose real content (readability_html)
+        # has zero <img> tags had 1053 assets archived (145MB) this way,
+        # because the raw page itself has 1620 <img> tags in its chrome.
+        # content_html/summary_html/readability_html are what actually gets
+        # rendered, so what's found in them is what's worth keeping.
+        # source_html stays in play for the readability extraction above and
+        # for the separate linked-FILE attachment scan below (base_urls),
+        # which is opt-in per feed via the attachment-extension policy and
+        # doesn't carry this cost the same way an unconditional image grab does.
+        image_scan_sources: list[tuple[str, str]] = [
+            (content_html, entry_link or feed_url),
+            (summary_html, entry_link or feed_url),
+            (readability_html, entry_link or feed_url),
+        ]
+        image_urls: set[str] = set()
+        for html_text, base_url in image_scan_sources:
+            if html_text:
+                image_urls.update(self._extract_image_urls(html_text, base_url))
+
         base_urls: list[tuple[str, str]] = [
             (content_html, entry_link or feed_url),
             (summary_html, entry_link or feed_url),
             (source_html, entry_link or feed_url),
             (readability_html, entry_link or feed_url),
         ]
-        image_urls: set[str] = set()
-        for html_text, base_url in base_urls:
-            if html_text:
-                image_urls.update(self._extract_image_urls(html_text, base_url))
 
         # 3b. Lead image (if cached) — may not appear inline if the renderer
         #     promoted it from <head> meta.

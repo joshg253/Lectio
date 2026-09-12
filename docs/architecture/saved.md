@@ -795,6 +795,31 @@ distinct assets were each linked twice. Fixed in both
 formula); the live library's already-computed sizes needed a second backfill
 run with the corrected query to fix entries affected by this specifically.
 
+**Image harvesting scanned the whole fetched page, not the article.**
+`_archive_entry` collects every `<img>` URL it can find and archives each one
+as an asset. Until 2026-09-12 that scan included `source_html` — the raw
+fetched page, not the article — alongside `content_html`/`summary_html`/
+`readability_html` (what actually gets rendered). A page's chrome (nav,
+sidebar, related-posts rails, footer, author headshots) routinely has far
+more images than the article itself, so this archived a pile of images no
+saved-article view ever shows. Reported live 2026-09-12 on two unrelated
+entries: a Dropbox blog post whose `readability_html` has zero `<img>` tags
+(genuinely a text-only piece) had 1053 assets archived at 145MB, because the
+raw page has 1620 `<img>` tags in its template; an AdGuard blog post with an
+empty extracted body had 65 assets at 29MB, all site-mascot/product-icon
+artwork from the same page chrome, not the post. Fixed by dropping
+`source_html` from the image scan — it stays in play for the readability
+extraction above it and for the separate linked-FILE attachment scan (4b),
+which is opt-in per feed via the attachment-extension policy and doesn't
+share this cost. Like the enclosure and double-counting fixes above, this is
+go-forward only: it stops new captures and re-fetches from repeating the
+problem, but doesn't shrink an entry already archived under the old scan —
+that needs the entry re-captured (delete the archive row and its now-orphaned
+assets, then re-enqueue), which nothing currently automates; doing it by hand
+against the live archive DB was refused by the sandbox's write classifier as
+too risky for an ad-hoc script, so it's Plan.md follow-up work, not something
+done in the moment for the three entries reported live.
+
 **Go-forward only, same as the DeviantArt pinning fix the same night** — until
 `scripts/backfill_archived_entry_sizes.py` (2026-09-11). Reported live as
 "sorting Inbox by Biggest First doesn't seem to work": on the real library
