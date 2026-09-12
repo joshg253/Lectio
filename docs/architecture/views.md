@@ -99,6 +99,34 @@ matches no real feed and so excludes nothing. No server change — the route's
 own `f.url != feed_url` naturally includes everything when `feed_url` is
 empty.
 
+### Moving an entry out of the Inbox made it vanish, then come back on reload
+
+Reported live 2026-09-12, right after the fix above unblocked using Move to
+feed from the Inbox on a mixed selection: entries disappeared from the list
+immediately on a successful move, but reappeared — now attributed to the new
+feed — the next time that view reloaded.
+
+`openMoveToFeedModal`'s post-success cleanup drops every moved row from the
+DOM on the assumption "moved = left this scope," true for a feed- or
+folder-scoped view (the target feed is outside it) but **not** for the Inbox
+(`kept=starred`): that view is feed-agnostic, spanning every starred entry in
+the whole library regardless of which feed it's under. Moving curation to
+another feed doesn't unstar it — `_move_entry_to_feed` carries the star (and
+tags, read state) onto the new feed's copy of the entry and only clears it
+from the old one (confirmed directly: the old (feed, id) key's `saved_entries`
+row is gone, the new one's is present) — so the entry never actually left the
+Inbox's server-side query at all. The client just assumed otherwise and
+removed a row a reload would put right back.
+
+Fixed by skipping the removal entirely when the current view is the Inbox
+(`new URL(location.href).searchParams.get('kept') === 'starred'`) — deliberately
+narrower than "any star_only view," since a folder-scoped Saved view (star_only
+alone, no `kept=starred`) *does* have a bounded feed set and a move genuinely
+can leave it. Verified live: after the fix, moving an entry from within the
+Inbox leaves its row in place (confirmed against the real saved_entries rows
+that the star correctly moved feeds); a non-Inbox view's removal behavior is
+untouched.
+
 ### Back on a phone walks the view stack
 
 In single-pane mode the article pane *is* the page, so Back steps down the stack

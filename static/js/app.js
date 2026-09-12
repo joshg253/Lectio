@@ -10268,12 +10268,26 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             // feed and lost the active search/filter you were working in.
             // Keep rows whose source feed IS the target: the server skips those
             // (a "move visible" over a folder includes the target's own posts).
-            const esc = (window.CSS && CSS.escape) ? (s) => CSS.escape(s) : (s) => s;
-            for (const e of entries) {
-              if (e.feedUrl === targetUrl) continue;   // skipped server-side, leave it
-              document.querySelectorAll(
-                `.posts .post-item[data-post-feed-url="${esc(e.feedUrl)}"][data-post-entry-id="${esc(e.entryId)}"]`
-              ).forEach((row) => row.remove());
+            //
+            // The Inbox (kept=starred) is feed-agnostic and root-scoped — it
+            // spans every starred entry in the whole library regardless of
+            // feed, unlike a folder-scoped Saved view (star_only alone) whose
+            // feed set IS bounded. Moving curation to another feed doesn't
+            // unstar it, so it still belongs in the Inbox under its new
+            // feed_url. Reported live 2026-09-12: rows vanished on move (this
+            // removal ran regardless) but were back on the next reload, since
+            // the server-side query never actually excluded them there — the
+            // assumption "moved = left this scope" only holds when the view's
+            // own feed set is bounded, which the Inbox's specifically isn't.
+            const isInbox = new URL(window.location.href).searchParams.get('kept') === 'starred';
+            if (!isInbox) {
+              const esc = (window.CSS && CSS.escape) ? (s) => CSS.escape(s) : (s) => s;
+              for (const e of entries) {
+                if (e.feedUrl === targetUrl) continue;   // skipped server-side, leave it
+                document.querySelectorAll(
+                  `.posts .post-item[data-post-feed-url="${esc(e.feedUrl)}"][data-post-entry-id="${esc(e.entryId)}"]`
+                ).forEach((row) => row.remove());
+              }
             }
             onDone?.(data);
           } else {
