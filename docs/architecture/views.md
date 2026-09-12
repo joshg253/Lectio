@@ -882,3 +882,44 @@ every merge, so it keeps advancing across repeated incremental loads and not jus
 `.posts` reads `CHUNK_SIZE` from the template context rather than carrying its own hardcoded copy,
 for the same reason `data-next-chunk` exists: two numbers that must agree cannot be allowed to
 drift by being written twice.
+
+### `next_chunk` is an offset, not a page number — the 2026-09-05 fix wasn't the whole story
+
+Found 2026-09-11 from "sorting Inbox by Biggest First doesn't seem to work" / "not sorting by the
+whole potential view, it's like the first X-number of chunks." Verified against the live library
+that `list_entries_for_feeds`'s sort itself is correct and stable (a limit=100 fetch and a limit=140
+fetch return identical, correctly-nested prefixes) — the bug is entirely in how the route turns a
+growing `limit` into chunk boundaries.
+
+The section above fixed *deriving* `next_chunk` from the requested `limit` instead of the client's
+rendered count, but `next_chunk` itself was still `(limit // CHUNK_SIZE) + 1` and the chunk_delta
+slice was still `posts[(chunk-1)*CHUNK_SIZE : chunk*CHUNK_SIZE]` — both assume `len(posts) ==
+limit` always. That assumption breaks whenever **server-side** filtering shrinks the result below
+`limit` — concretely, `list_entries_for_feeds`'s cross-feed dedupe (`build_entry_dedupe_key`): the
+same article saved once via its live feed subscription and once via the bookmarklet/extension
+capture (two different `feed_url`/`entry_id` pairs, same link+title) collapses to one entry. A big
+Saved/Kept backlog accumulates plenty of these. And unlike the hide-unpremiered/tag-narrowing case
+above, the shrinkage isn't a fixed amount — a *bigger* `limit` can catch additional duplicate pairs
+that a smaller one didn't even include yet, so the gap between "requested" and "real" grows
+unevenly as the window grows. Page-number arithmetic assumes that gap is always zero: whatever an
+earlier, smaller-window request's dedupe pass already removed is permanently unreachable, because
+the next chunk's fixed offset starts counting from the nominal (not real) prior total and never
+looks back for it.
+
+Fixed by tracking a true offset instead of a page number. `next_chunk` is now `len(posts)` itself —
+captured right after dedup/orphan-merge, before the chunk_delta slice runs — not a formula. An
+incoming `chunk` value means two different things depending on whether `chunk_delta` came with it:
+plain `chunk` (e.g. single-pane's small initial fetch) keeps the old page-count meaning, since that
+request has no prior "already have" state to offset from; `chunk` *with* `chunk_delta` is the
+offset itself, so `limit = min(offset + CHUNK_SIZE, 2000)` and the slice is a plain `posts[offset :
+offset + CHUNK_SIZE]`. This works with **no client change** — the browser already just echoes
+`data-next-chunk` back verbatim as the next `chunk` param; only what that number *means* changed.
+Correct regardless of how much dedup happens at any point, because the windowed sort paths
+(`_sorted_star_key_window` et al.) are a stable, prefix-preserving function of the underlying key
+set — confirmed directly: a bigger `limit` only ever appends past what a smaller one already
+returned, never reorders or drops from it.
+
+`tests/integration/test_saved_inbox_chunking.py` gained a dedicated regression test seeding a
+cross-feed duplicate inside the first chunk's window and chaining a full chunk_delta sequence
+through it — confirmed to fail against the pre-fix code (reverted main.py, same test) and pass
+against the fix.
