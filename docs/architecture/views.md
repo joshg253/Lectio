@@ -75,6 +75,30 @@ by size" cleanup surfaces) made Select All report "Nothing to select." Fixed
 by dropping the orphan filter from this path; `Move visible to feed…` keeps
 its own, for the reason stated there.
 
+### The bulk "Move to feed" target picker excluded the target itself, for a mixed selection
+
+Reported live 2026-09-12: filtering the Inbox to a mix of "already in Guitar
+World Lessons" and "not yet" posts, selecting all of them, and opening Move
+to feed didn't offer Guitar World Lessons as a destination at all.
+
+`openMoveToFeedModal`'s candidate list is `GET /feeds/curation-count`, reused
+from the unsubscribe-migration picker — that endpoint's whole point there is
+excluding the ONE feed named by `feed_url` (you can't usefully migrate a
+feed's curation to itself). The bulk-move call site passed
+`entries[0].feedUrl` as that exclusion, correct for a genuine single-entry
+move (don't offer "move this post to the feed it's already in") but wrong for
+a multi-entry selection: there's no single "current feed" to exclude, and if
+the first selected post happened to already live in the target, the whole
+picker lost that feed for every other selected post too — even though the
+move route already no-ops (skips, not errors) any entry already in the
+target, so showing it as a candidate is always safe.
+
+Fixed by only passing an exclusion for a genuine single-entry move
+(`entries.length === 1`); a bulk selection passes an empty `feed_url`, which
+matches no real feed and so excludes nothing. No server change — the route's
+own `f.url != feed_url` naturally includes everything when `feed_url` is
+empty.
+
 ### Back on a phone walks the view stack
 
 In single-pane mode the article pane *is* the page, so Back steps down the stack

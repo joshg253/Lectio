@@ -10215,10 +10215,20 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       confirmBtn.textContent = 'Move';
 
       // Candidates: every other subscribed feed (same endpoint the unsubscribe
-      // migration picker uses, so it doesn't depend on what's in the DOM).
+      // migration picker uses, so it doesn't depend on what's in the DOM). The
+      // endpoint excludes whichever feed_url it's given (a single entry can't
+      // usefully "move" to the feed it's already in) -- correct for a single
+      // entry, but reported live 2026-09-12 for a mixed bulk selection: if the
+      // FIRST selected post happened to already be in the target feed, that
+      // feed vanished from the picker for the whole batch, even though other
+      // selected posts weren't in it yet and the move route already no-ops
+      // (skips, not errors) whichever entries are. Only exclude a feed for a
+      // genuine single-entry move; a bulk selection has no one "current feed"
+      // to exclude in the first place.
       let candidates = [];
       try {
-        const r = await fetch(`/feeds/curation-count?feed_url=${encodeURIComponent(entries[0].feedUrl)}`);
+        const excludeFeedUrl = entries.length === 1 ? entries[0].feedUrl : '';
+        const r = await fetch(`/feeds/curation-count?feed_url=${encodeURIComponent(excludeFeedUrl)}`);
         const d = await r.json();
         candidates = d.candidates || [];
       } catch (_) { /* picker just stays empty */ }
