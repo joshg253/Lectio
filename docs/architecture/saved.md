@@ -747,9 +747,20 @@ attributed to every entry that links it: the question this size answers is
 "what does keeping *this* item cost," not "what would deleting only this item
 free," and for that the shared bytes really are part of each entry's weight.
 
-**Go-forward only, same as the DeviantArt pinning fix the same night.**
-Nothing backfills existing archives; the column is `NULL` (not `0`) until an
-entry's next capture or re-fetch. `list_entries_for_feeds` reads it into
+**Go-forward only, same as the DeviantArt pinning fix the same night** — until
+`scripts/backfill_archived_entry_sizes.py` (2026-09-11). Reported live as
+"sorting Inbox by Biggest First doesn't seem to work": on the real library
+only 373 of 18,664 archived entries had a size at all (2%), so the sort
+mostly ordered ties. The script does the exact computation
+`StarredArchiveService._archive_entry` does at capture time — blob lengths
+plus linked-asset bytes — against content that's already fully captured
+(`status='complete'`), so it needs no re-fetch or network call, just reading
+stored lengths and writing one column; run once against the live library
+(17,056 rows, ~44s). New captures/re-fetches keep writing it going forward as
+before — this was a one-time catch-up, not a standing behavior change.
+Nothing backfills existing archives *automatically*; the column was `NULL`
+(not `0`) until an entry's next capture, re-fetch, or this backfill.
+`list_entries_for_feeds` reads it into
 `size_bytes`/`size_display` only when `star_only` is set (Saved and Kept
 views; an ordinary feed list has no use for a third database's worth of
 query on every render) and treats a missing row as "not yet measured," never
