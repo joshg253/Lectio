@@ -10251,6 +10251,12 @@ starred_archive_service = StarredArchiveService(
     # keeps) plus the link scan, so the service only has to ask one question.
     find_attachments=lambda feed_url, html, base: attachment_links_in_html(
         html, base, get_feed_attachment_exts(feed_url)),
+    # Same per-feed policy, reused to gate enclosures (see the "4a" comment
+    # in starred_archive.py) so one setting governs every non-image file
+    # regardless of whether it was declared as an enclosure or found in the
+    # body.
+    attachment_allowed=lambda feed_url, url: _attachment_ext_matches(
+        _url_ext(url), get_feed_attachment_exts(feed_url)),
 )
 
 

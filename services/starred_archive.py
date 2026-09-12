@@ -86,6 +86,7 @@ class StarredArchiveService:
         background_user_ids: Callable[[], list[str]] | None = None,
         on_canonical_link: Callable[[str, str, str, str], bool] | None = None,
         find_attachments=None,
+        attachment_allowed: Callable[[str, str], bool] | None = None,
         manually_tagged_keys: Callable[[], set[tuple[str, str]]] | None = None,
     ) -> None:
         self._get_archive_connection = get_archive_connection
@@ -107,6 +108,11 @@ class StarredArchiveService:
         # than implemented here: which extensions a feed keeps is a per-feed
         # setting in the meta DB, and that policy belongs with the rest of it.
         self._find_attachments = find_attachments
+        # Given (feed_url, url), whether this feed's attachment-extension
+        # policy allows keeping it. Same policy as _find_attachments, reused
+        # for enclosures (see the "4a" comment below) so one per-feed setting
+        # governs every non-image file regardless of how it was found.
+        self._attachment_allowed = attachment_allowed
         # Which users the worker should scan each cycle. The archive DB is
         # resolved per-user through the context-bound get_archive_connection,
         # so the worker must bind each user in turn — a single global thread
@@ -1367,10 +1373,20 @@ class StarredArchiveService:
 
         # 4a. Enclosures — the publisher DECLARING that a file belongs to this
         #     post (Standard Ebooks attaches the epub, magazine feeds the issue
-        #     PDF). That is a stronger claim than a link in the body, so these
-        #     are kept unconditionally rather than behind the per-feed extension
-        #     list. Audio is skipped: podcast enclosures are large and stream
-        #     fine, and images are already collected above.
+        #     PDF; a software project's release-notes feed attaches an
+        #     installer). Gated by the SAME per-feed attachment-extension
+        #     policy as body-linked files (4b) — it used to be unconditional
+        #     on the theory that a declared enclosure is a stronger claim than
+        #     a body link, but that left no way to opt out of a large
+        #     installer/binary an unconfigured feed happened to attach:
+        #     reported live 2026-09-12, a feed explicitly configured to keep
+        #     no attachments at all still archived ~200MB of them via
+        #     enclosures, which this path never checked. A feed relying on the
+        #     PREVIOUS unconditional behavior (no extension list configured at
+        #     all) now needs its extensions added explicitly, same as any
+        #     body-linked attachment always has. Audio is skipped: podcast
+        #     enclosures are large and stream fine, and images are already
+        #     collected above.
         for enc in (getattr(entry, "enclosures", None) or []):
             enc_url = str(getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
             if not enc_url:
@@ -1379,6 +1395,8 @@ class StarredArchiveService:
             if enc_type.startswith(("audio/", "image/")):
                 continue
             if enc_url in image_urls:
+                continue
+            if self._attachment_allowed is not None and not self._attachment_allowed(feed_url, enc_url):
                 continue
             self._archive_asset(feed_url, entry_id, enc_url, max_bytes=ATTACHMENT_MAX_BYTES)
 
@@ -1409,15 +1427,30 @@ class StarredArchiveService:
         # entry that links it is deliberate here — it is what this entry
         # actually costs to keep captured, not what deleting it alone would
         # free. See Plan.md "Saved: see and sort by item size".
+        #
+        # DISTINCT on asset_hash, not a raw SUM over the join: the same image
+        # is routinely discovered at more than one URL for the SAME entry
+        # (e.g. a raw CDN download link and a display-CDN mirror of the exact
+        # same file) — archived_asset_link's key is (feed_url, entry_id,
+        # source_url), so that's two link rows for one already-deduped asset.
+        # A raw SUM over the join counted that asset's bytes once per link
+        # row instead of once per distinct asset, doubling (or worse) the
+        # reported size for any entry with such a duplicate — reported live
+        # 2026-09-12 as "some Saved articles are basically empty yet a couple
+        # hundred MB"; confirmed directly (a GitLab post with 17 distinct
+        # assets, several double-linked, reported 498.5MB where the correct
+        # distinct total is 249.4MB).
         content_size_bytes = (
             len(source_blob or b"") + len(readability_blob or b"") + len(content_blob or b"")
         )
         try:
             with self._archive_conn() as conn:
                 asset_total = conn.execute(
-                    "SELECT COALESCE(SUM(a.byte_size), 0) FROM archived_asset_link l"
-                    " JOIN archived_asset a ON a.asset_hash = l.asset_hash"
-                    " WHERE l.feed_url = ? AND l.entry_id = ?",
+                    "SELECT COALESCE(SUM(byte_size), 0) FROM ("
+                    "  SELECT DISTINCT a.asset_hash, a.byte_size"
+                    "  FROM archived_asset_link l JOIN archived_asset a ON a.asset_hash = l.asset_hash"
+                    "  WHERE l.feed_url = ? AND l.entry_id = ?"
+                    ")",
                     (feed_url, entry_id),
                 ).fetchone()[0]
             content_size_bytes += int(asset_total or 0)

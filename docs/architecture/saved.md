@@ -711,11 +711,23 @@ What counts as a file is the whole design:
   `data-file` are decoded and the result still has to satisfy the feed's
   extension list. This widens where links are *found*, not what counts as a file.
 
-**Enclosures are captured unconditionally**, without the extension list: an
-`<enclosure>` is the publisher *declaring* that a file belongs to the post
-(Standard Ebooks attaches the epub), which is a stronger claim than a body link.
-Audio is skipped (podcast enclosures are large and stream fine) and images are
-already captured as images.
+**Enclosures now go through the same extension list** (fixed 2026-09-12; were
+captured unconditionally before). An `<enclosure>` is the publisher *declaring*
+that a file belongs to the post (Standard Ebooks attaches the epub, a
+software project's release-notes feed attaches an installer) — a stronger
+claim than a body link, which is why this was originally left ungated. But
+"stronger claim" isn't "the user wants it kept regardless of their own
+attachment policy": reported live as a feed explicitly configured to keep no
+attachments (`attachment_exts` empty) still archiving ~200MB of installer
+enclosures, because this path never consulted that setting at all. Gated
+through the same `attachment_allowed` callable
+(`StarredArchiveService.__init__`) the body scan already uses — one policy,
+whichever way the file was found. A feed relying on the *previous*
+unconditional behavior (no extension list ever configured) needs its
+extensions added explicitly now, same as any body-linked attachment always
+has. Audio is still skipped outright (podcast enclosures are large and stream
+fine) and images are still captured as images, neither ever consulting this
+policy.
 
 An archived asset is addressed by content hash, so a bare `download` attribute
 made the browser save `cfc24ad676…` with no extension — unopenable and
@@ -746,6 +758,22 @@ across entries — a site's repeated logo, say. Its full `byte_size` is still
 attributed to every entry that links it: the question this size answers is
 "what does keeping *this* item cost," not "what would deleting only this item
 free," and for that the shared bytes really are part of each entry's weight.
+
+**But only once per entry, not once per link.** `archived_asset_link`'s key is
+`(feed_url, entry_id, source_url)`, and the *same* asset routinely gets found
+at more than one URL for one entry — a raw CDN download link and a
+display-CDN mirror of the identical file, say — so a raw `SUM(byte_size)`
+over the join counted that asset once per link row instead of once per
+distinct asset, double-counting (or worse) it within a single entry. Reported
+live 2026-09-12 as "some Saved articles are basically empty yet a couple
+hundred MB": a GitLab post whose real content was ~3KB of text (a handful of
+large tutorial GIFs did the actual work) reported 498.5MB where `SUM` over
+`DISTINCT (asset_hash, byte_size)` gives the correct 249.4MB — 10 of its 17
+distinct assets were each linked twice. Fixed in both
+`StarredArchiveService._archive_entry` (the live capture path) and
+`scripts/backfill_archived_entry_sizes.py` (which had copied the same
+formula); the live library's already-computed sizes needed a second backfill
+run with the corrected query to fix entries affected by this specifically.
 
 **Go-forward only, same as the DeviantArt pinning fix the same night** — until
 `scripts/backfill_archived_entry_sizes.py` (2026-09-11). Reported live as

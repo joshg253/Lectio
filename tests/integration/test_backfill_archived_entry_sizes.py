@@ -161,6 +161,35 @@ def test_apply_attributes_a_shared_asset_fully_to_each_linking_entry(configured)
     assert _size_of("post-b") == 5000
 
 
+def test_apply_counts_the_same_asset_once_when_one_entry_links_it_twice(configured):
+    """Reported live 2026-09-12 as "some Saved articles are basically empty
+    yet a couple hundred MB": the same image is routinely discovered at two
+    URLs for the SAME entry (a raw CDN download link and a display-CDN
+    mirror of the identical file) -- archived_asset_link's key includes
+    source_url, so that's two link rows for one already content-addressed
+    asset. Summing byte_size per link row (rather than per distinct asset)
+    double-counted it. Confirmed live: a GitLab post with several
+    double-linked assets reported 498.5MB where the correct distinct total
+    was 249.4MB."""
+    import scripts.backfill_archived_entry_sizes as cli
+
+    _insert_archived_entry("gif-post", status="complete", content_size_bytes=None)
+    with main.archive_conn() as conn:
+        conn.execute(
+            "INSERT INTO archived_asset (asset_hash, data, content_type, byte_size, created_at)"
+            " VALUES ('big-gif', ?, 'image/gif', 50_000_000, 0)", (b"x",),
+        )
+        conn.executemany(
+            "INSERT INTO archived_asset_link (feed_url, entry_id, source_url, asset_hash) VALUES (?, ?, ?, ?)",
+            [(FEED, "gif-post", "https://downloads.cdn.test/image6.gif", "big-gif"),
+             (FEED, "gif-post", "https://res.cloudinary.test/image6.gif", "big-gif")],
+        )
+
+    cli.backfill_for_user("u_test", apply=True, limit=0)
+
+    assert _size_of("gif-post") == 50_000_000  # not 100_000_000
+
+
 def test_apply_processes_more_than_one_chunk(configured, monkeypatch):
     """Regression guard for the chunked-write loop: every chunk's updates must
     land, not just the last one."""

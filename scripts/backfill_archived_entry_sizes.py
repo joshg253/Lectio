@@ -59,13 +59,21 @@ def _asset_totals(conn, pairs: list[tuple[str, str]]) -> dict[tuple[str, str], i
     query for the whole chunk rather than one per entry."""
     if not pairs:
         return {}
+    # DISTINCT on (feed_url, entry_id, asset_hash) before summing: the same
+    # image is routinely discovered at more than one URL for the same entry
+    # (a raw CDN download link and a display-CDN mirror of the same file),
+    # giving it two archived_asset_link rows for one already-deduped asset.
+    # Grouping straight off the join would sum that asset's bytes once per
+    # link row instead of once per distinct asset -- see the matching fix in
+    # StarredArchiveService._archive_entry.
     placeholders = ",".join("(?,?)" for _ in pairs)
     params = [v for pair in pairs for v in pair]
     rows = conn.execute(
-        f"SELECT l.feed_url, l.entry_id, COALESCE(SUM(a.byte_size), 0) AS total"
-        f" FROM archived_asset_link l JOIN archived_asset a ON a.asset_hash = l.asset_hash"
-        f" WHERE (l.feed_url, l.entry_id) IN ({placeholders})"
-        f" GROUP BY l.feed_url, l.entry_id",
+        f"SELECT feed_url, entry_id, COALESCE(SUM(byte_size), 0) AS total FROM ("
+        f"  SELECT DISTINCT l.feed_url, l.entry_id, a.asset_hash, a.byte_size"
+        f"  FROM archived_asset_link l JOIN archived_asset a ON a.asset_hash = l.asset_hash"
+        f"  WHERE (l.feed_url, l.entry_id) IN ({placeholders})"
+        f") GROUP BY feed_url, entry_id",
         params,
     ).fetchall()
     return {(r["feed_url"], r["entry_id"]): int(r["total"]) for r in rows}
