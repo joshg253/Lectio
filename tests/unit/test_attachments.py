@@ -59,7 +59,7 @@ def test_duplicate_urls_collapsed():
         _enc("https://dl.test/a.pdf", type="application/pdf"),
         _enc("https://dl.test/a.pdf", type="application/pdf"),
     ])
-    assert main._render_entry_attachments(e, None).count("<li>") == 1
+    assert main._render_entry_attachments(e, None).count("<li ") == 1
 
 
 def test_placeholder_size_dropped_real_size_kept():

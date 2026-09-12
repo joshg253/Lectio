@@ -4627,6 +4627,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           () => applyPortraitImageCap(nextPane),
           () => renderMathInEntryPane(nextPane),
           () => initBskyVideoPlayers(nextPane),
+          () => loadEntryAttachments(),
           () => { if (typeof window.bindSwipeGestures === 'function') window.bindSwipeGestures(); },
           () => { if (typeof applyHighlights === 'function') applyHighlights(); },
           () => markActivePostByUrl(url),
@@ -8295,6 +8296,312 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       refreshFolderForm.submit();
     });
 
+    // Per-entry Attachments panel. The footer itself (#entry-attachments) is
+    // baked server-side into the article's content_html when the entry has
+    // enclosures or policy-captured body files (main._render_entry_attachments)
+    // — this reuses that same footer rather than adding a second one:
+    // existing rows get a delete "×" added, and file-like body links found but
+    // NOT kept (because the feed's attachment-extension policy doesn't cover
+    // them) are appended into the same list with a Save button. When the
+    // footer doesn't exist yet (nothing captured) but there's something
+    // available to save, this builds one fresh in the same shape and appends
+    // it to .entry-content. feed_url/entry_id come from the (always-present)
+    // star-toggle form, not the footer -- which may not exist yet.
+    async function loadEntryAttachments() {
+      const saveForm = document.querySelector('.entry-save-toggle-form');
+      const feedUrl = saveForm?.querySelector('input[name="feed_url"]')?.value;
+      const entryId = saveForm?.querySelector('input[name="entry_id"]')?.value;
+      if (!feedUrl || !entryId) return;
+
+      function filenameFor(url) {
+        try {
+          const path = new URL(url).pathname;
+          const base = path.split('/').filter(Boolean).pop() || url;
+          return decodeURIComponent(base);
+        } catch (_e) {
+          return url;
+        }
+      }
+
+      function addRemoveButton(li) {
+        if (li.querySelector('.entry-attachment-remove')) return;
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'entry-attachment-remove';
+        removeBtn.setAttribute('aria-label', 'Delete this attachment');
+        removeBtn.textContent = '×';
+        li.appendChild(removeBtn);
+      }
+
+      function makeKeptRow(item) {
+        const li = document.createElement('li');
+        li.dataset.sourceUrl = item.source_url;
+        li.dataset.kept = '1';
+        const link = document.createElement('a');
+        // The local archived copy, not the publisher's URL — same "local
+        // copy wins" rule the server-rendered footer applies (main.
+        // _attachment_list_item): a saved post whose files still 404 at the
+        // source has kept the wrong half, and that's the whole point of
+        // archiving them.
+        link.href = item.local_url || item.source_url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.title = item.source_url;
+        link.textContent = filenameFor(item.source_url);
+        li.appendChild(link);
+        const size = document.createElement('span');
+        size.className = 'entry-attachment-size';
+        size.textContent = ' (' + formatBytes(item.byte_size || 0) + ')';
+        li.appendChild(size);
+        addRemoveButton(li);
+        return li;
+      }
+
+      function makeAvailableRow(url) {
+        const li = document.createElement('li');
+        li.className = 'entry-attachment-available';
+        li.dataset.sourceUrl = url;
+        const link = document.createElement('a');
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.title = url;
+        link.textContent = filenameFor(url);
+        li.appendChild(link);
+        const saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'entry-attachment-save';
+        saveBtn.textContent = 'Save';
+        li.appendChild(saveBtn);
+        return li;
+      }
+
+      let data;
+      try {
+        const params = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId });
+        const resp = await fetch('/entries/attachments?' + params.toString(), { credentials: 'same-origin' });
+        if (!resp.ok) return;
+        data = await resp.json();
+        if (!data.ok) return;
+      } catch (_e) {
+        return;
+      }
+      const kept = data.kept || [];
+      const available = data.available || [];
+
+      let container = document.getElementById('entry-attachments');
+      if (!kept.length && !available.length) {
+        if (container) container.remove();
+        return;
+      }
+
+      // A container already bound to click handlers means this call is a
+      // post-mutation refresh, not the initial render — the reconciliation
+      // below is add-only (it never removes a row a prior render added), so
+      // a refresh clears the list and rebuilds it purely from this response
+      // rather than risk leaving a just-deleted/just-saved row stale. The
+      // only cost is losing the server's nicer enclosure label in favor of
+      // the plain filename on rows rebuilt this way — a fair trade for
+      // correctness after an action the user just took.
+      const isRefresh = !!container && container.dataset.boundClick === '1';
+
+      let list = document.getElementById('entry-attachments-list');
+      let header = document.getElementById('entry-attachments-header');
+      if (!container) {
+        const entryContent = document.querySelector('.entry-content');
+        if (!entryContent) return;
+        container = document.createElement('div');
+        container.id = 'entry-attachments';
+        container.className = 'entry-attachments';
+        header = document.createElement('div');
+        header.id = 'entry-attachments-header';
+        header.className = 'entry-attachments-header';
+        const label = document.createElement('span');
+        label.className = 'entry-attachments-label';
+        label.textContent = 'Attachments';
+        header.appendChild(label);
+        container.appendChild(header);
+        list = document.createElement('ul');
+        list.id = 'entry-attachments-list';
+        container.appendChild(list);
+        entryContent.appendChild(container);
+      }
+      if (!list || !header) return;
+
+      if (isRefresh) list.innerHTML = '';
+
+      // Existing server-rendered rows (first render only): add a delete
+      // control to the kept ones.
+      for (const li of Array.from(list.children)) {
+        if (li instanceof HTMLElement && li.dataset.kept === '1') addRemoveButton(li);
+      }
+      // Kept items the API knows about but not yet in the list — either a
+      // manually-saved link the feed's policy never covered (4a/4b in
+      // _archive_entry don't know about it, only archive_one_attachment
+      // does), or every kept row on a post-mutation refresh.
+      const existingUrls = new Set(
+        Array.from(list.children).map((li) => (li instanceof HTMLElement ? li.dataset.sourceUrl : null))
+      );
+      for (const item of kept) {
+        if (existingUrls.has(item.source_url)) continue;
+        list.appendChild(makeKeptRow(item));
+        existingUrls.add(item.source_url);
+      }
+      // Available candidates always come from here — the server-render never
+      // lists a not-yet-kept link.
+      for (const url of available) {
+        if (existingUrls.has(url)) continue;
+        list.appendChild(makeAvailableRow(url));
+        existingUrls.add(url);
+      }
+
+      const keptCount = Array.from(list.children).filter(
+        (li) => li instanceof HTMLElement && li.dataset.kept === '1'
+      ).length;
+      const availCount = Array.from(list.children).filter(
+        (li) => li instanceof HTMLElement && li.classList.contains('entry-attachment-available')
+      ).length;
+
+      let deleteAllBtn = document.getElementById('entry-attachments-delete-all');
+      if (!deleteAllBtn && keptCount > 1) {
+        deleteAllBtn = document.createElement('button');
+        deleteAllBtn.type = 'button';
+        deleteAllBtn.id = 'entry-attachments-delete-all';
+        deleteAllBtn.className = 'entry-attachments-bulk-btn';
+        deleteAllBtn.textContent = 'Delete all';
+        header.appendChild(deleteAllBtn);
+      }
+      if (deleteAllBtn) {
+        deleteAllBtn.hidden = keptCount <= 1;
+        deleteAllBtn.disabled = false;
+      }
+
+      let saveAllBtn = document.getElementById('entry-attachments-save-all');
+      if (!saveAllBtn && availCount > 1) {
+        saveAllBtn = document.createElement('button');
+        saveAllBtn.type = 'button';
+        saveAllBtn.id = 'entry-attachments-save-all';
+        saveAllBtn.className = 'entry-attachments-bulk-btn';
+        saveAllBtn.textContent = 'Save all';
+        header.appendChild(saveAllBtn);
+      }
+      if (saveAllBtn) {
+        saveAllBtn.hidden = availCount <= 1;
+        saveAllBtn.disabled = false;
+        saveAllBtn.textContent = 'Save all';
+      }
+
+      if (container.dataset.boundClick) return;
+      container.dataset.boundClick = '1';
+
+      list.addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+
+        const removeBtn = target.closest('.entry-attachment-remove');
+        if (removeBtn) {
+          const li = removeBtn.closest('li');
+          const sourceUrl = li instanceof HTMLElement ? li.dataset.sourceUrl : null;
+          if (!sourceUrl) return;
+          removeBtn.disabled = true;
+          try {
+            const resp = await fetch('/entries/attachments/delete', {
+              method: 'POST',
+              body: new URLSearchParams({ feed_url: feedUrl, entry_id: entryId, source_url: sourceUrl }),
+            });
+            const respData = await resp.json();
+            if (respData.ok) {
+              showToastMessage('Attachment deleted.');
+              loadEntryAttachments();
+            } else {
+              removeBtn.disabled = false;
+              showToastMessage('Could not delete that attachment.');
+            }
+          } catch (_err) {
+            removeBtn.disabled = false;
+            showToastMessage('Delete failed — network error.');
+          }
+          return;
+        }
+
+        const saveBtn = target.closest('.entry-attachment-save');
+        if (saveBtn) {
+          const li = saveBtn.closest('li');
+          const sourceUrl = li instanceof HTMLElement ? li.dataset.sourceUrl : null;
+          if (!sourceUrl) return;
+          saveBtn.disabled = true;
+          saveBtn.textContent = 'Saving…';
+          try {
+            const resp = await fetch('/entries/attachments/save', {
+              method: 'POST',
+              body: new URLSearchParams({ feed_url: feedUrl, entry_id: entryId, source_url: sourceUrl }),
+            });
+            const respData = await resp.json();
+            if (respData.ok) {
+              showToastMessage('Attachment saved.');
+              li.remove();
+              loadEntryAttachments();
+            } else {
+              saveBtn.disabled = false;
+              saveBtn.textContent = 'Save';
+              showToastMessage(respData.error || 'Could not save that file.');
+            }
+          } catch (_err) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save';
+            showToastMessage('Save failed — network error.');
+          }
+        }
+      });
+
+      header.addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+
+        if (target.id === 'entry-attachments-delete-all') {
+          const btn = target;
+          btn.disabled = true;
+          try {
+            const resp = await fetch('/entries/attachments/delete-all', {
+              method: 'POST',
+              body: new URLSearchParams({ feed_url: feedUrl, entry_id: entryId }),
+            });
+            const respData = await resp.json();
+            showToastMessage(respData.removed
+              ? `Deleted ${respData.removed} attachment${respData.removed === 1 ? '' : 's'}.`
+              : 'Nothing to delete.');
+            loadEntryAttachments();
+          } catch (_err) {
+            btn.disabled = false;
+            showToastMessage('Delete all failed — network error.');
+          }
+          return;
+        }
+
+        if (target.id === 'entry-attachments-save-all') {
+          const btn = target;
+          const urls = Array.from(list.children)
+            .filter((li) => li instanceof HTMLElement && li.classList.contains('entry-attachment-available'))
+            .map((li) => (li instanceof HTMLElement ? li.dataset.sourceUrl : null))
+            .filter((u) => !!u);
+          if (!urls.length) return;
+          btn.disabled = true;
+          try {
+            const resp = await fetch('/entries/attachments/save-all', {
+              method: 'POST',
+              body: new URLSearchParams({ feed_url: feedUrl, entry_id: entryId, urls: JSON.stringify(urls) }),
+            });
+            const respData = await resp.json();
+            showToastMessage(`Saved ${respData.saved || 0}${respData.failed ? `, ${respData.failed} failed` : ''}.`);
+            loadEntryAttachments();
+          } catch (_err) {
+            btn.disabled = false;
+            showToastMessage('Save all failed — network error.');
+          }
+        }
+      });
+    }
+
     function bindEntryPaneInteractions() {
       const entrySaveForm = document.querySelector('.entry-save-toggle-form');
       if (entrySaveForm && !entrySaveForm.dataset.boundAsyncSubmit) {
@@ -8695,6 +9002,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     try { applyPortraitImageCap(document.querySelector('.pane-entry')); } catch (e) {}
     try { renderMathInEntryPane(document.querySelector('.pane-entry')); } catch (e) {}
     try { initBskyVideoPlayers(document.querySelector('.pane-entry')); } catch (e) {}
+    try { loadEntryAttachments(); } catch (e) {}
     if (_ytAccountFeaturesEnabled) _ytResumeBatchJobOnLoad();
 
     // --- Post multi-select (checkboxes) -----------------------------------

@@ -758,6 +758,85 @@ the publisher set their own `download` name), and the `/starred-asset/` route vi
 for images/audio/video, which render inline and would only be made un-viewable by
 an attachment disposition.
 
+### Managing attachments per entry — delete one/all, save one/all beyond policy
+
+Built 2026-09-12, after a "which saved articles are hoarding space for no
+reason" pass turned up entries whose attachments were legitimate (Guitar
+Pro's `.gp` tabs, a magazine's PDF/EPUB issue) with no way to individually
+prune the odd unwanted one, and no way to keep a file the feed's
+`attachment_exts` policy doesn't happen to cover without widening that policy
+for every other post from that feed.
+
+**Reuses the existing server-rendered footer instead of adding a second one.**
+`_render_entry_attachments` already bakes an `<div id="entry-attachments">`
+into `content_html` when the entry has kept enclosures/body files (see above);
+`loadEntryAttachments` (app.js, runs on every pane load/swap) finds that same
+element, adds a delete "×" to each existing row, and appends rows for file-like
+body links found but not kept — the panel's "available to save" list — rather
+than rendering a competing section. When nothing is server-rendered yet (no
+enclosures, nothing captured under the feed's policy) but there's something
+available to save, the same structure is built fresh in JS and appended to
+`.entry-content`.
+
+**"Available" deliberately ignores the feed's attachment-extension policy.**
+`candidate_attachment_links_in_html` is `attachment_links_in_html`'s sibling
+with the extension *allowlist* replaced by the same *exclusions*
+`scan_feed_attachment_extensions` already uses (page types, images, bare-domain
+TLD lookalikes) — everything else counts as a candidate. That's the entire
+point of a per-entry override: a link outside the feed's policy is exactly
+what an "available" list needs to surface, and `archive_one_attachment` (the
+"Save" action) doesn't consult the policy either, only the size cap
+(`ATTACHMENT_MAX_BYTES`) every attachment already respects.
+
+**Candidates are scanned from what the article pane actually renders**
+(`_resolve_entry_content_html`, or the archived readability capture for an
+orphan whose feed is gone) — **never `source_html`**, the raw fetched page.
+That's the exact mistake the same-day image-scope fix undid for the automatic
+image scan (see "Image harvesting scanned the whole fetched page, not the
+article" above): scanning page chrome for file-like links would offer the
+user "save" buttons for a site's nav/footer/related-posts links that were
+never part of the article.
+
+**A server-rendered row's `href` isn't reliable as a row identity.** It's the
+local `/starred-asset/<hash>` copy when one exists (`_attachment_list_item`'s
+"local copy wins" rule) — so `_attachment_list_item` also stamps
+`data-source-url` (the original URL) and `data-kept="1"` on each `<li>`,
+letting the JS panel identify a row and add its delete control without
+re-deriving anything. `list_non_image_assets` (the "kept" half of `GET
+/entries/attachments`) returns each row's `asset_hash` for the same reason —
+`entry_attachments_route` turns it into a `local_url`, and any row this panel
+*rebuilds* (which happens after any mutation — see below) links to that,
+not the source, so re-fetching after a delete/save never regresses a row
+back to linking the publisher's copy.
+
+**A refresh clears and rebuilds the list; the initial render only augments
+it.** The reconciliation that adds missing rows is add-only — it has no way
+to know a row present at initial render is now stale. `loadEntryAttachments`
+tracks this with the same flag it uses to guard against double-binding
+(`container.dataset.boundClick`): unset means this is the first render
+(existing server-rendered rows are kept, just augmented with delete
+controls), set means a prior mutation already bound the click handlers, so
+the list is cleared and rebuilt purely from the fresh API response. The only
+visible cost is a server-rendered row's nicer enclosure label (from
+`_enclosure_label`) becoming a plain filename once it's rebuilt this way — a
+fair trade against a stale or duplicated row.
+
+**Bulk actions gate on there being more than one item**, not merely one-plus
+— removing/saving a lone item is what its own row's button is for, and a
+delete-all/save-all button doing exactly the same thing as the row it sits
+next to is just noise. `delete_all_attachments` and the client-supplied
+`urls` list `save-all` posts are otherwise no different from repeating the
+single-item action.
+
+**Go-forward for delete, not for save.** Deleting an attachment is immediate
+and synchronous (`delete_one_attachment`/`delete_all_attachments` — direct
+SQL, no network). Saving one re-fetches over the network through the same
+`_archive_asset` the automatic capture path uses, so a dead link, a page
+returned instead of a file, or a file over the 25MB cap fails exactly the way
+an automatic capture would — `archive_one_attachment` checks the link table
+afterward rather than trusting `_archive_asset`'s silent-skip return to know
+whether it actually landed.
+
 ## Saved/Kept item size: maintained, not computed live
 
 `archived_entry.content_size_bytes` is written once, at archive-completion

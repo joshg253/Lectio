@@ -4604,6 +4604,102 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   line-height: 1.5;
 }
 
+/* Per-entry Attachments footer — .entry-attachments is baked server-side into
+   content_html (main._render_entry_attachments) when the entry has kept
+   enclosures/body files; loadEntryAttachments (app.js) reuses this same
+   footer, adding delete controls to existing rows and appending file-like
+   body links found but not kept under the feed's attachment policy. The
+   server-rendered version carries this same rule inline (survives the
+   sanitizer without depending on this stylesheet); this covers the case
+   where JS builds the footer fresh instead, for an entry with nothing
+   server-rendered yet but something available to save. */
+.entry-attachments {
+  margin: 1.5em 0 0.5em;
+  padding-top: 0.75em;
+  border-top: 1px solid var(--border, #ddd);
+}
+
+#entry-attachments-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.entry-attachments-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.entry-attachments-bulk-btn {
+  font-size: 0.78rem;
+  padding: 0.15em 0.6em;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ink-mid, color-mix(in srgb, var(--ink) 75%, transparent));
+  cursor: pointer;
+}
+
+.entry-attachments-bulk-btn:hover { background: var(--hover-bg, rgba(0, 0, 0, 0.05)); }
+.entry-attachments-bulk-btn:disabled { opacity: 0.5; cursor: default; }
+
+#entry-attachments-list {
+  margin: 0;
+  padding-left: 1.25em;
+}
+
+#entry-attachments-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+#entry-attachments-list li > a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A candidate found in the body but not kept under the feed's attachment
+   policy — dashed to read as "not part of the archive yet". */
+.entry-attachment-available > a {
+  border-bottom: 1px dashed var(--border, #d0d0d0);
+}
+
+.entry-attachment-size {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.entry-attachment-remove,
+.entry-attachment-save {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  padding: 0.1em 0.5em;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.entry-attachment-remove {
+  color: var(--danger, #c0392b);
+  line-height: 1;
+  padding: 0.05em 0.45em;
+}
+
+.entry-attachment-remove:disabled,
+.entry-attachment-save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .action-modal-textarea {
   width: 100%;
   min-height: 12rem;
