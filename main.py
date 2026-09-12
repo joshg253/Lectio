@@ -19709,6 +19709,102 @@ def mark_feeds_as_read(feed_urls: set[str]) -> tuple[int, str | None]:
     return len(to_sync), when
 
 
+def _mark_entries_as_read_for_view(
+    feed_urls: set[str],
+    *,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    read_filter: str | None = None,
+    star_only: str | int | bool | None = None,
+    tag: str | None = None,
+    older_than_cutoff: datetime | None = None,
+) -> tuple[int, str | None]:
+    """Mark as read only the entries the current filtered view actually shows —
+    tag, star_only, read_filter, and every hide_* display preference
+    list_entries_for_feeds itself applies (hide_locked_comics, hide_shorts,
+    hide_paywalled, hide_members_only, hide_unpremiered) — not every raw
+    unread entry in feed_urls regardless of what the view is hiding.
+
+    Shared by /folders/mark-read, /feeds/mark-read, and
+    /entries/mark-older-than-read, each of which used to ignore the tag/
+    star_only/read_filter params their own forms already submitted (accepted
+    only to round-trip into the redirect URL) and mark every unread entry in
+    scope instead — so marking a filtered/starred/tagged view as read could
+    silently mark entries the filter was hiding. Only /entries/mark-range-read
+    ("Read above/below") was already scoped correctly, via this same
+    list_entries_for_feeds call.
+
+    older_than_cutoff, when given, additionally requires the same effective
+    date (published/updated/added, via entry_effective_date) the list itself
+    displays and greys on to be before it — the "Older than N days" action's
+    own scoping, layered on top of the view filter rather than replacing it.
+    """
+    if not feed_urls:
+        return 0, None
+    # list_entries_for_feeds(enrich=False) is used only to compute WHICH
+    # entries the current tag/star_only/read_filter/hide_* view actually shows
+    # — cheaply (no thumbnails/tags/premiere-prefix work) — not as the source
+    # of the entries themselves, since that shape drops post_timestamp and
+    # everything else an enriched caller would get. The actual read/date
+    # checks below run against raw reader entries, same as before this scoping
+    # existed.
+    allowed_ids = {
+        (post["feed_url"], post["id"])
+        for post in list_entries_for_feeds(
+            feed_urls,
+            limit=_RANGE_READ_LIMIT,
+            sort_by=sort_by or "post",
+            sort_dir=sort_dir or "asc",
+            read_filter=read_filter or "all",
+            star_only=normalize_star_only(star_only),
+            selected_tag=tag,
+            enrich=False,
+        )
+    }
+    if not allowed_ids:
+        return 0, None
+
+    to_sync: list[tuple[str, str]] = []
+    with get_reader() as reader:
+        for feed_url in feed_urls:
+            for entry in reader.get_entries(feed=feed_url, read=False):
+                if (entry.feed_url, entry.id) not in allowed_ids:
+                    continue
+                if older_than_cutoff is not None:
+                    date = entry_effective_date(entry)
+                    if date is None:
+                        continue
+                    if date.tzinfo is None:
+                        date = date.replace(tzinfo=timezone.utc)
+                    if date >= older_than_cutoff:
+                        continue
+                # A premiere that hasn't aired yet shouldn't be swallowed by a
+                # blanket mark-read sweep, even when hide_unpremiered itself is
+                # off (matching every other mark-read entry point's
+                # unconditional exemption) — it hasn't delivered its content.
+                if _is_youtube_unpremiered(entry):
+                    continue
+                try:
+                    reader.mark_entry_as_read((entry.feed_url, entry.id))
+                except Exception:
+                    continue
+                to_sync.append((entry.feed_url, entry.id))
+
+    when = None
+    if to_sync:
+        when = datetime.now().isoformat()
+        with get_meta_connection() as conn:
+            conn.executemany(
+                """
+                INSERT INTO entry_read_state (feed_url, entry_id, read_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at
+                """,
+                [(fu, eid, when) for fu, eid in to_sync],
+            )
+    return len(to_sync), when
+
+
 def _is_youtube_host(host: str) -> bool:
     """True for youtube.com / youtu.be and their subdomains (exact suffix match,
     not substring — "youtube.com.evil.com" must not pass)."""
@@ -33973,7 +34069,9 @@ def mark_folder_as_read(
     with get_meta_connection() as conn:
         feed_urls = get_folder_feed_urls(conn, folder_id)
 
-    marked_count, undo_token = mark_feeds_as_read(feed_urls)
+    marked_count, undo_token = _mark_entries_as_read_for_view(
+        feed_urls, sort_by=sort_by, sort_dir=sort_dir, read_filter=read_filter, star_only=star_only, tag=tag,
+    )
     with unread_counts_cache_lock:
         global _unread_counts_generation
         _unread_counts_generation += 1
@@ -34071,7 +34169,9 @@ def mark_feed_as_read(
     resume_read_filter: str | None = Form(default=None),
 ):
     normalized_tag = normalize_tag_value(tag)
-    marked_count, undo_token = mark_feeds_as_read({feed_url})
+    marked_count, undo_token = _mark_entries_as_read_for_view(
+        {feed_url}, sort_by=sort_by, sort_dir=sort_dir, read_filter=read_filter, star_only=star_only, tag=tag,
+    )
     with unread_counts_cache_lock:
         global _unread_counts_generation
         _unread_counts_generation += 1
@@ -36288,45 +36388,11 @@ def mark_entries_older_than_read(
     filtered_feed_urls = filter_feed_urls(feed_urls, list_feed_url)
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
-    marked_count = 0
-    undo_token = None
-    to_sync: list[tuple[str, str]] = []
-    with get_reader() as reader:
-        for fu in filtered_feed_urls:
-            for entry in reader.get_entries(feed=fu, read=False):
-                # Match the date the list displays and the client greys on
-                # (post_timestamp = published or updated or added). Without the
-                # `added` fallback the server skips entries the UI optimistically
-                # marked, so they flash read then revert.
-                date = entry_effective_date(entry)
-                if date is None:
-                    continue
-                if date.tzinfo is None:
-                    date = date.replace(tzinfo=timezone.utc)
-                if date >= cutoff:
-                    continue
-                # A premiere that hasn't aired yet shouldn't be swallowed by a
-                # blanket "mark older than X" sweep.
-                if _is_youtube_unpremiered(entry):
-                    continue
-                try:
-                    reader.mark_entry_as_read((entry.feed_url, entry.id))
-                except Exception:
-                    continue
-                to_sync.append((entry.feed_url, entry.id))
-                marked_count += 1
-
-    if to_sync:
-        when = undo_token = datetime.now().isoformat()
-        with get_meta_connection() as conn:
-            conn.executemany(
-                """
-                INSERT INTO entry_read_state (feed_url, entry_id, read_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at
-                """,
-                [(fu, eid, when) for fu, eid in to_sync],
-            )
+    marked_count, undo_token = _mark_entries_as_read_for_view(
+        filtered_feed_urls, sort_by=sort_by, sort_dir=sort_dir, read_filter=read_filter, star_only=star_only,
+        tag=tag, older_than_cutoff=cutoff,
+    )
+    if marked_count:
         global _unread_counts_generation
         _unread_counts_generation += 1
         unread_counts_cache.clear()

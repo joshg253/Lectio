@@ -178,6 +178,37 @@ with rendering the article being read. Failures are swallowed.
 article's HTML would mark it read unseen. The two changes are ordered, not
 independent.
 
+### Bulk mark-read must scope to the filtered view, not the raw folder/feed
+
+Answered 2026-09-11 (a standing open question — "just what's shown, or newer not-yet-seen
+too?"): a filtered view's "Mark as read" only marks what the filter actually shows.
+
+`/folders/mark-read`, `/feeds/mark-read`, and `/entries/mark-older-than-read` each already
+accepted `tag`/`star_only`/`read_filter` form fields — the template already sends them,
+matching whatever the current view is scoped to — but only used them to build the redirect
+URL, then ran a flat "every unread entry in these feeds" sweep (`mark_feeds_as_read`, or an
+inline reader loop for the older-than case). So marking a tag-filtered or Starred-filtered
+folder as read silently marked entries the filter was hiding, not just what was on screen.
+Only `/entries/mark-range-read` ("Read above/below") was already scoped correctly, by
+resolving its candidate list through `list_entries_for_feeds` — the same function the list
+view itself renders from.
+
+The fix, `_mark_entries_as_read_for_view`, gives the other three that same scoping without
+duplicating it: it calls `list_entries_for_feeds(..., enrich=False)` once to compute *which*
+`(feed_url, entry_id)` pairs the current tag/star_only/read_filter view contains — for free,
+this also means every hide_* display preference (`hide_locked_comics`, `hide_shorts`,
+`hide_paywalled`, `hide_members_only`, `hide_unpremiered`) is respected too, since those live
+inside `list_entries_for_feeds` already — then walks the real unread reader entries per feed,
+keeping only ones in that allowed set. It does not read fields off the `enrich=False` result
+dicts themselves (that shape deliberately strips `post_timestamp` and everything else an
+enriched caller would get, to stay cheap on a big unread scan) — the "older than N days" cutoff
+and the unconditional unpremiered exemption both still run against the raw reader `Entry`
+objects, exactly as they did before this fix, just filtered to the allowed set first.
+
+`mark_feeds_as_read` itself is unchanged and still used as-is by `/feeds/bulk`'s "mark read"
+action (Settings → Feeds toolbar) — that caller has no view/filter context at all (a raw set of
+selected feeds), so the blanket sweep is the correct behavior there, not a gap.
+
 ### Two scopes
 
 `?scope=saved` (default) is the starred backlog with the Archive axis. `feeds` is

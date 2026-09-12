@@ -376,13 +376,6 @@ on entries carrying that tag. Wants it editable somewhere in Settings (a new lis
 Not scoped: needs a new setting (JSON list or a small table), a check at chip-render time
 (`feed_tag_suggestions` filtering), and a Settings UI panel.
 
-### MAR scope: only what's currently shown, or newer-not-yet-seen too?
-
-"mark folder only shown or potentially newer that haven't been seen yet?" — a question about what a
-folder's "Mark Read" bulk action should cover: just the entries currently rendered/loaded in the
-list, or also anything newer that hasn't been fetched into view yet. Not resolved — needs Josh to
-say which behavior he actually wants (and whether the two already differ today) before scoping.
-
 ### An entry takes a really long time to open — inconclusive, no repro caught
 
 [entry](https://play.nobleknight.com/?p=19266) (feed:
