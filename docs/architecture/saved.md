@@ -328,6 +328,26 @@ leaves the source (reader cannot delete feed-provided entries), but
 source is hard-deleted once the move succeeds. Without this the backlog never
 shrank as it was filed, and duplicate scans re-read husks.
 
+**A synthesized target gets a real date, not whatever reader defaults an
+absent one to.** When no existing entry matches in the target feed,
+`_move_entry_to_feed` (and `migrate_entry_to_new_host`'s identical synth path)
+creates one via `reader.add_entry(ed)`. `ed["published"]` used to be set only
+`if src.published:` — true for a real date, but also (falsily) skipped for a
+source whose only "date" is a feed-supplied garbage value real_published_date
+already treats as invalid (e.g. epoch-0), leaving the synthesized copy with no
+`published` key at all. Reader then has nothing to fall back to either, while
+the synthesized entry's own `added` (ingest time) is simply *now*, since it
+was just created — so the same post reads as ancient wherever something sorts
+on the raw column and brand new wherever something displays via the
+`entry_effective_date` fallback (`published`, else `updated`, else `added`).
+Reported live 2026-09-12 (mid-triage, moving misfiled guitarworld.com posts
+into the real feed) as dozens of just-moved entries suddenly at the top of the
+Inbox reading "Now" — "confusing as hell." Fixed by setting
+`ed["published"] = entry_effective_date(src)` instead of the raw attribute:
+the *source's* effective date, under the identical chain every other
+date-based view already agrees on, rather than leaving the synthesized copy
+to fall through reader's own default.
+
 **Barred targets** (`_autofile_excluded_targets`, on preview *and* apply): Saved
 Articles itself, and every YouTube feed — a saved page is never a channel post,
 and channels routinely share a name with the blog they accompany. For the same
@@ -849,3 +869,31 @@ Settings → Feeds → Utilities → **Archive old stars** clears the Inbox of s
 **Why it shipped with a "DO NOT RUN YET" in Plan.md, and what fixed it.** The cutoff originally sorted only on `saved_entries.saved_at`, which is not a real star date for most rows: the 2026-06 multi-user migration stamped its own run date over years-old Inoreader stars. Measured on the live library, 6,091 of 10,002 stars carry a `saved_at` in that one week; only 419 are a genuine Lectio-made star, the rest (3,492) predate it honestly. A 30-day cutoff would have swept the 6,091 migration-stamped rows in and a 90-day cutoff would have protected them — neither for any date-related reason.
 
 The fix (2026-08-25) is a **date basis**, not a smarter cutoff: `basis="published"` (the default, in both `GET /saved/archive-old/preview` and `POST /saved/archive-old`) measures age off the article's own `entries.published`, read directly from reader's DB (`_bulk_reader_published_dates`, same raw-connection-read pattern as `get_tagged_entry_keys`/`_sorted_star_key_window` — reader's high-level API has no bulk-by-key lookup). `basis="saved"` is kept as an explicit option for anyone who genuinely wants star-date bankruptcy, with its unreliability caveat shown in the UI only when picked. An entry with no date under the chosen basis is left alone rather than guessed at — the same policy `build_archive_plan` already applied to a missing `saved_at`.
+
+## `backfill_saved_entries_from_archive` didn't know about the Archive (done) axis
+
+`backfill_saved_entries_from_archive` (`services/starred_archive.py`, run at
+every startup) exists to recover from a wiped meta DB: if `archived_entry`
+still has a `status='complete'` row for an entry reader still holds, and
+nothing else explains it, it re-inserts the `saved_entries` row. It already
+knew to skip a **manually tagged** entry — tag-as-keep means a tag archives
+too, so "has a complete archive" stopped implying "was starred" the day that
+shipped.
+
+It didn't know about the **Archive (done)** axis, which broke the exact same
+assumption a second way: `entry_has_keep_signal` (main.py) treats Archived as
+a third independent reason to keep an entry's capture, and `apply_star_state`
+correctly never enqueues removal for an Archived-and-unstarred entry — the
+capture is *supposed* to survive. But `backfill_saved_entries_from_archive`
+had no way to tell "Archived, deliberately left unstarred" apart from
+"genuinely lost the star row," so every restart silently put the star back.
+Reported live 2026-09-12 as "it keeps coming back after I unstarred it
+multiple times" — several `make rebuild`s in one working session raced ahead
+of what would otherwise be a rare, invisible bug in a longer-lived deployment.
+
+Fixed the same way the tag case was: a new `archived_keys` callable (bulk
+`get_archived_saved_keys()`, mirroring `manually_tagged_keys`) is checked
+alongside `tagged`, and either explains away a complete archive without
+restoring its star. A failing lookup bails the whole function rather than
+guessing, same as the existing tag-lookup-failure rule — inventing thousands
+of stars is worse than skipping one restart's worth of disaster recovery.

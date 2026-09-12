@@ -83,6 +83,49 @@ def test_move_synthesizes_and_carries_star_and_tags(env):
         assert not conn.execute("SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id='e1'", (SRC,)).fetchone()
 
 
+def test_move_synth_falls_back_to_effective_date_when_source_has_none(env):
+    """Reported live 2026-09-12 as "confusing as hell": a source with no real
+    publication date used to leave the synthesized copy with no `published` at
+    all -- reader defaults that to epoch-0 (1970-01-01), while the synthesized
+    entry's own `added` (ingest time) is simply now, so it read as ancient in
+    a raw-column sort and brand new wherever entry_effective_date's `added`
+    fallback was what actually got displayed. The synthesized copy must get a
+    real date instead -- the source's own entry_effective_date (published,
+    else updated, else added), the same chain every other date-based view
+    already agrees on."""
+    _setup_feeds()  # e1 has no published/updated at all
+    with main.get_reader() as reader:
+        src_added = reader.get_entry((SRC, "e1")).added
+
+    result = _move()
+
+    assert result["ok"] and result["synth"]
+    with main.get_reader() as reader:
+        moved = reader.get_entry((DST, "e1"))
+        assert moved.published is not None
+        assert moved.published.year > 1970
+        assert moved.published == src_added
+
+
+def test_move_synth_carries_a_real_published_date_unchanged(env):
+    """The normal case (source has a real date) must still work exactly as
+    before -- entry_effective_date returns the real published date first, so
+    it, not `added`, is what gets carried."""
+    from datetime import datetime, timezone
+    real_date = datetime(2020, 5, 4, tzinfo=timezone.utc)
+    with main.get_reader() as reader:
+        reader.add_feed(SRC, allow_invalid_url=True, exist_ok=True)
+        reader.add_feed(DST, allow_invalid_url=True, exist_ok=True)
+        reader.add_entry({"feed_url": SRC, "id": "e1", "title": "Post",
+                          "link": "https://example.test/a", "published": real_date})
+
+    result = _move()
+
+    assert result["ok"] and result["synth"]
+    with main.get_reader() as reader:
+        assert reader.get_entry((DST, "e1")).published == real_date
+
+
 def test_move_matches_existing_target_entry_by_link(env):
     _setup_feeds(dst_entry={"id": "other-guid", "title": "Same post",
                             "link": "https://example.test/a"})

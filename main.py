@@ -10247,6 +10247,10 @@ starred_archive_service = StarredArchiveService(
     # tag-created archive from a star-created one — since tag-as-keep, an
     # archive row alone no longer means the entry was starred.
     manually_tagged_keys=lambda: _manually_tagged_entry_keys(),
+    # Lazy for the same reason, same purpose one axis over: Archive (done)
+    # also keeps an entry's capture through an unstar (entry_has_keep_signal),
+    # so an archive row alone doesn't mean "was starred" here either.
+    archived_keys=lambda: get_archived_saved_keys(),
     # Lazy for the same reason. Per-feed policy (which extensions this feed
     # keeps) plus the link scan, so the service only has to ask one question.
     find_attachments=lambda feed_url, html, base: attachment_links_in_html(
@@ -20659,8 +20663,23 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
             "title": src.title or "",
             "link": src.link or entry_id,
         }
-        if src.published:
-            ed["published"] = src.published
+        # entry_effective_date, not raw src.published: a source with no real
+        # publication date (published/updated both absent or garbage) left the
+        # synthesized copy with NO published key at all — reader defaults that
+        # to epoch-0 (1970-01-01), while its `added` (ingest time) is simply
+        # now, since it was just created. The result reads as "brand new" in
+        # any date-based view and as "ancient" in any sort keying off the raw
+        # column directly, an inconsistency reported live as "confusing as
+        # hell" 2026-09-12 — dozens of just-moved GuitarWorld posts sitting at
+        # epoch-0 while showing "Now" wherever the effective-date fallback (to
+        # `added`) was what actually got displayed. entry_effective_date is
+        # the same "published, else updated, else received" chain the list
+        # render and mark-older/newer actions already agree on, so the
+        # synthesized copy gets a real date under the identical rule instead
+        # of silently falling through reader's own default.
+        _src_effective_date = entry_effective_date(src)
+        if _src_effective_date:
+            ed["published"] = _src_effective_date
         if getattr(src, "content", None):
             ed["content"] = [{"value": src.content[0].value}]
         elif src.summary:
@@ -31807,8 +31826,11 @@ def migrate_entry_to_new_host(reader, conn, feed, old_id, new_id, new_link) -> s
     if reader.get_entry((feed, new_id), None) is None:
         ed: dict = {"feed_url": feed, "id": new_id, "link": new_link or new_id,
                     "title": src.title or ""}
-        if src.published:
-            ed["published"] = src.published
+        # entry_effective_date, not raw src.published — see the identical fix
+        # (and its rationale) in _move_entry_to_feed's own synth path.
+        _src_effective_date = entry_effective_date(src)
+        if _src_effective_date:
+            ed["published"] = _src_effective_date
         if getattr(src, "content", None):
             ed["content"] = [{"value": src.content[0].value}]
         elif src.summary:

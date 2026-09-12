@@ -88,6 +88,7 @@ class StarredArchiveService:
         find_attachments=None,
         attachment_allowed: Callable[[str, str], bool] | None = None,
         manually_tagged_keys: Callable[[], set[tuple[str, str]]] | None = None,
+        archived_keys: Callable[[], set[tuple[str, str]]] | None = None,
     ) -> None:
         self._get_archive_connection = get_archive_connection
         self._get_meta_connection = get_meta_connection
@@ -103,6 +104,12 @@ class StarredArchiveService:
         # "has a complete archive" no longer implies "was starred" — see
         # backfill_saved_entries_from_archive.
         self._manually_tagged_keys = manually_tagged_keys
+        # Every (feed_url, entry_id) marked Archived (done), fetched in bulk.
+        # Same reasoning as manually_tagged_keys, one axis over: Archive keeps
+        # an entry's capture on unstar too (entry_has_keep_signal in main.py),
+        # so "has a complete archive" doesn't imply "was starred" here either
+        # — see backfill_saved_entries_from_archive.
+        self._archived_keys = archived_keys
         # Given (feed_url, html, base_url), returns absolute URLs of linked
         # FILES this feed is configured to keep (tabs, PDFs). Injected rather
         # than implemented here: which extensions a feed keeps is a per-feed
@@ -906,14 +913,22 @@ class StarredArchiveService:
         the whole of the orphaned-star-row mystery; it also made a one-off sweep
         pointless, since the next startup re-created every row it deleted.
 
-        **Never restore a star for a manually tagged entry.** This function
-        infers "had a complete archive" ⇒ "was starred", which was true when it
-        was written and became false at the tag-as-keep flip: a tag now archives
-        too, so ``archived_entry`` is a superset of the starred set. Without the
-        check, retro-archiving tagged entries (Part C pass 1) silently converted
-        them into *starred* entries at the next boot — manufacturing exactly the
-        redundant stars that the "unstar tagged items" cleanup exists to remove.
-        An entry that is both starred and tagged is skipped too: this is a
+        **Never restore a star for a manually tagged entry, or one marked
+        Archived (done).** This function infers "had a complete archive" ⇒
+        "was starred", which was true when it was written and became false at
+        the tag-as-keep flip: a tag now archives too, so ``archived_entry`` is
+        a superset of the starred set. The Archive (done) axis is the same
+        shape and just as real a reason: unstarring an Archived, untagged
+        entry deliberately leaves its capture in place (``entry_has_keep_signal``
+        in main.py — Archive keeps the offline copy by design, and
+        ``apply_star_state`` never enqueues its removal), which is
+        indistinguishable here from "meta DB lost the star row" unless this
+        function also excludes it. Without that exclusion, unstarring anything
+        Archived got the star silently put back at the next restart — reported
+        live 2026-09-12 as "it keeps coming back after I unstarred it", after
+        several restarts during one session raced ahead of a fix that would
+        otherwise be invisible in a longer-lived deployment. An entry that is
+        both starred and tagged/archived is skipped too: this is a
         disaster-recovery path, and failing to restore one real star is far
         cheaper than inventing thousands.
         """
@@ -940,9 +955,20 @@ class StarredArchiveService:
             )
             return 0
 
+        try:
+            archived = self._archived_keys() if self._archived_keys else set()
+        except Exception as exc:  # noqa: BLE001
+            # Same reasoning as the tag lookup above — without it, every
+            # Archived entry would get its star silently put back.
+            LOGGER.warning(
+                "starred archive: backfill_saved_entries skipped, archived-keys lookup failed: %s", exc
+            )
+            return 0
+
         inserted = 0
         stale = 0
         tag_explained = 0
+        archived_explained = 0
         try:
             with self._get_meta_connection() as meta_conn, self._get_reader() as reader:
                 for row in rows:
@@ -950,6 +976,9 @@ class StarredArchiveService:
                     entry_id = str(row["entry_id"])
                     if (feed_url, entry_id) in tagged:
                         tag_explained += 1
+                        continue
+                    if (feed_url, entry_id) in archived:
+                        archived_explained += 1
                         continue
                     try:
                         entry = reader.get_entry((feed_url, entry_id), None)
@@ -978,6 +1007,11 @@ class StarredArchiveService:
             LOGGER.info(
                 "starred archive: skipped %d archive row(s) explained by a manual tag, not a star",
                 tag_explained,
+            )
+        if archived_explained:
+            LOGGER.info(
+                "starred archive: skipped %d archive row(s) explained by Archive (done), not a star",
+                archived_explained,
             )
         return inserted
 

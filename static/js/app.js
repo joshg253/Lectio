@@ -10323,8 +10323,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             // the server-side query never actually excluded them there — the
             // assumption "moved = left this scope" only holds when the view's
             // own feed set is bounded, which the Inbox's specifically isn't.
-            const isInbox = new URL(window.location.href).searchParams.get('kept') === 'starred';
-            if (!isInbox) {
+            if (!isInboxKeptScope()) {
               const esc = (window.CSS && CSS.escape) ? (s) => CSS.escape(s) : (s) => s;
               for (const e of entries) {
                 if (e.feedUrl === targetUrl) continue;   // skipped server-side, leave it
