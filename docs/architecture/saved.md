@@ -829,6 +829,24 @@ Two sort-path consequences worth knowing before touching either:
   strings (ISO-ish) already sort correctly lexically, but a raw byte count
   does not (`"9000" > "10000"` as strings). Zero-padded to a fixed width
   (`f"{n:020d}"`) before merging is what keeps it numeric.
+- **A third merge step has its own, separate sort-key map.** `merge_orphan_saved_entries`
+  (root Inbox/Kept views merge in archive-only orphans whose feed is gone —
+  it runs on every plain root-folder request, not just when orphans exist)
+  re-sorts `posts + additions` itself, with its own `{"post": ..., "starred":
+  ...}` lookup that had no `"size"` entry — so a `sort_by=size` request
+  silently fell through to the default (`received_sort_value`), undoing the
+  size order `list_entries_for_feeds` had just computed and re-clipping to
+  `limit` in received-date order instead. Reported live 2026-09-12 as "sort by
+  Size Big still not quite right — maybe only sorting each chunk": each
+  chunk's own fetch really was sorted by size going in, but this merge step
+  ran on every one of them and re-sorted the result by received date before
+  handing it back. Fixed by adding `"size": "size_sort_value"` to that map,
+  giving orphans a `size_sort_value` from `archived_entry.content_size_bytes`
+  (added to `get_orphan_saved_entries`'s query — it only selected the date
+  columns before) and re-deriving it for existing posts from the surviving
+  `size_bytes` field the same way the date sort keys are re-derived from their
+  `_timestamp` twins, since `list_entries_for_feeds` pops whichever
+  `*_sort_value` it used before returning.
 
 ## Editing a post's published date (overrides)
 

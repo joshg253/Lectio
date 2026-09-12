@@ -16612,6 +16612,7 @@ def merge_orphan_saved_entries(
     sort_key = {
         "post": "post_sort_value",
         "starred": "saved_sort_value",
+        "size": "size_sort_value",
     }.get(normalized_orphan_sort, "received_sort_value")
 
     additions: list[dict] = []
@@ -16637,6 +16638,7 @@ def merge_orphan_saved_entries(
                 "post_sort_value": post_iso,
                 "received_sort_value": recv_iso,
                 "saved_sort_value": _sort_value_from_epoch(orphan.get("starred_at")),
+                "size_sort_value": float(orphan.get("content_size_bytes") or 0),
                 "history_sort_value": "",
                 "post_timestamp": post_iso or None,
                 "received_timestamp": recv_iso or None,
@@ -16648,6 +16650,12 @@ def merge_orphan_saved_entries(
                     datetime.fromtimestamp(orphan["received_at"], tz=timezone.utc) if orphan.get("received_at") else None
                 ),
                 "read_display": None,
+                "size_bytes": orphan.get("content_size_bytes"),
+                "size_display": (
+                    _format_size_bytes(_ob)
+                    if (_ob := orphan.get("content_size_bytes")) is not None
+                    else None
+                ),
                 "duration_seconds": None,
                 "duration_display": None,
                 "is_orphan_archive": True,
@@ -16664,15 +16672,25 @@ def merge_orphan_saved_entries(
             p["received_sort_value"] = p.get("received_timestamp") or ""
         if "saved_sort_value" not in p:
             p["saved_sort_value"] = p.get("saved_timestamp") or ""
+        if "size_sort_value" not in p:
+            # list_entries_for_feeds pops the sort_key it used, same as the ISO
+            # fields above, but "size_bytes" (the raw int, used for the display
+            # badge) survives — re-derive from that instead of a timestamp.
+            p["size_sort_value"] = float(p.get("size_bytes") or 0)
 
     combined = posts + additions
-    combined.sort(key=lambda item: item.get(sort_key) or "", reverse=sort_desc)
+    # size_sort_value is a float (0 for "nothing archived yet"), not an empty
+    # string -- `or ""` here would have coerced a genuine 0-byte/unarchived
+    # item into a string and made it uncomparable against the rest.
+    default_sort_value = 0.0 if sort_key == "size_sort_value" else ""
+    combined.sort(key=lambda item: item.get(sort_key, default_sort_value), reverse=sort_desc)
     combined = combined[:limit]
 
     for p in combined:
         p.pop("post_sort_value", None)
         p.pop("received_sort_value", None)
         p.pop("saved_sort_value", None)
+        p.pop("size_sort_value", None)
         p.pop("history_sort_value", None)
 
     return combined

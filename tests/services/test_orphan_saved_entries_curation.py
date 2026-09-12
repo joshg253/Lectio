@@ -22,7 +22,7 @@ def archive(tmp_path):
         CREATE TABLE archived_entry (
             feed_url TEXT, entry_id TEXT, status TEXT, title TEXT, link TEXT,
             feed_title TEXT, author TEXT, published_at REAL, received_at REAL,
-            starred_at REAL,
+            starred_at REAL, content_size_bytes INTEGER,
             PRIMARY KEY (feed_url, entry_id)
         );
         """
