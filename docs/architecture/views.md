@@ -50,6 +50,33 @@ excluded on both sides: there is no reader entry to move.
 `_RANGE_READ_LIMIT`; this generalizes it from an anchor lookup to a whole-set
 action.
 
+### The id-list bulk actions (tag/read/star/move) are chunked client-side past `_MOVE_BATCH_CAP`
+
+`_MOVE_BATCH_CAP` (500, `main.py`) is a payload/processing-size safety limit on
+the id-list bulk routes (`/entries/tags-batch`, `/read-batch`, `/star-batch`,
+`/move-to-feed-batch`) — never a design intent that a selection can't exceed
+it. Once Select All could select an entire large view (2026-09-11), hitting it
+became routine rather than exceptional: reported live 2026-09-12 as an outright
+"max 500 per action" error when bulk-tagging a big selection.
+
+`postEntriesBatched` (app.js) splits `entries` into ≤500 groups and POSTs each
+to the same route sequentially (never concurrently — these are real DB
+writes), returning every chunk's parsed response for the caller to merge per
+its own route's result shape (counts summed, message rebuilt, `still_tagged`/
+`now_untagged` concatenated for tags-batch). All four call sites route through
+it now. `/move-to-feed-batch`'s sibling `/move-visible-to-feed` (predicate-
+resolved, see above) was never affected — it has no id payload to cap in the
+first place.
+
+**Star-batch's undo is the one place chunking has a real, accepted limitation.**
+`entry_unstar_batch`'s shared undo token is per-request, so a selection split
+across multiple chunks gets multiple tokens — the single "undo this batch"
+toast only applies cleanly when everything fit in one chunk (`results.length
+=== 1`). A selection over 500 still unstars correctly either way; it just
+doesn't get one coherent undo affordance across the whole thing. Not solved
+further — the common case is well under 500, and building cross-chunk undo
+wasn't worth it for the rare one.
+
 **Select All is the one exception, and only when a filter term is active.**
 Reported live 2026-09-11: Select All used to share `Move visible to feed…`'s
 predicate-resolved, whole-set design (`POST /entries/select-all-visible`,
