@@ -58,12 +58,22 @@ view" term means something narrower than a tag/star/read/search scope —
 "the specific handful of posts I'm looking at right now," not "every post in
 the whole view that happens to contain this word," which can be vastly larger
 across a big Inbox/folder. So with a filter term active, Select All now reads
-the DOM directly — `.post-item:not(.post-item-filtered)`, minus orphans, the
-same row set `Move visible to feed…` still computes for its own "how many are
-loaded here" messaging — instead of calling the server at all. `Move visible
-to feed…` itself is unchanged: its own confirmation dialog already states the
-real total up front ("N are loaded here; all M are moved") before acting, so
-there is no silent-surprise version of that gap to fix there.
+the DOM directly — `.post-item:not(.post-item-filtered)` — instead of calling
+the server at all. `Move visible to feed…` itself is unchanged: its own
+confirmation dialog already states the real total up front ("N are loaded
+here; all M are moved") before acting, so there is no silent-surprise version
+of that gap to fix there.
+
+**Orphans are NOT excluded here, unlike `Move visible to feed…`.** The first
+cut of this fix copied that route's `data-post-orphan` exclusion (orphan
+archive rows have no reader entry, so there's genuinely nothing to *move*) —
+wrong for a plain multi-select, which every other bulk action (archive,
+delete, tag) treats an orphan row as ordinary and individually checkable.
+Reported live minutes after shipping: filtering the Inbox down to an
+all-orphan set (old saves from since-unsubscribed feeds — exactly what "sort
+by size" cleanup surfaces) made Select All report "Nothing to select." Fixed
+by dropping the orphan filter from this path; `Move visible to feed…` keeps
+its own, for the reason stated there.
 
 ### Back on a phone walks the view stack
 

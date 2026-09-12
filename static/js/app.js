@@ -17300,11 +17300,16 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           // matches title/link/feed name across the WHOLE view, which is
           // usually a much bigger set than what's actually rendered. Select
           // exactly the rows the filter is showing instead (chunked-in but not
-          // filtered-out, same set "Move visible to feed" collects) -- a
-          // filter term means the user has a specific small set in mind, not
-          // "everything that could ever match this word."
-          const rows = Array.from(document.querySelectorAll('.posts .post-item:not(.post-item-filtered)'))
-            .filter(el => el.getAttribute('data-post-orphan') !== '1');
+          // filtered-out) -- a filter term means the user has a specific small
+          // set in mind, not "everything that could ever match this word."
+          //
+          // Unlike "Move visible to feed" (which excludes orphan archive rows
+          // because there's no reader entry to move), this is a plain
+          // multi-select -- orphans are ordinary, individually-checkable rows
+          // for every other bulk action, so excluding them here just made
+          // Select All report "Nothing to select" on an all-orphan filtered
+          // view (reported live 2026-09-12, right after this shipped).
+          const rows = Array.from(document.querySelectorAll('.posts .post-item:not(.post-item-filtered)'));
           rows.forEach(el => setPostSelected(el, true));
           showToastMessage(selectedPosts.size ? `Selected ${selectedPosts.size} post${selectedPosts.size === 1 ? '' : 's'}.` : 'Nothing to select.');
           return;
