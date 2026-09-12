@@ -17284,11 +17284,6 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       document.getElementById('posts-selection-count')?.addEventListener('click', () => {
         clearPostSelection();
       });
-      // Resolves the whole current view + filter server-side — same
-      // machinery as "Move all shown to feed…" — so it selects everything
-      // matching, not just what scroll-chunking has rendered so far. Rows
-      // not yet in the DOM get synced when they render (see
-      // bindPostListInteractions's boundCheckbox setup).
       document.getElementById('posts-select-all')?.addEventListener('click', async () => {
         // Toggle: a second click while anything is selected clears it, mirroring
         // the selection-count pill's own click-to-clear rather than re-resolving
@@ -17297,8 +17292,30 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           clearPostSelection();
           return;
         }
+        const filterTerm = box.value.trim();
+        if (filterTerm) {
+          // Reported live 2026-09-11: with a "Filter this view" term active,
+          // resolving the whole server-side view (below) can select vastly
+          // more than what the filter is showing on screen -- the filter term
+          // matches title/link/feed name across the WHOLE view, which is
+          // usually a much bigger set than what's actually rendered. Select
+          // exactly the rows the filter is showing instead (chunked-in but not
+          // filtered-out, same set "Move visible to feed" collects) -- a
+          // filter term means the user has a specific small set in mind, not
+          // "everything that could ever match this word."
+          const rows = Array.from(document.querySelectorAll('.posts .post-item:not(.post-item-filtered)'))
+            .filter(el => el.getAttribute('data-post-orphan') !== '1');
+          rows.forEach(el => setPostSelected(el, true));
+          showToastMessage(selectedPosts.size ? `Selected ${selectedPosts.size} post${selectedPosts.size === 1 ? '' : 's'}.` : 'Nothing to select.');
+          return;
+        }
+        // No filter term: resolve the whole current view server-side — same
+        // machinery as "Move all shown to feed…" — so it selects everything
+        // matching (tag/star/read-filter/search), not just what scroll-chunking
+        // has rendered so far. Rows not yet in the DOM get synced when they
+        // render (see bindPostListInteractions's boundCheckbox setup).
         const predicate = currentViewParams();
-        predicate.set('filter_term', box.value.trim());
+        predicate.set('filter_term', '');
         try {
           const resp = await fetch('/entries/select-all-visible', { method: 'POST', body: new URLSearchParams(predicate) });
           const data = await resp.json();

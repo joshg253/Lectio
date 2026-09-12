@@ -50,6 +50,21 @@ excluded on both sides: there is no reader entry to move.
 `_RANGE_READ_LIMIT`; this generalizes it from an anchor lookup to a whole-set
 action.
 
+**Select All is the one exception, and only when a filter term is active.**
+Reported live 2026-09-11: Select All used to share `Move visible to feed…`'s
+predicate-resolved, whole-set design (`POST /entries/select-all-visible`,
+still there and still used when no filter term is set), but a "Filter this
+view" term means something narrower than a tag/star/read/search scope —
+"the specific handful of posts I'm looking at right now," not "every post in
+the whole view that happens to contain this word," which can be vastly larger
+across a big Inbox/folder. So with a filter term active, Select All now reads
+the DOM directly — `.post-item:not(.post-item-filtered)`, minus orphans, the
+same row set `Move visible to feed…` still computes for its own "how many are
+loaded here" messaging — instead of calling the server at all. `Move visible
+to feed…` itself is unchanged: its own confirmation dialog already states the
+real total up front ("N are loaded here; all M are moved") before acting, so
+there is no silent-surprise version of that gap to fix there.
+
 ### Back on a phone walks the view stack
 
 In single-pane mode the article pane *is* the page, so Back steps down the stack
