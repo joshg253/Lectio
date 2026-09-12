@@ -287,3 +287,81 @@ def test_starred_filter_shows_unpremiered_despite_hide_unpremiered(configured):
     # Starred filter shows it anyway.
     ids_starred = {e["id"] for e in main.list_entries_for_feeds({YT_FEED}, read_filter="starred", limit=100)}
     assert ids_starred == {"starred-premiere"}
+
+
+# --- unread-count badge (same gap hide_locked_comics was fixed for) --------
+
+def test_unread_count_excludes_unpremiered_hidden_via_per_feed_pref(configured):
+    """Same badge-leak class as hide_locked_comics: hide_unpremiered's
+    render-time filter hides the not-yet-aired video from the list, but
+    _compute_unread_counts_by_feed's raw GROUP BY didn't know to exclude it."""
+    _seed_live_status("UPCOMING014", "upcoming", "2026-09-20T18:00:00Z")
+    with main.get_reader() as reader:
+        reader.add_feed(YT_FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="premiere", video_id="UPCOMING014", published=OLD)
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="normal", video_id=None, published=OLD)
+
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, YT_FEED, "hide_unpremiered", 1)
+
+    counts = main._compute_unread_counts_by_feed()
+    assert counts.get(YT_FEED) == 1
+
+
+def test_unread_count_excludes_unpremiered_via_global_setting(configured):
+    _seed_live_status("UPCOMING015", "upcoming", "2026-09-20T18:00:00Z")
+    with main.get_reader() as reader:
+        reader.add_feed(YT_FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="premiere", video_id="UPCOMING015", published=OLD)
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="normal", video_id=None, published=OLD)
+
+    with main.get_meta_connection() as conn:
+        main.set_setting(conn, main.SETTING_YT_HIDE_UNPREMIERED_GLOBAL, "1")
+
+    counts = main._compute_unread_counts_by_feed()
+    assert counts.get(YT_FEED) == 1
+
+
+def test_unread_count_unaffected_when_pref_off(configured):
+    _seed_live_status("UPCOMING016", "upcoming", "2026-09-20T18:00:00Z")
+    with main.get_reader() as reader:
+        reader.add_feed(YT_FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="premiere", video_id="UPCOMING016", published=OLD)
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="normal", video_id=None, published=OLD)
+
+    counts = main._compute_unread_counts_by_feed()
+    assert counts.get(YT_FEED) == 2
+
+
+def test_unread_count_unaffected_once_live(configured):
+    _seed_live_status("UPCOMING017", "live")
+    with main.get_reader() as reader:
+        reader.add_feed(YT_FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="now-live", video_id="UPCOMING017", published=OLD)
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, YT_FEED, "hide_unpremiered", 1)
+
+    counts = main._compute_unread_counts_by_feed()
+    assert counts.get(YT_FEED) == 1
+
+
+def test_unread_count_unaffected_for_non_youtube_feed():
+    """A non-YouTube feed must never even be considered -- the pattern match
+    on the feed URL is the whole gate, with no meta-DB query for it at all."""
+    assert main._youtube_unpremiered_video_id(OTHER_FEED, "https://example.test/x") is None
+
+
+def test_unread_count_ignores_read_unpremiered_entry(configured):
+    """The subtract must only touch the UNREAD count -- an already-read
+    unpremiered entry (if one ever exists) must not be double-subtracted."""
+    _seed_live_status("UPCOMING018", "upcoming", "2026-09-20T18:00:00Z")
+    with main.get_reader() as reader:
+        reader.add_feed(YT_FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="premiere", video_id="UPCOMING018",
+                    published=OLD, read=True)
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="normal", video_id=None, published=OLD)
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, YT_FEED, "hide_unpremiered", 1)
+
+    counts = main._compute_unread_counts_by_feed()
+    assert counts.get(YT_FEED) == 1

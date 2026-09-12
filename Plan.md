@@ -299,26 +299,6 @@ placeholder graphic or "locked" badge instead of a broken image would read bette
 detection signal to key off (the same lock-page markup the report above used to confirm it) and
 hasn't been sized.
 
-### hide_unpremiered has the same unread-count-badge leak hide_locked_comics just got fixed for
-
-Reported live 2026-09-06 for `hide_locked_comics` — cad-comic's unread badge kept counting a post
-the render-time filter correctly hid from the list, because `_compute_unread_counts_by_feed`'s SQL
-count has no idea any hide_* filter exists. Fixed for locked comics via
-`_subtract_hidden_locked_comics_from_counts` (see docs/architecture/images.md). `hide_unpremiered`
-(YouTube's "don't show yet" filter, same shape) has the identical gap and has not been reported —
-not fixed here since it wasn't asked for.
-
-**Scoped 2026-09-11.** Same pattern, one real complication: locked-comics' companion function gets
-its answer from one indexed meta-DB column (`entry_lead_images.locked_until`), a straight query. YT
-premiere status has no equivalent column keyed by `(feed_url, entry_id)` — `_youtube_unpremiered_video_id`
-(main.py:8093) works by extracting a video id out of the entry's *link* and checking
-`youtube_video_duration.live_status == "upcoming"` (via `youtube_duration_service.get_cached_live_status`).
-So a `_subtract_hidden_unpremiered_from_counts` companion can't do a single join the way the
-locked-comics one does — it has to pull each unread entry's `(feed_url, link)` for feeds where
-`hide_unpremiered` (or the global toggle) is on, extract the video id per entry, and check its cached
-live-status, mirroring `_is_youtube_unpremiered`'s own logic rather than a column filter. Same
-global-vs-per-feed branching as the locked-comics version otherwise. Not built.
-
 ## Tier 2 — small, fast, independent wins
 
 ### Manual single-feed "Refresh" can silently no-op for up to an hour

@@ -6398,6 +6398,7 @@ def _compute_unread_counts_by_feed() -> dict[str, int]:
         ).fetchall()
         counts = {str(row[0]): int(row[1]) for row in rows}
         _subtract_hidden_locked_comics_from_counts(conn, counts)
+        _subtract_hidden_unpremiered_from_counts(conn, counts)
         conn.close()
         return counts
     except Exception:
@@ -6474,6 +6475,58 @@ def _subtract_hidden_locked_comics_from_counts(reader_conn: sqlite3.Connection, 
                 counts[feed_url] = max(0, counts.get(feed_url, 0) - hidden_unread)
     except Exception:
         LOGGER.exception("[hide-locked-comics] failed to subtract hidden counts from unread totals")
+
+
+def _subtract_hidden_unpremiered_from_counts(reader_conn: sqlite3.Connection, counts: dict[str, int]) -> None:
+    """A not-yet-premiered YouTube video hide_unpremiered keeps out of the list
+    must not inflate the unread badge either — same gap
+    _subtract_hidden_locked_comics_from_counts was built for, identified but not
+    fixed alongside it (2026-09-06).
+
+    Unlike locked comics, there is no indexed meta-DB column keyed by
+    (feed_url, entry_id) for premiere status: `_is_youtube_unpremiered` works by
+    extracting a video id out of the entry's *link* and checking
+    youtube_duration_service's cached live status (itself warmed into memory at
+    startup, so this is an in-memory lookup per candidate entry, not a DB hit
+    per entry). So instead of one meta-DB join, this walks each qualifying
+    feed's unread entry links and re-derives the same check the render-time
+    filter uses. The candidate feed set is normally tiny (a handful of YouTube
+    feeds with the toggle on, at most), so this costs one small query per such
+    feed, not a scan of everything.
+    """
+    try:
+        global_hide = youtube_hide_unpremiered_global()
+        yt_feeds = [f for f, n in counts.items() if n and "youtube.com/feeds/videos.xml" in f]
+        if not yt_feeds:
+            return
+        if global_hide:
+            candidate_feeds = yt_feeds
+        else:
+            per_feed_on: set[str] = set()
+            with get_meta_connection() as mconn:
+                for _i in range(0, len(yt_feeds), 900):
+                    _chunk = yt_feeds[_i:_i + 900]
+                    _ph = ",".join("?" for _ in _chunk)
+                    per_feed_on.update(
+                        str(r["feed_url"])
+                        for r in mconn.execute(
+                            f"SELECT feed_url FROM feed_display_prefs"
+                            f" WHERE hide_unpremiered = 1 AND feed_url IN ({_ph})",
+                            _chunk,
+                        ).fetchall()
+                    )
+            candidate_feeds = [f for f in yt_feeds if f in per_feed_on]
+        for feed_url in candidate_feeds:
+            hidden_unread = 0
+            for (link,) in reader_conn.execute(
+                "SELECT link FROM entries WHERE feed = ? AND read = 0", (feed_url,)
+            ).fetchall():
+                if _youtube_unpremiered_video_id(feed_url, link):
+                    hidden_unread += 1
+            if hidden_unread:
+                counts[feed_url] = max(0, counts.get(feed_url, 0) - hidden_unread)
+    except Exception:
+        LOGGER.exception("[hide-unpremiered] failed to subtract hidden counts from unread totals")
 
 
 # Newest-post-per-feed is derived from a full GROUP BY over the reader entries
