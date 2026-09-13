@@ -547,6 +547,168 @@ class StarredArchiveService:
         except sqlite3.Error:
             return False
 
+    def recompute_content_size_bytes(self, feed_url: str, entry_id: str) -> int | None:
+        """Recompute and persist content_size_bytes from the stored blobs plus
+        every DISTINCT linked asset -- the same formula `_archive_entry` computes
+        at capture time (see docs/architecture/saved.md, "But only once per
+        entry, not once per link"). Called after any per-entry attachment
+        add/remove (the Attachments panel), since those change what an entry
+        weighs without a fresh capture. Returns the new total, or None if the
+        entry has no archive row at all.
+        """
+        try:
+            with self._archive_conn() as conn:
+                row = conn.execute(
+                    "SELECT source_html_zlib, readability_html_zlib, content_html_zlib"
+                    " FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                ).fetchone()
+                if row is None:
+                    return None
+                blob_len = sum(
+                    len(row[col] or b"")
+                    for col in ("source_html_zlib", "readability_html_zlib", "content_html_zlib")
+                )
+                asset_total = conn.execute(
+                    "SELECT COALESCE(SUM(byte_size), 0) FROM ("
+                    " SELECT DISTINCT a.asset_hash, a.byte_size FROM archived_asset_link l"
+                    " JOIN archived_asset a ON a.asset_hash = l.asset_hash"
+                    " WHERE l.feed_url = ? AND l.entry_id = ?)",
+                    (feed_url, entry_id),
+                ).fetchone()[0]
+                total = blob_len + int(asset_total or 0)
+                conn.execute(
+                    "UPDATE archived_entry SET content_size_bytes = ? WHERE feed_url = ? AND entry_id = ?",
+                    (total, feed_url, entry_id),
+                )
+                return total
+        except sqlite3.Error as exc:
+            LOGGER.warning("starred archive: recompute_content_size_bytes failed for %s/%s: %s", feed_url, entry_id, exc)
+            return None
+
+    def list_non_image_assets(self, feed_url: str, entry_id: str) -> list[dict[str, Any]]:
+        """Currently-kept non-image attachments for one entry, newest first --
+        the Attachments panel's "kept" list. Images are the article's own
+        content and never appear here, whatever found them.
+
+        Includes asset_hash (not just source_url) so the caller can point at
+        the local archived copy instead of the publisher's URL -- the same
+        "local copy wins" rule main._attachment_list_item already applies to
+        the server-rendered footer. Without it, a row this panel rebuilds
+        (any row touched after the initial page load -- see loadEntryAttachments
+        in app.js) would silently regress to linking the remote file directly,
+        undoing the entire reason it was archived.
+        """
+        try:
+            with self._archive_conn() as conn:
+                rows = conn.execute(
+                    "SELECT l.source_url, l.asset_hash, a.byte_size, a.content_type FROM archived_asset_link l"
+                    " JOIN archived_asset a ON a.asset_hash = l.asset_hash"
+                    " WHERE l.feed_url = ? AND l.entry_id = ? AND a.content_type NOT LIKE 'image/%'"
+                    " ORDER BY a.created_at DESC",
+                    (feed_url, entry_id),
+                ).fetchall()
+        except sqlite3.Error:
+            return []
+        return [
+            {
+                "source_url": str(r["source_url"]),
+                "asset_hash": str(r["asset_hash"]),
+                "byte_size": int(r["byte_size"] or 0),
+                "content_type": str(r["content_type"] or ""),
+            }
+            for r in rows
+        ]
+
+    def delete_one_attachment(self, feed_url: str, entry_id: str, source_url: str) -> bool:
+        """Remove one kept attachment link, garbage-collect its asset if no
+        other link anywhere still uses it, and recompute this entry's
+        content_size_bytes. Refuses (returns False) if the link doesn't exist
+        or points at an image -- images are the article's own content, not an
+        attachment, and this is not how to remove one."""
+        try:
+            with self._archive_conn() as conn:
+                row = conn.execute(
+                    "SELECT a.asset_hash, a.content_type FROM archived_asset_link l"
+                    " JOIN archived_asset a ON a.asset_hash = l.asset_hash"
+                    " WHERE l.feed_url = ? AND l.entry_id = ? AND l.source_url = ?",
+                    (feed_url, entry_id, source_url),
+                ).fetchone()
+                if row is None or str(row["content_type"] or "").lower().startswith("image/"):
+                    return False
+                asset_hash = str(row["asset_hash"])
+                conn.execute(
+                    "DELETE FROM archived_asset_link WHERE feed_url = ? AND entry_id = ? AND source_url = ?",
+                    (feed_url, entry_id, source_url),
+                )
+                still_used = conn.execute(
+                    "SELECT 1 FROM archived_asset_link WHERE asset_hash = ? LIMIT 1", (asset_hash,)
+                ).fetchone() is not None
+                if not still_used:
+                    conn.execute("DELETE FROM archived_asset WHERE asset_hash = ?", (asset_hash,))
+        except sqlite3.Error as exc:
+            LOGGER.warning("starred archive: delete_one_attachment failed for %s/%s: %s", feed_url, entry_id, exc)
+            return False
+        self.recompute_content_size_bytes(feed_url, entry_id)
+        return True
+
+    def delete_all_attachments(self, feed_url: str, entry_id: str) -> int:
+        """Remove every kept non-image attachment for one entry (images --
+        the article's own content -- are untouched), garbage-collect assets
+        no other link anywhere still uses, and recompute content_size_bytes.
+        Returns the count removed."""
+        try:
+            with self._archive_conn() as conn:
+                hashes = [
+                    str(r["asset_hash"]) for r in conn.execute(
+                        "SELECT DISTINCT l.asset_hash FROM archived_asset_link l"
+                        " JOIN archived_asset a ON a.asset_hash = l.asset_hash"
+                        " WHERE l.feed_url = ? AND l.entry_id = ? AND a.content_type NOT LIKE 'image/%'",
+                        (feed_url, entry_id),
+                    ).fetchall()
+                ]
+                if not hashes:
+                    return 0
+                removed = conn.execute(
+                    "DELETE FROM archived_asset_link WHERE feed_url = ? AND entry_id = ?"
+                    " AND asset_hash IN (SELECT asset_hash FROM archived_asset WHERE content_type NOT LIKE 'image/%')",
+                    (feed_url, entry_id),
+                ).rowcount
+                for asset_hash in hashes:
+                    still_used = conn.execute(
+                        "SELECT 1 FROM archived_asset_link WHERE asset_hash = ? LIMIT 1", (asset_hash,)
+                    ).fetchone() is not None
+                    if not still_used:
+                        conn.execute("DELETE FROM archived_asset WHERE asset_hash = ?", (asset_hash,))
+        except sqlite3.Error as exc:
+            LOGGER.warning("starred archive: delete_all_attachments failed for %s/%s: %s", feed_url, entry_id, exc)
+            return 0
+        self.recompute_content_size_bytes(feed_url, entry_id)
+        return removed
+
+    def archive_one_attachment(self, feed_url: str, entry_id: str, source_url: str) -> bool:
+        """Fetch and keep one specific file link as an attachment, regardless
+        of the feed's attachment-extension policy -- the Attachments panel's
+        per-item "Save" action on a link the blanket policy doesn't cover.
+        Refuses if the entry has no complete archive to attach to (nothing to
+        make this a part of). Returns whether the link ended up kept -- the
+        same success signal `_archive_entry` itself has no return value for,
+        so this checks the link table rather than trusting a silent _archive_asset."""
+        if not self.has_complete_archive(feed_url, entry_id):
+            return False
+        self._archive_asset(feed_url, entry_id, source_url, max_bytes=ATTACHMENT_MAX_BYTES)
+        try:
+            with self._archive_conn() as conn:
+                linked = conn.execute(
+                    "SELECT 1 FROM archived_asset_link WHERE feed_url = ? AND entry_id = ? AND source_url = ?",
+                    (feed_url, entry_id, source_url),
+                ).fetchone() is not None
+        except sqlite3.Error:
+            return False
+        if linked:
+            self.recompute_content_size_bytes(feed_url, entry_id)
+        return linked
+
     def delete_archive(self, feed_url: str, entry_id: str) -> bool:
         """Synchronously remove an archive row and its now-unreferenced assets.
 

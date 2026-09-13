@@ -34,7 +34,10 @@ def test_an_archived_enclosure_is_served_locally():
     html = main._render_entry_attachments(_Entry([_Enc(EPUB, "application/epub+zip")]),
                                           None, {EPUB: "HASH1"})
     assert "/starred-asset/HASH1" in html
-    assert EPUB not in html
+    # The remote URL is still present in data-source-url (an internal id the
+    # Attachments panel's JS uses to identify this row for delete/save
+    # actions) but must never be the thing actually served or clicked.
+    assert f'href="{EPUB}"' not in html
     assert "saved" in html
 
 
@@ -77,7 +80,7 @@ def test_images_and_audio_are_not_listed_as_attachments(monkeypatch):
 def test_an_enclosure_is_not_listed_twice():
     html = main._render_entry_attachments(_Entry([_Enc(EPUB, "application/epub+zip")]),
                                           None, {EPUB: "HASH1"})
-    assert html.count("<li>") == 1
+    assert html.count("<li ") == 1
 
 
 def test_nothing_renders_when_there_is_nothing():
