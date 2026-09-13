@@ -24895,7 +24895,22 @@ def _home_inner(
         # remembered Saved direction, so leaving it turned "All" from
         # oldest-first to newest-first. A sort is a pair, and a node default has
         # to be inert as a pair.
-        if selected_sort_by != "starred":
+        # A sort_by requesting a star-only order ("starred"/"size") from
+        # OUTSIDE the star scope isn't a real choice for the scope it landed
+        # in — it's exactly what a stale Saved-scope link (or a stale
+        # address-bar URL, force-refreshed) carries. normalize_sort_by
+        # already falls the KEY back to the default safely, but that default
+        # is a hardcoded "post", not this scope's own actual remembered
+        # value — and sort_dir is valid in any scope, so it sails through
+        # untouched. Either half persisting here would silently overwrite
+        # what this scope had remembered with values that were never a
+        # genuine choice for it. Reported live 2026-09-13 as "my FEEDS sort
+        # keeps getting reset to Pub new": browsing Saved sorted by size,
+        # then clicking a Feeds-tree link (which index.html no longer builds
+        # this way — see _feeds_tree_sq) silently flipped the Feeds scope's
+        # own remembered direction from asc ("Pub old") to desc ("Pub new").
+        _sort_from_wrong_scope = bool(sort_by) and sort_by in {"starred", "size"} and not _allow_starred_sort
+        if selected_sort_by != "starred" and not _sort_from_wrong_scope:
             if sort_by:
                 set_setting(conn, _sort_by_key, selected_sort_by)
             if sort_dir:
@@ -37267,8 +37282,15 @@ def tree_folder_feeds_fragment(request: Request, folder_id: int,
         # Same per-scope split as a full render: these rows are links into
         # whichever view the sidebar is currently showing, so stamping them with
         # the other scope's order would make one click silently re-sort.
-        _sb_key, _sd_key = sort_setting_keys(normalize_star_only(star_only))
-        sort_by = normalize_sort_by(get_setting(conn, _sb_key))
+        _star_only_bool = normalize_star_only(star_only)
+        _sb_key, _sd_key = sort_setting_keys(_star_only_bool)
+        # allow_starred has to match the scope actually being read here, same
+        # as the full render's own read (index.html's home route) already
+        # does — otherwise a remembered "starred"/"size" (only meaningful in
+        # the Saved scope, which this fragment is when star_only is set) gets
+        # silently normalized back to the default on every read, same shape
+        # of bug as the one that let a remembered "starred" destroy itself.
+        sort_by = normalize_sort_by(get_setting(conn, _sb_key), allow_starred=_star_only_bool)
         sort_dir = normalize_sort_dir(get_setting(conn, _sd_key))
 
     if folder_id == UNCATEGORIZED_FOLDER_ID:

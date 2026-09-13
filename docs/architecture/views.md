@@ -713,6 +713,33 @@ both cases is to pass the parameter through rather than invent one — absent me
 "not in the URL", the redirect carries nothing, and the remembered preference
 stands. Suspect this first the next time an order "won't stick".
 
+**Third occurrence, 2026-09-13: a shared template variable, not a JS default
+or a read-side gate this time.** `index.html`'s sidebar builds Feeds-tree and
+Saved-tree links from the *same* `_tree_sq` fragment — the current view's
+active sort, whichever scope it belongs to. Sorting Saved by `size` sets
+`_tree_sq` to `&sort_by=size&sort_dir=desc`; the Saved-tree links are
+supposed to carry that (it's their own scope's current order), but the
+Feeds-tree links (present in the DOM, just `hidden` while `selected_star_only`
+— the sidebar can flip between them client-side) got stamped with it too.
+`sort_by=size` on a plain Feeds request falls back to the default safely (the
+existing `allow_starred` gate), but `sort_dir=desc` is valid in *any* scope
+and sailed through — clicking one of those Feeds-tree links persisted "desc"
+as the Feeds scope's own remembered direction, flipping "Pub old" to
+"Pub new" with no menu click involved. Reported live as "my FEEDS sort keeps
+getting reset to Pub new" (misleadingly — `sort_by` never moved, only
+`sort_dir` did; the label happens to read "Pub new" for `post`+`desc` same as
+"Pub old" does for `post`+`asc`). Fixed two ways: `_feeds_tree_sq` (empty
+whenever the current view is Saved, `_tree_sq` otherwise) is what the
+Feeds-tree links use now, so they never carry a foreign scope's sort at all;
+and, as defense in depth against a stale link or address-bar URL from before
+this fix existed (the user's other reported trigger, "force-refreshing"), the
+home route's persistence guard now refuses to write *either* half of the sort
+when the incoming `sort_by` names a value that belongs to the other scope
+(`starred`/`size` outside `allow_starred`) — which also closes a second,
+worse variant of the same gap: that request would have clobbered a
+genuinely different remembered Feeds `sort_by` (say, `received`) back to the
+hardcoded default too, not just flipped its direction.
+
 **The Feeds "Starred" filter (`read_filter=starred`) deliberately never sets
 `star_only`, to stay out of this whole mechanism.** It's a peer of All/Unread/
 History in the Feeds filter dropdown — literal stars only, within the current
