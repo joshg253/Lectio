@@ -253,6 +253,22 @@
         {% set _tree_sq = (('&sort_by=' ~ _tree_sort_by) if _tree_sort_by != 'post' else '') ~ (('&sort_dir=' ~ _tree_sort_dir) if _tree_sort_dir != 'asc' else '') %}
         {# Feeds-tree links never carry star mode: Saved Articles and All Feeds
            are the mode switches, and each block is only visible in its own mode. #}
+        {# The Feeds tree's OWN links must never carry the Saved scope's active
+           sort either, for the same reason 'starred' alone used to get special-
+           cased above — 'size' means nothing outside Saved, but it isn't
+           REJECTED there, only its sort_by half is (normalize_sort_by falls
+           it back to "post"); its sort_dir half (just "desc"/"asc", valid in
+           any scope) sailed through untouched and got PERSISTED into the
+           Feeds scope's own remembered direction the moment a Feeds-tree link
+           built from _tree_sq (stamped with Saved's current order) was
+           clicked while browsing Saved sorted by size. Reported live
+           2026-09-13 as "my FEEDS sort keeps getting reset to Pub new" (really
+           Pub OLD silently flipping to Pub NEW — sort_by stayed "post" the
+           whole time, only sort_dir was ever cross-contaminated). Omitting
+           the params entirely when the current view is Saved is safe: the
+           destination just reads that scope's own remembered order fresh,
+           the same as any other omitted-default link already does. #}
+        {% set _feeds_tree_sq = '' if selected_star_only else _tree_sq %}
         {% set _tree_rfq = (('&read_filter=' ~ tree_read_filter) if tree_read_filter != 'all' else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != tree_read_filter else '') %}
         {# Saved-mode links carry only the mode: each mode's read filter is
            remembered separately (per-mode cookie/localStorage, resolved
@@ -383,7 +399,7 @@
               <div class="tree-folder-row">
                 <span class="tree-toggle-spacer"></span>
                 <a
-                  href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _tree_rfq }}"
+                  href="/?folder_id={{ root_folder_row.id }}{{ _feeds_tree_sq }}{{ _tree_rfq }}"
                   class="tree-item child-item feeds-all-item {% if not selected_star_only and not selected_home and root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_tag %}active{% endif %}"
                   data-folder-id="{{ root_folder_row.id }}"
                 >
@@ -415,7 +431,7 @@
                 <span class="tree-toggle-spacer"></span>
                 {% endif %}
                 <a
-                  href="/?folder_id={{ row.id }}{{ _tree_sq }}{{ _tree_rfq }}"
+                  href="/?folder_id={{ row.id }}{{ _feeds_tree_sq }}{{ _tree_rfq }}"
                   class="tree-item child-item {% if row.virtual %}virtual-folder {% endif %}{% if row.id == selected_folder_id and not selected_feed_url %}active{% endif %}"
                   data-folder-id="{{ row.id }}"
                   data-folder-name="{{ row.name }}"
@@ -452,7 +468,7 @@
               <li class="tree-feed-item" data-unread-count="{{ feed.unread_count }}">
                 <a
                   class="feed-link {% if selected_feed_url == feed.url and selected_folder_id == root_folder_row.id %}active{% endif %}"
-                  href="/?folder_id={{ root_folder_row.id }}&list_feed_url={{ feed.url | urlencode }}{{ _tree_sq }}{{ _tree_rfq }}"
+                  href="/?folder_id={{ root_folder_row.id }}&list_feed_url={{ feed.url | urlencode }}{{ _feeds_tree_sq }}{{ _tree_rfq }}"
                   data-feed-url="{{ feed.url }}"
                   data-folder-id="{{ root_folder_row.id }}"
                   title="{{ feed.url }}"
