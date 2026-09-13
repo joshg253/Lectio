@@ -260,8 +260,18 @@ post, nothing visible in the feed." `_subtract_hidden_locked_comics_from_counts`
 runs a small follow-up query against the (still-locked) rows the pref covers
 and subtracts any that are unread from that feed's raw total, rather than
 teaching the count query itself to join across the reader and meta databases.
-`hide_unpremiered` has the identical gap and hasn't been reported — noted in
-`Plan.md`, not fixed here.
+
+`hide_unpremiered` had the identical gap (fixed 2026-09-11, same session as this
+one, via `_subtract_hidden_unpremiered_from_counts`), but can't reuse the same
+shape verbatim: there is no indexed meta-DB column keyed by `(feed_url,
+entry_id)` for premiere status the way `locked_until` is for a locked comic.
+`_youtube_unpremiered_video_id` instead extracts a video id out of the entry's
+*link* and checks `youtube_duration_service`'s cached live status (warmed into
+memory at startup, so this is an in-memory lookup per candidate entry, not a
+DB hit). So its companion walks each qualifying feed's unread entry links and
+re-derives that same per-entry check, rather than a single join — candidate
+feeds are normally few (a handful of YouTube feeds with the toggle on), so
+this costs one small reader-DB query per such feed, not a scan of everything.
 
 ### Galleries rank nothing, so they need their own filters
 

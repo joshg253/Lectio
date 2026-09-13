@@ -9,10 +9,10 @@ AT Protocol API using the post's ``at://`` URI (which the RSS feed stores as the
 entry id/guid) and surface them as the entry's lead image + article content.
 
 A video post (``app.bsky.embed.video``) has no ``images`` list, just a static
-``thumbnail`` and an HLS ``playlist`` — we only surface the thumbnail here, as a
-plain lead image. There is no video playback and, deliberately, no "this is a
-video" indicator on it yet (see Plan.md); a viewer only learns it's a video by
-clicking through to bsky.app.
+``thumbnail`` and an HLS ``playlist``. ``fetch_post_images`` surfaces just the
+thumbnail (used for the list-view thumb and as a plain-image fallback lead
+image); ``fetch_post_video`` returns both, for the entry pane to render an
+actual ``<video>`` element (see app.js ``initBskyVideoPlayers``).
 
 No auth is required and no label is honored at this layer — the feed subscription
 is the user's explicit opt-in to that account's posts.
@@ -35,9 +35,11 @@ _API_GET_POSTS = "https://public.api.bsky.app/xrpc/app.bsky.feed.getPosts"
 _USER_AGENT = "Lectio/1.0 (+https://github.com/joshg253/Lectio)"
 _HTTP_TIMEOUT = 15.0
 
-# at:// URI -> (fetched_at, [image_urls]). Small in-memory TTL cache so list
-# thumbnails don't re-hit the API for every render.
-_cache: dict[str, tuple[float, list[str]]] = {}
+# at:// URI -> (fetched_at, post_dict_or_None). Small in-memory TTL cache so list
+# thumbnails/pane rendering don't re-hit the API for every render. Caching the
+# raw post (not just derived image URLs) lets fetch_post_images and
+# fetch_post_video share one fetch instead of each hitting the API separately.
+_cache: dict[str, tuple[float, dict | None]] = {}
 _cache_lock = threading.Lock()
 _TTL_SECONDS = 3600.0
 _CACHE_MAX = 2000  # bound the cache so a long-running process can't grow unbounded
@@ -88,6 +90,62 @@ def _images_from_post(post: dict) -> list[str]:
     return [u for u in out if not (u in seen or seen.add(u))]
 
 
+def _video_from_embed(embed: object) -> dict[str, str] | None:
+    """Return {"thumbnail", "playlist", "width", "height"} for a video embed
+    (recursing into recordWithMedia), or None if the post has no video.
+
+    width/height (from the embed's own aspectRatio, when present) are the
+    video's real dimensions -- a portrait clip (height > width, common for a
+    phone-shot vertical video) stretched to the article's full column width
+    via the plain CSS width:100%/height:auto rule renders extremely tall.
+    Carried through as HTML width/height attributes so the same portrait-cap
+    treatment images already get (applyPortraitImageCap) can size it correctly
+    without needing metadata to load first -- the video is preload="none",
+    so videoWidth/videoHeight aren't available until playback starts.
+    """
+    if not isinstance(embed, dict):
+        return None
+    etype = str(embed.get("$type") or "")
+    if etype.startswith("app.bsky.embed.video"):
+        thumb, playlist = embed.get("thumbnail"), embed.get("playlist")
+        if thumb and playlist:
+            out = {"thumbnail": str(thumb), "playlist": str(playlist)}
+            aspect = embed.get("aspectRatio")
+            if isinstance(aspect, dict) and aspect.get("width") and aspect.get("height"):
+                out["width"] = str(int(aspect["width"]))
+                out["height"] = str(int(aspect["height"]))
+            return out
+        return None
+    if etype.startswith("app.bsky.embed.recordWithMedia"):
+        return _video_from_embed(embed.get("media"))
+    return None
+
+
+def _fetch_post(at_uri: str) -> dict | None:
+    """Fetch and cache the raw post-view dict for an ``at://`` URI. Returns
+    None on any error or if the post isn't found."""
+    now = time.time()
+    with _cache_lock:
+        hit = _cache.get(at_uri)
+        if hit and now - hit[0] < _TTL_SECONDS:
+            return hit[1]
+    post: dict | None = None
+    try:
+        with httpx.Client(timeout=_HTTP_TIMEOUT, headers={"User-Agent": _USER_AGENT}) as client:
+            resp = client.get(_API_GET_POSTS, params={"uris": at_uri})
+            resp.raise_for_status()
+            posts = resp.json().get("posts", [])
+            if posts:
+                post = posts[0]
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[bsky] getPosts failed for %s: %s", at_uri, exc)
+        post = None
+    with _cache_lock:
+        _cache[at_uri] = (now, post)
+        _evict_locked(now)
+    return post
+
+
 def fetch_post_images(at_uri: str | None) -> list[str]:
     """Return the CDN image URLs for a Bluesky post given its ``at://`` URI —
     a video post's static thumbnail counts as an "image" here too.
@@ -96,23 +154,17 @@ def fetch_post_images(at_uri: str | None) -> list[str]:
     images (e.g. text-only or external-link embeds)."""
     if not at_uri or not at_uri.startswith("at://"):
         return []
-    now = time.time()
-    with _cache_lock:
-        hit = _cache.get(at_uri)
-        if hit and now - hit[0] < _TTL_SECONDS:
-            return hit[1]
-    urls: list[str] = []
-    try:
-        with httpx.Client(timeout=_HTTP_TIMEOUT, headers={"User-Agent": _USER_AGENT}) as client:
-            resp = client.get(_API_GET_POSTS, params={"uris": at_uri})
-            resp.raise_for_status()
-            posts = resp.json().get("posts", [])
-            if posts:
-                urls = _images_from_post(posts[0])
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("[bsky] getPosts failed for %s: %s", at_uri, exc)
-        urls = []
-    with _cache_lock:
-        _cache[at_uri] = (now, urls)
-        _evict_locked(now)
-    return urls
+    post = _fetch_post(at_uri)
+    return _images_from_post(post) if post else []
+
+
+def fetch_post_video(at_uri: str | None) -> dict[str, str] | None:
+    """Return {"thumbnail", "playlist"} for a Bluesky video post given its
+    ``at://`` URI, or None if the post isn't a video (or on any error).
+
+    Shares ``fetch_post_images``'s cached fetch — calling both for the same
+    post costs one API request, not two."""
+    if not at_uri or not at_uri.startswith("at://"):
+        return None
+    post = _fetch_post(at_uri)
+    return _video_from_embed(post.get("embed")) if post else None

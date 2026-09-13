@@ -39,7 +39,10 @@ def _dummy_meta_conn() -> sqlite3.Connection:
 def _build_feed_mark_read_app(monkeypatch, marked: int = 3) -> FastAPI:
     app = FastAPI()
     app.post("/feeds/mark-read")(main.mark_feed_as_read)
-    monkeypatch.setattr(main, "mark_feeds_as_read", lambda _feed_urls: (marked, "2026-07-17T00:00:00" if marked else None))
+    monkeypatch.setattr(
+        main, "_mark_entries_as_read_for_view",
+        lambda _feed_urls, **_kwargs: (marked, "2026-07-17T00:00:00" if marked else None),
+    )
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_conn)
     monkeypatch.setattr(main, "unread_counts_cache", {})
     return app
@@ -97,7 +100,10 @@ def _build_folder_mark_read_app(monkeypatch, marked: int = 7) -> FastAPI:
     app.post("/folders/mark-read")(main.mark_folder_as_read)
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_conn)
     monkeypatch.setattr(main, "get_folder_feed_urls", lambda _conn, _fid: {"https://a.com/f", "https://b.com/f"})
-    monkeypatch.setattr(main, "mark_feeds_as_read", lambda _feed_urls: (marked, "2026-07-17T00:00:00" if marked else None))
+    monkeypatch.setattr(
+        main, "_mark_entries_as_read_for_view",
+        lambda _feed_urls, **_kwargs: (marked, "2026-07-17T00:00:00" if marked else None),
+    )
     monkeypatch.setattr(main, "unread_counts_cache", {})
     return app
 
@@ -244,6 +250,13 @@ def test_older_than_marks_entries_dated_only_by_added(monkeypatch):
     monkeypatch.setattr(main, "filter_feed_urls", lambda urls, _l: urls)
     monkeypatch.setattr(main, "unread_counts_cache", {})
     monkeypatch.setattr(main, "get_reader", lambda: fake)
+    # This test is about the date-cutoff logic (entry_effective_date), not view
+    # filtering -- stub list_entries_for_feeds (which needs a real meta-DB
+    # schema this fixture doesn't set up) to allow every fake entry through.
+    monkeypatch.setattr(
+        main, "list_entries_for_feeds",
+        lambda *_a, **_kw: [{"feed_url": "http://feed/", "id": e.id} for e in entries],
+    )
 
     with TestClient(app) as client:
         r = client.post(

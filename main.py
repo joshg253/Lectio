@@ -6398,6 +6398,7 @@ def _compute_unread_counts_by_feed() -> dict[str, int]:
         ).fetchall()
         counts = {str(row[0]): int(row[1]) for row in rows}
         _subtract_hidden_locked_comics_from_counts(conn, counts)
+        _subtract_hidden_unpremiered_from_counts(conn, counts)
         conn.close()
         return counts
     except Exception:
@@ -6474,6 +6475,58 @@ def _subtract_hidden_locked_comics_from_counts(reader_conn: sqlite3.Connection, 
                 counts[feed_url] = max(0, counts.get(feed_url, 0) - hidden_unread)
     except Exception:
         LOGGER.exception("[hide-locked-comics] failed to subtract hidden counts from unread totals")
+
+
+def _subtract_hidden_unpremiered_from_counts(reader_conn: sqlite3.Connection, counts: dict[str, int]) -> None:
+    """A not-yet-premiered YouTube video hide_unpremiered keeps out of the list
+    must not inflate the unread badge either — same gap
+    _subtract_hidden_locked_comics_from_counts was built for, identified but not
+    fixed alongside it (2026-09-06).
+
+    Unlike locked comics, there is no indexed meta-DB column keyed by
+    (feed_url, entry_id) for premiere status: `_is_youtube_unpremiered` works by
+    extracting a video id out of the entry's *link* and checking
+    youtube_duration_service's cached live status (itself warmed into memory at
+    startup, so this is an in-memory lookup per candidate entry, not a DB hit
+    per entry). So instead of one meta-DB join, this walks each qualifying
+    feed's unread entry links and re-derives the same check the render-time
+    filter uses. The candidate feed set is normally tiny (a handful of YouTube
+    feeds with the toggle on, at most), so this costs one small query per such
+    feed, not a scan of everything.
+    """
+    try:
+        global_hide = youtube_hide_unpremiered_global()
+        yt_feeds = [f for f, n in counts.items() if n and "youtube.com/feeds/videos.xml" in f]
+        if not yt_feeds:
+            return
+        if global_hide:
+            candidate_feeds = yt_feeds
+        else:
+            per_feed_on: set[str] = set()
+            with get_meta_connection() as mconn:
+                for _i in range(0, len(yt_feeds), 900):
+                    _chunk = yt_feeds[_i:_i + 900]
+                    _ph = ",".join("?" for _ in _chunk)
+                    per_feed_on.update(
+                        str(r["feed_url"])
+                        for r in mconn.execute(
+                            f"SELECT feed_url FROM feed_display_prefs"
+                            f" WHERE hide_unpremiered = 1 AND feed_url IN ({_ph})",
+                            _chunk,
+                        ).fetchall()
+                    )
+            candidate_feeds = [f for f in yt_feeds if f in per_feed_on]
+        for feed_url in candidate_feeds:
+            hidden_unread = 0
+            for (link,) in reader_conn.execute(
+                "SELECT link FROM entries WHERE feed = ? AND read = 0", (feed_url,)
+            ).fetchall():
+                if _youtube_unpremiered_video_id(feed_url, link):
+                    hidden_unread += 1
+            if hidden_unread:
+                counts[feed_url] = max(0, counts.get(feed_url, 0) - hidden_unread)
+    except Exception:
+        LOGGER.exception("[hide-unpremiered] failed to subtract hidden counts from unread totals")
 
 
 # Newest-post-per-feed is derived from a full GROUP BY over the reader entries
@@ -18902,15 +18955,41 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # AT Protocol API, incl. content-labeled posts) so the article shows them.
         # The list thumbnail is handled separately in extract_entry_thumbnail_url.
         if bluesky.is_bsky_feed(str(entry.feed_url)):
-            _bsky_imgs = bluesky.fetch_post_images(str(entry.id))
-            if _bsky_imgs:
-                _existing = content_html or ""
-                _add = "".join(
-                    f'<p><img src="{html.escape(u, quote=True)}" loading="lazy"'
-                    f' referrerpolicy="no-referrer" style="max-width:100%;height:auto;"></p>'
-                    for u in _bsky_imgs if u not in _existing
+            _existing = content_html or ""
+            _bsky_video = bluesky.fetch_post_video(str(entry.id))
+            if _bsky_video:
+                # A real <video> instead of a static thumb: data-bsky-hls-src is
+                # picked up by app.js's initBskyVideoPlayers, which attaches
+                # native HLS (Safari) or lazy-loads vendored hls.js for everyone
+                # else. poster keeps today's thumbnail as the pre-play frame.
+                #
+                # width/height (when the embed carried an aspectRatio) let
+                # applyPortraitImageCap cap a portrait video the same way it
+                # already caps a portrait image -- without them, a vertical
+                # phone-shot clip stretched to the article's full column width
+                # via width:100%/height:auto renders extremely tall. The video
+                # itself can't report this on its own before playback starts
+                # (preload="none" means no videoWidth/videoHeight yet).
+                _dims = (
+                    f' width="{html.escape(_bsky_video["width"], quote=True)}"'
+                    f' height="{html.escape(_bsky_video["height"], quote=True)}"'
+                    if _bsky_video.get("width") and _bsky_video.get("height") else ""
                 )
-                content_html = _existing + _add
+                content_html = _existing + (
+                    f'<p><video controls preload="none" playsinline{_dims}'
+                    f' poster="{html.escape(_bsky_video["thumbnail"], quote=True)}"'
+                    f' data-bsky-hls-src="{html.escape(_bsky_video["playlist"], quote=True)}"'
+                    f' style="max-width:100%;"></video></p>'
+                )
+            else:
+                _bsky_imgs = bluesky.fetch_post_images(str(entry.id))
+                if _bsky_imgs:
+                    _add = "".join(
+                        f'<p><img src="{html.escape(u, quote=True)}" loading="lazy"'
+                        f' referrerpolicy="no-referrer" style="max-width:100%;height:auto;"></p>'
+                        for u in _bsky_imgs if u not in _existing
+                    )
+                    content_html = _existing + _add
 
         # Has this body been hand-cleaned in the pane? Gates "Revert cleanup" in
         # the UI, and suppresses the embed recovery below — re-adding an embed
@@ -19626,6 +19705,102 @@ def mark_feeds_as_read(feed_urls: set[str]) -> tuple[int, str | None]:
                 if _is_youtube_unpremiered(entry):
                     continue
                 reader.mark_entry_as_read((entry.feed_url, entry.id))
+                to_sync.append((entry.feed_url, entry.id))
+
+    when = None
+    if to_sync:
+        when = datetime.now().isoformat()
+        with get_meta_connection() as conn:
+            conn.executemany(
+                """
+                INSERT INTO entry_read_state (feed_url, entry_id, read_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at
+                """,
+                [(fu, eid, when) for fu, eid in to_sync],
+            )
+    return len(to_sync), when
+
+
+def _mark_entries_as_read_for_view(
+    feed_urls: set[str],
+    *,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    read_filter: str | None = None,
+    star_only: str | int | bool | None = None,
+    tag: str | None = None,
+    older_than_cutoff: datetime | None = None,
+) -> tuple[int, str | None]:
+    """Mark as read only the entries the current filtered view actually shows —
+    tag, star_only, read_filter, and every hide_* display preference
+    list_entries_for_feeds itself applies (hide_locked_comics, hide_shorts,
+    hide_paywalled, hide_members_only, hide_unpremiered) — not every raw
+    unread entry in feed_urls regardless of what the view is hiding.
+
+    Shared by /folders/mark-read, /feeds/mark-read, and
+    /entries/mark-older-than-read, each of which used to ignore the tag/
+    star_only/read_filter params their own forms already submitted (accepted
+    only to round-trip into the redirect URL) and mark every unread entry in
+    scope instead — so marking a filtered/starred/tagged view as read could
+    silently mark entries the filter was hiding. Only /entries/mark-range-read
+    ("Read above/below") was already scoped correctly, via this same
+    list_entries_for_feeds call.
+
+    older_than_cutoff, when given, additionally requires the same effective
+    date (published/updated/added, via entry_effective_date) the list itself
+    displays and greys on to be before it — the "Older than N days" action's
+    own scoping, layered on top of the view filter rather than replacing it.
+    """
+    if not feed_urls:
+        return 0, None
+    # list_entries_for_feeds(enrich=False) is used only to compute WHICH
+    # entries the current tag/star_only/read_filter/hide_* view actually shows
+    # — cheaply (no thumbnails/tags/premiere-prefix work) — not as the source
+    # of the entries themselves, since that shape drops post_timestamp and
+    # everything else an enriched caller would get. The actual read/date
+    # checks below run against raw reader entries, same as before this scoping
+    # existed.
+    allowed_ids = {
+        (post["feed_url"], post["id"])
+        for post in list_entries_for_feeds(
+            feed_urls,
+            limit=_RANGE_READ_LIMIT,
+            sort_by=sort_by or "post",
+            sort_dir=sort_dir or "asc",
+            read_filter=read_filter or "all",
+            star_only=normalize_star_only(star_only),
+            selected_tag=tag,
+            enrich=False,
+        )
+    }
+    if not allowed_ids:
+        return 0, None
+
+    to_sync: list[tuple[str, str]] = []
+    with get_reader() as reader:
+        for feed_url in feed_urls:
+            for entry in reader.get_entries(feed=feed_url, read=False):
+                if (entry.feed_url, entry.id) not in allowed_ids:
+                    continue
+                if older_than_cutoff is not None:
+                    date = entry_effective_date(entry)
+                    if date is None:
+                        continue
+                    if date.tzinfo is None:
+                        date = date.replace(tzinfo=timezone.utc)
+                    if date >= older_than_cutoff:
+                        continue
+                # A premiere that hasn't aired yet shouldn't be swallowed by a
+                # blanket mark-read sweep, even when hide_unpremiered itself is
+                # off (matching every other mark-read entry point's
+                # unconditional exemption) — it hasn't delivered its content.
+                if _is_youtube_unpremiered(entry):
+                    continue
+                try:
+                    reader.mark_entry_as_read((entry.feed_url, entry.id))
+                except Exception:
+                    continue
                 to_sync.append((entry.feed_url, entry.id))
 
     when = None
@@ -33907,7 +34082,9 @@ def mark_folder_as_read(
     with get_meta_connection() as conn:
         feed_urls = get_folder_feed_urls(conn, folder_id)
 
-    marked_count, undo_token = mark_feeds_as_read(feed_urls)
+    marked_count, undo_token = _mark_entries_as_read_for_view(
+        feed_urls, sort_by=sort_by, sort_dir=sort_dir, read_filter=read_filter, star_only=star_only, tag=tag,
+    )
     with unread_counts_cache_lock:
         global _unread_counts_generation
         _unread_counts_generation += 1
@@ -34005,7 +34182,9 @@ def mark_feed_as_read(
     resume_read_filter: str | None = Form(default=None),
 ):
     normalized_tag = normalize_tag_value(tag)
-    marked_count, undo_token = mark_feeds_as_read({feed_url})
+    marked_count, undo_token = _mark_entries_as_read_for_view(
+        {feed_url}, sort_by=sort_by, sort_dir=sort_dir, read_filter=read_filter, star_only=star_only, tag=tag,
+    )
     with unread_counts_cache_lock:
         global _unread_counts_generation
         _unread_counts_generation += 1
@@ -36222,45 +36401,11 @@ def mark_entries_older_than_read(
     filtered_feed_urls = filter_feed_urls(feed_urls, list_feed_url)
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
-    marked_count = 0
-    undo_token = None
-    to_sync: list[tuple[str, str]] = []
-    with get_reader() as reader:
-        for fu in filtered_feed_urls:
-            for entry in reader.get_entries(feed=fu, read=False):
-                # Match the date the list displays and the client greys on
-                # (post_timestamp = published or updated or added). Without the
-                # `added` fallback the server skips entries the UI optimistically
-                # marked, so they flash read then revert.
-                date = entry_effective_date(entry)
-                if date is None:
-                    continue
-                if date.tzinfo is None:
-                    date = date.replace(tzinfo=timezone.utc)
-                if date >= cutoff:
-                    continue
-                # A premiere that hasn't aired yet shouldn't be swallowed by a
-                # blanket "mark older than X" sweep.
-                if _is_youtube_unpremiered(entry):
-                    continue
-                try:
-                    reader.mark_entry_as_read((entry.feed_url, entry.id))
-                except Exception:
-                    continue
-                to_sync.append((entry.feed_url, entry.id))
-                marked_count += 1
-
-    if to_sync:
-        when = undo_token = datetime.now().isoformat()
-        with get_meta_connection() as conn:
-            conn.executemany(
-                """
-                INSERT INTO entry_read_state (feed_url, entry_id, read_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at
-                """,
-                [(fu, eid, when) for fu, eid in to_sync],
-            )
+    marked_count, undo_token = _mark_entries_as_read_for_view(
+        filtered_feed_urls, sort_by=sort_by, sort_dir=sort_dir, read_filter=read_filter, star_only=star_only,
+        tag=tag, older_than_cutoff=cutoff,
+    )
+    if marked_count:
         global _unread_counts_generation
         _unread_counts_generation += 1
         unread_counts_cache.clear()
