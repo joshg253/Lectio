@@ -10191,6 +10191,45 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       resultsEl.innerHTML = '';
     }
 
+    // Mirrors main.py's _MOVE_BATCH_CAP — every id-list bulk-action route
+    // (tags/read/star/move-to-feed -batch) hard-caps a single request at this
+    // many entries, as a payload/processing-size safety limit, not a design
+    // intent that a selection can never exceed it. Select All can now select
+    // an entire large view (2026-09-11), so a selection bigger than this is
+    // routine, not exceptional.
+    const _BULK_ACTION_CHUNK = 500;
+
+    // Splits `entries` into <=_BULK_ACTION_CHUNK groups and POSTs each to
+    // `url` sequentially (never concurrently — these are real DB writes),
+    // merging `extraParams` into every request alongside the entries payload.
+    // Reported live 2026-09-12: bulk-tagging a large Select-All selection
+    // errored "max 500 per action" outright, since these routes previously
+    // only ever saw whatever the browser posted in one shot. Returns every
+    // chunk's parsed response for the caller to merge per its own route's
+    // result shape; stops after the first chunk that comes back !ok — a
+    // later chunk failing (rather than the whole thing) is meant to look
+    // like a partial-success report, not silently swallowed.
+    async function postEntriesBatched(url, entries, extraParams) {
+      const results = [];
+      for (let i = 0; i < entries.length; i += _BULK_ACTION_CHUNK) {
+        const chunk = entries.slice(i, i + _BULK_ACTION_CHUNK);
+        const body = new URLSearchParams({
+          ...extraParams,
+          entries: JSON.stringify(chunk.map((e) => [e.feedUrl, e.entryId])),
+        });
+        let data;
+        try {
+          const resp = await fetch(url, { method: 'POST', body });
+          data = await resp.json();
+        } catch (_) {
+          data = { ok: false, error: 'Network error.' };
+        }
+        results.push(data);
+        if (!data.ok) break;
+      }
+      return results;
+    }
+
     // Shared driver for the move-to-feed modal. `entries` is a list of
     // {feedUrl, entryId}; one entry uses the single endpoint, more uses the
     // batch endpoint. `bodyText` describes what's being moved.
@@ -10215,10 +10254,20 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       confirmBtn.textContent = 'Move';
 
       // Candidates: every other subscribed feed (same endpoint the unsubscribe
-      // migration picker uses, so it doesn't depend on what's in the DOM).
+      // migration picker uses, so it doesn't depend on what's in the DOM). The
+      // endpoint excludes whichever feed_url it's given (a single entry can't
+      // usefully "move" to the feed it's already in) -- correct for a single
+      // entry, but reported live 2026-09-12 for a mixed bulk selection: if the
+      // FIRST selected post happened to already be in the target feed, that
+      // feed vanished from the picker for the whole batch, even though other
+      // selected posts weren't in it yet and the move route already no-ops
+      // (skips, not errors) whichever entries are. Only exclude a feed for a
+      // genuine single-entry move; a bulk selection has no one "current feed"
+      // to exclude in the first place.
       let candidates = [];
       try {
-        const r = await fetch(`/feeds/curation-count?feed_url=${encodeURIComponent(entries[0].feedUrl)}`);
+        const excludeFeedUrl = entries.length === 1 ? entries[0].feedUrl : '';
+        const r = await fetch(`/feeds/curation-count?feed_url=${encodeURIComponent(excludeFeedUrl)}`);
         const d = await r.json();
         candidates = d.candidates || [];
       } catch (_) { /* picker just stays empty */ }
@@ -10230,25 +10279,30 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         if (!targetUrl) return;
         confirmBtn.disabled = true;
         confirmBtn.textContent = 'Moving…';
-        let body;
-        let endpoint;
-        if (predicate) {
-          body = new URLSearchParams(predicate);
-          body.set('target_url', targetUrl);
-          endpoint = '/entries/move-visible-to-feed';
-        } else if (entries.length === 1) {
-          body = new URLSearchParams({ feed_url: entries[0].feedUrl, entry_id: entries[0].entryId, target_url: targetUrl });
-          endpoint = '/entries/move-to-feed';
-        } else {
-          body = new URLSearchParams({
-            entries: JSON.stringify(entries.map(e => [e.feedUrl, e.entryId])),
-            target_url: targetUrl,
-          });
-          endpoint = '/entries/move-to-feed-batch';
-        }
         try {
-          const resp = await fetch(endpoint, { method: 'POST', body });
-          const data = await resp.json();
+          let data;
+          if (predicate) {
+            const body = new URLSearchParams(predicate);
+            body.set('target_url', targetUrl);
+            const resp = await fetch('/entries/move-visible-to-feed', { method: 'POST', body });
+            data = await resp.json();
+          } else if (entries.length === 1) {
+            const body = new URLSearchParams({ feed_url: entries[0].feedUrl, entry_id: entries[0].entryId, target_url: targetUrl });
+            const resp = await fetch('/entries/move-to-feed', { method: 'POST', body });
+            data = await resp.json();
+          } else {
+            // Chunked: a Select-All-driven selection can exceed the server's
+            // per-request cap (main.py's _MOVE_BATCH_CAP).
+            const results = await postEntriesBatched('/entries/move-to-feed-batch', entries, { target_url: targetUrl });
+            const moved = results.reduce((n, r) => n + (r.moved || 0), 0);
+            const skipped = results.reduce((n, r) => n + (r.skipped || 0), 0);
+            const failed = results.reduce((n, r) => n + (r.failed || 0), 0);
+            const ok = results.length > 0 && results.every((r) => r.ok);
+            let message = `Moved ${moved} entr${moved === 1 ? 'y' : 'ies'}.`;
+            if (skipped) message += ` ${skipped} already in that feed.`;
+            if (failed) message += ` ${failed} failed.`;
+            data = { ok, moved, skipped, failed, message, error: results.find((r) => !r.ok)?.error };
+          }
           if (data.ok) {
             modal.setAttribute('hidden', '');
             showToastMessage(data.message || 'Moved.');
@@ -10258,12 +10312,26 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             // feed and lost the active search/filter you were working in.
             // Keep rows whose source feed IS the target: the server skips those
             // (a "move visible" over a folder includes the target's own posts).
-            const esc = (window.CSS && CSS.escape) ? (s) => CSS.escape(s) : (s) => s;
-            for (const e of entries) {
-              if (e.feedUrl === targetUrl) continue;   // skipped server-side, leave it
-              document.querySelectorAll(
-                `.posts .post-item[data-post-feed-url="${esc(e.feedUrl)}"][data-post-entry-id="${esc(e.entryId)}"]`
-              ).forEach((row) => row.remove());
+            //
+            // The Inbox (kept=starred) is feed-agnostic and root-scoped — it
+            // spans every starred entry in the whole library regardless of
+            // feed, unlike a folder-scoped Saved view (star_only alone) whose
+            // feed set IS bounded. Moving curation to another feed doesn't
+            // unstar it, so it still belongs in the Inbox under its new
+            // feed_url. Reported live 2026-09-12: rows vanished on move (this
+            // removal ran regardless) but were back on the next reload, since
+            // the server-side query never actually excluded them there — the
+            // assumption "moved = left this scope" only holds when the view's
+            // own feed set is bounded, which the Inbox's specifically isn't.
+            const isInbox = new URL(window.location.href).searchParams.get('kept') === 'starred';
+            if (!isInbox) {
+              const esc = (window.CSS && CSS.escape) ? (s) => CSS.escape(s) : (s) => s;
+              for (const e of entries) {
+                if (e.feedUrl === targetUrl) continue;   // skipped server-side, leave it
+                document.querySelectorAll(
+                  `.posts .post-item[data-post-feed-url="${esc(e.feedUrl)}"][data-post-entry-id="${esc(e.entryId)}"]`
+                ).forEach((row) => row.remove());
+              }
             }
             onDone?.(data);
           } else {
@@ -10384,12 +10452,20 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         confirmBtn.disabled = true;
         confirmBtn.textContent = 'Saving…';
         try {
-          const body = new URLSearchParams({
-            entries: JSON.stringify(entries.map((e) => [e.feedUrl, e.entryId])),
-            tags_text: tokens.join(' '),
-          });
-          const resp = await fetch('/entries/tags-batch', { method: 'POST', body });
-          const data = await resp.json();
+          // Chunked: a Select-All-driven selection can exceed the server's
+          // per-request cap (main.py's _MOVE_BATCH_CAP).
+          const results = await postEntriesBatched('/entries/tags-batch', entries, { tags_text: tokens.join(' ') });
+          const tagged = results.reduce((n, r) => n + (r.tagged || 0), 0);
+          const failed = results.reduce((n, r) => n + (r.failed || 0), 0);
+          const ok = results.length > 0 && results.every((r) => r.ok);
+          let message = `Updated tags on ${tagged} post${tagged === 1 ? '' : 's'}.`;
+          if (failed) message += ` ${failed} failed.`;
+          const data = {
+            ok, tagged, failed, message,
+            error: results.find((r) => !r.ok)?.error,
+            still_tagged: results.flatMap((r) => r.still_tagged || []),
+            now_untagged: results.flatMap((r) => r.now_untagged || []),
+          };
           if (data.ok) {
             modal.setAttribute('hidden', '');
             showToastMessage(data.message || 'Tags updated.');
@@ -10429,10 +10505,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             const toMarkRead = entries.filter((e) => stillTaggedKeys.has(`${e.feedUrl} ${e.entryId}`));
             if (toMarkRead.length) {
               try {
-                const readBody = new URLSearchParams({ entries: JSON.stringify(toMarkRead.map((e) => [e.feedUrl, e.entryId])) });
-                const readResp = await fetch('/entries/read-batch', { method: 'POST', body: readBody });
-                const readData = await readResp.json().catch(() => ({}));
-                if (readData && readData.ok) applyReadStateToSelection(toMarkRead);
+                const readResults = await postEntriesBatched('/entries/read-batch', toMarkRead, {});
+                if (readResults.length > 0 && readResults.every((r) => r.ok)) applyReadStateToSelection(toMarkRead);
               } catch (_e) { /* the tag edit itself already succeeded and is reported above */ }
             }
             // Selection is left as-is — bulk actions chain.
@@ -10471,11 +10545,15 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       hideAllContextMenus();
       if (!entries.length) return;
       try {
-        const body = new URLSearchParams({
-          entries: JSON.stringify(entries.map((e) => [e.feedUrl, e.entryId])),
-        });
-        const resp = await fetch('/entries/read-batch', { method: 'POST', body });
-        const data = await resp.json();
+        // Chunked: a Select-All-driven selection can exceed the server's
+        // per-request cap (main.py's _MOVE_BATCH_CAP).
+        const results = await postEntriesBatched('/entries/read-batch', entries, {});
+        const marked = results.reduce((n, r) => n + (r.marked || 0), 0);
+        const failed = results.reduce((n, r) => n + (r.failed || 0), 0);
+        const ok = results.length > 0 && results.every((r) => r.ok);
+        let message = `Marked ${marked} post${marked === 1 ? '' : 's'} as read.`;
+        if (failed) message += ` ${failed} failed.`;
+        const data = { ok, marked, failed, message, error: results.find((r) => !r.ok)?.error };
         if (data.ok) {
           showToastMessage(data.message || 'Marked as read.');
           applyReadStateToSelection(entries);
@@ -10495,12 +10573,24 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       if (!entries.length) return;
       const dropped = applyStarStateToSelection(entries, isSaved);
       try {
-        const body = new URLSearchParams({
-          entries: JSON.stringify(entries.map((e) => [e.feedUrl, e.entryId])),
-          saved: isSaved ? '1' : '0',
-        });
-        const resp = await fetch('/entries/star-batch', { method: 'POST', body });
-        const data = await resp.json();
+        // Chunked: a Select-All-driven selection can exceed the server's
+        // per-request cap (main.py's _MOVE_BATCH_CAP). Each chunk gets its
+        // own undo_token (entry_unstar_batch is keyed per-request), so the
+        // single-toast "undo this batch" affordance only applies cleanly when
+        // everything fit in one chunk — a selection that large is the rare
+        // case, and still unstars correctly either way.
+        const results = await postEntriesBatched('/entries/star-batch', entries, { saved: isSaved ? '1' : '0' });
+        const changed = results.reduce((n, r) => n + (r.changed || 0), 0);
+        const failed = results.reduce((n, r) => n + (r.failed || 0), 0);
+        const ok = results.length > 0 && results.every((r) => r.ok);
+        const verb = isSaved ? 'Starred' : 'Unstarred';
+        let message = `${verb} ${changed} post${changed === 1 ? '' : 's'}.`;
+        if (failed) message += ` ${failed} failed.`;
+        const data = {
+          ok, changed, failed, message,
+          error: results.find((r) => !r.ok)?.error,
+          undo_token: results.length === 1 ? results[0].undo_token : undefined,
+        };
         if (data.ok) {
           for (const el of dropped) el.remove();
           if (!isSaved && data.undo_token) {
@@ -17284,11 +17374,6 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       document.getElementById('posts-selection-count')?.addEventListener('click', () => {
         clearPostSelection();
       });
-      // Resolves the whole current view + filter server-side — same
-      // machinery as "Move all shown to feed…" — so it selects everything
-      // matching, not just what scroll-chunking has rendered so far. Rows
-      // not yet in the DOM get synced when they render (see
-      // bindPostListInteractions's boundCheckbox setup).
       document.getElementById('posts-select-all')?.addEventListener('click', async () => {
         // Toggle: a second click while anything is selected clears it, mirroring
         // the selection-count pill's own click-to-clear rather than re-resolving
@@ -17297,8 +17382,35 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           clearPostSelection();
           return;
         }
+        const filterTerm = box.value.trim();
+        if (filterTerm) {
+          // Reported live 2026-09-11: with a "Filter this view" term active,
+          // resolving the whole server-side view (below) can select vastly
+          // more than what the filter is showing on screen -- the filter term
+          // matches title/link/feed name across the WHOLE view, which is
+          // usually a much bigger set than what's actually rendered. Select
+          // exactly the rows the filter is showing instead (chunked-in but not
+          // filtered-out) -- a filter term means the user has a specific small
+          // set in mind, not "everything that could ever match this word."
+          //
+          // Unlike "Move visible to feed" (which excludes orphan archive rows
+          // because there's no reader entry to move), this is a plain
+          // multi-select -- orphans are ordinary, individually-checkable rows
+          // for every other bulk action, so excluding them here just made
+          // Select All report "Nothing to select" on an all-orphan filtered
+          // view (reported live 2026-09-12, right after this shipped).
+          const rows = Array.from(document.querySelectorAll('.posts .post-item:not(.post-item-filtered)'));
+          rows.forEach(el => setPostSelected(el, true));
+          showToastMessage(selectedPosts.size ? `Selected ${selectedPosts.size} post${selectedPosts.size === 1 ? '' : 's'}.` : 'Nothing to select.');
+          return;
+        }
+        // No filter term: resolve the whole current view server-side — same
+        // machinery as "Move all shown to feed…" — so it selects everything
+        // matching (tag/star/read-filter/search), not just what scroll-chunking
+        // has rendered so far. Rows not yet in the DOM get synced when they
+        // render (see bindPostListInteractions's boundCheckbox setup).
         const predicate = currentViewParams();
-        predicate.set('filter_term', box.value.trim());
+        predicate.set('filter_term', '');
         try {
           const resp = await fetch('/entries/select-all-visible', { method: 'POST', body: new URLSearchParams(predicate) });
           const data = await resp.json();

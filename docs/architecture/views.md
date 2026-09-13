@@ -50,6 +50,110 @@ excluded on both sides: there is no reader entry to move.
 `_RANGE_READ_LIMIT`; this generalizes it from an anchor lookup to a whole-set
 action.
 
+### The id-list bulk actions (tag/read/star/move) are chunked client-side past `_MOVE_BATCH_CAP`
+
+`_MOVE_BATCH_CAP` (500, `main.py`) is a payload/processing-size safety limit on
+the id-list bulk routes (`/entries/tags-batch`, `/read-batch`, `/star-batch`,
+`/move-to-feed-batch`) — never a design intent that a selection can't exceed
+it. Once Select All could select an entire large view (2026-09-11), hitting it
+became routine rather than exceptional: reported live 2026-09-12 as an outright
+"max 500 per action" error when bulk-tagging a big selection.
+
+`postEntriesBatched` (app.js) splits `entries` into ≤500 groups and POSTs each
+to the same route sequentially (never concurrently — these are real DB
+writes), returning every chunk's parsed response for the caller to merge per
+its own route's result shape (counts summed, message rebuilt, `still_tagged`/
+`now_untagged` concatenated for tags-batch). All four call sites route through
+it now. `/move-to-feed-batch`'s sibling `/move-visible-to-feed` (predicate-
+resolved, see above) was never affected — it has no id payload to cap in the
+first place.
+
+**Star-batch's undo is the one place chunking has a real, accepted limitation.**
+`entry_unstar_batch`'s shared undo token is per-request, so a selection split
+across multiple chunks gets multiple tokens — the single "undo this batch"
+toast only applies cleanly when everything fit in one chunk (`results.length
+=== 1`). A selection over 500 still unstars correctly either way; it just
+doesn't get one coherent undo affordance across the whole thing. Not solved
+further — the common case is well under 500, and building cross-chunk undo
+wasn't worth it for the rare one.
+
+**Select All is the one exception, and only when a filter term is active.**
+Reported live 2026-09-11: Select All used to share `Move visible to feed…`'s
+predicate-resolved, whole-set design (`POST /entries/select-all-visible`,
+still there and still used when no filter term is set), but a "Filter this
+view" term means something narrower than a tag/star/read/search scope —
+"the specific handful of posts I'm looking at right now," not "every post in
+the whole view that happens to contain this word," which can be vastly larger
+across a big Inbox/folder. So with a filter term active, Select All now reads
+the DOM directly — `.post-item:not(.post-item-filtered)` — instead of calling
+the server at all. `Move visible to feed…` itself is unchanged: its own
+confirmation dialog already states the real total up front ("N are loaded
+here; all M are moved") before acting, so there is no silent-surprise version
+of that gap to fix there.
+
+**Orphans are NOT excluded here, unlike `Move visible to feed…`.** The first
+cut of this fix copied that route's `data-post-orphan` exclusion (orphan
+archive rows have no reader entry, so there's genuinely nothing to *move*) —
+wrong for a plain multi-select, which every other bulk action (archive,
+delete, tag) treats an orphan row as ordinary and individually checkable.
+Reported live minutes after shipping: filtering the Inbox down to an
+all-orphan set (old saves from since-unsubscribed feeds — exactly what "sort
+by size" cleanup surfaces) made Select All report "Nothing to select." Fixed
+by dropping the orphan filter from this path; `Move visible to feed…` keeps
+its own, for the reason stated there.
+
+### The bulk "Move to feed" target picker excluded the target itself, for a mixed selection
+
+Reported live 2026-09-12: filtering the Inbox to a mix of "already in Guitar
+World Lessons" and "not yet" posts, selecting all of them, and opening Move
+to feed didn't offer Guitar World Lessons as a destination at all.
+
+`openMoveToFeedModal`'s candidate list is `GET /feeds/curation-count`, reused
+from the unsubscribe-migration picker — that endpoint's whole point there is
+excluding the ONE feed named by `feed_url` (you can't usefully migrate a
+feed's curation to itself). The bulk-move call site passed
+`entries[0].feedUrl` as that exclusion, correct for a genuine single-entry
+move (don't offer "move this post to the feed it's already in") but wrong for
+a multi-entry selection: there's no single "current feed" to exclude, and if
+the first selected post happened to already live in the target, the whole
+picker lost that feed for every other selected post too — even though the
+move route already no-ops (skips, not errors) any entry already in the
+target, so showing it as a candidate is always safe.
+
+Fixed by only passing an exclusion for a genuine single-entry move
+(`entries.length === 1`); a bulk selection passes an empty `feed_url`, which
+matches no real feed and so excludes nothing. No server change — the route's
+own `f.url != feed_url` naturally includes everything when `feed_url` is
+empty.
+
+### Moving an entry out of the Inbox made it vanish, then come back on reload
+
+Reported live 2026-09-12, right after the fix above unblocked using Move to
+feed from the Inbox on a mixed selection: entries disappeared from the list
+immediately on a successful move, but reappeared — now attributed to the new
+feed — the next time that view reloaded.
+
+`openMoveToFeedModal`'s post-success cleanup drops every moved row from the
+DOM on the assumption "moved = left this scope," true for a feed- or
+folder-scoped view (the target feed is outside it) but **not** for the Inbox
+(`kept=starred`): that view is feed-agnostic, spanning every starred entry in
+the whole library regardless of which feed it's under. Moving curation to
+another feed doesn't unstar it — `_move_entry_to_feed` carries the star (and
+tags, read state) onto the new feed's copy of the entry and only clears it
+from the old one (confirmed directly: the old (feed, id) key's `saved_entries`
+row is gone, the new one's is present) — so the entry never actually left the
+Inbox's server-side query at all. The client just assumed otherwise and
+removed a row a reload would put right back.
+
+Fixed by skipping the removal entirely when the current view is the Inbox
+(`new URL(location.href).searchParams.get('kept') === 'starred'`) — deliberately
+narrower than "any star_only view," since a folder-scoped Saved view (star_only
+alone, no `kept=starred`) *does* have a bounded feed set and a move genuinely
+can leave it. Verified live: after the fix, moving an entry from within the
+Inbox leaves its row in place (confirmed against the real saved_entries rows
+that the star correctly moved feeds); a non-Inbox view's removal behavior is
+untouched.
+
 ### Back on a phone walks the view stack
 
 In single-pane mode the article pane *is* the page, so Back steps down the stack
@@ -857,3 +961,44 @@ every merge, so it keeps advancing across repeated incremental loads and not jus
 `.posts` reads `CHUNK_SIZE` from the template context rather than carrying its own hardcoded copy,
 for the same reason `data-next-chunk` exists: two numbers that must agree cannot be allowed to
 drift by being written twice.
+
+### `next_chunk` is an offset, not a page number — the 2026-09-05 fix wasn't the whole story
+
+Found 2026-09-11 from "sorting Inbox by Biggest First doesn't seem to work" / "not sorting by the
+whole potential view, it's like the first X-number of chunks." Verified against the live library
+that `list_entries_for_feeds`'s sort itself is correct and stable (a limit=100 fetch and a limit=140
+fetch return identical, correctly-nested prefixes) — the bug is entirely in how the route turns a
+growing `limit` into chunk boundaries.
+
+The section above fixed *deriving* `next_chunk` from the requested `limit` instead of the client's
+rendered count, but `next_chunk` itself was still `(limit // CHUNK_SIZE) + 1` and the chunk_delta
+slice was still `posts[(chunk-1)*CHUNK_SIZE : chunk*CHUNK_SIZE]` — both assume `len(posts) ==
+limit` always. That assumption breaks whenever **server-side** filtering shrinks the result below
+`limit` — concretely, `list_entries_for_feeds`'s cross-feed dedupe (`build_entry_dedupe_key`): the
+same article saved once via its live feed subscription and once via the bookmarklet/extension
+capture (two different `feed_url`/`entry_id` pairs, same link+title) collapses to one entry. A big
+Saved/Kept backlog accumulates plenty of these. And unlike the hide-unpremiered/tag-narrowing case
+above, the shrinkage isn't a fixed amount — a *bigger* `limit` can catch additional duplicate pairs
+that a smaller one didn't even include yet, so the gap between "requested" and "real" grows
+unevenly as the window grows. Page-number arithmetic assumes that gap is always zero: whatever an
+earlier, smaller-window request's dedupe pass already removed is permanently unreachable, because
+the next chunk's fixed offset starts counting from the nominal (not real) prior total and never
+looks back for it.
+
+Fixed by tracking a true offset instead of a page number. `next_chunk` is now `len(posts)` itself —
+captured right after dedup/orphan-merge, before the chunk_delta slice runs — not a formula. An
+incoming `chunk` value means two different things depending on whether `chunk_delta` came with it:
+plain `chunk` (e.g. single-pane's small initial fetch) keeps the old page-count meaning, since that
+request has no prior "already have" state to offset from; `chunk` *with* `chunk_delta` is the
+offset itself, so `limit = min(offset + CHUNK_SIZE, 2000)` and the slice is a plain `posts[offset :
+offset + CHUNK_SIZE]`. This works with **no client change** — the browser already just echoes
+`data-next-chunk` back verbatim as the next `chunk` param; only what that number *means* changed.
+Correct regardless of how much dedup happens at any point, because the windowed sort paths
+(`_sorted_star_key_window` et al.) are a stable, prefix-preserving function of the underlying key
+set — confirmed directly: a bigger `limit` only ever appends past what a smaller one already
+returned, never reorders or drops from it.
+
+`tests/integration/test_saved_inbox_chunking.py` gained a dedicated regression test seeding a
+cross-feed duplicate inside the first chunk's window and chaining a full chunk_delta sequence
+through it — confirmed to fail against the pre-fix code (reverted main.py, same test) and pass
+against the fix.

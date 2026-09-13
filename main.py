@@ -25068,26 +25068,25 @@ def _home_inner(
 
     # Determine server-side limit. If the client requested a "chunk" (page) use
     # CHUNK_SIZE per chunk; otherwise use the default limit from list_entries_for_feeds.
+    #
+    # A chunk_delta continuation's `chunk` value is an OFFSET -- the count of
+    # real (post-dedup/filter) items the client already has, echoed back as
+    # next_chunk below -- not a page multiplier. A plain `chunk` with no delta
+    # (e.g. single-pane mode's initial small fetch) keeps the old page-count
+    # meaning; that request has no "already have" state to offset from.
+    offset = None
     try:
         if chunk and int(chunk) > 0:
             requested_chunk = int(chunk)
-            limit = min(requested_chunk * CHUNK_SIZE, 2000)
+            if chunk_delta:
+                offset = requested_chunk
+                limit = min(offset + CHUNK_SIZE, 2000)
+            else:
+                limit = min(requested_chunk * CHUNK_SIZE, 2000)
         else:
             limit = 250
     except Exception:
         limit = 250
-
-    # The chunk the client should ask for next, based on how many entries we
-    # actually asked reader for (`limit`) -- NOT on how many ended up rendered
-    # after per-entry filtering (read state, hide-unpremiered, tag narrowing,
-    # etc). Those two counts can differ by even one entry, and the client used
-    # to derive "next chunk" from the rendered count, which rounds back down to
-    # the SAME chunk whenever a filter drops anything from an otherwise-full
-    # window -- infinite-scroll got permanently stuck re-fetching (and
-    # deduplicating away) the identical top slice forever. Found 2026-09-05:
-    # a single filtered-out entry among an "All" (2179-feed) single-pane
-    # initial chunk (10 items) was enough to trigger it every time.
-    next_chunk = (limit // CHUNK_SIZE) + 1
 
     posts_start = time.perf_counter()
     gap_ms = int((posts_start - gap_start) * 1000)
@@ -25205,6 +25204,34 @@ def _home_inner(
 
     posts_block_ms = int((time.perf_counter() - posts_start) * 1000)
     LOGGER.info("[perf] home: posts_block=%dms", posts_block_ms)
+
+    # The offset the client should ask for next -- the TRUE count of real
+    # (post-dedup/filter/orphan-merge) items now available, not a page-number
+    # arithmetic guess. Must be captured here: after dedup/orphan-merge have
+    # had their say, before the chunk_delta slice below narrows `posts` down
+    # to just this request's own delta.
+    #
+    # The previous scheme derived "next chunk" from the REQUESTED limit
+    # (`limit // CHUNK_SIZE + 1`), fixed 2026-09-05 to stop deriving it from
+    # the CLIENT's rendered count (which could undercount from its own
+    # display-only filtering and get permanently stuck re-fetching the same
+    # slice). That fix didn't cover this: SERVER-side dedup (cross-feed
+    # duplicates -- the same article saved once via a live feed and once via
+    # a bookmarklet/extension capture, common in a large Saved/Kept backlog)
+    # can *also* shrink `len(posts)` below the requested `limit`, and by a
+    # DIFFERENT amount at each successively larger `limit` as more duplicate
+    # pairs enter the window. Page-number-based slicing (`(chunk-1)*SIZE :
+    # chunk*SIZE`) assumed that gap was always zero, so a later chunk's fixed
+    # offset silently permanently skipped whatever an earlier chunk's dedup
+    # pass had already removed -- visible live as "Biggest first" showing
+    # entries out of size order a few chunks into scrolling a Saved view with
+    # cross-posted duplicates. Offsetting from the actual `len(posts)` here
+    # instead of a formula makes the slice correct regardless of how much
+    # dedup happens at any point, since windowed sorts (_sorted_star_key_window)
+    # are a stable, prefix-preserving function of the key set: a bigger `limit`
+    # only ever appends past what a smaller one already returned, never
+    # reorders it.
+    next_chunk = len(posts)
     # Refresh-contention investigation (Plan.md Tier 1): a 2026-09-03 live capture
     # (folder_id=9, 12961ms total) accounted for only ~7s across meta/tag/gap/posts
     # blocks -- ~6s was unattributed, after posts_block and before the response
@@ -25244,13 +25271,11 @@ def _home_inner(
 
     # If the client requested a delta chunk (incremental load), return only
     # the slice for that chunk rather than the cumulative list up to limit.
+    # `offset` (set above, when chunk_delta was given) is the true prior
+    # count, not a page-number multiple -- see next_chunk's comment above.
     try:
-        if chunk and chunk_delta:
-            requested_chunk = int(chunk)
-            if requested_chunk > 0:
-                start = (requested_chunk - 1) * CHUNK_SIZE
-                end = requested_chunk * CHUNK_SIZE
-                posts = posts[start:end]
+        if chunk and chunk_delta and offset is not None:
+            posts = posts[offset:offset + CHUNK_SIZE]
     except Exception:
         # On any error, fall back to the cumulative behavior.
         pass

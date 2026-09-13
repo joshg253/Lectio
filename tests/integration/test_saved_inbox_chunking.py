@@ -152,6 +152,18 @@ def _inbox_chunk_via_route(monkeypatch, chunk: int | None,
                            chunk_delta: str | None = None) -> list[str]:
     """The ids _home_inner hands the template. The response itself streams, so
     the context is captured at the render call rather than read off the result."""
+    ids, _next_chunk = _inbox_chunk_via_route_full(monkeypatch, chunk, chunk_delta)
+    return ids
+
+
+def _inbox_chunk_via_route_full(monkeypatch, chunk: int | None,
+                                chunk_delta: str | None = None) -> tuple[list[str], int]:
+    """Like _inbox_chunk_via_route, but also returns next_chunk -- the offset
+    (real items delivered so far) the route hands back for the client to
+    request next. `chunk`, for a chunk_delta request, is itself now that same
+    kind of offset (see main.py's next_chunk comment) -- NOT a page number --
+    so a real caller chains the previous call's next_chunk into this one,
+    exactly as the browser does."""
     captured: dict = {}
     real_get_template = main.templates.env.get_template
 
@@ -179,17 +191,30 @@ def _inbox_chunk_via_route(monkeypatch, chunk: int | None,
         chunk=chunk,
         chunk_delta=chunk_delta,
     )
-    return [p["id"] for p in captured["context"]["posts"]]
+    ctx = captured["context"]
+    return [p["id"] for p in ctx["posts"]], ctx["next_chunk"]
 
 
 def test_route_inbox_unchunked_is_newest_star_first(seeded, monkeypatch):
     assert _inbox_chunk_via_route(monkeypatch, None) == _BY_STAR_DESC
 
 
-@pytest.mark.parametrize("chunk", [1, 2, 3])
-def test_route_chunk_delta_returns_that_page_of_the_star_order(seeded, monkeypatch, chunk):
-    expected = _BY_STAR_DESC[(chunk - 1) * CHUNK:chunk * CHUNK]
-    assert _inbox_chunk_via_route(monkeypatch, chunk, chunk_delta="1") == expected
+def test_route_chunk_delta_returns_that_page_of_the_star_order(seeded, monkeypatch):
+    """chunk_delta's `chunk` is an offset (real items already delivered), not a
+    page number — chain the real next_chunk from each response into the next
+    request, exactly as the browser does, rather than assuming offset ==
+    page * CHUNK (only true here because this seed has no dedup collisions).
+
+    Starts from chunk=1 with no delta (single-pane's small initial fetch,
+    limit=CHUNK) rather than an unchunked full load — this seed's 60 entries
+    all fit under the default limit=250, so an unchunked load would return
+    everything in one response and leave nothing to chain."""
+    ids0, offset = _inbox_chunk_via_route_full(monkeypatch, 1)
+    assert ids0 == _BY_STAR_DESC[:CHUNK]
+    for expected_page in range(1, 3):
+        ids, offset = _inbox_chunk_via_route_full(monkeypatch, offset, chunk_delta="1")
+        expected = _BY_STAR_DESC[expected_page * CHUNK:(expected_page + 1) * CHUNK]
+        assert ids == expected, f"page {expected_page}"
 
 
 # --- sequences, because a single request was never the failing case ---------
@@ -223,12 +248,17 @@ def _saved_all_via_route(monkeypatch, **kwargs) -> list[str]:
 def test_chunk_request_after_the_initial_inbox_load(seeded, monkeypatch):
     """What the browser actually does: land on the Inbox unchunked, then ask for
     a chunk. The two requests share a meta DB, so anything the first one persists
-    is in force for the second."""
+    is in force for the second — the unchunked load itself doesn't feed into the
+    chained sequence below (it returns everything at once on this small seed),
+    it's here to prove it doesn't corrupt subsequent chunk requests."""
     assert _inbox_chunk_via_route(monkeypatch, None) == _BY_STAR_DESC
 
-    for chunk in (1, 2, 3):
-        assert _inbox_chunk_via_route(monkeypatch, chunk, chunk_delta="1") == \
-            _BY_STAR_DESC[(chunk - 1) * CHUNK:chunk * CHUNK], f"chunk {chunk} after landing"
+    ids0, offset = _inbox_chunk_via_route_full(monkeypatch, 1)
+    assert ids0 == _BY_STAR_DESC[:CHUNK]
+    for expected_page in range(1, 3):
+        ids, offset = _inbox_chunk_via_route_full(monkeypatch, offset, chunk_delta="1")
+        expected = _BY_STAR_DESC[expected_page * CHUNK:(expected_page + 1) * CHUNK]
+        assert ids == expected, f"page {expected_page} after landing"
 
 
 def test_inbox_chunks_survive_a_remembered_saved_sort(seeded, monkeypatch):
@@ -237,9 +267,12 @@ def test_inbox_chunks_survive_a_remembered_saved_sort(seeded, monkeypatch):
     # Choose "published oldest" in Saved, explicitly, so it is remembered.
     _saved_all_via_route(monkeypatch, sort_by="post", sort_dir="asc")
 
-    for chunk in (1, 2, 3):
-        assert _inbox_chunk_via_route(monkeypatch, chunk, chunk_delta="1") == \
-            _BY_STAR_DESC[(chunk - 1) * CHUNK:chunk * CHUNK], f"chunk {chunk}"
+    ids0, offset = _inbox_chunk_via_route_full(monkeypatch, 1)
+    assert ids0 == _BY_STAR_DESC[:CHUNK]
+    for expected_page in range(1, 3):
+        ids, offset = _inbox_chunk_via_route_full(monkeypatch, offset, chunk_delta="1")
+        expected = _BY_STAR_DESC[expected_page * CHUNK:(expected_page + 1) * CHUNK]
+        assert ids == expected, f"page {expected_page}"
 
     # And Saved still remembers what the user chose, not the Inbox's default.
     with main.get_meta_connection() as conn:
@@ -258,3 +291,82 @@ def test_visiting_the_inbox_does_not_reorder_saved_all(seeded, monkeypatch):
     _inbox_chunk_via_route(monkeypatch, 2, chunk_delta="1")
 
     assert _saved_all_via_route(monkeypatch) == before
+
+
+# --- the actual reported bug: cross-feed duplicates shrinking a chunk -------
+
+OTHER_FEED = "https://example.test/other-feed"
+
+
+@pytest.fixture
+def seeded_with_a_duplicate(tmp_path):
+    """Same shape as `seeded`, plus one cross-feed duplicate of e05 (same link
+    + title, a different feed_url/entry_id — exactly the "saved once via the
+    live feed, once via the bookmarklet/extension" shape from the live report)
+    starred to rank immediately after e05. `list_entries_for_feeds` dedupes it
+    away, so any single chunk's *actual* length is one less than requested —
+    the reported bug's precondition."""
+    saved_layout = tenancy._layout
+    main.close_thread_db_pools()
+    tenancy.configure(
+        data_dir=tmp_path,
+        legacy_reader=tmp_path / "reader.sqlite",
+        legacy_meta=tmp_path / "meta.sqlite3",
+        legacy_starred=tmp_path / "starred.sqlite",
+    )
+    main.ensure_meta_schema()
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, exist_ok=True)
+        reader.add_feed(OTHER_FEED, exist_ok=True)
+        for n in range(STAR_COUNT):
+            reader.add_entry({
+                "feed_url": FEED, "id": f"e{n:02d}", "title": f"post {n:02d}",
+                "link": f"https://example.test/{n:02d}", "published": base + timedelta(days=n),
+            })
+        # Same link + title as e05 — build_entry_dedupe_key collides.
+        reader.add_entry({
+            "feed_url": OTHER_FEED, "id": "e05dup", "title": "post 05",
+            "link": "https://example.test/05", "published": base + timedelta(days=5),
+        })
+    with main.get_meta_connection() as conn:
+        conn.executemany(
+            "INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
+            [(FEED, f"e{n:02d}",
+              (base + timedelta(days=STAR_COUNT - 1 - n)).isoformat())
+             for n in range(STAR_COUNT)],
+        )
+        # Ranks immediately after e05 (older star than e05, newer than e06) --
+        # loses the dedup collision (older star = lower saved_sort_value), so
+        # the surviving order is unaffected; only the count shrinks by one.
+        dup_saved_at = base + timedelta(days=STAR_COUNT - 1 - 5, hours=-1)
+        conn.execute(
+            "INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
+            (OTHER_FEED, "e05dup", dup_saved_at.isoformat()),
+        )
+        conn.commit()
+    try:
+        yield
+    finally:
+        main.close_thread_db_pools()
+        tenancy._layout = saved_layout
+
+
+def test_chunk_sequence_has_no_gaps_or_repeats_across_a_dedup_collision(seeded_with_a_duplicate, monkeypatch):
+    """The reported bug: a cross-feed duplicate makes one chunk's real length
+    one less than requested; page-number-based slicing then permanently
+    skipped whichever item fell at that boundary once a later chunk's bigger
+    limit resolved the same duplicate again. Chaining next_chunk (the real
+    offset) instead must tile the true star order exactly, with no gaps and
+    no repeats, regardless of where the dropped duplicate falls."""
+    seen: list[str] = []
+    ids, offset = _inbox_chunk_via_route_full(monkeypatch, 1)
+    seen.extend(ids)
+    for _ in range(4):
+        ids, offset = _inbox_chunk_via_route_full(monkeypatch, offset, chunk_delta="1")
+        if not ids:
+            break
+        seen.extend(ids)
+
+    assert seen == _BY_STAR_DESC, "chunked sequence must tile the true star order with no gaps or repeats"
+    assert len(set(seen)) == len(seen), "no entry should be delivered twice across chunks"
