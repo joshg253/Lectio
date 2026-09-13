@@ -12,6 +12,9 @@
 # the pile growing. CI runs the same script against the whole PR, so passing
 # here means passing there.
 #
+# Also gates `ruff format --check` on whole staged files (the repo was
+# reformatted wholesale, so there is no backlog to dodge there).
+#
 # Reports rather than rewrites: a hook that silently reformats staged changes
 # means committing something you never read.
 #

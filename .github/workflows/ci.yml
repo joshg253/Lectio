@@ -87,6 +87,14 @@ jobs:
         continue-on-error: true
         run: uv run --frozen ruff check . --statistics
 
+      # Blocking coverage of format drift is the changed-files check above
+      # (scripts/lint_changed.py); this whole-repo view just surfaces the
+      # rare case of a ruff version bump shifting canonical formatting on
+      # files this PR never touched.
+      - name: Whole-repo format check (informational)
+        continue-on-error: true
+        run: uv run --frozen ruff format --check .
+
       - name: Whole-repo types (informational)
         continue-on-error: true
         run: uv run --frozen ty check .

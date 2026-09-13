@@ -17,13 +17,15 @@ for exactly that reason.
 Used by both .githooks/pre-commit (staged changes) and the CI lint job (the
 whole PR), so a commit that passed locally cannot fail in CI.
 
+`ruff format --check` is also gated here, but on whole *files* rather than
+lines: the repo was reformatted wholesale in one commit, so unlike the ruff/ty
+findings backlog there is no pre-existing debt to dodge — any touched file is
+expected to already be canonically formatted. Run `uv run ruff format <file>`
+to fix.
+
 Usage:
     uv run scripts/lint_changed.py              # staged changes (the hook)
     uv run scripts/lint_changed.py --base <sha> # everything since <sha> (CI)
-
-`ruff format` is deliberately not run: this repo has never been formatted, so
-enabling it would mean reformatting every file at once. Nothing here prevents
-adopting it later, file by file.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ from collections import defaultdict
 from pathlib import Path
 
 _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+_FORMAT_PATH_RE = re.compile(r"^\s*--> (.+):\d+:\d+$")
 
 
 def _run(args: list[str]) -> str:
@@ -113,6 +116,13 @@ def _ty_hits(touched: dict[str, set[int]]) -> list[str]:
     return hits
 
 
+def _format_hits(touched: dict[str, set[int]]) -> list[str]:
+    """Whole touched files that `ruff format` would rewrite."""
+    raw = _run(["ruff", "format", "--check", "--", *sorted(touched)])
+    paths = {m.group(1) for line in raw.splitlines() if (m := _FORMAT_PATH_RE.match(line))}
+    return [f"{p}: [ruff format] not canonically formatted" for p in sorted(paths)]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Lint only the lines this change touches.")
     ap.add_argument("--base", default=None, help="base ref to diff against (default: staged changes)")
@@ -123,7 +133,7 @@ def main() -> int:
         print("lint: no Python lines changed")
         return 0
 
-    hits = _ruff_hits(touched) + _ty_hits(touched)
+    hits = _ruff_hits(touched) + _ty_hits(touched) + _format_hits(touched)
     if not hits:
         print(f"lint: {len(touched)} file(s) checked, nothing new on the lines you changed")
         return 0
@@ -131,9 +141,10 @@ def main() -> int:
     for h in hits:
         print(h)
     print(f"\nlint: {len(hits)} finding(s) on lines this change touches.")
-    print("  fix (ruff): uv run ruff check --fix <file>")
-    print("  fix (ty):   uv run ty check <file>  # then edit by hand")
-    print("  bypass:     git commit --no-verify")
+    print("  fix (ruff):        uv run ruff check --fix <file>")
+    print("  fix (ruff format): uv run ruff format <file>")
+    print("  fix (ty):          uv run ty check <file>  # then edit by hand")
+    print("  bypass:            git commit --no-verify")
     return 1
 
 
