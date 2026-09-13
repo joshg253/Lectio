@@ -8333,6 +8333,15 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         li.appendChild(removeBtn);
       }
 
+      function addSaveButton(li) {
+        if (li.querySelector('.entry-attachment-save')) return;
+        const saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'entry-attachment-save';
+        saveBtn.textContent = 'Save';
+        li.appendChild(saveBtn);
+      }
+
       function makeKeptRow(item) {
         const li = document.createElement('li');
         li.dataset.sourceUrl = item.source_url;
@@ -8431,9 +8440,26 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       if (isRefresh) list.innerHTML = '';
 
       // Existing server-rendered rows (first render only): add a delete
-      // control to the kept ones.
+      // control to the kept ones. _render_entry_attachments lists EVERY
+      // enclosure regardless of kept status (that's the whole reason
+      // enclosures need their own candidate source at all — see
+      // _filtered_file_enclosures), so a not-yet-kept enclosure already has
+      // a row here too, just with neither button yet.
+      const availableSet = new Set(available);
       for (const li of Array.from(list.children)) {
-        if (li instanceof HTMLElement && li.dataset.kept === '1') addRemoveButton(li);
+        if (!(li instanceof HTMLElement)) continue;
+        if (li.dataset.kept === '1') {
+          addRemoveButton(li);
+        } else if (availableSet.has(li.dataset.sourceUrl || "")) {
+          // Reported live 2026-09-13: an enclosure-declared file server-
+          // rendered here (no button either way) was matched by URL and
+          // skipped entirely by the loop below on the strength of already
+          // having *a* row — leaving it with no Save button and no way to
+          // save it. A row existing is not the same as a row having the
+          // right control for what it currently is.
+          li.classList.add('entry-attachment-available');
+          addSaveButton(li);
+        }
       }
       // Kept items the API knows about but not yet in the list — either a
       // manually-saved link the feed's policy never covered (4a/4b in
@@ -8447,8 +8473,8 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         list.appendChild(makeKeptRow(item));
         existingUrls.add(item.source_url);
       }
-      // Available candidates always come from here — the server-render never
-      // lists a not-yet-kept link.
+      // Candidates with no existing row at all (a body link, never
+      // server-rendered) still need a fresh row.
       for (const url of available) {
         if (existingUrls.has(url)) continue;
         list.appendChild(makeAvailableRow(url));

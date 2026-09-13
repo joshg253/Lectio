@@ -812,6 +812,25 @@ alongside the body scan in `_entry_content_html_and_base`; an orphan has no
 enclosure data preserved in the archive, so this only ever adds candidates
 for a live entry.
 
+**That server-side fix alone still didn't put a Save button on either
+report.** `_render_entry_attachments` lists *every* enclosure regardless of
+kept status — it's the whole reason enclosures needed their own candidate
+source in the first place — so a not-yet-kept enclosure was already a
+server-rendered `<li data-source-url>` before this fix, just with neither
+button. `loadEntryAttachments`'s reconciliation loop only ever *added* a row
+whose URL wasn't already present (`existingUrls.has(url) → skip`), which is
+right for a body-linked candidate (never server-rendered) but wrong here: the
+row already existing was mistaken for the row already being handled. Fixed by
+splitting the reconciliation into "does a row exist" and "does it have the
+control it needs" — an existing non-kept row whose URL is in `available` now
+gets `addSaveButton` (mirroring `addRemoveButton` for kept rows) instead of
+being passed over. Confirmed against production data first — calling
+`entry_attachments_route` directly showed the server had been returning the
+right `available` list all along, ruling out a stale-cache explanation
+(hard refreshing was already confirmed happening before each report) and
+pointing back at this reconciliation bug instead — then reproduced and fixed
+against a seeded entry matching Full Circle's exact three-enclosure shape.
+
 **A bare social-handle link is a bare-domain problem, not a new one.**
 `scan_feed_attachment_extensions` already excludes `_TLD_LOOKALIKES` (a link
 to a bare domain leaves its TLD looking like a file extension — the reason
