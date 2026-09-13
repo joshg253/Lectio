@@ -16,6 +16,7 @@ Two icons are not a duplicate of each other:
 Usage:
     uv run scripts/make_app_icons.py [--out static/icons]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -57,12 +58,10 @@ def draw_icon(size: int, *, maskable: bool) -> Image.Image:
     y0 = (size - h) / 2
     fold = w * 0.32
 
-    d.rounded_rectangle([x0, y0, x0 + w, y0 + h], radius=size * 0.045 * scale,
-                        fill=PAPER)
+    d.rounded_rectangle([x0, y0, x0 + w, y0 + h], radius=size * 0.045 * scale, fill=PAPER)
     # Folded corner, drawn as the accent so the page reads as "a feed item"
     # rather than a blank sheet.
-    d.polygon([(x0 + w - fold, y0), (x0 + w, y0 + fold), (x0 + w - fold, y0 + fold)],
-              fill=ACCENT)
+    d.polygon([(x0 + w - fold, y0), (x0 + w, y0 + fold), (x0 + w - fold, y0 + fold)], fill=ACCENT)
 
     # Text rules. The top one is short (a title), the rest are body.
     line_x0 = x0 + w * 0.14
@@ -71,16 +70,14 @@ def draw_icon(size: int, *, maskable: bool) -> Image.Image:
     y = y0 + h * 0.42
     for i, frac in enumerate((0.62, 1.0, 1.0, 0.78)):
         colour = ACCENT if i == 0 else "#9fb0bd"
-        d.rounded_rectangle([line_x0, y, line_x0 + line_w * frac, y + line_h],
-                            radius=line_h / 2, fill=colour)
+        d.rounded_rectangle([line_x0, y, line_x0 + line_w * frac, y + line_h], radius=line_h / 2, fill=colour)
         y += h * 0.115
 
     return img
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", default="static/icons")
     args = parser.parse_args(argv)
 

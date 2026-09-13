@@ -1,6 +1,7 @@
 """Hard-deleting a single post: POST /entries/delete removes the entry and
 writes a tombstone (meta ``deleted_entries``), and the refresh service purges
 tombstoned entries a refresh re-ingested from the publisher's feed window."""
+
 from __future__ import annotations
 
 import pytest
@@ -34,12 +35,14 @@ def configured(tmp_path):
 def _add_entry(entry_id: str) -> None:
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
-        reader.add_entry({
-            "feed_url": FEED,
-            "id": entry_id,
-            "title": "spam post",
-            "link": f"https://example.test/{entry_id}",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": entry_id,
+                "title": "spam post",
+                "link": f"https://example.test/{entry_id}",
+            }
+        )
 
 
 def _client() -> TestClient:
@@ -56,9 +59,7 @@ def test_delete_removes_entry_and_writes_tombstone(configured):
     with main.get_reader() as reader:
         assert reader.get_entry((FEED, "e1"), None) is None
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT 1 FROM deleted_entries WHERE feed_url = ? AND entry_id = 'e1'", (FEED,)
-        ).fetchone()
+        assert conn.execute("SELECT 1 FROM deleted_entries WHERE feed_url = ? AND entry_id = 'e1'", (FEED,)).fetchone()
 
 
 def test_delete_unknown_entry_404s(configured):
@@ -72,9 +73,7 @@ def test_refresh_purges_resurrected_tombstoned_entry(configured):
     # refresh re-ingested it from the publisher's feed after the user deleted it).
     _add_entry("e2")
     with main.get_meta_connection() as conn:
-        conn.execute(
-            "INSERT INTO deleted_entries (feed_url, entry_id) VALUES (?, 'e2')", (FEED,)
-        )
+        conn.execute("INSERT INTO deleted_entries (feed_url, entry_id) VALUES (?, 'e2')", (FEED,))
 
     purged = main.feed_refresh_service.purge_tombstoned_entries([FEED])
 

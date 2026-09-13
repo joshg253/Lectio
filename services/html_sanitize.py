@@ -12,6 +12,7 @@ Regex sanitizing is unsafe (unquoted ``onerror=``, ``href="javascript:"``, and
 countless encoding tricks slip through), so we parse and rebuild with
 BeautifulSoup instead.
 """
+
 from __future__ import annotations
 
 import html as html_stdlib
@@ -20,27 +21,110 @@ from urllib.parse import urlparse
 
 from services import svg_sanitize
 
-_ALLOWED_TAGS = frozenset({
-    "a", "abbr", "address", "article", "aside", "b", "blockquote", "br", "caption",
-    "cite", "code", "col", "colgroup", "dd", "del", "details", "dfn", "div", "dl",
-    "dt", "em", "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
-    "header", "hr", "i", "img", "ins", "kbd", "li", "main", "mark", "nav", "ol", "p",
-    "picture", "pre", "q", "s", "samp", "section", "small", "span", "strong", "sub",
-    "summary", "sup", "table", "tbody", "td", "tfoot", "th", "thead", "time", "tr",
-    "u", "ul", "var", "wbr", "audio", "video", "source", "iframe",
-    # Deprecated but purely presentational, and still emitted by older feeds.
-    # Unwrapping it (the default for unknown tags) silently lost the author's
-    # centering, since we never load feed CSS to restore it another way.
-    "center",
-})
+_ALLOWED_TAGS = frozenset(
+    {
+        "a",
+        "abbr",
+        "address",
+        "article",
+        "aside",
+        "b",
+        "blockquote",
+        "br",
+        "caption",
+        "cite",
+        "code",
+        "col",
+        "colgroup",
+        "dd",
+        "del",
+        "details",
+        "dfn",
+        "div",
+        "dl",
+        "dt",
+        "em",
+        "figcaption",
+        "figure",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "i",
+        "img",
+        "ins",
+        "kbd",
+        "li",
+        "main",
+        "mark",
+        "nav",
+        "ol",
+        "p",
+        "picture",
+        "pre",
+        "q",
+        "s",
+        "samp",
+        "section",
+        "small",
+        "span",
+        "strong",
+        "sub",
+        "summary",
+        "sup",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "time",
+        "tr",
+        "u",
+        "ul",
+        "var",
+        "wbr",
+        "audio",
+        "video",
+        "source",
+        "iframe",
+        # Deprecated but purely presentational, and still emitted by older feeds.
+        # Unwrapping it (the default for unknown tags) silently lost the author's
+        # centering, since we never load feed CSS to restore it another way.
+        "center",
+    }
+)
 # Dangerous tags whose entire subtree is dropped. Anything else not in the allow
 # list is unwrapped (its text/children kept) rather than deleted. ``svg`` and
 # ``math`` are handled specially (sanitized in place), so they're not here.
-_DROP_TAGS = frozenset({
-    "script", "style", "object", "embed", "form", "link", "meta", "base",
-    "noscript", "template", "applet", "frame", "frameset", "title",
-    "button", "input", "select", "textarea", "option",
-})
+_DROP_TAGS = frozenset(
+    {
+        "script",
+        "style",
+        "object",
+        "embed",
+        "form",
+        "link",
+        "meta",
+        "base",
+        "noscript",
+        "template",
+        "applet",
+        "frame",
+        "frameset",
+        "title",
+        "button",
+        "input",
+        "select",
+        "textarea",
+        "option",
+    }
+)
 _ALLOWED_ATTRS = {
     # target/rel are allowed but never trusted: _force_external_link_target below
     # overwrites both on every off-site link and deletes them everywhere else, so
@@ -55,18 +139,42 @@ _ALLOWED_ATTRS = {
     # align is the legacy presentational float/inline alignment some feeds
     # still use (value-constrained, no scripting surface — same reasoning as
     # the td/th/tr align kept below).
-    "img": frozenset({
-        "src", "srcset", "alt", "title", "loading", "width", "height", "sizes",
-        "decoding", "align", "data-src", "data-srcset", "data-lazy-src",
-        "data-original", "data-image",
-    }),
+    "img": frozenset(
+        {
+            "src",
+            "srcset",
+            "alt",
+            "title",
+            "loading",
+            "width",
+            "height",
+            "sizes",
+            "decoding",
+            "align",
+            "data-src",
+            "data-srcset",
+            "data-lazy-src",
+            "data-original",
+            "data-image",
+        }
+    ),
     "source": frozenset({"src", "srcset", "type", "media", "width", "height", "sizes", "data-srcset"}),
     "video": frozenset({"src", "controls", "poster", "preload", "width", "height"}),
     "audio": frozenset({"src", "controls", "preload"}),
-    "iframe": frozenset({
-        "src", "width", "height", "allow", "allowfullscreen", "frameborder",
-        "loading", "title", "referrerpolicy", "scrolling",
-    }),
+    "iframe": frozenset(
+        {
+            "src",
+            "width",
+            "height",
+            "allow",
+            "allowfullscreen",
+            "frameborder",
+            "loading",
+            "title",
+            "referrerpolicy",
+            "scrolling",
+        }
+    ),
     # align is a legacy presentational attr some feeds still use for table
     # layout (Old New Thing centers its spanning before/after rows with
     # td align="center"); value-constrained, no scripting surface.
@@ -104,10 +212,23 @@ _GLOBAL_ALLOWED_ATTRS = frozenset({"class", "style"})
 _ALLOWED_STYLE_VALUES: dict[str, frozenset[str]] = {
     "text-align": frozenset({"left", "right", "center", "justify", "start", "end"}),
     "font-style": frozenset({"normal", "italic", "oblique"}),
-    "font-weight": frozenset({
-        "normal", "bold", "bolder", "lighter",
-        "100", "200", "300", "400", "500", "600", "700", "800", "900",
-    }),
+    "font-weight": frozenset(
+        {
+            "normal",
+            "bold",
+            "bolder",
+            "lighter",
+            "100",
+            "200",
+            "300",
+            "400",
+            "500",
+            "600",
+            "700",
+            "800",
+            "900",
+        }
+    ),
     "text-decoration": frozenset({"none", "underline", "line-through", "overline"}),
     "text-transform": frozenset({"none", "uppercase", "lowercase", "capitalize"}),
     "font-variant": frozenset({"normal", "small-caps"}),
@@ -139,15 +260,26 @@ _ALLOWED_STYLE_VALUES: dict[str, frozenset[str]] = {
 # titles as HTML would silently DELETE those, mangling a C++ post title, which is
 # far worse than showing <em> literally. Only 6 titles actually want formatting.
 _TITLE_INLINE_TAGS = (
-    "em", "i", "strong", "b", "code", "sub", "sup", "mark", "small", "u", "s",
-    "del", "ins", "kbd", "var", "cite", "q",
+    "em",
+    "i",
+    "strong",
+    "b",
+    "code",
+    "sub",
+    "sup",
+    "mark",
+    "small",
+    "u",
+    "s",
+    "del",
+    "ins",
+    "kbd",
+    "var",
+    "cite",
+    "q",
 )
-_TITLE_RESTORE_RE = re.compile(
-    r"&lt;(/?)(" + "|".join(_TITLE_INLINE_TAGS) + r")&gt;", re.IGNORECASE
-)
-_TITLE_STRIP_RE = re.compile(
-    r"</?(?:" + "|".join(_TITLE_INLINE_TAGS) + r")>", re.IGNORECASE
-)
+_TITLE_RESTORE_RE = re.compile(r"&lt;(/?)(" + "|".join(_TITLE_INLINE_TAGS) + r")&gt;", re.IGNORECASE)
+_TITLE_STRIP_RE = re.compile(r"</?(?:" + "|".join(_TITLE_INLINE_TAGS) + r")>", re.IGNORECASE)
 
 
 def sanitize_inline_title(value: str | None) -> str:
@@ -195,6 +327,8 @@ def _sanitize_style_attr(value: str) -> str:
         if allowed_values and val in allowed_values:
             kept.append(f"{prop}: {val}")
     return "; ".join(kept)
+
+
 # Single-URL attributes scheme-validated against javascript:/data:/vbscript:. The
 # lazyload data-* attrs are included so an unsafe value can't survive sanitization
 # and later be promoted into src by the lazy-media normalizer. (srcset/data-srcset
@@ -237,38 +371,89 @@ _NO_STRIP_ANCESTORS = frozenset({"code", "pre", "samp", "kbd", "var"})
 # strips every <iframe> unconditionally, and _reinject_readability_embeds
 # (below) shares this same allowlist to recover them, so this one line covers
 # both the readability-strip-and-recover path and the general sanitizer pass.
-_EMBED_HOST_ALLOWLIST = frozenset({
-    "youtube.com", "youtube-nocookie.com", "youtu.be",
-    "player.vimeo.com", "vimeo.com",
-    "dailymotion.com",
-    "twitch.tv",
-    "soundcloud.com",
-    "bandcamp.com",
-    "spotify.com",
-    "platform.twitter.com",
-    "codepen.io",
-    "redditmedia.com",
-    "archive.org",
-    "soundslice.com",
-})
+_EMBED_HOST_ALLOWLIST = frozenset(
+    {
+        "youtube.com",
+        "youtube-nocookie.com",
+        "youtu.be",
+        "player.vimeo.com",
+        "vimeo.com",
+        "dailymotion.com",
+        "twitch.tv",
+        "soundcloud.com",
+        "bandcamp.com",
+        "spotify.com",
+        "platform.twitter.com",
+        "codepen.io",
+        "redditmedia.com",
+        "archive.org",
+        "soundslice.com",
+    }
+)
 # allow-same-origin refers to the *embed's* origin (a different host), so the
 # player runs while remaining unable to script Lectio's page.
 _IFRAME_SANDBOX = "allow-scripts allow-same-origin allow-popups allow-presentation allow-forms"
 
 # MathML elements kept (attribute-stripped except a safe few). Anything else
 # inside <math> is unwrapped.
-_MATHML_TAGS = frozenset({
-    "math", "maction", "menclose", "merror", "mfenced", "mfrac", "mglyph", "mi",
-    "mlabeledtr", "mmultiscripts", "mn", "mo", "mover", "mpadded", "mphantom",
-    "mroot", "mrow", "ms", "mspace", "msqrt", "mstyle", "msub", "msubsup", "msup",
-    "mtable", "mtd", "mtext", "mtr", "munder", "munderover", "semantics",
-    "annotation", "annotation-xml",
-})
-_MATHML_ATTRS = frozenset({
-    "display", "displaystyle", "mathvariant", "dir", "href", "mathcolor",
-    "mathbackground", "scriptlevel", "columnalign", "rowalign", "open", "close",
-    "separators", "stretchy", "fence", "accent", "notation",
-})
+_MATHML_TAGS = frozenset(
+    {
+        "math",
+        "maction",
+        "menclose",
+        "merror",
+        "mfenced",
+        "mfrac",
+        "mglyph",
+        "mi",
+        "mlabeledtr",
+        "mmultiscripts",
+        "mn",
+        "mo",
+        "mover",
+        "mpadded",
+        "mphantom",
+        "mroot",
+        "mrow",
+        "ms",
+        "mspace",
+        "msqrt",
+        "mstyle",
+        "msub",
+        "msubsup",
+        "msup",
+        "mtable",
+        "mtd",
+        "mtext",
+        "mtr",
+        "munder",
+        "munderover",
+        "semantics",
+        "annotation",
+        "annotation-xml",
+    }
+)
+_MATHML_ATTRS = frozenset(
+    {
+        "display",
+        "displaystyle",
+        "mathvariant",
+        "dir",
+        "href",
+        "mathcolor",
+        "mathbackground",
+        "scriptlevel",
+        "columnalign",
+        "rowalign",
+        "open",
+        "close",
+        "separators",
+        "stretchy",
+        "fence",
+        "accent",
+        "notation",
+    }
+)
 
 
 # Schemes allowed in an href. `safeHttpUrl()` in static/js/app.js guards the
@@ -489,11 +674,11 @@ def lift_float_classes(html: str) -> str:
         sm = _STYLE_ATTR_RE.search(attrs)
         existing = (sm.group(1) or sm.group(2) or "") if sm else ""
         if "float" in existing.lower():
-            return m.group(0)          # the page already said; do not argue
+            return m.group(0)  # the page already said; do not argue
         decl = f"float: {side}"
         if sm:
             merged = f"{existing.rstrip().rstrip(';')}; {decl}" if existing.strip() else decl
-            attrs = attrs[:sm.start()] + f'style="{merged}"' + attrs[sm.end():]
+            attrs = attrs[: sm.start()] + f'style="{merged}"' + attrs[sm.end() :]
         else:
             attrs = f'{attrs} style="{decl}"'
         return f"<{tag}{attrs}>"
@@ -521,9 +706,17 @@ def lift_img_style_sizes(html: str) -> str:
 
 
 _RELATIVE_URL_ATTRS = (
-    ("img", "src"), ("img", "data-src"), ("source", "src"), ("a", "href"),
-    ("video", "src"), ("video", "poster"), ("audio", "src"), ("iframe", "src"),
-    ("embed", "src"), ("object", "data"), ("track", "src"),
+    ("img", "src"),
+    ("img", "data-src"),
+    ("source", "src"),
+    ("a", "href"),
+    ("video", "src"),
+    ("video", "poster"),
+    ("audio", "src"),
+    ("iframe", "src"),
+    ("embed", "src"),
+    ("object", "data"),
+    ("track", "src"),
 )
 _NON_RESOLVABLE_SCHEMES = ("data:", "mailto:", "javascript:", "tel:", "blob:", "about:", "#")
 
@@ -759,8 +952,10 @@ def sanitize_html(content: str) -> str:
             if alt:
                 img.attrs["alt"] = alt
             obj_class = obj.attrs.get("class")
-            classes = AttributeValueList(obj_class) if isinstance(obj_class, list) else (
-                AttributeValueList([obj_class]) if obj_class else AttributeValueList()
+            classes = (
+                AttributeValueList(obj_class)
+                if isinstance(obj_class, list)
+                else (AttributeValueList([obj_class]) if obj_class else AttributeValueList())
             )
             classes.append("lectio-math-svg")
             img.attrs["class"] = classes

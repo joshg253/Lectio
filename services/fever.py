@@ -1,4 +1,5 @@
 """Fever API (PubSubHubbub v3 compatible) subscriber implementation for Lectio."""
+
 from __future__ import annotations
 
 import hmac
@@ -87,11 +88,7 @@ class FeverService:
             root_id = root_row["id"] if root_row else None
 
             folder_rows = (
-                conn.execute(
-                    "SELECT id, name FROM folders WHERE parent_id=?", (root_id,)
-                ).fetchall()
-                if root_id is not None
-                else []
+                conn.execute("SELECT id, name FROM folders WHERE parent_id=?", (root_id,)).fetchall() if root_id is not None else []
             )
 
             # Ensure all feeds have integer IDs.
@@ -112,9 +109,7 @@ class FeverService:
                     "INSERT OR IGNORE INTO fever_group_map (title) VALUES (?)",
                     (folder["name"],),
                 )
-                gid_row = conn.execute(
-                    "SELECT id FROM fever_group_map WHERE title=?", (folder["name"],)
-                ).fetchone()
+                gid_row = conn.execute("SELECT id FROM fever_group_map WHERE title=?", (folder["name"],)).fetchone()
                 gid = gid_row["id"]
                 group_folder_ids[folder["id"]] = gid
                 groups.append({"id": gid, "title": folder["name"]})
@@ -122,14 +117,8 @@ class FeverService:
             # Build feeds_groups mapping.
             feeds_groups: list[dict] = []
             for folder_id, gid in group_folder_ids.items():
-                ff_rows = conn.execute(
-                    "SELECT feed_url FROM folder_feeds WHERE folder_id=?", (folder_id,)
-                ).fetchall()
-                fids = [
-                    str(feed_id_map[r["feed_url"]])
-                    for r in ff_rows
-                    if r["feed_url"] in feed_id_map
-                ]
+                ff_rows = conn.execute("SELECT feed_url FROM folder_feeds WHERE folder_id=?", (folder_id,)).fetchall()
+                fids = [str(feed_id_map[r["feed_url"]]) for r in ff_rows if r["feed_url"] in feed_id_map]
                 if fids:
                     feeds_groups.append({"group_id": gid, "feed_ids": ",".join(fids)})
 
@@ -137,17 +126,19 @@ class FeverService:
         for feed in all_feeds:
             fid = feed_id_map.get(str(feed.url), 0)
             last_updated = int(feed.updated.timestamp()) if feed.updated else 0
-            feeds.append({
-                "id": fid,
-                "favicon_id": 0,
-                # Prefer the user's overridden feed name so synced clients (Capy,
-                # etc.) show the same names as the Lectio web UI.
-                "title": getattr(feed, "user_title", None) or feed.title or str(feed.url),
-                "url": str(feed.url),
-                "site_url": str(feed.link or ""),
-                "is_spark": 0,
-                "last_updated_on_time": last_updated,
-            })
+            feeds.append(
+                {
+                    "id": fid,
+                    "favicon_id": 0,
+                    # Prefer the user's overridden feed name so synced clients (Capy,
+                    # etc.) show the same names as the Lectio web UI.
+                    "title": getattr(feed, "user_title", None) or feed.title or str(feed.url),
+                    "url": str(feed.url),
+                    "site_url": str(feed.link or ""),
+                    "is_spark": 0,
+                    "last_updated_on_time": last_updated,
+                }
+            )
 
         return {"feeds": feeds, "groups": groups, "feeds_groups": feeds_groups}
 
@@ -169,38 +160,28 @@ class FeverService:
                     return {"items": [], "total_items": 0}
                 placeholders = ",".join("?" * len(ids_list))
                 map_rows = conn.execute(
-                    f"SELECT id, feed_url, entry_id FROM fever_entry_map"
-                    f" WHERE id IN ({placeholders})",
+                    f"SELECT id, feed_url, entry_id FROM fever_entry_map WHERE id IN ({placeholders})",
                     ids_list,
                 ).fetchall()
             elif since_id is not None:
                 map_rows = conn.execute(
-                    "SELECT id, feed_url, entry_id FROM fever_entry_map"
-                    " WHERE id > ? ORDER BY id ASC LIMIT ?",
+                    "SELECT id, feed_url, entry_id FROM fever_entry_map WHERE id > ? ORDER BY id ASC LIMIT ?",
                     (since_id, self._MAX_ITEMS),
                 ).fetchall()
             elif max_id is not None:
                 map_rows = conn.execute(
-                    "SELECT id, feed_url, entry_id FROM fever_entry_map"
-                    " WHERE id < ? ORDER BY id DESC LIMIT ?",
+                    "SELECT id, feed_url, entry_id FROM fever_entry_map WHERE id < ? ORDER BY id DESC LIMIT ?",
                     (max_id, self._MAX_ITEMS),
                 ).fetchall()
             else:
                 map_rows = conn.execute(
-                    "SELECT id, feed_url, entry_id FROM fever_entry_map"
-                    " ORDER BY id DESC LIMIT ?",
+                    "SELECT id, feed_url, entry_id FROM fever_entry_map ORDER BY id DESC LIMIT ?",
                     (self._MAX_ITEMS,),
                 ).fetchall()
 
             total = conn.execute("SELECT COUNT(*) FROM fever_entry_map").fetchone()[0]
-            saved_set = {
-                (r["feed_url"], r["entry_id"])
-                for r in conn.execute("SELECT feed_url, entry_id FROM saved_entries").fetchall()
-            }
-            feed_id_map = {
-                r["feed_url"]: r["id"]
-                for r in conn.execute("SELECT id, feed_url FROM fever_feed_map").fetchall()
-            }
+            saved_set = {(r["feed_url"], r["entry_id"]) for r in conn.execute("SELECT feed_url, entry_id FROM saved_entries").fetchall()}
+            feed_id_map = {r["feed_url"]: r["id"] for r in conn.execute("SELECT id, feed_url FROM fever_feed_map").fetchall()}
 
         items: list[dict] = []
         for row in map_rows:
@@ -213,17 +194,19 @@ class FeverService:
             elif entry.summary:
                 content = entry.summary or ""
             pub = entry.published or entry.updated
-            items.append({
-                "id": row["id"],
-                "feed_id": feed_id_map.get(str(entry.feed_url), 0),
-                "title": entry.title or "",
-                "author": entry.author or "",
-                "html": content,
-                "url": str(entry.link or ""),
-                "is_saved": 1 if (str(entry.feed_url), str(entry.id)) in saved_set else 0,
-                "is_read": 1 if entry.read else 0,
-                "created_on_time": int(pub.timestamp()) if pub else 0,
-            })
+            items.append(
+                {
+                    "id": row["id"],
+                    "feed_id": feed_id_map.get(str(entry.feed_url), 0),
+                    "title": entry.title or "",
+                    "author": entry.author or "",
+                    "html": content,
+                    "url": str(entry.link or ""),
+                    "is_saved": 1 if (str(entry.feed_url), str(entry.id)) in saved_set else 0,
+                    "is_read": 1 if entry.read else 0,
+                    "created_on_time": int(pub.timestamp()) if pub else 0,
+                }
+            )
 
         return {"items": items, "total_items": total}
 
@@ -244,8 +227,7 @@ class FeverService:
             feed_urls = list({fu for fu, _ in unread_pairs})
             placeholders = ",".join("?" * len(feed_urls))
             id_rows = conn.execute(
-                f"SELECT id, feed_url, entry_id FROM fever_entry_map"
-                f" WHERE feed_url IN ({placeholders})",
+                f"SELECT id, feed_url, entry_id FROM fever_entry_map WHERE feed_url IN ({placeholders})",
                 feed_urls,
             ).fetchall()
         pair_to_id = {(r["feed_url"], r["entry_id"]): r["id"] for r in id_rows}
@@ -270,9 +252,7 @@ class FeverService:
 
     def mark_item(self, item_id: int, action: str) -> None:
         with self._get_meta() as conn:
-            row = conn.execute(
-                "SELECT feed_url, entry_id FROM fever_entry_map WHERE id=?", (item_id,)
-            ).fetchone()
+            row = conn.execute("SELECT feed_url, entry_id FROM fever_entry_map WHERE id=?", (item_id,)).fetchone()
             if not row:
                 return
             feed_url, entry_id = row["feed_url"], row["entry_id"]
@@ -300,9 +280,7 @@ class FeverService:
 
     def mark_feed_read(self, feed_id: int, before: int) -> None:
         with self._get_meta() as conn:
-            row = conn.execute(
-                "SELECT feed_url FROM fever_feed_map WHERE id=?", (feed_id,)
-            ).fetchone()
+            row = conn.execute("SELECT feed_url FROM fever_feed_map WHERE id=?", (feed_id,)).fetchone()
             if not row:
                 return
             feed_url = row["feed_url"]
@@ -318,21 +296,14 @@ class FeverService:
 
     def mark_group_read(self, group_id: int, before: int) -> None:
         with self._get_meta() as conn:
-            group_row = conn.execute(
-                "SELECT title FROM fever_group_map WHERE id=?", (group_id,)
-            ).fetchone()
+            group_row = conn.execute("SELECT title FROM fever_group_map WHERE id=?", (group_id,)).fetchone()
             if not group_row:
                 return
-            folder_row = conn.execute(
-                "SELECT id FROM folders WHERE name=?", (group_row["title"],)
-            ).fetchone()
+            folder_row = conn.execute("SELECT id FROM folders WHERE name=?", (group_row["title"],)).fetchone()
             if not folder_row:
                 return
             feed_urls = [
-                r["feed_url"]
-                for r in conn.execute(
-                    "SELECT feed_url FROM folder_feeds WHERE folder_id=?", (folder_row["id"],)
-                ).fetchall()
+                r["feed_url"] for r in conn.execute("SELECT feed_url FROM folder_feeds WHERE folder_id=?", (folder_row["id"],)).fetchall()
             ]
         reader = self._get_reader()
         cutoff = datetime.fromtimestamp(before, tz=timezone.utc)

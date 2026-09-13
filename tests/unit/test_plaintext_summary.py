@@ -1,6 +1,7 @@
 """_promote_plaintext_summary upgrades a bare-text feed summary (URLs / <br>
 breaks) into renderable HTML, while leaving genuinely plain prose alone so the
 template's <pre> fallback keeps its whitespace layout."""
+
 from __future__ import annotations
 
 import pytest
@@ -58,7 +59,7 @@ def test_bare_image_url_becomes_img():
     assert '<img src="https://i.ibb.co/abc/pic.jpg"' in out
     assert 'referrerpolicy="no-referrer"' in out
     # An image URL is NOT also wrapped in an anchor.
-    assert "<a href=\"https://i.ibb.co/abc/pic.jpg\"" not in out
+    assert '<a href="https://i.ibb.co/abc/pic.jpg"' not in out
 
 
 @pytest.mark.parametrize("ext", ["png", "JPG", "jpeg", "gif", "webp"])
@@ -71,11 +72,9 @@ def test_image_extensions_detected(ext):
 def test_double_escaped_ampersands_collapse_to_single():
     # tracker.example double-escapes & in URLs (&amp;amp;); the link must end up
     # with a single &amp; (a valid href that decodes to one '&'), not amp;amp;.
-    out = main._promote_plaintext_summary(
-        "https://o.test/x.php?a=1&amp;amp;b=2 more"
-    )
+    out = main._promote_plaintext_summary("https://o.test/x.php?a=1&amp;amp;b=2 more")
     assert isinstance(out, str)
-    assert "href=\"https://o.test/x.php?a=1&amp;b=2\"" in out
+    assert 'href="https://o.test/x.php?a=1&amp;b=2"' in out
     assert "&amp;amp;" not in out
 
 
@@ -88,9 +87,7 @@ def test_excessive_break_runs_are_collapsed():
 
 def test_looks_like_escaped_plaintext_detects_mislabeled_html():
     # Content declared text/html but actually escaped plain text (tracker.example).
-    assert main._looks_like_escaped_plaintext(
-        "https://x.test/a.jpg&lt;br&gt;hello&lt;br&gt;world"
-    ) is True
+    assert main._looks_like_escaped_plaintext("https://x.test/a.jpg&lt;br&gt;hello&lt;br&gt;world") is True
 
 
 def test_looks_like_escaped_plaintext_rejects_real_html():
@@ -107,6 +104,7 @@ def test_looks_like_escaped_plaintext_negative(value):
 # --- several content elements: take the fullest -----------------------------
 # reader's get_content returns the FIRST html element, and a feed may put a
 # lesser one first.
+
 
 class _C:
     def __init__(self, value, is_html=True):

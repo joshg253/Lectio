@@ -2,6 +2,7 @@
 into reader's ``entries.title`` column plus a meta override row, and the
 refresh service re-pins the override if a refresh re-ingests the feed's
 original value. (Same mechanism as the published-date override.)"""
+
 from __future__ import annotations
 
 import pytest
@@ -27,12 +28,14 @@ def configured(tmp_path):
     main.ensure_meta_schema()
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
-        reader.add_entry({
-            "feed_url": FEED,
-            "id": "e1",
-            "title": "original title",
-            "link": "https://example.test/e1",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "e1",
+                "title": "original title",
+                "link": "https://example.test/e1",
+            }
+        )
     try:
         yield
     finally:
@@ -48,9 +51,7 @@ def _client() -> TestClient:
 
 def _reader_title() -> str | None:
     with main.get_reader() as reader:
-        row = reader._storage.get_db().execute(
-            "SELECT title FROM entries WHERE feed = ? AND id = 'e1'", (FEED,)
-        ).fetchone()
+        row = reader._storage.get_db().execute("SELECT title FROM entries WHERE feed = ? AND id = 'e1'", (FEED,)).fetchone()
     return row[0] if row else None
 
 
@@ -60,9 +61,7 @@ def test_set_title_updates_reader_and_records_override(configured):
     assert r.status_code == 200 and r.json()["ok"] is True
     assert _reader_title() == "Better Title"
     with main.get_meta_connection() as conn:
-        row = conn.execute(
-            "SELECT title FROM entry_title_overrides WHERE feed_url = ? AND entry_id = 'e1'", (FEED,)
-        ).fetchone()
+        row = conn.execute("SELECT title FROM entry_title_overrides WHERE feed_url = ? AND entry_id = 'e1'", (FEED,)).fetchone()
     assert row and row[0] == "Better Title"
 
 

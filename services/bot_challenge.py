@@ -17,6 +17,7 @@ fetched with Lectio's honest UA and with a full browser identity gets the byte-
 identical challenge. So detecting one is not a prelude to working around it —
 escalating the UA does nothing. It exists to label the failure honestly.
 """
+
 from __future__ import annotations
 
 # Vendor markers, matched case-insensitively against the first bytes of the body.
@@ -48,9 +49,7 @@ _SNIFF_BYTES = 4096
 # it surfaced as a raw AttributeError crash in reader's own parser instead of
 # a labeled block). Header names are matched case-insensitively; requests'
 # CaseInsensitiveDict already does that for the lookup itself.
-_HEADER_MARKERS: tuple[tuple[str, str, str], ...] = (
-    ("x-amzn-waf-action", "challenge", "AWS WAF challenge"),
-)
+_HEADER_MARKERS: tuple[tuple[str, str, str], ...] = (("x-amzn-waf-action", "challenge", "AWS WAF challenge"),)
 
 
 def detect_challenge_headers(headers) -> str | None:
@@ -109,5 +108,4 @@ class FeedBlockedError(Exception):
     def __init__(self, label: str, url: str = "") -> None:
         self.label = label
         self.url = url
-        super().__init__(f"bot challenge: blocked by {label} (the site served a "
-                         f"challenge page instead of the feed)")
+        super().__init__(f"bot challenge: blocked by {label} (the site served a challenge page instead of the feed)")

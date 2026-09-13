@@ -7,6 +7,7 @@ producing side (services.starred_archive._archive_entry's completion block) is
 a simple SUM+addition inside an already-heavy, HTTP-fetching pipeline nothing
 else unit-tests in isolation either.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -34,11 +35,15 @@ def configured(tmp_path):
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
         for i in ("e1", "e2", "e3"):
-            reader.add_entry({
-                "feed_url": FEED, "id": i, "title": f"post {i}",
-                "link": f"https://example.test/{i}",
-                "published": datetime(2024, 1, 1, tzinfo=timezone.utc),
-            })
+            reader.add_entry(
+                {
+                    "feed_url": FEED,
+                    "id": i,
+                    "title": f"post {i}",
+                    "link": f"https://example.test/{i}",
+                    "published": datetime(2024, 1, 1, tzinfo=timezone.utc),
+                }
+            )
     with main.get_meta_connection() as conn:
         conn.executemany(
             "INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
@@ -67,6 +72,7 @@ def _set_size(feed_url, entry_id, size_bytes):
 # _format_size_bytes
 # ---------------------------------------------------------------------------
 
+
 def test_format_size_bytes_units():
     assert main._format_size_bytes(0) == "0 B"
     assert main._format_size_bytes(999) == "999 B"
@@ -79,6 +85,7 @@ def test_format_size_bytes_units():
 # normalize_sort_by
 # ---------------------------------------------------------------------------
 
+
 def test_size_sort_requires_allow_starred():
     assert main.normalize_sort_by("size", allow_starred=False) == main.DEFAULT_SORT_BY
     assert main.normalize_sort_by("size", allow_starred=True) == "size"
@@ -87,6 +94,7 @@ def test_size_sort_requires_allow_starred():
 # ---------------------------------------------------------------------------
 # list_entries_for_feeds
 # ---------------------------------------------------------------------------
+
 
 def test_size_map_only_populated_for_star_only_views(configured):
     _set_size(FEED, "e1", 1000)
@@ -110,24 +118,21 @@ def test_sort_by_size_orders_biggest_first(configured):
     _set_size(FEED, "e1", 500)
     _set_size(FEED, "e2", 5000)
     # e3 stays unarchived -> 0 for sorting purposes, must sort last descending.
-    posts = main.list_entries_for_feeds(
-        {FEED}, read_filter="all", star_only=True, sort_by="size", sort_dir="desc"
-    )
+    posts = main.list_entries_for_feeds({FEED}, read_filter="all", star_only=True, sort_by="size", sort_dir="desc")
     assert [p["id"] for p in posts] == ["e2", "e1", "e3"]
 
 
 def test_sort_by_size_ascending(configured):
     _set_size(FEED, "e1", 500)
     _set_size(FEED, "e2", 5000)
-    posts = main.list_entries_for_feeds(
-        {FEED}, read_filter="all", star_only=True, sort_by="size", sort_dir="asc"
-    )
+    posts = main.list_entries_for_feeds({FEED}, read_filter="all", star_only=True, sort_by="size", sort_dir="asc")
     assert [p["id"] for p in posts] == ["e3", "e1", "e2"]
 
 
 # ---------------------------------------------------------------------------
 # _sorted_star_key_window (the windowed fast path for a large kept backlog)
 # ---------------------------------------------------------------------------
+
 
 def test_sorted_star_key_window_sorts_size_numerically_not_lexically(configured):
     """A lexical string sort would put "500" ahead of "5000" ahead of "50000"
@@ -139,7 +144,11 @@ def test_sorted_star_key_window_sorts_size_numerically_not_lexically(configured)
     _set_size(FEED, "e3", 500)
     keys = {(FEED, "e1"), (FEED, "e2"), (FEED, "e3")}
     window = main._sorted_star_key_window(
-        keys, sort_by="size", sort_dir="desc", reader_read_filter=None, limit=10,
+        keys,
+        sort_by="size",
+        sort_dir="desc",
+        reader_read_filter=None,
+        limit=10,
     )
     assert window == [(FEED, "e2"), (FEED, "e1"), (FEED, "e3")]
 
@@ -151,6 +160,10 @@ def test_sorted_star_key_window_size_respects_read_filter(configured):
     _set_size(FEED, "e2", 100)
     keys = {(FEED, "e1"), (FEED, "e2")}
     window = main._sorted_star_key_window(
-        keys, sort_by="size", sort_dir="desc", reader_read_filter=False, limit=10,
+        keys,
+        sort_by="size",
+        sort_dir="desc",
+        reader_read_filter=False,
+        limit=10,
     )
     assert window == [(FEED, "e1")]

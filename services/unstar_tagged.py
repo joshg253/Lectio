@@ -14,6 +14,7 @@ This module is the pure decision layer: it takes the current curation and
 returns what would change. All DB access, and the cache invalidation a
 behind-the-back write requires, stays with the caller.
 """
+
 from __future__ import annotations
 
 from collections import Counter
@@ -60,8 +61,7 @@ def build_unstar_plan(
         "to_unstar": sorted(to_unstar),
         "protected": sorted(protected),
         "per_tag": [
-            {"tag": tag, "count": n, "kept": tag.lower() in keep}
-            for tag, n in sorted(per_tag.items(), key=lambda kv: (-kv[1], kv[0]))
+            {"tag": tag, "count": n, "kept": tag.lower() in keep} for tag, n in sorted(per_tag.items(), key=lambda kv: (-kv[1], kv[0]))
         ],
         "totals": {
             "starred": len(starred),

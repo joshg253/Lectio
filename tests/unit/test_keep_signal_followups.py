@@ -9,6 +9,7 @@
 - Re-fetch showed up on the right-click menu straight after starring a post but
   not after tagging it, even though both are keep signals.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -29,7 +30,7 @@ def test_inline_strategy_falls_back_to_the_source_page():
     usually inline can still have one with no image at all, and then the page is
     the only place a cover can come from."""
     src = inspect.getsource(lead_images.LeadImageService.resolve_entry_lead_image_url)
-    tail = src[src.rindex("_plugin_fallback_lead_image_url"):]
+    tail = src[src.rindex("_plugin_fallback_lead_image_url") :]
     assert "skip_source" in tail, "the skip_source path has no fallback after inline fails"
     assert "_fetch_source_lead_image" in tail
 
@@ -70,7 +71,8 @@ def test_an_imageless_entry_on_an_inline_feed_gets_the_pages_cover(monkeypatch):
     svc, calls = _inline_strategy_service(monkeypatch, scraped=cover)
     got = svc.resolve_entry_lead_image_url(
         _Entry("https://standardebooks.org/ebooks/joseph-conrad/suspense"),
-        "A young Englishman stumbles upon love and political intrigue.", None,
+        "A young Englishman stumbles upon love and political intrigue.",
+        None,
     )
     assert got == cover
     assert calls, "the source page was never scraped"
@@ -81,7 +83,9 @@ def test_an_inline_image_still_wins_and_costs_no_fetch(monkeypatch):
     the page is not scraped at all."""
     svc, calls = _inline_strategy_service(monkeypatch, scraped="https://e.com/og.jpg")
     got = svc.resolve_entry_lead_image_url(
-        _Entry("https://e.com/post"), '<p>x</p><img src="https://e.com/inline.jpg">', None,
+        _Entry("https://e.com/post"),
+        '<p>x</p><img src="https://e.com/inline.jpg">',
+        None,
     )
     assert got == "https://e.com/inline.jpg"
     assert calls == [], "inline image found — the page should not have been fetched"
@@ -91,7 +95,7 @@ def test_the_fallback_still_respects_the_negative_cache_and_plugins():
     """A recorded 'no image here' result and a plugin's skip both mean don't
     fetch. The fallback must not become a way around either."""
     src = inspect.getsource(lead_images.LeadImageService.resolve_entry_lead_image_url)
-    tail = src[src.rindex("_plugin_fallback_lead_image_url"):]
+    tail = src[src.rindex("_plugin_fallback_lead_image_url") :]
     assert "not cached_negative" in tail
     assert "_plugin_should_skip_source_lookup" in tail
 
@@ -138,24 +142,23 @@ def test_tagging_syncs_the_list_rows_kept_flag():
     on a post that had just been tagged."""
     js = _app_js()
     assert "function applyPostItemKeptState" in js
-    assert js.count("syncKeptFromTagResponse(entryTagsForm, data)") == 2, \
-        "both the add and the remove handler must sync"
+    assert js.count("syncKeptFromTagResponse(entryTagsForm, data)") == 2, "both the add and the remove handler must sync"
 
 
 def test_removing_a_tag_from_a_starred_post_leaves_it_kept():
     """Kept is starred OR tagged. Clearing the last tag off a still-starred post
     must not un-keep it and take Re-fetch away."""
     js = _app_js()
-    fn = js[js.index("function applyPostItemKeptState"):]
-    fn = fn[:fn.index("\n    }")]
+    fn = js[js.index("function applyPostItemKeptState") :]
+    fn = fn[: fn.index("\n    }")]
     assert "data-post-saved" in fn
 
 
 def test_kept_comes_from_the_servers_reply_not_the_typed_text():
     """The server normalizes and caps; what was typed is not what was stored."""
     js = _app_js()
-    fn = js[js.index("function syncKeptFromTagResponse"):]
-    fn = fn[:fn.index("\n    }")]
+    fn = js[js.index("function syncKeptFromTagResponse") :]
+    fn = fn[: fn.index("\n    }")]
     assert "data?.tags" in fn
 
 
@@ -169,7 +172,7 @@ def test_auto_refetch_only_fires_for_a_thin_stored_copy():
     src = inspect.getsource(main._maybe_autofetch_on_keep)
     assert "_archived_copy_is_plausible" in src
     # ...and bails out when it IS plausible, rather than merely mentioning it.
-    body = src[src.index('"""', src.index('"""') + 3) + 3:]
+    body = src[src.index('"""', src.index('"""') + 3) + 3 :]
     assert re.search(r"if _archived_copy_is_plausible\(stored\):\s*\n\s*return", body)
 
 

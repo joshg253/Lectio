@@ -19,12 +19,8 @@ def _build_html(title: str, feed_title: str, link: str, excerpt: str, excerpt_ht
         excerpt_block = f'<div class="excerpt">{excerpt_html}</div>'
     else:
         safe_excerpt = html.escape(excerpt or "")
-        excerpt_block = "".join(
-            f'<p class="excerpt">{para}</p>' for para in safe_excerpt.split("\n\n") if para
-        )
-    feed_line = (
-        f'<span class="meta">from <strong>{safe_feed}</strong></span>' if safe_feed else ""
-    )
+        excerpt_block = "".join(f'<p class="excerpt">{para}</p>' for para in safe_excerpt.split("\n\n") if para)
+    feed_line = f'<span class="meta">from <strong>{safe_feed}</strong></span>' if safe_feed else ""
 
     return textwrap.dedent(f"""\
         <!DOCTYPE html>

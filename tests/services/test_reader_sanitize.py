@@ -1,5 +1,6 @@
 """reader_sanitize mounts a feed parser that keeps safe embeds instead of letting
 feedparser destroy them, sanitizing entry content with Lectio's own allowlist."""
+
 from __future__ import annotations
 
 import io
@@ -16,6 +17,7 @@ def test_uses_readers_feedparser_not_standalone():
     # `feedparser` here yields different classes, so survivable bozos wrongly
     # raise ParseError and break every feed update returning a body.
     from reader._parser.feedparser import feedparser as reader_feedparser
+
     assert reader_sanitize.feedparser is reader_feedparser
 
 
@@ -24,7 +26,8 @@ def test_survives_nonxml_contenttype_bozo():
     # (reader's stream path). _process_feed must SURVIVE it (it's in reader's
     # survivable list) and return entries, not raise ParseError.
     import io
-    raw = _feed('<p>hi</p>')
+
+    raw = _feed("<p>hi</p>")
     feed, entries = SanitizingFeedparserParser()("https://x.test/feed", io.BytesIO(raw), {})
     assert len(entries) == 1
 
@@ -38,9 +41,9 @@ def test_accepts_malformed_xml_recovered_by_loose_parser():
     raw = (
         b'<?xml version="1.0"?>'
         b'<rss version="2.0"><channel><title>T</title>'
-        b'<item><guid>e1</guid><link>https://x.test/1</link>'
-        b'<title>Bad & unescaped</title><description>hi</description></item>'
-        b'</channel></rss>'
+        b"<item><guid>e1</guid><link>https://x.test/1</link>"
+        b"<title>Bad & unescaped</title><description>hi</description></item>"
+        b"</channel></rss>"
     )
     feed, entries = SanitizingFeedparserParser()("https://x.test/feed", io.BytesIO(raw), {})
     assert len(entries) == 1
@@ -69,8 +72,7 @@ def _feed(body: str) -> bytes:
 
 
 def test_ingest_keeps_trusted_embed_drops_script():
-    raw = _feed('<p>hi</p><iframe src="https://www.youtube.com/embed/weFUWLfaP28"></iframe>'
-                '<script>alert(1)</script>')
+    raw = _feed('<p>hi</p><iframe src="https://www.youtube.com/embed/weFUWLfaP28"></iframe><script>alert(1)</script>')
     feed, entries = SanitizingFeedparserParser()("https://x.test/feed", io.BytesIO(raw), {})
     content = entries[0].content[0].value
     assert "youtube.com/embed/weFUWLfaP28" in content
@@ -89,8 +91,7 @@ def test_ingest_renders_raw_markdown_content():
     rendered HTML -- with no tags to interpret, a browser collapses every
     newline into one dense wall of text. Root-caused 2026-08-30."""
     raw = _feed(
-        "## Security\n\nThis release fixes **CVE-2026-12345**.\n\n"
-        "- one\n- two\n\nSee [the changelog](https://example.test/changelog)."
+        "## Security\n\nThis release fixes **CVE-2026-12345**.\n\n- one\n- two\n\nSee [the changelog](https://example.test/changelog)."
     )
     feed, entries = SanitizingFeedparserParser()("https://x.test/feed", io.BytesIO(raw), {})
     content = entries[0].content[0].value
@@ -113,7 +114,7 @@ def test_ingest_leaves_genuine_plain_text_alone():
 def test_ingest_leaves_real_html_alone():
     """Genuine HTML content (has tags) must never be treated as Markdown, even
     if it happens to contain literal '**' or '##' text."""
-    raw = _feed('<p>Use ** for bold and ## for a heading in our custom syntax.</p>')
+    raw = _feed("<p>Use ** for bold and ## for a heading in our custom syntax.</p>")
     feed, entries = SanitizingFeedparserParser()("https://x.test/feed", io.BytesIO(raw), {})
     content = entries[0].content[0].value
     assert "<strong>" not in content
@@ -167,10 +168,7 @@ def test_style_px_sizes_lift_onto_img_attributes():
     otherwise the icons render at intrinsic/column size."""
     from services.html_sanitize import sanitize_html
 
-    out = sanitize_html(
-        '<img src="https://x.test/icon.svg" '
-        'style="width: 18px;height: 18px;vertical-align: -3px;margin-right: 8px;" />'
-    )
+    out = sanitize_html('<img src="https://x.test/icon.svg" style="width: 18px;height: 18px;vertical-align: -3px;margin-right: 8px;" />')
     assert 'width="18"' in out and 'height="18"' in out
     assert "style=" not in out
 
@@ -194,15 +192,17 @@ def test_readability_keeps_style_sized_glyphs():
     import main
 
     body = "<p>" + "Genuine readable article content here. " * 40 + "</p>"
-    raw = ('<html><body><article>' + body +
-           '<p><img src="/assets/feed-icon-star.svg" style="width: 18px;height: 18px;"> Saved Stories</p>'
-           '</article></body></html>')
+    raw = (
+        "<html><body><article>" + body + '<p><img src="/assets/feed-icon-star.svg" style="width: 18px;height: 18px;"> Saved Stories</p>'
+        "</article></body></html>"
+    )
     _title, article = main.extract_readability_article(raw, "https://blog.example.test/post/")
     assert 'width="18"' in article and 'height="18"' in article
 
 
 def test_img_align_attribute_survives():
     from services.html_sanitize import sanitize_html
+
     out = sanitize_html('<img src="https://x.test/a.png" align="right">')
     assert 'align="right"' in out
 
@@ -212,6 +212,7 @@ def test_table_align_attribute_survives():
     rely on (Old New Thing centers spanning before/after rows with
     td align="center") — the sanitizer must keep it."""
     from services.html_sanitize import sanitize_html
+
     html = '<table><tr align="center"><td colspan="2" align="center">Before</td><th align="right">x</th></tr></table>'
     out = sanitize_html(html)
     assert 'align="center"' in out and 'colspan="2"' in out and 'align="right"' in out
@@ -227,6 +228,7 @@ def test_block_align_attribute_survives():
     centering, and we never load feed CSS to restore it another way.
     """
     from services.html_sanitize import sanitize_html
+
     for tag in ("p", "div", "figure", "h2"):
         out = sanitize_html(f'<{tag} align="center">x</{tag}>')
         assert 'align="center"' in out, tag
@@ -235,6 +237,7 @@ def test_block_align_attribute_survives():
 def test_align_is_still_not_global():
     """Inline elements have no business carrying presentational alignment."""
     from services.html_sanitize import sanitize_html
+
     assert "align" not in sanitize_html('<span align="center">x</span>')
     assert "align" not in sanitize_html('<a href="https://x.test" align="center">x</a>')
 
@@ -250,12 +253,10 @@ def test_title_inline_formatting_renders_but_code_stays_literal():
     """
     from services.html_sanitize import sanitize_inline_title
 
-    out = sanitize_inline_title(
-        "Beyond the Veil: Deathless Widdling, <em>or</em> Diminished Scales")
+    out = sanitize_inline_title("Beyond the Veil: Deathless Widdling, <em>or</em> Diminished Scales")
     assert "<em>or</em>" in out
 
-    assert sanitize_inline_title("Why std::vector<T> is slow") == \
-        "Why std::vector&lt;T&gt; is slow"
+    assert sanitize_inline_title("Why std::vector<T> is slow") == "Why std::vector&lt;T&gt; is slow"
     assert "&lt;chrono&gt;" in sanitize_inline_title("#include <chrono> considered harmful")
 
 
@@ -265,8 +266,8 @@ def test_title_sanitizer_cannot_be_used_to_inject():
     from services.html_sanitize import sanitize_inline_title
 
     for payload in (
-        '<img src=x onerror=alert(1)>',
-        '<script>alert(1)</script>',
+        "<img src=x onerror=alert(1)>",
+        "<script>alert(1)</script>",
         '<em onmouseover="x()">hover</em>',
         '<a href="javascript:alert(1)">x</a>',
     ):
@@ -282,6 +283,5 @@ def test_title_plain_text_drops_the_allowlisted_tags_only():
     render markup — while a literal <T> is still left alone."""
     from services.html_sanitize import title_plain_text
 
-    assert title_plain_text("Deathless Widdling, <em>or</em> Diminished") == \
-        "Deathless Widdling, or Diminished"
+    assert title_plain_text("Deathless Widdling, <em>or</em> Diminished") == "Deathless Widdling, or Diminished"
     assert title_plain_text("Why std::vector<T> is slow") == "Why std::vector<T> is slow"

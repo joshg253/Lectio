@@ -5,6 +5,7 @@ lectio:saved capture renders as a phantom duplicate of the moved article.
 These pin the three service primitives the move path and the one-off cleanup
 use: has_complete_archive, delete_archive (cascading, shared assets kept), and
 rekey_archive (preserve, or dedupe when the target already has a capture)."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -72,8 +73,8 @@ def _add(archive, feed, eid, *, status="complete", asset=None):
     )
     if asset:
         archive.execute(
-            "INSERT INTO archived_asset_link (feed_url, entry_id, source_url, asset_hash)"
-            " VALUES (?, ?, ?, ?)", (feed, eid, f"http://x/{asset}", asset),
+            "INSERT INTO archived_asset_link (feed_url, entry_id, source_url, asset_hash) VALUES (?, ?, ?, ?)",
+            (feed, eid, f"http://x/{asset}", asset),
         )
         archive.execute(
             "INSERT OR IGNORE INTO archived_asset (asset_hash, data) VALUES (?, ?)",
@@ -83,8 +84,7 @@ def _add(archive, feed, eid, *, status="complete", asset=None):
 
 
 def _entries(archive):
-    return {(r["feed_url"], r["entry_id"]) for r in archive.execute(
-        "SELECT feed_url, entry_id FROM archived_entry")}
+    return {(r["feed_url"], r["entry_id"]) for r in archive.execute("SELECT feed_url, entry_id FROM archived_entry")}
 
 
 def test_has_complete_archive(archive):
@@ -114,9 +114,9 @@ def test_delete_keeps_assets_shared_with_another_entry(archive):
 
 
 def test_sweep_failed_orphans_removes_only_the_unkept(archive):
-    _add(archive, REAL, "gone", status="failed")        # orphan: entry gone, unstarred
+    _add(archive, REAL, "gone", status="failed")  # orphan: entry gone, unstarred
     _add(archive, REAL, "still-here", status="failed")  # failed but keep() says live/starred
-    _add(archive, REAL, "done", status="complete")      # not failed — never touched
+    _add(archive, REAL, "done", status="complete")  # not failed — never touched
     kept = {(REAL, "still-here")}
     swept = _svc(archive).sweep_failed_orphans(lambda f, e: (f, e) in kept)
     assert swept == 1
@@ -134,8 +134,7 @@ def test_rekey_moves_the_capture_when_target_has_none(archive):
     _svc(archive).rekey_archive(SAVED, EID, REAL, EID)
     assert _entries(archive) == {(REAL, EID)}
     # asset link followed the entry
-    link = archive.execute(
-        "SELECT feed_url FROM archived_asset_link WHERE asset_hash='h1'").fetchone()
+    link = archive.execute("SELECT feed_url FROM archived_asset_link WHERE asset_hash='h1'").fetchone()
     assert link["feed_url"] == REAL
 
 
@@ -147,8 +146,7 @@ def test_rekey_dedupes_when_target_already_captured(archive):
     assert _svc(archive).rekey_archive(SAVED, EID, REAL, EID) is True
     assert _entries(archive) == {(REAL, EID)}  # only the target remains
     # the target's own capture is intact
-    assert archive.execute(
-        "SELECT COUNT(*) FROM archived_entry WHERE feed_url=?", (REAL,)).fetchone()[0] == 1
+    assert archive.execute("SELECT COUNT(*) FROM archived_entry WHERE feed_url=?", (REAL,)).fetchone()[0] == 1
 
 
 def test_rekey_same_key_is_a_noop(archive):

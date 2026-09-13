@@ -4,6 +4,7 @@ The route itself does no DB work -- it wraps feed_discovery.suggest_feed_migrati
 and reshapes its result for the Failing Feeds panel's "Suggest fix" button. See
 tests/services/test_feed_migration_suggestion.py for the resolver's own behavior.
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch

@@ -2,6 +2,7 @@
 "Saved Articles" feed. Pins the contract that saved articles are ordinary
 reader entries (user-added, never updated away) plus a saved_entries star row,
 so every existing flow (Saved view, archive worker, tags) applies unchanged."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -149,8 +150,7 @@ def test_resave_resurfaces_an_archived_read_article(reader, meta_conn):
     save_article(reader, meta_conn, url, extract=_extract_ok)
     # Simulate the prior archived+read state (as an Instapaper Archive import left it).
     meta_conn.execute(
-        "INSERT INTO archived_entries (feed_url, entry_id, archived_at) "
-        "VALUES (?, ?, '2019-10-31T23:47:54+00:00')",
+        "INSERT INTO archived_entries (feed_url, entry_id, archived_at) VALUES (?, ?, '2019-10-31T23:47:54+00:00')",
         (SAVED_FEED_URL, url),
     )
     # A read-state override row, as the earlier read state left behind — it would
@@ -166,15 +166,11 @@ def test_resave_resurfaces_an_archived_read_article(reader, meta_conn):
 
     assert result["duplicate"] is True
     assert result["resurfaced"] is True
-    archived = meta_conn.execute(
-        "SELECT archived_at FROM saved_entries WHERE entry_id = ?", (url,)
-    ).fetchone()[0]
-    assert archived is None                              # back out of Archive
+    archived = meta_conn.execute("SELECT archived_at FROM saved_entries WHERE entry_id = ?", (url,)).fetchone()[0]
+    assert archived is None  # back out of Archive
     assert reader.get_entry((SAVED_FEED_URL, url)).read in (False, None)  # back to unread
     # The read-state override is gone, so a refresh can't flip it back to read.
-    assert meta_conn.execute(
-        "SELECT COUNT(*) FROM entry_read_state WHERE entry_id = ?", (url,)
-    ).fetchone()[0] == 0
+    assert meta_conn.execute("SELECT COUNT(*) FROM entry_read_state WHERE entry_id = ?", (url,)).fetchone()[0] == 0
 
 
 def test_resave_of_an_inbox_article_is_not_flagged_resurfaced(reader, meta_conn):
@@ -229,8 +225,11 @@ def test_resave_with_refresh_replaces_content_and_bumps_received_not_published(r
         return "Cleaned Title", "<p>Aardvark-cleaned body.</p>"
 
     result = save_article(
-        reader, meta_conn, "https://example.com/post",
-        extract=cleaned_extract, refresh_content=True,
+        reader,
+        meta_conn,
+        "https://example.com/post",
+        extract=cleaned_extract,
+        refresh_content=True,
     )
     assert result["duplicate"] is True and result.get("refreshed") is True
     fresh = reader.get_entry((SAVED_FEED_URL, "https://example.com/post"))
@@ -238,6 +237,7 @@ def test_resave_with_refresh_replaces_content_and_bumps_received_not_published(r
     assert fresh.title == "Cleaned Title"
     assert fresh.published == old.published, "Pub is the publication date, not the last-touched date"
     from datetime import timedelta
+
     # Received is stored in reader's naive-UTC format, i.e. without microseconds,
     # so a bump inside the same second reads as marginally earlier.
     assert fresh.added >= old.added - timedelta(seconds=1), "Received carries the re-fetch instead"
@@ -258,12 +258,13 @@ def test_resave_refresh_respects_pinned_title(reader, meta_conn):
     )
     # Simulate the pin having been applied to the entry too.
     db = reader._storage.get_db()
-    db.execute("UPDATE entries SET title='My Pinned Title' WHERE feed=? AND id=?",
-               (SAVED_FEED_URL, "https://example.com/post"))
+    db.execute("UPDATE entries SET title='My Pinned Title' WHERE feed=? AND id=?", (SAVED_FEED_URL, "https://example.com/post"))
     db.commit()
 
     save_article(
-        reader, meta_conn, "https://example.com/post",
+        reader,
+        meta_conn,
+        "https://example.com/post",
         extract=lambda u: ("Clobber Attempt", "<p>new body</p>"),
         refresh_content=True,
     )
@@ -273,7 +274,7 @@ def test_resave_refresh_respects_pinned_title(reader, meta_conn):
 
 
 def test_capture_does_not_fabricate_a_publish_date(reader, meta_conn):
-    """"When I saved this" is not "when this was published".
+    """ "When I saved this" is not "when this was published".
 
     save_article used to store now() as the article's publish date, and the UI
     presented that as fact. The save time is recorded on saved_entries.saved_at,

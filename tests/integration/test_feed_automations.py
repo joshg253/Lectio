@@ -1,6 +1,7 @@
 """The Feed Properties → Automations tab shows which configured rules act on a
 feed (scoped to it, its folder, or all feeds) and the recent runs that touched
 its entries. collect_feed_automations builds that data."""
+
 from __future__ import annotations
 
 import pytest
@@ -96,8 +97,7 @@ def test_feeds_scope_dedup_resolves_selected_feeds(meta):
 
 
 def test_feeds_scoped_rule_applies_to_member_feed(meta):
-    main.add_highlight_keyword(meta, "feeds", f"{FEED}\n{OTHER_FEED}", "x", "yellow",
-                               rule_type="highlight", enabled=1)
+    main.add_highlight_keyword(meta, "feeds", f"{FEED}\n{OTHER_FEED}", "x", "yellow", rule_type="highlight", enabled=1)
     applies = main.collect_feed_automations(meta, FEED, folder_ids=[])["rules"]
     assert any(r["scope_label"] == "Selected feeds" for r in applies)
     # A feed not in the set sees no rule.
@@ -163,9 +163,20 @@ def test_folders_scoped_rule_applies_to_member_feed(meta):
 
 
 def test_youtube_playlist_rule_detail_and_label(meta):
-    main.add_highlight_keyword(meta, "feed", FEED, "", "yellow", rule_type="youtube_playlist",
-                               enabled=1, yt_playlist_id="PL1", yt_playlist_title="TV Queue",
-                               yt_include_shorts=False, yt_mark_read=True, yt_min_minutes=60)
+    main.add_highlight_keyword(
+        meta,
+        "feed",
+        FEED,
+        "",
+        "yellow",
+        rule_type="youtube_playlist",
+        enabled=1,
+        yt_playlist_id="PL1",
+        yt_playlist_title="TV Queue",
+        yt_include_shorts=False,
+        yt_mark_read=True,
+        yt_min_minutes=60,
+    )
     rules = main.collect_feed_automations(meta, FEED, folder_ids=[])["rules"]
     r = next(x for x in rules if x["type"] == "youtube_playlist")
     assert r["type_label"] == "Add to YT playlist"

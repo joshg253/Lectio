@@ -57,7 +57,7 @@ def main() -> None:
     feed_tags: dict[str, set[str]] = defaultdict(set)
     for feed, key in rc.execute(f"SELECT DISTINCT feed, key FROM entry_tags WHERE key LIKE '{PFX}%'"):
         if feed in uncat:
-            feed_tags[feed].add(key[len(PFX):])
+            feed_tags[feed].add(key[len(PFX) :])
 
     tags = sorted({t for ts in feed_tags.values() for t in ts})
     membership_per_feed = Counter(len(ts) for ts in feed_tags.values())
@@ -90,8 +90,7 @@ def main() -> None:
     print(("DRY-RUN " if args.dry_run else "") + f"tags/folders: {len(tags)}  (create={created}, reuse-existing={reused})")
     print(f"tagged uncategorized feeds: {len(feed_tags)}  ->  folder memberships added: {memberships}")
     print(f"untagged uncategorized feeds (left in Uncategorized): {len(uncat) - len(feed_tags)}")
-    print("feeds by #tags(=#folders they land in): " +
-          ", ".join(f"{k}tag:{v}" for k, v in sorted(membership_per_feed.items())))
+    print("feeds by #tags(=#folders they land in): " + ", ".join(f"{k}tag:{v}" for k, v in sorted(membership_per_feed.items())))
     if not args.dry_run:
         print("\nDone. Restart the app to refresh the sidebar: docker compose restart")
 

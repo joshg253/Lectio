@@ -1,5 +1,6 @@
 """_derived_entry_link gives link-less podcast feeds (Buzzsprout) a clickable
 page URL derived from the audio enclosure, so the post title isn't inert."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -16,10 +17,7 @@ def test_buzzsprout_link_derived_from_enclosure():
         link=None,
         enclosures=[_enc("https://www.buzzsprout.com/2315966/episodes/19369337-close-your-apps-and-think-of-england.mp3")],
     )
-    assert (
-        main._derived_entry_link(e)
-        == "https://www.buzzsprout.com/2315966/episodes/19369337-close-your-apps-and-think-of-england"
-    )
+    assert main._derived_entry_link(e) == "https://www.buzzsprout.com/2315966/episodes/19369337-close-your-apps-and-think-of-england"
 
 
 def test_existing_link_not_overridden():

@@ -5,6 +5,7 @@ it with CSS (guitarworld ships `<svg class="play-button" width="234.67">` beside
 the thumbnail). The sanitizer drops that positioning, so the glyph stops being an
 overlay and becomes a block element in the flow.
 """
+
 from __future__ import annotations
 
 import main
@@ -12,9 +13,9 @@ import main
 FACADE = (
     '<div class="youtube-video youtube-facade">'
     '<img src="https://img.youtube.com/vi/ZNaCj9aSEHo/maxresdefault.jpg">'
-    '</div>'
+    "</div>"
     '<svg class="play-button" width="234.67" height="165.33"><path d="M1 1"/></svg>'
-    '<p>the article</p>'
+    "<p>the article</p>"
 )
 
 

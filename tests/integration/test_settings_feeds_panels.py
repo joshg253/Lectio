@@ -12,6 +12,7 @@ one heavy Feeds-tab panel still inlined on every page load — up to 500 rows
 settings modal's page weight — while folders/stale had already been made
 lazy. Moved to this same on-demand pattern.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -41,12 +42,14 @@ def configured(tmp_path, monkeypatch):
     main.page_fetcher._state.clear()
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
-        reader.add_entry({
-            "feed_url": FEED,
-            "id": "e1",
-            "title": "post e1",
-            "link": "https://example.test/e1",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "e1",
+                "title": "post e1",
+                "link": "https://example.test/e1",
+            }
+        )
     with main.get_meta_connection() as conn:
         root_id = main.get_root_folder_id(conn)
         cur = conn.execute(
@@ -59,8 +62,7 @@ def configured(tmp_path, monkeypatch):
             (FEED, folder_id),
         )
         conn.execute(
-            "INSERT INTO feed_failure_state (feed_url, consecutive_failures, last_error, last_failure_at) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO feed_failure_state (feed_url, consecutive_failures, last_error, last_failure_at) VALUES (?, ?, ?, ?)",
             (FEED, 3, "403 Forbidden", 1.0),
         )
     main.invalidate_meta_structure_cache()
@@ -184,7 +186,11 @@ def test_fetch_tiers_panel_lists_page_fetch_host_state(configured):
     import time as _time
 
     main.page_fetcher._state.record_block(
-        "u_test", "blocked.example", deepest_available="browser", challenge="Cloudflare block", now=_time.monotonic(),
+        "u_test",
+        "blocked.example",
+        deepest_available="browser",
+        challenge="Cloudflare block",
+        now=_time.monotonic(),
     )
     resp = _client().get("/settings/feeds/panel/fetch-tiers")
     assert resp.status_code == 200

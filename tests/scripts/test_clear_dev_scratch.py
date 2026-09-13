@@ -5,6 +5,7 @@ fills, pytest reports mass failures that look like real regressions. The failure
 it could CAUSE is worse — pulling a scratch dir out from under a session that is
 still running — so the age and --keep guards are pinned here.
 """
+
 from __future__ import annotations
 
 import time
@@ -29,6 +30,7 @@ def _session(tmp_root, name, *, age_days, size=0):
         (d / "scratchpad" / "blob.bin").write_bytes(b"x" * size)
     when = time.time() - age_days * DAY
     import os
+
     os.utime(d, (when, when))
     return d
 
@@ -84,6 +86,7 @@ def test_unrelated_tmp_entries_are_never_touched(tmp_root):
     other = tmp_root / "claude-1000" / "-other-project" / "sess"
     other.mkdir()
     import os
+
     when = time.time() - 99 * DAY
     os.utime(other, (when, when))
 

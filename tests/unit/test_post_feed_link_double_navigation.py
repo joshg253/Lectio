@@ -12,6 +12,7 @@ inside `.post-feed`) and re-navigated using the TREE's own, often-stale
 Source assertion, because the defect is in a client-side event-propagation
 interaction with no JS test harness in this repo.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,7 +22,7 @@ APP_JS = (Path(__file__).resolve().parent.parent.parent / "static" / "js" / "app
 
 def _post_item_click_handler() -> str:
     start = APP_JS.index("postItem.addEventListener('click', (event) => {")
-    return APP_JS[start:start + 1500]
+    return APP_JS[start : start + 1500]
 
 
 def test_the_handler_bails_out_when_the_anchor_already_handled_the_click():

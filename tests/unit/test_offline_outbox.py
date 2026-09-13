@@ -10,6 +10,7 @@ The rest are wiring contracts: load order, shell membership, cache version. They
 are cheap and they catch the failures that are invisible until a device is
 offline in a field somewhere, which is the worst possible place to find them.
 """
+
 from __future__ import annotations
 
 import re
@@ -64,10 +65,8 @@ def _harvest(html: str) -> list[str]:
 
 
 def test_harvest_finds_proxied_and_archived_images():
-    html = ('<p>x</p><img src="/api/img?u=https%3A//e.com/a.jpg&amp;w=800">'
-            '<img class="lead" src="/starred-asset/abc123.jpg">')
-    assert _harvest(html) == ["/api/img?u=https%3A//e.com/a.jpg&w=800",
-                              "/starred-asset/abc123.jpg"]
+    html = '<p>x</p><img src="/api/img?u=https%3A//e.com/a.jpg&amp;w=800"><img class="lead" src="/starred-asset/abc123.jpg">'
+    assert _harvest(html) == ["/api/img?u=https%3A//e.com/a.jpg&w=800", "/starred-asset/abc123.jpg"]
 
 
 def test_harvest_unescapes_ampersands():
@@ -83,9 +82,7 @@ def test_harvest_skips_cross_origin_and_stray_same_origin():
     """A cross-origin fetch is opaque, so caching one stores something the worker
     cannot tell apart from a failure. A feed's broken relative src resolves
     against our origin and would be cached as a 404."""
-    html = ('<img src="https://cdn.example.com/a.jpg">'
-            '<img src="/uploads/2019/broken.jpg">'
-            '<img src="/static/placeholder.png">')
+    html = '<img src="https://cdn.example.com/a.jpg"><img src="/uploads/2019/broken.jpg"><img src="/static/placeholder.png">'
     assert _harvest(html) == []
 
 
@@ -138,7 +135,7 @@ def test_outbox_loads_before_reader_js_on_the_article_page():
     strictly required — but a queue that is not yet defined when a page-load
     flush should have run means actions sit unsent until the next navigation."""
     src = (ROOT / "main.py").read_text()
-    doc = src[src.index("f\"<script src='/static/outbox.js"):]
+    doc = src[src.index("f\"<script src='/static/outbox.js") :]
     assert doc.index("/static/outbox.js") < doc.index("/static/reader.js")
 
 
@@ -197,7 +194,7 @@ def test_archive_and_delete_go_through_the_queue():
     """Both are immediately followed by a navigation, which cancels an in-flight
     POST. Enqueue-first is the only ordering that survives that."""
     for route in ("/entries/archive", "/entries/discard"):
-        block = READER[READER.index(route) - 400:READER.index(route) + 200]
+        block = READER[READER.index(route) - 400 : READER.index(route) + 200]
         assert "postAction(" in block
     assert "submit(url, params, requestedWith).then(afterAction, afterAction)" in READER
 
@@ -210,7 +207,7 @@ def test_mark_read_goes_through_the_queue():
 def test_tagging_posts_directly_and_queues_only_on_failure():
     """Tagging is the one action whose REPLY matters: the server normalizes the
     name and enforces the cap, and the panel re-renders from what came back."""
-    block = READER[READER.index("function applyTags"):READER.index("function toggleTag")]
+    block = READER[READER.index("function applyTags") : READER.index("function toggleTag")]
     assert 'post("/entries/tags", params' in block
     assert "window.LectioOutbox.submit" in block
 

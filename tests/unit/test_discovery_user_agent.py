@@ -11,6 +11,7 @@ refusing us, and Add Feed offered "Subscribe anyway" — the husk-feed path the
 add-feed code explicitly warns about — instead of offering a page feed. A
 self-inflicted wrong remedy.
 """
+
 from __future__ import annotations
 
 from services import feed_discovery

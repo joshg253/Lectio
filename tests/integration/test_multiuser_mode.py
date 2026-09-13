@@ -4,6 +4,7 @@ The E2E scenarios run in a subprocess so each harness starts with a fresh
 import of main.py (which sets module-level constants at import time).
 The middleware-binding logic is additionally unit-tested in-process.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -112,7 +113,6 @@ def test_middleware_binds_authenticated_user_in_multi_mode(monkeypatch):
     assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
 
 
-
 def test_middleware_does_not_bind_unauthenticated(monkeypatch):
     assert _drive_middleware({"user_id": "alice"}) == tenancy.DEFAULT_USER_ID
     assert _drive_middleware({}) == tenancy.DEFAULT_USER_ID
@@ -171,5 +171,3 @@ def test_bootstrap_admin_seeds_once(monkeypatch, tmp_path):
         assert store.count() == 1
     finally:
         tenancy._layout = saved
-
-

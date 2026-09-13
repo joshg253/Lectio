@@ -9,6 +9,7 @@ The caller folds the channel link through the feed's declared host migrations
 (feed_url_rewrites) first, so a declared migration wins. These pin that fold and
 that the genuine feedburner rebase still works when no migration is declared.
 """
+
 from __future__ import annotations
 
 import main

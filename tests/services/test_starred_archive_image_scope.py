@@ -9,6 +9,7 @@ content_html/summary_html/readability_html (what's actually rendered) are the
 only sources scanned for images now. source_html stays available for the
 separate, policy-gated linked-FILE attachment scan, which doesn't share this
 unconditional-image-grab cost."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -131,7 +132,8 @@ def test_images_found_only_in_the_raw_page_chrome_are_not_archived(tmp_path, mon
     svc._get_reader = lambda: _FakeReader(entry)
     svc._fetch_text_with_url = _fetch_stub(source_html)
     monkeypatch.setattr(
-        starred_archive, "Document",
+        starred_archive,
+        "Document",
         lambda html: SimpleNamespace(summary=lambda html_partial=True: readability_html),
     )
     spy_calls: list[str] = []
@@ -162,7 +164,8 @@ def test_an_image_that_survives_into_readability_html_is_still_archived(tmp_path
     svc._get_reader = lambda: _FakeReader(entry)
     svc._fetch_text_with_url = _fetch_stub(source_html)
     monkeypatch.setattr(
-        starred_archive, "Document",
+        starred_archive,
+        "Document",
         lambda html: SimpleNamespace(summary=lambda html_partial=True: readability_html),
     )
     spy_calls: list[str] = []
@@ -200,7 +203,8 @@ def test_linked_file_attachment_scan_still_sees_source_html(tmp_path, monkeypatc
     svc._get_reader = lambda: _FakeReader(entry)
     svc._fetch_text_with_url = _fetch_stub(source_html)
     monkeypatch.setattr(
-        starred_archive, "Document",
+        starred_archive,
+        "Document",
         lambda html: SimpleNamespace(summary=lambda html_partial=True: readability_html),
     )
     spy_calls: list[str] = []

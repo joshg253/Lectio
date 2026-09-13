@@ -1,6 +1,7 @@
 """parse_manual_tag_edit_tokens / apply_manual_tag_edits (main.py): the +/-tag
 tokenizer and merge logic behind bulk "Edit tags" (raised 2026-08-31, same
 convention as the rule editor's tag_filter spec, parse_tag_filter_spec)."""
+
 from __future__ import annotations
 
 import main

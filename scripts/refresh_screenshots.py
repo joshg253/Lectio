@@ -11,6 +11,7 @@ because no real feed is ever loaded.
 
 Run with ``--keep-data`` to leave the temp instance in place for debugging.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -81,10 +82,7 @@ def _demo_user_id(data_dir: Path) -> str:
     """
     users = sorted(p.name for p in (data_dir / "users").glob("u_*") if p.is_dir())
     if not users:
-        raise SystemExit(
-            "No per-user data dir was provisioned — the demo library would be "
-            "seeded somewhere the app never reads."
-        )
+        raise SystemExit("No per-user data dir was provisioned — the demo library would be seeded somewhere the app never reads.")
     return users[0]
 
 
@@ -97,7 +95,7 @@ def _wait_healthy(url: str, proc: subprocess.Popen, timeout: float = 40.0) -> No
             with urllib.request.urlopen(url, timeout=2) as r:
                 if r.status == 200:
                     return
-        except (urllib.error.URLError, ConnectionError, OSError):
+        except urllib.error.URLError, ConnectionError, OSError:
             time.sleep(0.5)
     raise TimeoutError(f"server did not become healthy at {url}")
 
@@ -105,8 +103,7 @@ def _wait_healthy(url: str, proc: subprocess.Popen, timeout: float = 40.0) -> No
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path, default=ROOT / "docs" / "screenshots")
-    ap.add_argument("--keep-data", action="store_true",
-                    help="leave the temp demo instance on disk for debugging")
+    ap.add_argument("--keep-data", action="store_true", help="leave the temp demo instance on disk for debugging")
     args = ap.parse_args()
 
     data_dir = Path(tempfile.mkdtemp(prefix="lectio-shots-"))
@@ -128,31 +125,38 @@ def main() -> int:
         _write_demo_feeds(feeds_dir)
 
         env = dict(os.environ)
-        env.update({
-            "LECTIO_DATA_DIR": str(data_dir),
-            "PYTHONPATH": str(ROOT),
-            # Blank out any real instance config from the developer's .env so it
-            # can never land in a committed screenshot.
-            "RESEND_API_KEY": "",
-            "LECTIO_EMAIL_FROM": "lectio@demo.example",
-            "LECTIO_EMAIL_TO": "you@demo.example",
-            "YOUTUBE_API_KEY": "",
-            "YOUTUBE_CHANNEL_ID": "",
-        })
+        env.update(
+            {
+                "LECTIO_DATA_DIR": str(data_dir),
+                "PYTHONPATH": str(ROOT),
+                # Blank out any real instance config from the developer's .env so it
+                # can never land in a committed screenshot.
+                "RESEND_API_KEY": "",
+                "LECTIO_EMAIL_FROM": "lectio@demo.example",
+                "LECTIO_EMAIL_TO": "you@demo.example",
+                "YOUTUBE_API_KEY": "",
+                "YOUTUBE_CHANNEL_ID": "",
+            }
+        )
 
         # Auth is unconditional, so the browsing session is always a real user
         # with its own per-user data dir. Seeding into the legacy top-level DBs
         # (what happens when the seeder runs unbound) writes a library nothing
         # ever serves — the capture then shoots an empty reader. So: boot once
         # to provision the user, learn its id, seed bound to it, then serve.
-        serve_env = dict(env, LECTIO_DEBUG="0", LECTIO_DISABLE_STARTUP_BACKFILL="1",
-                         LECTIO_AUTO_LOGIN="1", LECTIO_SECRET_KEY=secrets.token_hex(32),
-                         LECTIO_HTTPS_ONLY="0")
+        serve_env = dict(
+            env,
+            LECTIO_DEBUG="0",
+            LECTIO_DISABLE_STARTUP_BACKFILL="1",
+            LECTIO_AUTO_LOGIN="1",
+            LECTIO_SECRET_KEY=secrets.token_hex(32),
+            LECTIO_HTTPS_ONLY="0",
+        )
         print("Provisioning the demo user…")
         boot = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "main:app",
-             "--host", "127.0.0.1", "--port", str(app_port), "--log-level", "warning"],
-            env=serve_env, cwd=str(ROOT),
+            [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(app_port), "--log-level", "warning"],
+            env=serve_env,
+            cwd=str(ROOT),
         )
         procs.append(boot)
         _wait_healthy(base_app_url + "/", boot)
@@ -166,27 +170,28 @@ def main() -> int:
         # localhost demo feed server is reachable. The serve phase runs WITHOUT
         # debug, since debug mode also auto-subscribes (failing) dev feeds.
         with _static_server(feeds_dir, feed_port):
-            seed_env = dict(env, LECTIO_DEBUG="1",
-                            DEMO_BASE_URL=f"http://127.0.0.1:{feed_port}",
-                            LECTIO_SEED_USER_ID=user_id)
+            seed_env = dict(env, LECTIO_DEBUG="1", DEMO_BASE_URL=f"http://127.0.0.1:{feed_port}", LECTIO_SEED_USER_ID=user_id)
             print("Seeding demo library…")
             subprocess.run(
                 [sys.executable, "-m", "scripts.screenshots.seed"],
-                env=seed_env, cwd=str(ROOT), check=True,
+                env=seed_env,
+                cwd=str(ROOT),
+                check=True,
             )
 
         # Serve the seeded instance (no background refresh — feeds are gone now).
         print(f"Starting Lectio on {base_app_url}…")
         server_proc = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "main:app",
-             "--host", "127.0.0.1", "--port", str(app_port), "--log-level", "warning"],
-            env=serve_env, cwd=str(ROOT),
+            [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(app_port), "--log-level", "warning"],
+            env=serve_env,
+            cwd=str(ROOT),
         )
         procs.append(server_proc)
         _wait_healthy(base_app_url + "/", server_proc)
 
         print(f"Capturing screenshots → {args.out}")
         from scripts.screenshots import capture  # deferred: needs Playwright
+
         capture.capture(base_app_url, args.out)
         _stop(server_proc)
 
@@ -195,28 +200,31 @@ def main() -> int:
         admin_user, admin_pw = "demoadmin", "demo-admin-pw"
         admin_port = _free_port()
         admin_url = f"http://127.0.0.1:{admin_port}"
-        admin_env = dict(os.environ, **{
-            "LECTIO_DATA_DIR": str(admin_data_dir),
-            "PYTHONPATH": str(ROOT),
-            "LECTIO_ADMIN_USERNAME": admin_user,
-            "LECTIO_ADMIN_PASSWORD": admin_pw,
-            "LECTIO_SECRET_KEY": secrets.token_hex(32),
-            "LECTIO_HTTPS_ONLY": "0",
-            "LECTIO_DEBUG": "0",
-            "LECTIO_DISABLE_STARTUP_BACKFILL": "1",
-            # Blank out any real instance config from the developer's .env so it
-            # can't land in the committed Administration screenshot.
-            "RESEND_API_KEY": "",
-            "LECTIO_EMAIL_FROM": "lectio@demo.example",
-            "LECTIO_EMAIL_TO": "you@demo.example",
-            "YOUTUBE_API_KEY": "",
-            "YOUTUBE_CHANNEL_ID": "",
-        })
+        admin_env = dict(
+            os.environ,
+            **{
+                "LECTIO_DATA_DIR": str(admin_data_dir),
+                "PYTHONPATH": str(ROOT),
+                "LECTIO_ADMIN_USERNAME": admin_user,
+                "LECTIO_ADMIN_PASSWORD": admin_pw,
+                "LECTIO_SECRET_KEY": secrets.token_hex(32),
+                "LECTIO_HTTPS_ONLY": "0",
+                "LECTIO_DEBUG": "0",
+                "LECTIO_DISABLE_STARTUP_BACKFILL": "1",
+                # Blank out any real instance config from the developer's .env so it
+                # can't land in the committed Administration screenshot.
+                "RESEND_API_KEY": "",
+                "LECTIO_EMAIL_FROM": "lectio@demo.example",
+                "LECTIO_EMAIL_TO": "you@demo.example",
+                "YOUTUBE_API_KEY": "",
+                "YOUTUBE_CHANNEL_ID": "",
+            },
+        )
         print(f"Starting multi-user Lectio on {admin_url}…")
         admin_proc = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "main:app",
-             "--host", "127.0.0.1", "--port", str(admin_port), "--log-level", "warning"],
-            env=admin_env, cwd=str(ROOT),
+            [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(admin_port), "--log-level", "warning"],
+            env=admin_env,
+            cwd=str(ROOT),
         )
         procs.append(admin_proc)
         _wait_healthy(admin_url + "/login", admin_proc)

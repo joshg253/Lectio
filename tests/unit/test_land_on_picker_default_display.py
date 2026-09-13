@@ -9,6 +9,7 @@ distinct from an explicit pick.
 Source assertions, because this is client-side context-menu state with no JS
 test harness in this repo.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,7 +21,7 @@ CSS = (ROOT / "static" / "style.css").read_text()
 
 def _reset_block() -> str:
     start = APP_JS.index("async function updateRefetchGroupVisibility()")
-    return APP_JS[start:start + 1100]
+    return APP_JS[start : start + 1100]
 
 
 def test_the_default_mirrors_the_server_is_capture_rule():
@@ -42,6 +43,6 @@ def test_default_styling_is_not_the_same_as_an_explicit_pick():
     """A pre-checked-looking chip would misrepresent "you already chose
     this" -- the CSS must not reuse --active's solid fill."""
     idx = CSS.index(".ctx-refetch-date-opt--default")
-    block = CSS[idx:idx + 200]
+    block = CSS[idx : idx + 200]
     assert "background:" not in block
     assert "dashed" in block

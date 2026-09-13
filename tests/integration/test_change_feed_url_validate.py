@@ -1,6 +1,7 @@
 """Change Feed URL validates the target like Add Feed (unless forced): a URL
 that doesn't resolve to a feed returns needs_confirm; force bypasses; a page
 that advertises a feed resolves to the discovered feed URL."""
+
 from __future__ import annotations
 
 import pytest
@@ -41,6 +42,7 @@ def _client() -> TestClient:
 
 def _patch_probe(monkeypatch, result):
     from services import feed_discovery
+
     monkeypatch.setattr(feed_discovery, "probe_url", lambda url, **kw: result)
 
 
@@ -86,6 +88,7 @@ def test_schemeless_input_gets_https(configured, monkeypatch):
         return {"status": "feed", "feeds": [{"url": url, "title": None}]}
 
     from services import feed_discovery
+
     monkeypatch.setattr(feed_discovery, "probe_url", _probe)
     with _client() as c:
         r = c.post("/feeds/change-url", data={"old_url": FEED, "new_url": "example.test/other.xml"})
@@ -125,9 +128,7 @@ def test_host_change_seeds_the_alias_rule(configured, monkeypatch):
     assert body["alias"]["from_host"] == "example.test"
     assert body["alias"]["to_host"] == "newhost.test"
     with main.get_meta_connection() as conn:
-        row = conn.execute(
-            "SELECT from_host, to_host FROM feed_url_rewrites WHERE feed_url = ?", (new_url,)
-        ).fetchone()
+        row = conn.execute("SELECT from_host, to_host FROM feed_url_rewrites WHERE feed_url = ?", (new_url,)).fetchone()
     assert (row["from_host"], row["to_host"]) == ("example.test", "newhost.test")
 
 
@@ -142,9 +143,7 @@ def test_same_host_change_seeds_nothing(configured, monkeypatch):
 
     assert r.json()["alias"] is None
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT count(*) FROM feed_url_rewrites WHERE feed_url = ?", (new_url,)
-        ).fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM feed_url_rewrites WHERE feed_url = ?", (new_url,)).fetchone()[0] == 0
 
 
 def test_existing_alias_is_not_clobbered(configured, monkeypatch):
@@ -162,10 +161,13 @@ def test_existing_alias_is_not_clobbered(configured, monkeypatch):
 
     assert r.json()["alias"] is None, "seeded over a rule the user already had"
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT to_host FROM feed_url_rewrites WHERE feed_url = ? AND from_host = ?",
-            (new_url, "example.test"),
-        ).fetchone()[0] == "hand.declared.test"
+        assert (
+            conn.execute(
+                "SELECT to_host FROM feed_url_rewrites WHERE feed_url = ? AND from_host = ?",
+                (new_url, "example.test"),
+            ).fetchone()[0]
+            == "hand.declared.test"
+        )
 
 
 def test_response_carries_the_folder_so_the_tree_can_select_it(configured, monkeypatch):
@@ -202,13 +204,12 @@ def test_cross_host_discovery_needs_confirm(configured, monkeypatch):
     network_feed = "https://publisher.test/posts.atom"
     _patch_probe(monkeypatch, {"status": "feed", "feeds": [{"url": network_feed}]})
     with _client() as c:
-        r = c.post("/feeds/change-url",
-                   data={"old_url": FEED, "new_url": "https://music.publisher.test/c/instruments"})
+        r = c.post("/feeds/change-url", data={"old_url": FEED, "new_url": "https://music.publisher.test/c/instruments"})
     assert r.status_code == 422
     body = r.json()
     assert body["needs_confirm"] is True
     assert body["resolved_url"] == network_feed
-    with main.get_reader() as reader:                    # nothing changed yet
+    with main.get_reader() as reader:  # nothing changed yet
         assert reader.get_feed(FEED, None) is not None
         assert reader.get_feed(network_feed, None) is None
     with main.get_meta_connection() as conn:
@@ -218,10 +219,9 @@ def test_cross_host_discovery_needs_confirm(configured, monkeypatch):
 def test_confirming_adopts_the_resolved_feed(configured, monkeypatch):
     """The client re-posts the resolved URL with force — not the pasted page."""
     network_feed = "https://publisher.test/posts.atom"
-    _patch_probe(monkeypatch, {"status": "none", "feeds": []})   # force skips the probe
+    _patch_probe(monkeypatch, {"status": "none", "feeds": []})  # force skips the probe
     with _client() as c:
-        r = c.post("/feeds/change-url",
-                   data={"old_url": FEED, "new_url": network_feed, "force": "1"})
+        r = c.post("/feeds/change-url", data={"old_url": FEED, "new_url": network_feed, "force": "1"})
     assert r.status_code == 200 and r.json()["new_url"] == network_feed
 
 
@@ -231,8 +231,7 @@ def test_direct_feed_redirecting_across_hosts_still_resolves_silently(configured
     moved = "https://newhost.test/feed.xml"
     _patch_probe(monkeypatch, {"status": "feed", "direct": True, "feeds": [{"url": moved}]})
     with _client() as c:
-        r = c.post("/feeds/change-url",
-                   data={"old_url": FEED, "new_url": "https://oldhost.test/feed.xml"})
+        r = c.post("/feeds/change-url", data={"old_url": FEED, "new_url": "https://oldhost.test/feed.xml"})
     assert r.status_code == 200 and r.json()["new_url"] == moved
 
 

@@ -1,5 +1,6 @@
 """Canonical entry links: redirector detection, the star-time rewrite hook,
 refresh re-pinning, and archive-HTML recovery for dead redirectors."""
+
 from __future__ import annotations
 
 import pytest
@@ -52,9 +53,7 @@ def configured(tmp_path):
 
 def _reader_link() -> str | None:
     with main.get_reader() as reader:
-        row = reader._storage.get_db().execute(
-            "SELECT link FROM entries WHERE feed = ? AND id = 'e1'", (FEED,)
-        ).fetchone()
+        row = reader._storage.get_db().execute("SELECT link FROM entries WHERE feed = ? AND id = 'e1'", (FEED,)).fetchone()
     return row[0] if row else None
 
 
@@ -87,6 +86,7 @@ def test_refresh_repins_reverted_link(configured):
 
 def test_canonical_from_archived_html():
     from scripts.backfill_canonical_links import canonical_from_html
+
     page = '<html><head><link rel="canonical" href="https://someblog.example/post/42"/></head></html>'
     assert canonical_from_html(page) == REAL
     og = '<html><head><meta property="og:url" content="https://someblog.example/post/42"></head></html>'

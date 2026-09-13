@@ -6,6 +6,7 @@ axis does not reclassify them, so this declares bankruptcy on the ones plainly
 never getting read — by archiving, which keeps the tag, the capture and
 pruning-exemption, rather than by unstarring, which throws the to-do axis away.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -24,7 +25,10 @@ A, B, C, D = ("f", "a"), ("f", "b"), ("f", "c"), ("f", "d")
 
 def test_only_stars_older_than_the_cutoff_are_archived():
     plan = build_archive_plan(
-        {A: _ago(45), B: _ago(2)}, set(), days=30, now=NOW,
+        {A: _ago(45), B: _ago(2)},
+        set(),
+        days=30,
+        now=NOW,
     )
     assert plan["to_archive"] == [A]
     assert plan["totals"]["to_archive"] == 1
@@ -60,13 +64,15 @@ def test_naive_timestamps_are_treated_as_utc():
 def test_boundary_is_strictly_older_than_the_cutoff():
     exactly = NOW - timedelta(days=30)
     plan = build_archive_plan({A: exactly}, set(), days=30, now=NOW)
-    assert plan["to_archive"] == []      # 'older than 30 days' excludes exactly 30
+    assert plan["to_archive"] == []  # 'older than 30 days' excludes exactly 30
 
 
 def test_buckets_let_the_total_be_checked():
     """A single total is impossible to sanity-check before 9,000 items move."""
     buckets = age_buckets(
-        {A: _ago(3), B: _ago(20), C: _ago(200), D: _ago(500)}, set(), now=NOW,
+        {A: _ago(3), B: _ago(20), C: _ago(200), D: _ago(500)},
+        set(),
+        now=NOW,
     )
     by_label = {b["label"]: b["count"] for b in buckets}
     assert by_label["under a week"] == 1

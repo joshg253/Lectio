@@ -13,6 +13,7 @@ Coverage matrix
 - purge_orphaned_feed via the dedup/combine call pattern (Site D): websub-unsubscribes the removed URL
 - get_push_active_feed_urls (Part B): verified vs pending/no-hub
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -38,6 +39,7 @@ BASE = dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc)
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
+
 
 def _reset_pools() -> None:
     main.close_thread_db_pools()
@@ -109,6 +111,7 @@ def _csrf_client() -> tuple[TestClient, str]:
 # ---------------------------------------------------------------------------
 # purge_orphaned_feed — unit-level (mocked services)
 # ---------------------------------------------------------------------------
+
 
 class TestPurgeOrphanedFeed:
     """purge_orphaned_feed runs the correct step sequence depending on flags."""
@@ -217,6 +220,7 @@ class TestPurgeOrphanedFeed:
 # Site B — /feeds/unsubscribe route
 # ---------------------------------------------------------------------------
 
+
 class TestUnsubscribeRoute:
     """The unsubscribe button must fully clean up: archive, DA/scraped delete, websub."""
 
@@ -233,9 +237,7 @@ class TestUnsubscribeRoute:
                 "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
                 (fid, FEED),
             )
-            still_used = conn.execute(
-                "SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (FEED,)
-            ).fetchone()
+            still_used = conn.execute("SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (FEED,)).fetchone()
         assert not still_used
         with main.get_reader() as reader:
             with main.get_meta_connection() as conn:
@@ -306,16 +308,18 @@ class TestUnsubscribeRoute:
         _add_feed_to_folder(FEED, _root_folder_id())
 
         client, token = _csrf_client()
-        r = client.post("/feeds/unsubscribe", data={
-            "_csrf": token,
-            "folder_id": str(_root_folder_id()), "feed_url": FEED,
-        })
+        r = client.post(
+            "/feeds/unsubscribe",
+            data={
+                "_csrf": token,
+                "folder_id": str(_root_folder_id()),
+                "feed_url": FEED,
+            },
+        )
         assert r.status_code != 403
 
         with main.get_meta_connection() as conn:
-            row = conn.execute(
-                "SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)
-            ).fetchone()
+            row = conn.execute("SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)).fetchone()
         assert row is not None
 
     def test_unsubscribe_via_remove_feed_from_folder_does_not_record_a_decline(self, env, monkeypatch):
@@ -330,15 +334,14 @@ class TestUnsubscribeRoute:
         monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
         main.remove_feed_from_folder(FEED, fid)
         with main.get_meta_connection() as conn:
-            row = conn.execute(
-                "SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)
-            ).fetchone()
+            row = conn.execute("SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)).fetchone()
         assert row is None
 
 
 # ---------------------------------------------------------------------------
 # get_folder_feed_urls — root ("All Feeds") must include uncategorized feeds
 # ---------------------------------------------------------------------------
+
 
 class TestRootFeedResolution:
     def test_root_includes_uncategorized_feeds(self, env):
@@ -362,6 +365,7 @@ class TestRootFeedResolution:
 # ---------------------------------------------------------------------------
 # Site C — delete_folder
 # ---------------------------------------------------------------------------
+
 
 class TestDeleteFolder:
     def test_delete_folder_websub_unsubscribes_orphaned_feeds(self, env, monkeypatch):
@@ -400,15 +404,11 @@ class TestDeleteFolder:
         _add_feed_to_folder(FEED, fid)
         ws_mock = MagicMock()
         monkeypatch.setattr(main, "websub_service", ws_mock)
-        deleted, unsubbed, moved = main.delete_folder(
-            fid, feed_action="move", move_to_folder_id=target
-        )
+        deleted, unsubbed, moved = main.delete_folder(fid, feed_action="move", move_to_folder_id=target)
         assert (unsubbed, moved) == (0, 1)
         ws_mock.unsubscribe.assert_not_called()
         with main.get_meta_connection() as conn:
-            rows = conn.execute(
-                "SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (FEED,)
-            ).fetchall()
+            rows = conn.execute("SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (FEED,)).fetchall()
         assert [int(r["folder_id"]) for r in rows] == [target]
 
     def test_delete_folder_move_to_uncategorized_leaves_feed_folderless(self, env, monkeypatch):
@@ -416,14 +416,10 @@ class TestDeleteFolder:
         _add_feed_to_folder(FEED, fid)
         ws_mock = MagicMock()
         monkeypatch.setattr(main, "websub_service", ws_mock)
-        main.delete_folder(
-            fid, feed_action="move", move_to_folder_id=main.UNCATEGORIZED_FOLDER_ID
-        )
+        main.delete_folder(fid, feed_action="move", move_to_folder_id=main.UNCATEGORIZED_FOLDER_ID)
         ws_mock.unsubscribe.assert_not_called()
         with main.get_meta_connection() as conn:
-            rows = conn.execute(
-                "SELECT 1 FROM folder_feeds WHERE feed_url = ?", (FEED,)
-            ).fetchall()
+            rows = conn.execute("SELECT 1 FROM folder_feeds WHERE feed_url = ?", (FEED,)).fetchall()
         assert rows == []  # folderless => Uncategorized
         with main.get_reader() as reader:
             assert any(str(f.url) == FEED for f in reader.get_feeds())  # still subscribed
@@ -444,9 +440,7 @@ class TestDeleteFolder:
         monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
         main.delete_folder(fid)
         with main.get_meta_connection() as conn:
-            row = conn.execute(
-                "SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)
-            ).fetchone()
+            row = conn.execute("SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)).fetchone()
         assert row is not None
 
     def test_delete_folder_move_does_not_record_a_decline(self, env, monkeypatch):
@@ -457,15 +451,14 @@ class TestDeleteFolder:
         monkeypatch.setattr(main, "websub_service", MagicMock())
         main.delete_folder(fid, feed_action="move", move_to_folder_id=target)
         with main.get_meta_connection() as conn:
-            row = conn.execute(
-                "SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)
-            ).fetchone()
+            row = conn.execute("SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)).fetchone()
         assert row is None
 
 
 # ---------------------------------------------------------------------------
 # Site E — bulk_feed_action's "unsubscribe" branch (Settings → Feeds toolbar)
 # ---------------------------------------------------------------------------
+
 
 class TestBulkUnsubscribeDecline:
     def test_bulk_unsubscribe_records_a_decline(self, env, monkeypatch):
@@ -475,9 +468,7 @@ class TestBulkUnsubscribeDecline:
         monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
         main.bulk_feed_action(_NO_REQUEST, action="unsubscribe", feed_urls=FEED)
         with main.get_meta_connection() as conn:
-            row = conn.execute(
-                "SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)
-            ).fetchone()
+            row = conn.execute("SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)).fetchone()
         assert row is not None
 
 
@@ -485,6 +476,7 @@ class TestBulkUnsubscribeDecline:
 # Site D — dedup/upgrade's purge_orphaned_feed call pattern (same-folder,
 # cross-folder, and combine/upgrade all route through it identically)
 # ---------------------------------------------------------------------------
+
 
 class TestDeduplicateWebSub:
     """dedup/upgrade must WebSub-unsubscribe the REMOVED url."""
@@ -531,9 +523,7 @@ class TestDeduplicateWebSub:
             with main.get_meta_connection() as conn:
                 main.purge_orphaned_feed(reader, conn, FEED2, archive_pending=False, rescue_to=FEED)
         with main.get_meta_connection() as conn:
-            row = conn.execute(
-                "SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED2,)
-            ).fetchone()
+            row = conn.execute("SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED2,)).fetchone()
         assert row is None
 
     def test_dedup_does_not_archive_pending_for_removed_url(self, env, monkeypatch):
@@ -557,6 +547,7 @@ class TestDeduplicateWebSub:
 # ---------------------------------------------------------------------------
 # Part B — get_push_active_feed_urls
 # ---------------------------------------------------------------------------
+
 
 class TestPushActiveFeedUrls:
     def test_returns_empty_set_when_websub_disabled(self, env, monkeypatch):
@@ -615,6 +606,7 @@ class TestPushActiveFeedUrls:
 # _migrate_curation — tags + stars move onto the survivor (dedup consolidation)
 # ---------------------------------------------------------------------------
 
+
 def _add_entry(feed_url: str, entry_id: str, link: str) -> None:
     with main.get_reader() as reader:
         reader.add_entry({"feed_url": feed_url, "id": entry_id, "title": entry_id, "link": link})
@@ -638,8 +630,8 @@ class TestMigrateCuration:
     def test_synth_when_survivor_lacks_entry(self, env):
         """A tagged+starred source entry absent from the survivor is synthesized
         into it, carrying the tag and star; source star row is removed."""
-        _add_feed_to_folder(FEED, _root_folder_id())    # survivor, no matching entry
-        _add_feed_to_folder(FEED2, _root_folder_id())   # source
+        _add_feed_to_folder(FEED, _root_folder_id())  # survivor, no matching entry
+        _add_feed_to_folder(FEED2, _root_folder_id())  # source
         _add_entry(FEED2, "e1", "https://example.test/a")
         _tag_entry(FEED2, "e1", "python")
         _star_entry(FEED2, "e1")
@@ -653,12 +645,8 @@ class TestMigrateCuration:
             keys = [main._extract_tag_key(t) for t in reader.get_tags((FEED, "e1"))]
         assert f"{main.MANUAL_TAG_KEY_PREFIX}python" in keys
         with main.get_meta_connection() as conn:
-            surv = conn.execute(
-                "SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id=?", (FEED, "e1")
-            ).fetchone()
-            src = conn.execute(
-                "SELECT 1 FROM saved_entries WHERE feed_url=?", (FEED2,)
-            ).fetchone()
+            surv = conn.execute("SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id=?", (FEED, "e1")).fetchone()
+            src = conn.execute("SELECT 1 FROM saved_entries WHERE feed_url=?", (FEED2,)).fetchone()
         assert surv is not None
         assert src is None  # moved off the source feed
 
@@ -667,7 +655,7 @@ class TestMigrateCuration:
         entry instead of synthesizing a duplicate."""
         _add_feed_to_folder(FEED, _root_folder_id())
         _add_feed_to_folder(FEED2, _root_folder_id())
-        _add_entry(FEED, "e1", "https://example.test/a")   # survivor already has e1
+        _add_entry(FEED, "e1", "https://example.test/a")  # survivor already has e1
         _add_entry(FEED2, "e1", "https://example.test/a")  # source
         _tag_entry(FEED2, "e1", "git")
 
@@ -712,6 +700,7 @@ class TestDuplicateScanGroupsAcrossSchemes:
         _add_feed_to_folder("http://azius.com/blog/feed", root)
         _add_feed_to_folder("https://azius.com/blog/feed", root)
         import json
+
         dup = json.loads(main.get_feed_duplicates().body)
         assert ("https://azius.com/blog/feed", "http://azius.com/blog/feed") in self._keys(dup)
 
@@ -721,9 +710,9 @@ class TestDuplicateScanGroupsAcrossSchemes:
         _add_feed_to_folder("http://tapastic.com/rss/series/4879", root)
         _add_feed_to_folder("https://tapas.io/rss/series/4879", root)
         import json
+
         dup = json.loads(main.get_feed_duplicates().body)
-        assert ("https://tapas.io/rss/series/4879",
-                "http://tapastic.com/rss/series/4879") in self._keys(dup)
+        assert ("https://tapas.io/rss/series/4879", "http://tapastic.com/rss/series/4879") in self._keys(dup)
 
     def test_the_survivor_is_always_a_subscribed_url(self, env):
         """`keep` used to be the canonical *string*, which is not always one of
@@ -734,6 +723,7 @@ class TestDuplicateScanGroupsAcrossSchemes:
         for u in subscribed:
             _add_feed_to_folder(u, root)
         import json
+
         dup = json.loads(main.get_feed_duplicates().body)
         pairs = self._keys(dup)
         assert pairs, "the pair must be detected"
@@ -747,6 +737,7 @@ class TestDuplicateScanGroupsAcrossSchemes:
         _add_feed_to_folder("https://a.test/feed", root)
         _add_feed_to_folder("https://b.test/feed", root)
         import json
+
         dup = json.loads(main.get_feed_duplicates().body)
         assert dup["same_folder"] == [] and dup["cross_folder"] == []
 
@@ -756,6 +747,7 @@ class TestDuplicateScanGroupsAcrossSchemes:
         _add_feed_to_folder("https://slash.test/feed", root)
         _add_feed_to_folder("https://slash.test/feed/", root)
         import json
+
         dup = json.loads(main.get_feed_duplicates().body)
         assert ("https://slash.test/feed", "https://slash.test/feed/") in self._keys(dup)
 
@@ -768,6 +760,7 @@ class TestDuplicateScanGroupsAcrossSchemes:
         _add_feed_to_folder("https://deathbulge.com/rss.xml", root)
         _add_feed_to_folder("https://www.deathbulge.com/rss.xml", root)
         import json
+
         dup = json.loads(main.get_feed_duplicates().body)
         assert ("https://deathbulge.com/rss.xml", "https://www.deathbulge.com/rss.xml") in self._keys(dup)
 
@@ -786,6 +779,7 @@ class TestDuplicateScanGroupsBySameTitle:
 
     def _title_groups(self):
         import json
+
         return json.loads(main.get_feed_duplicates().body)["title_groups"]
 
     def test_two_feeds_sharing_a_title_are_grouped(self, env):
@@ -798,7 +792,8 @@ class TestDuplicateScanGroupsBySameTitle:
         assert len(groups) == 1
         assert groups[0]["title"] == "Cryptid Club"
         assert {f["feed_url"] for f in groups[0]["feeds"]} == {
-            "https://tumblr.test/comic", "https://tapas.test/comic",
+            "https://tumblr.test/comic",
+            "https://tapas.test/comic",
         }
 
     def test_title_matching_is_case_insensitive(self, env):
@@ -810,7 +805,8 @@ class TestDuplicateScanGroupsBySameTitle:
         groups = self._title_groups()
         assert len(groups) == 1
         assert {f["feed_url"] for f in groups[0]["feeds"]} == {
-            "https://a.test/feed", "https://b.test/feed",
+            "https://a.test/feed",
+            "https://b.test/feed",
         }
 
     def test_a_unique_title_is_not_grouped(self, env):
@@ -851,11 +847,13 @@ class TestDuplicateScanGroupsBySameTitle:
         root = _root_folder_id()
         _add_feed_to_folder("https://blog.test/feed", root)
         _add_feed_to_folder(
-            "https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123", root,
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123",
+            root,
         )
         self._set_title("https://blog.test/feed", "Some Creator")
         self._set_title(
-            "https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123", "Some Creator",
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123",
+            "Some Creator",
         )
         assert self._title_groups() == []
 
@@ -870,6 +868,7 @@ class TestDuplicateScanQueryDifferingPairs:
 
     def _query_pairs(self):
         import json
+
         return json.loads(main.get_feed_duplicates().body)["query_pairs"]
 
     def test_a_differing_query_pair_with_an_unrecognized_selector_is_found(self, env):
@@ -899,6 +898,7 @@ class TestDuplicateScanQueryDifferingPairs:
         _add_feed_to_folder("https://paizo.test/blog?feed=json1", root)
         _add_feed_to_folder("https://paizo.test/blog?feed=rss", root)
         import json
+
         dup = json.loads(main.get_feed_duplicates().body)
         same_folder_urls = {(d["keep"], d["remove"]) for d in dup["same_folder"]}
         assert any("tosecdev.test" in k for k, _r in same_folder_urls)
@@ -908,10 +908,12 @@ class TestDuplicateScanQueryDifferingPairs:
     def test_youtube_feeds_are_excluded(self, env):
         root = _root_folder_id()
         _add_feed_to_folder(
-            "https://www.youtube.com/feeds/videos.xml?channel_id=UCabc", root,
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCabc",
+            root,
         )
         _add_feed_to_folder(
-            "https://www.youtube.com/feeds/videos.xml?channel_id=UCdef", root,
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCdef",
+            root,
         )
         assert self._query_pairs() == []
 
@@ -921,10 +923,12 @@ class TestDuplicateScanQueryDifferingPairs:
         grouped dozens of genuinely distinct subscriptions as "duplicates"."""
         root = _root_folder_id()
         _add_feed_to_folder(
-            "https://backend.deviantart.com/rss.xml?q=gallery:rantz&type=deviation", root,
+            "https://backend.deviantart.com/rss.xml?q=gallery:rantz&type=deviation",
+            root,
         )
         _add_feed_to_folder(
-            "https://backend.deviantart.com/rss.xml?q=gallery:yuumei&type=deviation", root,
+            "https://backend.deviantart.com/rss.xml?q=gallery:yuumei&type=deviation",
+            root,
         )
         assert self._query_pairs() == []
 
@@ -953,9 +957,7 @@ class TestRemovalLeavesNoGhostInTheTree:
 
     def _folder_rows(self, url):
         with main.get_meta_connection() as conn:
-            return conn.execute(
-                "SELECT COUNT(*) FROM folder_feeds WHERE feed_url = ?", (url,)
-            ).fetchone()[0]
+            return conn.execute("SELECT COUNT(*) FROM folder_feeds WHERE feed_url = ?", (url,)).fetchone()[0]
 
     def test_purging_a_feed_removes_its_folder_row(self, env):
         _add_feed_to_folder(FEED, _root_folder_id())
@@ -992,6 +994,7 @@ class TestLazyFeedTitles:
 
     def _lazy_titles(self):
         import json
+
         return json.loads(main.get_lazy_titles().body)["lazy_titles"]
 
     def test_a_generic_title_is_flagged_with_a_suggested_rename(self, env):
@@ -1039,6 +1042,7 @@ class TestFormatUpgradeAlternates:
 
     def _upgradable(self):
         import json
+
         return json.loads(main.get_feed_duplicates().body)["upgradable"]
 
     def test_a_feed_param_gets_same_family_alternates(self, env):
@@ -1105,20 +1109,20 @@ class TestCombineFeedsSurvivorFolderPlacement:
 
     def _folders_of(self, url):
         with main.get_meta_connection() as conn:
-            return {
-                r[0] for r in conn.execute(
-                    "SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (url,)
-                )
-            }
+            return {r[0] for r in conn.execute("SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (url,))}
 
     def test_new_survivor_inherits_the_sources_folders(self, env):
         folder = _make_child_folder("Comics")
         _add_feed_to_folder(FEED, folder)
         new_url = "https://example.test/feed?feed=json1"
         result = main.combine_feeds_route(
-            _NO_REQUEST, survivor_url=new_url, source_url=[FEED], move_unread="",
+            _NO_REQUEST,
+            survivor_url=new_url,
+            source_url=[FEED],
+            move_unread="",
         )
         import json as _json
+
         body = _json.loads(result.body)
         assert body["ok"] is True
         assert self._folders_of(new_url) == {folder}
@@ -1133,7 +1137,10 @@ class TestCombineFeedsSurvivorFolderPlacement:
         _add_feed_to_folder(FEED, folder_a)
         _add_feed_to_folder(FEED2, folder_b)
         main.combine_feeds_route(
-            _NO_REQUEST, survivor_url=FEED, source_url=[FEED2], move_unread="",
+            _NO_REQUEST,
+            survivor_url=FEED,
+            source_url=[FEED2],
+            move_unread="",
         )
         assert self._folders_of(FEED) == {folder_a}
 
@@ -1147,6 +1154,7 @@ class TestContentIdenticalFlag:
 
     def _duplicates(self):
         import json
+
         return json.loads(main.get_feed_duplicates().body)
 
     def test_scheme_only_variant_is_content_identical(self, env):
@@ -1187,6 +1195,7 @@ class TestLazyFeedTitlesFeedburner:
 
     def _lazy_titles(self):
         import json
+
         return json.loads(main.get_lazy_titles().body)["lazy_titles"]
 
     def test_feedburner_uses_the_path_slug_not_the_host(self, env):
@@ -1204,9 +1213,7 @@ class TestSiteNameFromSubtitle:
     separator; only the name half is used."""
 
     def test_name_dash_tagline_takes_the_name_half(self):
-        assert main._site_name_from_subtitle(
-            "TOSEC - The Old School Emulation Center"
-        ) == "TOSEC"
+        assert main._site_name_from_subtitle("TOSEC - The Old School Emulation Center") == "TOSEC"
 
     def test_name_colon_tagline_takes_the_name_half(self):
         assert main._site_name_from_subtitle("Kotaku: Gaming Reviews and News") == "Kotaku"
@@ -1231,6 +1238,7 @@ class TestFormatUpgradeExcludesBareDomains:
 
     def _upgradable(self):
         import json
+
         return json.loads(main.get_feed_duplicates().body)["upgradable"]
 
     def test_root_level_feed_param_stripped_default_is_not_offered(self, env):
@@ -1249,7 +1257,7 @@ class TestFormatUpgradeExcludesBareDomains:
 
 
 class TestDedupDismissal:
-    """"Not dupes" (reported 2026-08-10): a duplicate-scan group the user
+    """ "Not dupes" (reported 2026-08-10): a duplicate-scan group the user
     explicitly says isn't a dupe stops being suggested. Matched by the exact
     set of feed URLs shown in the group -- if the underlying feeds change,
     the dismissal naturally stops applying rather than silently hiding some
@@ -1257,6 +1265,7 @@ class TestDedupDismissal:
 
     def _duplicates(self):
         import json
+
         return json.loads(main.get_feed_duplicates().body)
 
     def _dismiss(self, urls):
@@ -1276,6 +1285,7 @@ class TestDedupDismissal:
         assert len(before) == 1
         result = self._dismiss(["https://example.test/feed", "https://example.test/feed/"])
         import json
+
         assert json.loads(result.body)["ok"] is True
         after = self._duplicates()["same_folder"]
         assert after == []
@@ -1334,6 +1344,7 @@ class TestDedupDismissal:
 
     def test_undismiss_lets_the_group_be_suggested_again(self, env):
         import json
+
         fid = _make_child_folder("Comics")
         _add_feed_to_folder("https://example.test/feed", fid)
         _add_feed_to_folder("https://example.test/feed/", fid)
@@ -1377,12 +1388,15 @@ class TestCombineAutoDismisses:
             move_unread="",
         )
         import json
+
         assert json.loads(result.body)["ok"] is True
-        key = main._dedup_dismiss_key([
-            "http://example.test/blog?feed=atom",
-            "http://example.test/blog?feed=rss",
-            "http://example.test/blog?feed=rss2",
-        ])
+        key = main._dedup_dismiss_key(
+            [
+                "http://example.test/blog?feed=atom",
+                "http://example.test/blog?feed=rss",
+                "http://example.test/blog?feed=rss2",
+            ]
+        )
         assert key in self._dismissed_keys()
 
     def test_dismissed_upgrade_group_no_longer_scanned(self, env):
@@ -1401,6 +1415,7 @@ class TestCombineAutoDismisses:
             move_unread="",
         )
         import json
+
         data = json.loads(main.get_feed_duplicates().body)
         currents = {d["current"] for d in data["upgradable"]}
         assert "http://example.test/blog?feed=atom" not in currents
@@ -1421,6 +1436,7 @@ class TestCombineAutoDismisses:
 # restar_curated_entries — the "show them at the top of the Inbox" option
 # ---------------------------------------------------------------------------
 
+
 class TestRestarCuratedEntries:
     """Unsubscribing a feed can bring its curated items back to the top.
 
@@ -1432,10 +1448,14 @@ class TestRestarCuratedEntries:
     def _entry(self, feed_url: str, entry_id: str, *, title: str = "t"):
         with main.get_reader() as reader:
             reader.add_feed(feed_url, allow_invalid_url=True, exist_ok=True)
-            reader.add_entry({
-                "feed_url": feed_url, "id": entry_id,
-                "title": title, "link": entry_id,
-            })
+            reader.add_entry(
+                {
+                    "feed_url": feed_url,
+                    "id": entry_id,
+                    "title": title,
+                    "link": entry_id,
+                }
+            )
 
     def _saved_at(self, feed_url: str, entry_id: str):
         with main.get_meta_connection() as conn:
@@ -1461,9 +1481,7 @@ class TestRestarCuratedEntries:
         """apply_star_state is INSERT OR IGNORE, so the old date would survive."""
         self._entry(FEED, "e-star")
         with main.get_meta_connection() as conn:
-            conn.execute(
-                "INSERT INTO saved_entries (feed_url, entry_id, saved_at)"
-                " VALUES (?, ?, '2020-01-01 00:00:00')", (FEED, "e-star"))
+            conn.execute("INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, '2020-01-01 00:00:00')", (FEED, "e-star"))
             conn.commit()
 
         assert main.restar_curated_entries(FEED) == 1
@@ -1479,12 +1497,8 @@ class TestRestarCuratedEntries:
         self._entry(FEED, "e-star")
         self._entry(FEED2, "other")
         with main.get_meta_connection() as conn:
-            conn.execute(
-                "INSERT INTO saved_entries (feed_url, entry_id, saved_at)"
-                " VALUES (?, ?, '2020-01-01 00:00:00')", (FEED, "e-star"))
-            conn.execute(
-                "INSERT INTO saved_entries (feed_url, entry_id, saved_at)"
-                " VALUES (?, ?, '2020-01-01 00:00:00')", (FEED2, "other"))
+            conn.execute("INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, '2020-01-01 00:00:00')", (FEED, "e-star"))
+            conn.execute("INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, '2020-01-01 00:00:00')", (FEED2, "other"))
             conn.commit()
 
         main.restar_curated_entries(FEED)
@@ -1499,19 +1513,27 @@ class TestRestarCuratedEntries:
         monkeypatch.setattr(main, "AUTH_ENABLED", False)
         _add_feed_to_folder(FEED, _root_folder_id())
         client, token = _csrf_client()
-        r = client.post("/feeds/unsubscribe", data={
-            "_csrf": token,
-            "folder_id": str(_root_folder_id()), "feed_url": FEED,
-        })
+        r = client.post(
+            "/feeds/unsubscribe",
+            data={
+                "_csrf": token,
+                "folder_id": str(_root_folder_id()),
+                "feed_url": FEED,
+            },
+        )
         assert r.status_code != 403
         assert calls == []
 
         _add_feed_to_folder(FEED, _root_folder_id())
-        client.post("/feeds/unsubscribe", data={
-            "_csrf": token,
-            "folder_id": str(_root_folder_id()), "feed_url": FEED,
-            "restar_curated": "1",
-        })
+        client.post(
+            "/feeds/unsubscribe",
+            data={
+                "_csrf": token,
+                "folder_id": str(_root_folder_id()),
+                "feed_url": FEED,
+                "restar_curated": "1",
+            },
+        )
         assert calls == [FEED]
 
     def test_route_restars_before_the_feed_is_removed(self, env, monkeypatch):
@@ -1529,16 +1551,22 @@ class TestRestarCuratedEntries:
         _add_feed_to_folder(FEED, _root_folder_id())
 
         client, token = _csrf_client()
-        client.post("/feeds/unsubscribe", data={
-            "_csrf": token,
-            "folder_id": str(_root_folder_id()), "feed_url": FEED, "restar_curated": "1",
-        })
+        client.post(
+            "/feeds/unsubscribe",
+            data={
+                "_csrf": token,
+                "folder_id": str(_root_folder_id()),
+                "feed_url": FEED,
+                "restar_curated": "1",
+            },
+        )
         assert seen["feed_exists"] is True
 
 
 # ---------------------------------------------------------------------------
 # drop_all_curation — "unsubscribe and drop everything"
 # ---------------------------------------------------------------------------
+
 
 class TestDropAllCuration:
     """The way out when the feed itself was the mistake.
@@ -1563,19 +1591,18 @@ class TestDropAllCuration:
                 reader.set_tag(entry.resource_id, "lectio.manual_tag.gamedev", "")
         if starred:
             with main.get_meta_connection() as conn:
-                conn.execute(
-                    "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
-                    (FEED, entry_id))
+                conn.execute("INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (FEED, entry_id))
                 conn.commit()
         with main.archive_conn() as ac:
-            ac.execute("INSERT OR REPLACE INTO archived_entry (feed_url, entry_id, status, starred_at)"
-                       " VALUES (?, ?, 'complete', 1.0)", (FEED, entry_id))
+            ac.execute(
+                "INSERT OR REPLACE INTO archived_entry (feed_url, entry_id, status, starred_at) VALUES (?, ?, 'complete', 1.0)",
+                (FEED, entry_id),
+            )
         return entry_id
 
     def _archive_rows(self) -> int:
         with main.archive_conn() as ac:
-            return ac.execute(
-                "SELECT COUNT(*) FROM archived_entry WHERE feed_url = ?", (FEED,)).fetchone()[0]
+            return ac.execute("SELECT COUNT(*) FROM archived_entry WHERE feed_url = ?", (FEED,)).fetchone()[0]
 
     def test_a_tagged_and_starred_entry_loses_everything(self, env):
         eid = self._seed(tagged=True, starred=True)
@@ -1606,9 +1633,7 @@ class TestDropAllCuration:
 
         assert self._archive_rows() == 0
         with main.get_meta_connection() as conn:
-            assert conn.execute(
-                "SELECT COUNT(*) FROM orphan_entry_tags WHERE feed_url = ?", (FEED,)
-            ).fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM orphan_entry_tags WHERE feed_url = ?", (FEED,)).fetchone()[0] == 0
         assert main.entry_has_keep_signal(FEED, eid, starred=False) is False
 
     def test_another_feeds_curation_is_untouched(self, env):
@@ -1630,21 +1655,30 @@ class TestDropAllCuration:
 
     def test_route_runs_it_only_when_asked(self, env, monkeypatch):
         calls = []
-        monkeypatch.setattr(main, "drop_all_curation",
-                            lambda u: calls.append(u) or {"untagged": 0, "unstarred": 0, "archives": 0})
+        monkeypatch.setattr(main, "drop_all_curation", lambda u: calls.append(u) or {"untagged": 0, "unstarred": 0, "archives": 0})
         monkeypatch.setattr(main, "websub_service", MagicMock())
         monkeypatch.setattr(main, "AUTH_ENABLED", False)
 
         _add_feed_to_folder(FEED, _root_folder_id())
         client, token = _csrf_client()
-        client.post("/feeds/unsubscribe", data={
-            "_csrf": token, "folder_id": str(_root_folder_id()), "feed_url": FEED,
-        })
+        client.post(
+            "/feeds/unsubscribe",
+            data={
+                "_csrf": token,
+                "folder_id": str(_root_folder_id()),
+                "feed_url": FEED,
+            },
+        )
         assert calls == []
 
         _add_feed_to_folder(FEED, _root_folder_id())
-        client.post("/feeds/unsubscribe", data={
-            "_csrf": token, "folder_id": str(_root_folder_id()), "feed_url": FEED,
-            "drop_curation": "1",
-        })
+        client.post(
+            "/feeds/unsubscribe",
+            data={
+                "_csrf": token,
+                "folder_id": str(_root_folder_id()),
+                "feed_url": FEED,
+                "drop_curation": "1",
+            },
+        )
         assert calls == [FEED]

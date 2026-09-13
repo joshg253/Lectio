@@ -1,4 +1,5 @@
 """Tests for the dev.to filtered synthetic-feed service."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -56,24 +57,29 @@ def _article(**over):
 
 # --- URL parsing ---
 
-@pytest.mark.parametrize("url, expected", [
-    ("https://dev.to/", {"tag": None}),
-    ("https://dev.to", {"tag": None}),
-    ("https://dev.to/feed", {"tag": None}),
-    ("https://dev.to/t/python", {"tag": "python"}),
-    ("https://dev.to/t/Python/top/week", {"tag": "python"}),
-    ("https://dev.to/feed/tag/cpp", {"tag": "cpp"}),
-    ("https://www.dev.to/t/csharp", {"tag": "csharp"}),
-    ("https://dev.to/someuser", None),          # user pages keep normal RSS
-    ("https://dev.to/feed/someuser", None),     # user feed too
-    ("https://example.com/t/python", None),
-    ("not a url", None),
-])
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://dev.to/", {"tag": None}),
+        ("https://dev.to", {"tag": None}),
+        ("https://dev.to/feed", {"tag": None}),
+        ("https://dev.to/t/python", {"tag": "python"}),
+        ("https://dev.to/t/Python/top/week", {"tag": "python"}),
+        ("https://dev.to/feed/tag/cpp", {"tag": "cpp"}),
+        ("https://www.dev.to/t/csharp", {"tag": "csharp"}),
+        ("https://dev.to/someuser", None),  # user pages keep normal RSS
+        ("https://dev.to/feed/someuser", None),  # user feed too
+        ("https://example.com/t/python", None),
+        ("not a url", None),
+    ],
+)
 def test_parse_devto_url(url, expected):
     assert devto.parse_devto_url(url) == expected
 
 
 # --- file-url dir-awareness ---
+
 
 def test_feed_id_from_url_roundtrip():
     fid = "abc-123"
@@ -88,10 +94,15 @@ def test_feed_id_from_url_rejects_other_dirs():
 
 # --- param building + client-side filters ---
 
+
 def test_build_params_full_config():
-    params = devto._build_params({
-        "tag": " Python ", "top_days": 7, "tags_exclude": "WebDev, career ,",
-    })
+    params = devto._build_params(
+        {
+            "tag": " Python ",
+            "top_days": 7,
+            "tags_exclude": "WebDev, career ,",
+        }
+    )
     assert params == {"per_page": 80, "tag": "python", "top": 7, "tags_exclude": "webdev,career"}
 
 
@@ -115,6 +126,7 @@ def test_filters_min_reactions():
 
 
 # --- article mapping + RSS ---
+
 
 def test_article_to_entry_embeds_cover_and_meta():
     e = devto._article_to_entry(_article())
@@ -140,8 +152,13 @@ def test_article_to_entry_skips_without_id_or_url():
 
 
 def test_generate_rss_xml_structure():
-    e = {"id": "101", "title": "Title & <stuff>", "entry_url": "https://dev.to/p",
-         "content": "<p>hi</p>", "published_at": "2026-07-01T00:00:00+00:00"}
+    e = {
+        "id": "101",
+        "title": "Title & <stuff>",
+        "entry_url": "https://dev.to/p",
+        "content": "<p>hi</p>",
+        "published_at": "2026-07-01T00:00:00+00:00",
+    }
     xml = devto._generate_rss_xml("dev.to #python", "https://dev.to/t/python", [e])
     assert '<?xml version="1.0"' in xml
     assert '<rss version="2.0">' in xml
@@ -156,6 +173,7 @@ def test_default_title():
 
 
 # --- HTTP (mocked) ---
+
 
 def _mock_client(responses):
     """responses: list of (status_code, payload, headers) returned in order."""
@@ -212,6 +230,7 @@ def test_request_returns_after_429_then_success():
 
 # --- upsert + lifecycle ---
 
+
 def test_upsert_entries_idempotent_and_seeds_lead_image():
     conn = _db()
     conn.execute(
@@ -235,8 +254,8 @@ def test_refresh_all_stops_on_rate_limit():
     conn = _db()
     for i in range(3):
         conn.execute(
-            "INSERT INTO devto_feeds (id, feed_title, created_at, last_synced_at)"
-            " VALUES (?, 't', 'now', ?)", ([F1, F2, F3][i], f"2026-01-0{i + 1}"),
+            "INSERT INTO devto_feeds (id, feed_title, created_at, last_synced_at) VALUES (?, 't', 'now', ?)",
+            ([F1, F2, F3][i], f"2026-01-0{i + 1}"),
         )
     calls = []
 
@@ -258,9 +277,17 @@ def test_update_config_refetches_and_rewrites(tmp_path):
     )
     reader = MagicMock()
     with patch("services.devto.fetch_articles", return_value=[_article(id=9)]) as fetch:
-        devto.update_devto_feed_config(conn, reader, F1, {
-            "tag": "python", "top_days": 7, "english_only": True, "min_reactions": 10,
-        })
+        devto.update_devto_feed_config(
+            conn,
+            reader,
+            F1,
+            {
+                "tag": "python",
+                "top_days": 7,
+                "english_only": True,
+                "min_reactions": 10,
+            },
+        )
     row = conn.execute("SELECT * FROM devto_feeds WHERE id = ?", (F1,)).fetchone()
     assert row["top_days"] == 7 and row["min_reactions"] == 10
     # Auto-generated title follows the new filters.
@@ -278,9 +305,16 @@ def test_update_config_preserves_custom_title(tmp_path):
         (F1,),
     )
     with patch("services.devto.fetch_articles", return_value=[]):
-        devto.update_devto_feed_config(conn, MagicMock(), F1, {
-            "tag": "python", "top_days": 7, "english_only": True,
-        })
+        devto.update_devto_feed_config(
+            conn,
+            MagicMock(),
+            F1,
+            {
+                "tag": "python",
+                "top_days": 7,
+                "english_only": True,
+            },
+        )
     row = conn.execute("SELECT feed_title FROM devto_feeds WHERE id = ?", (F1,)).fetchone()
     assert row["feed_title"] == "My Python Picks"
 
@@ -289,8 +323,8 @@ def test_delete_devto_feed_removes_row_and_file():
     conn = _db()
     conn.execute("INSERT INTO devto_feeds (id, feed_title, created_at) VALUES (?, 't', 'now')", (F1,))
     conn.execute(
-        "INSERT INTO devto_entries (id, devto_feed_id, article_id, title, published_at)"
-        " VALUES ('e1', ?, '1', 't', 'now')", (F1,),
+        "INSERT INTO devto_entries (id, devto_feed_id, article_id, title, published_at) VALUES ('e1', ?, '1', 't', 'now')",
+        (F1,),
     )
     (devto._dir() / f"{F1}.xml").write_text("<rss/>")
     reader = MagicMock()
@@ -310,17 +344,21 @@ def test_article_to_entry_carries_tags():
 
 
 def test_item_xml_emits_category_per_tag():
-    e = {"id": "101", "title": "T", "entry_url": "https://dev.to/p",
-         "content": "<p>hi</p>", "published_at": "2026-07-01T00:00:00+00:00",
-         "tags": ["python", "a&b"]}
+    e = {
+        "id": "101",
+        "title": "T",
+        "entry_url": "https://dev.to/p",
+        "content": "<p>hi</p>",
+        "published_at": "2026-07-01T00:00:00+00:00",
+        "tags": ["python", "a&b"],
+    }
     xml = devto._item_xml(e)
     assert "<category>python</category>" in xml
     assert "<category>a&amp;b</category>" in xml
 
 
 def test_item_xml_no_tags_no_category():
-    e = {"id": "101", "title": "T", "entry_url": "https://dev.to/p",
-         "content": "", "published_at": "2026-07-01T00:00:00+00:00"}
+    e = {"id": "101", "title": "T", "entry_url": "https://dev.to/p", "content": "", "published_at": "2026-07-01T00:00:00+00:00"}
     assert "<category>" not in devto._item_xml(e)
 
 

@@ -10,6 +10,7 @@ so safe embeds survive while scripts/handlers are still removed.
 ``reader`` does no sanitizing of its own, so once this is installed the stored
 content is exactly what html_sanitize produced — safe to render with ``| safe``.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -183,6 +184,7 @@ def _looks_like_markdown(text: str) -> bool:
 
 def _render_markdown(text: str) -> str:
     import markdown as _markdown  # same call main.markdown_to_article_html makes
+
     return _markdown.markdown(text, extensions=["fenced_code", "tables", "sane_lists"])
 
 
@@ -224,10 +226,7 @@ def _sanitize_entry(entry, feed_url: str = ""):
     content = getattr(entry, "content", None)
     if content:
         new_content = tuple(
-            dataclasses.replace(c, value=_clean(c.value))
-            if isinstance(getattr(c, "value", None), str) and c.value
-            else c
-            for c in content
+            dataclasses.replace(c, value=_clean(c.value)) if isinstance(getattr(c, "value", None), str) and c.value else c for c in content
         )
         changed["content"] = new_content
     return dataclasses.replace(entry, **changed) if changed else entry
@@ -275,7 +274,8 @@ def _accept_recovered_bozo(url, result) -> None:
     exc = result.get("bozo_exception")
     LOGGER.warning(
         "feed recovered via loose parser despite %s; accepting instead of discarding: %s",
-        f"{type(exc).__name__}: {exc}" if exc else "bozo flag", url,
+        f"{type(exc).__name__}: {exc}" if exc else "bozo flag",
+        url,
     )
     result["bozo"] = 0
 
@@ -318,9 +318,7 @@ def install(reader) -> None:
         try:
             for _mime, plist in parser.parsers_by_mime_type.items():
                 for i, (quality, p) in enumerate(plist):
-                    if isinstance(p, FeedparserParser) and not isinstance(
-                        p, SanitizingFeedparserParser
-                    ):
+                    if isinstance(p, FeedparserParser) and not isinstance(p, SanitizingFeedparserParser):
                         plist[i] = (quality, replacement)
         except Exception:  # never let a parsing-plugin swap break reader init
             LOGGER.warning("could not install sanitizing feed parser", exc_info=True)

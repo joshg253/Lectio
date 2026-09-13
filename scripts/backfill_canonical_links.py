@@ -16,6 +16,7 @@ Usage:
 Dry-run by default: prints old -> new without writing. --live-resolve enables
 step 2's network fetches (off by default: archive recovery is free).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -61,6 +62,7 @@ _WAYBACK_SNAPSHOT_RE = re.compile(r"/web/\d+[a-z_]*/(https?://.+)$")
 def strip_tracking_params(url: str) -> str:
     """Drop utm_* params (FeedBurner appended them to every redirect target)."""
     from urllib.parse import parse_qsl, urlencode, urlunsplit
+
     parts = urlsplit(url)
     kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if not k.lower().startswith("utm_")]
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(kept), parts.fragment))
@@ -72,10 +74,12 @@ def resolve_wayback(url: str) -> str | None:
     embedded in the wayback path (/web/<ts>/<original>). archive.org rate-
     limits the /web/ endpoint aggressively — back off and retry on 429."""
     import httpx
+
     for _attempt in range(3):
         try:
-            with httpx.Client(follow_redirects=True, timeout=30.0,
-                              headers={"User-Agent": "Lectio/1.0 (+https://github.com/joshg253/Lectio)"}) as client:
+            with httpx.Client(
+                follow_redirects=True, timeout=30.0, headers={"User-Agent": "Lectio/1.0 (+https://github.com/joshg253/Lectio)"}
+            ) as client:
                 resp = client.get(f"https://web.archive.org/web/2/{url}")
             if resp.status_code == 429:
                 wait = float(resp.headers.get("Retry-After") or 30) + 5
@@ -101,6 +105,7 @@ def resolve_wayback(url: str) -> str | None:
 
 def resolve_live(url: str) -> str | None:
     from services import url_guard  # deferred: needs httpx
+
     try:
         with url_guard.build_client(timeout=10.0, headers={"User-Agent": "Lectio/1.0 (+https://github.com/joshg253/Lectio)"}) as client:
             resp = url_guard.safe_get(client, url, headers={"User-Agent": "Lectio/1.0"})
@@ -143,9 +148,7 @@ def process_user(label: str, d: Path, *, apply: bool, live: bool, wayback: bool)
         saved = meta.execute("SELECT feed_url, entry_id FROM saved_entries").fetchall()
         for row in saved:
             feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
-            ent = reader.execute(
-                "SELECT link FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id)
-            ).fetchone()
+            ent = reader.execute("SELECT link FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id)).fetchone()
             link = str(ent["link"] or "") if ent else ""
             if not link or not is_redirector_link(link):
                 continue
@@ -207,7 +210,8 @@ def main() -> None:
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
     ap.add_argument("--live-resolve", action="store_true", help="follow still-alive redirectors over the network")
     ap.add_argument(
-        "--wayback", action="store_true",
+        "--wayback",
+        action="store_true",
         help="recover dead redirectors via the Wayback Machine's archived redirects (rate-limited, ~2s/link)",
     )
     args = ap.parse_args()

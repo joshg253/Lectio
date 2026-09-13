@@ -7,6 +7,7 @@ webtoons.com Referer. The sibling `swebtoon-phinf` host serves the same paths
 with no Referer at all and is what the feed itself uses, so the URLs are
 rewritten to it rather than forging a header we do not have.
 """
+
 from __future__ import annotations
 
 import re
@@ -25,9 +26,9 @@ SLICES = [
 # The page also embeds a recommendation strip of *other* series — a looser scan
 # swept 62 URLs into an episode that has 50.
 RECOMMENDED = '<img class="thmb" data-url="https://webtoon-phinf.pstatic.net/x/other.jpg?type=f160_151">'
-PAGE = ("<div id='_imageList'>"
-        + "".join(f'<img class="_images" data-url="{u}" src="/spinner.gif">' for u in SLICES)
-        + "</div>" + RECOMMENDED)
+PAGE = (
+    "<div id='_imageList'>" + "".join(f'<img class="_images" data-url="{u}" src="/spinner.gif">' for u in SLICES) + "</div>" + RECOMMENDED
+)
 
 
 class _Entry:
@@ -38,11 +39,8 @@ class _Entry:
 
 
 def _inject(body=FEED_BODY, page=PAGE, entry=None):
-    with patch.object(main.lead_image_service, "fetch_source_html_now",
-                      return_value=(LINK, page) if page is not None else None):
-        return main._inject_webtoons_episode_panels(
-            body, entry or _Entry(), "https://www.webtoons.com/feed", FEED_IMG
-        )
+    with patch.object(main.lead_image_service, "fetch_source_html_now", return_value=(LINK, page) if page is not None else None):
+        return main._inject_webtoons_episode_panels(body, entry or _Entry(), "https://www.webtoons.com/feed", FEED_IMG)
 
 
 def _srcs(html_out):
@@ -104,10 +102,7 @@ def test_duplicate_slices_collapse():
 
 
 def test_the_slice_count_is_capped():
-    many = "".join(
-        f'<img class="_images" data-url="https://webtoon-phinf.pstatic.net/d/{i}.jpg">'
-        for i in range(200)
-    )
+    many = "".join(f'<img class="_images" data-url="https://webtoon-phinf.pstatic.net/d/{i}.jpg">' for i in range(200))
     out, _ = _inject(page=many)
     assert len(_srcs(out)) == main._WEBTOONS_MAX_PANELS
 
@@ -136,14 +131,16 @@ def test_stripping_is_linear_on_a_pathological_tag():
     host, so a tag repeating the host backtracked quadratically. Feed HTML is
     attacker-influenced, so this is a real input."""
     import time
-    nasty = '<img ' + ('src="//swebtoon-phinf.pstatic.net/a" ' * 4000) + '>'
+
+    nasty = "<img " + ('src="//swebtoon-phinf.pstatic.net/a" ' * 4000) + ">"
     start = time.monotonic()
     out, _ = _inject(body=nasty)
     assert time.monotonic() - start < 2.0, "stripping must not backtrack"
     # The injected panels are themselves swebtoon URLs, so the check is that
     # nothing of the body survived: exactly the three slices remain.
     assert _srcs(out) == [main._webtoons_public_slice_url(u) for u in SLICES], (
-        "only the three slices survive; the pathological body is gone")
+        "only the three slices survive; the pathological body is gone"
+    )
 
 
 def test_a_src_with_an_html_entity_still_matches_its_host():

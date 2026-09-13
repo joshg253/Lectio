@@ -46,8 +46,8 @@ def test_a_tag_with_no_alias_is_left_alone(env):
     main.create_tag_alias("cpp", "c++", rewrite=False)
 
     assert main.normalize_tag_value("rust") == "rust"
-    assert main.normalize_tag_value("Rust") == "rust"          # still case-normalized
-    assert main.normalize_tag_value("c++") == "c++"            # the canonical side is not re-aliased
+    assert main.normalize_tag_value("Rust") == "rust"  # still case-normalized
+    assert main.normalize_tag_value("c++") == "c++"  # the canonical side is not re-aliased
     assert main.normalize_tag_value("cpp-lang") == "cpp-lang"  # not a prefix match on the alias
 
 
@@ -101,7 +101,7 @@ def test_preview_counts_feed_tags_without_writing(env):
     out = main.tag_alias_preview("cpp", "c++")
     assert out["feed"] == 2
     assert not out["error"]
-    assert main.list_tag_aliases() == []          # preview wrote nothing
+    assert main.list_tag_aliases() == []  # preview wrote nothing
 
 
 def test_create_rewrites_stored_feed_tags(env):

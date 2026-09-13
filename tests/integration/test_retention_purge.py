@@ -3,6 +3,7 @@ the Purge utility (delete posts older than a date from selected folders).
 Both run through _prune_entries: any post carrying a keep signal — starred
 (TODO), manually tagged (filed), or archived (done) — and the Saved Articles feed
 are never deleted; deletes are tombstoned."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -36,18 +37,18 @@ def configured(tmp_path):
         tenancy._layout = saved
 
 
-def _seed(reader, *, entry_id: str, published: datetime, read: bool = False,
-          read_at: datetime | None = None) -> None:
-    reader.add_entry({"feed_url": FEED, "id": entry_id,
-                      "link": f"https://example.test/{entry_id}",
-                      "title": f"Post {entry_id}", "published": published})
+def _seed(reader, *, entry_id: str, published: datetime, read: bool = False, read_at: datetime | None = None) -> None:
+    reader.add_entry(
+        {"feed_url": FEED, "id": entry_id, "link": f"https://example.test/{entry_id}", "title": f"Post {entry_id}", "published": published}
+    )
     if read:
         reader.mark_entry_as_read((FEED, entry_id))
     if read_at is not None:
         with main.get_meta_connection() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?,?,?)",
-                (FEED, entry_id, read_at.isoformat()))
+                (FEED, entry_id, read_at.isoformat()),
+            )
 
 
 def _exists(reader, entry_id: str) -> bool:
@@ -78,10 +79,8 @@ def test_retention_deletes_only_old_read_unprotected(configured):
         for kept in ("fresh-read", "unread", "starred", "tagged"):
             assert _exists(reader, kept), kept
     with main.get_meta_connection() as conn:
-        assert conn.execute("SELECT 1 FROM deleted_entries WHERE feed_url = ? AND entry_id = 'old-read'",
-                            (FEED,)).fetchone()
-        assert not conn.execute("SELECT 1 FROM entry_read_state WHERE feed_url = ? AND entry_id = 'old-read'",
-                                (FEED,)).fetchone()
+        assert conn.execute("SELECT 1 FROM deleted_entries WHERE feed_url = ? AND entry_id = 'old-read'", (FEED,)).fetchone()
+        assert not conn.execute("SELECT 1 FROM entry_read_state WHERE feed_url = ? AND entry_id = 'old-read'", (FEED,)).fetchone()
 
 
 def test_retention_protects_archived_posts(configured):
@@ -94,7 +93,7 @@ def test_retention_protects_archived_posts(configured):
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
         _seed(reader, entry_id="archived", published=OLD, read=True, read_at=LONG_AGO)
-    main.set_entry_archived(FEED, "archived", True)   # note: no star, no tag
+    main.set_entry_archived(FEED, "archived", True)  # note: no star, no tag
 
     assert main._prune_entries([FEED], read_cutoff=datetime.now() - timedelta(days=7)) == 0
     with main.get_reader() as reader:
@@ -115,8 +114,7 @@ def test_retention_never_touches_saved_articles_feed(configured):
     saved_feed = saved_articles_service.SAVED_FEED_URL
     with main.get_reader() as reader:
         saved_articles_service.ensure_saved_feed(reader)
-        reader.add_entry({"feed_url": saved_feed, "id": "https://x.test/a",
-                          "link": "https://x.test/a", "title": "A", "published": OLD})
+        reader.add_entry({"feed_url": saved_feed, "id": "https://x.test/a", "link": "https://x.test/a", "title": "A", "published": OLD})
         reader.mark_entry_as_read((saved_feed, "https://x.test/a"))
     assert main._prune_entries([saved_feed], read_cutoff=datetime.now() + timedelta(days=1)) == 0
 
@@ -141,8 +139,7 @@ def test_tombstone_sweep_drops_only_old_out_of_window_tombstones(configured):
     fresh_ts = datetime.now().isoformat()
     with main.get_meta_connection() as conn:
         for eid, ts in (("old-gone", old_ts), ("old-in-window", old_ts), ("fresh", fresh_ts)):
-            conn.execute("INSERT INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, ?, ?)",
-                         (FEED, eid, ts))
+            conn.execute("INSERT INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, ?, ?)", (FEED, eid, ts))
         # The feed's last parse still carries 'old-in-window' — a quiet channel
         # serving the same posts for years. Its tombstone must survive any age.
         conn.execute("INSERT INTO feed_seen_window (feed_url, entry_id) VALUES (?, 'old-in-window')", (FEED,))
@@ -158,8 +155,7 @@ def test_tombstone_sweep_keeps_everything_for_unknown_windows(configured):
     quiet 304-forever feed) keeps ALL its tombstones regardless of age."""
     old_ts = (datetime.now() - timedelta(days=400)).isoformat()
     with main.get_meta_connection() as conn:
-        conn.execute("INSERT INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, 'ancient', ?)",
-                     (FEED, old_ts))
+        conn.execute("INSERT INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, 'ancient', ?)", (FEED, old_ts))
     main._daily_maintenance_for_user()
     with main.get_meta_connection() as conn:
         assert conn.execute("SELECT 1 FROM deleted_entries WHERE entry_id = 'ancient'").fetchone()
@@ -180,8 +176,7 @@ def test_tombstone_sweep_default_and_disable(configured, monkeypatch):
     monkeypatch.setattr(main, "get_tombstone_sweep_days", lambda: 0)
     old_ts = (datetime.now() - timedelta(days=400)).isoformat()
     with main.get_meta_connection() as conn:
-        conn.execute("INSERT INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, 'ancient', ?)",
-                     (FEED, old_ts))
+        conn.execute("INSERT INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, 'ancient', ?)", (FEED, old_ts))
     main._daily_maintenance_for_user()
     with main.get_meta_connection() as conn:
         assert conn.execute("SELECT 1 FROM deleted_entries WHERE entry_id = 'ancient'").fetchone()
@@ -193,8 +188,7 @@ def test_prune_writes_timestamped_tombstones(configured):
         _seed(reader, entry_id="old-read", published=OLD, read=True, read_at=LONG_AGO)
     main._prune_entries([FEED], read_cutoff=datetime.now() - timedelta(days=7))
     with main.get_meta_connection() as conn:
-        row = conn.execute("SELECT created_at FROM deleted_entries WHERE feed_url = ? AND entry_id = 'old-read'",
-                           (FEED,)).fetchone()
+        row = conn.execute("SELECT created_at FROM deleted_entries WHERE feed_url = ? AND entry_id = 'old-read'", (FEED,)).fetchone()
     assert row is not None and row[0]
 
 
@@ -218,11 +212,9 @@ def test_purge_route_dry_run_and_delete(configured):
     with _purge_client() as c:
         r = c.post("/entries/purge", json={"folder_ids": [fid], "before": "2026-06-01", "dry_run": True})
         assert r.json() == {"ok": True, "count": 1, "dry_run": True}  # read only by default
-        r = c.post("/entries/purge", json={"folder_ids": [fid], "before": "2026-06-01",
-                                           "include_unread": True, "dry_run": True})
+        r = c.post("/entries/purge", json={"folder_ids": [fid], "before": "2026-06-01", "include_unread": True, "dry_run": True})
         assert r.json()["count"] == 2
-        r = c.post("/entries/purge", json={"folder_ids": [fid], "before": "2026-06-01",
-                                           "include_unread": True})
+        r = c.post("/entries/purge", json={"folder_ids": [fid], "before": "2026-06-01", "include_unread": True})
         assert r.json() == {"ok": True, "count": 2, "dry_run": False}
     with main.get_reader() as reader:
         assert not _exists(reader, "ancient-read")

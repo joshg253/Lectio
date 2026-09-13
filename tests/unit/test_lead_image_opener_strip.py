@@ -1,6 +1,7 @@
 """_strip_lead_image_opener dedups the lead image against the article body —
 opener strip, mid-article suppression, artwork hoist, Tumblr size-variant dedup,
 and thumbnail-wrapper stripping. Extracted from get_entry_detail."""
+
 from __future__ import annotations
 
 import main
@@ -27,7 +28,7 @@ def test_hidden_lead_still_strips_the_body_opener():
     content, lead = _strip(f'<p><img src="{LEAD}"></p><p>body</p>', show=False)
     assert LEAD not in (content or "")
     assert "body" in content
-    assert lead == LEAD          # still the thumbnail; only the body copy goes
+    assert lead == LEAD  # still the thumbnail; only the body copy goes
 
 
 def test_hidden_lead_leaves_a_mid_article_occurrence_alone():
@@ -48,8 +49,8 @@ def test_opener_equals_lead_is_stripped(monkeypatch):
     monkeypatch.setattr(main.lead_image_service, "get_feed_strategy", lambda u: ("auto", 0.0, False))
     content, lead = _strip(f'<figure><img src="{LEAD}"></figure><p>real body text</p>')
     assert "real body text" in content
-    assert LEAD not in content        # opener removed from body
-    assert lead == LEAD               # still shown at top
+    assert LEAD not in content  # opener removed from body
+    assert lead == LEAD  # still shown at top
 
 
 def test_thin_post_whose_only_content_is_the_lead_image_keeps_the_body(monkeypatch):
@@ -69,7 +70,7 @@ def test_lead_buried_midarticle_drops_separate_lead(monkeypatch):
     monkeypatch.setattr(main.lead_image_service, "get_feed_strategy", lambda u: ("auto", 0.0, False))
     content, lead = _strip(f'<p>intro paragraph</p><p><img src="{LEAD}"></p><p>more</p>')
     assert lead is None
-    assert LEAD in content            # left in its natural position
+    assert LEAD in content  # left in its natural position
 
 
 def test_artwork_hoists_image_to_top(monkeypatch):
@@ -103,9 +104,7 @@ def test_spacer_only_blocks_and_boundary_breaks_are_dropped():
     as a large empty gap. It was always there — a second image above it filled
     the space, so removing that image is what made it visible.
     """
-    out = main._collapse_block_spacers(
-        '<div><img src="https://x.test/a.png"></div><br/><div><i><br/></i><p>Body text</p></div>'
-    )
+    out = main._collapse_block_spacers('<div><img src="https://x.test/a.png"></div><br/><div><i><br/></i><p>Body text</p></div>')
     assert "<br" not in out
     assert "Body text" in out
     assert 'src="https://x.test/a.png"' in out
@@ -144,8 +143,7 @@ def test_all_spacer_content_collapses_to_none():
 
 
 def test_brs_between_an_image_and_the_next_block_are_dropped():
-    out = main._collapse_block_spacers(
-        '<img src="a.jpg"/><br/><br/><div>commentary</div>')
+    out = main._collapse_block_spacers('<img src="a.jpg"/><br/><br/><div>commentary</div>')
     assert "<br" not in out
     assert '<img src="a.jpg"/>' in out and "commentary" in out
 
@@ -174,7 +172,5 @@ def test_a_br_nested_in_inline_wrappers_between_two_spans_survives():
     immediate parent (the innermost <span>) has no siblings of its own, which
     used to read as "edge of the block" and get it dropped along with its empty
     <i>/<span> wrappers."""
-    html = ('<p><span><strong>Magnavox Odyssey</strong></span>'
-            '<i><span><br/></span></i>'
-            '<span>The console that started it all.</span></p>')
+    html = "<p><span><strong>Magnavox Odyssey</strong></span><i><span><br/></span></i><span>The console that started it all.</span></p>"
     assert main._collapse_block_spacers(html) == html

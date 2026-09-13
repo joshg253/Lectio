@@ -2,6 +2,7 @@
 (starred or manually tagged) — a surviving capture is not itself a keep
 signal, same star-OR-tag rule as every live entry (see
 main._build_orphan_entry_detail / main.get_manual_tags_for_entry)."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -71,8 +72,7 @@ def _svc(archive, meta):
 
 def _add(archive, entry_id, *, status="complete", title="", link="", feed_title="", author=None):
     archive.execute(
-        "INSERT INTO archived_entry (feed_url, entry_id, status, title, link, feed_title, author)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO archived_entry (feed_url, entry_id, status, title, link, feed_title, author) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (FEED, entry_id, status, title, link, feed_title, author),
     )
     archive.commit()
@@ -139,9 +139,7 @@ def test_search_terms_all_must_match(archive, meta):
     _add(archive, "one-only", title="Working with something else")
     _star(meta, "both")
     _star(meta, "one-only")
-    out = _svc(archive, meta).get_orphan_saved_entries(
-        live_feed_urls=set(), search_terms=["working", "powershell"]
-    )
+    out = _svc(archive, meta).get_orphan_saved_entries(live_feed_urls=set(), search_terms=["working", "powershell"])
     assert [o["id"] for o in out] == ["both"]
 
 

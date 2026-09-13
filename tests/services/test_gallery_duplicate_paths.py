@@ -30,9 +30,7 @@ def test_dated_copy_wins_when_it_comes_second():
 
 
 def test_order_varies_within_one_strip():
-    urls = [DATED.format(n=1), BARE.format(n=1),
-            BARE.format(n=2), DATED.format(n=2),
-            BARE.format(n=3), DATED.format(n=3)]
+    urls = [DATED.format(n=1), BARE.format(n=1), BARE.format(n=2), DATED.format(n=2), BARE.format(n=3), DATED.format(n=3)]
     assert _dedupe(urls) == [DATED.format(n=1), DATED.format(n=2), DATED.format(n=3)]
 
 

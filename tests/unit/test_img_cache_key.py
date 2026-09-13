@@ -1,6 +1,7 @@
 """_img_cache_key_url strips per-request signing params so signed-CDN images
 (GitHub private-user-images JWT, wixmp/S3 tokens) stay cache-resident across token
 rotations and keep loading after the original short-lived URL expires."""
+
 from __future__ import annotations
 
 import main

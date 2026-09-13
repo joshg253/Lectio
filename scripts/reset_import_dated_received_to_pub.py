@@ -33,6 +33,7 @@ it; unstarred entries have no saved_at row to touch.
     uv run python scripts/reset_import_dated_received_to_pub.py --date 2026-07-21
     uv run python scripts/reset_import_dated_received_to_pub.py --date 2026-07-21 --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -53,25 +54,29 @@ def _candidates(date: str, starred_only: bool) -> list[dict]:
     with main.get_reader() as reader:
         db = reader._storage.get_db()
         rows = db.execute(
-            "SELECT feed, id, title, published, updated, first_updated, read FROM entries "
-            "WHERE first_updated LIKE ?",
+            "SELECT feed, id, title, published, updated, first_updated, read FROM entries WHERE first_updated LIKE ?",
             (f"{date}%",),
         ).fetchall()
     with main.get_meta_connection() as conn:
-        starred = {(r["feed_url"], r["entry_id"]) for r in conn.execute(
-            "SELECT feed_url, entry_id FROM saved_entries")}
+        starred = {(r["feed_url"], r["entry_id"]) for r in conn.execute("SELECT feed_url, entry_id FROM saved_entries")}
     out = []
     for feed, entry_id, title, published, updated, first_updated, read in rows:
         is_starred = (feed, entry_id) in starred
         if starred_only and not is_starred:
             continue
         source_date = published or updated
-        out.append({
-            "feed": feed, "entry_id": entry_id, "title": title,
-            "source_date": source_date, "source_field": "published" if published else "updated",
-            "first_updated": first_updated,
-            "read": bool(read), "starred": is_starred,
-        })
+        out.append(
+            {
+                "feed": feed,
+                "entry_id": entry_id,
+                "title": title,
+                "source_date": source_date,
+                "source_field": "published" if published else "updated",
+                "first_updated": first_updated,
+                "read": bool(read),
+                "starred": is_starred,
+            }
+        )
     return out
 
 
@@ -82,9 +87,11 @@ def run(uid: str, date: str, apply: bool, starred_only: bool) -> None:
     from_published = [c for c in fixable if c["source_field"] == "published"]
     from_updated = [c for c in fixable if c["source_field"] == "updated"]
     scope = "starred entries" if starred_only else "entries"
-    print(f"[{uid}] {len(candidates)} {scope} with Received={date} "
-          f"({len(from_published)} from Published, {len(from_updated)} from Updated "
-          f"(no Published), {len(no_date)} have neither and are skipped)")
+    print(
+        f"[{uid}] {len(candidates)} {scope} with Received={date} "
+        f"({len(from_published)} from Published, {len(from_updated)} from Updated "
+        f"(no Published), {len(no_date)} have neither and are skipped)"
+    )
     if not fixable:
         return
     if not apply:
@@ -92,8 +99,7 @@ def run(uid: str, date: str, apply: bool, starred_only: bool) -> None:
         return
 
     log = list(fixable)
-    out = tenancy.meta_db_path().parent / (
-        f"reset_received_to_pub_{date}_{datetime.now():%Y%m%d-%H%M%S}.json")
+    out = tenancy.meta_db_path().parent / (f"reset_received_to_pub_{date}_{datetime.now():%Y%m%d-%H%M%S}.json")
     out.write_text(json.dumps(log, indent=2, default=str))
 
     with main.get_reader() as reader:
@@ -113,14 +119,12 @@ def run(uid: str, date: str, apply: bool, starred_only: bool) -> None:
                 stored = src.strftime("%Y-%m-%d %H:%M:%S")
                 with db:
                     db.execute(
-                        "UPDATE entries SET first_updated = ?, recent_sort = ? "
-                        "WHERE feed = ? AND id = ?",
+                        "UPDATE entries SET first_updated = ?, recent_sort = ? WHERE feed = ? AND id = ?",
                         (stored, stored, c["feed"], c["entry_id"]),
                     )
                 if c["starred"]:
                     conn.execute(
-                        "UPDATE saved_entries SET saved_at = ? "
-                        "WHERE feed_url = ? AND entry_id = ?",
+                        "UPDATE saved_entries SET saved_at = ? WHERE feed_url = ? AND entry_id = ?",
                         (stored, c["feed"], c["entry_id"]),
                     )
                 # Committed per-row, matching the reader DB's own `with db:`
@@ -136,15 +140,13 @@ def run(uid: str, date: str, apply: bool, starred_only: bool) -> None:
 
 
 def main_cli() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--date", required=True, help="the stuck Received date, e.g. 2026-07-21")
     ap.add_argument("--apply", action="store_true", help="write (default: dry run)")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
-    ap.add_argument("--starred-only", action="store_true",
-                     help="only touch starred entries (2026-08-30's first, narrower pass)")
+    ap.add_argument("--starred-only", action="store_true", help="only touch starred entries (2026-08-30's first, narrower pass)")
     args = ap.parse_args()
-    for uid in ([args.user] if args.user else main._background_user_ids()):
+    for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
             run(uid, args.date, args.apply, args.starred_only)
     return 0

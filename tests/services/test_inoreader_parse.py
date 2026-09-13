@@ -1,6 +1,7 @@
 """Inoreader export parsing: published-date fallbacks so entries that omit
 <pubDate> still carry a real timestamp (and sort by true age) instead of
 defaulting to import time downstream."""
+
 from __future__ import annotations
 
 from services import inoreader
@@ -49,10 +50,12 @@ def test_folder_name_from_categories_ignores_lowercase_tag_label():
 
 
 def test_folder_name_from_categories_skips_tags_to_find_the_folder():
-    name = inoreader.folder_name_from_categories([
-        {"id": "user/-/label/lessons"},
-        {"id": "user/-/label/Comics & Art"},
-    ])
+    name = inoreader.folder_name_from_categories(
+        [
+            {"id": "user/-/label/lessons"},
+            {"id": "user/-/label/Comics & Art"},
+        ]
+    )
     assert name == "Comics & Art"
 
 
@@ -65,6 +68,7 @@ def test_prefers_non_redirector_link():
     """FeedBurner-era items carry the dead feedproxy URL in one link slot and
     the real article URL in the other — pick whichever isn't a redirector."""
     from services.inoreader import parse_export_json
+
     item = {
         "canonical": [{"href": "http://feedproxy.google.com/~r/Blog/~3/abc/"}],
         "alternate": [{"href": "https://blog.example/real-post", "type": "text/html"}],

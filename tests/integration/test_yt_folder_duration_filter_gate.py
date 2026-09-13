@@ -4,6 +4,7 @@ correct on first paint -- it was originally read from the Settings modal's
 /settings/all fetch, which only happens lazily when Settings is opened, so
 the duration filter silently never activated for anyone who hadn't opened
 Settings first in that session (reported 2026-08-29)."""
+
 from __future__ import annotations
 
 import pytest
@@ -55,9 +56,7 @@ def tenant(tmp_path):
 def test_yt_folder_renders_the_gate_as_active(tenant):
     with main.get_meta_connection() as conn:
         root = main.get_root_folder_id(conn)
-        cur = conn.execute(
-            "INSERT INTO folders (name, parent_id) VALUES (?, ?)", (main.get_yt_folder_name(), root)
-        )
+        cur = conn.execute("INSERT INTO folders (name, parent_id) VALUES (?, ?)", (main.get_yt_folder_name(), root))
         folder_id = cur.lastrowid
         conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (folder_id, FEED))
         conn.commit()
@@ -91,9 +90,7 @@ def test_yt_folder_id_is_stamped_page_wide_for_the_rules_editor(tenant):
     can be scoped correctly without visiting Settings -> YouTube first."""
     with main.get_meta_connection() as conn:
         root = main.get_root_folder_id(conn)
-        cur = conn.execute(
-            "INSERT INTO folders (name, parent_id) VALUES (?, ?)", (main.get_yt_folder_name(), root)
-        )
+        cur = conn.execute("INSERT INTO folders (name, parent_id) VALUES (?, ?)", (main.get_yt_folder_name(), root))
         folder_id = cur.lastrowid
         conn.commit()
     main.invalidate_meta_structure_cache()

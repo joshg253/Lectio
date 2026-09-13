@@ -5,6 +5,7 @@ run two syncs for the same user at once, and reports subscribed artists that
 are no longer watched -- pausing (disable_feed) a newly-unwatched artist's
 feed once, never auto-unsubscribing, and never re-pausing one already reported
 (so a manual re-enable sticks)."""
+
 from __future__ import annotations
 
 import json
@@ -151,9 +152,7 @@ def test_concurrent_sync_is_skipped(configured):
 
 def test_reconcile_reports_unwatched_artists(configured):
     with main.get_meta_connection() as conn:
-        conn.execute(
-            "INSERT INTO deviantart_feeds (id, username, feed_title, created_at) VALUES ('x', 'zoe', 'zoe', 'now')"
-        )
+        conn.execute("INSERT INTO deviantart_feeds (id, username, feed_title, created_at) VALUES ('x', 'zoe', 'zoe', 'now')")
     configured.setattr(deviantart_service, "list_watching", lambda tok, user: ["alice"])
     fake, _ = _fake_create(fail_from=99, retry_after=None)
     configured.setattr(deviantart_service, "create_deviantart_feed", fake)
@@ -168,9 +167,7 @@ def test_reconcile_reports_unwatched_artists(configured):
 
 def test_reconcile_pauses_a_newly_unwatched_artists_feed(configured):
     with main.get_meta_connection() as conn:
-        conn.execute(
-            "INSERT INTO deviantart_feeds (id, username, feed_title, created_at) VALUES ('x', 'zoe', 'zoe', 'now')"
-        )
+        conn.execute("INSERT INTO deviantart_feeds (id, username, feed_title, created_at) VALUES ('x', 'zoe', 'zoe', 'now')")
     configured.setattr(deviantart_service, "list_watching", lambda tok, user: ["alice"])
     fake, _ = _fake_create(fail_from=99, retry_after=None)
     configured.setattr(deviantart_service, "create_deviantart_feed", fake)
@@ -191,21 +188,17 @@ def test_reconcile_does_not_repause_an_already_reported_artist(configured):
     # despite the unwatch. A later sync that still sees zoe as unwatched must
     # not disable it again and undo that choice.
     with main.get_meta_connection() as conn:
-        conn.execute(
-            "INSERT INTO deviantart_feeds (id, username, feed_title, created_at) VALUES ('x', 'zoe', 'zoe', 'now')"
-        )
-        main.set_setting(conn, main.SETTING_DEVIANTART_SYNC_DETAIL,
-                          json.dumps({"failed": [], "unwatched": [{"username": "zoe"}]}))
+        conn.execute("INSERT INTO deviantart_feeds (id, username, feed_title, created_at) VALUES ('x', 'zoe', 'zoe', 'now')")
+        main.set_setting(conn, main.SETTING_DEVIANTART_SYNC_DETAIL, json.dumps({"failed": [], "unwatched": [{"username": "zoe"}]}))
     # The `configured` fixture's get_runtime_setting patch is a blanket
     # lambda key: "me" (fine for the username lookup it exists for), but that
     # also breaks _load_da_sync_detail's read of the sync-detail setting just
     # written above -- override it here to fall through to the real cache for
     # any other key.
     configured.setattr(
-        main, "get_runtime_setting",
-        lambda key, env_fallback="": (
-            "me" if key == main.SETTING_DEVIANTART_USERNAME else (main.get_cached_setting(key) or env_fallback)
-        ),
+        main,
+        "get_runtime_setting",
+        lambda key, env_fallback="": "me" if key == main.SETTING_DEVIANTART_USERNAME else (main.get_cached_setting(key) or env_fallback),
     )
     configured.setattr(deviantart_service, "list_watching", lambda tok, user: ["alice"])
     fake, _ = _fake_create(fail_from=99, retry_after=None)
@@ -271,8 +264,7 @@ def test_gallery_feeds_still_added_without_a_watch_feed(configured):
 
 def _da_deactivated_rows() -> list[str]:
     with main.get_meta_connection() as conn:
-        return [str(r["username"]) for r in
-                conn.execute("SELECT username FROM deviantart_deactivated ORDER BY username").fetchall()]
+        return [str(r["username"]) for r in conn.execute("SELECT username FROM deviantart_deactivated ORDER BY username").fetchall()]
 
 
 def test_deactivated_account_is_parked_not_failed(configured):
@@ -298,10 +290,7 @@ def test_deactivated_account_is_parked_not_failed(configured):
 
 def test_parked_deactivated_is_skipped_on_next_sync(configured):
     with main.get_meta_connection() as conn:
-        conn.execute(
-            "INSERT INTO deviantart_deactivated (username, first_seen_at, last_checked_at)"
-            " VALUES ('gone', 'now', 'now')"
-        )
+        conn.execute("INSERT INTO deviantart_deactivated (username, first_seen_at, last_checked_at) VALUES ('gone', 'now', 'now')")
     configured.setattr(deviantart_service, "list_watching", lambda tok, user: ["alice", "gone"])
     attempted: list[str] = []
 
@@ -320,12 +309,10 @@ def test_parked_deactivated_is_skipped_on_next_sync(configured):
 
 def test_recheck_reactivates_and_subscribes(configured):
     with main.get_meta_connection() as conn:
-        conn.execute(
-            "INSERT INTO deviantart_deactivated (username, first_seen_at, last_checked_at)"
-            " VALUES ('back', 'now', 'now')"
-        )
+        conn.execute("INSERT INTO deviantart_deactivated (username, first_seen_at, last_checked_at) VALUES ('back', 'now', 'now')")
     configured.setattr(
-        deviantart_service, "create_deviantart_feed",
+        deviantart_service,
+        "create_deviantart_feed",
         lambda conn, reader, artist, cid, secret, access_token=None, limit=24: (f"fid-{artist}", f"file:///da/{artist}.xml"),
     )
 
@@ -337,10 +324,7 @@ def test_recheck_reactivates_and_subscribes(configured):
 
 def test_recheck_keeps_still_deactivated(configured):
     with main.get_meta_connection() as conn:
-        conn.execute(
-            "INSERT INTO deviantart_deactivated (username, first_seen_at, last_checked_at)"
-            " VALUES ('stillgone', 'now', 'old')"
-        )
+        conn.execute("INSERT INTO deviantart_deactivated (username, first_seen_at, last_checked_at) VALUES ('stillgone', 'now', 'old')")
 
     def fake(conn, reader, artist, cid, secret, access_token=None, limit=24):
         raise RuntimeError('HTTP 400: {"error_description":"Account is inactive."}')
@@ -356,6 +340,7 @@ def test_recheck_keeps_still_deactivated(configured):
 # ---------------------------------------------------------------------------
 # "Unsubscribe all unwatched" — the batch version of the reconcile report.
 # ---------------------------------------------------------------------------
+
 
 def _add_da_artist_feed(username: str, folder_id: int | None = None) -> str:
     feed_id = f"fid-{username}"
@@ -378,7 +363,8 @@ def _add_da_artist_feed(username: str, folder_id: int | None = None) -> str:
 def _set_unwatched(usernames: list[str]) -> None:
     with main.get_meta_connection() as conn:
         main.set_setting(
-            conn, main.SETTING_DEVIANTART_SYNC_DETAIL,
+            conn,
+            main.SETTING_DEVIANTART_SYNC_DETAIL,
             json.dumps({"failed": [], "unwatched": [{"username": u} for u in usernames]}),
         )
 

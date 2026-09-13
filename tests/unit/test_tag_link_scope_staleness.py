@@ -10,6 +10,7 @@ test harness in this repo, and because the subtle half is *which* variable the
 stamp reads: ``nextFolderId`` is reassigned further down from whichever tree row
 is still lit, so stamping from it would reproduce the very staleness being fixed.
 """
+
 from __future__ import annotations
 
 import re
@@ -21,7 +22,7 @@ APP_JS = (Path(__file__).resolve().parent.parent.parent / "static" / "js" / "app
 def _tag_link_block() -> str:
     """The loop in updateScopeActiveState that maintains the tag links."""
     start = APP_JS.index("for (const tagLink of document.querySelectorAll(")
-    return APP_JS[start:start + 2000]
+    return APP_JS[start : start + 2000]
 
 
 def test_tag_links_are_repointed_on_navigation():

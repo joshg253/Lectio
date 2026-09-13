@@ -1,4 +1,5 @@
 """Tests for the DeviantArt synthetic-feed service."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -17,16 +18,20 @@ def _init_dir(tmp_path):
 
 # --- URL parsing ---
 
-@pytest.mark.parametrize("url, expected", [
-    ("https://backend.deviantart.com/rss.xml?q=gallery:arcipello&type=deviation", "arcipello"),
-    ("https://backend.deviantart.com/rss.xml?q=gallery:red-j&type=deviation", "red-j"),
-    ("https://www.deviantart.com/yuumei", "yuumei"),
-    ("https://www.deviantart.com/koyorin/gallery/all", "koyorin"),
-    ("https://patrickbrown.deviantart.com/", "patrickbrown"),
-    ("https://example.com/feed", None),
-    ("https://www.deviantart.com/settings", None),
-    ("https://backend.deviantart.com/rss.xml?q=tag:cats", None),
-])
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://backend.deviantart.com/rss.xml?q=gallery:arcipello&type=deviation", "arcipello"),
+        ("https://backend.deviantart.com/rss.xml?q=gallery:red-j&type=deviation", "red-j"),
+        ("https://www.deviantart.com/yuumei", "yuumei"),
+        ("https://www.deviantart.com/koyorin/gallery/all", "koyorin"),
+        ("https://patrickbrown.deviantart.com/", "patrickbrown"),
+        ("https://example.com/feed", None),
+        ("https://www.deviantart.com/settings", None),
+        ("https://backend.deviantart.com/rss.xml?q=tag:cats", None),
+    ],
+)
 def test_username_from_url(url, expected):
     assert da.username_from_url(url) == expected
 
@@ -37,6 +42,7 @@ def test_is_deviantart_url():
 
 
 # --- file-url dir-awareness ---
+
 
 def test_feed_id_from_url_roundtrip():
     fid = "abc-123"
@@ -50,6 +56,7 @@ def test_feed_id_from_url_rejects_other_dirs():
 
 
 # --- deviation mapping + RSS ---
+
 
 def test_deviation_to_entry_embeds_image():
     dev = {
@@ -72,8 +79,11 @@ def test_deviation_to_entry_embeds_image():
 
 def test_deviation_to_entry_falls_back_to_thumb():
     dev = {
-        "deviationid": "D2", "url": "https://da/y", "title": "t",
-        "published_time": "x", "thumbs": [{"src": "https://t/small.jpg"}],
+        "deviationid": "D2",
+        "url": "https://da/y",
+        "title": "t",
+        "published_time": "x",
+        "thumbs": [{"src": "https://t/small.jpg"}],
     }
     e = da._deviation_to_entry(dev)
     assert e is not None
@@ -86,15 +96,21 @@ def test_deviation_to_entry_skips_without_id_or_url():
 
 
 def test_generate_rss_xml_structure():
-    e = {"id": "g1", "title": "Title & <stuff>", "entry_url": "https://da/p",
-         "content": "<p>hi</p>", "published_at": "2024-01-01T00:00:00+00:00"}
+    e = {
+        "id": "g1",
+        "title": "Title & <stuff>",
+        "entry_url": "https://da/p",
+        "content": "<p>hi</p>",
+        "published_at": "2024-01-01T00:00:00+00:00",
+    }
     xml = da._generate_rss_xml("Feed", "https://src", [e])
     assert '<?xml version="1.0"' in xml
-    assert "<rss version=\"2.0\">" in xml
+    assert '<rss version="2.0">' in xml
     assert "guid" in xml and "g1" in xml
 
 
 # --- token + gallery fetch (mocked HTTP) ---
+
 
 def _mock_client(responses):
     """responses: list of (status_code, json) returned in order for post/get."""
@@ -171,6 +187,7 @@ def test_fetch_gallery_paginates():
 
 # --- OAuth2 authorization_code (Phase 2) ---
 
+
 def test_generate_pkce_pair():
     v, c = da.generate_pkce_pair()
     assert 43 <= len(v) <= 128
@@ -213,6 +230,7 @@ def test_whoami_returns_username():
 
 # --- rate-limit handling (_request / DeviantArtRateLimited) ---
 
+
 def test_request_raises_rate_limited_after_max_retries(monkeypatch):
     monkeypatch.setattr(da.time, "sleep", lambda *a, **k: None)  # no real backoff
     client = _mock_client([(429, {})] * da._MAX_RETRIES)
@@ -235,6 +253,7 @@ def test_request_returns_after_429_then_success(monkeypatch):
 
 def _da_conn_with_feeds(feed_ids):
     import sqlite3
+
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute(
@@ -249,8 +268,11 @@ def _da_conn_with_feeds(feed_ids):
     )
     for fid in feed_ids:
         # last_synced_at NULL → never synced → always due (see _da_resync_due).
-        conn.execute("INSERT INTO deviantart_feeds (id, username, feed_title, created_at,"
-                     " last_synced_at, source) VALUES (?, 'u', 't', 'now', NULL, 'gallery')", (fid,))
+        conn.execute(
+            "INSERT INTO deviantart_feeds (id, username, feed_title, created_at,"
+            " last_synced_at, source) VALUES (?, 'u', 't', 'now', NULL, 'gallery')",
+            (fid,),
+        )
     return conn
 
 
@@ -270,13 +292,21 @@ def test_refresh_all_stops_on_rate_limit(monkeypatch):
 
 # --- _upsert_entries lead-image seeding ---
 
+
 def test_upsert_entries_seeds_lead_image_sink():
     conn = _da_conn_with_feeds(["FID"])
     sink_calls = []
     da.set_lead_image_sink(lambda *a: sink_calls.append(a))
     try:
-        devs = [{"deviationid": "D1", "url": "https://da/p1", "title": "t1",
-                 "published_time": "1700000000", "content": {"src": "https://img/1.jpg"}}]
+        devs = [
+            {
+                "deviationid": "D1",
+                "url": "https://da/p1",
+                "title": "t1",
+                "published_time": "1700000000",
+                "content": {"src": "https://img/1.jpg"},
+            }
+        ]
         added = da._upsert_entries(conn, "FID", devs)
     finally:
         da.set_lead_image_sink(None)
@@ -289,8 +319,9 @@ def test_upsert_entries_no_sink_when_no_image():
     sink_calls = []
     da.set_lead_image_sink(lambda *a: sink_calls.append(a))
     try:
-        devs = [{"deviationid": "D2", "url": "https://da/p2", "title": "t2",
-                 "published_time": "1700000000"}]  # no content/thumbs -> empty image_src
+        devs = [
+            {"deviationid": "D2", "url": "https://da/p2", "title": "t2", "published_time": "1700000000"}
+        ]  # no content/thumbs -> empty image_src
         added = da._upsert_entries(conn, "FID", devs)
     finally:
         da.set_lead_image_sink(None)
@@ -299,6 +330,7 @@ def test_upsert_entries_no_sink_when_no_image():
 
 
 # --- _post_token: public vs confidential client ---
+
 
 def _token_client(responses):
     """Like _mock_client but every response reports a JSON content-type, which
@@ -380,8 +412,7 @@ def _call_with_json_ct(fn, *args):
 
 
 def test_deviation_to_entry_carries_tags_when_present():
-    dev = {"deviationid": "d1", "url": "https://da/x", "title": "T",
-           "tags": [{"tag_name": "fantasy"}, "landscape"]}
+    dev = {"deviationid": "d1", "url": "https://da/x", "title": "T", "tags": [{"tag_name": "fantasy"}, "landscape"]}
     e = da._deviation_to_entry(dev)
     assert e is not None
     assert e["tags"] == ["fantasy", "landscape"]
@@ -394,27 +425,39 @@ def test_deviation_to_entry_no_tags_field():
 
 
 def test_item_xml_emits_category_per_tag():
-    e = {"id": "d1", "title": "T", "entry_url": "https://da/x", "content": "",
-         "published_at": "2026-07-01T00:00:00+00:00", "tags": ["fantasy"]}
+    e = {
+        "id": "d1",
+        "title": "T",
+        "entry_url": "https://da/x",
+        "content": "",
+        "published_at": "2026-07-01T00:00:00+00:00",
+        "tags": ["fantasy"],
+    }
     assert "<category>fantasy</category>" in da._item_xml(e)
 
 
 def test_item_xml_emits_author_when_present():
-    e = {"id": "d1", "title": "T", "entry_url": "https://da/x", "content": "",
-         "published_at": "2026-07-01T00:00:00+00:00", "author": "someartist"}
+    e = {
+        "id": "d1",
+        "title": "T",
+        "entry_url": "https://da/x",
+        "content": "",
+        "published_at": "2026-07-01T00:00:00+00:00",
+        "author": "someartist",
+    }
     assert "<author>someartist</author>" in da._item_xml(e)
 
 
 def test_item_xml_omits_author_when_absent():
-    e = {"id": "d1", "title": "T", "entry_url": "https://da/x", "content": "",
-         "published_at": "2026-07-01T00:00:00+00:00"}
+    e = {"id": "d1", "title": "T", "entry_url": "https://da/x", "content": "", "published_at": "2026-07-01T00:00:00+00:00"}
     assert "<author>" not in da._item_xml(e)
 
 
 def test_upsert_entries_persists_author():
     conn = _da_conn_with_feeds(["FID"])
-    devs = [{"deviationid": "D1", "url": "https://da/p1", "title": "t1",
-             "published_time": "1700000000", "author": {"username": "someartist"}}]
+    devs = [
+        {"deviationid": "D1", "url": "https://da/p1", "title": "t1", "published_time": "1700000000", "author": {"username": "someartist"}}
+    ]
     da._upsert_entries(conn, "FID", devs)
     row = conn.execute("SELECT author FROM deviantart_entries WHERE deviationid = 'D1'").fetchone()
     assert row["author"] == "someartist"
@@ -422,13 +465,14 @@ def test_upsert_entries_persists_author():
 
 # --- deviation tags via /deviation/metadata ---
 
+
 def test_fetch_deviation_tags_batches_and_maps():
     # 60 ids → two metadata calls of ≤50 (plus the initial token call).
     ids = [f"d{i}" for i in range(60)]
+
     def meta(batch):
-        return {"metadata": [
-            {"deviationid": d, "tags": [{"tag_name": f"tag-{d}"}]} for d in batch
-        ]}
+        return {"metadata": [{"deviationid": d, "tags": [{"tag_name": f"tag-{d}"}]} for d in batch]}
+
     responses = [
         (200, {"access_token": "T", "expires_in": 3600}),
         (200, meta(ids[:50])),
@@ -445,6 +489,7 @@ def test_fetch_deviation_tags_batches_and_maps():
 
 def _tags_conn():
     import sqlite3
+
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute("""CREATE TABLE deviantart_entries (
@@ -455,15 +500,15 @@ def _tags_conn():
         UNIQUE(deviantart_feed_id, deviationid))""")
     for i in range(3):
         conn.execute(
-            "INSERT INTO deviantart_entries (id, deviantart_feed_id, deviationid, title, published_at)"
-            " VALUES (?, 'f1', ?, 't', ?)", (f"row{i}", f"d{i}", f"2026-07-0{i+1}"))
+            "INSERT INTO deviantart_entries (id, deviantart_feed_id, deviationid, title, published_at) VALUES (?, 'f1', ?, 't', ?)",
+            (f"row{i}", f"d{i}", f"2026-07-0{i + 1}"),
+        )
     return conn
 
 
 def test_fetch_and_store_missing_tags_updates_rows_and_marks_checked():
     conn = _tags_conn()
-    with patch.object(da, "fetch_deviation_tags",
-                      return_value={"d2": ["fantasy", "dragon"], "d1": []}) as fetched:
+    with patch.object(da, "fetch_deviation_tags", return_value={"d2": ["fantasy", "dragon"], "d1": []}) as fetched:
         tagged = da.fetch_and_store_missing_tags(conn, "f1", "cid", "sec")
     fetched.assert_called_once()
     assert tagged == 1
@@ -480,10 +525,10 @@ def test_fetch_and_store_missing_tags_updates_rows_and_marks_checked():
 
 def test_fetch_deviation_authors_batches_and_maps():
     ids = [f"d{i}" for i in range(60)]
+
     def meta(batch):
-        return {"metadata": [
-            {"deviationid": d, "author": {"username": f"artist-{d}"}} for d in batch
-        ]}
+        return {"metadata": [{"deviationid": d, "author": {"username": f"artist-{d}"}} for d in batch]}
+
     responses = [
         (200, {"access_token": "T", "expires_in": 3600}),
         (200, meta(ids[:50])),
@@ -498,8 +543,7 @@ def test_fetch_deviation_authors_batches_and_maps():
 
 def test_fetch_and_store_missing_authors_updates_rows_and_marks_checked():
     conn = _tags_conn()
-    with patch.object(da, "fetch_deviation_authors",
-                      return_value={"d2": "artist2", "d1": ""}) as fetched:
+    with patch.object(da, "fetch_deviation_authors", return_value={"d2": "artist2", "d1": ""}) as fetched:
         filled = da.fetch_and_store_missing_authors(conn, "f1", "cid", "sec")
     fetched.assert_called_once()
     assert filled == 1

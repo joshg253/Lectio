@@ -1,6 +1,7 @@
 """Undo for bulk mark-as-read: every bulk mark stamps its batch with one
 shared entry_read_state read_at value; POST /entries/undo-mark-read restores
 exactly that batch to unread within a short window."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -43,8 +44,7 @@ def _seed_feed(n: int = 3) -> None:
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
         for i in range(n):
-            reader.add_entry({"feed_url": FEED, "id": f"e{i}",
-                              "link": f"https://example.test/post-{i}", "title": f"Post {i}"})
+            reader.add_entry({"feed_url": FEED, "id": f"e{i}", "link": f"https://example.test/post-{i}", "title": f"Post {i}"})
 
 
 def test_undo_restores_exactly_the_batch(configured):
@@ -61,16 +61,14 @@ def test_undo_restores_exactly_the_batch(configured):
     with main.get_reader() as reader:
         assert all(reader.get_entry((FEED, f"e{i}")).read is False for i in range(3))
     with main.get_meta_connection() as conn:
-        assert not conn.execute(
-            "SELECT 1 FROM entry_read_state WHERE read_at = ?", (token,)).fetchone()
+        assert not conn.execute("SELECT 1 FROM entry_read_state WHERE read_at = ?", (token,)).fetchone()
 
 
 def test_undo_leaves_other_batches_alone(configured):
     _seed_feed(2)
     _, token1 = main.mark_feeds_as_read({FEED})
     with main.get_reader() as reader:
-        reader.add_entry({"feed_url": FEED, "id": "late",
-                          "link": "https://example.test/late", "title": "Late"})
+        reader.add_entry({"feed_url": FEED, "id": "late", "link": "https://example.test/late", "title": "Late"})
     _, token2 = main.mark_feeds_as_read({FEED})
     assert token1 != token2
     assert token2 is not None
@@ -87,8 +85,7 @@ def test_undo_token_outside_window_refused(configured):
     _seed_feed(1)
     stale = (datetime.now() - timedelta(minutes=30)).isoformat()
     with main.get_meta_connection() as conn:
-        conn.execute("INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?,?,?)",
-                     (FEED, "e0", stale))
+        conn.execute("INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?,?,?)", (FEED, "e0", stale))
     with _client() as c:
         r = c.post("/entries/undo-mark-read", data={"read_at": stale})
     assert r.status_code == 410

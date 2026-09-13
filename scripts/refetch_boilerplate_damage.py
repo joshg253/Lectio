@@ -55,6 +55,7 @@ there is nothing left to write a body back to.
     uv run python scripts/refetch_boilerplate_damage.py --limit 20 --apply
     uv run python scripts/refetch_boilerplate_damage.py --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -89,16 +90,14 @@ def _has_snapshot(keys: list[tuple[str, str]]) -> set[tuple[str, str]]:
         return set()
     try:
         rows = meta.execute(
-            "SELECT feed_url, entry_id FROM entry_content_edits"
-            " WHERE original_content IS NOT NULL AND original_content != ''"
+            "SELECT feed_url, entry_id FROM entry_content_edits WHERE original_content IS NOT NULL AND original_content != ''"
         ).fetchall()
     except sqlite3.OperationalError:
-        return set()          # the table predates nothing here; absent means none
+        return set()  # the table predates nothing here; absent means none
     finally:
         meta.close()
     wanted = set(keys)
     return {(str(f), str(e)) for f, e in rows if (str(f), str(e)) in wanted}
-
 
 
 def _useful_snapshots(keys: set[tuple[str, str]]) -> set[tuple[str, str]]:
@@ -115,16 +114,15 @@ def _useful_snapshots(keys: set[tuple[str, str]]) -> set[tuple[str, str]]:
     """
     if not keys:
         return set()
-    by_feed: dict[str, dict[str, list[str]]] = collections.defaultdict(
-        lambda: collections.defaultdict(list))
+    by_feed: dict[str, dict[str, list[str]]] = collections.defaultdict(lambda: collections.defaultdict(list))
     fingerprint = main.starred_archive_service.extraction_fingerprint
     meta = sqlite3.connect(str(tenancy.meta_db_path()))
     meta.row_factory = sqlite3.Row
     try:
         for feed_url, entry_id in keys:
             row = meta.execute(
-                "SELECT original_content FROM entry_content_edits"
-                " WHERE feed_url = ? AND entry_id = ?", (feed_url, entry_id)).fetchone()
+                "SELECT original_content FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?", (feed_url, entry_id)
+            ).fetchone()
             if not row or not row["original_content"]:
                 continue
             raw = str(row["original_content"])
@@ -164,26 +162,24 @@ def targets(only_feed: str | None) -> tuple[list[tuple[str, str, str]], dict[str
     # alone, the next run would spend ~90 network re-fetches re-repairing entries
     # that are already fine. An entry whose CURRENT body is unique on its feed is
     # not damaged, whatever the archive still says.
-    _sharing, _bodied = main.starred_archive_service.body_text_sharing_state(
-        list(victims), min_chars=_MIN_EXTRACTION_CHARS)
+    _sharing, _bodied = main.starred_archive_service.body_text_sharing_state(list(victims), min_chars=_MIN_EXTRACTION_CHARS)
     already_fixed = _bodied - _sharing
     victims = [k for k in victims if k not in already_fixed]
 
     # Only a snapshot that is not itself boilerplate is worth diverting to the
     # revert script; the rest still want the network.
     restorable = _useful_snapshots(_has_snapshot(victims))
-    skipped = {"has_snapshot": 0, "entry_gone": 0, "no_http_link": 0,
-               "already_repaired": len(already_fixed)}
+    skipped = {"has_snapshot": 0, "entry_gone": 0, "no_http_link": 0, "already_repaired": len(already_fixed)}
 
     rows: list[tuple[str, str, str]] = []
     with main.get_reader() as reader:
         for feed_url, entry_id in victims:
             if (feed_url, entry_id) in restorable:
-                skipped["has_snapshot"] += 1      # the revert script's job, not ours
+                skipped["has_snapshot"] += 1  # the revert script's job, not ours
                 continue
             entry = reader.get_entry((feed_url, entry_id), None)
             if entry is None:
-                skipped["entry_gone"] += 1        # archive row outlived the entry
+                skipped["entry_gone"] += 1  # archive row outlived the entry
                 continue
             link = str(getattr(entry, "link", "") or "") or entry_id
             if not link.startswith(("http://", "https://")):
@@ -197,14 +193,15 @@ def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None
     rows, skipped = targets(only_feed)
     total_skipped = sum(skipped.values())
     scope = only_feed or "every feed"
-    print(f"[{uid}] {len(rows) + total_skipped:,} entr(ies) hold a sibling-shared "
-          f"extraction in {scope}")
-    print(f"      {skipped['has_snapshot']:,} have a snapshot worth restoring — run "
-          "scripts/revert_boilerplate_refetches.py for those, it needs no network")
-    print(f"      {skipped['already_repaired']:,} already hold unique text — repaired by an "
-          "earlier run; the archive just has not caught up")
-    print(f"      {skipped['entry_gone']:,} no longer exist in the reader; "
-          f"{skipped['no_http_link']:,} have no http(s) link")
+    print(f"[{uid}] {len(rows) + total_skipped:,} entr(ies) hold a sibling-shared extraction in {scope}")
+    print(
+        f"      {skipped['has_snapshot']:,} have a snapshot worth restoring — run "
+        "scripts/revert_boilerplate_refetches.py for those, it needs no network"
+    )
+    print(
+        f"      {skipped['already_repaired']:,} already hold unique text — repaired by an earlier run; the archive just has not caught up"
+    )
+    print(f"      {skipped['entry_gone']:,} no longer exist in the reader; {skipped['no_http_link']:,} have no http(s) link")
     print(f"      {len(rows):,} can be re-fetched")
     if not rows:
         return
@@ -214,9 +211,11 @@ def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None
         ordered = ordered[:limit]
     hosts = Counter(refetch_batch.host_of(link) for _f, _e, link in ordered)
     est = refetch_batch.estimate_seconds(ordered) / 60
-    print(f"      pacing: {refetch_batch.GLOBAL_DELAY}s global, "
-          f"{refetch_batch.PER_HOST_DELAY}s per host across {len(hosts)} host(s) — "
-          f"roughly {est:.0f} min for {len(ordered):,}")
+    print(
+        f"      pacing: {refetch_batch.GLOBAL_DELAY}s global, "
+        f"{refetch_batch.PER_HOST_DELAY}s per host across {len(hosts)} host(s) — "
+        f"roughly {est:.0f} min for {len(ordered):,}"
+    )
     for host, count in hosts.most_common(6):
         print(f"         {count:>4}  {host}")
 
@@ -229,9 +228,11 @@ def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None
         return
 
     def progress(i: int, total: int, stats: dict[str, int]) -> None:
-        print(f"   {i:>5}/{total}  recovered={stats['ok']} archive={stats['archive']} "
-              f"refused={stats['mismatch']} dead={stats['dead']} failed={stats['failed']}",
-              flush=True)
+        print(
+            f"   {i:>5}/{total}  recovered={stats['ok']} archive={stats['archive']} "
+            f"refused={stats['mismatch']} dead={stats['dead']} failed={stats['failed']}",
+            flush=True,
+        )
 
     # Start with no in-run memory, so a previous run's allowances cannot refuse
     # a legitimate write here.
@@ -245,10 +246,12 @@ def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None
 
     out = tenancy.meta_db_path().parent / f"refetch_boilerplate_{datetime.now():%Y%m%d-%H%M%S}.json"
     out.write_text(json.dumps(log, indent=2))
-    print(f"\n[{uid}] recovered {stats['ok']:,} (+{stats['archive']:,} from the archive) | "
-          f"still boilerplate or a different article, left alone {stats['mismatch']:,} | "
-          f"page gone {stats['dead']:,} | failed {stats['failed']:,} | "
-          f"host dropped {stats['skipped_host']:,}")
+    print(
+        f"\n[{uid}] recovered {stats['ok']:,} (+{stats['archive']:,} from the archive) | "
+        f"still boilerplate or a different article, left alone {stats['mismatch']:,} | "
+        f"page gone {stats['dead']:,} | failed {stats['failed']:,} | "
+        f"host dropped {stats['skipped_host']:,}"
+    )
     print(f"      log: {out}")
 
     # Verify the run's own output. "recovered" only means a write was allowed at
@@ -258,11 +261,12 @@ def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None
     # afterwards. A repair that cannot audit itself is not finished.
     written = [(r["feed_url"], r["entry_id"]) for r in log if r.get("ok")]
     if written:
-        bad = sorted(main.starred_archive_service.body_text_sharing_state(
-            written, min_chars=_MIN_EXTRACTION_CHARS)[0])
-        print(f"\n      verification: of {len(written):,} rewritten, "
-              f"{len(written) - len(bad):,} hold text unique on their feed, "
-              f"{len(bad):,} still share text with a sibling.")
+        bad = sorted(main.starred_archive_service.body_text_sharing_state(written, min_chars=_MIN_EXTRACTION_CHARS)[0])
+        print(
+            f"\n      verification: of {len(written):,} rewritten, "
+            f"{len(written) - len(bad):,} hold text unique on their feed, "
+            f"{len(bad):,} still share text with a sibling."
+        )
         if bad:
             print("      Those are NOT repaired — the page gave boilerplate again.")
             for _feed_url, entry_id in bad[:5]:
@@ -277,15 +281,14 @@ def run(uid: str, only_feed: str | None, apply: bool, limit: int | None) -> None
 
 
 def main_cli() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="write (default: dry run)")
     ap.add_argument("--feed", default=None, help="restrict to one feed URL")
     ap.add_argument("--limit", type=int, default=None, help="stop after N articles")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
     args = ap.parse_args()
 
-    for uid in ([args.user] if args.user else main._background_user_ids()):
+    for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
             run(uid, args.feed, args.apply, args.limit)
     return 0

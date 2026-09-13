@@ -1,5 +1,6 @@
 """The /thumb negative cache short-circuits recently-failed image fetches so a
 folder full of server-blocked images doesn't re-hit every dead host per page load."""
+
 from __future__ import annotations
 
 import time

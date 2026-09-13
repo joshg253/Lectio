@@ -9,6 +9,7 @@ exposes no remaining-quota read — only a 429 + ``Retry-After`` when exceeded. 
 app layer keeps its own sliding-window tally of the calls billed through ``_bill`` and
 surfaces it as a usage meter, the way the YouTube integration meters daily quota.
 """
+
 from __future__ import annotations
 
 from urllib.parse import urlencode
@@ -69,23 +70,29 @@ def _post_token(payload: dict, what: str) -> dict:
 
 def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: str) -> dict:
     """Exchange an authorization code for access + refresh tokens."""
-    return _post_token({
-        "grant_type": "authorization_code",
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "code": code,
-        "redirect_uri": redirect_uri,
-    }, "token exchange")
+    return _post_token(
+        {
+            "grant_type": "authorization_code",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": code,
+            "redirect_uri": redirect_uri,
+        },
+        "token exchange",
+    )
 
 
 def refresh_access_token(client_id: str, client_secret: str, refresh_token: str) -> dict:
     """Refresh an expired access token."""
-    return _post_token({
-        "grant_type": "refresh_token",
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "refresh_token": refresh_token,
-    }, "token refresh")
+    return _post_token(
+        {
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+        },
+        "token refresh",
+    )
 
 
 def _auth_headers(access_token: str) -> dict:
@@ -98,7 +105,7 @@ def _raise_for_status(resp: httpx.Response, what: str) -> None:
     if resp.status_code == 429:
         try:
             retry_after = int(resp.headers.get("Retry-After", "0") or "0")
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             retry_after = 0
         raise QuireRateLimited(f"{what}: Quire rate limit hit", retry_after)
     raise RuntimeError(f"{what} failed: HTTP {resp.status_code}: {resp.text[:300]}")
@@ -112,11 +119,13 @@ def list_projects(access_token: str) -> list[dict]:
     _bill(1)
     out: list[dict] = []
     for item in resp.json() or []:
-        out.append({
-            "id": item.get("id", ""),
-            "oid": item.get("oid", ""),
-            "name": item.get("name", ""),
-        })
+        out.append(
+            {
+                "id": item.get("id", ""),
+                "oid": item.get("oid", ""),
+                "name": item.get("name", ""),
+            }
+        )
     return out
 
 

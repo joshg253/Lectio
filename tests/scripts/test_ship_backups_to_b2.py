@@ -93,6 +93,7 @@ def test_main_reports_missing_rclone_binary(tmp_path: Path, monkeypatch: pytest.
 # optional. Pruning only ever runs after a successful ship (never before), so a
 # failed upload can't leave zero backups on the remote.
 
+
 def test_remote_generations_lists_dirs_newest_first(monkeypatch: pytest.MonkeyPatch):
     def fake_run(cmd, env, capture_output, text):
         assert cmd == ["rclone", "lsf", "lectiob2:my-bucket/backups", "--dirs-only"]
@@ -106,8 +107,9 @@ def test_remote_generations_lists_dirs_newest_first(monkeypatch: pytest.MonkeyPa
 
 
 def test_remote_generations_returns_empty_on_listing_failure(monkeypatch: pytest.MonkeyPatch, capsys):
-    monkeypatch.setattr(subprocess, "run", lambda cmd, env, capture_output, text:
-                         subprocess.CompletedProcess(cmd, 1, stdout="", stderr="bucket not found"))
+    monkeypatch.setattr(
+        subprocess, "run", lambda cmd, env, capture_output, text: subprocess.CompletedProcess(cmd, 1, stdout="", stderr="bucket not found")
+    )
 
     stamps = ship_backups_to_b2.remote_generations("my-bucket", "key-id", "secret")
 

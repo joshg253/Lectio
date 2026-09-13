@@ -1,5 +1,6 @@
 """Tests for _compare_one_feed's title decoding (used by the Add-Feed picker
 and the duplicate-scan Compare/Combine flow's live feed comparison)."""
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -53,8 +54,7 @@ def test_atom_double_encoded_title_is_fully_decoded(monkeypatch):
 
 
 def test_json_feed_double_encoded_title_is_fully_decoded(monkeypatch):
-    body = '{"version": "https://jsonfeed.org/version/1", "title": "Test", ' \
-           '"items": [{"id": "1", "title": "Ocean&#8217;s Dream"}]}'
+    body = '{"version": "https://jsonfeed.org/version/1", "title": "Test", "items": [{"id": "1", "title": "Ocean&#8217;s Dream"}]}'
     _stub_fetch(monkeypatch, _FakeResponse(body, "application/feed+json"))
     result = main._compare_one_feed("https://example.test/feed.json")
     assert result["sample_title"] == "Ocean’s Dream"

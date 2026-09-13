@@ -53,10 +53,7 @@ DEFAULT_REFUSAL_STATUSES = frozenset({403, 415, 429, 503})
 # preemptively. Page-shaped Accept (vs the feed-shaped one in reader_api.py) —
 # some WAFs sniff Sec-Fetch-*/Accept-Language, not just the UA.
 _DEFAULT_BROWSER_HEADERS: Mapping[str, str] = {
-    "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
     "Accept": "text/html,application/xhtml+xml,application/rss+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Sec-Fetch-Dest": "document",
@@ -209,9 +206,7 @@ class HostEscalationState:
             return {}
         return dict(st.cookies)
 
-    def record_cookies(
-        self, uid: str, host: str, cookies: tuple[tuple[str, str, float | None], ...], *, now: float
-    ) -> None:
+    def record_cookies(self, uid: str, host: str, cookies: tuple[tuple[str, str, float | None], ...], *, now: float) -> None:
         if not cookies:
             return
         with self._lock:
@@ -478,7 +473,13 @@ class PageFetcher:
         return self._attempt_httpx(tier, url, headers=headers, proxy=proxy, timeout=timeout, cookies=cookies)
 
     def _attempt_httpx(
-        self, tier: FetchTier, url: str, *, headers: Mapping[str, str], proxy: str | None, timeout: float,
+        self,
+        tier: FetchTier,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        proxy: str | None,
+        timeout: float,
         cookies: Mapping[str, str] | None = None,
     ) -> _Attempt:
         client_kwargs: dict[str, object] = {"timeout": timeout, "headers": dict(headers)}
@@ -500,8 +501,13 @@ class PageFetcher:
                 if fallback is not None:
                     html_text, final_url, resp_headers = fallback
                     return _Attempt(
-                        tier=tier, status=200, html=html_text, final_url=final_url,
-                        headers=resp_headers, response=httpx.Response(status_code=200), error=None,
+                        tier=tier,
+                        status=200,
+                        html=html_text,
+                        final_url=final_url,
+                        headers=resp_headers,
+                        response=httpx.Response(status_code=200),
+                        error=None,
                     )
             return _Attempt(tier=tier, status=None, html=None, final_url=url, headers={}, response=None, error=exc)
         except httpx.HTTPError as exc:
@@ -553,7 +559,12 @@ class PageFetcher:
         acquire_timeout = self._flaresolverr_max_timeout_ms / 1000.0
         if not self._flaresolverr_semaphore.acquire(timeout=acquire_timeout):
             return _Attempt(
-                tier="flaresolverr", status=None, html=None, final_url=url, headers={}, response=None,
+                tier="flaresolverr",
+                status=None,
+                html=None,
+                final_url=url,
+                headers={},
+                response=None,
                 error=TimeoutError("flaresolverr: busy, timed out waiting for the shared solve slot"),
             )
         try:
@@ -571,8 +582,13 @@ class PageFetcher:
             self._flaresolverr_semaphore.release()
         status = solution.status if solution.status is not None else 502
         return _Attempt(
-            tier="flaresolverr", status=status, html=solution.html, final_url=solution.url,
-            headers={}, response=httpx.Response(status_code=status), error=None,
+            tier="flaresolverr",
+            status=status,
+            html=solution.html,
+            final_url=solution.url,
+            headers={},
+            response=httpx.Response(status_code=status),
+            error=None,
             cookies=solution.cookies,
         )
 
@@ -583,6 +599,11 @@ def _attempt_from_response(tier: FetchTier, response: httpx.Response) -> _Attemp
     except Exception:
         html_text = ""
     return _Attempt(
-        tier=tier, status=response.status_code, html=html_text, final_url=str(response.url),
-        headers=response.headers, response=response, error=None,
+        tier=tier,
+        status=response.status_code,
+        html=html_text,
+        final_url=str(response.url),
+        headers=response.headers,
+        response=response,
+        error=None,
     )

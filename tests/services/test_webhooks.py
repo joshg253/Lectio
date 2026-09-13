@@ -1,4 +1,5 @@
 """Unit tests for outbound webhook payload building and SSRF-guarded delivery."""
+
 from __future__ import annotations
 
 import httpx
@@ -41,6 +42,7 @@ def test_unknown_format_falls_back_to_generic():
 def test_send_webhook_rejects_unsafe_url(monkeypatch):
     def _reject(_u):
         raise webhooks.UnsafeURLError(_u)
+
     monkeypatch.setattr(webhooks, "ensure_safe_outbound_url", _reject)
     ok, err = webhooks.send_webhook("http://169.254.169.254/latest/meta-data", {"x": 1})
     assert ok is False

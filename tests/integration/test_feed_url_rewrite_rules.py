@@ -5,6 +5,7 @@ channel <link>, or the host most posts link to), so an author's older dead
 domain with no surviving entries had no way into `feed_url_rewrites` at all.
 These routes are that way in: add, list (via the properties payload), remove.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -30,14 +31,22 @@ def configured(tmp_path):
     main.ensure_meta_schema()
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
-        reader.add_entry({
-            "feed_url": FEED, "id": "https://sadh.life/post/old/",
-            "link": "https://sadh.life/post/old/", "title": "on the dead domain",
-        })
-        reader.add_entry({
-            "feed_url": FEED, "id": "https://tush.ar/post/new/",
-            "link": "https://tush.ar/post/new/", "title": "on the live domain",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "https://sadh.life/post/old/",
+                "link": "https://sadh.life/post/old/",
+                "title": "on the dead domain",
+            }
+        )
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "https://tush.ar/post/new/",
+                "link": "https://tush.ar/post/new/",
+                "title": "on the live domain",
+            }
+        )
         db = reader._storage.get_db()
         db.execute("UPDATE feeds SET link = ? WHERE url = ?", ("https://tush.ar/", FEED))
         db.commit()
@@ -81,12 +90,15 @@ def test_add_alias_for_a_domain_with_no_entries(configured):
     assert ("tushar.bio", "tush.ar") in _rules()
 
 
-@pytest.mark.parametrize("raw,expected", [
-    ("https://tushar.bio/", "tushar.bio"),
-    ("http://www.tushar.bio", "tushar.bio"),
-    ("  TUSHAR.BIO  ", "tushar.bio"),
-    ("tushar.bio:8080", "tushar.bio"),
-])
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("https://tushar.bio/", "tushar.bio"),
+        ("http://www.tushar.bio", "tushar.bio"),
+        ("  TUSHAR.BIO  ", "tushar.bio"),
+        ("tushar.bio:8080", "tushar.bio"),
+    ],
+)
 def test_add_alias_accepts_pasted_urls(configured, raw, expected):
     """Users copy what's in the address bar, so a full URL has to work as
     readily as a bare host — and `www.` is dropped to match how
@@ -130,9 +142,14 @@ def test_add_alias_rejects_unknown_feed(configured):
 
 def test_explicit_to_host_overrides_the_website(configured):
     with _client() as c:
-        r = c.post("/feeds/url-rewrites", data={
-            "feed_url": FEED, "from_host": "sadh.life", "to_host": "https://elsewhere.test/",
-        })
+        r = c.post(
+            "/feeds/url-rewrites",
+            data={
+                "feed_url": FEED,
+                "from_host": "sadh.life",
+                "to_host": "https://elsewhere.test/",
+            },
+        )
     assert r.json()["to_host"] == "elsewhere.test"
 
 

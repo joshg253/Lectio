@@ -75,7 +75,7 @@ class LeadImageService:
     # article icon/hero as raw inline SVG rather than an <img>.
     _INLINE_SVG_RE = re.compile(r"<svg\b[^>]*>.*?</svg\s*>", re.IGNORECASE | re.DOTALL)
     _IMG_ATTR_RE = re.compile(
-        r'([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*'
+        r"([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*"
         r'(?:"([^"]*)"'
         r"|'([^']*)'"
         r'|([^\s"\'`=<>]+))'
@@ -117,9 +117,7 @@ class LeadImageService:
     )
     # BBCode [img]...[/img] found in some feed content (e.g. Nexus Mods).  Only
     # the img tag is converted here — enough for inline image extraction.
-    _BBCODE_IMG_RE = re.compile(
-        r'\[img(?:=[^\]]*)?](https?://[^\[]{1,500})\[/img]', re.IGNORECASE
-    )
+    _BBCODE_IMG_RE = re.compile(r"\[img(?:=[^\]]*)?](https?://[^\[]{1,500})\[/img]", re.IGNORECASE)
 
     @classmethod
     def _bbcode_img_to_html(cls, text: str) -> str:
@@ -146,6 +144,7 @@ class LeadImageService:
         if "<img" in text.lower():
             return text
         return cls._BARE_IMG_URL_RE.sub(r'<img src="\1">', text)
+
     # The bare-"logo" lookahead permits letters only (compound words like
     # "imdblogo" stay content) but NOT digits: sites version their wordmark as
     # logo2.png / logo2026.png (questionablecontent's New-Year rename slipped
@@ -324,25 +323,53 @@ class LeadImageService:
     _BLOGGER_PROXY_RE = re.compile(r"googleusercontent\.com/blogger_img_proxy/", re.I)
 
     _SOCIAL_ICON_NAMES = (
-        "bsky", "bluesky", "twitter", "tweet", "facebook", "fb", "instagram",
-        "mastodon", "linkedin", "youtube", "reddit", "tumblr", "pinterest",
-        "telegram", "whatsapp", "discord", "threads", "tiktok", "github",
-        "rss", "feed", "email", "mailto", "share", "vimeo", "flickr", "twitch",
-        "patreon", "kofi", "ko-fi", "substack", "signal", "snapchat", "x",
+        "bsky",
+        "bluesky",
+        "twitter",
+        "tweet",
+        "facebook",
+        "fb",
+        "instagram",
+        "mastodon",
+        "linkedin",
+        "youtube",
+        "reddit",
+        "tumblr",
+        "pinterest",
+        "telegram",
+        "whatsapp",
+        "discord",
+        "threads",
+        "tiktok",
+        "github",
+        "rss",
+        "feed",
+        "email",
+        "mailto",
+        "share",
+        "vimeo",
+        "flickr",
+        "twitch",
+        "patreon",
+        "kofi",
+        "ko-fi",
+        "substack",
+        "signal",
+        "snapchat",
+        "x",
     )
     # Ad-server URLs. Once the social row is stripped from an image-less post, the
     # next best-scoring "picture" is whatever the ad slots render — accu.org served
     # ads.accu.org/www/delivery/avw.php. Matched by host prefix and by the Revive/
     # OpenX delivery-script shape, which is what self-hosted ad servers look like.
-    _AD_HOST_RE = re.compile(
-        r"^(?:ads?|adserver|adservice|banners?|promo)\d*\.", re.IGNORECASE)
+    _AD_HOST_RE = re.compile(r"^(?:ads?|adserver|adservice|banners?|promo)\d*\.", re.IGNORECASE)
     _AD_NETWORK_HOST_RE = re.compile(
         r"(?:^|\.)(?:doubleclick\.net|googlesyndication\.com|googleadservices\.com|"
         r"adnxs\.com|taboola\.com|outbrain\.com|criteo\.(?:com|net)|"
-        r"zedo\.com|openx\.net|pubmatic\.com|rubiconproject\.com)$", re.IGNORECASE)
-    _AD_PATH_RE = re.compile(
-        r"/(?:www/)?delivery/[a-z]+\.php|/(?:adserver|adframe|ad_?frame|banner(?:s|ad)?)/",
-        re.IGNORECASE)
+        r"zedo\.com|openx\.net|pubmatic\.com|rubiconproject\.com)$",
+        re.IGNORECASE,
+    )
+    _AD_PATH_RE = re.compile(r"/(?:www/)?delivery/[a-z]+\.php|/(?:adserver|adframe|ad_?frame|banner(?:s|ad)?)/", re.IGNORECASE)
     # Ad-slot names publishers put in the FILENAME. decibelmagazine.com uploads
     # its house ads to wp-content like any other image, so host and path say
     # nothing — "…-hero-superbanner.gif", "…-content-banner.jpg" do.
@@ -354,14 +381,30 @@ class LeadImageService:
     _AD_SLOT_NAME_RE = re.compile(
         r"superbanner|leaderboard|skyscraper|halfpage|billboard|"
         r"\bmpu\b|sponsored|advertisement|house[-_]?ad|ad[-_]?banner",
-        re.IGNORECASE)
+        re.IGNORECASE,
+    )
     # IAB standard ad sizes. An image at exactly one of these is a slot fill, not
     # a photograph — 728x90 is the leaderboard decibelmagazine served mid-article.
-    _AD_DIMENSIONS = frozenset({
-        (728, 90), (970, 250), (970, 90), (300, 250), (336, 280), (300, 600),
-        (160, 600), (120, 600), (320, 50), (320, 100), (468, 60), (234, 60),
-        (250, 250), (200, 200), (180, 150), (125, 125),
-    })
+    _AD_DIMENSIONS = frozenset(
+        {
+            (728, 90),
+            (970, 250),
+            (970, 90),
+            (300, 250),
+            (336, 280),
+            (300, 600),
+            (160, 600),
+            (120, 600),
+            (320, 50),
+            (320, 100),
+            (468, 60),
+            (234, 60),
+            (250, 250),
+            (200, 200),
+            (180, 150),
+            (125, 125),
+        }
+    )
 
     @classmethod
     def is_ad_dimension(cls, width: object, height: object) -> bool:
@@ -370,7 +413,7 @@ class LeadImageService:
             # page's markup gave them (str, int, None, garbage), and int()'s
             # own TypeError/ValueError is exactly the validation this needs.
             return (int(width), int(height)) in cls._AD_DIMENSIONS  # ty: ignore[invalid-argument-type]
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
     @classmethod
@@ -464,8 +507,7 @@ class LeadImageService:
     # …/the-third-round/downloads/cover.jpg is a perfectly good 1400x2100 JPEG,
     # and "round" was matching in a *directory* segment that is a book title.
     # Same class of false positive the "profile" guard above already documents.
-    _ROUND_AVATAR_FILENAME_RE = re.compile(
-        r"(?<![a-zA-Z0-9])round(?![a-zA-Z0-9])", re.IGNORECASE)
+    _ROUND_AVATAR_FILENAME_RE = re.compile(r"(?<![a-zA-Z0-9])round(?![a-zA-Z0-9])", re.IGNORECASE)
 
     @classmethod
     def _looks_like_avatar_url(cls, url_or_path: str) -> bool:
@@ -475,12 +517,19 @@ class LeadImageService:
             return True
         filename = (url_or_path or "").split("?")[0].rstrip("/").rsplit("/", 1)[-1]
         return bool(cls._ROUND_AVATAR_FILENAME_RE.search(filename))
+
     # Code-forge avatar URLs are a single user segment + .png on the forge host
     # (e.g. github.com/octocat.png, gitea.com/delvh.png) — profile pictures, not
     # article images. Repo/asset paths have more segments and don't match.
-    _FORGE_AVATAR_HOSTS = frozenset({
-        "github.com", "www.github.com", "gitea.com", "gitlab.com", "codeberg.org",
-    })
+    _FORGE_AVATAR_HOSTS = frozenset(
+        {
+            "github.com",
+            "www.github.com",
+            "gitea.com",
+            "gitlab.com",
+            "codeberg.org",
+        }
+    )
     _FORGE_AVATAR_PATH_RE = re.compile(r"^/[^/]+\.png$", re.IGNORECASE)
 
     @classmethod
@@ -494,6 +543,7 @@ class LeadImageService:
             return False
         stem = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
         return bool(stem) and bool(cls._SOCIAL_ICON_STEM_RE.match(stem))
+
     # Detects class attributes on surrounding HTML elements that mark author/bio/speaker sections.
     # Used by _extract_preferred_source_image_data to skip headshot images.
     _AUTHOR_CONTEXT_RE = re.compile(
@@ -506,7 +556,7 @@ class LeadImageService:
         r'class=["\'][^"\']*(?:\bbranding\b|\bsite-logo\b|\bsite-header\b|\bsite-name\b|\bsubscribe-dropdown\b|\brelated-content\b|\brelated-posts\b|\brecent-posts\b|\bmobile-banner\b|\bcomic-navigation\b|\bnav-links\b'
         # Nav menus and dropdowns (e.g. krita.org's language-picker icon) and
         # CMS sidebar/footer widgets (e.g. Blogger's "Powered By Blogger" button).
-        r'|\bnavbar\b|\bnav-item\b|\bnav-link\b|\bdropdown-toggle\b|\bwidget\b)'
+        r"|\bnavbar\b|\bnav-item\b|\bnav-link\b|\bdropdown-toggle\b|\bwidget\b)"
         # An image inside a link to a support/social platform is that
         # platform's badge, not article content (meetingcpp.com's topbar wraps
         # meetup.png / patreon.png in such anchors) — matches the enclosing
@@ -518,20 +568,20 @@ class LeadImageService:
     # The per-image site-chrome check only looks ~500 chars back, so images deep
     # in a long related list escape it; stripping the whole container is reliable.
     _RELATED_BLOCK_OPEN_RE = re.compile(
-        r'<(div|section|aside|nav|ul|article)\b[^>]*'
+        r"<(div|section|aside|nav|ul|article)\b[^>]*"
         r'(?:\bclass=["\'][^"\']*'
-        r'(?:related[-_]content|related[-_]posts|recent[-_]posts|more[-_]posts|'
-        r'you[-_]might|you[-_]may|see[-_]also|read[-_]next|post[-_]nav|'
+        r"(?:related[-_]content|related[-_]posts|recent[-_]posts|more[-_]posts|"
+        r"you[-_]might|you[-_]may|see[-_]also|read[-_]next|post[-_]nav|"
         # c-sharpcorner renders a "Recommended Videos" widget (class
         # "videos-section" wrapping a "videoList" <ul>) whose thumbnails are
         # OTHER articles' video stills. With no real og:image on the page these
         # would otherwise win the body scan and show a sibling post's image.
-        r'videos?[-_]section|recommended[-_]?videos|'
+        r"videos?[-_]section|recommended[-_]?videos|"
         # WordPress "Megaphone" podcast theme (e.g. se-radio.net): the
         # recent/related-episode widget is `megaphone-items megaphone-posts`,
         # whose thumbnails belong to OTHER episodes. The article's own featured
         # image lives in `megaphone-section`, which does NOT match these tokens.
-        r'megaphone[-_]posts|megaphone[-_]items|'
+        r"megaphone[-_]posts|megaphone[-_]items|"
         # WordPress block-theme Query Loop (`wp-block-query`): a list of OTHER
         # posts (featured/recent/related grids) embedded on a single-post page,
         # each carrying a `wp-post-image` featured thumbnail. The article's own
@@ -549,7 +599,7 @@ class LeadImageService:
         # in the same run — they'd all picked up whichever post this row
         # happened to feature at scrape time, not their own image.
         r'|\bid=["\'][^"\']*shopify-section[^"\']*(?:blogs?[-_]?row|related[-_]?blogs?|recent[-_]?blogs?|blog[-_]?(?:list|grid|posts))[^"\']*["\']'
-        r')[^>]*>',
+        r")[^>]*>",
         re.IGNORECASE,
     )
     # Allow Blogger/Google CDN URLs where the extension is followed by a size
@@ -565,7 +615,7 @@ class LeadImageService:
     # these IDs/classes receive a large score bonus so the main comic panel wins
     # over nav buttons, site chrome, and vote/promotion images.
     _WEBCOMIC_IMG_ID_RE = re.compile(
-        r'^(?:strip|cc-comic|comic|comicimg|comic-image|comic_image|comicImage|woo-entry-image)$',
+        r"^(?:strip|cc-comic|comic|comicimg|comic-image|comic_image|comicImage|woo-entry-image)$",
         re.IGNORECASE,
     )
     _WEBCOMIC_IMG_CLASS_RE = re.compile(
@@ -623,10 +673,10 @@ class LeadImageService:
     # instead, so what remains inside `#comic` is the whole page.
     _WEBCOMIC_CONTAINER_OPEN_RE = re.compile(
         r'<(div|section|article|figure)\b[^>]*\b(?:id|class)=["\'][^"\']*'
-        r'(?<![-\w])(?:'
-        r'comic|comic[-_]area|comic[-_]body|comic[-_]wrap(?:per)?|'
-        r'comic[-_]page|comic[-_]panel|comicpane|unspliced[-_]comic'
-        r')(?![-\w])'
+        r"(?<![-\w])(?:"
+        r"comic|comic[-_]area|comic[-_]body|comic[-_]wrap(?:per)?|"
+        r"comic[-_]page|comic[-_]panel|comicpane|unspliced[-_]comic"
+        r")(?![-\w])"
         r'[^"\']*["\'][^>]*>',
         re.IGNORECASE,
     )
@@ -639,15 +689,15 @@ class LeadImageService:
     # sits is.
     _WEBCOMIC_CHROME_OPEN_RE = re.compile(
         r'<(nav|header|footer|aside|ul|div|li)\b[^>]*\b(?:id|class)=["\'][^"\']*'
-        r'(?:menu[-_]item|top[-_]menu|site[-_]header|site[-_]footer|'
-        r'widget|sidebar|thumbnail[-_]gallery|pf[-_]summary)'
+        r"(?:menu[-_]item|top[-_]menu|site[-_]header|site[-_]footer|"
+        r"widget|sidebar|thumbnail[-_]gallery|pf[-_]summary)"
         r'[^"\']*["\'][^>]*>'
         # …plus the phone-only duplicate rendering of a page that is also
         # published whole (mahonoir's `#spliced-comic` beside `#unspliced-comic`).
         # The lookbehind is what keeps `unspliced-comic` out of this: there,
         # `spliced` is preceded by a word character and so does not match.
         r'|<(div|section)\b[^>]*\b(?:id|class)=["\'][^"\']*'
-        r'(?<![-\w])spliced[-_]comic(?![-\w])'
+        r"(?<![-\w])spliced[-_]comic(?![-\w])"
         r'[^"\']*["\'][^>]*>',
         re.IGNORECASE,
     )
@@ -657,7 +707,7 @@ class LeadImageService:
     # panel lives at /comics/<same-file> on the page (id="cc-comic"). The thumb and
     # full image share a filename, so we can promote the URL directly — no extra
     # source fetch needed to get the readable comic.
-    _COMICCONTROL_THUMB_RE = re.compile(r'(?<=/)comicsthumbs(?=/)', re.IGNORECASE)
+    _COMICCONTROL_THUMB_RE = re.compile(r"(?<=/)comicsthumbs(?=/)", re.IGNORECASE)
 
     _LEAD_IMAGE_MIN_WIDTH = 200
     _LEAD_IMAGE_MIN_HEIGHT = 100
@@ -693,7 +743,7 @@ class LeadImageService:
         "guitarplayer.com": ("product",),
     }
 
-    _FEED_STRIP_DIV_RE = re.compile(r'<(/?)div\b[^>]*>', re.IGNORECASE)
+    _FEED_STRIP_DIV_RE = re.compile(r"<(/?)div\b[^>]*>", re.IGNORECASE)
     _POSITIVE_REVALIDATE_SECONDS = 12 * 60 * 60
     _POSITIVE_REVALIDATE_PER_FEED_LIMIT = 12
     # Re-detect feed strategy weekly (or when still 'unknown')
@@ -724,9 +774,13 @@ class LeadImageService:
         # honest->browser behavior this always had — main.py passes a real,
         # tenancy-aware one shared with the saved-article re-fetch path (see
         # services/page_fetch.py and Plan.md).
-        self._page_fetcher = page_fetcher if page_fetcher is not None else page_fetch.PageFetcher(
-            backends=lambda: page_fetch.FetchBackends(mode="off", proxy_url="", flaresolverr_url=""),
-            honest_user_agent=user_agent,
+        self._page_fetcher = (
+            page_fetcher
+            if page_fetcher is not None
+            else page_fetch.PageFetcher(
+                backends=lambda: page_fetch.FetchBackends(mode="off", proxy_url="", flaresolverr_url=""),
+                honest_user_agent=user_agent,
+            )
         )
         self._cache = cache if cache is not None else {}
         self._fetched_at_cache = fetched_at_cache if fetched_at_cache is not None else {}
@@ -885,7 +939,7 @@ class LeadImageService:
             # to the network, while a platform's own media is hosted BY that
             # platform and links to it. So keep the image when it lives on the
             # same service the link points at.
-            src_m = re.search(r'<img\b[^>]*\bsrc\s*=\s*[\"\']([^\"\']+)', block, re.IGNORECASE)
+            src_m = re.search(r"<img\b[^>]*\bsrc\s*=\s*[\"\']([^\"\']+)", block, re.IGNORECASE)
             if src_m and self._same_service(src_m.group(1), href):
                 return block
             return ""
@@ -954,7 +1008,7 @@ class LeadImageService:
         Returns *start* when the element never closes, so callers can tell the
         walk failed rather than silently swallowing the rest of the document.
         """
-        tag_re = re.compile(r'<(/?)' + tag_name + r'\b[^>]*>', re.IGNORECASE)
+        tag_re = re.compile(r"<(/?)" + tag_name + r"\b[^>]*>", re.IGNORECASE)
         depth = 0
         for dm in tag_re.finditer(html, start):
             if dm.group(1):
@@ -988,7 +1042,7 @@ class LeadImageService:
                 continue
             end = self._balanced_container_end(html, start, _tag_name_of(match.group(0)))
             if end > start:
-                yield html[match.end():end]
+                yield html[match.end() : end]
                 pos = end
 
     def _strip_related_post_blocks(self, html: str) -> str:
@@ -1006,9 +1060,7 @@ class LeadImageService:
         if self._none_strategy_feeds is None:
             try:
                 with self._get_meta_connection() as conn:
-                    rows = conn.execute(
-                        "SELECT feed_url FROM feed_lead_image_strategy WHERE strategy = 'none' AND manual = 1"
-                    ).fetchall()
+                    rows = conn.execute("SELECT feed_url FROM feed_lead_image_strategy WHERE strategy = 'none' AND manual = 1").fetchall()
                 self._none_strategy_feeds = {str(r["feed_url"]) for r in rows}
             except Exception:
                 self._none_strategy_feeds = set()
@@ -1019,9 +1071,7 @@ class LeadImageService:
         if self._webcomic_feeds is None:
             try:
                 with self._get_meta_connection() as conn:
-                    rows = conn.execute(
-                        "SELECT feed_url FROM feed_lead_image_strategy WHERE strategy = 'webcomic'"
-                    ).fetchall()
+                    rows = conn.execute("SELECT feed_url FROM feed_lead_image_strategy WHERE strategy = 'webcomic'").fetchall()
                 self._webcomic_feeds = {str(r["feed_url"]) for r in rows}
             except Exception:
                 self._webcomic_feeds = set()
@@ -1162,8 +1212,7 @@ class LeadImageService:
         try:
             with self._get_meta_connection() as conn:
                 row = conn.execute(
-                    "SELECT 1 FROM entry_lead_images"
-                    " WHERE feed_url = ? AND entry_id != ? AND image_title = ? LIMIT 1",
+                    "SELECT 1 FROM entry_lead_images WHERE feed_url = ? AND entry_id != ? AND image_title = ? LIMIT 1",
                     (feed_url, entry_id, title_text),
                 ).fetchone()
             return row is not None
@@ -1175,8 +1224,7 @@ class LeadImageService:
         try:
             with self._get_meta_connection() as conn:
                 conn.execute(
-                    "UPDATE entry_lead_images SET image_title = NULL"
-                    " WHERE feed_url = ? AND image_title = ?",
+                    "UPDATE entry_lead_images SET image_title = NULL WHERE feed_url = ? AND image_title = ?",
                     (feed_url, title_text),
                 )
         except Exception:
@@ -1389,25 +1437,17 @@ class LeadImageService:
         uid = tenancy.current_user_id()
         self._enqueue_write(uid, lambda: self.store_entry_lead_image(feed_url, entry_id, image_url))
 
-    def persist_image_alt_async(
-        self, feed_url: str, entry_id: str, alt_text: str | None, title_text: str | None = None
-    ) -> None:
+    def persist_image_alt_async(self, feed_url: str, entry_id: str, alt_text: str | None, title_text: str | None = None) -> None:
         """Async + skip-if-unchanged counterpart of store_entry_image_alt for the
         request path (same rationale as persist_lead_image_async)."""
         key = (feed_url, entry_id)
-        unchanged = (
-            key in self._alt_cache
-            and self._alt_cache[key] == alt_text
-            and self._title_cache.get(key) == title_text
-        )
+        unchanged = key in self._alt_cache and self._alt_cache[key] == alt_text and self._title_cache.get(key) == title_text
         self._alt_cache[key] = alt_text
         self._title_cache[key] = title_text
         if unchanged:
             return
         uid = tenancy.current_user_id()
-        self._enqueue_write(
-            uid, lambda: self.store_entry_image_alt(feed_url, entry_id, alt_text, title_text=title_text)
-        )
+        self._enqueue_write(uid, lambda: self.store_entry_image_alt(feed_url, entry_id, alt_text, title_text=title_text))
 
     def rename_feed_url_in_cache(self, old_url: str, new_url: str) -> None:
         """Re-key all in-memory cache entries from old_url to new_url after a feed URL change."""
@@ -1588,9 +1628,7 @@ class LeadImageService:
         return url
 
     def extract_entry_thumbnail_url(self, entry: object, include_source_lookup: bool = False, fast_only: bool = False) -> str | None:
-        return self._promote_known_thumbnail(
-            self._extract_entry_thumbnail_url_inner(entry, include_source_lookup, fast_only)
-        )
+        return self._promote_known_thumbnail(self._extract_entry_thumbnail_url_inner(entry, include_source_lookup, fast_only))
 
     def _extract_entry_thumbnail_url_inner(self, entry: object, include_source_lookup: bool = False, fast_only: bool = False) -> str | None:
         entry_link = str(getattr(entry, "link", "") or "")
@@ -1926,8 +1964,10 @@ class LeadImageService:
                         url = item.get("url") or item.get("href")
                     elif isinstance(item, str):
                         url = item
-                    if url and self._is_image_url_acceptable(url, None, None) and not self._should_bypass_cached_url(
-                        entry_link=entry_link, cached_url=url
+                    if (
+                        url
+                        and self._is_image_url_acceptable(url, None, None)
+                        and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=url)
                     ):
                         return url
             media_content = getattr(entry, "media_content", None)
@@ -2041,11 +2081,8 @@ class LeadImageService:
         #
         # The backfill loop (fetch_and_store_lead_images_for_feed) has always had
         # this fallback and says so in its comment; this path simply never got it.
-        if not cached_negative and entry_link and skip_source \
-                and not self._plugin_should_skip_source_lookup(entry_link=entry_link):
-            source_image = self._fetch_source_lead_image(
-                entry_link, is_webcomic=self._is_feed_webcomic(feed_url_str)
-            )
+        if not cached_negative and entry_link and skip_source and not self._plugin_should_skip_source_lookup(entry_link=entry_link):
+            source_image = self._fetch_source_lead_image(entry_link, is_webcomic=self._is_feed_webcomic(feed_url_str))
             if source_image:
                 return source_image
 
@@ -2069,7 +2106,7 @@ class LeadImageService:
         if not self._plugin_should_skip_source_lookup(entry_link=entry_link):
             return self._fetch_source_lead_image(entry_link, is_webcomic=is_webcomic)
         content_html = None
-        for chunk in (getattr(entry, "content", None) or ()):
+        for chunk in getattr(entry, "content", None) or ():
             value = getattr(chunk, "value", None)
             if isinstance(value, str) and value.strip():
                 content_html = value
@@ -2104,10 +2141,14 @@ class LeadImageService:
 
         manual_tagged_ids: set[str] = set()
         try:
-            rows = reader._storage.get_db().execute(
-                "SELECT DISTINCT id FROM entry_tags WHERE feed = ? AND key LIKE ?",
-                (feed_url, _MANUAL_TAG_KEY_PREFIX + "%"),
-            ).fetchall()
+            rows = (
+                reader._storage.get_db()
+                .execute(
+                    "SELECT DISTINCT id FROM entry_tags WHERE feed = ? AND key LIKE ?",
+                    (feed_url, _MANUAL_TAG_KEY_PREFIX + "%"),
+                )
+                .fetchall()
+            )
             manual_tagged_ids = {str(row[0]) for row in rows}
         except Exception:
             manual_tagged_ids = set()
@@ -2223,8 +2264,7 @@ class LeadImageService:
                         entry_link = str(getattr(entry, "link", "") or "")
                         if not entry_link:
                             continue
-                        source_image = self._plugin_or_source_lead_image(
-                            entry, entry_link, is_webcomic=self._is_feed_webcomic(feed_url))
+                        source_image = self._plugin_or_source_lead_image(entry, entry_link, is_webcomic=self._is_feed_webcomic(feed_url))
                         if source_image:
                             self.store_entry_lead_image(feed_url_str, entry_id_str, source_image, batch=pending)
                         else:
@@ -2306,8 +2346,7 @@ class LeadImageService:
                 # that refuses the source page may still be able to name the
                 # image from the feed body (Webtoons, Tapas), and storing None
                 # here would blank a perfectly good panel.
-                plugin_image = self._plugin_or_source_lead_image(
-                    entry, entry_link, is_webcomic=strategy == "webcomic")
+                plugin_image = self._plugin_or_source_lead_image(entry, entry_link, is_webcomic=strategy == "webcomic")
                 self.store_entry_lead_image(feed_url_str, entry_id_str, plugin_image, batch=pending)
                 time.sleep(0.05)
                 continue
@@ -2493,8 +2532,8 @@ class LeadImageService:
     # Applied unconditionally in _extract_first_image_url_from_html so feed-content
     # paths (source_url=None) are covered as well as source-page paths.
     _INLINE_DECO_CLASS_RE = re.compile(
-        r"\bvalign-"       # Sphinx/RST math formula glyphs (e.g. valign-m4, valign-0)
-        r"|\bemoji\b"      # emoji sprites from any CDN (class="emoji")
+        r"\bvalign-"  # Sphinx/RST math formula glyphs (e.g. valign-m4, valign-0)
+        r"|\bemoji\b"  # emoji sprites from any CDN (class="emoji")
         r"|\bwp-smiley\b"  # WordPress inline smilies
         r"|\bipsEmoji\b",  # Invision Community emoji sprites
         re.IGNORECASE,
@@ -2567,10 +2606,7 @@ class LeadImageService:
                 continue
             w = self._parse_positive_int_attr(attrs, "width")
             h = self._parse_positive_int_attr(attrs, "height")
-            if (
-                w is not None and w >= self._LEAD_IMAGE_MIN_WIDTH
-                and h is not None and h >= self._LEAD_IMAGE_MIN_HEIGHT
-            ):
+            if w is not None and w >= self._LEAD_IMAGE_MIN_WIDTH and h is not None and h >= self._LEAD_IMAGE_MIN_HEIGHT:
                 return resolved
         return None
 
@@ -2784,8 +2820,10 @@ class LeadImageService:
             return False
         if alt_title and self._LOGO_URL_PATTERNS.search(alt_title):
             _has_qualifying_dims = (
-                width_attr is not None and width_attr >= self._LEAD_IMAGE_MIN_WIDTH
-                and height_attr is not None and height_attr >= self._LEAD_IMAGE_MIN_HEIGHT
+                width_attr is not None
+                and width_attr >= self._LEAD_IMAGE_MIN_WIDTH
+                and height_attr is not None
+                and height_attr >= self._LEAD_IMAGE_MIN_HEIGHT
             )
             if not _has_qualifying_dims:
                 return False
@@ -2799,13 +2837,7 @@ class LeadImageService:
         # designated image even when square — many podcasts (e.g. se-radio.net) use a
         # square guest photo as the episode featured image.
         _is_featured = bool(self._WEBCOMIC_IMG_CLASS_RE.search(attrs.get("class", "")))
-        if (
-            not _is_featured
-            and width_attr is not None
-            and height_attr is not None
-            and width_attr == height_attr
-            and width_attr <= 400
-        ):
+        if not _is_featured and width_attr is not None and height_attr is not None and width_attr == height_attr and width_attr <= 400:
             return False
 
         # Banner-shaped hero (e.g. PlayStation Blog's 1900x470 "header-image"):
@@ -2882,9 +2914,25 @@ class LeadImageService:
 
         # URL path contains keywords typical of article hero/cover images.
         _url_path = resolved_url.lower()
-        if any(kw in _url_path for kw in ("/banner", "-banner", "_banner", "/hero", "-hero", "_hero",
-                                            "/cover", "-cover", "_cover", "/featured", "-featured",
-                                            "_featured", "/thumbnail", "-thumbnail")):
+        if any(
+            kw in _url_path
+            for kw in (
+                "/banner",
+                "-banner",
+                "_banner",
+                "/hero",
+                "-hero",
+                "_hero",
+                "/cover",
+                "-cover",
+                "_cover",
+                "/featured",
+                "-featured",
+                "_featured",
+                "/thumbnail",
+                "-thumbnail",
+            )
+        ):
             score += 15
 
         score += self._plugin_source_score_adjustment(source_url=source_url, attrs=attrs, resolved_url=resolved_url)
@@ -2899,9 +2947,7 @@ class LeadImageService:
     # image failure (a genuinely inaccessible image, not a stale/expired URL)
     # before the actual cause was found.
     _WEBCOMIC_LOCK_RE = re.compile(r'class=["\'][^"\']*\bsingle-comic-locked\b', re.IGNORECASE)
-    _WEBCOMIC_UNLOCK_DATE_RE = re.compile(
-        r'class=["\']unlock-date-text["\'][^>]*>\s*\(([^)]+)\)', re.IGNORECASE
-    )
+    _WEBCOMIC_UNLOCK_DATE_RE = re.compile(r'class=["\']unlock-date-text["\'][^>]*>\s*\(([^)]+)\)', re.IGNORECASE)
 
     def _extract_webcomic_lock_until(self, html_text: str) -> float | None:
         """Epoch seconds this webcomic strip unlocks at, or None if it isn't
@@ -3030,20 +3076,17 @@ class LeadImageService:
             _is_featured = bool(self._WEBCOMIC_IMG_CLASS_RE.search(attrs.get("class", "")))
             # Skip images inside author/speaker/bio sections — they are headshots.
             # Skip images inside site-chrome branding elements (logo, nav header).
-            context_before = html_text[max(0, tag_match.start() - 500):tag_match.start()]
+            context_before = html_text[max(0, tag_match.start() - 500) : tag_match.start()]
             _am = self._AUTHOR_CONTEXT_RE.search(context_before)
             if _am and not _is_featured:
                 # If the matched element was an <address> that closed before reaching
                 # this img, the img is in a sibling element — don't skip it.
                 # (e.g. <address class="article-author">...</address> followed by
                 # <figure><img .../></figure> on the same page.)
-                _tag_start = context_before.rfind('<', 0, _am.start())
-                _in_address = (
-                    _tag_start != -1
-                    and context_before[_tag_start:_tag_start + 8].lower().startswith('<address')
-                )
-                _after = context_before[_am.end():]
-                if not (_in_address and re.search(r'</address\b', _after, re.IGNORECASE)):
+                _tag_start = context_before.rfind("<", 0, _am.start())
+                _in_address = _tag_start != -1 and context_before[_tag_start : _tag_start + 8].lower().startswith("<address")
+                _after = context_before[_am.end() :]
+                if not (_in_address and re.search(r"</address\b", _after, re.IGNORECASE)):
                     continue
             if not _is_featured and self._SITE_CHROME_CONTEXT_RE.search(context_before):
                 continue
@@ -3052,7 +3095,7 @@ class LeadImageService:
                 # Prefer <source type="image/webp"> from an enclosing <picture> element.
                 # The webp source is the browser's preferred format for this image and
                 # often carries a larger srcset than the fallback <img src>.
-                _pre_ctx = html_text[max(0, tag_match.start() - 600):tag_match.start()]
+                _pre_ctx = html_text[max(0, tag_match.start() - 600) : tag_match.start()]
                 _pic_pos = _pre_ctx.rfind("<picture")
                 if _pic_pos != -1:
                     _wm = self._WEBP_SOURCE_SRCSET_RE.search(_pre_ctx[_pic_pos:])
@@ -3082,9 +3125,7 @@ class LeadImageService:
             return best_url, best_alt
         return None, None
 
-    def extract_source_gallery_urls(
-        self, entry_link: str, exclude_urls: set[str] | None = None, limit: int = 20
-    ) -> list[str]:
+    def extract_source_gallery_urls(self, entry_link: str, exclude_urls: set[str] | None = None, limit: int = 20) -> list[str]:
         """Return all acceptable article images from a cached source page, in order.
 
         For feeds whose body carries no inline images (e.g. paizo blog) the full
@@ -3103,7 +3144,7 @@ class LeadImageService:
         seen: set[str] = set()
         entry_path = urlparse(entry_link).path.rstrip("/").lower()
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
-            context_before = html_text[max(0, tag_match.start() - 500):tag_match.start()]
+            context_before = html_text[max(0, tag_match.start() - 500) : tag_match.start()]
             if self._AUTHOR_CONTEXT_RE.search(context_before) or self._SITE_CHROME_CONTEXT_RE.search(context_before):
                 continue
             attrs = self._parse_img_attrs(tag_match.group(0))
@@ -3116,9 +3157,10 @@ class LeadImageService:
                 # (tinyview's skeleton GIF, wordmark and icons8 buttons all live
                 # on assets.tinyview.com) sailed straight into the gallery, which
                 # takes everything acceptable rather than ranking it.
-                if self._plugin_source_score_adjustment(
-                    source_url=entry_link, attrs=attrs, resolved_url=resolved
-                ) <= self._PLUGIN_CHROME_SCORE:
+                if (
+                    self._plugin_source_score_adjustment(source_url=entry_link, attrs=attrs, resolved_url=resolved)
+                    <= self._PLUGIN_CHROME_SCORE
+                ):
                     continue
                 tag_urls.append(resolved)
             if not tag_urls:
@@ -3133,8 +3175,7 @@ class LeadImageService:
             # _drop_duplicate_basenames below cannot repair that, because it only
             # sees the single URL this loop kept.
             chosen = next(
-                (u for u in tag_urls
-                 if entry_path and urlparse(u).path.lower().startswith(entry_path + "/")),
+                (u for u in tag_urls if entry_path and urlparse(u).path.lower().startswith(entry_path + "/")),
                 tag_urls[0],
             )
             seen.add(chosen)
@@ -3176,8 +3217,7 @@ class LeadImageService:
             # dog_blizzard2.jpg as well as inside the dated directory, so the
             # 404 copy satisfied the test whenever it happened to come first.
             preferred = next(
-                (g for g in group
-                 if entry_path and urlparse(g).path.lower().startswith(entry_path + "/")),
+                (g for g in group if entry_path and urlparse(g).path.lower().startswith(entry_path + "/")),
                 group[0],
             )
             dropped.update(g for g in group if g != preferred)
@@ -3356,8 +3396,14 @@ class LeadImageService:
         return False
 
     def _is_image_url_acceptable(
-        self, image_url: str, width: int | None, height: int | None, *,
-        allow_extensionless: bool = False, skip_logo_patterns: bool = False, source_url: str | None = None,
+        self,
+        image_url: str,
+        width: int | None,
+        height: int | None,
+        *,
+        allow_extensionless: bool = False,
+        skip_logo_patterns: bool = False,
+        source_url: str | None = None,
     ) -> bool:
         # Sanitized inline-SVG data URIs (from services.svg_sanitize, e.g. a
         # per-feed plugin's hero SVG) are trusted and carry no remote host to vet —
@@ -3365,7 +3411,7 @@ class LeadImageService:
         # which we reject so the entry re-resolves to real art.
         if image_url.startswith("data:image/svg+xml,"):
             try:
-                _decoded = unquote(image_url[len("data:image/svg+xml,"):])
+                _decoded = unquote(image_url[len("data:image/svg+xml,") :])
             except Exception:
                 _decoded = image_url
             if self._SVG_ICON_CLASS_RE.search(_decoded):
@@ -3434,9 +3480,11 @@ class LeadImageService:
         # filename and can only produce false positives there — see
         # _UUID_BASENAME_RE. Path- and dimension-based checks still apply.
         opaque_name = bool(self._UUID_BASENAME_RE.match(parsed.path.rsplit("/", 1)[-1]))
-        if (self._TRACKER_URL_PATTERNS.search(parsed.netloc)
-                or self._TRACKER_URL_PATTERNS.search(parsed.path)
-                or self._TRACKER_URL_PATTERNS.search(image_url)):
+        if (
+            self._TRACKER_URL_PATTERNS.search(parsed.netloc)
+            or self._TRACKER_URL_PATTERNS.search(parsed.path)
+            or self._TRACKER_URL_PATTERNS.search(image_url)
+        ):
             return False
         # Match host+path only (not the query string) so a non-emoji asset with
         # e.g. "?ref=twemoji" in its query isn't mistaken for an emoji sprite.
@@ -3476,8 +3524,7 @@ class LeadImageService:
                         # small-vs-large path scan already applies; this earlier,
                         # stricter check just wasn't wired to it.
                         if not any(
-                            int(_lg.group(1)) >= self._LEAD_IMAGE_MIN_WIDTH
-                            and int(_lg.group(2)) >= self._LEAD_IMAGE_MIN_HEIGHT
+                            int(_lg.group(1)) >= self._LEAD_IMAGE_MIN_WIDTH and int(_lg.group(2)) >= self._LEAD_IMAGE_MIN_HEIGHT
                             for _lg in list(self._URL_DIMENSION_RE.finditer(_path_no_qs))
                             + list(self._PATH_SIZE_SEGMENT_RE.finditer(_path_no_qs))
                         ):
@@ -3497,14 +3544,10 @@ class LeadImageService:
             for _m in self._URL_DIMENSION_RE.finditer(_lp_path):
                 try:
                     _lpw, _lph = int(_m.group(1)), int(_m.group(2))
-                    if (
-                        _lpw >= self._LEAD_IMAGE_MIN_WIDTH
-                        and _lph >= self._LEAD_IMAGE_MIN_HEIGHT
-                        and 0.25 <= _lpw / _lph <= 4.0
-                    ):
+                    if _lpw >= self._LEAD_IMAGE_MIN_WIDTH and _lph >= self._LEAD_IMAGE_MIN_HEIGHT and 0.25 <= _lpw / _lph <= 4.0:
                         _lp_has_large_dims = True
                         break
-                except (ValueError, ZeroDivisionError):
+                except ValueError, ZeroDivisionError:
                     pass
             # Width-only hint (e.g. "1000w") — WordPress responsive-image naming
             if not _lp_has_large_dims:
@@ -3552,8 +3595,10 @@ class LeadImageService:
             # canonical placeholder back in — which is what the existing
             # regression test for that image immediately caught.
             _placeholder_has_real_dims = (
-                width is not None and width >= self._PLACEHOLDER_OVERRIDE_MIN_WIDTH
-                and height is not None and height >= self._PLACEHOLDER_OVERRIDE_MIN_HEIGHT
+                width is not None
+                and width >= self._PLACEHOLDER_OVERRIDE_MIN_WIDTH
+                and height is not None
+                and height >= self._PLACEHOLDER_OVERRIDE_MIN_HEIGHT
             )
             if not _placeholder_has_real_dims:
                 return False
@@ -3607,7 +3652,7 @@ class LeadImageService:
                         return False
                     if _rh and (_rw / _rh > 4.0 or _rh / _rw > 4.0):
                         return False
-                except (ValueError, ZeroDivisionError):
+                except ValueError, ZeroDivisionError:
                     pass
                 break
 
@@ -3616,9 +3661,7 @@ class LeadImageService:
             # Skip URL-dimension filtering for paths that are specifically
             # content/download thumbnail directories — their small dimensions
             # are intentional and they represent the article's primary image.
-            _is_download_thumb = bool(re.search(
-                r'/(?:download|file|product|entry)?thumbs?(?:nail)?s?/', url_path_no_query, re.IGNORECASE
-            ))
+            _is_download_thumb = bool(re.search(r"/(?:download|file|product|entry)?thumbs?(?:nail)?s?/", url_path_no_query, re.IGNORECASE))
             _url_has_large_dim = False
             _url_has_small_dim = False
             _dim_matches = list(self._URL_DIMENSION_RE.finditer(url_path_no_query))
@@ -3745,7 +3788,7 @@ class LeadImageService:
                 try:
                     w = int(thumb.get("width", 0) or 0)
                     h = int(thumb.get("height", 0) or 0)
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     w = h = 0
                 if w and h and (w < self._LEAD_IMAGE_MIN_WIDTH or h < self._LEAD_IMAGE_MIN_HEIGHT):
                     continue
@@ -3768,7 +3811,7 @@ class LeadImageService:
                     try:
                         w = int(mc.get("width", 0) or 0)
                         h = int(mc.get("height", 0) or 0)
-                    except (ValueError, TypeError):
+                    except ValueError, TypeError:
                         w = h = 0
                     if w and h and (w < self._LEAD_IMAGE_MIN_WIDTH or h < self._LEAD_IMAGE_MIN_HEIGHT):
                         continue
@@ -3806,7 +3849,7 @@ class LeadImageService:
         """
         try:
             result = self._page_fetcher.fetch(url, timeout=15.0, refusal_statuses=frozenset({403, 503}))
-        except (page_fetch.PageFetchError, url_guard.UnsafeURLError):
+        except page_fetch.PageFetchError, url_guard.UnsafeURLError:
             return None
         _corp = result.headers.get("cross-origin-resource-policy", "").lower()
         return self._strip_script_blocks(result.html), result.final_url, _corp in ("same-site", "same-origin")
@@ -3835,9 +3878,7 @@ class LeadImageService:
             return html_text
         return cls._SCRIPT_BLOCK_RE.sub(" ", html_text)
 
-    def _is_image_url_fetchable(
-        self, image_url: str, domain_cache: dict[str, bool] | None = None
-    ) -> bool:
+    def _is_image_url_fetchable(self, image_url: str, domain_cache: dict[str, bool] | None = None) -> bool:
         """Return True if a server-side HEAD request to image_url succeeds (HTTP < 400).
 
         Uses an optional per-call domain_cache dict so that all images from the
@@ -3847,9 +3888,7 @@ class LeadImageService:
         if domain_cache is not None and domain in domain_cache:
             return domain_cache[domain]
         try:
-            resp = url_guard.safe_head(
-                image_url, timeout=4.0, headers={"User-Agent": self._user_agent}
-            )
+            resp = url_guard.safe_head(image_url, timeout=4.0, headers={"User-Agent": self._user_agent})
             ok = resp.status_code < 400
         except Exception:
             ok = False
@@ -3951,11 +3990,12 @@ class LeadImageService:
             return alt, title
 
         # Deathbulge SPA: API returns combined alt_text only; return as title, no alt.
-        _db_spa_m = re.match(r'https?://(?:www\.)?deathbulge\.com/#/comics/(\d+)', entry_link)
+        _db_spa_m = re.match(r"https?://(?:www\.)?deathbulge\.com/#/comics/(\d+)", entry_link)
         if _db_spa_m:
             try:
                 import json as _json
                 import urllib.request as _ureq
+
                 _api_url = f"http://deathbulge.com/api/comics/{_db_spa_m.group(1)}"
                 _req = _ureq.Request(_api_url, headers={"User-Agent": self._user_agent})
                 with _ureq.urlopen(_req, timeout=10) as _resp:
@@ -4002,7 +4042,7 @@ class LeadImageService:
             # elements whose WebP srcset contains lead_image_url and return the
             # enclosed <img>'s alt/title.
             for tag_match in self._IMG_TAG_RE.finditer(source_html):
-                pre_ctx = source_html[max(0, tag_match.start() - 600):tag_match.start()]
+                pre_ctx = source_html[max(0, tag_match.start() - 600) : tag_match.start()]
                 pic_pos = pre_ctx.rfind("<picture")
                 if pic_pos == -1:
                     continue
@@ -4055,9 +4095,7 @@ class LeadImageService:
         """
         if (feed_url, entry_id) in self._alt_cache:
             return
-        alt, title = self.fetch_entry_image_caption(
-            entry_link, lead_image_url=image_url, is_webcomic=is_webcomic
-        )
+        alt, title = self.fetch_entry_image_caption(entry_link, lead_image_url=image_url, is_webcomic=is_webcomic)
         self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title, batch=alt_batch)
 
     def _fetch_source_lead_image(self, entry_link: str, is_webcomic: bool = False) -> str | None:
@@ -4147,10 +4185,10 @@ class LeadImageService:
             # appears before the og:image in the body HTML it is more likely
             # to be the article's primary visual (the og:image may be a later
             # image that the CMS happened to pick for the share preview).
-            body_start = source_html.lower().find('<body')
+            body_start = source_html.lower().find("<body")
             body_html = source_html[body_start:] if body_start != -1 else source_html
-            meta_fname = meta_image.rstrip('/').split('/')[-1].split('?')[0]
-            pref_fname = preferred_image.rstrip('/').split('/')[-1].split('?')[0]
+            meta_fname = meta_image.rstrip("/").split("/")[-1].split("?")[0]
+            pref_fname = preferred_image.rstrip("/").split("/")[-1].split("?")[0]
             meta_body_pos = body_html.find(meta_fname)
             pref_body_pos = body_html.find(pref_fname)
             if pref_body_pos != -1 and meta_body_pos != -1 and pref_body_pos < meta_body_pos:
@@ -4160,7 +4198,7 @@ class LeadImageService:
             # hash suffixes (e.g. foo.D9sM0Dvc_1b0SmR.png vs foo.D9sM0Dvc_1NFnGy.png).
             # The exact filename lookup fails, but the stem before the first dot
             # still matches — confirming the OG is article-specific.
-            meta_stem = meta_fname.split('.')[0]
+            meta_stem = meta_fname.split(".")[0]
             if len(meta_stem) >= 10 and meta_stem.lower() in body_html.lower():
                 return meta_image
 
@@ -4179,15 +4217,15 @@ class LeadImageService:
         # try to promote to the full-resolution <img> variant when the css_bg is a
         # responsive-resized crop (e.g. hero-576x324.jpg → find hero-616x347.jpg or hero.jpg).
         if not meta_image and css_bg_image and preferred_image and css_bg_image != preferred_image:
-            _body_start = source_html.lower().find('<body')
+            _body_start = source_html.lower().find("<body")
             _bh = source_html[_body_start:] if _body_start != -1 else source_html
-            _css_fname = css_bg_image.rstrip('/').split('/')[-1].split('?')[0]
-            _pref_fname = preferred_image.rstrip('/').split('/')[-1].split('?')[0]
+            _css_fname = css_bg_image.rstrip("/").split("/")[-1].split("?")[0]
+            _pref_fname = preferred_image.rstrip("/").split("/")[-1].split("?")[0]
             _css_pos = _bh.lower().find(_css_fname.lower())
             _pref_pos = _bh.lower().find(_pref_fname.lower())
             if _css_pos != -1 and (_pref_pos == -1 or _css_pos < _pref_pos):
                 # Strip responsive size suffix (e.g. -576x324) from filename stem.
-                _css_stem = re.sub(r'-\d{2,4}x\d{2,4}$', '', _css_fname.rsplit('.', 1)[0])
+                _css_stem = re.sub(r"-\d{2,4}x\d{2,4}$", "", _css_fname.rsplit(".", 1)[0])
                 if len(_css_stem) >= 6:
                     _full_re = re.compile(
                         r'(?:data-)?src=["\']([^"\']*' + re.escape(_css_stem) + r'[^"\']*\.[a-zA-Z]{2,5})["\']',
@@ -4319,7 +4357,8 @@ class LeadImageService:
                             self._source_html_cache.popitem(last=False)
                         if feed_url and entry_id and lead_image_url:
                             alt, title = self.fetch_entry_image_caption(
-                                entry_link, lead_image_url=lead_image_url,
+                                entry_link,
+                                lead_image_url=lead_image_url,
                                 is_webcomic=self._is_feed_webcomic(feed_url),
                             )
                             self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title)
@@ -4402,9 +4441,7 @@ class LeadImageService:
                             if k and v:
                                 attrs[k] = v
                         for candidate_url in self._collect_img_candidate_urls(attrs):
-                            if candidate_url and self._urls_equivalent(
-                                urljoin(base_url, candidate_url), img
-                            ):
+                            if candidate_url and self._urls_equivalent(urljoin(base_url, candidate_url), img):
                                 inline_alt = (attrs.get("alt") or "").strip() or None
                                 inline_title = (attrs.get("title") or "").strip() or None
                                 break
@@ -4423,10 +4460,15 @@ class LeadImageService:
                         break
         except Exception as exc:
             inline_error = str(exc)
-        results.append({
-            "strategy": "inline", "image_url": inline_url,
-            "image_alt": inline_alt, "image_title": inline_title, "error": inline_error,
-        })
+        results.append(
+            {
+                "strategy": "inline",
+                "image_url": inline_url,
+                "image_alt": inline_alt,
+                "image_title": inline_title,
+                "error": inline_error,
+            }
+        )
 
         # --- media_rss: media:thumbnail / media:content from the live feed XML,
         #     with fallback to image enclosures on the entry itself ---
@@ -4440,7 +4482,7 @@ class LeadImageService:
             # extraction path.  Lets feeds whose images live in <enclosure> rather
             # than <media:thumbnail> still show a card in the Tuning tab.
             if not media_url:
-                for enc in (getattr(entry, "enclosures", None) or []):
+                for enc in getattr(entry, "enclosures", None) or []:
                     if isinstance(enc, dict):
                         enc_url = enc.get("href") or enc.get("url")
                         enc_type = enc.get("type") or ""
@@ -4452,16 +4494,21 @@ class LeadImageService:
                         break
         except Exception as exc:
             media_error = str(exc)
-        results.append({
-            "strategy": "media_rss", "image_url": media_url,
-            "image_alt": None, "image_title": None, "error": media_error,
-        })
+        results.append(
+            {
+                "strategy": "media_rss",
+                "image_url": media_url,
+                "image_alt": None,
+                "image_title": None,
+                "error": media_error,
+            }
+        )
 
         # --- enclosure: per-entry image already stored by reader (no live re-fetch) ---
         encl_url: str | None = None
         encl_error: str | None = None
         try:
-            for enc in (getattr(entry, "enclosures", None) or []):
+            for enc in getattr(entry, "enclosures", None) or []:
                 if isinstance(enc, dict):
                     eu = enc.get("href") or enc.get("url")
                     et = enc.get("type") or ""
@@ -4473,10 +4520,15 @@ class LeadImageService:
                     break
         except Exception as exc:
             encl_error = str(exc)
-        results.append({
-            "strategy": "enclosure", "image_url": encl_url,
-            "image_alt": None, "image_title": None, "error": encl_error,
-        })
+        results.append(
+            {
+                "strategy": "enclosure",
+                "image_url": encl_url,
+                "image_alt": None,
+                "image_title": None,
+                "error": encl_error,
+            }
+        )
 
         # --- og_scrape: og:image / hero image from the article source page ---
         og_url: str | None = None
@@ -4491,10 +4543,15 @@ class LeadImageService:
                     og_alt, og_title = self.fetch_entry_image_caption(entry_link, lead_image_url=og_url)
         except Exception as exc:
             og_error = str(exc)
-        results.append({
-            "strategy": "og_scrape", "image_url": og_url,
-            "image_alt": og_alt, "image_title": og_title, "error": og_error,
-        })
+        results.append(
+            {
+                "strategy": "og_scrape",
+                "image_url": og_url,
+                "image_alt": og_alt,
+                "image_title": og_title,
+                "error": og_error,
+            }
+        )
 
         # --- webcomic: source-page scrape with comic-strip image scoring ---
         wc_url: str | None = None
@@ -4508,10 +4565,15 @@ class LeadImageService:
                     wc_alt, wc_title = self.fetch_entry_image_caption(entry_link, lead_image_url=wc_url, is_webcomic=True)
         except Exception as exc:
             wc_error = str(exc)
-        results.append({
-            "strategy": "webcomic", "image_url": wc_url,
-            "image_alt": wc_alt, "image_title": wc_title, "error": wc_error,
-        })
+        results.append(
+            {
+                "strategy": "webcomic",
+                "image_url": wc_url,
+                "image_alt": wc_alt,
+                "image_title": wc_title,
+                "error": wc_error,
+            }
+        )
 
         # --- artwork: first large image from feed content HTML (art-portfolio feeds) ---
         art_url: str | None = None
@@ -4534,9 +4596,7 @@ class LeadImageService:
                             if k and v:
                                 attrs[k] = v
                         for candidate_url in self._collect_img_candidate_urls(attrs):
-                            if candidate_url and self._urls_equivalent(
-                                urljoin(base_url, candidate_url), img
-                            ):
+                            if candidate_url and self._urls_equivalent(urljoin(base_url, candidate_url), img):
                                 art_alt = (attrs.get("alt") or "").strip() or None
                                 art_title = (attrs.get("title") or "").strip() or None
                                 break
@@ -4545,10 +4605,15 @@ class LeadImageService:
                     break
         except Exception as exc:
             art_error = str(exc)
-        results.append({
-            "strategy": "artwork", "image_url": art_url,
-            "image_alt": art_alt, "image_title": art_title, "error": art_error,
-        })
+        results.append(
+            {
+                "strategy": "artwork",
+                "image_url": art_url,
+                "image_alt": art_alt,
+                "image_title": art_title,
+                "error": art_error,
+            }
+        )
 
         # --- youtube: hqdefault thumbnail for YouTube video entries ---
         yt_url: str | None = None
@@ -4559,10 +4624,15 @@ class LeadImageService:
                     yt_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
         except Exception:
             pass
-        results.append({
-            "strategy": "youtube", "image_url": yt_url,
-            "image_alt": None, "image_title": None, "error": None,
-        })
+        results.append(
+            {
+                "strategy": "youtube",
+                "image_url": yt_url,
+                "image_alt": None,
+                "image_title": None,
+                "error": None,
+            }
+        )
 
         return results
 
@@ -4609,12 +4679,14 @@ class LeadImageService:
     def _urls_equivalent(url1: str, url2: str) -> bool:
         """Loose URL match ignoring scheme (http/https) and www. prefix."""
         try:
+
             def _norm(u: str) -> str:
                 p = urlparse(u)
                 host = p.netloc.lower()
                 if host.startswith("www."):
                     host = host[4:]
                 return host + p.path + ("?" + p.query if p.query else "")
+
             return _norm(url1) == _norm(url2)
         except Exception:
             return url1 == url2
@@ -4633,11 +4705,12 @@ class LeadImageService:
         """
         # Deathbulge is an AngularJS SPA; static page fetch returns only a shell.
         # Their JSON API at /api/comics/{id} exposes alt_text directly.
-        _db_spa_m = re.match(r'https?://(?:www\.)?deathbulge\.com/#/comics/(\d+)', entry_link)
+        _db_spa_m = re.match(r"https?://(?:www\.)?deathbulge\.com/#/comics/(\d+)", entry_link)
         if _db_spa_m:
             try:
                 import json as _json
                 import urllib.request as _ureq
+
                 _api_url = f"http://deathbulge.com/api/comics/{_db_spa_m.group(1)}"
                 _req = _ureq.Request(_api_url, headers={"User-Agent": self._user_agent})
                 with _ureq.urlopen(_req, timeout=10) as _resp:

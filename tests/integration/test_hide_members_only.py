@@ -3,6 +3,7 @@ members-only video entries read. Unlike hide-shorts/hide-unpremiered, detection
 costs a real watch-page fetch per video (mocked here), so it must only run for
 YouTube feeds, only for feeds/global-toggle that opted in, and must cache its
 result rather than re-fetching every refresh."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -46,14 +47,16 @@ def env(tmp_path):
 
 def _add_video_entry(feed_url: str, entry_id: str, video_id: str):
     reader = main.get_reader()
-    reader.add_entry({
-        "feed_url": feed_url,
-        "id": entry_id,
-        "title": f"Video {entry_id}",
-        "link": f"https://www.youtube.com/watch?v={video_id}",
-        "content": [{"value": "<p>a video</p>", "type": "text/html"}],
-        "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
-    })
+    reader.add_entry(
+        {
+            "feed_url": feed_url,
+            "id": entry_id,
+            "title": f"Video {entry_id}",
+            "link": f"https://www.youtube.com/watch?v={video_id}",
+            "content": [{"value": "<p>a video</p>", "type": "text/html"}],
+            "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        }
+    )
 
 
 def _read(feed_url: str, entry_id: str):
@@ -152,14 +155,16 @@ def test_non_youtube_feeds_are_never_checked(env, monkeypatch):
     """The global toggle and per-feed pref must not touch non-YouTube feeds --
     _is_yt_host gates the whole function."""
     reader = main.get_reader()
-    reader.add_entry({
-        "feed_url": NON_YT_FEED,
-        "id": "e1",
-        "title": "A regular post",
-        "link": "https://example.com/post-1",
-        "content": [{"value": "<p>text</p>", "type": "text/html"}],
-        "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
-    })
+    reader.add_entry(
+        {
+            "feed_url": NON_YT_FEED,
+            "id": "e1",
+            "title": "A regular post",
+            "link": "https://example.com/post-1",
+            "content": [{"value": "<p>text</p>", "type": "text/html"}],
+            "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        }
+    )
     monkeypatch.setattr(main, "youtube_hide_members_only_global", lambda: True)
 
     def fail_if_called(video_id):
@@ -183,14 +188,16 @@ def test_non_youtube_feed_with_the_pref_set_is_not_scanned_in_a_mixed_batch(env,
     read on a feed the user never opted in for."""
     _add_video_entry(FEED, "v1", "NORMALVIDEO")
     reader = main.get_reader()
-    reader.add_entry({
-        "feed_url": NON_YT_FEED,
-        "id": "e1",
-        "title": "A regular post that happens to link to a video",
-        "link": "https://www.youtube.com/watch?v=MEMBERONLY1",
-        "content": [{"value": "<p>text</p>", "type": "text/html"}],
-        "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
-    })
+    reader.add_entry(
+        {
+            "feed_url": NON_YT_FEED,
+            "id": "e1",
+            "title": "A regular post that happens to link to a video",
+            "link": "https://www.youtube.com/watch?v=MEMBERONLY1",
+            "content": [{"value": "<p>text</p>", "type": "text/html"}],
+            "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        }
+    )
     with main.get_meta_connection() as conn:
         main.upsert_feed_display_pref(conn, NON_YT_FEED, "hide_members_only", 1)
     monkeypatch.setattr(main.youtube_duration_service, "get_cached_members_only", lambda vid: True)

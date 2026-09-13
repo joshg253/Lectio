@@ -1,4 +1,5 @@
 """Per-feed browser-identity flag storage (browser_ua_feeds)."""
+
 from __future__ import annotations
 
 import pytest

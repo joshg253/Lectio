@@ -7,6 +7,7 @@ because find_mergeable_rule_groups requires the same is_regex value).
 Source assertions, because this is client-side settings-panel rendering with
 no JS test harness in this repo.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,7 +21,7 @@ def test_regex_convertible_bucket_is_read_from_the_response():
 
 def test_regex_convertible_group_renders_a_convert_and_merge_button():
     idx = APP_JS.index("regexConvertible.forEach((group) => {")
-    block = APP_JS[idx:idx + 1600]
+    block = APP_JS[idx : idx + 1600]
     assert "/highlights/merge-group-regex-convert" in block
     assert "Convert & merge into one regex rule" in block
     # Unlike the same-is_regex merge action, no is_regex form field -- the

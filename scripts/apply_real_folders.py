@@ -159,7 +159,7 @@ def main_cli() -> None:
     feed_tags: dict[str, set[str]] = defaultdict(set)
     for feed, key in rc.execute(f"SELECT DISTINCT feed, key FROM entry_tags WHERE key LIKE '{PFX}%'"):
         if feed in uncat:
-            feed_tags[feed].add(key[len(PFX):])
+            feed_tags[feed].add(key[len(PFX) :])
     c_members = 0
     c_folders = set()
     for f, ts in feed_tags.items():
@@ -174,8 +174,7 @@ def main_cli() -> None:
         mc.commit()
 
     # ---- Phase D: titles ----
-    empty = [r[0] for r in rc.execute(
-        "SELECT url FROM feeds WHERE COALESCE(NULLIF(user_title,''),NULLIF(title,'')) IS NULL")]
+    empty = [r[0] for r in rc.execute("SELECT url FROM feeds WHERE COALESCE(NULLIF(user_title,''),NULLIF(title,'')) IS NULL")]
     t_real = t_strip = 0
     for f in empty:
         title = canon_title.get(main.canonical_feed_url(f))
@@ -194,8 +193,10 @@ def main_cli() -> None:
 
     tag = "DRY-RUN " if dry else ""
     print(f"{tag}A. undo tag-folders: {len(undo_ids)} folders, {undo_memberships} memberships removed")
-    print(f"{tag}B. real folders: {b_members} memberships"
-          + (f"  (folders to create: {sorted(b_created)})" if b_created else "  (all matched existing)"))
+    print(
+        f"{tag}B. real folders: {b_members} memberships"
+        + (f"  (folders to create: {sorted(b_created)})" if b_created else "  (all matched existing)")
+    )
     print(f"{tag}C. tag fallback: {c_members} memberships across {len(c_folders)} capitalized folders")
     print(f"{tag}D. titles: {t_real} from backup.zip + {t_strip} stripped = {len(empty)} total")
     foldered2 = {r[0] for r in mc.execute("SELECT DISTINCT feed_url FROM folder_feeds")} if not dry else foldered

@@ -3,6 +3,7 @@ must not be silently swallowed: not by retention/purge, not by a blanket
 mark-as-read sweep (Mark Folder/Feed as Read, Read above/below, Mark older
 than X), and — when "hide_unpremiered" is on — not shown in the list until
 they actually air."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -43,8 +44,7 @@ def configured(tmp_path):
         tenancy._layout = saved
 
 
-def _seed_live_status(video_id: str, live_broadcast_content: str | None,
-                       scheduled_start_time: str | None = None) -> None:
+def _seed_live_status(video_id: str, live_broadcast_content: str | None, scheduled_start_time: str | None = None) -> None:
     # Real YouTube video ids are always exactly 11 characters — the extractor
     # regex depends on that width, so test ids must match it too.
     assert len(video_id) == 11, video_id
@@ -55,20 +55,21 @@ def _watch_link(video_id: str) -> str:
     return f"https://www.youtube.com/watch?v={video_id}"
 
 
-def _seed_entry(reader, *, feed_url: str, entry_id: str, video_id: str | None,
-                 published: datetime, read: bool = False, read_at: datetime | None = None) -> None:
+def _seed_entry(
+    reader, *, feed_url: str, entry_id: str, video_id: str | None, published: datetime, read: bool = False, read_at: datetime | None = None
+) -> None:
     # video_id=None seeds a non-YouTube-watch link — used for filler entries
     # whose premiere status isn't under test.
     link = _watch_link(video_id) if video_id else f"{feed_url}#{entry_id}"
-    reader.add_entry({"feed_url": feed_url, "id": entry_id, "link": link,
-                      "title": f"Post {entry_id}", "published": published})
+    reader.add_entry({"feed_url": feed_url, "id": entry_id, "link": link, "title": f"Post {entry_id}", "published": published})
     if read:
         reader.mark_entry_as_read((feed_url, entry_id))
     if read_at is not None:
         with main.get_meta_connection() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?,?,?)",
-                (feed_url, entry_id, read_at.isoformat()))
+                (feed_url, entry_id, read_at.isoformat()),
+            )
 
 
 def _exists(reader, feed_url: str, entry_id: str) -> bool:
@@ -80,6 +81,7 @@ LONG_AGO = datetime.now() - timedelta(days=30)
 
 
 # --- detection ---------------------------------------------------------
+
 
 def test_detects_upcoming_video(configured):
     _seed_live_status("UPCOMING001", "upcoming", "2026-09-20T18:00:00Z")
@@ -103,6 +105,7 @@ def test_does_not_flag_non_youtube_feeds(configured):
 
 # --- title prefix --------------------------------------------------------
 
+
 def test_premiere_prefix_counts_down_in_days(configured):
     # A comfortable margin past 3 full days — days=3 exactly would floor to 2
     # depending on how many microseconds elapse between seeding and asserting.
@@ -124,12 +127,12 @@ def test_premiere_prefix_none_when_not_upcoming(configured):
 
 # --- retention / purge exemption -----------------------------------------
 
+
 def test_prune_entries_protects_unpremiered_under_read_cutoff(configured):
     _seed_live_status("UPCOMING005", "upcoming", "2026-09-20T18:00:00Z")
     with main.get_reader() as reader:
         reader.add_feed(YT_FEED, exist_ok=True)
-        _seed_entry(reader, feed_url=YT_FEED, entry_id="premiere", video_id="UPCOMING005",
-                    published=OLD, read=True, read_at=LONG_AGO)
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="premiere", video_id="UPCOMING005", published=OLD, read=True, read_at=LONG_AGO)
     assert main._prune_entries([YT_FEED], read_cutoff=datetime.now() - timedelta(days=7)) == 0
     with main.get_reader() as reader:
         assert _exists(reader, YT_FEED, "premiere")
@@ -151,12 +154,12 @@ def test_prune_entries_still_deletes_once_aired(configured):
     # not linger past the point the video actually premiered.
     with main.get_reader() as reader:
         reader.add_feed(YT_FEED, exist_ok=True)
-        _seed_entry(reader, feed_url=YT_FEED, entry_id="aired", video_id="AIREDVID001",
-                    published=OLD, read=True, read_at=LONG_AGO)
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="aired", video_id="AIREDVID001", published=OLD, read=True, read_at=LONG_AGO)
     assert main._prune_entries([YT_FEED], read_cutoff=datetime.now() - timedelta(days=7)) == 1
 
 
 # --- bulk mark-read guards -------------------------------------------------
+
 
 def test_mark_feeds_as_read_skips_unpremiered(configured):
     _seed_live_status("UPCOMING007", "upcoming", "2026-09-20T18:00:00Z")
@@ -185,9 +188,14 @@ def test_mark_older_than_skips_unpremiered(configured):
         _seed_entry(reader, feed_url=YT_FEED, entry_id="premiere", video_id="UPCOMING008", published=OLD)
         _seed_entry(reader, feed_url=YT_FEED, entry_id="normal", video_id=None, published=OLD)
     with TestClient(_older_than_app()) as client:
-        r = client.post("/entries/mark-older-than-read", data={
-            "folder_id": str(UNCAT), "max_age_days": "1",
-        }, headers={"X-Requested-With": "lectio-mark-read"})
+        r = client.post(
+            "/entries/mark-older-than-read",
+            data={
+                "folder_id": str(UNCAT),
+                "max_age_days": "1",
+            },
+            headers={"X-Requested-With": "lectio-mark-read"},
+        )
     assert r.status_code == 200
     assert r.json()["marked"] == 1
     with main.get_reader() as reader:
@@ -206,17 +214,23 @@ def test_mark_range_read_skips_unpremiered(configured):
     with main.get_reader() as reader:
         reader.add_feed(YT_FEED, allow_invalid_url=True, exist_ok=True)
         reader.disable_feed_updates(YT_FEED)
-        _seed_entry(reader, feed_url=YT_FEED, entry_id="anchor", video_id=None,
-                    published=datetime(2021, 1, 1, tzinfo=timezone.utc))
-        _seed_entry(reader, feed_url=YT_FEED, entry_id="premiere", video_id="UPCOMING009",
-                    published=datetime(2021, 1, 2, tzinfo=timezone.utc))
-        _seed_entry(reader, feed_url=YT_FEED, entry_id="normal", video_id=None,
-                    published=datetime(2021, 1, 3, tzinfo=timezone.utc))
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="anchor", video_id=None, published=datetime(2021, 1, 1, tzinfo=timezone.utc))
+        _seed_entry(
+            reader, feed_url=YT_FEED, entry_id="premiere", video_id="UPCOMING009", published=datetime(2021, 1, 2, tzinfo=timezone.utc)
+        )
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="normal", video_id=None, published=datetime(2021, 1, 3, tzinfo=timezone.utc))
     with TestClient(_range_app()) as client:
-        r = client.post("/entries/mark-range-read", data={
-            "folder_id": str(UNCAT), "feed_url": YT_FEED, "entry_id": "anchor",
-            "direction": "below", "read_filter": "unread",
-        }, headers={"X-Requested-With": "lectio-post-range-read"})
+        r = client.post(
+            "/entries/mark-range-read",
+            data={
+                "folder_id": str(UNCAT),
+                "feed_url": YT_FEED,
+                "entry_id": "anchor",
+                "direction": "below",
+                "read_filter": "unread",
+            },
+            headers={"X-Requested-With": "lectio-post-range-read"},
+        )
     assert r.status_code == 200
     with main.get_reader() as reader:
         assert not reader.get_entry((YT_FEED, "premiere")).read
@@ -224,6 +238,7 @@ def test_mark_range_read_skips_unpremiered(configured):
 
 
 # --- render-time "don't show yet" filter -----------------------------------
+
 
 def test_list_entries_hides_unpremiered_when_pref_enabled(configured):
     _seed_live_status("UPCOMING010", "upcoming", "2026-09-20T18:00:00Z")
@@ -291,6 +306,7 @@ def test_starred_filter_shows_unpremiered_despite_hide_unpremiered(configured):
 
 # --- unread-count badge (same gap hide_locked_comics was fixed for) --------
 
+
 def test_unread_count_excludes_unpremiered_hidden_via_per_feed_pref(configured):
     """Same badge-leak class as hide_locked_comics: hide_unpremiered's
     render-time filter hides the not-yet-aired video from the list, but
@@ -357,8 +373,7 @@ def test_unread_count_ignores_read_unpremiered_entry(configured):
     _seed_live_status("UPCOMING018", "upcoming", "2026-09-20T18:00:00Z")
     with main.get_reader() as reader:
         reader.add_feed(YT_FEED, allow_invalid_url=True, exist_ok=True)
-        _seed_entry(reader, feed_url=YT_FEED, entry_id="premiere", video_id="UPCOMING018",
-                    published=OLD, read=True)
+        _seed_entry(reader, feed_url=YT_FEED, entry_id="premiere", video_id="UPCOMING018", published=OLD, read=True)
         _seed_entry(reader, feed_url=YT_FEED, entry_id="normal", video_id=None, published=OLD)
     with main.get_meta_connection() as conn:
         main.upsert_feed_display_pref(conn, YT_FEED, "hide_unpremiered", 1)

@@ -4,6 +4,7 @@ lead-image cache via extract_inline_thumb_url, but the article view always calle
 the cache-consulting extract_entry_thumbnail_url, which returns a stale negative
 ('no image') entry without scanning content. _derive_article_lead_image routes by
 strategy so the two stay consistent."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace

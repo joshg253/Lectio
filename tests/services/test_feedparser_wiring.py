@@ -7,6 +7,7 @@ no longer imports at all. services/__init__.py opts out via
 READER_NO_VENDORED_FEEDPARSER; these tests fail loudly if that stops taking
 effect, because the symptom otherwise is feeds quietly parsing differently.
 """
+
 from __future__ import annotations
 
 import feedparser

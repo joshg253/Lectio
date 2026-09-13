@@ -2,6 +2,7 @@
 view, not a 250-post page — a post past that cutoff used to read as "not in the
 current view" and the action silently no-op'd.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -46,13 +47,16 @@ def _seed(n):
         reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
         reader.disable_feed_updates(FEED)
         for i in range(n):
-            reader.add_entry({
-                "feed_url": FEED, "id": f"{FEED}post-{i:03d}", "link": f"{FEED}post-{i:03d}",
-                "title": f"Post {i}",
-                "published": datetime(2021, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=i),
-            })
-    return [p["id"] for p in main.list_entries_for_feeds(
-        {FEED}, limit=10000, read_filter="unread")]
+            reader.add_entry(
+                {
+                    "feed_url": FEED,
+                    "id": f"{FEED}post-{i:03d}",
+                    "link": f"{FEED}post-{i:03d}",
+                    "title": f"Post {i}",
+                    "published": datetime(2021, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=i),
+                }
+            )
+    return [p["id"] for p in main.list_entries_for_feeds({FEED}, limit=10000, read_filter="unread")]
 
 
 def _app():
@@ -70,10 +74,17 @@ def test_read_above_marks_everything_before_the_anchor(tenant):
     order = _seed(6)
     anchor = order[3]
     with TestClient(_app()) as client:
-        r = client.post("/entries/mark-range-read", data={
-            "folder_id": str(UNCAT), "feed_url": FEED, "entry_id": anchor,
-            "direction": "above", "read_filter": "unread",
-        }, headers={"X-Requested-With": "lectio-post-range-read"})
+        r = client.post(
+            "/entries/mark-range-read",
+            data={
+                "folder_id": str(UNCAT),
+                "feed_url": FEED,
+                "entry_id": anchor,
+                "direction": "above",
+                "read_filter": "unread",
+            },
+            headers={"X-Requested-With": "lectio-post-range-read"},
+        )
     assert r.status_code == 200
     # Everything before the anchor is read; the anchor and everything after stay unread.
     assert all(_read_state(order[i]) for i in range(3))
@@ -89,18 +100,29 @@ def test_read_above_respects_the_active_search(tenant):
         reader.disable_feed_updates(FEED)
         titles = ["Post Zero", "Apple One", "Post Two", "Apple Three", "Post Four", "Apple Five"]
         for i, title in enumerate(titles):
-            reader.add_entry({
-                "feed_url": FEED, "id": f"{FEED}post-{i:03d}", "link": f"{FEED}post-{i:03d}",
-                "title": title,
-                "published": datetime(2021, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=i),
-            })
+            reader.add_entry(
+                {
+                    "feed_url": FEED,
+                    "id": f"{FEED}post-{i:03d}",
+                    "link": f"{FEED}post-{i:03d}",
+                    "title": title,
+                    "published": datetime(2021, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=i),
+                }
+            )
     order = [f"{FEED}post-{i:03d}" for i in range(6)]
     anchor = order[3]  # "Apple Three"
     with TestClient(_app()) as client:
-        r = client.post("/entries/mark-range-read", data={
-            "folder_id": str(UNCAT), "feed_url": FEED, "entry_id": anchor,
-            "direction": "above", "q": "Apple",
-        }, headers={"X-Requested-With": "lectio-post-range-read"})
+        r = client.post(
+            "/entries/mark-range-read",
+            data={
+                "folder_id": str(UNCAT),
+                "feed_url": FEED,
+                "entry_id": anchor,
+                "direction": "above",
+                "q": "Apple",
+            },
+            headers={"X-Requested-With": "lectio-post-range-read"},
+        )
     assert r.status_code == 200
     # "Apple One" is above the anchor within the search results: read.
     assert _read_state(order[1])
@@ -116,12 +138,19 @@ def test_anchor_past_the_default_page_is_still_found(tenant):
     order = _seed(320)
     anchor = order[300]
     with TestClient(_app()) as client:
-        r = client.post("/entries/mark-range-read", data={
-            "folder_id": str(UNCAT), "feed_url": FEED, "entry_id": anchor,
-            "direction": "above", "read_filter": "unread",
-        }, headers={"X-Requested-With": "lectio-post-range-read"})
+        r = client.post(
+            "/entries/mark-range-read",
+            data={
+                "folder_id": str(UNCAT),
+                "feed_url": FEED,
+                "entry_id": anchor,
+                "direction": "above",
+                "read_filter": "unread",
+            },
+            headers={"X-Requested-With": "lectio-post-range-read"},
+        )
     assert r.status_code == 200
     body = r.json()
     assert "Could not find" not in (body.get("message") or "")
-    assert _read_state(order[0]) and _read_state(order[299])   # the 300 above are read
+    assert _read_state(order[0]) and _read_state(order[299])  # the 300 above are read
     assert not _read_state(order[300]) and not _read_state(order[319])

@@ -8,6 +8,7 @@ pattern as the DeviantArt integration; this module only speaks HTTP to Google.
 Scope: https://www.googleapis.com/auth/youtube (manage playlists). We only ever
 call playlists.list / playlistItems.insert / playlists.insert.
 """
+
 from __future__ import annotations
 
 from urllib.parse import urlencode
@@ -72,24 +73,30 @@ def _post_token(payload: dict, what: str) -> dict:
 
 def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: str) -> dict:
     """Exchange an authorization code for access + refresh tokens."""
-    return _post_token({
-        "grant_type": "authorization_code",
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "code": code,
-        "redirect_uri": redirect_uri,
-    }, "token exchange")
+    return _post_token(
+        {
+            "grant_type": "authorization_code",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": code,
+            "redirect_uri": redirect_uri,
+        },
+        "token exchange",
+    )
 
 
 def refresh_access_token(client_id: str, client_secret: str, refresh_token: str) -> dict:
     """Refresh an expired access token. Google omits ``refresh_token`` from the
     response, so the caller keeps the existing one."""
-    return _post_token({
-        "grant_type": "refresh_token",
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "refresh_token": refresh_token,
-    }, "token refresh")
+    return _post_token(
+        {
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+        },
+        "token refresh",
+    )
 
 
 def _auth_headers(access_token: str) -> dict:
@@ -141,11 +148,13 @@ def list_playlists(access_token: str) -> list[dict]:
             _bill(1)
             data = resp.json()
             for item in data.get("items", []):
-                out.append({
-                    "id": item.get("id", ""),
-                    "title": (item.get("snippet") or {}).get("title", ""),
-                    "count": (item.get("contentDetails") or {}).get("itemCount", 0),
-                })
+                out.append(
+                    {
+                        "id": item.get("id", ""),
+                        "title": (item.get("snippet") or {}).get("title", ""),
+                        "count": (item.get("contentDetails") or {}).get("itemCount", 0),
+                    }
+                )
             page_token = data.get("nextPageToken", "")
             if not page_token:
                 break

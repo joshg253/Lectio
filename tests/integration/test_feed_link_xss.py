@@ -8,6 +8,7 @@ origin the moment the user clicked the article, with the session cookie and
 CSRF token in scope. CodeQL flagged only the JS half (js/xss-through-dom on
 static/js/app.js); the server-rendered hrefs were the worse half.
 """
+
 from __future__ import annotations
 
 import pytest

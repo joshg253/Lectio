@@ -7,6 +7,7 @@ archive-only *orphans* — from the archive row's own stale link, which is how i
 surfaced: a combined feed's articles still showing their old, dead URLs.
 Measured on the live library 2026-07-25, past combines had stranded 85 of them.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -35,9 +36,14 @@ def configured(tmp_path):
         reader.add_feed(OLD, exist_ok=True)
         reader.add_feed(NEW, exist_ok=True)
         for feed in (OLD, NEW):
-            reader.add_entry({
-                "feed_url": feed, "id": SHARED_ID, "link": SHARED_ID, "title": "dunders",
-            })
+            reader.add_entry(
+                {
+                    "feed_url": feed,
+                    "id": SHARED_ID,
+                    "link": SHARED_ID,
+                    "title": "dunders",
+                }
+            )
     try:
         yield
     finally:
@@ -58,9 +64,7 @@ def _put_archive(feed_url: str, entry_id: str, body: bytes) -> None:
 
 def _archive_feeds(entry_id: str) -> list[str]:
     with main.get_starred_archive_connection() as conn:
-        return [r[0] for r in conn.execute(
-            "SELECT feed_url FROM archived_entry WHERE entry_id = ?", (entry_id,)
-        )]
+        return [r[0] for r in conn.execute("SELECT feed_url FROM archived_entry WHERE entry_id = ?", (entry_id,))]
 
 
 def test_combine_carries_the_capture_to_the_survivor(configured):
@@ -118,10 +122,14 @@ def test_an_uncurated_unread_post_moves_to_the_survivor(configured):
     and no capture — `_migrate_curation` walked curation, not entries, so it was
     never matched and never synthesized."""
     with main.get_reader() as reader:
-        reader.add_entry({
-            "feed_url": OLD, "id": UNCURATED, "link": UNCURATED,
-            "title": "only on the old feed",
-        })
+        reader.add_entry(
+            {
+                "feed_url": OLD,
+                "id": UNCURATED,
+                "link": UNCURATED,
+                "title": "only on the old feed",
+            }
+        )
         with main.get_meta_connection() as conn:
             counts = main._migrate_curation(reader, conn, OLD, NEW)
 
@@ -162,8 +170,7 @@ def test_per_entry_meta_follows_the_entry(configured):
     correction reverted is a worse outcome than not moving it."""
     with main.get_meta_connection() as conn:
         conn.execute(
-            "INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at)"
-            " VALUES (?, ?, ?, ?)",
+            "INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at) VALUES (?, ?, ?, ?)",
             (OLD, UNCURATED, "https://cdn.test/panel.jpg", 1786232800.0),
         )
         conn.execute(
@@ -172,9 +179,14 @@ def test_per_entry_meta_follows_the_entry(configured):
         )
         conn.commit()
     with main.get_reader() as reader:
-        reader.add_entry({
-            "feed_url": OLD, "id": UNCURATED, "link": UNCURATED, "title": "t",
-        })
+        reader.add_entry(
+            {
+                "feed_url": OLD,
+                "id": UNCURATED,
+                "link": UNCURATED,
+                "title": "t",
+            }
+        )
         with main.get_meta_connection() as conn:
             main._migrate_curation(reader, conn, OLD, NEW)
 
@@ -187,9 +199,7 @@ def test_per_entry_meta_follows_the_entry(configured):
             "SELECT title FROM entry_title_overrides WHERE feed_url = ? AND entry_id = ?",
             (NEW, UNCURATED),
         ).fetchone()
-        left = conn.execute(
-            "SELECT COUNT(*) FROM entry_lead_images WHERE feed_url = ?", (OLD,)
-        ).fetchone()[0]
+        left = conn.execute("SELECT COUNT(*) FROM entry_lead_images WHERE feed_url = ?", (OLD,)).fetchone()[0]
 
     assert img is not None and img[0] == "https://cdn.test/panel.jpg"
     assert title is not None and title[0] == "corrected title"
@@ -202,15 +212,12 @@ def test_rekeying_read_history_does_not_lose_the_row(configured):
     DELETE then loses the row outright."""
     with main.get_meta_connection() as conn:
         conn.execute(
-            "INSERT INTO read_history (feed_url, entry_id, title, link, feed_title, read_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO read_history (feed_url, entry_id, title, link, feed_title, read_at) VALUES (?, ?, ?, ?, ?, ?)",
             (OLD, UNCURATED, "t", UNCURATED, "old feed", "2026-08-08T00:00:00"),
         )
         conn.commit()
         main._rekey_entry_meta(conn, OLD, UNCURATED, NEW, UNCURATED)
         conn.commit()
-        rows = conn.execute(
-            "SELECT feed_url FROM read_history WHERE entry_id = ?", (UNCURATED,)
-        ).fetchall()
+        rows = conn.execute("SELECT feed_url FROM read_history WHERE entry_id = ?", (UNCURATED,)).fetchall()
 
     assert [r[0] for r in rows] == [NEW]

@@ -2,6 +2,7 @@
 
 Older entries whose <iframe> was stripped at ingest (no placeholder figure) get
 their YouTube/Bandcamp/SoundCloud players recovered from the source page."""
+
 from __future__ import annotations
 
 import types
@@ -40,20 +41,14 @@ def test_extract_skips_already_present_src():
 
 
 def test_extract_youtube_uses_inline_player_and_canonical():
-    out = main._extract_source_embed_iframes(
-        f'<iframe src="https://www.youtube.com/embed/{VID}"></iframe>'
-    )
+    out = main._extract_source_embed_iframes(f'<iframe src="https://www.youtube.com/embed/{VID}"></iframe>')
     canonical, embed = out[0]
     assert canonical == f"yt:{VID}"
     assert "youtube-embed-container" in embed
 
 
 def test_extract_bandcamp_canonical_from_inner_link():
-    html = (
-        f'<iframe src="{BC}">'
-        '<a href="https://artist.bandcamp.com/album/foo">Foo by Artist</a>'
-        "</iframe>"
-    )
+    html = f'<iframe src="{BC}"><a href="https://artist.bandcamp.com/album/foo">Foo by Artist</a></iframe>'
     out = main._extract_source_embed_iframes(html)
     assert out[0][0] == "https://artist.bandcamp.com/album/foo"
 
@@ -77,20 +72,12 @@ def test_extract_youtube_facade_thumbnail():
 def test_extract_facade_thumbnail_needs_video_ancestor_hint():
     # A bare /vi/ thumbnail with no video-ish container (e.g. a random article
     # image that happens to be a YouTube thumb) is not treated as an embed.
-    html = (
-        '<div class="article-body"><figure>'
-        f'<img src="https://i.ytimg.com/vi/{VID}/hqdefault.jpg">'
-        "</figure></div>"
-    )
+    html = f'<div class="article-body"><figure><img src="https://i.ytimg.com/vi/{VID}/hqdefault.jpg"></figure></div>'
     assert main._extract_source_embed_iframes(html) == []
 
 
 def test_extract_facade_thumbnail_host_case_insensitive():
-    html = (
-        '<div class="youtube-facade">'
-        f'<img src="https://I.YTIMG.COM/vi/{VID}/maxresdefault.jpg">'
-        "</div>"
-    )
+    html = f'<div class="youtube-facade"><img src="https://I.YTIMG.COM/vi/{VID}/maxresdefault.jpg"></div>'
     out = main._extract_source_embed_iframes(html)
     assert out and out[0][0] == f"yt:{VID}"  # ID case preserved
 
@@ -134,10 +121,7 @@ def test_place_fills_empty_video_husk_div():
     # guitarworld feed bodies keep the stripped facade's empty container div;
     # the recovered player should land there (top of the article), not at the
     # bottom.
-    body = (
-        '<article><div class="youtube-video"><div class="video-aspect-box"></div></div>'
-        "<p>First real paragraph.</p></article>"
-    )
+    body = '<article><div class="youtube-video"><div class="video-aspect-box"></div></div><p>First real paragraph.</p></article>'
     out = main._place_recovered_embeds(body, [(f"yt:{VID}", f'<iframe src="https://www.youtube.com/embed/{VID}"></iframe>')])
     assert out.index(f"/embed/{VID}") < out.index("First real paragraph")
     assert 'class="youtube-video"' not in out  # husk consumed, not duplicated
@@ -175,7 +159,8 @@ def _entry(link="https://example.com/post"):
 
 def test_inject_appends_recovered_embeds(monkeypatch):
     monkeypatch.setattr(
-        main.lead_image_service, "get_cached_source_html",
+        main.lead_image_service,
+        "get_cached_source_html",
         lambda link: ("https://example.com/post", SOURCE_HTML),
     )
     body = "<p>Article body with no embed.</p>"
@@ -206,15 +191,15 @@ def test_inject_noop_without_link(monkeypatch):
 
 def test_inject_queues_without_blocking_on_miss(monkeypatch):
     events = {"queued": [], "waited": []}
+    monkeypatch.setattr(main.lead_image_service, "get_cached_source_html", lambda link: None)
     monkeypatch.setattr(
-        main.lead_image_service, "get_cached_source_html", lambda link: None
-    )
-    monkeypatch.setattr(
-        main.lead_image_service, "queue_source_html_fetch",
+        main.lead_image_service,
+        "queue_source_html_fetch",
         lambda link, *a, **k: events["queued"].append(link),
     )
     monkeypatch.setattr(
-        main.lead_image_service, "wait_for_source_html_fetch",
+        main.lead_image_service,
+        "wait_for_source_html_fetch",
         lambda *a, **k: events["waited"].append(1) or False,
     )
     body = "<p>body</p>"
@@ -225,8 +210,7 @@ def test_inject_queues_without_blocking_on_miss(monkeypatch):
 
 
 def test_strip_bandcamp_track_signature():
-    src = ("https://bandcamp.com/EmbeddedPlayer/album=2004014866/size=large/"
-           "bgcol=ffffff/tracklist=true/tracks=159,260/esig=d83a3a2cbedcb6/")
+    src = "https://bandcamp.com/EmbeddedPlayer/album=2004014866/size=large/bgcol=ffffff/tracklist=true/tracks=159,260/esig=d83a3a2cbedcb6/"
     html_in = f'<iframe loading="lazy" src="{src}"></iframe>'
     out = main._strip_bandcamp_track_signature(html_in)
     assert "tracks=" not in out
@@ -265,13 +249,13 @@ def test_strip_bandcamp_is_linear_not_quadratic():
     import time
 
     def _elapsed(reps: int) -> float:
-        html = '<iframe src="' + "bandcamp.com/EmbeddedPlayer/" * reps + ' tracks=1'
+        html = '<iframe src="' + "bandcamp.com/EmbeddedPlayer/" * reps + " tracks=1"
         start = time.perf_counter()
         main._strip_bandcamp_track_signature(html)
         return time.perf_counter() - start
 
     _elapsed(200)  # warm up, so import/JIT costs don't land in the baseline
-    base = max(_elapsed(500), 1e-4)   # floor: guards against a ~0 baseline
-    quad = _elapsed(2000)             # 4x the input
+    base = max(_elapsed(500), 1e-4)  # floor: guards against a ~0 baseline
+    quad = _elapsed(2000)  # 4x the input
     # Linear predicts ~4x, quadratic ~16x. 8x splits them with room for noise.
     assert quad < base * 8, f"non-linear: {base * 1000:.2f}ms -> {quad * 1000:.2f}ms"

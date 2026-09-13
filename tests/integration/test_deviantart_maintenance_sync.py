@@ -1,6 +1,7 @@
 """Daily maintenance now runs the DeviantArt watch-list → gallery feeds sync for
 connected users, so the watch list stays current without the manual Settings
 button. It must run only when the account is connected (a user token exists)."""
+
 from __future__ import annotations
 
 import pytest
@@ -34,7 +35,8 @@ def test_sync_runs_when_connected(configured):
     calls: list[int] = []
     configured.setattr(main, "get_deviantart_user_token", lambda: "user-token")
     configured.setattr(
-        main, "sync_deviantart_watchlist",
+        main,
+        "sync_deviantart_watchlist",
         lambda: calls.append(1) or {"added": 2, "total": 5, "rate_limited": False},
     )
 

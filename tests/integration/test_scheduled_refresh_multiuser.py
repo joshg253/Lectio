@@ -4,6 +4,7 @@ Exercised in-process by monkeypatching the user store; the actual
 feed-fetch / cleanup work is stubbed so no network or feed data is needed. Users
 are identified by their stable user_id.
 """
+
 from __future__ import annotations
 
 import main
@@ -43,10 +44,8 @@ def test_daily_maintenance_per_user_then_global(monkeypatch, tmp_path):
 
     per_user: list[str] = []
     global_runs: list[str] = []
-    monkeypatch.setattr(main, "_daily_maintenance_for_user",
-                        lambda: per_user.append(tenancy.current_user_id()))
-    monkeypatch.setattr(main, "_run_global_maintenance",
-                        lambda: global_runs.append(tenancy.current_user_id()))
+    monkeypatch.setattr(main, "_daily_maintenance_for_user", lambda: per_user.append(tenancy.current_user_id()))
+    monkeypatch.setattr(main, "_run_global_maintenance", lambda: global_runs.append(tenancy.current_user_id()))
 
     main._run_daily_maintenance()
 

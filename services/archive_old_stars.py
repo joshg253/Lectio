@@ -16,6 +16,7 @@ This module is the pure decision layer: it takes the current curation and return
 what would change. Every DB write, and the cache invalidation a behind-the-back
 write needs, stays with the caller.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone

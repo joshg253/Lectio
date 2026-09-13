@@ -15,6 +15,7 @@ Usage (inside the app container):
     uv run scripts/refresh_expired_deviantart_images.py --apply
     uv run scripts/refresh_expired_deviantart_images.py --apply --within-days 2
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,8 +32,9 @@ def main_cli() -> None:
     ap = argparse.ArgumentParser(description="Re-sign expiring DeviantArt image URLs.")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--user", default=None)
-    ap.add_argument("--within-days", type=float, default=0.0,
-                    help="also re-sign tokens expiring within N days (default: only already-expired)")
+    ap.add_argument(
+        "--within-days", type=float, default=0.0, help="also re-sign tokens expiring within N days (default: only already-expired)"
+    )
     ap.add_argument("--max", type=int, default=main._DA_IMAGE_REFRESH_MAX_PER_RUN)
     args = ap.parse_args()
     users = [args.user] if args.user else main._background_user_ids()
@@ -40,7 +42,9 @@ def main_cli() -> None:
     for uid in users:
         with tenancy.user_context(uid):
             stats = main.refresh_expiring_deviantart_images(
-                within_seconds=args.within_days * 86400, max_entries=args.max, apply=args.apply,
+                within_seconds=args.within_days * 86400,
+                max_entries=args.max,
+                apply=args.apply,
             )
         print(f"[{uid}]  {stats}")
     if not args.apply:

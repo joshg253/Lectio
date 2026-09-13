@@ -17,6 +17,7 @@ actual ``<video>`` element (see app.js ``initBskyVideoPlayers``).
 No auth is required and no label is honored at this layer — the feed subscription
 is the user's explicit opt-in to that account's posts.
 """
+
 from __future__ import annotations
 
 import logging

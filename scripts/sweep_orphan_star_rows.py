@@ -22,6 +22,7 @@ Usage (inside the app container so LECTIO_DATA_DIR=/data resolves):
 Restart the app afterwards (or let the caller invalidate): the unread-count
 cache is generation-guarded and will not self-heal from a behind-the-back write.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -41,10 +42,7 @@ def sweep_for_user(uid: str, apply: bool) -> dict:
         live = {(str(f), str(i)) for f, i in rc.execute("SELECT feed, id FROM entries")}
 
     with sqlite3.connect(str(tenancy.meta_db_path()), timeout=30.0) as mc:
-        stars = [
-            (str(f), str(i))
-            for f, i in mc.execute("SELECT feed_url, entry_id FROM saved_entries")
-        ]
+        stars = [(str(f), str(i)) for f, i in mc.execute("SELECT feed_url, entry_id FROM saved_entries")]
         orphans = [k for k in stars if k not in live]
 
         by_feed = Counter(f for f, _ in orphans)
@@ -59,15 +57,14 @@ def sweep_for_user(uid: str, apply: bool) -> dict:
             if placeholders:
                 flat = [v for k in orphans[:500] for v in k]
                 archived = mc.execute(
-                    "SELECT COUNT(*) FROM archived_entries "
-                    f"WHERE (feed_url, entry_id) IN ({placeholders})",
+                    f"SELECT COUNT(*) FROM archived_entries WHERE (feed_url, entry_id) IN ({placeholders})",
                     flat,
                 ).fetchone()[0]
 
         deleted = 0
         if apply and orphans:
             for start in range(0, len(orphans), 500):
-                chunk = orphans[start:start + 500]
+                chunk = orphans[start : start + 500]
                 placeholders = ",".join("(?,?)" for _ in chunk)
                 flat = [v for k in chunk for v in k]
                 cur = mc.execute(

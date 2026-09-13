@@ -1,4 +1,5 @@
 """Unit tests for the tenancy resolver (services/tenancy.py)."""
+
 from __future__ import annotations
 
 import pytest

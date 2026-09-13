@@ -6,6 +6,7 @@ an anchor's position and act on entries around it.
 Measured on the live library: an 8,472-entry "All Feeds" unread resolve went
 from ~10.4s to ~6.5s, since phase 2 alone was ~3.9s of work this caller never
 used any part of."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -32,10 +33,15 @@ def configured(tmp_path):
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
         for i, read in (("e1", False), ("e2", True), ("e3", False)):
-            reader.add_entry({
-                "feed_url": FEED, "id": i, "title": f"Post {i}", "link": f"https://example.test/{i}",
-                "published": datetime(2021, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=int(i[-1])),
-            })
+            reader.add_entry(
+                {
+                    "feed_url": FEED,
+                    "id": i,
+                    "title": f"Post {i}",
+                    "link": f"https://example.test/{i}",
+                    "published": datetime(2021, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=int(i[-1])),
+                }
+            )
             if read:
                 reader.mark_entry_as_read((FEED, i))
     try:

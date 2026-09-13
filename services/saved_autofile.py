@@ -26,6 +26,7 @@ presents it for approval per host. Two guards decide what may be auto-approved:
               articles into it would be wrong. `MIN_SUPPORT` is the floor for
               calling a target confident.
 """
+
 from __future__ import annotations
 
 from collections import Counter, defaultdict
@@ -93,9 +94,7 @@ def build_autofile_plan(
     # Absent explicit declarations, a feed still declares its own URL's host —
     # otherwise a caller that omits `feed_hosts` silently loses the preference
     # for a site's own feed over an aggregator that links to it.
-    declared = feed_hosts if feed_hosts is not None else {
-        f: {article_host(f)} for f in seen_feeds
-    }
+    declared = feed_hosts if feed_hosts is not None else {f: {article_host(f)} for f in seen_feeds}
     # A declared host makes the feed a candidate even with no matching entries.
     declares: dict[str, set[str]] = defaultdict(set)
     for feed_url, hosts in declared.items():
@@ -128,36 +127,31 @@ def build_autofile_plan(
             key=lambda kv: (kv[0] not in host_declarers, -kv[1], kv[0]),
         )
         on_host = [f for f, _ in ranked if f in host_declarers]
-        target, support = (ranked[0] if ranked else (None, 0))
+        target, support = ranked[0] if ranked else (None, 0)
         ambiguous = len(on_host) > 1 if on_host else len(ranked) > 1
         # A feed that declares the host is trustworthy once it is demonstrably a
         # real feed — enough entries of its own — even if none of them happen to
         # be on this host yet. Without the size check a scraped single-article
         # URL sitting in the subscription list (one entry, its own host) would
         # read as the site's feed and collect the whole backlog.
-        declares_and_stocked = (
-            target in host_declarers and sizes.get(target, 0) >= min_support
+        declares_and_stocked = target in host_declarers and sizes.get(target, 0) >= min_support
+        plan.append(
+            {
+                "host": host,
+                "count": len(entry_ids),
+                "entry_ids": entry_ids,
+                "target_feed_url": target,
+                "target_title": titles.get(target or "", target or ""),
+                "support": support,
+                "ambiguous": ambiguous,
+                "declared": target in host_declarers,
+                # Auto-approvable only when the choice is unambiguous *and* the
+                # target is either evidenced by its own entries on this host or is a
+                # stocked feed that declares it.
+                "confident": bool(target) and not ambiguous and (support >= min_support or declares_and_stocked),
+                "candidates": [{"feed_url": f, "title": titles.get(f, f), "support": n} for f, n in ranked[:5]],
+            }
         )
-        plan.append({
-            "host": host,
-            "count": len(entry_ids),
-            "entry_ids": entry_ids,
-            "target_feed_url": target,
-            "target_title": titles.get(target or "", target or ""),
-            "support": support,
-            "ambiguous": ambiguous,
-            "declared": target in host_declarers,
-            # Auto-approvable only when the choice is unambiguous *and* the
-            # target is either evidenced by its own entries on this host or is a
-            # stocked feed that declares it.
-            "confident": bool(target) and not ambiguous and (
-                support >= min_support or declares_and_stocked
-            ),
-            "candidates": [
-                {"feed_url": f, "title": titles.get(f, f), "support": n}
-                for f, n in ranked[:5]
-            ],
-        })
 
     plan.sort(key=lambda c: (-c["count"], c["host"]))
     return plan
@@ -172,8 +166,5 @@ def plan_totals(plan: list[dict]) -> dict:
         "confident_articles": sum(c["count"] for c in plan if c["confident"]),
         "ambiguous_articles": sum(c["count"] for c in plan if c["ambiguous"]),
         "unmatched_articles": sum(c["count"] for c in plan if not c["target_feed_url"]),
-        "low_support_articles": sum(
-            c["count"] for c in plan
-            if c["target_feed_url"] and not c["ambiguous"] and not c["confident"]
-        ),
+        "low_support_articles": sum(c["count"] for c in plan if c["target_feed_url"] and not c["ambiguous"] and not c["confident"]),
     }

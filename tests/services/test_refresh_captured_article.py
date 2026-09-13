@@ -7,6 +7,7 @@ gate on feed identity, so filing silently stripped the re-fetch escape hatch
 from every article the filer moved. These tests pin the in-place refresh that
 replaces it — and that it never writes back into the saved feed, which would
 resurrect the duplicate filing removed."""
+
 from __future__ import annotations
 
 import json
@@ -94,24 +95,22 @@ def _add_filed_capture(reader, meta_conn, *, feed=REAL_FEED, entry_id=ARTICLE):
     """A capture as it looks after auto-filing: user-added, on a real feed."""
     reader.add_feed(feed, allow_invalid_url=True, exist_ok=True)
     reader.disable_feed_updates(feed)
-    reader.add_entry({
-        "feed_url": feed,
-        "id": entry_id,
-        "link": entry_id,
-        "title": "Stale Listing Page",
-        "published": datetime.now(timezone.utc),
-        "content": [{"value": "<p>By Jesse Will By Andrew Zaleski</p>"}],
-    })
-    meta_conn.execute(
-        "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (feed, entry_id)
+    reader.add_entry(
+        {
+            "feed_url": feed,
+            "id": entry_id,
+            "link": entry_id,
+            "title": "Stale Listing Page",
+            "published": datetime.now(timezone.utc),
+            "content": [{"value": "<p>By Jesse Will By Andrew Zaleski</p>"}],
+        }
     )
+    meta_conn.execute("INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (feed, entry_id))
     meta_conn.commit()
 
 
 def _stored_content(reader, feed, entry_id) -> str:
-    row = reader._storage.get_db().execute(
-        "SELECT content FROM entries WHERE feed = ? AND id = ?", (feed, entry_id)
-    ).fetchone()
+    row = reader._storage.get_db().execute("SELECT content FROM entries WHERE feed = ? AND id = ?", (feed, entry_id)).fetchone()
     return json.loads(row[0])[0]["value"]
 
 
@@ -120,7 +119,10 @@ def test_replaces_content_in_place_on_the_real_feed(reader, meta_conn):
     archived: list[tuple[str, str]] = []
 
     result = refresh_captured_article(
-        reader, meta_conn, REAL_FEED, ARTICLE,
+        reader,
+        meta_conn,
+        REAL_FEED,
+        ARTICLE,
         extract=_extract_ok,
         enqueue_archive=lambda f, e: archived.append((f, e)),
     )
@@ -140,9 +142,7 @@ def test_never_writes_into_the_saved_feed(reader, meta_conn):
     refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
 
     assert reader.get_entry((SAVED_FEED_URL, ARTICLE), None) is None
-    saved_rows = meta_conn.execute(
-        "SELECT feed_url FROM saved_entries WHERE entry_id = ?", (ARTICLE,)
-    ).fetchall()
+    saved_rows = meta_conn.execute("SELECT feed_url FROM saved_entries WHERE entry_id = ?", (ARTICLE,)).fetchall()
     assert [r["feed_url"] for r in saved_rows] == [REAL_FEED]
 
 
@@ -157,9 +157,7 @@ def test_updates_the_title_when_not_pinned(reader, meta_conn):
 def test_a_pinned_title_survives_the_refresh(reader, meta_conn):
     """Edit title pins an override; a later re-fetch must not clobber it."""
     _add_filed_capture(reader, meta_conn)
-    meta_conn.execute(
-        "INSERT INTO entry_title_overrides (feed_url, entry_id) VALUES (?, ?)", (REAL_FEED, ARTICLE)
-    )
+    meta_conn.execute("INSERT INTO entry_title_overrides (feed_url, entry_id) VALUES (?, ?)", (REAL_FEED, ARTICLE))
     meta_conn.commit()
 
     refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
@@ -180,18 +178,18 @@ def test_refetches_an_unkept_feed_entry_and_pins_it(reader, meta_conn):
     not want filed just to read it properly."""
     reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
     reader.disable_feed_updates(REAL_FEED)
-    reader.add_entry({
-        "feed_url": REAL_FEED,
-        "id": ARTICLE,
-        "link": ARTICLE,
-        "title": "Publisher Entry",
-        "published": datetime.now(timezone.utc),
-    })
+    reader.add_entry(
+        {
+            "feed_url": REAL_FEED,
+            "id": ARTICLE,
+            "link": ARTICLE,
+            "title": "Publisher Entry",
+            "published": datetime.now(timezone.utc),
+        }
+    )
     # add_entry marks it user-added; force the feed-provided case directly.
     db = reader._storage.get_db()
-    db.execute(
-        "UPDATE entries SET added_by = 'feed' WHERE feed = ? AND id = ?", (REAL_FEED, ARTICLE)
-    )
+    db.execute("UPDATE entries SET added_by = 'feed' WHERE feed = ? AND id = ?", (REAL_FEED, ARTICLE))
     db.commit()
 
     result = refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
@@ -199,10 +197,13 @@ def test_refetches_an_unkept_feed_entry_and_pins_it(reader, meta_conn):
     assert result["ok"] is True
     assert result["refreshed"] is True
     # Pinned, or the next refresh would put the publisher's thin copy back.
-    assert meta_conn.execute(
-        "SELECT 1 FROM entry_content_overrides WHERE feed_url = ? AND entry_id = ?",
-        (REAL_FEED, ARTICLE),
-    ).fetchone() is not None
+    assert (
+        meta_conn.execute(
+            "SELECT 1 FROM entry_content_overrides WHERE feed_url = ? AND entry_id = ?",
+            (REAL_FEED, ARTICLE),
+        ).fetchone()
+        is not None
+    )
 
 
 def test_an_unkept_entry_is_not_archived_by_a_refetch(reader, meta_conn):
@@ -211,17 +212,26 @@ def test_an_unkept_entry_is_not_archived_by_a_refetch(reader, meta_conn):
     it — exactly the husk the unstar path then has to clean up."""
     reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
     reader.disable_feed_updates(REAL_FEED)
-    reader.add_entry({
-        "feed_url": REAL_FEED, "id": ARTICLE, "link": ARTICLE,
-        "title": "Publisher Entry", "published": datetime.now(timezone.utc),
-    })
+    reader.add_entry(
+        {
+            "feed_url": REAL_FEED,
+            "id": ARTICLE,
+            "link": ARTICLE,
+            "title": "Publisher Entry",
+            "published": datetime.now(timezone.utc),
+        }
+    )
     db = reader._storage.get_db()
     db.execute("UPDATE entries SET added_by = 'feed' WHERE feed = ? AND id = ?", (REAL_FEED, ARTICLE))
     db.commit()
 
     archived: list[tuple[str, str]] = []
     result = refresh_captured_article(
-        reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok,
+        reader,
+        meta_conn,
+        REAL_FEED,
+        ARTICLE,
+        extract=_extract_ok,
         enqueue_archive=lambda f, e: archived.append((f, e)),
     )
     assert result["ok"] is True
@@ -232,17 +242,20 @@ def _add_starred_feed_entry(reader, meta_conn, *, published=None):
     """A feed-provided (added_by='feed') entry the user has starred."""
     reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
     reader.disable_feed_updates(REAL_FEED)
-    reader.add_entry({
-        "feed_url": REAL_FEED, "id": ARTICLE, "link": ARTICLE, "title": "Feed Post",
-        "published": published or datetime(2020, 1, 1, tzinfo=timezone.utc),
-        "content": [{"value": "<p>Thin feed content, no images.</p>"}],
-    })
+    reader.add_entry(
+        {
+            "feed_url": REAL_FEED,
+            "id": ARTICLE,
+            "link": ARTICLE,
+            "title": "Feed Post",
+            "published": published or datetime(2020, 1, 1, tzinfo=timezone.utc),
+            "content": [{"value": "<p>Thin feed content, no images.</p>"}],
+        }
+    )
     db = reader._storage.get_db()
     db.execute("UPDATE entries SET added_by = 'feed' WHERE feed = ? AND id = ?", (REAL_FEED, ARTICLE))
     db.commit()
-    meta_conn.execute(
-        "INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (REAL_FEED, ARTICLE)
-    )
+    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (REAL_FEED, ARTICLE))
     meta_conn.commit()
 
 
@@ -290,9 +303,7 @@ def test_a_failed_fetch_leaves_the_stored_copy_alone(reader, meta_conn):
 def test_an_empty_extraction_leaves_the_stored_copy_alone(reader, meta_conn):
     _add_filed_capture(reader, meta_conn)
 
-    result = refresh_captured_article(
-        reader, meta_conn, REAL_FEED, ARTICLE, extract=lambda url: ("Title", "")
-    )
+    result = refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=lambda url: ("Title", ""))
 
     assert result["ok"] is False
     assert "By Jesse Will" in _stored_content(reader, REAL_FEED, ARTICLE)
@@ -301,6 +312,7 @@ def test_an_empty_extraction_leaves_the_stored_copy_alone(reader, meta_conn):
 class _FakeStatusError(Exception):
     """Stands in for httpx.HTTPStatusError: carries a .response.status_code the
     service duck-types, without importing httpx into the test."""
+
     def __init__(self, status: int):
         super().__init__(f"HTTP {status}")
         self.response = type("R", (), {"status_code": status})()
@@ -358,25 +370,33 @@ def test_tagged_feed_entry_is_refetched_and_pinned(reader, meta_conn):
     """
     reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
     reader.disable_feed_updates(REAL_FEED)
-    reader.add_entry({
-        "feed_url": REAL_FEED, "id": ARTICLE, "link": ARTICLE, "title": "Feed Post",
-        "published": datetime(2020, 1, 1, tzinfo=timezone.utc),
-        "content": [{"value": "<p>Thin feed content.</p>"}],
-    })
+    reader.add_entry(
+        {
+            "feed_url": REAL_FEED,
+            "id": ARTICLE,
+            "link": ARTICLE,
+            "title": "Feed Post",
+            "published": datetime(2020, 1, 1, tzinfo=timezone.utc),
+            "content": [{"value": "<p>Thin feed content.</p>"}],
+        }
+    )
     db = reader._storage.get_db()
     db.execute("UPDATE entries SET added_by = 'feed' WHERE feed = ? AND id = ?", (REAL_FEED, ARTICLE))
     db.commit()
-    _tag_entry(reader, REAL_FEED, ARTICLE)          # tagged, NOT starred
+    _tag_entry(reader, REAL_FEED, ARTICLE)  # tagged, NOT starred
 
     result = refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
 
     assert result["ok"] is True
     # Pinned, so the next feed refresh can't clobber the fuller copy — which is
     # what makes allowing a feed entry safe at all.
-    assert meta_conn.execute(
-        "SELECT 1 FROM entry_content_overrides WHERE feed_url = ? AND entry_id = ?",
-        (REAL_FEED, ARTICLE),
-    ).fetchone() is not None
+    assert (
+        meta_conn.execute(
+            "SELECT 1 FROM entry_content_overrides WHERE feed_url = ? AND entry_id = ?",
+            (REAL_FEED, ARTICLE),
+        ).fetchone()
+        is not None
+    )
 
 
 def test_a_parked_page_at_the_url_is_refused(reader, meta_conn):
@@ -391,17 +411,19 @@ def test_a_parked_page_at_the_url_is_refused(reader, meta_conn):
     refuse the very case the feature is for. A slug does not change when a site
     starts serving a parked page over it.
     """
-    url = ("https://the-digital-reader.com/2019/01/22/"
-           "33-ornament-dingbat-and-other-decorative-fonts-for-your-next-ebook/")
+    url = "https://the-digital-reader.com/2019/01/22/33-ornament-dingbat-and-other-decorative-fonts-for-your-next-ebook/"
     reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
     reader.disable_feed_updates(REAL_FEED)
-    reader.add_entry({
-        "feed_url": REAL_FEED, "id": url, "link": url,
-        "title": "33 Ornament, Dingbat and Other Decorative Fonts",
-        "content": [{"value": "<p>The original article body.</p>"}],
-    })
-    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
-                      (REAL_FEED, url))
+    reader.add_entry(
+        {
+            "feed_url": REAL_FEED,
+            "id": url,
+            "link": url,
+            "title": "33 Ornament, Dingbat and Other Decorative Fonts",
+            "content": [{"value": "<p>The original article body.</p>"}],
+        }
+    )
+    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (REAL_FEED, url))
     meta_conn.commit()
 
     def _parked(u):
@@ -412,7 +434,7 @@ def test_a_parked_page_at_the_url_is_refused(reader, meta_conn):
     assert result["ok"] is False
     assert result.get("mismatch") is True
     entry = reader.get_entry((REAL_FEED, url))
-    assert "original article body" in entry.content[0].value   # untouched
+    assert "original article body" in entry.content[0].value  # untouched
     assert entry.title.startswith("33 Ornament")
 
 
@@ -422,8 +444,7 @@ def test_the_guard_stands_down_when_it_cannot_judge():
     overlap, and not at all when the slug carries too little to judge."""
     from services.saved_articles import _page_is_a_different_article as different
 
-    rich = ("https://the-digital-reader.com/2019/01/22/"
-            "33-ornament-dingbat-and-other-decorative-fonts-for-your-next-ebook/")
+    rich = "https://the-digital-reader.com/2019/01/22/33-ornament-dingbat-and-other-decorative-fonts-for-your-next-ebook/"
     assert different(rich, "Empowering Relationships - The Digital Reader")
     assert not different(rich, "33 Ornament, Dingbat and Other Decorative Fonts")
 
@@ -433,8 +454,7 @@ def test_the_guard_stands_down_when_it_cannot_judge():
     assert not different("https://blog.example.com/topics/how-to-focus", "The Real Article")
 
     # A title that genuinely echoes its slug is never refused.
-    assert not different("https://x.test/2020/09/08/stl-algorithms-tutorial-unique-copy",
-                         "STL Algorithms Tutorial: unique_copy")
+    assert not different("https://x.test/2020/09/08/stl-algorithms-tutorial-unique-copy", "STL Algorithms Tutorial: unique_copy")
 
 
 def test_query_string_urls_are_judged_on_their_query(reader, meta_conn):
@@ -450,9 +470,11 @@ def test_query_string_urls_are_judged_on_their_query(reader, meta_conn):
     """
     from services.saved_articles import _page_is_a_different_article as different
 
-    url = ("http://www.informit.com/articles/article.aspx?p=2432250&WT.rss_f=Article"
-           "&WT.rss_a=Working%20with%20the%20PowerShell%20Desired%20State%20Configuration"
-           "%2C%20Part%202%3A%20Implementation%20and%20Troubleshooting")
+    url = (
+        "http://www.informit.com/articles/article.aspx?p=2432250&WT.rss_f=Article"
+        "&WT.rss_a=Working%20with%20the%20PowerShell%20Desired%20State%20Configuration"
+        "%2C%20Part%202%3A%20Implementation%20and%20Troubleshooting"
+    )
 
     assert different(url, "Articles | InformIT")
     assert not different(url, "Working with the PowerShell Desired State Configuration, Part 2")
@@ -478,16 +500,19 @@ def test_a_refetch_is_undoable(reader, meta_conn):
     """
     reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
     reader.disable_feed_updates(REAL_FEED)
-    reader.add_entry({
-        "feed_url": REAL_FEED, "id": ARTICLE, "link": ARTICLE, "title": "Focus",
-        "content": [{"value": "<p>The body the feed served.</p>"}],
-    })
-    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
-                      (REAL_FEED, ARTICLE))
+    reader.add_entry(
+        {
+            "feed_url": REAL_FEED,
+            "id": ARTICLE,
+            "link": ARTICLE,
+            "title": "Focus",
+            "content": [{"value": "<p>The body the feed served.</p>"}],
+        }
+    )
+    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (REAL_FEED, ARTICLE))
     meta_conn.commit()
 
-    assert refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE,
-                                    extract=_extract_ok)["ok"] is True
+    assert refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)["ok"] is True
 
     row = meta_conn.execute(
         "SELECT original_content FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
@@ -498,6 +523,7 @@ def test_a_refetch_is_undoable(reader, meta_conn):
 
     # And the existing revert path restores it.
     from services.saved_articles import restore_entry_content
+
     restore_entry_content(reader, REAL_FEED, ARTICLE, row[0])
     assert "the feed served" in reader.get_entry((REAL_FEED, ARTICLE)).content[0].value
 
@@ -507,17 +533,20 @@ def test_the_snapshot_keeps_the_first_original(reader, meta_conn):
     — the same semantics the cleanup feature has, since they share the row."""
     reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
     reader.disable_feed_updates(REAL_FEED)
-    reader.add_entry({
-        "feed_url": REAL_FEED, "id": ARTICLE, "link": ARTICLE, "title": "Focus",
-        "content": [{"value": "<p>ORIGINAL feed body.</p>"}],
-    })
-    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
-                      (REAL_FEED, ARTICLE))
+    reader.add_entry(
+        {
+            "feed_url": REAL_FEED,
+            "id": ARTICLE,
+            "link": ARTICLE,
+            "title": "Focus",
+            "content": [{"value": "<p>ORIGINAL feed body.</p>"}],
+        }
+    )
+    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (REAL_FEED, ARTICLE))
     meta_conn.commit()
 
     refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
-    refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE,
-                             extract=lambda u: ("Focus", "<p>A second re-fetch.</p>"))
+    refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=lambda u: ("Focus", "<p>A second re-fetch.</p>"))
 
     original = meta_conn.execute(
         "SELECT original_content FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
@@ -534,16 +563,19 @@ def test_a_summary_only_entry_still_gets_a_snapshot(reader, meta_conn):
     root-caused on a real premierguitar.com entry, 2026-08-30."""
     reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
     reader.disable_feed_updates(REAL_FEED)
-    reader.add_entry({
-        "feed_url": REAL_FEED, "id": ARTICLE, "link": ARTICLE, "title": "Focus",
-        "summary": "The real lesson body, living only in summary.",
-    })
-    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
-                      (REAL_FEED, ARTICLE))
+    reader.add_entry(
+        {
+            "feed_url": REAL_FEED,
+            "id": ARTICLE,
+            "link": ARTICLE,
+            "title": "Focus",
+            "summary": "The real lesson body, living only in summary.",
+        }
+    )
+    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (REAL_FEED, ARTICLE))
     meta_conn.commit()
 
-    assert refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE,
-                                    extract=_extract_ok)["ok"] is True
+    assert refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)["ok"] is True
 
     row = meta_conn.execute(
         "SELECT original_content FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
@@ -553,14 +585,21 @@ def test_a_summary_only_entry_still_gets_a_snapshot(reader, meta_conn):
     assert "living only in summary" in row[0]
 
     from services.saved_articles import restore_entry_content
+
     restore_entry_content(reader, REAL_FEED, ARTICLE, row[0])
     assert "living only in summary" in reader.get_entry((REAL_FEED, ARTICLE)).content[0].value
 
 
 # ── the short-title hole: informit again, 2026-07-31 ──
-_INDEX_HTML = ("<div>" + "".join(
-    f'<dl><dt><a class="title" href="http://x.test/a{i}">Some Article Title {i}</a></dt>'
-    f'<dd class="meta"><span>Feb 25, 2026</span></dd></dl>' for i in range(30)) + "</div>")
+_INDEX_HTML = (
+    "<div>"
+    + "".join(
+        f'<dl><dt><a class="title" href="http://x.test/a{i}">Some Article Title {i}</a></dt>'
+        f'<dd class="meta"><span>Feb 25, 2026</span></dd></dl>'
+        for i in range(30)
+    )
+    + "</div>"
+)
 _PROSE_HTML = "<p>" + ("Real prose about the subject at hand. " * 80) + "</p>"
 
 
@@ -578,11 +617,9 @@ def test_an_opaque_url_with_a_short_title_falls_back_to_the_stored_title():
     """
     from services.saved_articles import _page_is_a_different_article as different
 
-    url = ("http://www.informit.com/articles/article.aspx?p=2438407&WT.rss_f=Article"
-           "&WT.rss_a=Classes%20in%20C%23&WT.rss_ev=a")
+    url = "http://www.informit.com/articles/article.aspx?p=2438407&WT.rss_f=Article&WT.rss_a=Classes%20in%20C%23&WT.rss_ev=a"
 
-    assert different(url, "Articles | InformIT",
-                     old_title="Classes in C#", new_html=_INDEX_HTML)
+    assert different(url, "Articles | InformIT", old_title="Classes in C#", new_html=_INDEX_HTML)
     # Without the stored title there is still nothing to judge by — unchanged.
     assert not different(url, "Articles | InformIT")
 
@@ -595,8 +632,7 @@ def test_a_corrected_title_on_a_prose_page_is_still_allowed():
 
     url = "http://www.informit.com/articles/article.aspx?p=2438407&WT.rss_a=Classes"
 
-    assert not different(url, "A Completely Corrected Title",
-                         old_title="untitled junk capture", new_html=_PROSE_HTML)
+    assert not different(url, "A Completely Corrected Title", old_title="untitled junk capture", new_html=_PROSE_HTML)
 
 
 def test_a_link_roundup_that_echoes_its_own_title_is_allowed():
@@ -606,9 +642,9 @@ def test_a_link_roundup_that_echoes_its_own_title_is_allowed():
 
     url = "https://www.techdirt.com/?p=1524"
 
-    assert not different(url, "This Week In Techdirt History: July 19th",
-                         old_title="This Week In Techdirt History: July 12th",
-                         new_html=_INDEX_HTML)
+    assert not different(
+        url, "This Week In Techdirt History: July 19th", old_title="This Week In Techdirt History: July 12th", new_html=_INDEX_HTML
+    )
 
 
 def test_link_index_detection_needs_both_quantity_and_density():

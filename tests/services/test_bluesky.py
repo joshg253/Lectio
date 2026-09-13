@@ -1,4 +1,5 @@
 """Unit tests for services.bluesky embed-image extraction (no network)."""
+
 from __future__ import annotations
 
 from services import bluesky
@@ -72,8 +73,7 @@ def test_images_from_record_with_media_video():
 def test_images_dedup_and_empty():
     assert bluesky._images_from_post({}) == []
     assert bluesky._images_from_post({"embed": {"$type": "app.bsky.embed.external#view"}}) == []
-    dup = {"embed": {"$type": "app.bsky.embed.images#view",
-                     "images": [{"fullsize": "u"}, {"fullsize": "u"}]}}
+    dup = {"embed": {"$type": "app.bsky.embed.images#view", "images": [{"fullsize": "u"}, {"fullsize": "u"}]}}
     assert bluesky._images_from_post(dup) == ["u"]
 
 

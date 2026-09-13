@@ -26,7 +26,7 @@ REAL = datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
     "value",
     [
         EPOCH,
-        datetime(1970, 1, 1),                      # naive, as feedparser may give
+        datetime(1970, 1, 1),  # naive, as feedparser may give
         datetime(1970, 6, 5, tzinfo=timezone.utc),  # still epoch-year junk
         datetime(1900, 1, 1, tzinfo=timezone.utc),  # template placeholder
     ],

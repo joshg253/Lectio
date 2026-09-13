@@ -9,6 +9,7 @@ Two unrelated reports from the same reading session (2026-08-02):
   already at the dimension cap, so nothing touched it, and 11.6 MB went to the
   browser on every view.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -40,9 +41,7 @@ def test_the_authors_margins_are_still_dropped():
     """Margins are free-form lengths. Keeping them would mean matching a value
     PATTERN, which is the one thing the allowlist promises never to do — the
     gutter comes from our stylesheet instead."""
-    out = html_sanitize.sanitize_html(
-        '<p style="float: left; margin-left: 1em; margin-bottom: 1em;">x</p>'
-    )
+    out = html_sanitize.sanitize_html('<p style="float: left; margin-left: 1em; margin-bottom: 1em;">x</p>')
     assert "float: left" in out
     assert "margin" not in out
 
@@ -64,9 +63,7 @@ def test_the_normalized_spacing_is_what_the_css_matches():
 def test_layout_escapes_are_still_refused():
     """float/clear were added; the properties that let feed content escape its
     container or overlay the UI were not."""
-    out = html_sanitize.sanitize_html(
-        '<p style="position: fixed; z-index: 999; width: 5000px; float: none">x</p>'
-    )
+    out = html_sanitize.sanitize_html('<p style="position: fixed; z-index: 999; width: 5000px; float: none">x</p>')
     assert "position" not in out
     assert "z-index" not in out
     assert "width" not in out
@@ -95,8 +92,7 @@ def test_floats_stack_on_a_narrow_screen():
         floats = [b for b in blocks if "float" in b]
         assert floats, f"{sheet} has no narrow-screen float override"
         for block in floats:
-            assert "float: none !important" in block, \
-                f"{sheet}: an inline float will beat a plain `float: none`"
+            assert "float: none !important" in block, f"{sheet}: an inline float will beat a plain `float: none`"
 
 
 # --- a floated opener is content, not a header ---------------------------
@@ -110,8 +106,10 @@ def test_a_floated_opening_image_stays_in_the_flow():
     enough: the FIRST image is also what the lead-image pipeline hoists into a
     full-width hero, stripping it from the body — so the one image the reader
     pointed at was the one that lost its float and its text wrap."""
-    html = ('<div class="separator"><a style="clear: right; float: right" href="x">'
-            '<img src="https://e.com/hero.jpg"/></a></div><p>The review text.</p>')
+    html = (
+        '<div class="separator"><a style="clear: right; float: right" href="x">'
+        '<img src="https://e.com/hero.jpg"/></a></div><p>The review text.</p>'
+    )
     body, lead = main._strip_lead_image_opener(html, _LEAD, _FEED, True)
     assert "hero.jpg" in body, "the floated image was hoisted out of the body"
     assert lead is None, "kept inline AND hoisted would show the picture twice"
@@ -120,18 +118,16 @@ def test_a_floated_opening_image_stays_in_the_flow():
 def test_an_ordinary_opening_image_is_still_hoisted():
     """The existing behaviour, which most feeds rely on: a plain opener is a
     header image and belongs above the article."""
-    html = ('<div class="separator" style="text-align: center"><a href="x">'
-            '<img src="https://e.com/hero.jpg"/></a></div><p>Body.</p>')
+    html = '<div class="separator" style="text-align: center"><a href="x"><img src="https://e.com/hero.jpg"/></a></div><p>Body.</p>'
     body, lead = main._strip_lead_image_opener(html, _LEAD, _FEED, True)
     assert lead == _LEAD
     assert "hero.jpg" not in (body or "")
 
 
 def test_hide_lead_in_article_still_wins_over_a_float():
-    """"Don't show the lead image in the article" is an explicit instruction and
+    """ "Don't show the lead image in the article" is an explicit instruction and
     outranks the author's layout."""
-    html = ('<div><a style="float: left" href="x"><img src="https://e.com/hero.jpg"/></a>'
-            '</div><p>Body.</p>')
+    html = '<div><a style="float: left" href="x"><img src="https://e.com/hero.jpg"/></a></div><p>Body.</p>'
     body, _ = main._strip_lead_image_opener(html, _LEAD, _FEED, False)
     assert "hero.jpg" not in (body or "")
 
@@ -151,7 +147,9 @@ def test_the_dedup_decision_is_not_persisted_as_the_lead_image():
     strip_at = src.index("_strip_lead_image_opener(")
     capture_at = src.index("_resolved_lead_for_cache = lead_image_url")
     assert capture_at < strip_at, "must be captured BEFORE the dedup rewrites it"
-    assert "persist_lead_image_async(\n                str(entry.feed_url), str(entry.id), _resolved_lead_for_cache\n            )" in src
+    assert re.search(
+        r"persist_lead_image_async\(\s*str\(entry\.feed_url\),\s*str\(entry\.id\),\s*_resolved_lead_for_cache\s*\)", src
+    )
 
 
 def test_the_float_is_detected_on_the_wrapper_not_just_the_img():
@@ -177,10 +175,10 @@ def test_a_big_photographic_png_is_re_encoded_lossy():
     """The reported case: at the dimension cap, so the downscaler leaves it, and
     huge. Noise stands in for painted art — neither compresses losslessly."""
     import random
+
     random.seed(7)
     img = Image.new("RGB", (1400, 1400))
-    img.putdata([(random.randrange(256), random.randrange(256), random.randrange(256))
-                 for _ in range(1400 * 1400)])
+    img.putdata([(random.randrange(256), random.randrange(256), random.randrange(256)) for _ in range(1400 * 1400)])
     raw = _png(img)
     assert len(raw) > 1_500_000, "fixture must exceed the budget to test anything"
 
@@ -233,5 +231,4 @@ def test_animations_are_left_alone():
 
 
 def test_garbage_bytes_are_passed_through():
-    assert main._maybe_shrink_oversized_image(b"not an image", "image/png", 1) == (
-        b"not an image", "image/png")
+    assert main._maybe_shrink_oversized_image(b"not an image", "image/png", 1) == (b"not an image", "image/png")

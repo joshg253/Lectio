@@ -1,4 +1,5 @@
 """Integration tests for the per-entry "Move to feed…" helper (_move_entry_to_feed)."""
+
 from __future__ import annotations
 
 import pytest
@@ -38,8 +39,7 @@ def _setup_feeds(*, dst_entry: dict | None = None) -> None:
     with main.get_reader() as reader:
         reader.add_feed(SRC, allow_invalid_url=True, exist_ok=True)
         reader.add_feed(DST, allow_invalid_url=True, exist_ok=True)
-        reader.add_entry({"feed_url": SRC, "id": "e1", "title": "Post",
-                          "link": "https://example.test/a"})
+        reader.add_entry({"feed_url": SRC, "id": "e1", "title": "Post", "link": "https://example.test/a"})
         if dst_entry:
             reader.add_entry({"feed_url": DST, **dst_entry})
 
@@ -112,12 +112,12 @@ def test_move_synth_carries_a_real_published_date_unchanged(env):
     before -- entry_effective_date returns the real published date first, so
     it, not `added`, is what gets carried."""
     from datetime import datetime, timezone
+
     real_date = datetime(2020, 5, 4, tzinfo=timezone.utc)
     with main.get_reader() as reader:
         reader.add_feed(SRC, allow_invalid_url=True, exist_ok=True)
         reader.add_feed(DST, allow_invalid_url=True, exist_ok=True)
-        reader.add_entry({"feed_url": SRC, "id": "e1", "title": "Post",
-                          "link": "https://example.test/a", "published": real_date})
+        reader.add_entry({"feed_url": SRC, "id": "e1", "title": "Post", "link": "https://example.test/a", "published": real_date})
 
     result = _move()
 
@@ -127,8 +127,7 @@ def test_move_synth_carries_a_real_published_date_unchanged(env):
 
 
 def test_move_matches_existing_target_entry_by_link(env):
-    _setup_feeds(dst_entry={"id": "other-guid", "title": "Same post",
-                            "link": "https://example.test/a"})
+    _setup_feeds(dst_entry={"id": "other-guid", "title": "Same post", "link": "https://example.test/a"})
     _star(SRC, "e1")
     result = _move()
     assert result["ok"] and not result["synth"] and result["star"]
@@ -142,8 +141,8 @@ def test_move_unread_source_leaves_target_unread(env):
     result = _move()
     assert result["ok"]
     with main.get_reader() as reader:
-        assert not reader.get_entry((DST, "e1")).read   # inherits unread
-        assert reader.get_entry((SRC, "e1")).read       # leftover copy silenced
+        assert not reader.get_entry((DST, "e1")).read  # inherits unread
+        assert reader.get_entry((SRC, "e1")).read  # leftover copy silenced
 
 
 def test_move_read_source_marks_synthesized_target_read(env):
@@ -165,6 +164,7 @@ def test_move_rejects_missing_entry_and_feed_and_self(env):
 
 def _batch(pairs, target=DST):
     import json
+
     resp = main.move_entries_to_feed_batch_route(entries=json.dumps(pairs), target_url=target)
     return json.loads(bytes(resp.body))
 
@@ -174,10 +174,8 @@ def test_batch_move_moves_skips_and_reports(env):
         reader.add_feed(SRC, allow_invalid_url=True, exist_ok=True)
         reader.add_feed(DST, allow_invalid_url=True, exist_ok=True)
         for i in (1, 2):
-            reader.add_entry({"feed_url": SRC, "id": f"e{i}", "title": f"P{i}",
-                              "link": f"https://example.test/{i}"})
-        reader.add_entry({"feed_url": DST, "id": "d1", "title": "D1",
-                          "link": "https://example.test/d1"})
+            reader.add_entry({"feed_url": SRC, "id": f"e{i}", "title": f"P{i}", "link": f"https://example.test/{i}"})
+        reader.add_entry({"feed_url": DST, "id": "d1", "title": "D1", "link": "https://example.test/d1"})
     _star(SRC, "e1")
     data = _batch([[SRC, "e1"], [SRC, "e2"], [DST, "d1"], [SRC, "missing"]])
     assert data["ok"]
@@ -185,13 +183,12 @@ def test_batch_move_moves_skips_and_reports(env):
     with main.get_reader() as reader:
         assert reader.get_entry((DST, "e1")) and reader.get_entry((DST, "e2"))
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id='e1'", (DST,)
-        ).fetchone()
+        assert conn.execute("SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id='e1'", (DST,)).fetchone()
 
 
 def test_batch_move_rejects_oversize_and_bad_payload(env):
     import json
+
     data = _batch([[SRC, str(i)] for i in range(main._MOVE_BATCH_CAP + 1)])
     assert not data["ok"] and "Too many" in data["error"]
     resp = main.move_entries_to_feed_batch_route(entries="not json", target_url=DST)
@@ -212,8 +209,7 @@ def _setup_saved() -> None:
     with main.get_reader() as reader:
         reader.add_feed(SAVED, allow_invalid_url=True, exist_ok=True)
         reader.add_feed(DST, allow_invalid_url=True, exist_ok=True)
-        reader.add_entry({"feed_url": SAVED, "id": SAVED_ID, "title": "Saved post",
-                          "link": SAVED_ID})
+        reader.add_entry({"feed_url": SAVED, "id": SAVED_ID, "title": "Saved post", "link": SAVED_ID})
 
 
 def _move_from(source: str, entry_id: str, target: str = DST) -> dict:
@@ -224,9 +220,7 @@ def _move_from(source: str, entry_id: str, target: str = DST) -> dict:
 
 def _saved_rows(feed_url: str) -> int:
     with main.get_meta_connection() as conn:
-        return conn.execute(
-            "SELECT COUNT(*) FROM saved_entries WHERE feed_url = ?", (feed_url,)
-        ).fetchone()[0]
+        return conn.execute("SELECT COUNT(*) FROM saved_entries WHERE feed_url = ?", (feed_url,)).fetchone()[0]
 
 
 def test_moving_a_saved_article_removes_the_source_entry(env):
@@ -245,8 +239,8 @@ def test_no_star_row_survives_on_the_saved_feed(env):
     _star(SAVED, SAVED_ID)
     assert _saved_rows(SAVED) == 1
     assert _move_from(SAVED, SAVED_ID)["ok"]
-    assert _saved_rows(SAVED) == 0        # source cleaned
-    assert _saved_rows(DST) == 1          # star moved, not duplicated
+    assert _saved_rows(SAVED) == 0  # source cleaned
+    assert _saved_rows(DST) == 1  # star moved, not duplicated
 
 
 def test_a_feed_provided_source_is_still_kept(env):
@@ -276,11 +270,16 @@ def test_move_carries_the_body_onto_an_empty_twin(env):
     with main.get_reader() as reader:
         reader.add_feed(SRC, allow_invalid_url=True, exist_ok=True)
         reader.add_feed(DST, allow_invalid_url=True, exist_ok=True)
-        reader.add_entry({"feed_url": SRC, "id": "e1", "title": "Post",
-                          "link": "https://example.test/a",
-                          "content": [{"value": "<p>" + ("the real article " * 200) + "</p>"}]})
-        reader.add_entry({"feed_url": DST, "id": "e1", "title": "Post",
-                          "link": "https://example.test/a"})  # the empty twin
+        reader.add_entry(
+            {
+                "feed_url": SRC,
+                "id": "e1",
+                "title": "Post",
+                "link": "https://example.test/a",
+                "content": [{"value": "<p>" + ("the real article " * 200) + "</p>"}],
+            }
+        )
+        reader.add_entry({"feed_url": DST, "id": "e1", "title": "Post", "link": "https://example.test/a"})  # the empty twin
 
     with main.get_reader() as reader, main.get_meta_connection() as conn:
         result = main._move_entry_to_feed(reader, conn, SRC, "e1", DST)
@@ -296,12 +295,10 @@ def test_move_does_not_overwrite_a_richer_target(env):
     with main.get_reader() as reader:
         reader.add_feed(SRC, allow_invalid_url=True, exist_ok=True)
         reader.add_feed(DST, allow_invalid_url=True, exist_ok=True)
-        reader.add_entry({"feed_url": SRC, "id": "e1", "title": "Post",
-                          "link": "https://example.test/a",
-                          "content": [{"value": "<p>short</p>"}]})
-        reader.add_entry({"feed_url": DST, "id": "e1", "title": "Post",
-                          "link": "https://example.test/a",
-                          "content": [{"value": rich}]})
+        reader.add_entry(
+            {"feed_url": SRC, "id": "e1", "title": "Post", "link": "https://example.test/a", "content": [{"value": "<p>short</p>"}]}
+        )
+        reader.add_entry({"feed_url": DST, "id": "e1", "title": "Post", "link": "https://example.test/a", "content": [{"value": rich}]})
 
     with main.get_reader() as reader, main.get_meta_connection() as conn:
         result = main._move_entry_to_feed(reader, conn, SRC, "e1", DST)

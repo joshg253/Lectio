@@ -3,6 +3,7 @@
 in that configuration. The app never drives the IFrame JS API, so the embed must
 use YouTube's canonical markup (nocookie host, referrerpolicy, no enablejsapi).
 """
+
 from __future__ import annotations
 
 import datetime as dt

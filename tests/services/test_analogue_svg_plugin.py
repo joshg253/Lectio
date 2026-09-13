@@ -1,4 +1,5 @@
 """AnalogueLeadImagePlugin: extract the source-page hero <svg> as a data URI."""
+
 from __future__ import annotations
 
 import pytest
@@ -52,13 +53,8 @@ def test_extracts_hero_svg_as_data_uri(mock_fetch):
 
 def test_ignores_non_analogue_links(mock_fetch):
     plugin = AnalogueLeadImagePlugin()
-    assert plugin.fallback_lead_image_url(
-        entry_link="https://example.com/post", content_html=None, summary=None
-    ) is None
+    assert plugin.fallback_lead_image_url(entry_link="https://example.com/post", content_html=None, summary=None) is None
 
 
 def test_registered_in_default_plugins():
-    assert any(
-        isinstance(p, AnalogueLeadImagePlugin)
-        for p in lead_image_plugins.DEFAULT_LEAD_IMAGE_PLUGINS
-    )
+    assert any(isinstance(p, AnalogueLeadImagePlugin) for p in lead_image_plugins.DEFAULT_LEAD_IMAGE_PLUGINS)

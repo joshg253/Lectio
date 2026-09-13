@@ -3,6 +3,7 @@
 folder_id accepts a single id, a comma-separated list (the folder picker is
 multi-select), or nothing at all (every feed).
 """
+
 from __future__ import annotations
 
 import pytest

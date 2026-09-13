@@ -1,5 +1,6 @@
 """ensure_reader_indexes adds the partial unread index to the reader DB so the
 per-feed unread-count query scans only unread rows (not the whole entries table)."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -51,13 +52,9 @@ def test_creates_partial_unread_index(tenant):
     main.ensure_reader_indexes()
 
     conn = sqlite3.connect(path)
-    idx = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='index' AND name='entries_unread_by_feed'"
-    ).fetchone()
+    idx = conn.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name='entries_unread_by_feed'").fetchone()
     assert idx is not None and "WHERE read=0" in idx[0]
-    plan = conn.execute(
-        "EXPLAIN QUERY PLAN SELECT feed, COUNT(*) FROM entries WHERE read=0 GROUP BY feed"
-    ).fetchall()
+    plan = conn.execute("EXPLAIN QUERY PLAN SELECT feed, COUNT(*) FROM entries WHERE read=0 GROUP BY feed").fetchall()
     conn.close()
     assert any("entries_unread_by_feed" in str(row) for row in plan)
 

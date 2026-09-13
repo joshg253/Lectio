@@ -1,4 +1,5 @@
 """Integration tests for POST /entries/email."""
+
 from __future__ import annotations
 
 from fastapi import FastAPI
@@ -18,8 +19,10 @@ def _build_app(monkeypatch, *, configured: bool = True, entry=None, send_result=
     class _FakeReader:
         def __enter__(self):
             return self
+
         def __exit__(self, *_):
             pass
+
         def get_entry(self, key, default):
             return entry
 
@@ -53,11 +56,13 @@ def test_entry_not_found_returns_404(monkeypatch):
 def _make_entry(title="Test Article", link="https://example.com/article", feed_title="My Feed", summary="Some summary text.", content=None):
     class _Feed:
         pass
+
     feed = _Feed()
     feed.title = feed_title  # ty: ignore[unresolved-attribute]
 
     class _Entry:
         pass
+
     e = _Entry()
     e.title = title  # ty: ignore[unresolved-attribute]
     e.link = link  # ty: ignore[unresolved-attribute]
@@ -93,6 +98,7 @@ def test_successful_send_returns_ok(monkeypatch):
 class _DummyConn:
     def __enter__(self):
         return self
+
     def __exit__(self, *_):
         pass
 
@@ -116,9 +122,15 @@ def test_cc_me_adds_profile_as_cc(monkeypatch):
     app = _build_app(monkeypatch, configured=True, entry=_make_entry())
     captured = _capture_cc(monkeypatch, profile_email="me@example.com")
     with TestClient(app) as client:
-        r = client.post("/entries/email", data={
-            "feed_url": "x", "entry_id": "1", "to_addr": "a@b.com", "cc_me": "1",
-        })
+        r = client.post(
+            "/entries/email",
+            data={
+                "feed_url": "x",
+                "entry_id": "1",
+                "to_addr": "a@b.com",
+                "cc_me": "1",
+            },
+        )
     assert r.status_code == 200
     assert captured["cc_addr"] == "me@example.com"
     assert captured["reply_to"] == "me@example.com"
@@ -129,9 +141,14 @@ def test_cc_me_unchecked_no_cc(monkeypatch):
     app = _build_app(monkeypatch, configured=True, entry=_make_entry())
     captured = _capture_cc(monkeypatch, profile_email="me@example.com")
     with TestClient(app) as client:
-        r = client.post("/entries/email", data={
-            "feed_url": "x", "entry_id": "1", "to_addr": "a@b.com",
-        })
+        r = client.post(
+            "/entries/email",
+            data={
+                "feed_url": "x",
+                "entry_id": "1",
+                "to_addr": "a@b.com",
+            },
+        )
     assert r.status_code == 200
     assert captured["cc_addr"] is None
     assert captured["reply_to"] is None
@@ -142,9 +159,15 @@ def test_cc_me_skips_self_cc_but_sets_reply_to(monkeypatch):
     app = _build_app(monkeypatch, configured=True, entry=_make_entry())
     captured = _capture_cc(monkeypatch, profile_email="me@example.com")
     with TestClient(app) as client:
-        r = client.post("/entries/email", data={
-            "feed_url": "x", "entry_id": "1", "to_addr": "ME@example.com", "cc_me": "1",
-        })
+        r = client.post(
+            "/entries/email",
+            data={
+                "feed_url": "x",
+                "entry_id": "1",
+                "to_addr": "ME@example.com",
+                "cc_me": "1",
+            },
+        )
     assert r.status_code == 200
     assert captured["cc_addr"] is None
     assert captured["reply_to"] == "me@example.com"
@@ -153,6 +176,7 @@ def test_cc_me_skips_self_cc_but_sets_reply_to(monkeypatch):
 def test_full_text_unchecked_sends_summary_only(monkeypatch):
     class _Content:
         value = "<p>Full body.</p><p>Second paragraph.</p>"
+
     app = _build_app(monkeypatch, configured=True, entry=_make_entry(summary="Short summary.", content=[_Content()]))
     captured = _capture_excerpt(monkeypatch)
     with TestClient(app) as client:
@@ -165,12 +189,19 @@ def test_full_text_unchecked_sends_summary_only(monkeypatch):
 def test_full_text_checked_sends_full_body_with_paragraphs(monkeypatch):
     class _Content:
         value = "<p>Full body.</p><p>Second paragraph.</p>"
+
     app = _build_app(monkeypatch, configured=True, entry=_make_entry(summary="Short summary.", content=[_Content()]))
     captured = _capture_excerpt(monkeypatch)
     with TestClient(app) as client:
-        r = client.post("/entries/email", data={
-            "feed_url": "x", "entry_id": "1", "to_addr": "a@b.com", "full_text": "1",
-        })
+        r = client.post(
+            "/entries/email",
+            data={
+                "feed_url": "x",
+                "entry_id": "1",
+                "to_addr": "a@b.com",
+                "full_text": "1",
+            },
+        )
     assert r.status_code == 200
     # Plain-text part: flattened, paragraph breaks kept for the text-only fallback.
     assert captured["excerpt"] == "Full body.\n\nSecond paragraph."
@@ -185,9 +216,15 @@ def test_full_text_checked_falls_back_to_summary_with_no_content(monkeypatch):
     app = _build_app(monkeypatch, configured=True, entry=_make_entry(summary="Only a summary.", content=None))
     captured = _capture_excerpt(monkeypatch)
     with TestClient(app) as client:
-        r = client.post("/entries/email", data={
-            "feed_url": "x", "entry_id": "1", "to_addr": "a@b.com", "full_text": "1",
-        })
+        r = client.post(
+            "/entries/email",
+            data={
+                "feed_url": "x",
+                "entry_id": "1",
+                "to_addr": "a@b.com",
+                "full_text": "1",
+            },
+        )
     assert r.status_code == 200
     assert captured["excerpt"] == "Only a summary."
 

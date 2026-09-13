@@ -90,14 +90,7 @@ def _is_private_or_local(ip_str: str) -> bool:
     except ValueError:
         # Unparseable address — refuse to fetch.
         return True
-    return (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    )
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
 
 
 def is_safe_outbound_url(url: str) -> bool:
@@ -140,7 +133,7 @@ def is_safe_outbound_url(url: str) -> bool:
     # whole URL as unsafe even if other addresses are public.)
     try:
         infos = socket.getaddrinfo(host, None)
-    except (socket.gaierror, UnicodeError):
+    except socket.gaierror, UnicodeError:
         # DNS lookup failed; refuse rather than fetch into an unknown target.
         return False
     has_public = False

@@ -51,17 +51,13 @@ def _duplicate_pairs(reader_db: Path, meta_db: Path) -> list[dict]:
     feeds = [r[0] for r in rc.execute("SELECT url FROM feeds")]
 
     tag_by_feed: dict[str, int] = defaultdict(int)
-    for (f,) in rc.execute(
-        "SELECT feed FROM entry_tags WHERE key LIKE 'lectio.manual_tag.%'"
-    ):
+    for (f,) in rc.execute("SELECT feed FROM entry_tags WHERE key LIKE 'lectio.manual_tag.%'"):
         tag_by_feed[f] += 1
     star_by_feed: dict[str, int] = defaultdict(int)
     for (f,) in mc.execute("SELECT feed_url FROM saved_entries"):
         star_by_feed[f] += 1
 
-    entry_count: dict[str, int] = {
-        r[0]: r[1] for r in rc.execute("SELECT feed, COUNT(*) FROM entries GROUP BY feed")
-    }
+    entry_count: dict[str, int] = {r[0]: r[1] for r in rc.execute("SELECT feed, COUNT(*) FROM entries GROUP BY feed")}
 
     groups: dict[str, list[str]] = defaultdict(list)
     for u in feeds:
@@ -71,30 +67,36 @@ def _duplicate_pairs(reader_db: Path, meta_db: Path) -> list[dict]:
     for canon, members in groups.items():
         if len(members) < 2:
             continue
+
         # Survivor = the feed that actually holds the content (most entries), so
         # curation migrates onto existing items instead of synthesizing them.
         # Tie-break toward a foldered member, then the canonical ("upgraded") URL.
         def rank(m: str, canon: str = canon) -> tuple:
             return (entry_count.get(m, 0), m in foldered, m == canon)
+
         survivor = max(members, key=rank)
         for m in members:
             if m == survivor:
                 continue
-            pairs.append({
-                "dupe": m,
-                "survivor": survivor,
-                "dupe_foldered": int(m in foldered),
-                "survivor_foldered": int(survivor in foldered),
-                "tags": tag_by_feed.get(m, 0),
-                "stars": star_by_feed.get(m, 0),
-            })
+            pairs.append(
+                {
+                    "dupe": m,
+                    "survivor": survivor,
+                    "dupe_foldered": int(m in foldered),
+                    "survivor_foldered": int(survivor in foldered),
+                    "tags": tag_by_feed.get(m, 0),
+                    "stars": star_by_feed.get(m, 0),
+                }
+            )
     rc.close()
     mc.close()
     # Curation-bearing dupes first, then by name.
-    pairs.sort(key=lambda p: (
-        -(tag_by_feed.get(str(p["dupe"]), 0) + star_by_feed.get(str(p["dupe"]), 0)),
-        p["dupe"],
-    ))
+    pairs.sort(
+        key=lambda p: (
+            -(tag_by_feed.get(str(p["dupe"]), 0) + star_by_feed.get(str(p["dupe"]), 0)),
+            p["dupe"],
+        )
+    )
     return pairs
 
 
@@ -102,20 +104,20 @@ def cmd_find(args) -> None:
     reader, meta = _db_paths(Path(args.data_dir), args.user)
     pairs = _duplicate_pairs(reader, meta)
     with open(args.out, "w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=["dupe", "survivor", "dupe_foldered",
-                                           "survivor_foldered", "tags", "stars"])
+        w = csv.DictWriter(fh, fieldnames=["dupe", "survivor", "dupe_foldered", "survivor_foldered", "tags", "stars"])
         w.writeheader()
         w.writerows(pairs)
     with_cur = [p for p in pairs if p["tags"] or p["stars"]]
     print(f"duplicate feeds (canonical collision): {len(pairs)}")
-    print(f"  with curation to migrate: {len(with_cur)}  "
-          f"({sum(p['tags'] for p in pairs)} tags, {sum(p['stars'] for p in pairs)} stars)")
+    print(f"  with curation to migrate: {len(with_cur)}  ({sum(p['tags'] for p in pairs)} tags, {sum(p['stars'] for p in pairs)} stars)")
     print(f"  pure drops (no curation):  {len(pairs) - len(with_cur)}")
     print("\ncuration-bearing pairs [dupe(fold?) -> survivor(fold?)  tags/stars]:")
     for p in with_cur:
-        print(f"  {'F' if p['dupe_foldered'] else 'u'} {p['dupe'][:44]:44} -> "
-              f"{'F' if p['survivor_foldered'] else 'u'} {p['survivor'][:44]:44}  "
-              f"{p['tags']}t/{p['stars']}s")
+        print(
+            f"  {'F' if p['dupe_foldered'] else 'u'} {p['dupe'][:44]:44} -> "
+            f"{'F' if p['survivor_foldered'] else 'u'} {p['survivor'][:44]:44}  "
+            f"{p['tags']}t/{p['stars']}s"
+        )
     print(f"\nPair list written to {args.out}. Review, then --merge (in the container).")
 
 
@@ -135,15 +137,16 @@ def _resolve(dupe_id, s_guids, s_link2id, dupe_link2id):
 
 def cmd_merge(args) -> None:
     from services import tenancy
+
     if args.user:
         tenancy.set_current_user(args.user)
     reader_db = str(tenancy.reader_db_path())
     dry = args.dry_run
 
     with open(args.merge_csv, newline="", encoding="utf-8") as fh:
-        pairs = [r for r in csv.DictReader(fh)
-                 if r["dupe"].strip() and r["survivor"].strip()
-                 and r["dupe"].strip() != r["survivor"].strip()]
+        pairs = [
+            r for r in csv.DictReader(fh) if r["dupe"].strip() and r["survivor"].strip() and r["dupe"].strip() != r["survivor"].strip()
+        ]
 
     c = defaultdict(int)  # counters
     for row in pairs:
@@ -159,16 +162,12 @@ def cmd_merge(args) -> None:
                 n = _norm_link(r["link"])
                 if n:
                     s_link2id.setdefault(n, r["id"])
-            dupe_link2id = {r["id"]: _norm_link(r["link"])
-                            for r in rconn.execute("SELECT id, link FROM entries WHERE feed=?", (dupe,))}
-            tag_rows = rconn.execute(
-                "SELECT id, key FROM entry_tags WHERE feed=? AND key LIKE 'lectio.manual_tag.%'",
-                (dupe,)).fetchall()
+            dupe_link2id = {r["id"]: _norm_link(r["link"]) for r in rconn.execute("SELECT id, link FROM entries WHERE feed=?", (dupe,))}
+            tag_rows = rconn.execute("SELECT id, key FROM entry_tags WHERE feed=? AND key LIKE 'lectio.manual_tag.%'", (dupe,)).fetchall()
         with main.get_meta_connection() as mc:
-            star_rows = mc.execute(
-                "SELECT entry_id, saved_at FROM saved_entries WHERE feed_url=?", (dupe,)).fetchall()
+            star_rows = mc.execute("SELECT entry_id, saved_at FROM saved_entries WHERE feed_url=?", (dupe,)).fetchall()
 
-        plan_tags = []   # (target_id, key)
+        plan_tags = []  # (target_id, key)
         plan_stars = []  # (target_id, saved_at)
         synth_ids: set[str] = set()
         for r in tag_rows:
@@ -197,9 +196,12 @@ def cmd_merge(args) -> None:
             with main.get_reader() as reader:
                 for sid in synth_ids:
                     e = reader.get_entry((dupe, sid), None)
-                    ed: dict = {"feed_url": surv, "id": sid,
-                                "title": (e.title if e else "") or "",
-                                "link": (e.link if e and e.link else sid)}
+                    ed: dict = {
+                        "feed_url": surv,
+                        "id": sid,
+                        "title": (e.title if e else "") or "",
+                        "link": (e.link if e and e.link else sid),
+                    }
                     if e and e.published:
                         ed["published"] = e.published
                     if e and e.content:
@@ -217,15 +219,13 @@ def cmd_merge(args) -> None:
             for tid, key, kind in plan_tags:
                 if kind == "synth" and tid not in synth_ok:
                     continue
-                wconn.execute("INSERT OR IGNORE INTO entry_tags (feed,id,key,value) VALUES (?,?,?, 'null')",
-                              (surv, tid, key))
+                wconn.execute("INSERT OR IGNORE INTO entry_tags (feed,id,key,value) VALUES (?,?,?, 'null')", (surv, tid, key))
                 c["tags_applied"] += 1
         with main.get_meta_connection() as mc:
             for tid, saved_at, kind in plan_stars:
                 if kind == "synth" and tid not in synth_ok:
                     continue
-                mc.execute("INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)",
-                           (surv, tid, saved_at))
+                mc.execute("INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)", (surv, tid, saved_at))
                 c["stars_applied"] += 1
             for (fid,) in mc.execute("SELECT folder_id FROM folder_feeds WHERE feed_url=?", (dupe,)):
                 mc.execute("INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?,?)", (fid, surv))
@@ -245,10 +245,13 @@ def cmd_merge(args) -> None:
         c["dropped"] += 1
 
     print(("DRY-RUN " if dry else "") + f"pairs={c['feeds']} synth_entries={c['synth_entries']}")
-    print(f"  tags:  guid={c['tags_guid']} link={c['tags_link']} synth={c['tags_synth']}"
-          + ("" if dry else f"  applied={c['tags_applied']}"))
-    print(f"  stars: guid={c['stars_guid']} link={c['stars_link']} synth={c['stars_synth']}"
-          + ("" if dry else f"  applied={c['stars_applied']}"))
+    print(
+        f"  tags:  guid={c['tags_guid']} link={c['tags_link']} synth={c['tags_synth']}" + ("" if dry else f"  applied={c['tags_applied']}")
+    )
+    print(
+        f"  stars: guid={c['stars_guid']} link={c['stars_link']} synth={c['stars_synth']}"
+        + ("" if dry else f"  applied={c['stars_applied']}")
+    )
     if not dry:
         print(f"  feeds dropped={c['dropped']}")
         print("Restart the app for the sidebar to refresh: docker compose restart")

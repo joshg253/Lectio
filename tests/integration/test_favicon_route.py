@@ -7,6 +7,7 @@ Resolution chain:
 
 All outbound fetches are mocked — no real network I/O.
 """
+
 from __future__ import annotations
 
 import httpx
@@ -33,6 +34,7 @@ def _client() -> TestClient:
 # ---------------------------------------------------------------------------
 # Helper builders
 # ---------------------------------------------------------------------------
+
 
 def _make_stub(responses: list[httpx.Response | Exception]):
     """Return a safe_get_async stub that pops from *responses* on each call.
@@ -66,11 +68,14 @@ def _png_bytes() -> bytes:
 # Hop 1: Google succeeds
 # ---------------------------------------------------------------------------
 
+
 def test_google_favicon_success(monkeypatch):
     """When Google returns 200 + image/png, serve it and cache it."""
-    stub, fetch = _make_stub([
-        httpx.Response(200, headers={"content-type": "image/png"}, content=_png_bytes()),
-    ])
+    stub, fetch = _make_stub(
+        [
+            httpx.Response(200, headers={"content-type": "image/png"}, content=_png_bytes()),
+        ]
+    )
     monkeypatch.setattr(url_guard, "safe_get_async", fetch)
 
     with _client() as client:
@@ -86,14 +91,17 @@ def test_google_favicon_success(monkeypatch):
 # Hop 2: Google 404 → /favicon.ico succeeds
 # ---------------------------------------------------------------------------
 
+
 def test_fallback_to_favicon_ico_when_google_404s(monkeypatch):
     """Google returns 404; route falls through to /favicon.ico."""
-    stub, fetch = _make_stub([
-        # Hop 1: Google returns 404 (non-200, not served)
-        httpx.Response(404, headers={"content-type": "image/png"}, content=b"not-found"),
-        # Hop 2: /favicon.ico returns a valid icon
-        httpx.Response(200, headers={"content-type": "image/x-icon"}, content=_ico_bytes()),
-    ])
+    stub, fetch = _make_stub(
+        [
+            # Hop 1: Google returns 404 (non-200, not served)
+            httpx.Response(404, headers={"content-type": "image/png"}, content=b"not-found"),
+            # Hop 2: /favicon.ico returns a valid icon
+            httpx.Response(200, headers={"content-type": "image/x-icon"}, content=_ico_bytes()),
+        ]
+    )
     monkeypatch.setattr(url_guard, "safe_get_async", fetch)
     monkeypatch.setattr(url_guard, "is_safe_outbound_url", lambda url: True)
 
@@ -109,14 +117,17 @@ def test_fallback_to_favicon_ico_when_google_404s(monkeypatch):
 # Hop 3: Google + favicon.ico both fail → placeholder
 # ---------------------------------------------------------------------------
 
+
 def test_fallback_to_placeholder_when_all_fail(monkeypatch):
     """Both Google and /favicon.ico fail; the SVG placeholder is served."""
-    stub, fetch = _make_stub([
-        # Hop 1: Google fails (UnsafeURLError or network error)
-        url_guard.UnsafeURLError("blocked"),
-        # Hop 2: /favicon.ico fails
-        Exception("connection refused"),
-    ])
+    stub, fetch = _make_stub(
+        [
+            # Hop 1: Google fails (UnsafeURLError or network error)
+            url_guard.UnsafeURLError("blocked"),
+            # Hop 2: /favicon.ico fails
+            Exception("connection refused"),
+        ]
+    )
     monkeypatch.setattr(url_guard, "safe_get_async", fetch)
     monkeypatch.setattr(url_guard, "is_safe_outbound_url", lambda url: True)
 
@@ -132,6 +143,7 @@ def test_fallback_to_placeholder_when_all_fail(monkeypatch):
 # ---------------------------------------------------------------------------
 # Cache hit skips outbound fetches
 # ---------------------------------------------------------------------------
+
 
 def test_cache_hit_skips_fetches(monkeypatch):
     """A cache hit is returned immediately without any outbound call."""
@@ -153,13 +165,16 @@ def test_cache_hit_skips_fetches(monkeypatch):
 # Second request served from cache (Google fetched only once)
 # ---------------------------------------------------------------------------
 
+
 def test_second_request_uses_cache(monkeypatch):
     """After the first successful request, a second request is a cache hit."""
-    stub, fetch = _make_stub([
-        httpx.Response(200, headers={"content-type": "image/png"}, content=_png_bytes()),
-        # Should not be reached:
-        httpx.Response(200, headers={"content-type": "image/png"}, content=b"second-fetch"),
-    ])
+    stub, fetch = _make_stub(
+        [
+            httpx.Response(200, headers={"content-type": "image/png"}, content=_png_bytes()),
+            # Should not be reached:
+            httpx.Response(200, headers={"content-type": "image/png"}, content=b"second-fetch"),
+        ]
+    )
     monkeypatch.setattr(url_guard, "safe_get_async", fetch)
 
     with _client() as client:
@@ -174,6 +189,7 @@ def test_second_request_uses_cache(monkeypatch):
 # ---------------------------------------------------------------------------
 # SSRF guard: internal/unsafe domain is blocked
 # ---------------------------------------------------------------------------
+
 
 def test_unsafe_domain_rejected(monkeypatch):
     """A domain resolving to private IP space is rejected without fetching."""
@@ -204,6 +220,7 @@ def test_unsafe_domain_rejected(monkeypatch):
 # Input validation: bad domain parameter
 # ---------------------------------------------------------------------------
 
+
 def test_empty_domain_returns_400():
     with _client() as client:
         r = client.get("/api/favicon", params={"domain": ""})
@@ -220,9 +237,11 @@ def test_domain_with_scheme_returns_400():
 def test_domain_starting_with_http_is_not_rejected(monkeypatch):
     """A real hostname that merely starts with 'http' (httpbin.org, http2.x) must
     not be mistaken for a scheme-prefixed URL and 400'd."""
-    stub, fetch = _make_stub([
-        httpx.Response(200, headers={"content-type": "image/png"}, content=_png_bytes()),
-    ])
+    stub, fetch = _make_stub(
+        [
+            httpx.Response(200, headers={"content-type": "image/png"}, content=_png_bytes()),
+        ]
+    )
     monkeypatch.setattr(url_guard, "safe_get_async", fetch)
     with _client() as client:
         r = client.get("/api/favicon", params={"domain": "httpbin.org"})
@@ -234,6 +253,7 @@ def test_domain_starting_with_http_is_not_rejected(monkeypatch):
 # ---------------------------------------------------------------------------
 # get_favicon_url returns same-origin URL
 # ---------------------------------------------------------------------------
+
 
 def test_get_favicon_url_returns_same_origin():
     url = main.get_favicon_url("https://example.com/feed.xml")

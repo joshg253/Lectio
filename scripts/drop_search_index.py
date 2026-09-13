@@ -17,6 +17,7 @@ Usage (inside the app container so LECTIO_DATA_DIR=/data resolves):
     uv run scripts/drop_search_index.py            # dry-run report
     uv run scripts/drop_search_index.py --apply    # drop it
 """
+
 from __future__ import annotations
 
 import argparse
@@ -91,8 +92,7 @@ def main_cli() -> None:
     if args.apply:
         print(f"Reclaimed {total / 1e6:,.1f} MB total.")
     else:
-        print(f"Dry-run only — {total / 1e6:,.1f} MB would be reclaimed. "
-              "Re-run with --apply to drop.")
+        print(f"Dry-run only — {total / 1e6:,.1f} MB would be reclaimed. Re-run with --apply to drop.")
 
 
 if __name__ == "__main__":

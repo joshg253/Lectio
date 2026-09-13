@@ -24,6 +24,7 @@ same selection was a second manual step for the common case.
 Source assertions, because this is client-side bulk-action wiring with no JS
 test harness in this repo.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -33,7 +34,7 @@ APP_JS = (Path(__file__).resolve().parent.parent.parent / "static" / "js" / "app
 
 def test_finished_job_handler_marks_read_only_settled_videos():
     idx = APP_JS.index("async function _ytHandleFinishedBatchJob(job, posts, playlistTitle)")
-    block = APP_JS[idx:idx + 1200]
+    block = APP_JS[idx : idx + 1200]
     assert "job.ok_video_ids" in block
     assert "okIds.has(p.videoId)" in block
     assert "/entries/read-batch" in block
@@ -42,7 +43,7 @@ def test_finished_job_handler_marks_read_only_settled_videos():
 
 def test_poller_delegates_to_the_shared_finished_job_handler_and_marks_it_consumed():
     idx = APP_JS.index("async function _ytPollBatchAddProgress(playlistTitle, posts, jobId)")
-    block = APP_JS[idx:idx + 2500]
+    block = APP_JS[idx : idx + 2500]
     assert "await _ytHandleFinishedBatchJob(job, posts, playlistTitle);" in block
     assert "_ytMarkBatchJobConsumed(job.job_id);" in block
 
@@ -57,14 +58,14 @@ def test_yt_bulk_add_passes_posts_and_job_id_to_the_poller():
 
 def test_poller_ignores_a_status_response_for_a_different_job():
     idx = APP_JS.index("async function _ytPollBatchAddProgress(playlistTitle, posts, jobId)")
-    block = APP_JS[idx:idx + 1300]
+    block = APP_JS[idx : idx + 1300]
     assert "job_id=${encodeURIComponent(jobId)}" in block
     assert "if (job.stale) return;" in block
 
 
 def test_resume_on_load_rebuilds_posts_from_the_dom_and_reuses_the_poller():
     idx = APP_JS.index("async function _ytResumeBatchJobOnLoad()")
-    block = APP_JS[idx:idx + 1800]
+    block = APP_JS[idx : idx + 1800]
     assert "add-batch/status" in block
     # Nothing to resume: no job, or a finished job with nothing to mark and
     # already handled once (job_id recorded consumed).
@@ -86,14 +87,14 @@ def test_resume_on_load_is_called_once_on_page_init_gated_on_the_yt_feature_flag
 
 def test_consumed_tracking_is_per_job_id_via_local_storage():
     idx = APP_JS.index("function _ytMarkBatchJobConsumed(jobId)")
-    block = APP_JS[idx:idx + 700]
+    block = APP_JS[idx : idx + 700]
     assert "localStorage.setItem('lectio-yt-batch-consumed', jobId)" in block
     assert "localStorage.getItem('lectio-yt-batch-consumed') === jobId" in block
 
 
 def test_bulk_edit_tags_marks_read_only_entries_still_tagged_after_the_edit():
     idx = APP_JS.index("showToastMessage(data.message || 'Tags updated.');")
-    block = APP_JS[idx:idx + 3200]
+    block = APP_JS[idx : idx + 3200]
     assert "data.still_tagged" in block
     assert "data.now_untagged" in block
     assert "stillTaggedKeys" in block

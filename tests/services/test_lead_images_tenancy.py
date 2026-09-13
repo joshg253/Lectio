@@ -3,6 +3,7 @@ render request but runs in a bare thread, which does not inherit the request's
 tenancy contextvar. It must capture and re-bind the user, or the resolved image
 is persisted to the default tenant's meta DB instead of the requesting user's —
 the bug that left real users' lead images accumulating under DEFAULT_USER_ID."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -104,9 +105,7 @@ def test_queued_source_fetch_persists_under_the_requesting_user(configured):
 
     # The image landed in alice's DB...
     alice_rows = _rows(tenancy.meta_db_path("alice"))
-    assert [(r["feed_url"], r["entry_id"], r["image_url"]) for r in alice_rows] == [
-        (feed, entry, "https://cdn.example/hero.jpg")
-    ]
+    assert [(r["feed_url"], r["entry_id"], r["image_url"]) for r in alice_rows] == [(feed, entry, "https://cdn.example/hero.jpg")]
     # ...and NOT in the default tenant's DB (the regression).
     assert _rows(tenancy.meta_db_path(tenancy.DEFAULT_USER_ID)) == []
 
@@ -118,6 +117,7 @@ def test_queued_source_fetch_does_not_persist_a_none_result(configured):
     feed actually has (regression: Standard Ebooks covers vanished after opening an
     entry whose page fetch transiently failed). The entry must stay unresolved so
     the background backfill and the next open can still recover the image."""
+
     def get_meta_connection():
         return _make_meta(tenancy.meta_db_path())
 
@@ -145,6 +145,7 @@ def test_chunk_backfill_persists_under_the_active_user(configured):
     under whatever tenancy user is active when it runs.  The home route spawns it
     in a bare daemon thread, so the caller must re-bind the user (regression:
     delightlylinux thumbnails not sticking across refreshes for the real user)."""
+
     def get_meta_connection():
         return _make_meta(tenancy.meta_db_path())
 
@@ -164,7 +165,5 @@ def test_chunk_backfill_persists_under_the_active_user(configured):
         svc.backfill_entry_list(posts)
 
     alice_rows = _rows(tenancy.meta_db_path("alice"))
-    assert [(r["feed_url"], r["entry_id"], r["image_url"]) for r in alice_rows] == [
-        (feed, entry, "https://cdn.example/hero.jpg")
-    ]
+    assert [(r["feed_url"], r["entry_id"], r["image_url"]) for r in alice_rows] == [(feed, entry, "https://cdn.example/hero.jpg")]
     assert _rows(tenancy.meta_db_path(tenancy.DEFAULT_USER_ID)) == []

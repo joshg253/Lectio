@@ -1,4 +1,5 @@
 """Sort-key normalization, and why one of the keys is opt-in."""
+
 from __future__ import annotations
 
 import main
@@ -15,7 +16,7 @@ def test_unknown_key_falls_back_to_the_default():
 
 
 def test_starred_sort_requires_opt_in():
-    """"starred" (order by when it was starred) exists for Read Mode's Inbox and
+    """ "starred" (order by when it was starred) exists for Read Mode's Inbox and
     must NOT be globally valid.
 
     The main index persists whatever normalize_sort_by hands it as the remembered
@@ -25,7 +26,7 @@ def test_starred_sort_requires_opt_in():
     Reported as the Feed view reverting to "Pub new" after switching in and out of
     e-ink mode.
     """
-    assert main.normalize_sort_by("starred") == "post"          # falls back
+    assert main.normalize_sort_by("starred") == "post"  # falls back
     assert main.normalize_sort_by("starred", allow_starred=True) == "starred"
     assert main.normalize_sort_by("post", allow_starred=True) == "post"
     assert main.normalize_sort_by("bogus", allow_starred=True) == "post"

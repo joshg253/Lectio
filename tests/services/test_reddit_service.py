@@ -1,4 +1,5 @@
 """Tests for the Reddit OAuth/feed service."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -12,38 +13,48 @@ from services import reddit as svc
 # URL helpers
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("url, expected", [
-    ("https://old.reddit.com/r/technology/.rss", "technology"),
-    ("https://www.reddit.com/r/buildapcsales/.rss", "buildapcsales"),
-    ("https://old.reddit.com/r/deals/new/.rss", "deals"),
-    ("https://old.reddit.com/user/spez/submitted/.rss", None),
-    ("https://example.com/feed", None),
-])
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://old.reddit.com/r/technology/.rss", "technology"),
+        ("https://www.reddit.com/r/buildapcsales/.rss", "buildapcsales"),
+        ("https://old.reddit.com/r/deals/new/.rss", "deals"),
+        ("https://old.reddit.com/user/spez/submitted/.rss", None),
+        ("https://example.com/feed", None),
+    ],
+)
 def test_subreddit_from_feed_url(url, expected):
     assert svc.subreddit_from_feed_url(url) == expected
 
 
-@pytest.mark.parametrize("url, expected", [
-    ("https://old.reddit.com/user/spez/submitted/.rss", "spez"),
-    ("https://www.reddit.com/user/automoderator/submitted/", "automoderator"),
-    ("https://old.reddit.com/r/technology/.rss", None),
-])
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://old.reddit.com/user/spez/submitted/.rss", "spez"),
+        ("https://www.reddit.com/user/automoderator/submitted/", "automoderator"),
+        ("https://old.reddit.com/r/technology/.rss", None),
+    ],
+)
 def test_redditor_from_feed_url(url, expected):
     assert svc.redditor_from_feed_url(url) == expected
 
 
-@pytest.mark.parametrize("url, is_reddit", [
-    ("https://old.reddit.com/r/technology/.rss", True),
-    ("https://www.reddit.com/r/buildapcsales/.rss", True),
-    ("https://example.com/feed", False),
-    ("https://news.ycombinator.com/rss", False),
-    ("https://reddit.com.evil.com/r/x/.rss", False),
-    ("https://evil.com/feed?ref=reddit.com", False),
-    ("https://reddit.com./r/x/.rss", True),          # trailing-dot host
-    ("https://OLD.REDDIT.COM/r/x/.rss", True),       # case-insensitive host
-    ("not a url", False),                            # malformed
-    ("http:///r/x/.rss", False),                     # empty host
-])
+@pytest.mark.parametrize(
+    "url, is_reddit",
+    [
+        ("https://old.reddit.com/r/technology/.rss", True),
+        ("https://www.reddit.com/r/buildapcsales/.rss", True),
+        ("https://example.com/feed", False),
+        ("https://news.ycombinator.com/rss", False),
+        ("https://reddit.com.evil.com/r/x/.rss", False),
+        ("https://evil.com/feed?ref=reddit.com", False),
+        ("https://reddit.com./r/x/.rss", True),  # trailing-dot host
+        ("https://OLD.REDDIT.COM/r/x/.rss", True),  # case-insensitive host
+        ("not a url", False),  # malformed
+        ("http:///r/x/.rss", False),  # empty host
+    ],
+)
 def test_is_reddit_feed_url(url, is_reddit):
     assert svc.is_reddit_feed_url(url) == is_reddit
 
@@ -51,6 +62,7 @@ def test_is_reddit_feed_url(url, is_reddit):
 # ---------------------------------------------------------------------------
 # authorize_url
 # ---------------------------------------------------------------------------
+
 
 def test_authorize_url_contains_params():
     url = svc.authorize_url("my_client_id", "https://host/callback", "abc123")
@@ -126,13 +138,14 @@ def test_fetch_reddit_feed_entries_unknown_url():
 # _posts_from_listing
 # ---------------------------------------------------------------------------
 
+
 def test_posts_from_listing_filters_non_t3():
     data = {
         "data": {
             "children": [
                 {"kind": "t3", "data": {"title": "post"}},
-                {"kind": "t1", "data": {"title": "comment"}},   # should be ignored
-                {"kind": "more", "data": {}},                    # should be ignored
+                {"kind": "t1", "data": {"title": "comment"}},  # should be ignored
+                {"kind": "more", "data": {}},  # should be ignored
             ]
         }
     }
@@ -145,13 +158,12 @@ def test_posts_from_listing_filters_non_t3():
 # submit_link
 # ---------------------------------------------------------------------------
 
+
 def test_submit_link_strips_r_prefix():
     with patch("services.reddit.httpx.Client") as mock_client_cls:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "json": {"errors": [], "data": {"url": "https://redd.it/abc", "id": "abc"}}
-        }
+        mock_resp.json.return_value = {"json": {"errors": [], "data": {"url": "https://redd.it/abc", "id": "abc"}}}
         mock_client_cls.return_value.__enter__.return_value.post.return_value = mock_resp
         result = svc.submit_link("tok", "r/technology", "Title", "https://example.com")
     assert result["url"] == "https://redd.it/abc"
@@ -161,9 +173,7 @@ def test_submit_link_raises_on_api_error():
     with patch("services.reddit.httpx.Client") as mock_client_cls:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "json": {"errors": [["SUBREDDIT_NOTALLOWED", "You are not allowed to post here.", "sr"]]}
-        }
+        mock_resp.json.return_value = {"json": {"errors": [["SUBREDDIT_NOTALLOWED", "You are not allowed to post here.", "sr"]]}}
         mock_client_cls.return_value.__enter__.return_value.post.return_value = mock_resp
         with pytest.raises(RuntimeError, match="SUBREDDIT_NOTALLOWED"):
             svc.submit_link("tok", "technology", "Title", "https://example.com")

@@ -10,6 +10,7 @@ Mirrors tests/services/test_refresh_captured_article.py's fixture shape
 (a real ReaderApi + an in-memory meta_conn), since date placement has to be
 checked against real reader columns (first_updated/recent_sort), not a mock.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -85,18 +86,21 @@ def _extract_ok(url: str) -> tuple[str, str]:
     return "The Real Article", "<p>It's a familiar story.</p>"
 
 
-def _add_capture(reader, meta_conn, *, is_capture: bool, feed=REAL_FEED, entry_id=ARTICLE,
-                  published=None, star=True):
+def _add_capture(reader, meta_conn, *, is_capture: bool, feed=REAL_FEED, entry_id=ARTICLE, published=None, star=True):
     """is_capture=True mirrors added_by='user' (a Lectio capture, filed or not);
     False is an ordinary feed entry, kept via a star."""
     reader.add_feed(feed, allow_invalid_url=True, exist_ok=True)
     reader.disable_feed_updates(feed)
-    reader.add_entry({
-        "feed_url": feed, "id": entry_id, "link": entry_id,
-        "title": "Stale Listing Page",
-        "published": published,
-        "content": [{"value": "<p>old body</p>"}],
-    })
+    reader.add_entry(
+        {
+            "feed_url": feed,
+            "id": entry_id,
+            "link": entry_id,
+            "title": "Stale Listing Page",
+            "published": published,
+            "content": [{"value": "<p>old body</p>"}],
+        }
+    )
     if not is_capture:
         # add_entry marks it user-added; force the feed-provided case directly
         # (same as test_refresh_captured_article.py's convention).
@@ -104,9 +108,7 @@ def _add_capture(reader, meta_conn, *, is_capture: bool, feed=REAL_FEED, entry_i
         db.execute("UPDATE entries SET added_by = 'feed' WHERE feed = ? AND id = ?", (feed, entry_id))
         db.commit()
     if star:
-        meta_conn.execute(
-            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (feed, entry_id)
-        )
+        meta_conn.execute("INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (feed, entry_id))
     meta_conn.commit()
 
 
@@ -115,15 +117,14 @@ def _first_updated(reader, feed, entry_id):
 
 
 def _saved_at(meta_conn, feed, entry_id) -> str:
-    row = meta_conn.execute(
-        "SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (feed, entry_id)
-    ).fetchone()
+    row = meta_conn.execute("SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (feed, entry_id)).fetchone()
     return str(row["saved_at"])
 
 
 # ---------------------------------------------------------------------------
 # date_choice="now" / "original" override bump_received regardless of is_capture
 # ---------------------------------------------------------------------------
+
 
 def test_now_bumps_even_a_feed_entry(reader, meta_conn):
     """A plain feed entry normally keeps its date on re-fetch -- date_choice
@@ -138,7 +139,12 @@ def test_now_bumps_even_a_feed_entry(reader, meta_conn):
     time.sleep(1.1)
 
     refresh_captured_article(
-        reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok, date_choice="now",
+        reader,
+        meta_conn,
+        REAL_FEED,
+        ARTICLE,
+        extract=_extract_ok,
+        date_choice="now",
     )
 
     after = _first_updated(reader, REAL_FEED, ARTICLE)
@@ -154,7 +160,12 @@ def test_original_never_bumps_even_a_capture(reader, meta_conn):
     before_saved = _saved_at(meta_conn, REAL_FEED, ARTICLE)
 
     refresh_captured_article(
-        reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok, date_choice="original",
+        reader,
+        meta_conn,
+        REAL_FEED,
+        ARTICLE,
+        extract=_extract_ok,
+        date_choice="original",
     )
 
     assert _first_updated(reader, REAL_FEED, ARTICLE) == before
@@ -165,11 +176,17 @@ def test_original_never_bumps_even_a_capture(reader, meta_conn):
 # date_choice="pub"
 # ---------------------------------------------------------------------------
 
+
 def test_pub_lands_on_the_entrys_published_date_not_now(reader, meta_conn):
     _add_capture(reader, meta_conn, is_capture=True, published=OLD_PUB_DATE)
 
     refresh_captured_article(
-        reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok, date_choice="pub",
+        reader,
+        meta_conn,
+        REAL_FEED,
+        ARTICLE,
+        extract=_extract_ok,
+        date_choice="pub",
     )
 
     after = _first_updated(reader, REAL_FEED, ARTICLE)
@@ -183,7 +200,12 @@ def test_pub_also_moves_saved_at_to_match(reader, meta_conn):
     _add_capture(reader, meta_conn, is_capture=True, published=OLD_PUB_DATE)
 
     refresh_captured_article(
-        reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok, date_choice="pub",
+        reader,
+        meta_conn,
+        REAL_FEED,
+        ARTICLE,
+        extract=_extract_ok,
+        date_choice="pub",
     )
 
     saved_at = _saved_at(meta_conn, REAL_FEED, ARTICLE)
@@ -194,7 +216,12 @@ def test_pub_falls_back_to_now_with_no_published_date(reader, meta_conn):
     _add_capture(reader, meta_conn, is_capture=True, published=None)
 
     refresh_captured_article(
-        reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok, date_choice="pub",
+        reader,
+        meta_conn,
+        REAL_FEED,
+        ARTICLE,
+        extract=_extract_ok,
+        date_choice="pub",
     )
 
     after = _first_updated(reader, REAL_FEED, ARTICLE)
@@ -208,7 +235,12 @@ def test_pub_does_not_touch_the_published_field_itself(reader, meta_conn):
     _add_capture(reader, meta_conn, is_capture=True, published=OLD_PUB_DATE)
 
     refresh_captured_article(
-        reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok, date_choice="pub",
+        reader,
+        meta_conn,
+        REAL_FEED,
+        ARTICLE,
+        extract=_extract_ok,
+        date_choice="pub",
     )
 
     assert reader.get_entry((REAL_FEED, ARTICLE)).published == OLD_PUB_DATE
@@ -217,6 +249,7 @@ def test_pub_does_not_touch_the_published_field_itself(reader, meta_conn):
 # ---------------------------------------------------------------------------
 # Unrecognized / absent date_choice falls back to today's default
 # ---------------------------------------------------------------------------
+
 
 def test_none_preserves_the_is_capture_conditional_default(reader, meta_conn):
     _add_capture(reader, meta_conn, is_capture=False, published=OLD_PUB_DATE)
@@ -234,7 +267,12 @@ def test_unrecognized_date_choice_is_ignored(reader, meta_conn):
     before = _first_updated(reader, REAL_FEED, ARTICLE)
 
     refresh_captured_article(
-        reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok, date_choice="yesterday",
+        reader,
+        meta_conn,
+        REAL_FEED,
+        ARTICLE,
+        extract=_extract_ok,
+        date_choice="yesterday",
     )
 
     assert _first_updated(reader, REAL_FEED, ARTICLE) == before
@@ -247,8 +285,13 @@ def test_date_choice_takes_precedence_over_bump_received(reader, meta_conn):
     before = _first_updated(reader, REAL_FEED, ARTICLE)
 
     refresh_captured_article(
-        reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok,
-        bump_received=True, date_choice="original",
+        reader,
+        meta_conn,
+        REAL_FEED,
+        ARTICLE,
+        extract=_extract_ok,
+        bump_received=True,
+        date_choice="original",
     )
 
     assert _first_updated(reader, REAL_FEED, ARTICLE) == before

@@ -6,6 +6,7 @@ folders / the Starred flag become manual tags, content fetch is deferred to
 the starred-archive worker (enqueued, not fetched inline), and re-import is
 idempotent.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -42,7 +43,8 @@ def configured(tmp_path, monkeypatch):
     # instead of doing network I/O in the test.
     enqueued: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        main.starred_archive_service, "enqueue_archive",
+        main.starred_archive_service,
+        "enqueue_archive",
         lambda feed_url, entry_id: enqueued.append((feed_url, entry_id)),
     )
     try:
@@ -91,8 +93,10 @@ def test_import_creates_saved_entries(configured):
         saved = {e for (e,) in conn.execute("SELECT entry_id FROM saved_entries")}
         archived = {e for (e,) in conn.execute("SELECT entry_id FROM archived_entries")}
     assert saved == {
-        "https://ex.test/unread", "https://ex.test/arch",
-        "https://ex.test/folder", "https://ex.test/star",
+        "https://ex.test/unread",
+        "https://ex.test/arch",
+        "https://ex.test/folder",
+        "https://ex.test/star",
     }
     # Only the Archive-folder item lands on the done axis.
     assert archived == {"https://ex.test/arch"}

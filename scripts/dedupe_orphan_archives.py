@@ -22,6 +22,7 @@ Usage (inside the app container):
     uv run scripts/dedupe_orphan_archives.py --apply
     uv run scripts/dedupe_orphan_archives.py --apply --user u_x
 """
+
 from __future__ import annotations
 
 import argparse
@@ -52,10 +53,8 @@ def run_for_user(uid: str, apply: bool) -> dict:
 
     apath = str(tenancy.starred_archive_db_path())
     with sqlite3.connect(f"file:{apath}?mode=ro", uri=True, timeout=30.0) as ac:
-        saved_arch = [str(i) for (i,) in ac.execute(
-            "SELECT entry_id FROM archived_entry WHERE feed_url = ?", (SAVED,))]
-        real_arch_ids = {str(i) for (i,) in ac.execute(
-            "SELECT entry_id FROM archived_entry WHERE feed_url != ?", (SAVED,))}
+        saved_arch = [str(i) for (i,) in ac.execute("SELECT entry_id FROM archived_entry WHERE feed_url = ?", (SAVED,))]
+        real_arch_ids = {str(i) for (i,) in ac.execute("SELECT entry_id FROM archived_entry WHERE feed_url != ?", (SAVED,))}
 
     stats: Counter[str] = Counter()
     for eid in saved_arch:
@@ -70,9 +69,7 @@ def run_for_user(uid: str, apply: bool) -> dict:
         elif eid in real_entry_feed:
             stats["rekey_preserve"] += 1
             if apply:
-                main.starred_archive_service.rekey_archive(
-                    SAVED, eid, real_entry_feed[eid], eid
-                )
+                main.starred_archive_service.rekey_archive(SAVED, eid, real_entry_feed[eid], eid)
         else:
             stats["true_orphan_left"] += 1
     stats["total_saved_archive"] = len(saved_arch)

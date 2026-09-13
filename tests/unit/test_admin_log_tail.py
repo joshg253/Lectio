@@ -1,6 +1,7 @@
 """The Admin → Logs tab reads the instance log via _read_log_tail: last-N lines,
 minimum-level filtering, and traceback continuation lines staying attached to
 their record."""
+
 from __future__ import annotations
 
 import main
@@ -52,7 +53,7 @@ def test_warning_filter_keeps_warning_and_error_and_traceback(tmp_path, monkeypa
     # the two INFO records are dropped.
     assert "2026-07-09 12:00:01,002 WARNING app: database is locked" in lines
     assert "2026-07-09 12:00:02,003 ERROR app: boom" in lines
-    assert 'sqlite3.OperationalError: boom' in lines
+    assert "sqlite3.OperationalError: boom" in lines
     assert not any("INFO" in ln for ln in lines)
 
 
@@ -79,7 +80,7 @@ def test_since_drops_older_records(tmp_path, monkeypatch):
 def test_since_keeps_boundary_and_rides_traceback(tmp_path, monkeypatch):
     _write_log(tmp_path, monkeypatch)
     lines, _, _ = main._read_log_tail(100, "", datetime(2026, 7, 9, 12, 0, 1))
-    assert not any("12:00:00" in ln for ln in lines)          # 12:00:00 dropped
+    assert not any("12:00:00" in ln for ln in lines)  # 12:00:00 dropped
     assert any(ln.endswith("database is locked") for ln in lines)  # 12:00:01 kept
     assert any('File "x.py", line 1, in <module>' in ln for ln in lines)  # traceback rides
 
@@ -96,6 +97,7 @@ def test_log_line_dt_parses_record_not_continuation():
 
 
 # ── daily-maintenance catch-up scheduling ────────────────────────────────────
+
 
 def test_maintenance_due_catches_up_after_missed_hour():
     # Missed the exact hour (restart/deploy near 3am): still due later same day.
@@ -117,6 +119,7 @@ def test_maintenance_disabled_never_due():
 
 # ── `until` bound + truncation flag ──────────────────────────────────────────
 
+
 def test_until_drops_newer_records(tmp_path, monkeypatch):
     _write_log(tmp_path, monkeypatch)
     lines, _, _ = main._read_log_tail(100, "", None, datetime(2026, 7, 9, 12, 0, 1))
@@ -128,11 +131,10 @@ def test_until_drops_newer_records(tmp_path, monkeypatch):
 
 def test_since_until_window(tmp_path, monkeypatch):
     _write_log(tmp_path, monkeypatch)
-    lines, _, _ = main._read_log_tail(100, "", datetime(2026, 7, 9, 12, 0, 1),
-                                      datetime(2026, 7, 9, 12, 0, 2))
+    lines, _, _ = main._read_log_tail(100, "", datetime(2026, 7, 9, 12, 0, 1), datetime(2026, 7, 9, 12, 0, 2))
     assert not any("12:00:00" in ln or "12:00:03" in ln for ln in lines)
     assert any(ln.endswith("database is locked") for ln in lines)  # 12:00:01
-    assert any(ln.endswith("ERROR app: boom") for ln in lines)      # 12:00:02
+    assert any(ln.endswith("ERROR app: boom") for ln in lines)  # 12:00:02
 
 
 def test_truncated_flag_when_cap_hit(tmp_path, monkeypatch):

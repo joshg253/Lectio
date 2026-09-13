@@ -5,6 +5,7 @@ under the test DATA_DIR, confirming that (a) the default user reproduces the
 legacy single-user behavior and (b) distinct users get isolated connections and
 storage.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -61,9 +62,7 @@ def test_meta_storage_is_isolated_between_users():
     with tenancy.user_context("bob"):
         cb = main.get_meta_connection()
         # bob's DB is a different file; alice's table/data must not be visible.
-        rows = cb.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='t'"
-        ).fetchall()
+        rows = cb.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='t'").fetchall()
         assert rows == []
 
     # alice still sees her own data.

@@ -1,4 +1,5 @@
 """Pinterest OAuth service: URL building, token Basic-auth, board/pin payloads."""
+
 from __future__ import annotations
 
 import base64
@@ -28,6 +29,7 @@ def _client_returning(captured, status=200, json_body=None):
     def handler(request: httpx.Request) -> httpx.Response:
         captured["request"] = request
         return httpx.Response(status, json=json_body if json_body is not None else {})
+
     return httpx.MockTransport(handler)
 
 
@@ -37,8 +39,13 @@ def test_exchange_code_sends_basic_auth_and_form(monkeypatch):
     class _C:
         def __init__(self, *a, **k):
             self._headers = k.get("headers", {})
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
         def post(self, url, data=None):
             captured["url"] = url
             captured["data"] = data
@@ -61,9 +68,15 @@ def test_list_boards_paginates(monkeypatch):
     ]
 
     class _C:
-        def __init__(self, *a, **k): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
         def get(self, url, params=None):
             return httpx.Response(200, json=pages.pop(0))
 
@@ -76,9 +89,15 @@ def test_create_pin_builds_media_source(monkeypatch):
     captured = {}
 
     class _C:
-        def __init__(self, *a, **k): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
         def post(self, url, json=None):
             captured["json"] = json
             return httpx.Response(201, json={"id": "pin1"})
@@ -95,9 +114,15 @@ def test_create_pin_builds_media_source(monkeypatch):
 
 def test_create_pin_raises_on_error(monkeypatch):
     class _C:
-        def __init__(self, *a, **k): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
         def post(self, url, json=None):
             return httpx.Response(400, json={"message": "bad"})
 

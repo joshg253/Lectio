@@ -7,6 +7,7 @@ lockout checks run pre-auth, image-cache eviction runs in maintenance. The
 regression here: maintenance_hour set via the UI was invisible to the
 scheduler, so nightly maintenance (YouTube sync, VACUUMs, pruning) never ran.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -22,8 +23,7 @@ class _StubUserStore:
         self._admin_id = admin_id
 
     def list_users(self) -> list[dict]:
-        return [{"user_id": self._admin_id, "username": "admin",
-                 "is_admin": True, "disabled": False}]
+        return [{"user_id": self._admin_id, "username": "admin", "is_admin": True, "disabled": False}]
 
 
 @pytest.fixture
@@ -245,6 +245,7 @@ def test_resolve_proxy_for_fetch_respects_per_user_override(configured):
 # --- last-resort backend (Tailscale) — rides the same proxy_mode, one rung
 #     further out than the primary proxy ---
 
+
 def test_tailscale_url_defaults_empty(configured):
     assert main.get_tailscale_url() == ""
 
@@ -332,6 +333,7 @@ def test_mark_backend_unreachable_marks_only_the_active_backend(configured):
 
 
 # --- FlareSolverr — rides the same proxy_mode, between the proxy and Tailscale ---
+
 
 def test_flaresolverr_url_defaults_empty(configured):
     assert main.get_flaresolverr_url() == ""

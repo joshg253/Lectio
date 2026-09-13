@@ -126,9 +126,7 @@ class StarredArchiveService:
         # with no context would only ever touch the default tenant's DB and
         # never archive other users' starred entries. Defaults to the single
         # default user when not injected (single-user mode and tests).
-        self._background_user_ids = background_user_ids or (
-            lambda: [tenancy.DEFAULT_USER_ID]
-        )
+        self._background_user_ids = background_user_ids or (lambda: [tenancy.DEFAULT_USER_ID])
         # Guards the in-run extraction memory (see extraction_matches_sibling):
         # the archive worker thread and a foreground re-fetch both reach it.
         self._recent_extractions: dict[str, OrderedDict] = {}
@@ -200,9 +198,7 @@ class StarredArchiveService:
         """
         try:
             with self._get_meta_connection() as meta_conn:
-                saved_rows = meta_conn.execute(
-                    "SELECT feed_url, entry_id FROM saved_entries"
-                ).fetchall()
+                saved_rows = meta_conn.execute("SELECT feed_url, entry_id FROM saved_entries").fetchall()
         except sqlite3.Error as exc:
             LOGGER.warning("starred archive backfill: failed to read saved_entries: %s", exc)
             return 0
@@ -247,9 +243,7 @@ class StarredArchiveService:
                 for row in conn.execute("SELECT asset_hash, width, height FROM archived_asset"):
                     if LeadImageService.is_ad_dimension(row["width"], row["height"]):
                         out.add(str(row["asset_hash"]))
-                for row in conn.execute(
-                    "SELECT DISTINCT asset_hash, source_url FROM archived_asset_link"
-                ):
+                for row in conn.execute("SELECT DISTINCT asset_hash, source_url FROM archived_asset_link"):
                     if LeadImageService.is_ad_url(str(row["source_url"] or "")):
                         out.add(str(row["asset_hash"]))
         except sqlite3.Error:
@@ -307,8 +301,7 @@ class StarredArchiveService:
         for row in rows:
             source_url = str(row["source_url"])
             ctype = str(row["content_type"] or "").lower()
-            if ctype.startswith(("image/", "audio/", "video/", "text/html",
-                                 "application/xhtml")):
+            if ctype.startswith(("image/", "audio/", "video/", "text/html", "application/xhtml")):
                 continue
             # An attachment must also LOOK like a file. A tracking pixel
             # ("facebook.com/tr?id=…&ev=PageView") has no extension in its path
@@ -331,9 +324,7 @@ class StarredArchiveService:
         text = re.sub(r"\s+", " ", text).strip()
         return hashlib.sha256(text.encode("utf-8")).hexdigest() if text else ""
 
-    def sibling_extraction_entries(
-        self, only_feed: str | None = None, *, min_chars: int = 120
-    ) -> list[tuple[str, str]]:
+    def sibling_extraction_entries(self, only_feed: str | None = None, *, min_chars: int = 120) -> list[tuple[str, str]]:
         """Every stored extraction that another entry on the same feed shares.
 
         The bulk, after-the-fact form of ``extraction_matches_sibling``: that one
@@ -353,10 +344,10 @@ class StarredArchiveService:
         # beside a SQL string is exactly the shape SQL-injection scanners look
         # for, and arguing with a scanner every time beats writing the two
         # literals once.
-        _BASE = ("SELECT feed_url, entry_id, readability_html_zlib FROM archived_entry"
-                 " WHERE readability_html_zlib IS NOT NULL")
-        _BY_FEED = ("SELECT feed_url, entry_id, readability_html_zlib FROM archived_entry"
-                    " WHERE readability_html_zlib IS NOT NULL AND feed_url = ?")
+        _BASE = "SELECT feed_url, entry_id, readability_html_zlib FROM archived_entry WHERE readability_html_zlib IS NOT NULL"
+        _BY_FEED = (
+            "SELECT feed_url, entry_id, readability_html_zlib FROM archived_entry WHERE readability_html_zlib IS NOT NULL AND feed_url = ?"
+        )
         try:
             with self._archive_conn() as conn:
                 if only_feed:
@@ -473,8 +464,7 @@ class StarredArchiveService:
         wanted = set(keys)
         return sharing & wanted, bodied & wanted
 
-    def extraction_matches_sibling(self, feed_url: str, entry_id: str,
-                                   html_text: str, *, min_chars: int = 120) -> bool:
+    def extraction_matches_sibling(self, feed_url: str, entry_id: str, html_text: str, *, min_chars: int = 120) -> bool:
         """True when this extraction is byte-identical to another entry's.
 
         Site chrome extracts the same for every post on a feed, so a match
@@ -491,8 +481,7 @@ class StarredArchiveService:
         # This run's own writes first — they are not in the archive yet.
         _recent = self._recent_sibling_entry(feed_url, entry_id, fingerprint)
         if _recent:
-            LOGGER.info("re-fetch: extraction matches %s written earlier this run on %s",
-                        _recent, feed_url)
+            LOGGER.info("re-fetch: extraction matches %s written earlier this run on %s", _recent, feed_url)
             return True
         try:
             with self._archive_conn() as conn:
@@ -503,15 +492,14 @@ class StarredArchiveService:
                     (feed_url, entry_id),
                 ).fetchall()
         except sqlite3.Error:
-            return False        # cannot judge; do not record a maybe
+            return False  # cannot judge; do not record a maybe
         for row in rows:
             try:
                 other = zlib.decompress(row["readability_html_zlib"]).decode("utf-8", "replace")
             except Exception:  # noqa: BLE001
                 continue
             if self.extraction_fingerprint(other) == fingerprint:
-                LOGGER.info("re-fetch: extraction matches sibling %s on %s",
-                            row["entry_id"], feed_url)
+                LOGGER.info("re-fetch: extraction matches sibling %s on %s", row["entry_id"], feed_url)
                 return True
         # Allowed. Remember it, so the next entry in this batch is measured
         # against it even though archiving has not caught up.
@@ -539,11 +527,13 @@ class StarredArchiveService:
         """True if a `complete` archive row exists for this key."""
         try:
             with self._archive_conn() as conn:
-                return conn.execute(
-                    "SELECT 1 FROM archived_entry "
-                    "WHERE feed_url = ? AND entry_id = ? AND status = 'complete' LIMIT 1",
-                    (feed_url, entry_id),
-                ).fetchone() is not None
+                return (
+                    conn.execute(
+                        "SELECT 1 FROM archived_entry WHERE feed_url = ? AND entry_id = ? AND status = 'complete' LIMIT 1",
+                        (feed_url, entry_id),
+                    ).fetchone()
+                    is not None
+                )
         except sqlite3.Error:
             return False
 
@@ -565,10 +555,7 @@ class StarredArchiveService:
                 ).fetchone()
                 if row is None:
                     return None
-                blob_len = sum(
-                    len(row[col] or b"")
-                    for col in ("source_html_zlib", "readability_html_zlib", "content_html_zlib")
-                )
+                blob_len = sum(len(row[col] or b"") for col in ("source_html_zlib", "readability_html_zlib", "content_html_zlib"))
                 asset_total = conn.execute(
                     "SELECT COALESCE(SUM(byte_size), 0) FROM ("
                     " SELECT DISTINCT a.asset_hash, a.byte_size FROM archived_asset_link l"
@@ -641,9 +628,9 @@ class StarredArchiveService:
                     "DELETE FROM archived_asset_link WHERE feed_url = ? AND entry_id = ? AND source_url = ?",
                     (feed_url, entry_id, source_url),
                 )
-                still_used = conn.execute(
-                    "SELECT 1 FROM archived_asset_link WHERE asset_hash = ? LIMIT 1", (asset_hash,)
-                ).fetchone() is not None
+                still_used = (
+                    conn.execute("SELECT 1 FROM archived_asset_link WHERE asset_hash = ? LIMIT 1", (asset_hash,)).fetchone() is not None
+                )
                 if not still_used:
                     conn.execute("DELETE FROM archived_asset WHERE asset_hash = ?", (asset_hash,))
         except sqlite3.Error as exc:
@@ -660,7 +647,8 @@ class StarredArchiveService:
         try:
             with self._archive_conn() as conn:
                 hashes = [
-                    str(r["asset_hash"]) for r in conn.execute(
+                    str(r["asset_hash"])
+                    for r in conn.execute(
                         "SELECT DISTINCT l.asset_hash FROM archived_asset_link l"
                         " JOIN archived_asset a ON a.asset_hash = l.asset_hash"
                         " WHERE l.feed_url = ? AND l.entry_id = ? AND a.content_type NOT LIKE 'image/%'",
@@ -675,9 +663,9 @@ class StarredArchiveService:
                     (feed_url, entry_id),
                 ).rowcount
                 for asset_hash in hashes:
-                    still_used = conn.execute(
-                        "SELECT 1 FROM archived_asset_link WHERE asset_hash = ? LIMIT 1", (asset_hash,)
-                    ).fetchone() is not None
+                    still_used = (
+                        conn.execute("SELECT 1 FROM archived_asset_link WHERE asset_hash = ? LIMIT 1", (asset_hash,)).fetchone() is not None
+                    )
                     if not still_used:
                         conn.execute("DELETE FROM archived_asset WHERE asset_hash = ?", (asset_hash,))
         except sqlite3.Error as exc:
@@ -699,10 +687,13 @@ class StarredArchiveService:
         self._archive_asset(feed_url, entry_id, source_url, max_bytes=ATTACHMENT_MAX_BYTES)
         try:
             with self._archive_conn() as conn:
-                linked = conn.execute(
-                    "SELECT 1 FROM archived_asset_link WHERE feed_url = ? AND entry_id = ? AND source_url = ?",
-                    (feed_url, entry_id, source_url),
-                ).fetchone() is not None
+                linked = (
+                    conn.execute(
+                        "SELECT 1 FROM archived_asset_link WHERE feed_url = ? AND entry_id = ? AND source_url = ?",
+                        (feed_url, entry_id, source_url),
+                    ).fetchone()
+                    is not None
+                )
         except sqlite3.Error:
             return False
         if linked:
@@ -718,9 +709,9 @@ class StarredArchiveService:
         try:
             with self._archive_conn() as conn:
                 hashes = [
-                    str(r["asset_hash"]) for r in conn.execute(
-                        "SELECT DISTINCT asset_hash FROM archived_asset_link "
-                        "WHERE feed_url = ? AND entry_id = ?",
+                    str(r["asset_hash"])
+                    for r in conn.execute(
+                        "SELECT DISTINCT asset_hash FROM archived_asset_link WHERE feed_url = ? AND entry_id = ?",
                         (feed_url, entry_id),
                     ).fetchall()
                 ]
@@ -756,9 +747,7 @@ class StarredArchiveService:
         Returns the number removed. Used by the nightly maintenance."""
         try:
             with self._archive_conn() as conn:
-                failed = conn.execute(
-                    "SELECT feed_url, entry_id FROM archived_entry WHERE status = 'failed'"
-                ).fetchall()
+                failed = conn.execute("SELECT feed_url, entry_id FROM archived_entry WHERE status = 'failed'").fetchall()
         except sqlite3.Error as exc:
             LOGGER.warning("starred archive: sweep_failed_orphans read failed: %s", exc)
             return 0
@@ -771,9 +760,7 @@ class StarredArchiveService:
                 if self.delete_archive(feed_url, entry_id):
                     swept += 1
             except Exception:  # noqa: BLE001 — one bad row must not abort the sweep
-                LOGGER.exception(
-                    "starred archive: sweep_failed_orphans failed for %s/%s", feed_url, entry_id
-                )
+                LOGGER.exception("starred archive: sweep_failed_orphans failed for %s/%s", feed_url, entry_id)
         return swept
 
     def rekey_archive(self, src_feed: str, src_id: str, dst_feed: str, dst_id: str) -> bool:
@@ -789,10 +776,13 @@ class StarredArchiveService:
             return True
         try:
             with self._archive_conn() as conn:
-                exists = conn.execute(
-                    "SELECT 1 FROM archived_entry WHERE feed_url = ? AND entry_id = ? LIMIT 1",
-                    (dst_feed, dst_id),
-                ).fetchone() is not None
+                exists = (
+                    conn.execute(
+                        "SELECT 1 FROM archived_entry WHERE feed_url = ? AND entry_id = ? LIMIT 1",
+                        (dst_feed, dst_id),
+                    ).fetchone()
+                    is not None
+                )
                 if exists:
                     # Target already captured — drop the source rows to dedupe.
                     conn.execute(
@@ -805,20 +795,22 @@ class StarredArchiveService:
                     )
                 else:
                     conn.execute(
-                        "UPDATE archived_entry SET feed_url = ?, entry_id = ? "
-                        "WHERE feed_url = ? AND entry_id = ?",
+                        "UPDATE archived_entry SET feed_url = ?, entry_id = ? WHERE feed_url = ? AND entry_id = ?",
                         (dst_feed, dst_id, src_feed, src_id),
                     )
                     conn.execute(
-                        "UPDATE archived_asset_link SET feed_url = ?, entry_id = ? "
-                        "WHERE feed_url = ? AND entry_id = ?",
+                        "UPDATE archived_asset_link SET feed_url = ?, entry_id = ? WHERE feed_url = ? AND entry_id = ?",
                         (dst_feed, dst_id, src_feed, src_id),
                     )
             return True
         except sqlite3.Error as exc:
             LOGGER.warning(
                 "starred archive: rekey_archive failed %s/%s -> %s/%s: %s",
-                src_feed, src_id, dst_feed, dst_id, exc,
+                src_feed,
+                src_id,
+                dst_feed,
+                dst_id,
+                exc,
             )
             return False
 
@@ -956,10 +948,11 @@ class StarredArchiveService:
         try:
             with self._get_meta_connection() as meta_conn:
                 for i in range(0, len(candidate_feeds), 900):
-                    chunk = candidate_feeds[i:i + 900]
+                    chunk = candidate_feeds[i : i + 900]
                     ph = ",".join("?" for _ in chunk)
                     starred.update(
-                        (str(f), str(e)) for f, e in meta_conn.execute(
+                        (str(f), str(e))
+                        for f, e in meta_conn.execute(
                             f"SELECT feed_url, entry_id FROM saved_entries WHERE feed_url IN ({ph})",
                             chunk,
                         )
@@ -984,8 +977,7 @@ class StarredArchiveService:
             elif not is_starred and not manual_tags:
                 continue
             if search_terms:
-                haystack = " ".join(str(row[c] or "") for c in
-                                     ("title", "link", "feed_title", "author")).lower()
+                haystack = " ".join(str(row[c] or "") for c in ("title", "link", "feed_title", "author")).lower()
                 if not all(term in haystack for term in search_terms):
                     continue
             out.append(
@@ -1003,9 +995,7 @@ class StarredArchiveService:
                     # When the star was made — the Inbox's "Recently starred"
                     # order. Orphans have no saved_entries row to read it from.
                     "starred_at": float(row["starred_at"]) if row["starred_at"] is not None else None,
-                    "content_size_bytes": (
-                        int(row["content_size_bytes"]) if row["content_size_bytes"] is not None else None
-                    ),
+                    "content_size_bytes": (int(row["content_size_bytes"]) if row["content_size_bytes"] is not None else None),
                 }
             )
         return out
@@ -1036,7 +1026,7 @@ class StarredArchiveService:
                 return None
             try:
                 return float(dt.timestamp())
-            except (AttributeError, ValueError):
+            except AttributeError, ValueError:
                 return None
 
         published_at = _to_epoch(getattr(entry, "published", None) or getattr(entry, "updated", None))
@@ -1099,9 +1089,7 @@ class StarredArchiveService:
         """
         try:
             with self._archive_conn() as conn:
-                rows = conn.execute(
-                    "SELECT feed_url, entry_id FROM archived_entry WHERE status = 'complete'"
-                ).fetchall()
+                rows = conn.execute("SELECT feed_url, entry_id FROM archived_entry WHERE status = 'complete'").fetchall()
         except sqlite3.Error as exc:
             LOGGER.warning("starred archive: backfill_saved_entries failed to read archive: %s", exc)
             return 0
@@ -1115,9 +1103,7 @@ class StarredArchiveService:
             # Without the tag set every tagged entry would be starred, so bail
             # rather than guess — the recovery this function offers is worth far
             # less than the damage of inventing stars.
-            LOGGER.warning(
-                "starred archive: backfill_saved_entries skipped, manual-tag lookup failed: %s", exc
-            )
+            LOGGER.warning("starred archive: backfill_saved_entries skipped, manual-tag lookup failed: %s", exc)
             return 0
 
         try:
@@ -1125,9 +1111,7 @@ class StarredArchiveService:
         except Exception as exc:  # noqa: BLE001
             # Same reasoning as the tag lookup above — without it, every
             # Archived entry would get its star silently put back.
-            LOGGER.warning(
-                "starred archive: backfill_saved_entries skipped, archived-keys lookup failed: %s", exc
-            )
+            LOGGER.warning("starred archive: backfill_saved_entries skipped, archived-keys lookup failed: %s", exc)
             return 0
 
         inserted = 0
@@ -1165,9 +1149,7 @@ class StarredArchiveService:
         if inserted:
             LOGGER.info("starred archive: restored %d saved_entries row(s) from archive", inserted)
         if stale:
-            LOGGER.info(
-                "starred archive: skipped %d archive row(s) whose entry no longer exists", stale
-            )
+            LOGGER.info("starred archive: skipped %d archive row(s) whose entry no longer exists", stale)
         if tag_explained:
             LOGGER.info(
                 "starred archive: skipped %d archive row(s) explained by a manual tag, not a star",
@@ -1189,8 +1171,7 @@ class StarredArchiveService:
         try:
             with self._archive_conn() as conn:
                 rows = conn.execute(
-                    "SELECT feed_url, entry_id FROM archived_entry "
-                    "WHERE status = 'complete' AND (title IS NULL OR title = '')"
+                    "SELECT feed_url, entry_id FROM archived_entry WHERE status = 'complete' AND (title IS NULL OR title = '')"
                 ).fetchall()
         except sqlite3.Error:
             return 0
@@ -1222,8 +1203,7 @@ class StarredArchiveService:
                         return completed
                     entry_id = str(row["entry_id"])
                     conn.execute(
-                        "UPDATE archived_entry SET status = 'in_progress' "
-                        "WHERE feed_url = ? AND entry_id = ?",
+                        "UPDATE archived_entry SET status = 'in_progress' WHERE feed_url = ? AND entry_id = ?",
                         (feed_url, entry_id),
                     )
             except sqlite3.Error:
@@ -1236,8 +1216,7 @@ class StarredArchiveService:
                 try:
                     with self._archive_conn() as conn:
                         conn.execute(
-                            "UPDATE archived_entry SET status = 'failed', error = ? "
-                            "WHERE feed_url = ? AND entry_id = ?",
+                            "UPDATE archived_entry SET status = 'failed', error = ? WHERE feed_url = ? AND entry_id = ?",
                             (str(exc)[:512], feed_url, entry_id),
                         )
                 except sqlite3.Error:
@@ -1248,8 +1227,7 @@ class StarredArchiveService:
         try:
             with self._archive_conn() as conn:
                 row = conn.execute(
-                    "SELECT readability_html_zlib FROM archived_entry "
-                    "WHERE feed_url = ? AND entry_id = ? AND status = 'complete'",
+                    "SELECT readability_html_zlib FROM archived_entry WHERE feed_url = ? AND entry_id = ? AND status = 'complete'",
                     (feed_url, entry_id),
                 ).fetchone()
         except sqlite3.Error:
@@ -1270,17 +1248,18 @@ class StarredArchiveService:
             with self._archive_conn() as conn:
                 by_status = {
                     str(row["status"]): int(row["c"])
-                    for row in conn.execute(
-                        "SELECT status, COUNT(*) AS c FROM archived_entry GROUP BY status"
-                    ).fetchall()
+                    for row in conn.execute("SELECT status, COUNT(*) AS c FROM archived_entry GROUP BY status").fetchall()
                 }
-                asset_total = conn.execute(
-                    "SELECT COUNT(*) AS c, COALESCE(SUM(byte_size), 0) AS s FROM archived_asset"
-                ).fetchone()
+                asset_total = conn.execute("SELECT COUNT(*) AS c, COALESCE(SUM(byte_size), 0) AS s FROM archived_asset").fetchone()
         except sqlite3.Error:
             return {
-                "complete": 0, "pending": 0, "in_progress": 0, "failed": 0,
-                "pending_removal": 0, "asset_count": 0, "asset_bytes": 0,
+                "complete": 0,
+                "pending": 0,
+                "in_progress": 0,
+                "failed": 0,
+                "pending_removal": 0,
+                "asset_count": 0,
+                "asset_bytes": 0,
             }
         return {
             "complete": by_status.get("complete", 0),
@@ -1373,14 +1352,12 @@ class StarredArchiveService:
             try:
                 with tenancy.user_context(uid):
                     with self._archive_conn() as conn:
-                        reclaimed = conn.execute(
-                            "UPDATE archived_entry SET status = 'pending' "
-                            "WHERE status = 'in_progress'"
-                        ).rowcount
+                        reclaimed = conn.execute("UPDATE archived_entry SET status = 'pending' WHERE status = 'in_progress'").rowcount
                 if reclaimed:
                     LOGGER.info(
                         "starred archive: reclaimed %d stale in_progress rows for %s",
-                        reclaimed, uid,
+                        reclaimed,
+                        uid,
                     )
             except sqlite3.Error as exc:
                 LOGGER.warning("starred archive: reclaim failed for %s: %s", uid, exc)
@@ -1406,16 +1383,14 @@ class StarredArchiveService:
         try:
             with self._archive_conn() as conn:
                 row = conn.execute(
-                    "SELECT feed_url, entry_id FROM archived_entry "
-                    "WHERE status = 'pending' ORDER BY starred_at ASC LIMIT 1"
+                    "SELECT feed_url, entry_id FROM archived_entry WHERE status = 'pending' ORDER BY starred_at ASC LIMIT 1"
                 ).fetchone()
                 if not row:
                     return False
                 feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
                 # Claim it.
                 claimed = conn.execute(
-                    "UPDATE archived_entry SET status = 'in_progress' "
-                    "WHERE feed_url = ? AND entry_id = ? AND status = 'pending'",
+                    "UPDATE archived_entry SET status = 'in_progress' WHERE feed_url = ? AND entry_id = ? AND status = 'pending'",
                     (feed_url, entry_id),
                 ).rowcount
             if not claimed:
@@ -1431,8 +1406,7 @@ class StarredArchiveService:
             try:
                 with self._archive_conn() as conn:
                     conn.execute(
-                        "UPDATE archived_entry SET status = 'failed', error = ? "
-                        "WHERE feed_url = ? AND entry_id = ?",
+                        "UPDATE archived_entry SET status = 'failed', error = ? WHERE feed_url = ? AND entry_id = ?",
                         (str(exc)[:512], feed_url, entry_id),
                     )
             except sqlite3.Error:
@@ -1442,19 +1416,16 @@ class StarredArchiveService:
     def _process_one_pending_removal(self) -> bool:
         try:
             with self._archive_conn() as conn:
-                row = conn.execute(
-                    "SELECT feed_url, entry_id FROM archived_entry "
-                    "WHERE status = 'pending_removal' LIMIT 1"
-                ).fetchone()
+                row = conn.execute("SELECT feed_url, entry_id FROM archived_entry WHERE status = 'pending_removal' LIMIT 1").fetchone()
                 if not row:
                     return False
                 feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
                 # Collect asset hashes before removing links so we can
                 # clean up assets that become unreferenced.
                 hashes = [
-                    str(r["asset_hash"]) for r in conn.execute(
-                        "SELECT DISTINCT asset_hash FROM archived_asset_link "
-                        "WHERE feed_url = ? AND entry_id = ?",
+                    str(r["asset_hash"])
+                    for r in conn.execute(
+                        "SELECT DISTINCT asset_hash FROM archived_asset_link WHERE feed_url = ? AND entry_id = ?",
                         (feed_url, entry_id),
                     ).fetchall()
                 ]
@@ -1518,7 +1489,7 @@ class StarredArchiveService:
                 return None
             try:
                 return float(dt.timestamp())
-            except (AttributeError, ValueError):
+            except AttributeError, ValueError:
                 return None
 
         published_at = _to_epoch(getattr(entry, "published", None) or getattr(entry, "updated", None))
@@ -1606,7 +1577,7 @@ class StarredArchiveService:
         #     body-linked attachment always has. Audio is skipped: podcast
         #     enclosures are large and stream fine, and images are already
         #     collected above.
-        for enc in (getattr(entry, "enclosures", None) or []):
+        for enc in getattr(entry, "enclosures", None) or []:
             enc_url = str(getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
             if not enc_url:
                 continue
@@ -1659,9 +1630,7 @@ class StarredArchiveService:
         # hundred MB"; confirmed directly (a GitLab post with 17 distinct
         # assets, several double-linked, reported 498.5MB where the correct
         # distinct total is 249.4MB).
-        content_size_bytes = (
-            len(source_blob or b"") + len(readability_blob or b"") + len(content_blob or b"")
-        )
+        content_size_bytes = len(source_blob or b"") + len(readability_blob or b"") + len(content_blob or b"")
         try:
             with self._archive_conn() as conn:
                 asset_total = conn.execute(
@@ -1785,8 +1754,7 @@ class StarredArchiveService:
             LOGGER.debug("starred archive: byte fetch failed for %s: %s", url, exc)
             return None
 
-    def _archive_asset(self, feed_url: str, entry_id: str, source_url: str,
-                       max_bytes: int | None = None) -> None:
+    def _archive_asset(self, feed_url: str, entry_id: str, source_url: str, max_bytes: int | None = None) -> None:
         # Skip if this entry already has a link for this URL.
         try:
             with self._archive_conn() as conn:
@@ -1847,9 +1815,7 @@ class StarredArchiveService:
         except sqlite3.Error as exc:
             LOGGER.warning("starred archive: failed to store asset %s: %s", source_url, exc)
 
-    def _process_image(
-        self, raw_bytes: bytes, source_content_type: str
-    ) -> tuple[bytes, str, int | None, int | None] | None:
+    def _process_image(self, raw_bytes: bytes, source_content_type: str) -> tuple[bytes, str, int | None, int | None] | None:
         """Decode + (optionally) resize + re-encode an image.
 
         Returns (bytes, content_type, width, height) on success, or None if the

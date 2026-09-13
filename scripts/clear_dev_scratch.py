@@ -44,6 +44,7 @@ Usage:
                    which are regenerated and always cleared.
   --dry-run        Report what would go, delete nothing.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -99,8 +100,9 @@ def _is_kept(candidate: Path, kept: list[Path]) -> bool:
     return False
 
 
-def collect_candidates(tmp_root: Path, kept: list[Path], max_age_days: int,
-                       now: float, self_session: str | None = None) -> list[tuple[Path, int, str]]:
+def collect_candidates(
+    tmp_root: Path, kept: list[Path], max_age_days: int, now: float, self_session: str | None = None
+) -> list[tuple[Path, int, str]]:
     """Return (path, bytes, reason) for everything safe to remove.
 
     ``self_session`` is the running session's id, which is also its scratch dir's
@@ -146,12 +148,9 @@ def collect_candidates(tmp_root: Path, kept: list[Path], max_age_days: int,
 def main(argv: list[str] | None = None) -> int:
     import time
 
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--keep", action="append", default=[],
-                        help="Path to preserve (repeatable); pass the current scratchpad.")
-    parser.add_argument("--max-age-days", type=int, default=2,
-                        help="Leave session scratch newer than this alone (default 2).")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--keep", action="append", default=[], help="Path to preserve (repeatable); pass the current scratchpad.")
+    parser.add_argument("--max-age-days", type=int, default=2, help="Leave session scratch newer than this alone (default 2).")
     parser.add_argument("--tmp-root", default="/tmp", help="Root to scan (default /tmp).")
     parser.add_argument("--dry-run", action="store_true", help="Report only.")
     parser.add_argument("--quiet", action="store_true", help="Only print the total.")
@@ -171,8 +170,7 @@ def main(argv: list[str] | None = None) -> int:
 
     import os
 
-    candidates = collect_candidates(tmp_root, kept, args.max_age_days, time.time(),
-                                    self_session=os.environ.get("CLAUDE_CODE_SESSION_ID"))
+    candidates = collect_candidates(tmp_root, kept, args.max_age_days, time.time(), self_session=os.environ.get("CLAUDE_CODE_SESSION_ID"))
     total = sum(size for _, size, _ in candidates)
 
     removed = 0
@@ -195,8 +193,10 @@ def main(argv: list[str] | None = None) -> int:
 
     usage = shutil.disk_usage(tmp_root)
     verb = "would free" if args.dry_run else "freed"
-    print(f"clear-scratch: {verb} {_human(total if args.dry_run else removed)}"
-          f" — {tmp_root} now {_human(usage.free)} free of {_human(usage.total)}")
+    print(
+        f"clear-scratch: {verb} {_human(total if args.dry_run else removed)}"
+        f" — {tmp_root} now {_human(usage.free)} free of {_human(usage.total)}"
+    )
     return 0
 
 

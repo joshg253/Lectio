@@ -4,6 +4,7 @@ Driven by :mod:`scripts.refresh_screenshots`, which seeds the demo library and
 starts the server first. Uses Playwright (Chromium). The set of shots mirrors the
 images referenced from ``README.md``.
 """
+
 from __future__ import annotations
 
 import sys
@@ -13,8 +14,7 @@ try:
     from playwright.sync_api import sync_playwright
 except ImportError:  # pragma: no cover - dependency hint
     print(
-        "Playwright is not installed. Install the screenshot extra:\n"
-        "    uv sync --extra screenshots && uv run playwright install chromium",
+        "Playwright is not installed. Install the screenshot extra:\n    uv sync --extra screenshots && uv run playwright install chromium",
         file=sys.stderr,
     )
     raise
@@ -42,10 +42,7 @@ def _open_first_article(page, base_url: str) -> None:
             page.wait_for_selector(".feed-link[href]", timeout=10_000)
         except Exception:  # noqa: BLE001 — fall through to the root list
             pass
-    href = page.evaluate(
-        "(() => { const el = document.querySelector('.feed-link[href]');"
-        " return el ? el.getAttribute('href') : null; })()"
-    )
+    href = page.evaluate("(() => { const el = document.querySelector('.feed-link[href]'); return el ? el.getAttribute('href') : null; })()")
     if href:
         page.goto(base_url.rstrip("/") + href, wait_until="networkidle")
         page.wait_for_timeout(300)
@@ -172,8 +169,7 @@ def capture(base_url: str, out_dir: Path) -> None:
         # Navigate by href rather than clicking: the Tags list lives in the
         # Saved half of the sidebar and is not visible while in Feeds mode.
         tag_href = page.evaluate(
-            "(() => { const el = document.querySelector('.tag-link[href]');"
-            " return el ? el.getAttribute('href') : null; })()"
+            "(() => { const el = document.querySelector('.tag-link[href]'); return el ? el.getAttribute('href') : null; })()"
         )
         if not tag_href:
             raise SystemExit("no tag link in the seeded sidebar")
@@ -188,8 +184,7 @@ def capture(base_url: str, out_dir: Path) -> None:
         ctx, page = new_page("dark")
         page.goto(base_url, wait_until="networkidle")
         href = page.evaluate(
-            "(() => { const el = document.querySelector('.filter-history-item[href]');"
-            " return el ? el.getAttribute('href') : null; })()"
+            "(() => { const el = document.querySelector('.filter-history-item[href]'); return el ? el.getAttribute('href') : null; })()"
         )
         if href:
             page.goto(base_url.rstrip("/") + href, wait_until="networkidle")
@@ -211,8 +206,7 @@ def capture(base_url: str, out_dir: Path) -> None:
         # The landing state is "pick a folder, tag, or Archive" with no list, so
         # drill into a folder first or both shots come back empty.
         folder = page.evaluate(
-            "(() => { const el = document.querySelector('.rm-folder-link[href]');"
-            " return el ? el.getAttribute('href') : null; })()"
+            "(() => { const el = document.querySelector('.rm-folder-link[href]'); return el ? el.getAttribute('href') : null; })()"
         )
         if not folder:
             raise SystemExit("no Read Mode folder link in the seeded tree")
@@ -220,8 +214,7 @@ def capture(base_url: str, out_dir: Path) -> None:
         page.wait_for_timeout(600)
         _shoot(page, out_dir, "13readmode.png")
         article = page.evaluate(
-            "(() => { const el = document.querySelector('a.rm-item-link[href]');"
-            " return el ? el.getAttribute('href') : null; })()"
+            "(() => { const el = document.querySelector('a.rm-item-link[href]'); return el ? el.getAttribute('href') : null; })()"
         )
         if not article:
             raise SystemExit("Read Mode folder listed no articles")
@@ -231,9 +224,7 @@ def capture(base_url: str, out_dir: Path) -> None:
         ctx.close()
 
         # 15: the phone layout — one pane at a time below 720px.
-        ctx = browser.new_context(viewport={"width": 390, "height": 844},
-                                  device_scale_factor=3, is_mobile=True,
-                                  has_touch=True)
+        ctx = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=3, is_mobile=True, has_touch=True)
         page = ctx.new_page()
         _set_theme(page, "dark")
         page.goto(base_url + "/?read_filter=all", wait_until="networkidle")

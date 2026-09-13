@@ -2,6 +2,7 @@
 Lectio as the extension's Backend. Token-only auth, CORS for the extension's
 non-host-permitted fetch, and extraction from browser-captured HTML (no
 server fetch — that's the whole point for paywalled pages)."""
+
 from __future__ import annotations
 
 import pytest
@@ -65,12 +66,15 @@ def test_save_extracts_from_captured_html_without_fetching(configured, monkeypat
 
     monkeypatch.setattr(main, "fetch_readability_article", boom)
     with _client() as c:
-        r = c.post("/api/bookmarklet/save", json={
-            "token": "ignored-in-no-auth-mode",
-            "url": "https://example.com/paywalled",
-            "title": "Tab Title",
-            "html": PAGE_HTML,
-        })
+        r = c.post(
+            "/api/bookmarklet/save",
+            json={
+                "token": "ignored-in-no-auth-mode",
+                "url": "https://example.com/paywalled",
+                "title": "Tab Title",
+                "html": PAGE_HTML,
+            },
+        )
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["ok"] is True and data["extracted"] is True
@@ -86,9 +90,13 @@ def test_save_extracts_from_captured_html_without_fetching(configured, monkeypat
 def test_save_without_html_falls_back_to_server_fetch(configured, monkeypatch):
     monkeypatch.setattr(main, "fetch_readability_article", lambda u: ("Fetched Title", "<p>fetched body</p>"))
     with _client() as c:
-        r = c.post("/api/bookmarklet/save", json={
-            "token": "x", "url": "https://example.com/normal",
-        })
+        r = c.post(
+            "/api/bookmarklet/save",
+            json={
+                "token": "x",
+                "url": "https://example.com/normal",
+            },
+        )
     assert r.status_code == 200
     with main.get_reader() as reader:
         entry = reader.get_entry((SAVED_FEED_URL, "https://example.com/normal"))
@@ -106,15 +114,25 @@ def test_bad_token_rejected_in_multiuser_mode(configured, tmp_path):
         tenancy.reader_db_path().parent.mkdir(parents=True, exist_ok=True)
         main.ensure_meta_schema()
     with _client() as c:
-        r = c.post("/api/bookmarklet/save", json={
-            "token": "wrong", "url": "https://example.com/a", "html": PAGE_HTML,
-        })
+        r = c.post(
+            "/api/bookmarklet/save",
+            json={
+                "token": "wrong",
+                "url": "https://example.com/a",
+                "html": PAGE_HTML,
+            },
+        )
         assert r.status_code == 401
         assert "detail" in r.json()
         # And the real token resolves + saves.
-        r2 = c.post("/api/bookmarklet/save", json={
-            "token": real_token, "url": "https://example.com/a", "html": PAGE_HTML,
-        })
+        r2 = c.post(
+            "/api/bookmarklet/save",
+            json={
+                "token": real_token,
+                "url": "https://example.com/a",
+                "html": PAGE_HTML,
+            },
+        )
     assert r2.status_code == 200, r2.text
     assert store.user_for_api_token(real_token) == uid
     assert store.user_for_api_token("nope") is None
@@ -129,14 +147,17 @@ def test_lectio_page_capture_stars_the_wrapped_entry(configured):
         reader.add_feed(feed, exist_ok=True)
         reader.add_entry({"feed_url": feed, "id": article, "title": "KOReader", "link": article})
 
-    lectio_page = (
-        "http://testserver/?folder_id=1&read_filter=unread"
-        f"&feed_url={feed}&entry_id={article}"
-    )
+    lectio_page = f"http://testserver/?folder_id=1&read_filter=unread&feed_url={feed}&entry_id={article}"
     with _client() as c:
-        r = c.post("/api/bookmarklet/save", json={
-            "token": "x", "url": lectio_page, "title": "Lectio", "html": PAGE_HTML,
-        })
+        r = c.post(
+            "/api/bookmarklet/save",
+            json={
+                "token": "x",
+                "url": lectio_page,
+                "title": "Lectio",
+                "html": PAGE_HTML,
+            },
+        )
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["starred_existing"] is True
@@ -152,10 +173,7 @@ def test_lectio_page_capture_stars_the_wrapped_entry(configured):
 def test_lectio_capture_of_aged_out_entry_saves_its_url(configured, monkeypatch):
     """Wrapped entry no longer exists, but its id is the article URL — save that."""
     monkeypatch.setattr(main, "fetch_readability_article", lambda u: ("Recovered", "<p>body</p>"))
-    lectio_page = (
-        "http://testserver/?feed_url=https://gone.test/feed"
-        "&entry_id=https://gone.test/article"
-    )
+    lectio_page = "http://testserver/?feed_url=https://gone.test/feed&entry_id=https://gone.test/article"
     with _client() as c:
         r = c.post("/api/bookmarklet/save", json={"token": "x", "url": lectio_page})
     assert r.status_code == 200, r.text
@@ -178,8 +196,7 @@ def test_foreign_host_with_lectio_like_params_is_not_unwrapped(configured, monke
 
 def test_invalid_body_and_bad_url(configured):
     with _client() as c:
-        assert c.post("/api/bookmarklet/save", content=b"not json",
-                      headers={"Content-Type": "application/json"}).status_code == 400
+        assert c.post("/api/bookmarklet/save", content=b"not json", headers={"Content-Type": "application/json"}).status_code == 400
         r = c.post("/api/bookmarklet/save", json={"token": "x", "url": "ftp://nope"})
     assert r.status_code == 400
     assert r.json()["detail"]
@@ -189,13 +206,13 @@ def test_jwplayer_chrome_stripped_at_render():
     """Captured pages serialize JWPlayer's whole control DOM (hidden on the
     live page by its own CSS) — the render cleanup strips the containers."""
     html = (
-        '<p>Article text.</p>'
+        "<p>Article text.</p>"
         '<div class="my-6 vid-present"><div><p><span class="jwp-carousel-title-desktop">'
-        'Latest Videos From Louder</span></p></div></div>'
+        "Latest Videos From Louder</span></p></div></div>"
         '<div class="jwplayer jw-reset jw-state-idle"><div class="jw-wrapper jw-reset">'
         '<p class="jw-title-primary jw-reset-text">10 obscure bands</p>'
         '<span class="jw-time-update">0 seconds of 1 minute, 33 seconds</span></div></div>'
-        '<p>More text.</p>'
+        "<p>More text.</p>"
     )
     cleaned = main._apply_feed_content_cleanups(html, "lectio:saved", "e1")
     assert "Latest Videos From" not in cleaned
@@ -209,19 +226,19 @@ def test_js_dependent_chrome_stripped_at_render():
     with no href, then four <li class="blog-item loading"> holding only a dice
     glyph — a related-posts carousel that never filled in."""
     html = (
-        '<p>Article text.</p>'
+        "<p>Article text.</p>"
         '<div class="sharing_widget"> <a class="fb" title="Share on Facebook">'
         '<svg class="share-icon svg-inline--fa fa-facebook-square"><path/></svg></a></div>'
         '<ul class="content_card_row__cards blog_feed">'
         '<li class="blog-item loading"><svg class="themed-icon"><path/></svg></li>'
         '<li class="blog-item loading"><svg class="themed-icon"><path/></svg></li>'
-        '</ul>'
-        '<p>More text.</p>'
+        "</ul>"
+        "<p>More text.</p>"
     )
     cleaned = main._apply_feed_content_cleanups(html, "lectio:saved", "e1")
     assert "sharing_widget" not in cleaned
     assert "blog-item" not in cleaned
-    assert "<ul" not in cleaned          # the emptied list husk goes too
+    assert "<ul" not in cleaned  # the emptied list husk goes too
     assert "Article text." in cleaned and "More text." in cleaned
 
 
@@ -275,26 +292,22 @@ def test_js_chrome_strip_keeps_a_container_holding_a_real_svg_figure():
     survive, or the strip silently eats article art.
     """
     html = (
-        '<p>Article text.</p>'
+        "<p>Article text.</p>"
         '<div class="social-chart">'
         '<svg viewBox="0 0 800 450" width="800" height="450"><rect width="800" height="450"/></svg>'
-        '</div>'
+        "</div>"
         '<div class="sharing_widget">'
         '<svg class="share-icon svg-inline--fa" width="448" height="512"><path/></svg>'
-        '</div>'
+        "</div>"
     )
     cleaned = main._apply_feed_content_cleanups(html, "lectio:saved", "e1")
-    assert "social-chart" in cleaned          # real figure kept
+    assert "social-chart" in cleaned  # real figure kept
     assert "viewBox" in cleaned or "viewbox" in cleaned
-    assert "sharing_widget" not in cleaned    # icon-only chrome still goes
+    assert "sharing_widget" not in cleaned  # icon-only chrome still goes
 
 
 def test_js_chrome_strip_still_removes_small_unclassed_glyphs():
     """An unclassed but icon-sized SVG is a glyph, not a figure."""
-    html = (
-        '<p>Text.</p>'
-        '<ul class="cards loading"><li class="loading">'
-        '<svg width="20" height="20"><path/></svg></li></ul>'
-    )
+    html = '<p>Text.</p><ul class="cards loading"><li class="loading"><svg width="20" height="20"><path/></svg></li></ul>'
     cleaned = main._apply_feed_content_cleanups(html, "lectio:saved", "e1")
     assert "<ul" not in cleaned and "Text." in cleaned

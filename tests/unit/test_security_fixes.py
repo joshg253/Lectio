@@ -1,4 +1,5 @@
 """Security regression tests for the SSRF / XSS / open-redirect / file:// fixes."""
+
 from __future__ import annotations
 
 import re
@@ -10,15 +11,15 @@ import services.feed_discovery as feed_discovery
 
 # ── M1: allowlist HTML sanitizer (replaces the bypassable regex sanitizers) ──
 _XSS_VECTORS = [
-    "<img src=x onerror=alert(1)>",          # unquoted event handler
-    '<a href="javascript:alert(1)">x</a>',   # javascript: scheme
-    "<svg onload=alert(1)></svg>",           # svg + handler
-    "<p>ok</p><script>alert(1)</script>",    # script tag
+    "<img src=x onerror=alert(1)>",  # unquoted event handler
+    '<a href="javascript:alert(1)">x</a>',  # javascript: scheme
+    "<svg onload=alert(1)></svg>",  # svg + handler
+    "<p>ok</p><script>alert(1)</script>",  # script tag
     '<img src="data:text/html,<script>1">',  # data: URI
     '<a href="java\tscript:alert(1)">x</a>',  # control-char obfuscation
     "<iframe src='https://evil'></iframe>",  # iframe
-    "<div onmouseover='x()'>hi</div>",       # handler on div
-    "<body onload=alert(1)>",                # body handler
+    "<div onmouseover='x()'>hi</div>",  # handler on div
+    "<body onload=alert(1)>",  # body handler
 ]
 
 _DANGEROUS_RE = re.compile(r"on\w+\s*=|javascript:|vbscript:|<script|<iframe|<svg|<object|data:text", re.IGNORECASE)
@@ -60,14 +61,17 @@ def test_safe_next_allows_local_paths(ok: str):
 
 
 # ── H2: only http(s) feed URLs are subscribable (no file:// local reads) ──
-@pytest.mark.parametrize("url,expected", [
-    ("http://example.com/feed", True),
-    ("https://example.com/feed", True),
-    ("file:///etc/passwd", False),
-    ("ftp://example.com/x", False),
-    ("gopher://x", False),
-    ("", False),
-])
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("http://example.com/feed", True),
+        ("https://example.com/feed", True),
+        ("file:///etc/passwd", False),
+        ("ftp://example.com/x", False),
+        ("gopher://x", False),
+        ("", False),
+    ],
+)
 def test_is_subscribable_feed_url(url: str, expected: bool):
     assert main._is_subscribable_feed_url(url) is expected
 

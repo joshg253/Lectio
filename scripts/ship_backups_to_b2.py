@@ -66,11 +66,12 @@ def remote_generations(bucket: str, key_id: str, application_key: str) -> list[s
     """Generation-stamp folders under backups/ on the remote, newest first."""
     result = subprocess.run(
         ["rclone", "lsf", f"{_REMOTE}:{bucket}/backups", "--dirs-only"],
-        env=rclone_env(key_id, application_key), capture_output=True, text=True,
+        env=rclone_env(key_id, application_key),
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
-        print(f"could not list remote generations (exit {result.returncode}): {result.stderr.strip()}",
-              file=sys.stderr)
+        print(f"could not list remote generations (exit {result.returncode}): {result.stderr.strip()}", file=sys.stderr)
         return []
     stamps = [line.strip().rstrip("/") for line in result.stdout.splitlines() if line.strip()]
     return sorted(stamps, reverse=True)
@@ -87,13 +88,14 @@ def prune_remote(bucket: str, key_id: str, application_key: str, keep: int) -> N
     for stamp in stamps[keep:]:
         result = subprocess.run(
             ["rclone", "purge", f"{_REMOTE}:{bucket}/backups/{stamp}"],
-            env=rclone_env(key_id, application_key), capture_output=True, text=True,
+            env=rclone_env(key_id, application_key),
+            capture_output=True,
+            text=True,
         )
         if result.returncode == 0:
             print(f"pruned remote generation: {stamp}")
         else:
-            print(f"failed to prune remote generation {stamp} (exit {result.returncode}): {result.stderr.strip()}",
-                  file=sys.stderr)
+            print(f"failed to prune remote generation {stamp} (exit {result.returncode}): {result.stderr.strip()}", file=sys.stderr)
 
 
 def main() -> int:
@@ -106,9 +108,15 @@ def main() -> int:
     bucket = os.getenv("LECTIO_B2_BUCKET")
     key_id = os.getenv("LECTIO_B2_KEY_ID")
     application_key = os.getenv("LECTIO_B2_APPLICATION_KEY")
-    missing = [name for name, val in (
-        ("LECTIO_B2_BUCKET", bucket), ("LECTIO_B2_KEY_ID", key_id), ("LECTIO_B2_APPLICATION_KEY", application_key),
-    ) if not val]
+    missing = [
+        name
+        for name, val in (
+            ("LECTIO_B2_BUCKET", bucket),
+            ("LECTIO_B2_KEY_ID", key_id),
+            ("LECTIO_B2_APPLICATION_KEY", application_key),
+        )
+        if not val
+    ]
     if missing:
         print(f"missing env var(s): {', '.join(missing)}", file=sys.stderr)
         return 1

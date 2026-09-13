@@ -4,6 +4,7 @@ Feed-provided chips only exist when the publisher ships them, and a feed with a
 stable subject ships none — a guitar blog does not tag its posts "guitar" — so
 filing them meant typing the same word on every post.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -49,13 +50,16 @@ def test_order_is_preserved(configured):
     assert main.get_feed_pinned_tags(FEED) == ["bass", "guitar", "amps"]
 
 
-@pytest.mark.parametrize("raw,expected", [
-    ("#guitar #bass", ["guitar", "bass"]),      # leading hashes
-    ("guitar, bass", ["guitar", "bass"]),        # commas
-    ("Guitar BASS", ["guitar", "bass"]),         # case
-    ("guitar   bass", ["guitar", "bass"]),       # runs of whitespace
-    ("guitar guitar bass", ["guitar", "bass"]),  # repeats
-])
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("#guitar #bass", ["guitar", "bass"]),  # leading hashes
+        ("guitar, bass", ["guitar", "bass"]),  # commas
+        ("Guitar BASS", ["guitar", "bass"]),  # case
+        ("guitar   bass", ["guitar", "bass"]),  # runs of whitespace
+        ("guitar guitar bass", ["guitar", "bass"]),  # repeats
+    ],
+)
 def test_input_is_normalized(configured, raw, expected):
     assert main.set_feed_pinned_tags(FEED, raw) == expected
 
@@ -83,8 +87,9 @@ def test_pinned_tags_survive_other_display_prefs(configured):
     main.set_feed_pinned_tags(FEED, "guitar")
     with main.get_meta_connection() as conn:
         conn.execute(
-            "INSERT INTO feed_display_prefs (feed_url, hide_shorts) VALUES (?, 1)"
-            " ON CONFLICT(feed_url) DO UPDATE SET hide_shorts = 1", (FEED,))
+            "INSERT INTO feed_display_prefs (feed_url, hide_shorts) VALUES (?, 1) ON CONFLICT(feed_url) DO UPDATE SET hide_shorts = 1",
+            (FEED,),
+        )
 
     assert main.get_feed_pinned_tags(FEED) == ["guitar"]
 
@@ -95,8 +100,7 @@ def test_pinned_tags_survive_other_display_prefs(configured):
 def test_pinned_tags_come_first_and_only_once(configured, monkeypatch):
     """Both halves of the request: pinned first, and never a duplicate chip when
     the publisher happens to ship the same tag."""
-    monkeypatch.setattr(main, "get_feed_tag_suggestions",
-                        lambda f, e: ["lessons", "guitar", "review"])
+    monkeypatch.setattr(main, "get_feed_tag_suggestions", lambda f, e: ["lessons", "guitar", "review"])
     main.set_feed_pinned_tags(FEED, "guitar bass")
 
     pinned = main.get_feed_pinned_tags(FEED)

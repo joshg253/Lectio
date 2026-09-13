@@ -29,6 +29,7 @@ Usage (inside the app container):
     uv run scripts/recapture_archived_entries.py --user u_x --apply FEED_URL ENTRY_ID
 Dry-run by default: reports the current size and asset count, applies nothing.
 """
+
 from __future__ import annotations
 
 import argparse

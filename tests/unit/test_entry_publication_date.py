@@ -10,6 +10,7 @@ Two defects met here and hid each other (found 2026-08-04):
 The visible result was an entry with `2025-11-22` in its own URL displaying no
 usable date at all.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -21,8 +22,8 @@ import main
 
 class _Entry:
     """Just the attributes the date helpers read."""
-    def __init__(self, *, published=None, updated=None, link=None, id=None,
-                 title=None, added=datetime(2026, 8, 4, tzinfo=timezone.utc)):
+
+    def __init__(self, *, published=None, updated=None, link=None, id=None, title=None, added=datetime(2026, 8, 4, tzinfo=timezone.utc)):
         self.published = published
         self.updated = updated
         self.link = link
@@ -41,11 +42,14 @@ def test_sentinel_dates_are_not_publication_dates(year):
     assert main.real_published_date(datetime(year, 1, 1)) is None
 
 
-@pytest.mark.parametrize("value", [
-    datetime(2025, 11, 22),
-    datetime(1995, 6, 1),
-    datetime(2025, 11, 22, tzinfo=timezone.utc),
-])
+@pytest.mark.parametrize(
+    "value",
+    [
+        datetime(2025, 11, 22),
+        datetime(1995, 6, 1),
+        datetime(2025, 11, 22, tzinfo=timezone.utc),
+    ],
+)
 def test_real_dates_survive(value):
     assert main.real_published_date(value) == value
 
@@ -57,24 +61,28 @@ def test_none_stays_none():
 # --- the /YYYY-MM-DD/ permalink shape --------------------------------------
 
 
-@pytest.mark.parametrize("url,expected", [
-    # Jekyll/Hugo and hand-rolled blogs — the shape that was unsupported.
-    ("https://www.brendangregg.com/blog/2025-11-22/intel-is-listening.html",
-     datetime(2025, 11, 22, tzinfo=timezone.utc)),
-    # WordPress, which already worked and must keep working.
-    ("https://example.test/2019/07/06/post.html",
-     datetime(2019, 7, 6, tzinfo=timezone.utc)),
-    ("https://example.test/2019/7/6/", datetime(2019, 7, 6, tzinfo=timezone.utc)),
-])
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        # Jekyll/Hugo and hand-rolled blogs — the shape that was unsupported.
+        ("https://www.brendangregg.com/blog/2025-11-22/intel-is-listening.html", datetime(2025, 11, 22, tzinfo=timezone.utc)),
+        # WordPress, which already worked and must keep working.
+        ("https://example.test/2019/07/06/post.html", datetime(2019, 7, 6, tzinfo=timezone.utc)),
+        ("https://example.test/2019/7/6/", datetime(2019, 7, 6, tzinfo=timezone.utc)),
+    ],
+)
 def test_dated_permalinks_are_read(url, expected):
     assert main.url_inferred_pubdate(url) == expected
 
 
-@pytest.mark.parametrize("url", [
-    "https://example.test/1234-56-78/post",     # month 56 is not a month
-    "https://example.test/1999-01-01/post",     # before the supported range
-    "https://example.test/no-date-here/post",
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.test/1234-56-78/post",  # month 56 is not a month
+        "https://example.test/1999-01-01/post",  # before the supported range
+        "https://example.test/no-date-here/post",
+    ],
+)
 def test_non_dates_are_rejected(url):
     assert main.url_inferred_pubdate(url) is None
 
@@ -84,8 +92,7 @@ def test_non_dates_are_rejected(url):
 
 def test_epoch_published_no_longer_blocks_url_inference():
     """The exact reported case: epoch-0 stored, real date in the URL."""
-    e = _Entry(published=datetime(1970, 1, 1),
-               link="https://www.brendangregg.com/blog/2025-11-22/intel-is-listening.html")
+    e = _Entry(published=datetime(1970, 1, 1), link="https://www.brendangregg.com/blog/2025-11-22/intel-is-listening.html")
 
     assert main.entry_publication_date(e) == datetime(2025, 11, 22, tzinfo=timezone.utc)
     assert main.entry_effective_date(e) == datetime(2025, 11, 22, tzinfo=timezone.utc)
@@ -93,9 +100,7 @@ def test_epoch_published_no_longer_blocks_url_inference():
 
 def test_date_can_come_from_the_id_when_the_link_has_none():
     """link and id can differ and the date may live in either."""
-    e = _Entry(published=datetime(1970, 1, 1),
-               link="https://example.test/permalink",
-               id="https://example.test/2021/03/09/real-slug")
+    e = _Entry(published=datetime(1970, 1, 1), link="https://example.test/permalink", id="https://example.test/2021/03/09/real-slug")
 
     assert main.entry_publication_date(e) == datetime(2021, 3, 9, tzinfo=timezone.utc)
 
@@ -108,8 +113,7 @@ def test_month_precision_is_used_only_after_day_precision():
 def test_a_real_feed_date_still_wins_over_the_url():
     """Inference is a fallback, never an override — a publisher's own date is
     better than anything guessed from a permalink."""
-    e = _Entry(published=datetime(2020, 5, 5),
-               link="https://example.test/2019/07/06/post.html")
+    e = _Entry(published=datetime(2020, 5, 5), link="https://example.test/2019/07/06/post.html")
 
     assert main.entry_publication_date(e) == datetime(2020, 5, 5)
 

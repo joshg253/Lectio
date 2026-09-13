@@ -5,6 +5,7 @@ the entry-existence check, every restart "restored" a star pointing at a
 tombstone — invisible in the UI, but inflating counts and re-created on the next
 boot however many times it was swept. These tests pin that the backfill restores
 live entries only."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -68,8 +69,7 @@ def dbs(tmp_path):
     meta.close()
 
 
-def _service(archive, meta, reader, tagged=None, tagged_raises=False,
-             archived=None, archived_raises=False):
+def _service(archive, meta, reader, tagged=None, tagged_raises=False, archived=None, archived_raises=False):
     # A fresh connection per call, as the app's factory does: the service
     # closes what it opens, so handing it the fixture's own handle would close
     # it out from under the test's assertions.
@@ -137,9 +137,7 @@ def test_restores_only_the_live_entries_in_a_mixed_batch(dbs):
     archive, meta = dbs
     for eid in ("live-1", "gone-1", "live-2", "gone-2"):
         _add_archive(archive, eid)
-    svc = _service(
-        archive, meta, _FakeReader({(SAVED_FEED, "live-1"), (SAVED_FEED, "live-2")})
-    )
+    svc = _service(archive, meta, _FakeReader({(SAVED_FEED, "live-1"), (SAVED_FEED, "live-2")}))
 
     assert svc.backfill_saved_entries_from_archive() == 2
     assert _stars(meta) == {(SAVED_FEED, "live-1"), (SAVED_FEED, "live-2")}
@@ -168,9 +166,7 @@ def test_existing_star_is_left_alone(dbs):
     svc = _service(archive, meta, _FakeReader({(SAVED_FEED, "already-starred")}))
 
     assert svc.backfill_saved_entries_from_archive() == 0
-    saved_at = meta.execute(
-        "SELECT saved_at FROM saved_entries WHERE entry_id = ?", ("already-starred",)
-    ).fetchone()[0]
+    saved_at = meta.execute("SELECT saved_at FROM saved_entries WHERE entry_id = ?", ("already-starred",)).fetchone()[0]
     assert saved_at == "2019-12-08 10:00:00"
 
 
@@ -210,9 +206,7 @@ def test_tagged_and_untagged_are_separated_in_one_batch(dbs):
         ("https://example.com/feed", "starred-only"),
         ("https://example.com/feed", "tagged-only"),
     }
-    svc = _service(
-        archive, meta, _FakeReader(live), tagged={("https://example.com/feed", "tagged-only")}
-    )
+    svc = _service(archive, meta, _FakeReader(live), tagged={("https://example.com/feed", "tagged-only")})
 
     assert svc.backfill_saved_entries_from_archive() == 1
     assert _stars(meta) == {("https://example.com/feed", "starred-only")}
@@ -254,7 +248,9 @@ def test_an_archived_done_entry_is_never_restarred(dbs):
     archive, meta = dbs
     _add_archive(archive, "archived-only", feed=SAVED_FEED)
     svc = _service(
-        archive, meta, _FakeReader({(SAVED_FEED, "archived-only")}),
+        archive,
+        meta,
+        _FakeReader({(SAVED_FEED, "archived-only")}),
         archived={(SAVED_FEED, "archived-only")},
     )
 
@@ -271,7 +267,9 @@ def test_archived_and_untouched_are_separated_in_one_batch(dbs):
         ("https://example.com/feed", "archived-only"),
     }
     svc = _service(
-        archive, meta, _FakeReader(live),
+        archive,
+        meta,
+        _FakeReader(live),
         archived={("https://example.com/feed", "archived-only")},
     )
 
@@ -285,7 +283,9 @@ def test_a_failing_archived_lookup_restores_nothing(dbs):
     archive, meta = dbs
     _add_archive(archive, "e1", feed="https://example.com/feed")
     svc = _service(
-        archive, meta, _FakeReader({("https://example.com/feed", "e1")}),
+        archive,
+        meta,
+        _FakeReader({("https://example.com/feed", "e1")}),
         archived_raises=True,
     )
 

@@ -1,4 +1,5 @@
 """Unit tests for feed_discovery.discover_feed_urls."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -72,20 +73,14 @@ class TestDiscoverFeedUrls:
         assert result == ["https://example.com/feed.xml"]
 
     def test_html_page_with_link_tag(self):
-        html = (
-            '<html><head>'
-            '<link rel="alternate" type="application/rss+xml" href="/feed.xml" title="RSS" />'
-            '</head></html>'
-        )
+        html = '<html><head><link rel="alternate" type="application/rss+xml" href="/feed.xml" title="RSS" /></head></html>'
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", html)):
             with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
                 result = discover_feed_urls("https://example.com/")
         assert result == ["https://example.com/feed.xml"]
 
     def test_html_page_with_atom_link(self):
-        html = (
-            '<link type="application/atom+xml" rel="alternate" href="https://feeds.example.com/atom" />'
-        )
+        html = '<link type="application/atom+xml" rel="alternate" href="https://feeds.example.com/atom" />'
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", html)):
             with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
                 result = discover_feed_urls("https://example.com/")
@@ -200,9 +195,11 @@ class TestDeadAdvertisedFallback:
     beat a working conventional path."""
 
     # Padded past probe_url's small-HTML bot-challenge heuristic (512 bytes).
-    HTML = ('<html><head>'
-            '<link rel="alternate" type="application/rss+xml" href="/rss" title="Blog (RSS)" />'
-            '</head><body>' + '<p>real page content</p>' * 30 + '</body></html>')
+    HTML = (
+        "<html><head>"
+        '<link rel="alternate" type="application/rss+xml" href="/rss" title="Blog (RSS)" />'
+        "</head><body>" + "<p>real page content</p>" * 30 + "</body></html>"
+    )
 
     @staticmethod
     def _head(alive_paths):
@@ -211,6 +208,7 @@ class TestDeadAdvertisedFallback:
                 if url == f"https://example.com{path}":
                     return _mock_response(url, ct)
             return _mock_response(url, "text/html", status=404)
+
         return fake_head
 
     def test_discover_falls_back_to_common_path(self):
@@ -233,8 +231,10 @@ class TestDeadAdvertisedFallback:
         """403 is the server refusing to answer a HEAD, not proof the feed is
         absent — reader's real GET may well get through, so it is still
         offered. This is the bot-walled case the last resort exists for."""
+
         def refused(url, **_kwargs):
             return _mock_response(str(url), "text/html", status=403)
+
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
             with patch("services.feed_discovery._guarded_head", side_effect=refused):
                 result = discover_feed_urls("https://example.com/")
@@ -259,6 +259,7 @@ class TestDeadAdvertisedFallback:
     def test_probe_url_keeps_a_refused_link_when_no_alternative(self):
         def refused(url, **_kwargs):
             return _mock_response(str(url), "text/html", status=403)
+
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
             with patch("services.feed_discovery._guarded_head", side_effect=refused):
                 result = probe_url("https://example.com/")
@@ -286,6 +287,7 @@ class TestDeadAdvertisedFallback:
     def test_head_hostile_405_keeps_advertised_link(self):
         def fake_head(url, **_kwargs):
             return _mock_response(url, "text/html", status=405)
+
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
             with patch("services.feed_discovery._guarded_head", side_effect=fake_head):
                 result = discover_feed_urls("https://example.com/")
@@ -294,6 +296,7 @@ class TestDeadAdvertisedFallback:
     def test_head_error_keeps_advertised_link(self):
         def fake_head(url, **_kwargs):
             raise Exception("connection reset")
+
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
             with patch("services.feed_discovery._guarded_head", side_effect=fake_head):
                 result = discover_feed_urls("https://example.com/")
@@ -308,9 +311,9 @@ class TestRedirectingAdvertisedFeed:
     """
 
     HTML = (
-        '<html><head>'
+        "<html><head>"
         '<link rel="alternate" type="application/rss+xml" href="http://example.com/feed.xml" />'
-        '</head><body>' + ("x" * 600) + '</body></html>'
+        "</head><body>" + ("x" * 600) + "</body></html>"
     )
 
     @staticmethod
@@ -326,16 +329,16 @@ class TestRedirectingAdvertisedFeed:
                 resp.is_redirect = True
                 return resp
             return _mock_response(url, spec)
+
         return fake_head
 
     def test_dead_link_behind_a_redirect_loses_to_a_working_alternative(self):
         heads = {
             "http://example.com/feed.xml": (301, "https://example.com/feed.xml"),
-            "https://example.com/feed.xml": None,          # 404 — the truth
+            "https://example.com/feed.xml": None,  # 404 — the truth
             "https://example.com/rss": "application/rss+xml",  # the live feed
         }
-        with patch("services.feed_discovery._guarded_get",
-                   return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
             with patch("services.feed_discovery._guarded_head", side_effect=self._head(heads)):
                 result = discover_feed_urls("https://example.com/")
         assert result == ["https://example.com/rss"]
@@ -345,8 +348,7 @@ class TestRedirectingAdvertisedFeed:
             "http://example.com/feed.xml": (301, "https://example.com/feed.xml"),
             "https://example.com/feed.xml": "application/rss+xml",
         }
-        with patch("services.feed_discovery._guarded_get",
-                   return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
             with patch("services.feed_discovery._guarded_head", side_effect=self._head(heads)):
                 result = discover_feed_urls("https://example.com/")
         assert result == ["http://example.com/feed.xml"]
@@ -357,8 +359,7 @@ class TestRedirectingAdvertisedFeed:
             "http://example.com/feed.xml": (301, "https://example.com/feed.xml"),
             "https://example.com/feed.xml": (301, "http://example.com/feed.xml"),
         }
-        with patch("services.feed_discovery._guarded_get",
-                   return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
             with patch("services.feed_discovery._guarded_head", side_effect=self._head(heads)):
                 result = discover_feed_urls("https://example.com/")
         assert result == ["http://example.com/feed.xml"]
@@ -381,11 +382,11 @@ class TestMultisitePathScopedFeeds:
                 if url == f"https://devblogs.microsoft.com{path}":
                     return _mock_response(url, ct)
             return _mock_response(url, "text/html", status=404)
+
         return fake_head
 
     def _probe(self, page, alive):
-        with patch("services.feed_discovery._guarded_get",
-                   return_value=_mock_response(page, "text/html", self.HTML)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response(page, "text/html", self.HTML)):
             with patch("services.feed_discovery._guarded_head", side_effect=self._head(alive)):
                 return probe_url(page)
 
@@ -394,9 +395,7 @@ class TestMultisitePathScopedFeeds:
             "https://devblogs.microsoft.com/oldnewthing/",
             {"/oldnewthing/feed": "application/rss+xml", "/feed": "application/rss+xml"},
         )
-        assert result["feeds"] == [
-            {"url": "https://devblogs.microsoft.com/oldnewthing/feed", "title": None}
-        ]
+        assert result["feeds"] == [{"url": "https://devblogs.microsoft.com/oldnewthing/feed", "title": None}]
 
     def test_root_feed_still_found_when_the_path_has_none(self):
         result = self._probe(
@@ -415,44 +414,42 @@ class TestPinboardRewrite:
     to feeds.pinboard.in feed URLs (same u:/t:/from: segment grammar)."""
 
     def test_popular(self):
-        assert rewrite_known_site_url("https://pinboard.in/popular/") == \
-            "https://feeds.pinboard.in/rss/popular/"
+        assert rewrite_known_site_url("https://pinboard.in/popular/") == "https://feeds.pinboard.in/rss/popular/"
 
     def test_recent(self):
-        assert rewrite_known_site_url("https://pinboard.in/recent/") == \
-            "https://feeds.pinboard.in/rss/recent/"
+        assert rewrite_known_site_url("https://pinboard.in/recent/") == "https://feeds.pinboard.in/rss/recent/"
 
     def test_user(self):
-        assert rewrite_known_site_url("https://pinboard.in/u:jsmith/") == \
-            "https://feeds.pinboard.in/rss/u:jsmith/"
+        assert rewrite_known_site_url("https://pinboard.in/u:jsmith/") == "https://feeds.pinboard.in/rss/u:jsmith/"
 
     def test_user_with_tags(self):
-        assert rewrite_known_site_url("https://pinboard.in/u:jsmith/t:python/t:web/") == \
-            "https://feeds.pinboard.in/rss/u:jsmith/t:python/t:web/"
+        assert (
+            rewrite_known_site_url("https://pinboard.in/u:jsmith/t:python/t:web/")
+            == "https://feeds.pinboard.in/rss/u:jsmith/t:python/t:web/"
+        )
 
     def test_tag_only(self):
-        assert rewrite_known_site_url("https://pinboard.in/t:linux/") == \
-            "https://feeds.pinboard.in/rss/t:linux/"
+        assert rewrite_known_site_url("https://pinboard.in/t:linux/") == "https://feeds.pinboard.in/rss/t:linux/"
 
     def test_user_from_source(self):
-        assert rewrite_known_site_url("https://pinboard.in/u:jsmith/from:twitter/") == \
-            "https://feeds.pinboard.in/rss/u:jsmith/from:twitter/"
+        assert (
+            rewrite_known_site_url("https://pinboard.in/u:jsmith/from:twitter/") == "https://feeds.pinboard.in/rss/u:jsmith/from:twitter/"
+        )
 
     def test_secret_private(self):
-        assert rewrite_known_site_url("https://pinboard.in/secret:abc123/u:jsmith/private/") == \
-            "https://feeds.pinboard.in/rss/secret:abc123/u:jsmith/private/"
+        assert (
+            rewrite_known_site_url("https://pinboard.in/secret:abc123/u:jsmith/private/")
+            == "https://feeds.pinboard.in/rss/secret:abc123/u:jsmith/private/"
+        )
 
     def test_www_host(self):
-        assert rewrite_known_site_url("https://www.pinboard.in/popular/") == \
-            "https://feeds.pinboard.in/rss/popular/"
+        assert rewrite_known_site_url("https://www.pinboard.in/popular/") == "https://feeds.pinboard.in/rss/popular/"
 
     def test_explicit_port_and_case(self):
-        assert rewrite_known_site_url("https://Pinboard.in:443/popular/") == \
-            "https://feeds.pinboard.in/rss/popular/"
+        assert rewrite_known_site_url("https://Pinboard.in:443/popular/") == "https://feeds.pinboard.in/rss/popular/"
 
     def test_missing_trailing_slash(self):
-        assert rewrite_known_site_url("https://pinboard.in/popular") == \
-            "https://feeds.pinboard.in/rss/popular/"
+        assert rewrite_known_site_url("https://pinboard.in/popular") == "https://feeds.pinboard.in/rss/popular/"
 
     def test_non_feed_page_unchanged(self):
         for url in (
@@ -464,8 +461,7 @@ class TestPinboardRewrite:
             assert rewrite_known_site_url(url) == url
 
     def test_other_host_unchanged(self):
-        assert rewrite_known_site_url("https://example.com/popular/") == \
-            "https://example.com/popular/"
+        assert rewrite_known_site_url("https://example.com/popular/") == "https://example.com/popular/"
 
     def test_feeds_host_untouched(self):
         # Pasting the feed URL itself must pass through unchanged.
@@ -508,8 +504,7 @@ class TestArtstationFeedRewrite:
         assert rewrite_known_site_url(url) == url
 
     def test_www_subdomain_not_treated_as_user(self):
-        assert rewrite_known_site_url("https://www.artstation.com/") == \
-            "https://www.artstation.com/"
+        assert rewrite_known_site_url("https://www.artstation.com/") == "https://www.artstation.com/"
 
 
 class TestBehanceFeedRewrite:
@@ -548,20 +543,22 @@ class TestFreeCodeCampFeedRewrite:
     to its own feed, not the firehose."""
 
     def test_tag_page_maps_to_tag_feed(self):
-        assert rewrite_known_site_url("https://www.freecodecamp.org/news/tag/advanced-mathematics/") == \
-            "https://www.freecodecamp.org/news/tag/advanced-mathematics/rss/"
+        assert (
+            rewrite_known_site_url("https://www.freecodecamp.org/news/tag/advanced-mathematics/")
+            == "https://www.freecodecamp.org/news/tag/advanced-mathematics/rss/"
+        )
 
     def test_tag_page_without_trailing_slash(self):
-        assert rewrite_known_site_url("https://www.freecodecamp.org/news/tag/python") == \
-            "https://www.freecodecamp.org/news/tag/python/rss/"
+        assert rewrite_known_site_url("https://www.freecodecamp.org/news/tag/python") == "https://www.freecodecamp.org/news/tag/python/rss/"
 
     def test_author_page_maps_to_author_feed(self):
-        assert rewrite_known_site_url("https://www.freecodecamp.org/news/author/quincy/") == \
-            "https://www.freecodecamp.org/news/author/quincy/rss/"
+        assert (
+            rewrite_known_site_url("https://www.freecodecamp.org/news/author/quincy/")
+            == "https://www.freecodecamp.org/news/author/quincy/rss/"
+        )
 
     def test_news_root_maps_to_site_feed(self):
-        assert rewrite_known_site_url("https://www.freecodecamp.org/news/") == \
-            "https://www.freecodecamp.org/news/rss/"
+        assert rewrite_known_site_url("https://www.freecodecamp.org/news/") == "https://www.freecodecamp.org/news/rss/"
 
     def test_already_a_feed_passes_through(self):
         for url in (
@@ -587,16 +584,14 @@ class TestTapasDiscovery:
     (slug form), which is what the community userscripts do by hand."""
 
     def test_numeric_series_url_is_a_pure_rewrite(self):
-        assert rewrite_known_site_url("https://tapas.io/series/217452") == \
-            "https://tapas.io/rss/series/217452"
+        assert rewrite_known_site_url("https://tapas.io/series/217452") == "https://tapas.io/rss/series/217452"
 
     def test_www_and_mobile_hosts(self):
         for url in ("https://www.tapas.io/series/2007", "https://m.tapas.io/series/2007"):
             assert rewrite_known_site_url(url) == "https://tapas.io/rss/series/2007"
 
     def test_trailing_slash_and_case(self):
-        assert rewrite_known_site_url("https://Tapas.io/series/62967/") == \
-            "https://tapas.io/rss/series/62967"
+        assert rewrite_known_site_url("https://Tapas.io/series/62967/") == "https://tapas.io/rss/series/62967"
 
     def test_slug_url_is_left_for_the_body_extractor(self):
         # No fetch here, so the rewriter must not invent an id from the slug.
@@ -619,10 +614,11 @@ class TestTapasDiscovery:
             ' href="https://m.tapas.io/episode/2294111">'
             '<link rel="canonical" href="https://tapas.io/episode/2294111"/></head>'
             '<body><a class="card" data-series-id="96914">something else</a>'
-            '<script>var seriesId: 217452;</script></body></html>'
+            "<script>var seriesId: 217452;</script></body></html>"
         )
-        with patch("services.feed_discovery._guarded_get",
-                   return_value=_mock_response("https://tapas.io/series/club_cryptid", "text/html", html)):
+        with patch(
+            "services.feed_discovery._guarded_get", return_value=_mock_response("https://tapas.io/series/club_cryptid", "text/html", html)
+        ):
             with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
                 result = discover_feed_urls("https://tapas.io/series/club_cryptid")
         assert result == ["https://tapas.io/rss/series/217452"]
@@ -630,12 +626,10 @@ class TestTapasDiscovery:
     def test_episode_page_falls_back_to_the_first_data_series_id(self):
         # Episode pages carry no `seriesId:`; the first data-series-id is the
         # episode's own series, the rest are recommendation cards.
-        html = (
-            '<div data-series-id="155459"><h1>FANGS</h1></div>'
-            '<a data-series-id="58981">recommended</a>'
-        )
-        with patch("services.feed_discovery._guarded_get",
-                   return_value=_mock_response("https://tapas.io/episode/1234567", "text/html", html)):
+        html = '<div data-series-id="155459"><h1>FANGS</h1></div><a data-series-id="58981">recommended</a>'
+        with patch(
+            "services.feed_discovery._guarded_get", return_value=_mock_response("https://tapas.io/episode/1234567", "text/html", html)
+        ):
             with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
                 result = discover_feed_urls("https://tapas.io/episode/1234567")
         assert result == ["https://tapas.io/rss/series/155459"]
@@ -644,8 +638,7 @@ class TestTapasDiscovery:
         html = "<html><body>nothing useful here</body></html>"
         no_match = MagicMock()
         no_match.is_success = False
-        with patch("services.feed_discovery._guarded_get",
-                   return_value=_mock_response("https://tapas.io/series/gone", "text/html", html)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://tapas.io/series/gone", "text/html", html)):
             with patch("services.feed_discovery._guarded_head", return_value=no_match):
                 result = discover_feed_urls("https://tapas.io/series/gone")
         assert result == []
@@ -656,19 +649,16 @@ class TestTapasDiscovery:
         html = '<div data-series-id="999">not tapas</div>'
         no_match = MagicMock()
         no_match.is_success = False
-        with patch("services.feed_discovery._guarded_get",
-                   return_value=_mock_response("https://example.com/series/x", "text/html", html)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/series/x", "text/html", html)):
             with patch("services.feed_discovery._guarded_head", return_value=no_match):
                 result = discover_feed_urls("https://example.com/series/x")
         assert result == []
 
     def test_an_advertised_feed_still_wins_over_the_body(self):
-        html = (
-            '<link rel="alternate" type="application/rss+xml" href="/real/feed.xml" />'
-            '<div data-series-id="217452"></div>'
-        )
-        with patch("services.feed_discovery._guarded_get",
-                   return_value=_mock_response("https://tapas.io/series/club_cryptid", "text/html", html)):
+        html = '<link rel="alternate" type="application/rss+xml" href="/real/feed.xml" /><div data-series-id="217452"></div>'
+        with patch(
+            "services.feed_discovery._guarded_get", return_value=_mock_response("https://tapas.io/series/club_cryptid", "text/html", html)
+        ):
             with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
                 result = discover_feed_urls("https://tapas.io/series/club_cryptid")
         assert result == ["https://tapas.io/real/feed.xml"]
@@ -681,8 +671,7 @@ class TestTapasDiscovery:
         # empty-response / bot-protection guard before discovery runs.
         html = '<div data-series-id="217452"></div>' + "<p>episode</p>" * 60
         url = "https://tapas.io/series/club_cryptid"
-        with patch("services.feed_discovery._guarded_get",
-                   return_value=_mock_response(url, "text/html", html)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response(url, "text/html", html)):
             with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
                 preview = probe_url(url)
                 added = discover_feed_urls(url)
@@ -709,8 +698,7 @@ class TestTinyviewRewrite:
         assert rewrite_known_site_url("https://www.tinyview.com/they-can-talk") == self.EXPECTED
 
     def test_episode_url_resolves_to_the_comic_feed(self):
-        assert rewrite_known_site_url(
-            "https://tinyview.com/they-can-talk/2026/08/13/time") == self.EXPECTED
+        assert rewrite_known_site_url("https://tinyview.com/they-can-talk/2026/08/13/time") == self.EXPECTED
 
     def test_feed_url_is_left_alone(self):
         assert rewrite_known_site_url(self.EXPECTED) == self.EXPECTED

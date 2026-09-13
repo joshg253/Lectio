@@ -5,6 +5,7 @@ word-boundary traps live: `Apple|AirPods|iPhone|MacBook` matched "Grapplers"
 and "Dole Pineapple Tidbits" in a deals folder. Terms keep SUBSTRING semantics
 — on the live library 4 plain rules match only *inside* words and would stop
 matching entirely if a split implied a word boundary."""
+
 from __future__ import annotations
 
 import re
@@ -37,21 +38,24 @@ def isolated_reader(tmp_path):
         tenancy._layout = saved
 
 
-@pytest.mark.parametrize("keyword,expected", [
-    ("apple", ["apple"]),
-    ("apple, iphone", ["apple", "iphone"]),
-    ("  apple ,  iphone  ", ["apple", "iphone"]),
-    ("apple,,iphone", ["apple", "iphone"]),
-    (" , ", []),
-    ("", []),
-])
+@pytest.mark.parametrize(
+    "keyword,expected",
+    [
+        ("apple", ["apple"]),
+        ("apple, iphone", ["apple", "iphone"]),
+        ("  apple ,  iphone  ", ["apple", "iphone"]),
+        ("apple,,iphone", ["apple", "iphone"]),
+        (" , ", []),
+        ("", []),
+    ],
+)
 def test_split_keyword_terms(keyword, expected):
     assert main.split_keyword_terms(keyword) == expected
 
 
 def test_single_keyword_is_still_a_substring_match():
     match = main.build_keyword_matcher("apple", False)
-    assert match("Grapplers: Relic Rivals") is True      # unchanged, deliberately
+    assert match("Grapplers: Relic Rivals") is True  # unchanged, deliberately
     assert match("APPLE PIE") is True
     assert match("nothing here") is False
 
@@ -82,7 +86,7 @@ def test_a_plain_term_cannot_require_a_literal_comma():
     """The limitation stated plainly: in plain mode the comma is the separator,
     so "hello, world" matches text with neither comma present."""
     match = main.build_keyword_matcher("hello, world", False)
-    assert match("hello world") is True      # matched by the term "hello"
+    assert match("hello world") is True  # matched by the term "hello"
     assert match("world domination") is True  # and by "world" alone
     assert main.build_keyword_matcher(r"hello, world", True)("say hello, world!") is True
 
@@ -143,8 +147,7 @@ def test_dry_run_run_now_and_live_matching_share_one_matcher(monkeypatch):
         main._dry_run_pattern(conn, "global", "", "spoiler, leak", False, "title")
         main._run_now_pattern(conn, "global", "", "leak, rumor", False, "title")
 
-    assert calls == [("spoiler, leak", False), ("leak, rumor", False),
-                     ("spoiler, leak", False), ("leak, rumor", False)]
+    assert calls == [("spoiler, leak", False), ("leak, rumor", False), ("spoiler, leak", False), ("leak, rumor", False)]
 
 
 def test_dry_run_unread_only_reaches_a_match_the_capped_scan_would_miss(isolated_reader):
@@ -164,22 +167,29 @@ def test_dry_run_unread_only_reaches_a_match_the_capped_scan_would_miss(isolated
     # Filler entries that don't match the pattern, newer than the target and
     # more numerous than the cap below -- exactly what pushes it out of reach.
     for i in range(6):
-        reader.add_entry({
-            "feed_url": feed, "id": f"newer-{i}", "title": "unrelated post",
-            "link": f"https://example.test/newer-{i}",
-            "published": dt.datetime(2026, 9, 1, tzinfo=dt.timezone.utc),
-        })
+        reader.add_entry(
+            {
+                "feed_url": feed,
+                "id": f"newer-{i}",
+                "title": "unrelated post",
+                "link": f"https://example.test/newer-{i}",
+                "published": dt.datetime(2026, 9, 1, tzinfo=dt.timezone.utc),
+            }
+        )
     # The actual target: much OLDER, unread, and it DOES match the pattern.
-    reader.add_entry({
-        "feed_url": feed, "id": "target", "title": "Apple's iCloud thing",
-        "link": "https://example.test/target",
-        "published": dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc),
-    })
+    reader.add_entry(
+        {
+            "feed_url": feed,
+            "id": "target",
+            "title": "Apple's iCloud thing",
+            "link": "https://example.test/target",
+            "published": dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc),
+        }
+    )
 
     with main.get_meta_connection() as conn:
         capped = main._dry_run_pattern(conn, "feed", feed, "Apple's iCloud", False, "title", max_entries=5)
-        uncapped = main._dry_run_pattern(conn, "feed", feed, "Apple's iCloud", False, "title",
-                                         max_entries=5, unread_only=True)
+        uncapped = main._dry_run_pattern(conn, "feed", feed, "Apple's iCloud", False, "title", max_entries=5, unread_only=True)
 
     assert capped["total_matches"] == 0
     assert uncapped["total_matches"] == 1
@@ -194,10 +204,13 @@ def test_dry_run_unread_only_reaches_a_match_the_capped_scan_would_miss(isolated
 # --- curly punctuation folds, so a term matches either spelling ---------------
 
 
-@pytest.mark.parametrize("title", [
-    "Apple’s new laptop",     # typographic
-    "Apple's new laptop",          # ASCII
-])
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Apple’s new laptop",  # typographic
+        "Apple's new laptop",  # ASCII
+    ],
+)
 def test_apostrophe_spelling_does_not_matter(title):
     assert main.build_keyword_matcher("apple's", False)(title) is True
 
@@ -208,8 +221,7 @@ def test_a_curly_term_matches_ascii_text_too():
 
 
 def test_curly_double_quotes_fold():
-    assert main.build_keyword_matcher('"deal of the day"', False)(
-        "“Deal of the Day” roundup") is True
+    assert main.build_keyword_matcher('"deal of the day"', False)("“Deal of the Day” roundup") is True
 
 
 def test_non_breaking_space_folds_to_a_plain_space():

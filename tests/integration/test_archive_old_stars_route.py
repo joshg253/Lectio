@@ -5,6 +5,7 @@ the guarantees the single-entry route gets for free have to be asserted here:
 tags survive, captures survive, the star comes off, and read state sticks at both
 levels. Plus one that only the bulk path has: it must NOT write read_history.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -39,8 +40,7 @@ def configured(tmp_path, monkeypatch):
     main.ensure_meta_schema()
 
     removals: list[tuple[str, str]] = []
-    monkeypatch.setattr(main.starred_archive_service, "enqueue_removal",
-                        lambda f, e: removals.append((f, e)))
+    monkeypatch.setattr(main.starred_archive_service, "enqueue_removal", lambda f, e: removals.append((f, e)))
     monkeypatch.setattr(main.starred_archive_service, "enqueue_archive", lambda f, e: None)
 
     with main.get_reader() as reader:
@@ -50,12 +50,9 @@ def configured(tmp_path, monkeypatch):
             reader.add_entry({"feed_url": FEED, "id": eid, "link": f"https://example.test/{eid}"})
         reader.set_tag((FEED, "old-tagged"), f"{MTAG}python")
     with main.get_meta_connection() as conn:
-        conn.execute("INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)",
-                     (FEED, "old", _ago(90)))
-        conn.execute("INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)",
-                     (FEED, "old-tagged", _ago(60)))
-        conn.execute("INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)",
-                     (FEED, "fresh", _ago(1)))
+        conn.execute("INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)", (FEED, "old", _ago(90)))
+        conn.execute("INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)", (FEED, "old-tagged", _ago(60)))
+        conn.execute("INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)", (FEED, "fresh", _ago(1)))
         conn.commit()
     try:
         yield removals
@@ -74,16 +71,14 @@ def _apply(days: int = 30, basis: str = "saved") -> dict:
 
 def _starred(eid: str) -> bool:
     with main.get_meta_connection() as conn:
-        return conn.execute(
-            "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (FEED, eid)
-        ).fetchone() is not None
+        return conn.execute("SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (FEED, eid)).fetchone() is not None
 
 
 def test_preview_changes_nothing(configured):
     res = json.loads(bytes(main.preview_archive_old_stars(days=30, basis="saved").body))
 
-    assert res["totals"]["to_archive"] == 2      # old, old-tagged
-    assert res["totals"]["remaining"] == 1       # fresh
+    assert res["totals"]["to_archive"] == 2  # old, old-tagged
+    assert res["totals"]["remaining"] == 1  # fresh
     assert main.get_archived_saved_keys() == set()
     assert _starred("old") and _starred("fresh")
 
@@ -120,9 +115,7 @@ def test_apply_marks_read_at_both_levels(configured):
     with main.get_reader() as reader:
         assert reader.get_entry((FEED, "old")).read is True
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT 1 FROM entry_read_state WHERE feed_url = ? AND entry_id = ?", (FEED, "old")
-        ).fetchone() is not None
+        assert conn.execute("SELECT 1 FROM entry_read_state WHERE feed_url = ? AND entry_id = ?", (FEED, "old")).fetchone() is not None
 
 
 def test_apply_does_not_flood_read_history(configured):
@@ -155,8 +148,7 @@ def test_apply_is_idempotent(configured):
 
     assert _apply(30)["archived"] == 0
     with main.get_meta_connection() as conn:
-        assert dict(conn.execute(
-            "SELECT entry_id, archived_at FROM archived_entries").fetchall()) == first
+        assert dict(conn.execute("SELECT entry_id, archived_at FROM archived_entries").fetchall()) == first
 
 
 def test_apply_removes_them_from_the_inbox(configured):
@@ -195,18 +187,29 @@ def published_configured(tmp_path, monkeypatch):
     with main.get_reader() as reader:
         reader.add_feed(PFEED, allow_invalid_url=True, exist_ok=True)
         reader.disable_feed_updates(PFEED)
-        reader.add_entry({"feed_url": PFEED, "id": "old-pub", "link": "https://published.test/old-pub",
-                           "published": datetime.now(timezone.utc) - timedelta(days=90)})
-        reader.add_entry({"feed_url": PFEED, "id": "fresh-pub", "link": "https://published.test/fresh-pub",
-                           "published": datetime.now(timezone.utc) - timedelta(days=1)})
+        reader.add_entry(
+            {
+                "feed_url": PFEED,
+                "id": "old-pub",
+                "link": "https://published.test/old-pub",
+                "published": datetime.now(timezone.utc) - timedelta(days=90),
+            }
+        )
+        reader.add_entry(
+            {
+                "feed_url": PFEED,
+                "id": "fresh-pub",
+                "link": "https://published.test/fresh-pub",
+                "published": datetime.now(timezone.utc) - timedelta(days=1),
+            }
+        )
         reader.add_entry({"feed_url": PFEED, "id": "no-pub", "link": "https://published.test/no-pub"})
     with main.get_meta_connection() as conn:
         # All three were starred *recently* (migration-stamped or genuine —
         # doesn't matter here) so a saved-basis run would archive none of
         # them; only the publish-date basis should tell them apart.
         for eid in ("old-pub", "fresh-pub", "no-pub"):
-            conn.execute("INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)",
-                         (PFEED, eid, _ago(1)))
+            conn.execute("INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)", (PFEED, eid, _ago(1)))
         conn.commit()
     try:
         yield
@@ -220,6 +223,7 @@ def test_published_basis_is_the_default_when_omitted():
     matching the UI's new default — this is the actual fix, not just an
     option."""
     import inspect
+
     default = inspect.signature(main.preview_archive_old_stars).parameters["basis"].default
     assert getattr(default, "default", default) == "published"
 
@@ -228,13 +232,14 @@ def test_published_basis_ignores_saved_at_and_uses_the_articles_own_date(publish
     res = json.loads(bytes(main.preview_archive_old_stars(days=30, basis="published").body))
 
     assert res["basis"] == "published"
-    assert res["totals"]["to_archive"] == 1   # old-pub only; no-pub has no date to go on
-    assert res["totals"]["remaining"] == 2    # fresh-pub, no-pub
+    assert res["totals"]["to_archive"] == 1  # old-pub only; no-pub has no date to go on
+    assert res["totals"]["remaining"] == 2  # fresh-pub, no-pub
 
 
 def test_published_basis_leaves_entries_with_no_published_date_alone(published_configured):
     """A missing publish date is not evidence of age — same "don't guess"
     policy the saved-date path already had for a missing saved_at."""
+
     class _Req:
         async def json(self):
             return {"days": 30, "basis": "published"}
@@ -243,9 +248,7 @@ def test_published_basis_leaves_entries_with_no_published_date_alone(published_c
 
     assert main.get_archived_saved_keys() == {(PFEED, "old-pub")}
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (PFEED, "no-pub")
-        ).fetchone() is not None
+        assert conn.execute("SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (PFEED, "no-pub")).fetchone() is not None
     assert body["basis"] == "published"
 
 

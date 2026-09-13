@@ -162,7 +162,7 @@ def sync_youtube_folder(
     current_yt: dict[str, str] = {}  # channel_id -> feed_url
     for url in current_urls:
         if url.startswith(YT_FEED_PREFIX):
-            ch_id = url[len(YT_FEED_PREFIX):]
+            ch_id = url[len(YT_FEED_PREFIX) :]
             if ch_id:
                 current_yt[ch_id] = url
 
@@ -190,6 +190,8 @@ def sync_youtube_folder(
 
     LOGGER.info(
         "YouTube sync complete: +%d -%d, total=%d",
-        result["added"], result["removed"], result["total"],
+        result["added"],
+        result["removed"],
+        result["total"],
     )
     return result

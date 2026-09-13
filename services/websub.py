@@ -5,6 +5,7 @@ subscribed to the same feed produce exactly ONE HTTP subscription to the hub,
 with ONE shared secret. Push fan-out to all per-user reader DBs is handled by
 the caller (main.py) via get_subscribers().
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -33,10 +34,10 @@ class WebSubService:
     # Matches: Link: <hub_url>; rel="hub"  (one segment from a comma-split Link header)
     _HUB_HTTP_RE = re.compile(r'<([^>]+)>\s*;\s*rel=["\']?hub["\']?', re.IGNORECASE)
 
-    _HUB_RETRY_SECONDS = 7 * 24 * 3600       # retry hub discovery after 7 days
-    _RENEW_BEFORE_SECONDS = 24 * 3600        # renew subscriptions 24 h before expiry
-    _LEASE_SECONDS = 7 * 24 * 3600           # request 7-day leases
-    _MAX_DISCOVERY_PER_BATCH = 5             # cap concurrent discoveries per refresh run
+    _HUB_RETRY_SECONDS = 7 * 24 * 3600  # retry hub discovery after 7 days
+    _RENEW_BEFORE_SECONDS = 24 * 3600  # renew subscriptions 24 h before expiry
+    _LEASE_SECONDS = 7 * 24 * 3600  # request 7-day leases
+    _MAX_DISCOVERY_PER_BATCH = 5  # cap concurrent discoveries per refresh run
 
     def __init__(
         self,
@@ -83,9 +84,7 @@ class WebSubService:
 
         # If we already have a subscription row (even pending), skip re-discovery.
         with self._get_shared() as conn:
-            existing = conn.execute(
-                "SELECT hub_url FROM websub_subscriptions WHERE feed_url=?", (feed_url,)
-            ).fetchone()
+            existing = conn.execute("SELECT hub_url FROM websub_subscriptions WHERE feed_url=?", (feed_url,)).fetchone()
         if existing is not None:
             return
 
@@ -94,8 +93,7 @@ class WebSubService:
         with self._get_shared() as conn:
             if hub_url:
                 conn.execute(
-                    "INSERT OR IGNORE INTO websub_subscriptions "
-                    "(feed_url, hub_url, hub_tried_at) VALUES (?, ?, ?)",
+                    "INSERT OR IGNORE INTO websub_subscriptions (feed_url, hub_url, hub_tried_at) VALUES (?, ?, ?)",
                     (feed_url, hub_url, now),
                 )
             else:
@@ -104,8 +102,7 @@ class WebSubService:
                     (feed_url, now),
                 )
                 conn.execute(
-                    "UPDATE websub_subscriptions SET hub_tried_at=? "
-                    "WHERE feed_url=? AND hub_url IS NULL",
+                    "UPDATE websub_subscriptions SET hub_tried_at=? WHERE feed_url=? AND hub_url IS NULL",
                     (now, feed_url),
                 )
         if hub_url:
@@ -122,8 +119,7 @@ class WebSubService:
         placeholders = ",".join("?" * len(feed_urls))
         with self._get_shared() as conn:
             known_rows = conn.execute(
-                f"SELECT feed_url, hub_tried_at, hub_url FROM websub_subscriptions "
-                f"WHERE feed_url IN ({placeholders})",
+                f"SELECT feed_url, hub_tried_at, hub_url FROM websub_subscriptions WHERE feed_url IN ({placeholders})",
                 feed_urls,
             ).fetchall()
             # Register user as subscriber for feeds that already have a subscription.
@@ -166,17 +162,18 @@ class WebSubService:
             return
         try:
             with httpx.Client(follow_redirects=False, timeout=10.0, headers={"User-Agent": self._user_agent}) as client:
-                resp = client.post(hub_url, data={
-                    "hub.mode": "subscribe",
-                    "hub.topic": feed_url,
-                    "hub.callback": self.callback_url_for(feed_url),
-                    "hub.secret": secret,
-                    "hub.lease_seconds": str(self._LEASE_SECONDS),
-                })
-            if resp.status_code not in (200, 201, 202, 204):
-                self._logger.warning(
-                    "[websub] hub returned HTTP %d for subscribe(%s)", resp.status_code, feed_url
+                resp = client.post(
+                    hub_url,
+                    data={
+                        "hub.mode": "subscribe",
+                        "hub.topic": feed_url,
+                        "hub.callback": self.callback_url_for(feed_url),
+                        "hub.secret": secret,
+                        "hub.lease_seconds": str(self._LEASE_SECONDS),
+                    },
                 )
+            if resp.status_code not in (200, 201, 202, 204):
+                self._logger.warning("[websub] hub returned HTTP %d for subscribe(%s)", resp.status_code, feed_url)
         except Exception as exc:
             self._logger.warning("[websub] subscribe POST failed for %s: %s", feed_url, exc)
 
@@ -188,13 +185,10 @@ class WebSubService:
                 "DELETE FROM websub_subscribers WHERE feed_url=? AND user_id=?",
                 (feed_url, user_id),
             )
-            remaining = conn.execute(
-                "SELECT COUNT(*) FROM websub_subscribers WHERE feed_url=?", (feed_url,)
-            ).fetchone()[0]
+            remaining = conn.execute("SELECT COUNT(*) FROM websub_subscribers WHERE feed_url=?", (feed_url,)).fetchone()[0]
             if remaining == 0:
                 row = conn.execute(
-                    "SELECT hub_url FROM websub_subscriptions "
-                    "WHERE feed_url=? AND hub_url IS NOT NULL",
+                    "SELECT hub_url FROM websub_subscriptions WHERE feed_url=? AND hub_url IS NOT NULL",
                     (feed_url,),
                 ).fetchone()
                 if row:
@@ -203,11 +197,14 @@ class WebSubService:
         if hub_url and is_safe_outbound_url(hub_url):
             try:
                 with httpx.Client(follow_redirects=False, timeout=8.0, headers={"User-Agent": self._user_agent}) as client:
-                    client.post(hub_url, data={
-                        "hub.mode": "unsubscribe",
-                        "hub.topic": feed_url,
-                        "hub.callback": self.callback_url_for(feed_url),
-                    })
+                    client.post(
+                        hub_url,
+                        data={
+                            "hub.mode": "unsubscribe",
+                            "hub.topic": feed_url,
+                            "hub.callback": self.callback_url_for(feed_url),
+                        },
+                    )
             except Exception:
                 pass  # best-effort; hub will expire the sub anyway
 
@@ -233,8 +230,7 @@ class WebSubService:
             now = time.time()
             expires = now + (lease_seconds or self._LEASE_SECONDS)
             conn.execute(
-                "UPDATE websub_subscriptions SET verified=1, expires_at=?, lease_seconds=? "
-                "WHERE feed_url=?",
+                "UPDATE websub_subscriptions SET verified=1, expires_at=?, lease_seconds=? WHERE feed_url=?",
                 (expires, lease_seconds or self._LEASE_SECONDS, feed_url),
             )
         return challenge
@@ -244,17 +240,14 @@ class WebSubService:
     def get_subscribers(self, feed_url: str) -> list[str]:
         """Return the list of user_ids subscribed to this feed."""
         with self._get_shared() as conn:
-            rows = conn.execute(
-                "SELECT user_id FROM websub_subscribers WHERE feed_url=?", (feed_url,)
-            ).fetchall()
+            rows = conn.execute("SELECT user_id FROM websub_subscribers WHERE feed_url=?", (feed_url,)).fetchall()
         return [r["user_id"] for r in rows]
 
     def verify_push_signature(self, feed_url: str, body: bytes, signature_header: str) -> bool:
         """Return True if the X-Hub-Signature header is valid for this subscription's secret."""
         with self._get_shared() as conn:
             row = conn.execute(
-                "SELECT secret FROM websub_subscriptions "
-                "WHERE feed_url=? AND verified=1 AND secret IS NOT NULL",
+                "SELECT secret FROM websub_subscriptions WHERE feed_url=? AND verified=1 AND secret IS NOT NULL",
                 (feed_url,),
             ).fetchone()
         if not row:
@@ -284,6 +277,4 @@ class WebSubService:
                 (cutoff,),
             ).fetchall()
         for row in rows:
-            threading.Thread(
-                target=self.subscribe, args=(row["feed_url"], row["hub_url"]), daemon=True
-            ).start()
+            threading.Thread(target=self.subscribe, args=(row["feed_url"], row["hub_url"]), daemon=True).start()

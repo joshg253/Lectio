@@ -1,4 +1,5 @@
 """Unit tests for the Fever API service."""
+
 from __future__ import annotations
 
 import hashlib
@@ -119,6 +120,7 @@ def _build_service(db_path: Path, reader_mock=None) -> FeverService:
 
 # ------------------------------------------------------------------ auth
 
+
 def test_check_auth_correct(tmp_path):
     svc = _build_service(tmp_path / "meta.sqlite")
     assert svc.check_auth(_FEVER_KEY) is True
@@ -135,6 +137,7 @@ def test_check_auth_case_insensitive(tmp_path):
 
 
 # ------------------------------------------------------------------ feeds & groups
+
 
 def test_get_feeds_and_groups_empty(tmp_path):
     svc = _build_service(tmp_path / "meta.sqlite")
@@ -205,6 +208,7 @@ def test_system_folders_excluded_from_groups(tmp_path):
 
 # ------------------------------------------------------------------ items
 
+
 def _seed_entry_map(db_path: Path, feed_url: str, entry_id: str) -> int:
     """Insert an entry into fever_entry_map and return its integer ID."""
     conn = _make_meta(db_path)
@@ -253,9 +257,7 @@ def test_get_items_since_id(tmp_path):
     mock_reader = MagicMock()
     mock_reader.get_feeds.return_value = []
     mock_reader.get_entries.return_value = []
-    mock_reader.get_entry.side_effect = lambda key, default=None: (
-        entry1 if key[1] == _ENTRY_ID else entry2
-    )
+    mock_reader.get_entry.side_effect = lambda key, default=None: entry1 if key[1] == _ENTRY_ID else entry2
     svc = _build_service(db, mock_reader)
     svc._synced_users.add(svc._current_user())
 
@@ -323,6 +325,7 @@ def test_get_items_is_saved_flag(tmp_path):
 
 # ------------------------------------------------------------------ unread / saved IDs
 
+
 def test_get_unread_item_ids(tmp_path):
     db = tmp_path / "meta.sqlite"
     entry = _mock_entry(read=False)
@@ -370,6 +373,7 @@ def test_get_saved_item_ids(tmp_path):
 
 
 # ------------------------------------------------------------------ mark actions
+
 
 def test_mark_item_read(tmp_path):
     db = tmp_path / "meta.sqlite"

@@ -11,6 +11,7 @@ Only the characters XML actually forbids are removed. Tab, newline and carriage
 return are legal and must survive untouched, or the scrub would corrupt every
 feed it touched to fix the rare broken one.
 """
+
 from __future__ import annotations
 
 import pytest

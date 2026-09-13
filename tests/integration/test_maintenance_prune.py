@@ -2,6 +2,7 @@
 (ran_at) and compared the ISO-text run_at against an int epoch, so it always
 raised, was swallowed, and the log grew unbounded. It must now drop runs older
 than 90 days and keep recent ones."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -36,14 +37,12 @@ def configured(tmp_path):
 
 def _insert_run(conn, run_at: str, entry_id: str) -> None:
     conn.execute(
-        "INSERT INTO rule_run_log (run_at, rule_type, scope, scope_id, keyword)"
-        " VALUES (?, 'mark_as_read', 'global', '', 'kw')",
+        "INSERT INTO rule_run_log (run_at, rule_type, scope, scope_id, keyword) VALUES (?, 'mark_as_read', 'global', '', 'kw')",
         (run_at,),
     )
     log_id = conn.execute("SELECT id FROM rule_run_log ORDER BY id DESC LIMIT 1").fetchone()["id"]
     conn.execute(
-        "INSERT INTO rule_run_log_entries (log_id, feed_url, entry_id)"
-        " VALUES (?, 'https://f.test/feed', ?)",
+        "INSERT INTO rule_run_log_entries (log_id, feed_url, entry_id) VALUES (?, 'https://f.test/feed', ?)",
         (log_id, entry_id),
     )
     conn.commit()

@@ -11,6 +11,7 @@ These are text assertions on the templates because that is exactly where the bug
 was: server and template disagreed about which field carried the answer, and no
 amount of testing the builder would have caught it.
 """
+
 from __future__ import annotations
 
 import re

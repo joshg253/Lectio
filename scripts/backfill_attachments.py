@@ -23,6 +23,7 @@ reimplementing it (`main.attachment_links_in_html`):
     uv run python scripts/backfill_attachments.py --feed <url>
     uv run python scripts/backfill_attachments.py --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -68,7 +69,7 @@ def _enclosure_urls(feed_url: str, entry_id: str) -> list[str]:
     if entry is None:
         return []
     out: list[str] = []
-    for enc in (getattr(entry, "enclosures", None) or []):
+    for enc in getattr(entry, "enclosures", None) or []:
         url = str(getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
         if not url:
             continue
@@ -93,7 +94,7 @@ def backfill_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
     print(f"[{user_id}] {len(rows):,} saved post(s) to check", flush=True)
 
     exts_by_feed: dict[str, list[str]] = {}
-    wanted: list[tuple[str, str, str]] = []   # (feed_url, entry_id, file_url)
+    wanted: list[tuple[str, str, str]] = []  # (feed_url, entry_id, file_url)
     for row in rows:
         feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
         if feed_url not in exts_by_feed:
@@ -112,15 +113,13 @@ def backfill_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
     with main.archive_conn() as conn:
         for feed_url, entry_id, url in wanted:
             got = conn.execute(
-                "SELECT 1 FROM archived_asset_link"
-                " WHERE feed_url = ? AND entry_id = ? AND source_url = ?",
+                "SELECT 1 FROM archived_asset_link WHERE feed_url = ? AND entry_id = ? AND source_url = ?",
                 (feed_url, entry_id, url),
             ).fetchone()
             if not got:
                 todo.append((feed_url, entry_id, url))
 
-    print(f"  {len(wanted):,} attachment(s) referenced, {len(todo):,} not yet stored",
-          flush=True)
+    print(f"  {len(wanted):,} attachment(s) referenced, {len(todo):,} not yet stored", flush=True)
     for _f, _e, url in todo[:6]:
         print(f"    {url[:96]}", flush=True)
     if not todo:
@@ -150,7 +149,9 @@ def backfill_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
             # main.starred_archive_service is the configured INSTANCE; the
             # module import above only carries the constants.
             main.starred_archive_service._archive_asset(
-                feed_url, entry_id, url,
+                feed_url,
+                entry_id,
+                url,
                 max_bytes=starred_archive_service.ATTACHMENT_MAX_BYTES,
             )
         except Exception as exc:  # noqa: BLE001
@@ -159,8 +160,7 @@ def backfill_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
             continue
         with main.archive_conn() as conn:
             ok = conn.execute(
-                "SELECT 1 FROM archived_asset_link"
-                " WHERE feed_url = ? AND entry_id = ? AND source_url = ?",
+                "SELECT 1 FROM archived_asset_link WHERE feed_url = ? AND entry_id = ? AND source_url = ?",
                 (feed_url, entry_id, url),
             ).fetchone()
         if ok:
@@ -176,14 +176,13 @@ def backfill_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
 
 
 def main_cli() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="fetch and store (default: dry run)")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
     ap.add_argument("--feed", default=None, help="restrict to one feed URL")
     args = ap.parse_args()
 
-    for uid in ([args.user] if args.user else main._background_user_ids()):
+    for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
             backfill_for_user(uid, args.apply, args.feed)
     return 0

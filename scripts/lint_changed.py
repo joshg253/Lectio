@@ -25,6 +25,7 @@ Usage:
 enabling it would mean reformatting every file at once. Nothing here prevents
 adopting it later, file by file.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -80,13 +81,12 @@ def _ruff_hits(touched: dict[str, set[int]]) -> list[str]:
         name = f.get("filename", "")
         try:
             rel = str(Path(name).resolve().relative_to(Path(root).resolve()))
-        except (ValueError, OSError):
+        except ValueError, OSError:
             rel = name.removeprefix("./")
         row = f.get("location", {}).get("row")
         if row in touched.get(rel, set()):
             loc = f.get("location", {})
-            hits.append(f"{f.get('filename')}:{loc.get('row')}:{loc.get('column')}: "
-                        f"[ruff] {f.get('code')} {f.get('message')}")
+            hits.append(f"{f.get('filename')}:{loc.get('row')}:{loc.get('column')}: [ruff] {f.get('code')} {f.get('message')}")
     return hits
 
 

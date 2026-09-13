@@ -1,4 +1,5 @@
 """instapaper automation rule: persistence + the after-refresh save path."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -31,12 +32,26 @@ def env(tmp_path, monkeypatch):
         main.set_setting(conn, main.SETTING_INSTAPAPER_PASSWORD, "pw")
     reader = main.get_reader()
     reader.add_feed(FEED, allow_invalid_url=True)
-    reader.add_entry({"feed_url": FEED, "id": "m1", "title": "Big metal show",
-                      "link": "https://example.test/a", "summary": "x",
-                      "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)})
-    reader.add_entry({"feed_url": FEED, "id": "m2", "title": "Cooking tips",
-                      "link": "https://example.test/b", "summary": "y",
-                      "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)})
+    reader.add_entry(
+        {
+            "feed_url": FEED,
+            "id": "m1",
+            "title": "Big metal show",
+            "link": "https://example.test/a",
+            "summary": "x",
+            "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        }
+    )
+    reader.add_entry(
+        {
+            "feed_url": FEED,
+            "id": "m2",
+            "title": "Cooking tips",
+            "link": "https://example.test/b",
+            "summary": "y",
+            "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        }
+    )
     try:
         yield
     finally:
@@ -48,8 +63,7 @@ def env(tmp_path, monkeypatch):
 
 def test_rule_persists(env):
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "metal", "yellow",
-                                   rule_type="instapaper", enabled=1)
+        main.add_highlight_keyword(conn, "feed", FEED, "metal", "yellow", rule_type="instapaper", enabled=1)
         r = main.get_highlight_keywords(conn)[0]
     assert r["type"] == "instapaper"
     assert r["keyword"] == "metal"
@@ -57,11 +71,9 @@ def test_rule_persists(env):
 
 def test_after_refresh_saves_matching_entries(env, monkeypatch):
     saved = []
-    monkeypatch.setattr(main, "_instapaper_save_url",
-                        lambda u, p, url, title: (saved.append((url, title)) or (True, None)))
+    monkeypatch.setattr(main, "_instapaper_save_url", lambda u, p, url, title: saved.append((url, title)) or (True, None))
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "metal", "yellow",
-                                   rule_type="instapaper", enabled=1, search_in="title")
+        main.add_highlight_keyword(conn, "feed", FEED, "metal", "yellow", rule_type="instapaper", enabled=1, search_in="title")
     main._run_instapaper_rules_after_refresh({FEED})
     # Only the title matching "metal" is saved.
     assert saved == [("https://example.test/a", "Big metal show")]
@@ -69,11 +81,9 @@ def test_after_refresh_saves_matching_entries(env, monkeypatch):
 
 def test_blank_keyword_saves_all_in_scope(env, monkeypatch):
     saved = []
-    monkeypatch.setattr(main, "_instapaper_save_url",
-                        lambda u, p, url, title: (saved.append(url) or (True, None)))
+    monkeypatch.setattr(main, "_instapaper_save_url", lambda u, p, url, title: saved.append(url) or (True, None))
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "", "yellow",
-                                   rule_type="instapaper", enabled=1)
+        main.add_highlight_keyword(conn, "feed", FEED, "", "yellow", rule_type="instapaper", enabled=1)
     main._run_instapaper_rules_after_refresh({FEED})
     # Blank keyword → every entry in scope is saved.
     assert sorted(saved) == ["https://example.test/a", "https://example.test/b"]
@@ -83,10 +93,8 @@ def test_not_configured_is_noop(env, monkeypatch):
     with main.get_meta_connection() as conn:
         main.delete_setting(conn, main.SETTING_INSTAPAPER_PASSWORD)
     called = []
-    monkeypatch.setattr(main, "_instapaper_save_url",
-                        lambda *a: called.append(a) or (True, None))
+    monkeypatch.setattr(main, "_instapaper_save_url", lambda *a: called.append(a) or (True, None))
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "metal", "yellow",
-                                   rule_type="instapaper", enabled=1)
+        main.add_highlight_keyword(conn, "feed", FEED, "metal", "yellow", rule_type="instapaper", enabled=1)
     main._run_instapaper_rules_after_refresh({FEED})
     assert called == []

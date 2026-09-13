@@ -9,6 +9,7 @@ view showed a lead image and nothing else where it used to show the article.
 
 Chrome is small next to the article it decorates, so text share is the signal.
 """
+
 from __future__ import annotations
 
 import main
@@ -18,6 +19,7 @@ PROSE = "<p>" + ("Real article prose that carries the page. " * 40) + "</p>"
 
 def _text_len(html: str) -> int:
     from bs4 import BeautifulSoup
+
     return len(BeautifulSoup(html, "html.parser").get_text(" ", strip=True))
 
 
@@ -43,12 +45,7 @@ def test_small_newsletter_box_is_still_stripped():
 
 
 def test_share_bar_inside_the_article_is_still_stripped():
-    html = (
-        "<html><body><article>"
-        '<div class="social-share"><a>Tweet</a><a>Share</a></div>'
-        f"{PROSE}"
-        "</article></body></html>"
-    )
+    html = f'<html><body><article><div class="social-share"><a>Tweet</a><a>Share</a></div>{PROSE}</article></body></html>'
     out = main._strip_article_chrome(html)
     assert "Tweet" not in out
     assert "Real article prose" in out

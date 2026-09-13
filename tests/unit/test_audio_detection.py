@@ -2,6 +2,7 @@
 player. It must match audio enclosures even when the extension is behind a query
 string or the MIME type is missing/odd, and fall back to the entry link when the
 feed carries the media URL there instead of in an enclosure."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -65,6 +66,5 @@ def test_falls_back_to_entry_link():
 
 
 def test_image_enclosure_and_article_link_yield_none():
-    e = _entry([_enc("https://cdn.test/cover.jpg", type="image/jpeg")],
-               link="https://blog.test/post/123")
+    e = _entry([_enc("https://cdn.test/cover.jpg", type="image/jpeg")], link="https://blog.test/post/123")
     assert main._find_entry_audio_url(e) is None

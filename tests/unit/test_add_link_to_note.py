@@ -17,6 +17,7 @@ index.html.
 Source assertions, because this is client-side context-menu/pane-button
 wiring with no JS test harness in this repo.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -29,7 +30,7 @@ ENTRY_PANE = (ROOT / "templates" / "_entry_pane.html").read_text()
 
 def _helper_block() -> str:
     start = APP_JS.index("function openGlobalNoteWithLink(link) {")
-    return APP_JS[start:start + 1400]
+    return APP_JS[start : start + 1400]
 
 
 def test_the_helper_appends_rather_than_overwrites():
@@ -56,7 +57,7 @@ def test_context_menu_item_exists_and_is_hidden_by_default():
 
 def test_lectio_entry_url_helper_builds_a_folder_feed_entry_link():
     start = APP_JS.index("function lectioEntryUrl(feedUrl, entryId, folderId) {")
-    block = APP_JS[start:start + 500]
+    block = APP_JS[start : start + 500]
     assert "if (!feedUrl || !entryId) return '';" in block
     assert "params.set('feed_url', feedUrl);" in block
     assert "params.set('entry_id', entryId);" in block
@@ -73,15 +74,13 @@ def test_context_menu_visibility_gates_on_feed_and_entry_id_not_the_source_link(
         "setMenuItemVisible(postAddLinkToNoteButton, false);",
     ):
         assert APP_JS.count(pattern) >= 1, pattern
-    assert APP_JS.count(
-        "setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));"
-    ) == 2
+    assert APP_JS.count("setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));") == 2
     assert "setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostLink));" not in APP_JS
 
 
 def test_context_menu_click_hides_the_menu_and_opens_the_note_with_a_lectio_url():
     idx = APP_JS.index("postAddLinkToNoteButton?.addEventListener('click'")
-    block = APP_JS[idx:idx + 700]
+    block = APP_JS[idx : idx + 700]
     assert "lectioEntryUrl(contextPostFeedUrl, contextPostEntryId, contextPostFolderId)" in block
     assert "hideAllContextMenus();" in block
     assert "openGlobalNoteWithLink(link)" in block
@@ -97,8 +96,8 @@ def test_entry_pane_button_exists_and_is_unconditional():
 def test_entry_pane_button_appends_the_lectio_page_url_not_the_source_link():
     """Corrected 2026-08-31: the useful link for reporting a problem is the
     one that reopens THIS entry in Lectio, not the source article."""
-    idx = APP_JS.index('document.getElementById(\'entry-add-link-to-note-button\')')
-    block = APP_JS[idx:idx + 1000]
+    idx = APP_JS.index("document.getElementById('entry-add-link-to-note-button')")
+    block = APP_JS[idx : idx + 1000]
     assert "openGlobalNoteWithLink(window.location.href)" in block
     assert "data-entry-link" not in block
 
@@ -107,6 +106,6 @@ def test_entry_pane_button_click_is_guarded_against_double_binding():
     """Rebinding on every pane swap without this guard would fire the note
     append once per prior swap on a single click."""
     idx = APP_JS.index("entryAddLinkToNoteButton.dataset.boundClick")
-    block = APP_JS[max(0, idx - 200):idx + 700]
+    block = APP_JS[max(0, idx - 200) : idx + 700]
     assert "!entryAddLinkToNoteButton.dataset.boundClick" in block
     assert "openGlobalNoteWithLink(window.location.href)" in block

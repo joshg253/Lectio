@@ -2,6 +2,7 @@
 backlog; plus the safe-dedup GUID signal that lets
 identical-GUID cross-feed copies (slickdeals search feeds) dedupe without a
 body match."""
+
 from __future__ import annotations
 
 import pytest
@@ -42,19 +43,15 @@ def _add_rule(keyword: str = "switch") -> None:
 
 def _seed(reader) -> None:
     reader.add_feed(FEED, exist_ok=True)
-    reader.add_entry({"feed_url": FEED, "id": "e-match",
-                      "link": "https://deals.example.test/switch-oled-199",
-                      "title": "Nintendo Switch OLED $199"})
-    reader.add_entry({"feed_url": FEED, "id": "e-other",
-                      "link": "https://deals.example.test/socks-3",
-                      "title": "Wool socks 3-pack $9"})
+    reader.add_entry(
+        {"feed_url": FEED, "id": "e-match", "link": "https://deals.example.test/switch-oled-199", "title": "Nintendo Switch OLED $199"}
+    )
+    reader.add_entry({"feed_url": FEED, "id": "e-other", "link": "https://deals.example.test/socks-3", "title": "Wool socks 3-pack $9"})
 
 
 def _is_starred(entry_id: str) -> bool:
     with main.get_meta_connection() as conn:
-        return conn.execute(
-            "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
-            (FEED, entry_id)).fetchone() is not None
+        return conn.execute("SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (FEED, entry_id)).fetchone() is not None
 
 
 def test_rule_stars_matching_entries(configured):
@@ -97,6 +94,7 @@ def test_rule_ignores_entries_older_than_cutoff(configured, monkeypatch):
         _seed(reader)
     # Pretend the refresh happened long after the entries arrived.
     from datetime import datetime, timedelta
+
     real_now = datetime.now
 
     class _FakeDateTime(datetime):
@@ -119,8 +117,7 @@ def test_dry_run_supports_save_article_with_blank_keyword(configured):
     app = FastAPI()
     app.get("/rules/dry-run")(main.rules_dry_run_route)
     with TestClient(app) as c:
-        r = c.get("/rules/dry-run", params={"type": "save_article", "scope": "feed",
-                                            "scope_id": FEED, "keyword": ""})
+        r = c.get("/rules/dry-run", params={"type": "save_article", "scope": "feed", "scope_id": FEED, "keyword": ""})
     assert r.status_code == 200
     data = r.json()
     assert data["ok"] is True and data["total_matches"] == 2
@@ -133,8 +130,7 @@ def test_run_now_dedup_sweeps_full_backlog(configured, monkeypatch):
 
     seen = {}
 
-    def fake_run_now_dedup(conn, scope, scope_id, match_method, window_hours,
-                           max_per_feed=500, exclude_scope_ids="", **kw):
+    def fake_run_now_dedup(conn, scope, scope_id, match_method, window_hours, max_per_feed=500, exclude_scope_ids="", **kw):
         seen["max_per_feed"] = max_per_feed
         return {"count": 0, "entries": [], "kept": []}
 
@@ -142,18 +138,27 @@ def test_run_now_dedup_sweeps_full_backlog(configured, monkeypatch):
     app = FastAPI()
     app.post("/rules/run-now")(main.rules_run_now_route)
     with TestClient(app) as c:
-        r = c.post("/rules/run-now", data={"type": "deduplicate", "scope": "folder",
-                                           "scope_id": "8", "keyword": "safe"})
+        r = c.post("/rules/run-now", data={"type": "deduplicate", "scope": "folder", "scope_id": "8", "keyword": "safe"})
     assert r.status_code == 200
     assert seen["max_per_feed"] == 10000
 
 
 # ── safe-dedup GUID signal ────────────────────────────────────────────────────
 
+
 def _rec(feed: str, entry_id: str, link: str, title: str = "", body: str = "") -> dict:
-    return {"feed_url": feed, "entry_id": entry_id, "title": title, "link": link,
-            "feed_title": feed, "published": None, "published_ts": 100.0,
-            "slug": None, "ntitle": title.lower(), "body": body}
+    return {
+        "feed_url": feed,
+        "entry_id": entry_id,
+        "title": title,
+        "link": link,
+        "feed_title": feed,
+        "published": None,
+        "published_ts": 100.0,
+        "slug": None,
+        "ntitle": title.lower(),
+        "body": body,
+    }
 
 
 def test_safe_dedup_same_guid_cross_feed_is_sufficient():

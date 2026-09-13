@@ -1,6 +1,7 @@
 """Per-feed 'hide paywalled' pref: the after-refresh pass auto-marks subscriber-only
 stub entries read, and (Plan.md Tier 1 refresh-contention item) must batch its
 meta-DB writes rather than committing once per stub entry."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -45,14 +46,16 @@ def _add_stub_entry(entry_id: str):
     is_paywall_stub's definition of a subscriber-only stub."""
     link = STUB_LINK_TMPL.format(i=entry_id)
     reader = main.get_reader()
-    reader.add_entry({
-        "feed_url": FEED,
-        "id": entry_id,
-        "title": f"Stub {entry_id}",
-        "link": link,
-        "content": [{"value": f'<a href="{link}">Read more</a>', "type": "text/html"}],
-        "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
-    })
+    reader.add_entry(
+        {
+            "feed_url": FEED,
+            "id": entry_id,
+            "title": f"Stub {entry_id}",
+            "link": link,
+            "content": [{"value": f'<a href="{link}">Read more</a>', "type": "text/html"}],
+            "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        }
+    )
 
 
 def _read(entry_id):

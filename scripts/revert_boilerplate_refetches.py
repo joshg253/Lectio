@@ -25,6 +25,7 @@ guessed at.
     uv run python scripts/revert_boilerplate_refetches.py --feed <url>
     uv run python scripts/revert_boilerplate_refetches.py --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -60,12 +61,14 @@ def revert_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
     _sharing, _bodied = main.starred_archive_service.body_text_sharing_state(list(victims))
     _healthy = _bodied - _sharing
     if _healthy:
-        print(f"[{user_id}] {len(_healthy):,} flagged entr(ies) already hold unique text"
-              " — skipping them; the archive simply has not caught up", flush=True)
+        print(
+            f"[{user_id}] {len(_healthy):,} flagged entr(ies) already hold unique text"
+            " — skipping them; the archive simply has not caught up",
+            flush=True,
+        )
     victims = [k for k in victims if k not in _healthy]
     feeds = {f for f, _ in victims}
-    print(f"[{user_id}] {len(victims):,} entr(ies) share an extraction with a sibling"
-          f" across {len(feeds)} feed(s)", flush=True)
+    print(f"[{user_id}] {len(victims):,} entr(ies) share an extraction with a sibling across {len(feeds)} feed(s)", flush=True)
     if not victims:
         return 0
 
@@ -76,8 +79,8 @@ def revert_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
     for feed_url, entry_id in victims:
         try:
             row = meta.execute(
-                "SELECT original_content FROM entry_content_edits"
-                " WHERE feed_url = ? AND entry_id = ?", (feed_url, entry_id),
+                "SELECT original_content FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
             ).fetchone()
         except sqlite3.OperationalError:
             row = None
@@ -87,8 +90,7 @@ def revert_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
             missing += 1
     meta.close()
 
-    print(f"  {len(restorable):,} have an original to restore; {missing:,} do not"
-          " (left untouched)", flush=True)
+    print(f"  {len(restorable):,} have an original to restore; {missing:,} do not (left untouched)", flush=True)
     for _feed, entry_id, _orig in restorable[:5]:
         print(f"    {entry_id[:88]}", flush=True)
     if not apply or not restorable:
@@ -99,8 +101,7 @@ def revert_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
     with main.get_reader() as reader:
         db = reader._storage.get_db()
         for feed_url, entry_id, original in restorable:
-            db.execute("UPDATE entries SET content = ? WHERE feed = ? AND id = ?",
-                       (original, feed_url, entry_id))
+            db.execute("UPDATE entries SET content = ? WHERE feed = ? AND id = ?", (original, feed_url, entry_id))
         db.commit()
 
     log = [{"feed_url": f, "entry_id": e} for f, e, _ in restorable]
@@ -112,14 +113,13 @@ def revert_for_user(user_id: str, apply: bool, only_feed: str | None) -> int:
 
 
 def main_cli() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="restore (default: dry run)")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
     ap.add_argument("--feed", default=None, help="restrict to one feed URL")
     args = ap.parse_args()
 
-    for uid in ([args.user] if args.user else main._background_user_ids()):
+    for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
             revert_for_user(uid, args.apply, args.feed)
     return 0

@@ -7,6 +7,7 @@ before spending any DeviantArt API quota on it, and a missing access token
 short-circuits the whole run rather than burning through every candidate to
 individually fail.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -94,12 +95,12 @@ def test_apply_resigns_and_pins_each_candidate(configured, monkeypatch):
     monkeypatch.setattr(main, "get_deviantart_user_token", lambda: "tok")
     resign_calls = []
     monkeypatch.setattr(
-        main, "_resign_expired_deviantart_url",
+        main,
+        "_resign_expired_deviantart_url",
         lambda url, eid: resign_calls.append((url, eid)) or "https://images-wixmp.test/1.jpg?token=fresh",
     )
     stored = []
-    monkeypatch.setattr(main.lead_image_service, "store_entry_lead_image",
-                         lambda fu, eid, url: stored.append((fu, eid, url)))
+    monkeypatch.setattr(main.lead_image_service, "store_entry_lead_image", lambda fu, eid, url: stored.append((fu, eid, url)))
     # Pinned only after store_entry_lead_image ran, mirroring the real pin sink.
     monkeypatch.setattr(main, "has_pinned_entry_thumbnail", lambda fu, eid: bool(stored))
 

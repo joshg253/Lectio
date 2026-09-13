@@ -9,6 +9,7 @@ raw (case-preserving); callers normalize to Lectio tag format at display time.
 Besides powering the post-header suggestion chips, this table is the data
 foundation for future tag-filtered feed adapters.
 """
+
 from __future__ import annotations
 
 import html as html_module
@@ -25,10 +26,27 @@ LOGGER = logging.getLogger(__name__)
 # "Uncategorized" and friends) — dropped at capture so they never become
 # suggestion chips or filter-rule bait. Compared lowercase.
 JUNK_TAGS = {
-    "uncategorized", "uncategorised", "untagged", "no category",
-    "general", "misc", "miscellaneous", "other", "others",
-    "blog", "blogs", "post", "posts", "article", "articles",
-    "all", "default", "unsorted", "rss", "feed", "home",
+    "uncategorized",
+    "uncategorised",
+    "untagged",
+    "no category",
+    "general",
+    "misc",
+    "miscellaneous",
+    "other",
+    "others",
+    "blog",
+    "blogs",
+    "post",
+    "posts",
+    "article",
+    "articles",
+    "all",
+    "default",
+    "unsorted",
+    "rss",
+    "feed",
+    "home",
 }
 
 
@@ -182,9 +200,7 @@ def _prefixed_hashtag_field_tags(raw_entry: object) -> list[str]:
 
 
 _META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.IGNORECASE)
-_META_ATTR_RE = re.compile(
-    r'\b(property|name|content)\s*=\s*("([^"]*)"|\'([^\']*)\')', re.IGNORECASE
-)
+_META_ATTR_RE = re.compile(r'\b(property|name|content)\s*=\s*("([^"]*)"|\'([^\']*)\')', re.IGNORECASE)
 # og:article:tag (e.g. initialcommit.com) is the same one-value-per-meta-tag
 # convention as bare article:tag — Open Graph's own og: prefix on top of the
 # article: namespace, not a different taxonomy shape.
@@ -221,9 +237,7 @@ _TAXONOMY_HREF_RE = re.compile(r"/(?:tags?|categor(?:y|ies))/([^/?#]+)", re.IGNO
 # characters that never completes the match, and hrefs are attacker-supplied
 # page content (a data: URI is arbitrarily long). 40 is far past any real
 # parameter name.
-_TAXONOMY_QUERY_RE = re.compile(
-    r"[?&]([A-Za-z0-9_-]{0,40}?(?:tags?|categor(?:y|ies)|topics?))=([^&#]+)", re.IGNORECASE
-)
+_TAXONOMY_QUERY_RE = re.compile(r"[?&]([A-Za-z0-9_-]{0,40}?(?:tags?|categor(?:y|ies)|topics?))=([^&#]+)", re.IGNORECASE)
 
 # "Posted on 8/31/26 in <a href="/deals/target">Target</a>, <a href="/deals/
 # household-essentials">Household Essentials</a>" — gottadeal.com's byline.
@@ -249,9 +263,7 @@ _POSTED_IN_ANCHOR_RE = re.compile(r"<a\b[^>]*>([^<]{1,60})</a>", re.IGNORECASE)
 # "tag", no "tag" class (itemProp is a different attribute entirely), and the
 # href's "/tagged/" doesn't match the /tag//tags/ taxonomy-href tier (a
 # different word, not a prefix of it).
-_ITEMPROP_KEYWORDS_ANCHOR_RE = re.compile(
-    r'<a\b[^>]*\bitemprop\s*=\s*["\']keywords["\'][^>]*>([^<]{1,60})</a>', re.IGNORECASE
-)
+_ITEMPROP_KEYWORDS_ANCHOR_RE = re.compile(r'<a\b[^>]*\bitemprop\s*=\s*["\']keywords["\'][^>]*>([^<]{1,60})</a>', re.IGNORECASE)
 
 # labnol.org (Digital Inspiration): tag chips carry no rel="tag", no "tag"
 # class, and no /tag//category/ href — their only taxonomy signal is the
@@ -282,12 +294,12 @@ def _taxonomy_slug_from_href(href: str) -> str | None:
         # of "How To Guides".
         return unquote_plus(query_m.group(2)).strip() or None
     return None
+
+
 # The unquoted alternative is not optional politeness: minified Hugo output emits
 # `href=https://host/tags/x/` with no quotes at all, so a quotes-only pattern
 # matched nothing on those pages and every anchor tier below silently found zero.
-_ANCHOR_ATTR_RE = re.compile(
-    r'\b(rel|class|href|title)\s*=\s*("([^"]*)"|\'([^\']*)\'|([^\s"\'>]+))', re.IGNORECASE
-)
+_ANCHOR_ATTR_RE = re.compile(r'\b(rel|class|href|title)\s*=\s*("([^"]*)"|\'([^\']*)\'|([^\s"\'>]+))', re.IGNORECASE)
 _INNER_TAG_RE = re.compile(r"<[^>]+>")
 
 
@@ -306,20 +318,38 @@ def _looks_like_a_tag(text: str) -> bool:
     if any(marker in text for marker in _TAG_PROSE_MARKERS):
         return False
     lowered = text.lower()
-    return not any(
-        lowered.startswith(prefix)
-        for prefix in ("more posts", "view all", "all posts", "see all", "browse ")
-    )
+    return not any(lowered.startswith(prefix) for prefix in ("more posts", "view all", "all posts", "see all", "browse "))
 
 
 # Path segments that are structure, not subject. Kept deliberately short: a
 # wrong entry here silently loses a real tag, and the shape rules below already
 # reject most noise.
-_PATH_TAG_STOPWORDS = frozenset({
-    "a", "amp", "article", "articles", "blog", "blogs", "e", "en", "entry",
-    "front", "index", "main", "p", "page", "pages", "post", "posts", "s",
-    "story", "stories", "us", "www",
-})
+_PATH_TAG_STOPWORDS = frozenset(
+    {
+        "a",
+        "amp",
+        "article",
+        "articles",
+        "blog",
+        "blogs",
+        "e",
+        "en",
+        "entry",
+        "front",
+        "index",
+        "main",
+        "p",
+        "page",
+        "pages",
+        "post",
+        "posts",
+        "s",
+        "story",
+        "stories",
+        "us",
+        "www",
+    }
+)
 _PATH_TAG_SEGMENT_RE = re.compile(r"^[a-z][a-z0-9-]{2,29}$")
 _MAX_PATH_TAGS = 3
 
@@ -329,8 +359,7 @@ _MAX_PATH_TAGS = 3
 #   <meta property="mrf:tags" content="region:GB;articleType:Deals;channel:Music tech;…">
 # Keys worth keeping. `control` is internal plumbing (serversidehawk,
 # print-to-web-archive-free) and `region` is which edition you got, not a subject.
-_MRF_TAG_KEYS = frozenset({"category", "articletype", "channel", "freeform",
-                           "unindexedfreeform"})
+_MRF_TAG_KEYS = frozenset({"category", "articletype", "channel", "freeform", "unindexedfreeform"})
 _MRF_META_RE = re.compile(
     r'<meta[^>]+(?:property|name)=["\']mrf:tags["\'][^>]+content=["\']([^"\']*)["\']',
     re.IGNORECASE,
@@ -522,9 +551,7 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
     for m in _ANCHOR_RE.finditer(html):
         attrs = {}
         for am in _ANCHOR_ATTR_RE.finditer(m.group(1)):
-            attrs[am.group(1).lower()] = next(
-                (g for g in (am.group(3), am.group(4), am.group(5)) if g is not None), ""
-            )
+            attrs[am.group(1).lower()] = next((g for g in (am.group(3), am.group(4), am.group(5)) if g is not None), "")
         if "tag" not in (attrs.get("rel") or "").lower().split():
             continue
         text = _INNER_TAG_RE.sub(" ", m.group(2)).strip()
@@ -538,9 +565,7 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
     for open_tag in re.findall(r"<a\b[^>]*>", html, re.IGNORECASE):
         attrs = {}
         for am in _ANCHOR_ATTR_RE.finditer(open_tag):
-            attrs[am.group(1).lower()] = next(
-                (g for g in (am.group(3), am.group(4), am.group(5)) if g is not None), ""
-            )
+            attrs[am.group(1).lower()] = next((g for g in (am.group(3), am.group(4), am.group(5)) if g is not None), "")
         classes = (attrs.get("class") or "").lower()
         href = attrs.get("href") or ""
         if "tag" not in classes or not href:
@@ -570,15 +595,13 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
     for m in _ANCHOR_RE.finditer(html):
         attrs = {}
         for am in _ANCHOR_ATTR_RE.finditer(m.group(1)):
-            attrs[am.group(1).lower()] = next(
-                (g for g in (am.group(3), am.group(4), am.group(5)) if g is not None), ""
-            )
+            attrs[am.group(1).lower()] = next((g for g in (am.group(3), am.group(4), am.group(5)) if g is not None), "")
         classes = (attrs.get("class") or "").lower()
         if "tag" not in classes or attrs.get("title"):
-            continue          # titled anchors are the tier above's job
+            continue  # titled anchors are the tier above's job
         body = m.group(2)
         if "<" in body:
-            continue          # wraps markup — not a plain tag label
+            continue  # wraps markup — not a plain tag label
         text = html_module.unescape(body).strip().lstrip("#").strip()
         if text and len(text) <= 60:
             values.append(text)
@@ -597,9 +620,7 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
     for m in _ANCHOR_RE.finditer(html):
         attrs = {}
         for am in _ANCHOR_ATTR_RE.finditer(m.group(1)):
-            attrs[am.group(1).lower()] = next(
-                (g for g in (am.group(3), am.group(4), am.group(5)) if g is not None), ""
-            )
+            attrs[am.group(1).lower()] = next((g for g in (am.group(3), am.group(4), am.group(5)) if g is not None), "")
         href = attrs.get("href") or ""
         slug = _taxonomy_slug_from_href(href)
         if slug is None:
@@ -669,9 +690,7 @@ class FeedTagService:
     def __init__(self, *, get_meta_connection: Callable) -> None:
         self._get_meta_connection = get_meta_connection
 
-    def record_entry_tags(
-        self, feed_url: str, pairs: list[tuple[str, list[str]]]
-    ) -> None:
+    def record_entry_tags(self, feed_url: str, pairs: list[tuple[str, list[str]]]) -> None:
         """Persist tags for entries of ``feed_url``.
 
         ``pairs`` is ``[(entry_id, tags), ...]``. Replace-per-entry semantics:
@@ -692,8 +711,7 @@ class FeedTagService:
                 )
                 # INSERT OR IGNORE guards case-collisions within one entry's tags.
                 conn.executemany(
-                    "INSERT OR IGNORE INTO entry_feed_tags"
-                    " (feed_url, entry_id, tag, first_seen_at) VALUES (?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO entry_feed_tags (feed_url, entry_id, tag, first_seen_at) VALUES (?, ?, ?, ?)",
                     [(feed_url, entry_id, tag, now) for tag in tags],
                 )
 
@@ -702,15 +720,12 @@ class FeedTagService:
             # rowid order = insertion order = the feed's own tag order
             # (replace-per-entry rewrites all of an entry's rows together).
             rows = conn.execute(
-                "SELECT tag FROM entry_feed_tags"
-                " WHERE feed_url = ? AND entry_id = ? ORDER BY rowid",
+                "SELECT tag FROM entry_feed_tags WHERE feed_url = ? AND entry_id = ? ORDER BY rowid",
                 (feed_url, entry_id),
             ).fetchall()
         return [row[0] for row in rows]
 
-    def tag_vocabulary(
-        self, feed_urls: Iterable[str] | None, *, limit: int = 400
-    ) -> list[tuple[str, int]]:
+    def tag_vocabulary(self, feed_urls: Iterable[str] | None, *, limit: int = 400) -> list[tuple[str, int]]:
         """The tags actually present in a scope, most-used first.
 
         Feeds the rule form's autocomplete: a tag_filter rule can only match
@@ -727,10 +742,7 @@ class FeedTagService:
         urls = None if feed_urls is None else [u for u in feed_urls if u]
         if urls is not None and not urls:
             return []
-        sql = (
-            "SELECT tag, COUNT(*) AS n FROM entry_feed_tags"
-            "{where} GROUP BY LOWER(tag) ORDER BY n DESC, LOWER(tag) LIMIT ?"
-        )
+        sql = "SELECT tag, COUNT(*) AS n FROM entry_feed_tags{where} GROUP BY LOWER(tag) ORDER BY n DESC, LOWER(tag) LIMIT ?"
         params: list = []
         where = ""
         if urls is not None:
@@ -755,9 +767,7 @@ class FeedTagService:
         quietly resurrect a chip that was already dismissed."""
         try:
             with self._get_meta_connection() as conn:
-                rows = conn.execute(
-                    "SELECT tag FROM suppressed_feed_tags WHERE feed_url = ?", (feed_url,)
-                ).fetchall()
+                rows = conn.execute("SELECT tag FROM suppressed_feed_tags WHERE feed_url = ?", (feed_url,)).fetchall()
         except Exception:
             LOGGER.warning("suppressed tag lookup failed for %s", feed_url, exc_info=True)
             return set()
@@ -771,16 +781,14 @@ class FeedTagService:
         with self._get_meta_connection() as conn:
             if suppressed:
                 conn.execute(
-                    "INSERT OR REPLACE INTO suppressed_feed_tags (feed_url, tag, suppressed_at)"
-                    " VALUES (?, ?, ?)",
+                    "INSERT OR REPLACE INTO suppressed_feed_tags (feed_url, tag, suppressed_at) VALUES (?, ?, ?)",
                     (feed_url, clean, time.time()),
                 )
             else:
                 # Delete case-insensitively: the stored row may differ in case from
                 # whatever the caller is looking at now.
                 conn.execute(
-                    "DELETE FROM suppressed_feed_tags WHERE feed_url = ?"
-                    " AND LOWER(tag) = LOWER(?)",
+                    "DELETE FROM suppressed_feed_tags WHERE feed_url = ? AND LOWER(tag) = LOWER(?)",
                     (feed_url, clean),
                 )
 
@@ -799,9 +807,7 @@ class FeedTagService:
 
     def delete_for_feed(self, feed_url: str) -> int:
         with self._get_meta_connection() as conn:
-            return conn.execute(
-                "DELETE FROM entry_feed_tags WHERE feed_url = ?", (feed_url,)
-            ).rowcount
+            return conn.execute("DELETE FROM entry_feed_tags WHERE feed_url = ?", (feed_url,)).rowcount
 
     def migrate_feed_url(self, old_url: str, new_url: str) -> None:
         with self._get_meta_connection() as conn:
@@ -811,6 +817,4 @@ class FeedTagService:
                 "UPDATE OR IGNORE entry_feed_tags SET feed_url = ? WHERE feed_url = ?",
                 (new_url, old_url),
             )
-            conn.execute(
-                "DELETE FROM entry_feed_tags WHERE feed_url = ?", (old_url,)
-            )
+            conn.execute("DELETE FROM entry_feed_tags WHERE feed_url = ?", (old_url,))

@@ -60,7 +60,7 @@ def parse_tags_cell(raw: str) -> list[str]:
     tags: list[str] = []
     try:
         parsed = json.loads(raw)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         parsed = None
     if isinstance(parsed, list):
         for item in parsed:
@@ -114,13 +114,15 @@ def parse_csv(data: bytes) -> list[dict]:
         url = (raw.get(url_key) or "").strip()
         if not url:
             continue
-        rows.append({
-            "url": url,
-            "title": (raw.get(title_key) or "").strip() if title_key else "",
-            "folder": (raw.get(folder_key) or "").strip() if folder_key else "",
-            "timestamp": (raw.get(ts_key) or "").strip() if ts_key else "",
-            "tags": parse_tags_cell(raw.get(tags_key) or "") if tags_key else [],
-        })
+        rows.append(
+            {
+                "url": url,
+                "title": (raw.get(title_key) or "").strip() if title_key else "",
+                "folder": (raw.get(folder_key) or "").strip() if folder_key else "",
+                "timestamp": (raw.get(ts_key) or "").strip() if ts_key else "",
+                "tags": parse_tags_cell(raw.get(tags_key) or "") if tags_key else [],
+            }
+        )
     return rows
 
 
@@ -129,7 +131,7 @@ def _parse_timestamp(value: str) -> float | None:
         return None
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
@@ -186,9 +188,7 @@ def plan_import(
         if (not existing.title or existing.title == key) and row["title"]:
             existing.title = row["title"]
         if saved_at is not None:
-            existing.saved_at = (
-                saved_at if existing.saved_at is None else min(existing.saved_at, saved_at)
-            )
+            existing.saved_at = saved_at if existing.saved_at is None else min(existing.saved_at, saved_at)
         for tag in tags:
             if tag not in existing.tags:
                 existing.tags.append(tag)

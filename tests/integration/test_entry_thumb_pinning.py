@@ -13,6 +13,7 @@ the existing per-feed thumbnail pin (_feed_thumb_cache_key /
 test_pinned_feed_thumbnail.py) but keyed by (feed_url, entry_id) instead of
 feed_url alone.
 """
+
 from __future__ import annotations
 
 import io
@@ -37,7 +38,7 @@ ENTRY = "entry-1"
 
 
 def _slice(start: str, end: str = "\ndef ") -> str:
-    body = MAIN[MAIN.index(start):]
+    body = MAIN[MAIN.index(start) :]
     return body[: body.index(end, len(start))]
 
 
@@ -69,6 +70,7 @@ def _stub_safe_get(monkeypatch, content: bytes, content_type: str = "image/png",
 # ---------------------------------------------------------------------------
 # Structural — mirrors test_pinned_feed_thumbnail.py's source-slice style.
 # ---------------------------------------------------------------------------
+
 
 def test_cache_key_is_per_entry_not_per_url():
     body = _slice("def _entry_thumb_cache_key")
@@ -124,6 +126,7 @@ def test_thumb_proxy_serves_the_pinned_copy_before_the_scheme_check():
 # ---------------------------------------------------------------------------
 # Behavioral
 # ---------------------------------------------------------------------------
+
 
 def test_url_is_signed_true_for_token_param():
     assert main._url_is_signed(SIGNED_URL) is True
@@ -261,6 +264,7 @@ def test_eviction_still_drops_ordinary_stale_entries(monkeypatch):
 # End-to-end through the real service sink wiring.
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def tenant(tmp_path):
     saved = tenancy._layout
@@ -299,6 +303,7 @@ def test_storing_a_plain_lead_image_does_not_pin(tenant, monkeypatch):
 def test_a_sink_failure_does_not_break_the_write(tenant, monkeypatch):
     """A pin fetch that raises must not take the entry_lead_images write down
     with it -- pinning is a durability nicety, not a required step."""
+
     def _boom(*a, **k):
         raise RuntimeError("network is on fire")
 

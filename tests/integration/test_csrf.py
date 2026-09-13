@@ -46,12 +46,15 @@ def test_post_without_token_is_rejected_with_403():
         assert r.status_code == 200
 
         # POST without supplying the token — must be rejected
-        r = client.post("/entries/saved", data={
-            "folder_id": "1",
-            "feed_url": "https://example.com/feed.xml",
-            "entry_id": "x1",
-            "saved": "1",
-        })
+        r = client.post(
+            "/entries/saved",
+            data={
+                "folder_id": "1",
+                "feed_url": "https://example.com/feed.xml",
+                "entry_id": "x1",
+                "saved": "1",
+            },
+        )
         assert r.status_code == 403
         assert "CSRF" in r.text
 
@@ -134,8 +137,9 @@ def test_login_post_is_csrf_exempt(monkeypatch):
     main._login_failures.clear()
     # Make verify_login accept "tester"/"secret" without needing a real DB user.
     if main.user_store is not None:
-        monkeypatch.setattr(main.user_store, "verify_login",
-                            lambda u, p, **kw: "u_test_tester" if u == "tester" and p == "secret" else None)
+        monkeypatch.setattr(
+            main.user_store, "verify_login", lambda u, p, **kw: "u_test_tester" if u == "tester" and p == "secret" else None
+        )
 
     with TestClient(main.app) as client:
         r = client.post("/login", data={"username": "tester", "password": "secret"}, follow_redirects=False)

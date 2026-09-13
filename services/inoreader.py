@@ -12,6 +12,7 @@ Rate limits: two zones tracked via response headers.
 Both are surfaced in the import checkpoint so the drip strategy can stay
 within limits automatically.
 """
+
 from __future__ import annotations
 
 from urllib.parse import quote, urlencode
@@ -32,8 +33,10 @@ _TIMEOUT = 45
 # Errors
 # ---------------------------------------------------------------------------
 
+
 class QuotaExceeded(RuntimeError):
     """Raised when Inoreader returns HTTP 429 (rate limit / quota exhausted)."""
+
     def __init__(self, msg: str, rate_limits: dict | None = None):
         super().__init__(msg)
         self.rate_limits = rate_limits or {}
@@ -42,6 +45,7 @@ class QuotaExceeded(RuntimeError):
 # ---------------------------------------------------------------------------
 # OAuth helpers
 # ---------------------------------------------------------------------------
+
 
 def authorize_url(client_id: str, redirect_uri: str, state: str) -> str:
     """Build the Inoreader consent-screen URL."""
@@ -70,28 +74,35 @@ def _post_token(payload: dict, what: str) -> dict:
 
 def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: str) -> dict:
     """Exchange an authorization code for access + refresh tokens."""
-    return _post_token({
-        "grant_type": "authorization_code",
-        "code": code,
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "redirect_uri": redirect_uri,
-    }, "token exchange")
+    return _post_token(
+        {
+            "grant_type": "authorization_code",
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+        },
+        "token exchange",
+    )
 
 
 def refresh_access_token(client_id: str, client_secret: str, refresh_token: str) -> dict:
     """Refresh an expired access token."""
-    return _post_token({
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "client_id": client_id,
-        "client_secret": client_secret,
-    }, "token refresh")
+    return _post_token(
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        },
+        "token refresh",
+    )
 
 
 # ---------------------------------------------------------------------------
 # API helpers
 # ---------------------------------------------------------------------------
+
 
 def _headers(access_token: str) -> dict:
     return {"Authorization": f"Bearer {access_token}", "User-Agent": _USER_AGENT}
@@ -99,11 +110,13 @@ def _headers(access_token: str) -> dict:
 
 def _parse_rate_limits(resp_headers) -> dict:
     """Extract zone1/zone2 quota info from response headers."""
+
     def _int(v: str | None) -> int | None:
         try:
             return int(v) if v is not None else None
         except ValueError:
             return None
+
     return {
         "z1_limit": _int(resp_headers.get("x-reader-zone1-limit")),
         "z1_usage": _int(resp_headers.get("x-reader-zone1-usage")),
@@ -143,7 +156,7 @@ def get_subscriptions(access_token: str) -> tuple[list[dict], dict]:
     for sub in subs:
         raw_id = sub.get("id", "")
         if raw_id.startswith("feed/"):
-            sub["feed_url"] = raw_id[len("feed/"):]
+            sub["feed_url"] = raw_id[len("feed/") :]
         else:
             sub["feed_url"] = raw_id
     return subs, rl
@@ -252,6 +265,7 @@ def folder_name_from_categories(categories: list[dict] | None) -> str | None:
 # JSON file import (Path B — no API calls needed)
 # ---------------------------------------------------------------------------
 
+
 def _coerce_published(item: dict) -> int | None:
     """Best-available publish timestamp (Unix seconds) for a native item.
 
@@ -262,19 +276,19 @@ def _coerce_published(item: dict) -> int | None:
     if pub:
         try:
             return int(pub)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             pass
     crawl_ms = item.get("crawlTimeMsec")
     if crawl_ms:
         try:
             return int(crawl_ms) // 1000
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             pass
     ts_usec = item.get("timestampUsec")
     if ts_usec:
         try:
             return int(ts_usec) // 1_000_000
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             pass
     return None
 
@@ -322,21 +336,16 @@ def parse_export_json(data) -> list[dict]:
         # candidate isn't a redirector (services.link_canonical).
         canonical = item.get("canonical") or []
         alternate = item.get("alternate") or []
-        url = link_canonical.pick_non_redirector([
-            c.get("href", "") for c in (list(canonical) + list(alternate)) if isinstance(c, dict)
-        ])
+        url = link_canonical.pick_non_redirector([c.get("href", "") for c in (list(canonical) + list(alternate)) if isinstance(c, dict)])
         origin = item.get("origin") or {}
         raw_stream = origin.get("streamId", "")
-        feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
+        feed_url = raw_stream[len("feed/") :] if raw_stream.startswith("feed/") else raw_stream
         # Starred: only the native Inoreader export (dict format, starred*.json) is the
         # source of truth for starred state. It uses a Unix-timestamp ``starred`` field.
         # ExportTool files (list format) carry starred state in categories too, but we
         # intentionally ignore it — starred.json is authoritative.
         if is_native:
-            starred = bool(item.get("starred")) or any(
-                ("state/com.google/like" in c or "state/com.google/starred" in c)
-                for c in cats
-            )
+            starred = bool(item.get("starred")) or any(("state/com.google/like" in c or "state/com.google/starred" in c) for c in cats)
         else:
             starred = False
         labels = []
@@ -345,26 +354,29 @@ def parse_export_json(data) -> list[dict]:
             if name:
                 labels.append(name)
         summary = item.get("summary") or {}
-        out.append({
-            "url": url,
-            "title": item.get("title", ""),
-            # Prefer the item's own published date; fall back to Inoreader's crawl
-            # time so entries that omit <pubDate> still carry a real timestamp and
-            # sort by true age instead of clustering at import time.
-            "published": _coerce_published(item),
-            "feed_url": feed_url,
-            "feed_title": origin.get("title", ""),
-            "content": summary.get("content", ""),
-            "starred": starred,
-            "labels": labels,
-            "item_id": item.get("id", ""),
-        })
+        out.append(
+            {
+                "url": url,
+                "title": item.get("title", ""),
+                # Prefer the item's own published date; fall back to Inoreader's crawl
+                # time so entries that omit <pubDate> still carry a real timestamp and
+                # sort by true age instead of clustering at import time.
+                "published": _coerce_published(item),
+                "feed_url": feed_url,
+                "feed_title": origin.get("title", ""),
+                "content": summary.get("content", ""),
+                "starred": starred,
+                "labels": labels,
+                "item_id": item.get("id", ""),
+            }
+        )
     return out
 
 
 def _parse_jsonfeed(data: dict) -> list[dict]:
     """Parse a jsonfeed.org/version/1 export from Inoreader."""
     from datetime import datetime
+
     out = []
     for item in data.get("items", []):
         pub = None
@@ -374,23 +386,26 @@ def _parse_jsonfeed(data: dict) -> list[dict]:
                 pub = int(datetime.fromisoformat(raw_pub.replace("Z", "+00:00")).timestamp())
             except Exception:
                 pass
-        out.append({
-            "url": item.get("url", ""),
-            "title": item.get("title", ""),
-            "published": pub,
-            "feed_url": "",  # not available per-item in JSON Feed
-            "feed_title": "",
-            "content": item.get("content_html", "") or item.get("content_text", ""),
-            "starred": False,  # JSON Feed exports are label streams, not starred
-            "labels": list(item.get("tags") or []),
-            "item_id": item.get("id", ""),
-        })
+        out.append(
+            {
+                "url": item.get("url", ""),
+                "title": item.get("title", ""),
+                "published": pub,
+                "feed_url": "",  # not available per-item in JSON Feed
+                "feed_title": "",
+                "content": item.get("content_html", "") or item.get("content_text", ""),
+                "starred": False,  # JSON Feed exports are label streams, not starred
+                "labels": list(item.get("tags") or []),
+                "item_id": item.get("id", ""),
+            }
+        )
     return out
 
 
 # ---------------------------------------------------------------------------
 # Rate-limit helpers for callers
 # ---------------------------------------------------------------------------
+
 
 def z1_remaining(rl: dict) -> int | None:
     """Zone-1 calls remaining, or None if headers were absent."""

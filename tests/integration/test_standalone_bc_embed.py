@@ -1,4 +1,5 @@
 """Standalone bare Bandcamp album/track links in feed content → inline embed."""
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -17,6 +18,7 @@ _DATA_ATTR_PAGE_HTML = f'<div data-album-id="{ALBUM_ID}"></div>'
 
 
 # --- _extract_bc_numeric_id ---
+
 
 def test_extract_id_from_embedded_player_url():
     assert main._extract_bc_numeric_id(_ALBUM_PAGE_HTML, "album") == ALBUM_ID
@@ -40,10 +42,12 @@ def test_extract_id_does_not_match_wrong_type():
 
 # --- _embed_standalone_bandcamp_links ---
 
+
 def test_standalone_album_link_becomes_embed_when_cached():
     html = f'<p>Intro.</p><p><a href="{ALBUM_URL}">{ALBUM_URL}</a></p>'
     with patch.object(
-        main.lead_image_service, "get_cached_source_html",
+        main.lead_image_service,
+        "get_cached_source_html",
         return_value=("https://someband.bandcamp.com/album/my-album", _ALBUM_PAGE_HTML),
     ):
         out = main._embed_standalone_bandcamp_links(html)
@@ -55,7 +59,8 @@ def test_standalone_album_link_becomes_embed_when_cached():
 def test_standalone_track_link_becomes_embed_when_cached():
     html = f'<p><a href="{TRACK_URL}">{TRACK_URL}</a></p>'
     with patch.object(
-        main.lead_image_service, "get_cached_source_html",
+        main.lead_image_service,
+        "get_cached_source_html",
         return_value=("https://someband.bandcamp.com/track/my-track", _TRACK_PAGE_HTML),
     ):
         out = main._embed_standalone_bandcamp_links(html)

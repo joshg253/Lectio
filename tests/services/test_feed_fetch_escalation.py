@@ -3,6 +3,7 @@
 Good-citizen policy: honest UA first, browser identity only after a refusal
 (403/415/429/503 or a hang), never preemptively.
 """
+
 from __future__ import annotations
 
 import httpx
@@ -87,6 +88,7 @@ def test_request_hook_swaps_identity_only_for_flagged():
     hook = api._make_browser_ua_request_hook()
 
     import requests
+
     r_flagged = requests.Request("GET", "https://blocked.test/feed", headers={"User-Agent": "Lectio/0.1"})
     out = hook(None, r_flagged)
     assert "Mozilla" in out.headers["User-Agent"]

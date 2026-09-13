@@ -15,6 +15,7 @@ The duplicates are invisible to a ``GROUP BY feed_url`` check — the two rows
 hold different strings — which is why these tests assert on the count of
 subscriptions rather than on any per-URL uniqueness.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -60,9 +61,7 @@ def conn(monkeypatch):
 def _opml(*urls: str, folder: str = "Comics") -> bytes:
     entries = "".join(f'<outline type="rss" text="f" xmlUrl="{u}" />' for u in urls)
     return (
-        '<?xml version="1.0" encoding="UTF-8"?><opml version="1.0"><head/><body>'
-        f'<outline text="{folder}">{entries}</outline>'
-        "</body></opml>"
+        f'<?xml version="1.0" encoding="UTF-8"?><opml version="1.0"><head/><body><outline text="{folder}">{entries}</outline></body></opml>'
     ).encode()
 
 
@@ -82,9 +81,9 @@ def test_a_trailing_slash_variant_is_not_a_new_feed(conn):
 def test_reimporting_what_was_exported_is_a_no_op(conn):
     conn, added = conn
     stored = [
-        "https://oglaf.com/feeds/rss/",          # non-canonical (trailing slash)
-        "https://edmocentral.com/feed/",         # non-canonical
-        "https://jvns.ca/atom.xml",              # already canonical
+        "https://oglaf.com/feeds/rss/",  # non-canonical (trailing slash)
+        "https://edmocentral.com/feed/",  # non-canonical
+        "https://jvns.ca/atom.xml",  # already canonical
     ]
     for url in stored:
         conn.execute("INSERT INTO folder_feeds VALUES (2, ?)", (url,))
@@ -110,9 +109,7 @@ def test_a_genuinely_new_feed_is_still_imported(conn):
 
 def test_two_spellings_of_one_feed_in_the_same_file_import_once(conn):
     conn, added = conn
-    imported = main.import_opml(
-        conn, _opml("https://oglaf.com/feeds/rss", "https://oglaf.com/feeds/rss/")
-    )
+    imported = main.import_opml(conn, _opml("https://oglaf.com/feeds/rss", "https://oglaf.com/feeds/rss/"))
     assert imported == 1
     assert conn.execute("SELECT count(*) FROM folder_feeds").fetchone()[0] == 1
 

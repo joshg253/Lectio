@@ -1,4 +1,5 @@
 """Unit tests for services.scraper_service link-list anchor resolution."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -79,9 +80,7 @@ def test_link_list_direct_anchor_selector_still_works(monkeypatch):
 
 
 def test_extract_link_items_dedups_and_resolves_absolute():
-    items = scraper_service.extract_link_items(
-        _PAGE, "https://basslessons.be/", "ul > li"
-    )
+    items = scraper_service.extract_link_items(_PAGE, "https://basslessons.be/", "ul > li")
     assert [i["url"] for i in items] == [
         "https://basslessons.be/transcriptions.php?i=1192",
         "https://basslessons.be/transcriptions.php?i=1193",

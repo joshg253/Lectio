@@ -1,4 +1,5 @@
 """Integration tests for POST /entries/instapaper."""
+
 from __future__ import annotations
 
 import urllib.request
@@ -11,6 +12,7 @@ import main
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _build_app(monkeypatch, *, username: str = "user", password: str = "pass", entry=None):
     app = FastAPI()
@@ -28,8 +30,10 @@ def _build_app(monkeypatch, *, username: str = "user", password: str = "pass", e
     class _FakeReader:
         def __enter__(self):
             return self
+
         def __exit__(self, *_):
             pass
+
         def get_entry(self, key, default):
             return entry
 
@@ -40,8 +44,10 @@ def _build_app(monkeypatch, *, username: str = "user", password: str = "pass", e
 class _FakeHTTPResponse:
     def __init__(self, status: int = 201):
         self.status = status
+
     def __enter__(self):
         return self
+
     def __exit__(self, *_):
         pass
 
@@ -64,6 +70,7 @@ def _make_entry(link: str = "https://example.com/article", tags=None):
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_not_configured_returns_503(monkeypatch):
     app = _build_app(monkeypatch, username="", password="")
@@ -99,7 +106,8 @@ def test_entry_without_url_returns_400(monkeypatch):
 def test_successful_save_returns_ok(monkeypatch):
     app = _build_app(monkeypatch, entry=_make_entry())
     monkeypatch.setattr(
-        urllib.request, "urlopen",
+        urllib.request,
+        "urlopen",
         lambda req, timeout=None: _FakeHTTPResponse(201),
     )
     with TestClient(app) as client:
@@ -114,8 +122,12 @@ def test_url_and_title_sent(monkeypatch):
 
     class _CapturingResponse:
         status = 201
-        def __enter__(self): return self
-        def __exit__(self, *_): pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
 
     def _fake_urlopen(req, timeout=None):
         sent_data.append(req.data)
@@ -137,7 +149,8 @@ def test_url_and_title_sent(monkeypatch):
 def test_instapaper_api_error_returns_502(monkeypatch):
     app = _build_app(monkeypatch, entry=_make_entry())
     monkeypatch.setattr(
-        urllib.request, "urlopen",
+        urllib.request,
+        "urlopen",
         lambda req, timeout=None: _FakeHTTPResponse(401),
     )
     with TestClient(app) as client:

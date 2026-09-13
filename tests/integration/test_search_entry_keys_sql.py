@@ -5,6 +5,7 @@ of a 10-20s search on the live library — so both search surfaces now narrow to
 matching keys in SQL and hydrate only the survivors. These tests pin the
 predicate: which fields are searched, how multiple terms combine, feed scoping,
 read filtering, and that user input can't act as a LIKE pattern."""
+
 from __future__ import annotations
 
 import pytest
@@ -32,23 +33,40 @@ def configured(tmp_path):
             reader.add_feed(url, allow_invalid_url=True, exist_ok=True)
             reader.disable_feed_updates(url)
             reader.set_feed_user_title(url, title)
-        reader.add_entry({
-            "feed_url": FEED_A, "id": "a1", "title": "Making espresso at home",
-            "link": "https://a.test/espresso", "summary": "beans and grinders",
-        })
-        reader.add_entry({
-            "feed_url": FEED_A, "id": "a2", "title": "Unrelated post",
-            "link": "https://a.test/other",
-            "content": [{"value": "<p>a phrase buried in the article body: quokka</p>"}],
-        })
-        reader.add_entry({
-            "feed_url": FEED_B, "id": "b1", "title": "Espresso machines reviewed",
-            "link": "https://b.test/machines",
-        })
-        reader.add_entry({
-            "feed_url": FEED_B, "id": "b2", "title": "100% pure",
-            "link": "https://b.test/a_b",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED_A,
+                "id": "a1",
+                "title": "Making espresso at home",
+                "link": "https://a.test/espresso",
+                "summary": "beans and grinders",
+            }
+        )
+        reader.add_entry(
+            {
+                "feed_url": FEED_A,
+                "id": "a2",
+                "title": "Unrelated post",
+                "link": "https://a.test/other",
+                "content": [{"value": "<p>a phrase buried in the article body: quokka</p>"}],
+            }
+        )
+        reader.add_entry(
+            {
+                "feed_url": FEED_B,
+                "id": "b1",
+                "title": "Espresso machines reviewed",
+                "link": "https://b.test/machines",
+            }
+        )
+        reader.add_entry(
+            {
+                "feed_url": FEED_B,
+                "id": "b2",
+                "title": "100% pure",
+                "link": "https://b.test/a_b",
+            }
+        )
     try:
         yield
     finally:
@@ -113,9 +131,14 @@ def test_like_wildcards_in_user_input_are_literals(configured, term):
 def test_an_underscore_does_not_act_as_a_single_char_wildcard(configured):
     """The companion to the above: "a_b" must not match "axb"."""
     with main.get_reader() as reader:
-        reader.add_entry({
-            "feed_url": FEED_B, "id": "b3", "title": "decoy", "link": "https://b.test/axb",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED_B,
+                "id": "b3",
+                "title": "decoy",
+                "link": "https://b.test/axb",
+            }
+        )
     assert set(_search(["a_b"])) == {(FEED_B, "b2")}
 
 

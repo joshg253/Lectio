@@ -18,6 +18,7 @@ Import merges data non-destructively:
   starred   — inserts into saved_entries if entry exists in reader
   history   — appends rows (INSERT OR IGNORE on feed_url+entry_id)
 """
+
 from __future__ import annotations
 
 import io
@@ -32,19 +33,23 @@ LOGGER = logging.getLogger(__name__)
 
 TAKEOUT_VERSION = 1
 
-_SETTINGS_SKIP_EXPORT = frozenset({
-    "instapaper_username",
-    "instapaper_password",
-})
+_SETTINGS_SKIP_EXPORT = frozenset(
+    {
+        "instapaper_username",
+        "instapaper_password",
+    }
+)
 
-_SETTINGS_SKIP_IMPORT = frozenset({
-    "instapaper_username",
-    "instapaper_password",
-    "problematic_feeds_last_viewed_at",
-    "youtube_sync_last_at",
-    "youtube_sync_last_result",
-    "maintenance_last_ran_at",
-})
+_SETTINGS_SKIP_IMPORT = frozenset(
+    {
+        "instapaper_username",
+        "instapaper_password",
+        "problematic_feeds_last_viewed_at",
+        "youtube_sync_last_at",
+        "youtube_sync_last_result",
+        "maintenance_last_ran_at",
+    }
+)
 
 _TAG_PREFIX = "lectio.manual_tag."
 
@@ -52,6 +57,7 @@ _TAG_PREFIX = "lectio.manual_tag."
 # ---------------------------------------------------------------------------
 # Export
 # ---------------------------------------------------------------------------
+
 
 def build_takeout_zip(
     meta_conn: sqlite3.Connection,
@@ -62,11 +68,17 @@ def build_takeout_zip(
     """Build and return the raw bytes of the takeout ZIP."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("manifest.json", json.dumps({
-            "takeout_version": TAKEOUT_VERSION,
-            "export_date": datetime.now(timezone.utc).isoformat(),
-            "app_version": app_version,
-        }, indent=2))
+        zf.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "takeout_version": TAKEOUT_VERSION,
+                    "export_date": datetime.now(timezone.utc).isoformat(),
+                    "app_version": app_version,
+                },
+                indent=2,
+            ),
+        )
 
         zf.writestr("opml.xml", opml_text)
         zf.writestr("rules.json", json.dumps(_export_rules(meta_conn), indent=2))
@@ -103,11 +115,7 @@ def _export_contacts(conn: sqlite3.Connection) -> list[dict]:
 
 def _export_settings(conn: sqlite3.Connection) -> dict:
     rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
-    return {
-        r["key"]: r["value"]
-        for r in rows
-        if r["key"] not in _SETTINGS_SKIP_EXPORT
-    }
+    return {r["key"]: r["value"] for r in rows if r["key"] not in _SETTINGS_SKIP_EXPORT}
 
 
 def _export_tagged(reader_conn: sqlite3.Connection) -> list[dict]:
@@ -119,7 +127,7 @@ def _export_tagged(reader_conn: sqlite3.Connection) -> list[dict]:
     entries: dict[tuple, dict] = {}
     for row in tag_rows:
         key = (str(row["feed"]), str(row["id"]))
-        tag_name = row["key"][len(_TAG_PREFIX):]
+        tag_name = row["key"][len(_TAG_PREFIX) :]
         if key not in entries:
             entries[key] = {"feed_url": key[0], "entry_id": key[1], "tags": []}
         entries[key]["tags"].append(tag_name)
@@ -137,9 +145,7 @@ def _export_tagged(reader_conn: sqlite3.Connection) -> list[dict]:
 
 
 def _export_starred(meta_conn: sqlite3.Connection, reader_conn: sqlite3.Connection) -> list[dict]:
-    rows = meta_conn.execute(
-        "SELECT feed_url, entry_id, saved_at FROM saved_entries ORDER BY saved_at DESC"
-    ).fetchall()
+    rows = meta_conn.execute("SELECT feed_url, entry_id, saved_at FROM saved_entries ORDER BY saved_at DESC").fetchall()
     if not rows:
         return []
 
@@ -156,10 +162,7 @@ def _export_starred(meta_conn: sqlite3.Connection, reader_conn: sqlite3.Connecti
 
 
 def _export_history(conn: sqlite3.Connection) -> list[dict]:
-    rows = conn.execute(
-        "SELECT feed_url, entry_id, title, link, feed_title, read_at"
-        " FROM read_history ORDER BY read_at DESC"
-    ).fetchall()
+    rows = conn.execute("SELECT feed_url, entry_id, title, link, feed_title, read_at FROM read_history ORDER BY read_at DESC").fetchall()
     return [dict(r) for r in rows]
 
 
@@ -173,8 +176,7 @@ def _bulk_fetch_entry_meta(
     placeholders = ",".join("(?,?)" for _ in entry_keys)
     flat = [v for pair in entry_keys for v in pair]
     rows = reader_conn.execute(
-        f"SELECT feed, id, title, link, published FROM entries"
-        f" WHERE (feed, id) IN ({placeholders})",
+        f"SELECT feed, id, title, link, published FROM entries WHERE (feed, id) IN ({placeholders})",
         flat,
     ).fetchall()
     result: dict[tuple[str, str], dict] = {}
@@ -191,6 +193,7 @@ def _bulk_fetch_entry_meta(
 # ---------------------------------------------------------------------------
 # Import
 # ---------------------------------------------------------------------------
+
 
 def import_takeout_zip(
     meta_conn: sqlite3.Connection,
@@ -233,9 +236,7 @@ def import_takeout_zip(
                 summary["tagged_entries"] = _import_tagged(reader_conn, _load("tagged_entries.json") or [])
 
             if "starred_entries.json" in names:
-                summary["starred_entries"] = _import_starred(
-                    meta_conn, reader_conn, _load("starred_entries.json") or []
-                )
+                summary["starred_entries"] = _import_starred(meta_conn, reader_conn, _load("starred_entries.json") or [])
         finally:
             reader_conn.close()
 
@@ -257,14 +258,22 @@ def _import_rules(conn: sqlite3.Connection, rules: list[dict]) -> int:
                 "  dedup_window_hours, exclude_scope_ids, sort_order)"
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
-                    r.get("scope", "global"), r.get("scope_id", ""),
-                    r.get("keyword", ""), r.get("type", "highlight"),
-                    r.get("color", "yellow"), int(r.get("is_regex", 0)),
-                    int(r.get("enabled", 1)), r.get("search_in", "title"),
-                    r.get("delivery", "immediately"), r.get("email_to", ""),
-                    r.get("batch_time", ""), int(r.get("batch_count", 0)),
-                    int(r.get("cc_me", 0)), int(r.get("dedup_window_hours", 24)),
-                    r.get("exclude_scope_ids", ""), int(r.get("sort_order", 0)),
+                    r.get("scope", "global"),
+                    r.get("scope_id", ""),
+                    r.get("keyword", ""),
+                    r.get("type", "highlight"),
+                    r.get("color", "yellow"),
+                    int(r.get("is_regex", 0)),
+                    int(r.get("enabled", 1)),
+                    r.get("search_in", "title"),
+                    r.get("delivery", "immediately"),
+                    r.get("email_to", ""),
+                    r.get("batch_time", ""),
+                    int(r.get("batch_count", 0)),
+                    int(r.get("cc_me", 0)),
+                    int(r.get("dedup_window_hours", 24)),
+                    r.get("exclude_scope_ids", ""),
+                    int(r.get("sort_order", 0)),
                 ),
             )
             inserted += conn.execute("SELECT changes()").fetchone()[0]
@@ -307,9 +316,7 @@ def _import_tagged(reader_conn: sqlite3.Connection, entries: list[dict]) -> int:
         tags = entry.get("tags") or []
         if not feed_url or not entry_id or not tags:
             continue
-        exists = reader_conn.execute(
-            "SELECT 1 FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id)
-        ).fetchone()
+        exists = reader_conn.execute("SELECT 1 FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id)).fetchone()
         if not exists:
             continue
         for tag in tags:
@@ -334,9 +341,7 @@ def _import_starred(
         entry_id = str(entry.get("entry_id") or "")
         if not feed_url or not entry_id:
             continue
-        exists = reader_conn.execute(
-            "SELECT 1 FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id)
-        ).fetchone()
+        exists = reader_conn.execute("SELECT 1 FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id)).fetchone()
         if not exists:
             continue
         saved_at = entry.get("saved_at") or now
@@ -356,13 +361,14 @@ def _import_history(conn: sqlite3.Connection, history: list[dict]) -> int:
         if not feed_url or not entry_id:
             continue
         conn.execute(
-            "INSERT OR IGNORE INTO read_history"
-            " (feed_url, entry_id, title, link, feed_title, read_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO read_history (feed_url, entry_id, title, link, feed_title, read_at) VALUES (?, ?, ?, ?, ?, ?)",
             (
-                feed_url, entry_id,
-                row.get("title", ""), row.get("link", ""),
-                row.get("feed_title", ""), row.get("read_at", ""),
+                feed_url,
+                entry_id,
+                row.get("title", ""),
+                row.get("link", ""),
+                row.get("feed_title", ""),
+                row.get("read_at", ""),
             ),
         )
         inserted += conn.execute("SELECT changes()").fetchone()[0]

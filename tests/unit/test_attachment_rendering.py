@@ -3,6 +3,7 @@
 A saved post whose "download the tab" link still points at a dead publisher has
 kept the wrong half, so anything archived is served from the local copy.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -31,8 +32,7 @@ TAB = "https://assets-wp.guitar-pro.eu/x/song.gp"
 
 
 def test_an_archived_enclosure_is_served_locally():
-    html = main._render_entry_attachments(_Entry([_Enc(EPUB, "application/epub+zip")]),
-                                          None, {EPUB: "HASH1"})
+    html = main._render_entry_attachments(_Entry([_Enc(EPUB, "application/epub+zip")]), None, {EPUB: "HASH1"})
     assert "/starred-asset/HASH1" in html
     # The remote URL is still present in data-source-url (an internal id the
     # Attachments panel's JS uses to identify this row for delete/save
@@ -42,8 +42,7 @@ def test_an_archived_enclosure_is_served_locally():
 
 
 def test_an_unarchived_enclosure_still_links_to_the_publisher():
-    html = main._render_entry_attachments(_Entry([_Enc(EPUB, "application/epub+zip")]),
-                                          None, {})
+    html = main._render_entry_attachments(_Entry([_Enc(EPUB, "application/epub+zip")]), None, {})
     assert EPUB in html
     assert "/starred-asset/" not in html
 
@@ -51,8 +50,7 @@ def test_an_unarchived_enclosure_still_links_to_the_publisher():
 def test_captured_body_files_join_the_same_list(monkeypatch):
     """From the reader's side these are the same thing — "files that came with
     this post" — and the difference is only how Lectio found them."""
-    monkeypatch.setattr(main.starred_archive_service, "get_entry_file_assets",
-                        lambda f, e: {TAB: "HASH2"})
+    monkeypatch.setattr(main.starred_archive_service, "get_entry_file_assets", lambda f, e: {TAB: "HASH2"})
 
     html = main._render_entry_attachments(_Entry([]), None, {TAB: "HASH2"})
 
@@ -66,20 +64,22 @@ def test_images_and_audio_are_not_listed_as_attachments(monkeypatch):
     two of them surfaced as "webp attachments"."""
     # get_entry_file_assets is what applies the content-type filter, so an
     # image never reaches the renderer at all.
-    monkeypatch.setattr(main.starred_archive_service, "get_entry_file_assets",
-                        lambda f, e: {})
+    monkeypatch.setattr(main.starred_archive_service, "get_entry_file_assets", lambda f, e: {})
 
-    html = main._render_entry_attachments(_Entry([]), None, {
-        "https://x.test/photo.jpg": "H1",
-        "https://x.test/show.mp3": "H2",
-    })
+    html = main._render_entry_attachments(
+        _Entry([]),
+        None,
+        {
+            "https://x.test/photo.jpg": "H1",
+            "https://x.test/show.mp3": "H2",
+        },
+    )
 
     assert html == ""
 
 
 def test_an_enclosure_is_not_listed_twice():
-    html = main._render_entry_attachments(_Entry([_Enc(EPUB, "application/epub+zip")]),
-                                          None, {EPUB: "HASH1"})
+    html = main._render_entry_attachments(_Entry([_Enc(EPUB, "application/epub+zip")]), None, {EPUB: "HASH1"})
     assert html.count("<li ") == 1
 
 
@@ -178,9 +178,11 @@ def test_a_share_button_is_not_an_image_link():
     pattern anchored on the whole href matched it — and 1.1MB of HTML was
     fetched and stored as an asset. The URL PATH is what decides."""
     svc = StarredArchiveService.__new__(StarredArchiveService)
-    html = ('<a href="https://pinterest.com/pin/create/button/'
-            '?url=https%3A%2F%2Fx.test%2Fp&media=https%3A%2F%2Fx.test%2Fa.jpg">pin</a>'
-            '<a href="https://x.test/real.jpg">photo</a>')
+    html = (
+        '<a href="https://pinterest.com/pin/create/button/'
+        '?url=https%3A%2F%2Fx.test%2Fp&media=https%3A%2F%2Fx.test%2Fa.jpg">pin</a>'
+        '<a href="https://x.test/real.jpg">photo</a>'
+    )
 
     got = svc._extract_image_urls(html, "https://x.test/")
 
@@ -201,20 +203,21 @@ def test_an_image_link_with_a_query_still_counts():
 # unopenable and unidentifiable.
 
 
-@pytest.mark.parametrize("url,expected", [
-    ("https://assets-wp.guitar-pro.eu/uploads/2024/12/Melody-Danny_Boy.gp",
-     "Melody-Danny_Boy.gp"),
-    ("https://x.test/a%20b/My%20Tab.gp5?v=2", "My Tab.gp5"),   # decoded, query dropped
-    ('https://x.test/na:me*.pdf', "na_me_.pdf"),               # sanitized
-    ("https://x.test/no-basename/", "attachment"),             # nothing to use
-])
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://assets-wp.guitar-pro.eu/uploads/2024/12/Melody-Danny_Boy.gp", "Melody-Danny_Boy.gp"),
+        ("https://x.test/a%20b/My%20Tab.gp5?v=2", "My Tab.gp5"),  # decoded, query dropped
+        ("https://x.test/na:me*.pdf", "na_me_.pdf"),  # sanitized
+        ("https://x.test/no-basename/", "attachment"),  # nothing to use
+    ],
+)
 def test_download_filename_is_derived_from_the_source_url(url, expected):
     assert main.attachment_filename_for_url(url) == expected
 
 
 def test_the_attachment_link_carries_the_filename():
-    html = main._render_entry_attachments(
-        _Entry([_Enc(EPUB, "application/epub+zip")]), None, {EPUB: "HASH1"})
+    html = main._render_entry_attachments(_Entry([_Enc(EPUB, "application/epub+zip")]), None, {EPUB: "HASH1"})
     assert 'download="book.epub"' in html
 
 
@@ -244,26 +247,30 @@ def test_xhtml_enclosure_is_not_an_attachment(monkeypatch):
     a label taken from a URL with no extension to give it a better one."""
     monkeypatch.setattr(main.starred_archive_service, "get_entry_file_assets", lambda *a: {})
     out = main._render_entry_attachments(
-        _Entry([_Enc(EPUB, "application/epub+zip", 610947),
-                _Enc(SINGLE_PAGE, "application/xhtml+xml", 389890)]),
-        None, asset_map={})
+        _Entry([_Enc(EPUB, "application/epub+zip", 610947), _Enc(SINGLE_PAGE, "application/xhtml+xml", 389890)]), None, asset_map={}
+    )
     assert "book.epub" in out
     assert "single-page" not in out
 
 
 def test_untyped_html_enclosure_is_not_an_attachment(monkeypatch):
     monkeypatch.setattr(main.starred_archive_service, "get_entry_file_assets", lambda *a: {})
-    out = main._render_entry_attachments(
-        _Entry([_Enc("https://x.test/read.html", "", 4242)]), None, asset_map={})
+    out = main._render_entry_attachments(_Entry([_Enc("https://x.test/read.html", "", 4242)]), None, asset_map={})
     assert out == ""
 
 
 def test_real_files_are_unaffected(monkeypatch):
     monkeypatch.setattr(main.starred_archive_service, "get_entry_file_assets", lambda *a: {})
     out = main._render_entry_attachments(
-        _Entry([_Enc(EPUB, "application/epub+zip", 1),
+        _Entry(
+            [
+                _Enc(EPUB, "application/epub+zip", 1),
                 _Enc("https://x.test/doc.pdf", "application/pdf", 2),
-                _Enc("https://x.test/tab.gp5", "", 3)]),
-        None, asset_map={})
+                _Enc("https://x.test/tab.gp5", "", 3),
+            ]
+        ),
+        None,
+        asset_map={},
+    )
     for keep in ("book.epub", "doc.pdf", "tab.gp5"):
         assert keep in out, keep

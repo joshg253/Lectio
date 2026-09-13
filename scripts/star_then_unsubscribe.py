@@ -31,6 +31,7 @@ Usage:
 
 Defaults to a dry run; --apply stars, captures and unsubscribes.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -88,9 +89,7 @@ def run(apply: bool) -> None:
             newly += 1
         print(f"   starred {newly} entr{'y' if newly == 1 else 'ies'}")
 
-        captured = main.starred_archive_service.force_archive_pending_for_feed(
-            feed_url, max_seconds=CAPTURE_SECONDS
-        )
+        captured = main.starred_archive_service.force_archive_pending_for_feed(feed_url, max_seconds=CAPTURE_SECONDS)
         print(f"   captured {captured}")
 
         with main.get_meta_connection() as conn:

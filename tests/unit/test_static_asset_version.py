@@ -6,6 +6,7 @@ expect: offline-probe.js and js/cleanup.js are both served with
 version unchanged, so browsers — and the service worker, which caches /static by
 design — kept serving the previous file. A deployed fix ran as the old copy.
 """
+
 from __future__ import annotations
 
 import re
@@ -22,8 +23,7 @@ def _versioned_assets() -> set[str]:
     """Every static file a template serves with ?v=<version>."""
     found: set[str] = set()
     for tpl in TEMPLATES.glob("*.html"):
-        for m in re.finditer(r'(?:src|href)="/(static/[^"?]+)\?v=\{\{\s*static_asset_version',
-                             tpl.read_text()):
+        for m in re.finditer(r'(?:src|href)="/(static/[^"?]+)\?v=\{\{\s*static_asset_version', tpl.read_text()):
             path = m.group(1)
             # Skip runtime-interpolated hrefs (the theme switcher builds
             # static/themes/${window.__lectioTheme}.css in JS); the real files it
@@ -38,11 +38,7 @@ def test_every_versioned_asset_is_covered_by_the_hash():
     """The property that actually matters: if a template cache-busts a file, the
     buster has to notice that file changing."""
     # Must track main._static_asset_version's own suffix set.
-    covered = {
-        str(p.relative_to(ROOT))
-        for p in STATIC.rglob("*")
-        if p.is_file() and p.suffix in (".css", ".js", ".webmanifest")
-    }
+    covered = {str(p.relative_to(ROOT)) for p in STATIC.rglob("*") if p.is_file() and p.suffix in (".css", ".js", ".webmanifest")}
 
     missing = _versioned_assets() - covered
     assert not missing, f"served with ?v= but not hashed: {sorted(missing)}"
@@ -59,7 +55,7 @@ def test_the_version_moves_when_a_versioned_asset_changes():
         probe.write_bytes(original)
 
     assert before != after
-    assert main._static_asset_version() == before      # restored
+    assert main._static_asset_version() == before  # restored
 
 
 def test_the_version_is_stable_for_unchanged_files():

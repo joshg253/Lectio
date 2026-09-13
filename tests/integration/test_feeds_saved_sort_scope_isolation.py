@@ -13,6 +13,7 @@ persistence guard in the home route now refuses to write either half of the
 sort when the incoming sort_by belongs to the other scope, as defense in
 depth against a stale link/URL from before the template fix existed.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -38,12 +39,14 @@ def configured(tmp_path, monkeypatch):
     main.ensure_meta_schema()
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
-        reader.add_entry({
-            "feed_url": FEED,
-            "id": "e1",
-            "title": "post e1",
-            "link": "https://example.test/e1",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "e1",
+                "title": "post e1",
+                "link": "https://example.test/e1",
+            }
+        )
     with main.get_meta_connection() as conn:
         root_id = main.get_root_folder_id(conn)
         cur = conn.execute(
@@ -79,7 +82,7 @@ def test_feeds_tree_folder_link_carries_no_saved_scope_sort(configured):
     body = resp.text
     idx = body.find("feeds-all-item")
     assert idx != -1, "Feeds tree's All link not found in the page"
-    snippet = body[max(0, idx - 400):idx]
+    snippet = body[max(0, idx - 400) : idx]
     assert "sort_by=size" not in snippet
     assert "sort_dir=desc" not in snippet
 
@@ -91,7 +94,7 @@ def test_saved_tree_link_still_carries_its_own_sort(configured):
     body = resp.text
     idx = body.find("saved-all-item")
     assert idx != -1
-    snippet = body[max(0, idx - 400):idx]
+    snippet = body[max(0, idx - 400) : idx]
     assert "sort_by=size" in snippet
     assert "sort_dir=desc" in snippet
 

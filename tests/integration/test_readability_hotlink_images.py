@@ -4,6 +4,7 @@ handling as the entry pane: known hotlink hosts (e.g. fabiensanglard.net, whose
 get referrerpolicy=no-referrer. Without this, the source page's webp images break
 in reader view while its jpg loads.
 """
+
 from __future__ import annotations
 
 import httpx
@@ -29,8 +30,8 @@ _PAGE = (
 
 def _stub_page(monkeypatch):
     def _fetch(client, url, *a, **k):
-        return httpx.Response(200, request=httpx.Request("GET", url),
-                              headers={"content-type": "text/html"}, text=_PAGE)
+        return httpx.Response(200, request=httpx.Request("GET", url), headers={"content-type": "text/html"}, text=_PAGE)
+
     monkeypatch.setattr(url_guard, "safe_get", _fetch)
 
 

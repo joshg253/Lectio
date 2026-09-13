@@ -1,4 +1,5 @@
 """Integration tests for the bulk "Mark as read" context-menu action (/entries/read-batch)."""
+
 from __future__ import annotations
 
 import json
@@ -40,8 +41,7 @@ def _setup_entries() -> None:
     with main.get_reader() as reader:
         reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
         for i in (1, 2):
-            reader.add_entry({"feed_url": FEED, "id": f"e{i}", "title": f"P{i}",
-                              "link": f"https://example.test/{i}"})
+            reader.add_entry({"feed_url": FEED, "id": f"e{i}", "title": f"P{i}", "link": f"https://example.test/{i}"})
 
 
 def _is_read(feed_url: str, entry_id: str) -> bool:
@@ -74,8 +74,7 @@ def test_batch_read_skips_already_read(env):
 def test_batch_read_skips_unpremiered_youtube_video(env):
     with main.get_reader() as reader:
         reader.add_feed(YT_FEED, allow_invalid_url=True, exist_ok=True)
-        reader.add_entry({"feed_url": YT_FEED, "id": "v1", "title": "Premiere",
-                          "link": "https://www.youtube.com/watch?v=abcdefghijk"})
+        reader.add_entry({"feed_url": YT_FEED, "id": "v1", "title": "Premiere", "link": "https://www.youtube.com/watch?v=abcdefghijk"})
     main.youtube_duration_service._live_cache["abcdefghijk"] = ("upcoming", None)
     data = _batch([[YT_FEED, "v1"]])
     assert data["ok"] and data["marked"] == 0

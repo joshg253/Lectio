@@ -26,6 +26,7 @@ injected). Each op carries a structural path *and* a fingerprint:
 An op that matches neither is reported back as unmatched rather than guessed
 at — deleting the wrong node silently is the one outcome worth failing over.
 """
+
 from __future__ import annotations
 
 import json
@@ -75,7 +76,7 @@ def parse_ops(raw: str | list) -> list[dict]:
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             # `from None`: the route returns this message to the browser, and a
             # chained parser error carries stack detail with it (CodeQL:
             # information exposure through an exception). The same reasoning as
@@ -167,9 +168,7 @@ def _score(candidate: dict, target: dict) -> int:
     candidate_text = candidate.get("text") or ""
     if target_text and candidate_text == target_text:
         score += 4
-    elif target_text and candidate_text and (
-        candidate_text.startswith(target_text[:60]) or target_text.startswith(candidate_text[:60])
-    ):
+    elif target_text and candidate_text and (candidate_text.startswith(target_text[:60]) or target_text.startswith(candidate_text[:60])):
         score += 2
     elif target_text != candidate_text:
         return 0  # text is the strongest signal; a mismatch means a different node
@@ -251,10 +250,7 @@ def _resolve_by_text(root, target: dict):
             return False
         return candidate[:shortest] == text[:shortest]
 
-    matches = [
-        node for node in root.find_all(tag)
-        if _same_passage(_normalize_text(node.get_text(" ", strip=True)))
-    ]
+    matches = [node for node in root.find_all(tag) if _same_passage(_normalize_text(node.get_text(" ", strip=True)))]
     return matches[0] if len(matches) == 1 else None
 
 
@@ -282,12 +278,14 @@ def apply_ops(content_html: str, ops: list[dict]) -> tuple[str, int, list[dict]]
         if node is None:
             node = _resolve_by_text(root, target)
         if node is None:
-            unmatched.append({
-                "index": index,
-                "op": op["op"],
-                "tag": target.get("tag", ""),
-                "text": (target.get("text") or "")[:80],
-            })
+            unmatched.append(
+                {
+                    "index": index,
+                    "op": op["op"],
+                    "tag": target.get("tag", ""),
+                    "text": (target.get("text") or "")[:80],
+                }
+            )
             continue
         if op["op"] == OP_REMOVE:
             node.decompose()

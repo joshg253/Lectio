@@ -13,6 +13,7 @@ Reddit API rules:
   - Respect ``Retry-After`` header on 429 responses.
   - No more than 60 OAuth requests per minute per token.
 """
+
 from __future__ import annotations
 
 import base64
@@ -33,6 +34,7 @@ _TIMEOUT = 30
 # ---------------------------------------------------------------------------
 # OAuth helpers
 # ---------------------------------------------------------------------------
+
 
 def authorize_url(client_id: str, redirect_uri: str, state: str) -> str:
     """Build the Reddit consent-screen URL."""
@@ -67,19 +69,29 @@ def _post_token(client_id: str, client_secret: str, payload: dict, what: str) ->
 
 def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: str) -> dict:
     """Exchange an authorization code for access + refresh tokens."""
-    return _post_token(client_id, client_secret, {
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": redirect_uri,
-    }, "token exchange")
+    return _post_token(
+        client_id,
+        client_secret,
+        {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+        },
+        "token exchange",
+    )
 
 
 def refresh_access_token(client_id: str, client_secret: str, refresh_token: str) -> dict:
     """Refresh an expired access token."""
-    return _post_token(client_id, client_secret, {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-    }, "token refresh")
+    return _post_token(
+        client_id,
+        client_secret,
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        },
+        "token refresh",
+    )
 
 
 def _api_headers(access_token: str) -> dict:
@@ -98,6 +110,7 @@ def get_me(access_token: str) -> dict:
 # ---------------------------------------------------------------------------
 # Feed URL helpers
 # ---------------------------------------------------------------------------
+
 
 def is_reddit_feed_url(url: str) -> bool:
     """True if *url* is a Reddit feed URL (old. or www.).
@@ -127,9 +140,9 @@ def redditor_from_feed_url(url: str) -> str | None:
 # Feed fetching
 # ---------------------------------------------------------------------------
 
+
 def _posts_from_listing(data: dict) -> list[dict]:
-    return [child["data"] for child in data.get("data", {}).get("children", [])
-            if child.get("kind") == "t3"]
+    return [child["data"] for child in data.get("data", {}).get("children", []) if child.get("kind") == "t3"]
 
 
 def get_subreddit_new(access_token: str, subreddit: str, limit: int = 100) -> list[dict]:
@@ -178,20 +191,23 @@ def fetch_reddit_feed_entries(access_token: str, feed_url: str) -> list[dict]:
         # Link posts: show the external URL as the main link; self-posts link to the thread.
         is_self = post.get("is_self", False)
         link = permalink if is_self else url
-        entries.append({
-            "feed_url": feed_url,
-            "id": permalink,
-            "title": post.get("title", ""),
-            "link": link,
-            "published": published,
-            "summary": selftext_html,
-        })
+        entries.append(
+            {
+                "feed_url": feed_url,
+                "id": permalink,
+                "title": post.get("title", ""),
+                "link": link,
+                "published": published,
+                "summary": selftext_html,
+            }
+        )
     return entries
 
 
 # ---------------------------------------------------------------------------
 # Feed sync
 # ---------------------------------------------------------------------------
+
 
 def refresh_all_reddit_feeds(
     meta_conn,
@@ -233,9 +249,8 @@ def refresh_all_reddit_feeds(
                     pass  # EntryExistsError — already in DB
         except Exception as exc:
             import logging
-            logging.getLogger(__name__).warning(
-                "[reddit] failed to sync %s: %s", feed_url, exc
-            )
+
+            logging.getLogger(__name__).warning("[reddit] failed to sync %s: %s", feed_url, exc)
         meta_conn.execute(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
             (f"reddit_last_sync:{feed_url}", now_iso),
@@ -248,6 +263,7 @@ def refresh_all_reddit_feeds(
 # ---------------------------------------------------------------------------
 # Submission
 # ---------------------------------------------------------------------------
+
 
 def submit_link(access_token: str, subreddit: str, title: str, url: str) -> dict:
     """Submit a link post to *subreddit*. Returns the Reddit API response dict."""

@@ -3,6 +3,7 @@ paginated reader state, prev/next, Archive/Delete controls, and the article
 content-resolution chain. Follows the save-article test pattern: mount the route
 on a bare app and monkeypatch the service layer so orchestration is exercised
 without a DB."""
+
 from __future__ import annotations
 
 from fastapi import FastAPI
@@ -13,8 +14,12 @@ import main
 
 def _rec(n: int, *, read: bool = False) -> dict:
     return {
-        "feed_url": f"feed{n}", "id": f"e{n}", "title": f"Title {n}",
-        "link": f"https://example.com/{n}", "read": read, "feed_title": "Feed",
+        "feed_url": f"feed{n}",
+        "id": f"e{n}",
+        "title": f"Title {n}",
+        "link": f"https://example.com/{n}",
+        "read": read,
+        "feed_title": "Feed",
     }
 
 
@@ -24,8 +29,7 @@ def _app():
     return app
 
 
-def _patch_read(monkeypatch, *, backlog, archived_keys=frozenset(), article="<p>BODY</p>",
-                starred=True, manual_tags=(), all_tag_names=()):
+def _patch_read(monkeypatch, *, backlog, archived_keys=frozenset(), article="<p>BODY</p>", starred=True, manual_tags=(), all_tag_names=()):
     marks: list[tuple] = []
     monkeypatch.setattr(main, "resolve_reader_backlog", lambda **k: list(backlog))
     monkeypatch.setattr(main, "resolve_reader_article_html", lambda f, e, link: article)
@@ -42,6 +46,7 @@ def _patch_read(monkeypatch, *, backlog, archived_keys=frozenset(), article="<p>
 
 # --- READ state (an article is selected) -------------------------------------
 
+
 def test_read_state_prev_next_and_controls(monkeypatch):
     marks = _patch_read(monkeypatch, backlog=[_rec(1), _rec(2), _rec(3)])
     with TestClient(_app()) as client:
@@ -49,12 +54,11 @@ def test_read_state_prev_next_and_controls(monkeypatch):
     body = r.text
     assert r.status_code == 200
     assert "reader-columns" in body and "Title 2" in body and "<p>BODY</p>" in body
-    assert "entry_id=e1" in body and "entry_id=e3" in body       # prev / next (nav object)
+    assert "entry_id=e1" in body and "entry_id=e3" in body  # prev / next (nav object)
     assert "__READER_NAV__" in body
     assert "name='csrf-token' content='tok'" in body
     assert "id='reader-archive-btn'" in body and "id='reader-delete-btn'" in body
-    assert marks == []                    # rendering alone never marks read
-
+    assert marks == []  # rendering alone never marks read
 
 
 def test_archive_button_shown_for_a_tag_kept_item(monkeypatch):
@@ -70,8 +74,8 @@ def test_archive_button_shown_for_a_tag_kept_item(monkeypatch):
     with TestClient(_app()) as client:
         body = client.get("/read", params={"feed_url": "feed2", "entry_id": "e2"}).text
     assert "id='reader-archive-btn'" in body
-    assert "id='reader-delete-btn'" in body         # Delete still applies
-    assert "data-tags='keepme'" in body             # confirm can name the tag
+    assert "id='reader-delete-btn'" in body  # Delete still applies
+    assert "data-tags='keepme'" in body  # confirm can name the tag
 
 
 def test_read_archive_button_reflects_state(monkeypatch):
@@ -105,14 +109,14 @@ def test_read_already_read_not_remarked(monkeypatch):
 def test_read_entry_not_in_list_renders_standalone(monkeypatch):
     _patch_read(monkeypatch, backlog=[_rec(2), _rec(3)])
     monkeypatch.setattr(
-        main, "get_entry_detail",
-        lambda f, e: {"feed_url": "feed1", "id": "e1", "title": "Gone",
-                      "link": "https://example.com/1", "read": True},
+        main,
+        "get_entry_detail",
+        lambda f, e: {"feed_url": "feed1", "id": "e1", "title": "Gone", "link": "https://example.com/1", "read": True},
     )
     with TestClient(_app()) as client:
         r = client.get("/read", params={"feed_url": "feed1", "entry_id": "e1"})
     assert r.status_code == 200 and "Gone" in r.text
-    assert '"prev": ""' in r.text and "entry_id=e2" in r.text     # no prev; next = list head
+    assert '"prev": ""' in r.text and "entry_id=e2" in r.text  # no prev; next = list head
 
 
 # --- BROWSE state (no article selected) --------------------------------------
@@ -125,7 +129,10 @@ _CANNED_CTX = {
     "tag_nodes": [{"label": "#toread", "glyph": "", "href": "/read?tag=toread", "count": 2, "active": False}],
     "archive_node": {"label": "Archive", "glyph": "▤", "href": "/read?archived=1", "count": 1, "active": False},
     "list_items": [{"title": "Item One", "subtitle": "example.com", "read": False, "href": "/read?feed_url=f&entry_id=e"}],
-    "selected_label": "All", "search_query": "", "tags_open": False, "static_asset_version": "t",
+    "selected_label": "All",
+    "search_query": "",
+    "tags_open": False,
+    "static_asset_version": "t",
 }
 
 
@@ -136,17 +143,20 @@ def test_bare_read_renders_two_pane_browse(monkeypatch):
         r = client.get("/read")
     body = r.text
     assert r.status_code == 200
-    assert "rm-layout" in body and "reader-columns" not in body   # browse, not reader
+    assert "rm-layout" in body and "reader-columns" not in body  # browse, not reader
     assert "Item One" in body and "#toread" in body and "Archive" in body
 
 
 def test_all_node_empty_glyph_renders_spacer_not_arrow(monkeypatch):
     """'All' is plain navigation — no expand arrow — but it still gets the
     fixed-width glyph spacer so its label aligns with the folder rows."""
-    ctx = dict(_CANNED_CTX, folder_nodes=[
-        {"label": "All", "glyph": "", "href": "/read?scope=feeds", "count": 3, "active": True},
-        {"label": "Tech", "glyph": "▸", "href": "/read?folder_id=5", "count": 2, "active": False},
-    ])
+    ctx = dict(
+        _CANNED_CTX,
+        folder_nodes=[
+            {"label": "All", "glyph": "", "href": "/read?scope=feeds", "count": 3, "active": True},
+            {"label": "Tech", "glyph": "▸", "href": "/read?folder_id=5", "count": 2, "active": False},
+        ],
+    )
     monkeypatch.setattr(main, "resolve_reader_backlog", lambda **k: [])
     monkeypatch.setattr(main, "_build_read_mode_context", lambda *a, **k: dict(ctx))
     with TestClient(_app()) as client:
@@ -177,6 +187,7 @@ def test_search_reaches_all_saved(monkeypatch):
 
 # --- URL scope helpers -------------------------------------------------------
 
+
 def test_read_href_helpers_encode_scope():
     assert main._read_browse_href(None, None, False, None) == "/read"
     assert main._read_browse_href(5, None, True, None) == "/read?folder_id=5&archived=1"
@@ -188,10 +199,10 @@ def test_read_href_helpers_encode_scope():
 
 # --- resolve_reader_article_html: archived -> live -> stored -----------------
 
+
 def test_article_html_prefers_archived(monkeypatch):
     monkeypatch.setattr(main, "_resolve_archived_readability_html", lambda f, e: "<p>ARCHIVED</p>")
-    monkeypatch.setattr(main, "fetch_readability_article",
-                        lambda url: (_ for _ in ()).throw(AssertionError("should not fetch")))
+    monkeypatch.setattr(main, "fetch_readability_article", lambda url: (_ for _ in ()).throw(AssertionError("should not fetch")))
     assert "ARCHIVED" in main.resolve_reader_article_html("feed1", "e1", "https://example.com/1")
 
 
@@ -200,8 +211,7 @@ def test_article_html_falls_back_live_then_stored(monkeypatch):
     monkeypatch.setattr(main, "fetch_readability_article", lambda url: ("T", "<p>LIVE</p>"))
     assert "LIVE" in main.resolve_reader_article_html("feed1", "e1", "https://example.com/1")
 
-    monkeypatch.setattr(main, "fetch_readability_article",
-                        lambda url: (_ for _ in ()).throw(RuntimeError("down")))
+    monkeypatch.setattr(main, "fetch_readability_article", lambda url: (_ for _ in ()).throw(RuntimeError("down")))
     monkeypatch.setattr(main, "get_entry_detail", lambda f, e: {"content_html": "<p>STORED</p>"})
     assert "STORED" in main.resolve_reader_article_html("feed1", "e1", "https://example.com/1")
 
@@ -210,10 +220,16 @@ def test_article_html_falls_back_live_then_stored(monkeypatch):
 
 _FEEDS_CTX = {
     "folder_nodes": [{"label": "All Feeds", "glyph": "☰", "href": "/read?scope=feeds", "count": 5, "active": True}],
-    "tag_nodes": [], "archive_node": None,
+    "tag_nodes": [],
+    "archive_node": None,
     "list_items": [{"title": "Item", "subtitle": "Feed", "read": False, "href": "/read?scope=feeds&feed_url=f&entry_id=e"}],
-    "selected_label": "All Feeds", "node_selected": True, "search_query": "",
-    "tags_open": False, "scope": "feeds", "exit_href": "/?full=1", "static_asset_version": "t",
+    "selected_label": "All Feeds",
+    "node_selected": True,
+    "search_query": "",
+    "tags_open": False,
+    "scope": "feeds",
+    "exit_href": "/?full=1",
+    "static_asset_version": "t",
 }
 
 
@@ -239,6 +255,7 @@ def test_feeds_reader_hides_saved_actions(monkeypatch):
 
 # --- Supernote e-ink auto-detect (home redirect) ------------------------------
 
+
 def _home_app():
     app = FastAPI()
     app.add_api_route("/", main.home, methods=["GET"])
@@ -256,6 +273,7 @@ def test_supernote_redirects_to_feeds_read_mode():
 
 def test_supernote_full_opt_out_sets_cookie(monkeypatch):
     from fastapi.responses import PlainTextResponse
+
     monkeypatch.setattr(main, "_home_inner", lambda **k: PlainTextResponse("app"))
     with TestClient(_home_app()) as client:
         r = client.get("/", params={"full": "1"}, headers={"User-Agent": _SUPERNOTE_UA}, follow_redirects=False)
@@ -264,6 +282,7 @@ def test_supernote_full_opt_out_sets_cookie(monkeypatch):
 
 def test_non_supernote_not_redirected(monkeypatch):
     from fastapi.responses import PlainTextResponse
+
     monkeypatch.setattr(main, "_home_inner", lambda **k: PlainTextResponse("app"))
     with TestClient(_home_app()) as client:
         r = client.get("/", headers={"User-Agent": "Mozilla/5.0 Chrome/120"}, follow_redirects=False)
@@ -277,8 +296,10 @@ def test_tag_panel_ships_the_whole_vocabulary(monkeypatch):
     them as toggles; only the "+ New" field needs a keyboard.
     """
     _patch_read(
-        monkeypatch, backlog=[_rec(2)],
-        manual_tags=("humour",), all_tag_names=("comics", "humour", "linux"),
+        monkeypatch,
+        backlog=[_rec(2)],
+        manual_tags=("humour",),
+        all_tag_names=("comics", "humour", "linux"),
     )
     with TestClient(_app()) as client:
         body = client.get("/read", params={"feed_url": "feed2", "entry_id": "e2"}).text
@@ -298,8 +319,7 @@ def test_tag_panel_absent_in_the_feeds_scope(monkeypatch):
     """Tagging is a Saved-scope action, alongside Archive/Delete."""
     _patch_read(monkeypatch, backlog=[_rec(2)], manual_tags=(), all_tag_names=("x",))
     with TestClient(_app()) as client:
-        body = client.get("/read", params={"feed_url": "feed2", "entry_id": "e2",
-                                           "scope": "feeds"}).text
+        body = client.get("/read", params={"feed_url": "feed2", "entry_id": "e2", "scope": "feeds"}).text
     assert "id='reader-tag-btn'" not in body
     assert "id='reader-tag-panel'" not in body
 
@@ -314,10 +334,8 @@ def test_a_failed_extraction_does_not_beat_the_feed_content(monkeypatch):
     unconditionally, the article read as empty online and offline alike — 520 of
     6,000 archived copies on the live library are in this state (8.7%).
     """
-    monkeypatch.setattr(main, "_resolve_archived_readability_html",
-                        lambda f, e: '<div><h2>Contact:</h2><p>a(at)b.com</p></div>')
-    monkeypatch.setattr(main, "get_entry_detail",
-                        lambda f, e: {"content_html": "<p>" + ("real prose " * 80) + "</p>"})
+    monkeypatch.setattr(main, "_resolve_archived_readability_html", lambda f, e: "<div><h2>Contact:</h2><p>a(at)b.com</p></div>")
+    monkeypatch.setattr(main, "get_entry_detail", lambda f, e: {"content_html": "<p>" + ("real prose " * 80) + "</p>"})
     monkeypatch.setattr(main, "_prepend_reader_lead_image", lambda f, e, h: h)
 
     out = main.resolve_reader_article_html("feed", "entry", "")
@@ -332,7 +350,7 @@ def test_a_picture_post_archive_is_plausible(monkeypatch):
     failed extraction."""
     comic = '<p>(Click for full size)</p><img src="a.jpg"><img src="b.jpg">'
     assert main._archived_copy_is_plausible(comic)
-    assert not main._archived_copy_is_plausible('<div><h2>Contact:</h2><p>a(at)b.com</p></div>')
+    assert not main._archived_copy_is_plausible("<div><h2>Contact:</h2><p>a(at)b.com</p></div>")
 
 
 def test_images_outweigh_text_when_choosing_a_copy():
@@ -340,7 +358,7 @@ def test_images_outweigh_text_when_choosing_a_copy():
     widget beating a picture post — and on that comparison a text-length test came
     down to 57 characters against 47, which is not a margin to trust."""
     widget = "<div><h2>Contact:</h2><p>illogicalcontraption(at)yahoo(dot)com</p></div>"
-    pictures = '<p>(Click individual images for full size)</p>' + ('<img src="x.jpg">' * 16)
+    pictures = "<p>(Click individual images for full size)</p>" + ('<img src="x.jpg">' * 16)
     assert main._reader_copy_is_richer(pictures, widget)
     assert not main._reader_copy_is_richer(widget, pictures)
 
@@ -348,8 +366,7 @@ def test_images_outweigh_text_when_choosing_a_copy():
 def test_a_thin_archive_is_still_used_when_nothing_is_richer(monkeypatch):
     """A genuinely short article must still render: the thin copy is the fallback,
     not a reason to show an error."""
-    monkeypatch.setattr(main, "_resolve_archived_readability_html",
-                        lambda f, e: "<p>A very short but real post.</p>")
+    monkeypatch.setattr(main, "_resolve_archived_readability_html", lambda f, e: "<p>A very short but real post.</p>")
     monkeypatch.setattr(main, "get_entry_detail", lambda f, e: {"content_html": ""})
     monkeypatch.setattr(main, "_prepend_reader_lead_image", lambda f, e, h: h)
 
@@ -385,10 +402,15 @@ def test_reader_head_title_is_plain_escaped_text():
 
     resp = main.build_reader_page(
         title="A <em>bold</em> claim about ReadOnlySpan<T>",
-        article_html="<p>body</p>", source_link="https://example.test/a",
-        prev_href="", next_href="", back_href="/read",
-        feed_url="https://example.test/feed", entry_id="e1",
-        is_archived=False, csrf_token="tok",
+        article_html="<p>body</p>",
+        source_link="https://example.test/a",
+        prev_href="",
+        next_href="",
+        back_href="/read",
+        feed_url="https://example.test/feed",
+        entry_id="e1",
+        is_archived=False,
+        csrf_token="tok",
     )
     body = bytes(resp.body).decode()
     title_match = _re.search(r"<title>(.*?)</title>", body, _re.S)

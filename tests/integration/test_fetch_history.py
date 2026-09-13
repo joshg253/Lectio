@@ -2,6 +2,7 @@
 feed_fetch_history (ok / error, with new-entry count, HTTP status, duration),
 get_feed_fetch_history reads them back newest-first, and daily maintenance keeps
 the table bounded (per-feed cap + age)."""
+
 from __future__ import annotations
 
 import time
@@ -94,8 +95,7 @@ def test_get_history_is_newest_first_and_limited(configured):
     conn = main.get_meta_connection()
     for i in range(5):
         conn.execute(
-            "INSERT INTO feed_fetch_history (feed_url, fetched_at, status, new_entries)"
-            " VALUES (?, ?, 'ok', ?)",
+            "INSERT INTO feed_fetch_history (feed_url, fetched_at, status, new_entries) VALUES (?, ?, 'ok', ?)",
             (FEED_OK, 1000 + i, i),
         )
     conn.commit()

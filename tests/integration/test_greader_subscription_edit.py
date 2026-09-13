@@ -1,5 +1,6 @@
 """GReader subscription/edit must actually persist folder moves + renames —
 previously a no-op stub, so Capy's "move feed to folder" silently reverted."""
+
 from __future__ import annotations
 
 import pytest
@@ -77,9 +78,10 @@ def test_rename_sets_user_title(configured):
 
 def test_unknown_feed_ignored(configured):
     main._greader_edit_subscriptions(
-        ["feed/http://nope.example/x"], ["user/-/label/Books & Education"], [], None,
+        ["feed/http://nope.example/x"],
+        ["user/-/label/Books & Education"],
+        [],
+        None,
     )
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM folder_feeds WHERE feed_url='http://nope.example/x'"
-        ).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM folder_feeds WHERE feed_url='http://nope.example/x'").fetchone()[0] == 0

@@ -1,4 +1,5 @@
 """Per-feed fill zoom: upsert clamping and clearing."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -21,9 +22,7 @@ def _make_conn() -> sqlite3.Connection:
 
 
 def _stored(conn: sqlite3.Connection, feed_url: str):
-    row = conn.execute(
-        "SELECT fill_zoom FROM feed_display_prefs WHERE feed_url = ?", (feed_url,)
-    ).fetchone()
+    row = conn.execute("SELECT fill_zoom FROM feed_display_prefs WHERE feed_url = ?", (feed_url,)).fetchone()
     return row["fill_zoom"] if row else None
 
 

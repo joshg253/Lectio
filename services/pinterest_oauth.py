@@ -10,6 +10,7 @@ Scopes: ``boards:read`` (list the user's boards for the picker) and
 ``pins:write`` (create the pin). The token endpoint authenticates the *client*
 with HTTP Basic (base64 of client_id:client_secret); the body is form-encoded.
 """
+
 from __future__ import annotations
 
 import base64
@@ -59,21 +60,31 @@ def _post_token(client_id: str, client_secret: str, payload: dict, what: str) ->
 
 def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: str) -> dict:
     """Exchange an authorization code for access + refresh tokens."""
-    return _post_token(client_id, client_secret, {
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": redirect_uri,
-    }, "token exchange")
+    return _post_token(
+        client_id,
+        client_secret,
+        {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+        },
+        "token exchange",
+    )
 
 
 def refresh_access_token(client_id: str, client_secret: str, refresh_token: str) -> dict:
     """Refresh an expired access token. Pinterest may omit ``refresh_token`` from
     the response, so the caller keeps the existing one."""
-    return _post_token(client_id, client_secret, {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "scope": _SCOPE,
-    }, "token refresh")
+    return _post_token(
+        client_id,
+        client_secret,
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "scope": _SCOPE,
+        },
+        "token refresh",
+    )
 
 
 def _auth_headers(access_token: str) -> dict:
@@ -103,8 +114,7 @@ def list_boards(access_token: str) -> list[dict]:
     return out
 
 
-def create_pin(access_token: str, board_id: str, image_url: str, link: str,
-               title: str = "", description: str = "") -> dict:
+def create_pin(access_token: str, board_id: str, image_url: str, link: str, title: str = "", description: str = "") -> dict:
     """Create a pin on ``board_id`` from ``image_url`` linking back to ``link``.
 
     Returns the created pin object. Pinterest requires an image — callers must

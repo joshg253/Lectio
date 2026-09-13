@@ -10,6 +10,7 @@ main.fetch_readability_article/_refresh_captured_article_for_current_user
 wiring end to end, including that a PageFetchError's status_code/.response
 duck-types the same way an httpx.HTTPStatusError always did.
 """
+
 from __future__ import annotations
 
 import httpx
@@ -101,7 +102,11 @@ def test_404_is_reported_dead_through_the_real_ladder(configured, monkeypatch):
 
     with tenancy.user_context(ADMIN_ID), main.get_meta_connection() as conn:
         result = saved_articles.refresh_captured_article(
-            main.get_reader(), conn, FEED, ENTRY, extract=main.fetch_readability_article,
+            main.get_reader(),
+            conn,
+            FEED,
+            ENTRY,
+            extract=main.fetch_readability_article,
         )
     assert result["ok"] is False
     assert result["dead"] is True
@@ -115,7 +120,11 @@ def test_403_is_reported_blocked_not_dead_through_the_real_ladder(configured, mo
 
     with tenancy.user_context(ADMIN_ID), main.get_meta_connection() as conn:
         result = saved_articles.refresh_captured_article(
-            main.get_reader(), conn, FEED, ENTRY, extract=main.fetch_readability_article,
+            main.get_reader(),
+            conn,
+            FEED,
+            ENTRY,
+            extract=main.fetch_readability_article,
         )
     assert result["ok"] is False
     assert result.get("dead") is not True

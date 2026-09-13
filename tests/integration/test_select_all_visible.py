@@ -3,6 +3,7 @@ server-side — same _resolve_view_posts/_view_filter_predicate machinery as
 "Move all shown to feed…" (see test_move_visible_to_feed.py) — so it covers
 the whole view rather than just the page/chunk the browser has loaded, and
 returns the entries themselves rather than moving or counting them."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -59,10 +60,15 @@ def _add_entries(feed_url, specs):
     """specs: iterable of (entry_id, title, link)."""
     with main.get_reader() as reader:
         for i, (entry_id, title, link) in enumerate(specs):
-            reader.add_entry({
-                "feed_url": feed_url, "id": entry_id, "title": title, "link": link,
-                "published": datetime(2021, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=i),
-            })
+            reader.add_entry(
+                {
+                    "feed_url": feed_url,
+                    "id": entry_id,
+                    "title": title,
+                    "link": link,
+                    "published": datetime(2021, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=i),
+                }
+            )
 
 
 def _post(client, **overrides):
@@ -75,9 +81,7 @@ def test_selects_the_whole_view_not_just_a_page(tenant):
     """The same regression move-visible-to-feed exists for: 300 posts, of
     which a browser holds 250. Select All must return all 300."""
     _add_feed(FEED)
-    _add_entries(FEED, [
-        (f"{FEED}post-{i:03d}", f"Post {i}", f"{FEED}post-{i:03d}") for i in range(300)
-    ])
+    _add_entries(FEED, [(f"{FEED}post-{i:03d}", f"Post {i}", f"{FEED}post-{i:03d}") for i in range(300)])
 
     with TestClient(_app()) as client:
         data = _post(client)
@@ -90,11 +94,14 @@ def test_selects_the_whole_view_not_just_a_page(tenant):
 
 def test_filter_term_narrows_to_matching_titles(tenant):
     _add_feed(FEED)
-    _add_entries(FEED, [
-        ("keep-1", "Guitar lesson one", "https://blog.example.com/a"),
-        ("keep-2", "Another guitar lesson", "https://blog.example.com/b"),
-        ("skip-1", "Bass workshop", "https://blog.example.com/c"),
-    ])
+    _add_entries(
+        FEED,
+        [
+            ("keep-1", "Guitar lesson one", "https://blog.example.com/a"),
+            ("keep-2", "Another guitar lesson", "https://blog.example.com/b"),
+            ("skip-1", "Bass workshop", "https://blog.example.com/c"),
+        ],
+    )
 
     with TestClient(_app()) as client:
         data = _post(client, filter_term="guitar")
@@ -118,14 +125,16 @@ def test_filter_term_matches_the_source_feed_name(tenant):
 
 def test_star_filter_scopes_to_kept_posts(tenant):
     _add_feed(FEED)
-    _add_entries(FEED, [
-        ("starred-1", "Post one", "https://a.example/1"),
-        ("plain-1", "Post two", "https://a.example/2"),
-    ])
+    _add_entries(
+        FEED,
+        [
+            ("starred-1", "Post one", "https://a.example/1"),
+            ("plain-1", "Post two", "https://a.example/2"),
+        ],
+    )
     with main.get_meta_connection() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at)"
-            " VALUES (?, ?, '2026-01-01')",
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, '2026-01-01')",
             (FEED, "starred-1"),
         )
 
@@ -138,16 +147,18 @@ def test_star_filter_scopes_to_kept_posts(tenant):
 
 def test_starred_read_filter_scopes_to_literal_stars_regardless_of_read_state(tenant):
     _add_feed(FEED)
-    _add_entries(FEED, [
-        ("starred-1", "Post one", "https://a.example/1"),
-        ("plain-1", "Post two", "https://a.example/2"),
-    ])
+    _add_entries(
+        FEED,
+        [
+            ("starred-1", "Post one", "https://a.example/1"),
+            ("plain-1", "Post two", "https://a.example/2"),
+        ],
+    )
     with main.get_reader() as reader:
         reader.mark_entry_as_read((FEED, "starred-1"))
     with main.get_meta_connection() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at)"
-            " VALUES (?, ?, '2026-01-01')",
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, '2026-01-01')",
             (FEED, "starred-1"),
         )
 
@@ -161,9 +172,12 @@ def test_starred_read_filter_scopes_to_literal_stars_regardless_of_read_state(te
 def test_video_id_is_included_for_youtube_entries(tenant):
     yt_feed = "https://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv"
     _add_feed(yt_feed)
-    _add_entries(yt_feed, [
-        ("v1", "A video", "https://www.youtube.com/watch?v=ABCDEFGHIJK"),
-    ])
+    _add_entries(
+        yt_feed,
+        [
+            ("v1", "A video", "https://www.youtube.com/watch?v=ABCDEFGHIJK"),
+        ],
+    )
 
     with TestClient(_app()) as client:
         data = _post(client)
@@ -190,12 +204,16 @@ def test_duration_filter_narrows_within_the_yt_folder(tenant, monkeypatch):
     with main.get_meta_connection() as conn:
         conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (folder_id, yt_feed))
     _add_feed(yt_feed)
-    _add_entries(yt_feed, [
-        ("short", "Short one", "https://www.youtube.com/watch?v=shortVID001"),
-        ("long", "Long one", "https://www.youtube.com/watch?v=longVID0001"),
-    ])
+    _add_entries(
+        yt_feed,
+        [
+            ("short", "Short one", "https://www.youtube.com/watch?v=shortVID001"),
+            ("long", "Long one", "https://www.youtube.com/watch?v=longVID0001"),
+        ],
+    )
     monkeypatch.setattr(
-        main.youtube_duration_service, "get_cached_duration",
+        main.youtube_duration_service,
+        "get_cached_duration",
         lambda vid: {"shortVID001": (90, "1:30"), "longVID0001": (5400, "1:30:00")}.get(vid, (None, None)),
     )
 

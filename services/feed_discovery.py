@@ -1,4 +1,5 @@
 """RSS/Atom auto-discovery helpers."""
+
 from __future__ import annotations
 
 import logging
@@ -41,10 +42,7 @@ _REFUSAL_STATUSES = frozenset({403, 415, 429, 503})
 # Browser identity used ONLY after an honest fetch is refused. Full header set:
 # some WAFs (nginx 415) sniff Sec-Fetch-*/Accept-Language, not just the UA.
 _BROWSER_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
     "Accept": "text/html,application/xhtml+xml,application/rss+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Sec-Fetch-Dest": "document",
@@ -77,22 +75,25 @@ def _get_with_escalation(url: str, *, timeout: float) -> tuple[httpx.Response | 
     except Exception:
         return resp, resp is not None
 
+
 _LINK_RE = re.compile(r"<link\b([^>]*?)(?:/>|>)", re.IGNORECASE | re.DOTALL)
 _ATTR_RE = re.compile(
-    r'([a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*'
+    r"([a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*"
     r'(?:"([^"]*)"'
     r"|'([^']*)'"
     r"|([^\s>\"'/]+))",
     re.IGNORECASE,
 )
 
-_FEED_MIME_TYPES = frozenset({
-    "application/rss+xml",
-    "application/atom+xml",
-    "application/feed+json",
-    "text/xml",
-    "application/xml",
-})
+_FEED_MIME_TYPES = frozenset(
+    {
+        "application/rss+xml",
+        "application/atom+xml",
+        "application/feed+json",
+        "text/xml",
+        "application/xml",
+    }
+)
 
 # Probed in order when no <link> tags are found.
 _COMMON_FEED_PATHS = [
@@ -157,12 +158,37 @@ def _pinboard_feed_url(url: str) -> str | None:
 
 # Single-segment artstation.com paths that are site pages, not usernames — never
 # rewrite these to a bogus <seg>.rss.
-_ARTSTATION_RESERVED = frozenset({
-    "artwork", "search", "jobs", "blogs", "prints", "marketplace", "learning",
-    "contests", "channels", "guilds", "about", "terms", "privacy", "podcast",
-    "magazine", "studios", "schools", "wallpapers", "2d", "3d", "login", "signup",
-    "users", "explore", "following", "notifications", "messages",
-})
+_ARTSTATION_RESERVED = frozenset(
+    {
+        "artwork",
+        "search",
+        "jobs",
+        "blogs",
+        "prints",
+        "marketplace",
+        "learning",
+        "contests",
+        "channels",
+        "guilds",
+        "about",
+        "terms",
+        "privacy",
+        "podcast",
+        "magazine",
+        "studios",
+        "schools",
+        "wallpapers",
+        "2d",
+        "3d",
+        "login",
+        "signup",
+        "users",
+        "explore",
+        "following",
+        "notifications",
+        "messages",
+    }
+)
 
 
 def _artstation_feed_url(url: str) -> str | None:
@@ -176,7 +202,7 @@ def _artstation_feed_url(url: str) -> str | None:
     host = (parsed.hostname or "").lower()
     user = None
     if host.endswith(".artstation.com") and host != "www.artstation.com":
-        sub = host[:-len(".artstation.com")]
+        sub = host[: -len(".artstation.com")]
         if sub and "." not in sub:
             user = sub
     elif host in ("artstation.com", "www.artstation.com"):
@@ -190,12 +216,35 @@ def _artstation_feed_url(url: str) -> str | None:
 
 
 # Single-segment behance.net paths that are site pages, not usernames.
-_BEHANCE_RESERVED = frozenset({
-    "search", "galleries", "joblist", "hire", "assets", "for_you", "live",
-    "onboarding", "settings", "notifications", "messages", "adobe", "blog",
-    "help", "about", "careers", "login", "signup", "feeds", "gallery",
-    "collection", "collections", "reviews", "schools", "discover",
-})
+_BEHANCE_RESERVED = frozenset(
+    {
+        "search",
+        "galleries",
+        "joblist",
+        "hire",
+        "assets",
+        "for_you",
+        "live",
+        "onboarding",
+        "settings",
+        "notifications",
+        "messages",
+        "adobe",
+        "blog",
+        "help",
+        "about",
+        "careers",
+        "login",
+        "signup",
+        "feeds",
+        "gallery",
+        "collection",
+        "collections",
+        "reviews",
+        "schools",
+        "discover",
+    }
+)
 
 
 def _behance_feed_url(url: str) -> str | None:
@@ -233,12 +282,12 @@ def _freecodecamp_feed_url(url: str) -> str | None:
     segments = [s for s in parsed.path.split("/") if s]
     if not segments or segments[0].lower() != "news" or segments[-1].lower() == "rss":
         return None
-    if len(segments) == 1:                                   # /news/ → site feed
+    if len(segments) == 1:  # /news/ → site feed
         path = "news"
     elif len(segments) == 3 and segments[1].lower() in ("tag", "author"):
-        path = "/".join(segments)                            # /news/tag|author/<x>/
+        path = "/".join(segments)  # /news/tag|author/<x>/
     else:
-        return None                                          # article or unknown
+        return None  # article or unknown
     return f"https://www.freecodecamp.org/{path}/rss/"
 
 
@@ -268,11 +317,32 @@ def _tapas_feed_url(url: str) -> str | None:
 # rewritten URL is fetched and validated below, so a non-comic path just fails
 # discovery as it would have anyway — but there is no reason to ask for
 # /about/feed.rss.
-_TINYVIEW_RESERVED = frozenset({
-    "about", "account", "admin", "api", "blog", "comics", "contact", "discover",
-    "faq", "gift", "help", "home", "login", "logout", "privacy", "search",
-    "settings", "signup", "subscribe", "support", "terms", "tinyview",
-})
+_TINYVIEW_RESERVED = frozenset(
+    {
+        "about",
+        "account",
+        "admin",
+        "api",
+        "blog",
+        "comics",
+        "contact",
+        "discover",
+        "faq",
+        "gift",
+        "help",
+        "home",
+        "login",
+        "logout",
+        "privacy",
+        "search",
+        "settings",
+        "signup",
+        "subscribe",
+        "support",
+        "terms",
+        "tinyview",
+    }
+)
 
 
 def _tinyview_feed_url(url: str) -> str | None:
@@ -299,8 +369,12 @@ def _tinyview_feed_url(url: str) -> str | None:
 
 
 _SITE_FEED_REWRITES = [
-    _pinboard_feed_url, _artstation_feed_url, _behance_feed_url, _freecodecamp_feed_url,
-    _tapas_feed_url, _tinyview_feed_url,
+    _pinboard_feed_url,
+    _artstation_feed_url,
+    _behance_feed_url,
+    _freecodecamp_feed_url,
+    _tapas_feed_url,
+    _tinyview_feed_url,
 ]
 
 # The page's *own* series id. `seriesId: N` is a script variable that appears
@@ -382,6 +456,7 @@ _FEED_BODY_RE = re.compile(
     re.IGNORECASE,
 )
 
+
 def _body_is_feed(text: str) -> bool:
     """Content-sniff the first 1 KB for RSS/Atom root elements."""
     return bool(_FEED_BODY_RE.search(text[:1024]))
@@ -450,6 +525,7 @@ def _advertised_feed_status(url: str, *, headers: dict | None) -> int | None:
     agreed the URL fails, and its value lets the caller separate *gone* (404,
     410) from *refused* (403 and friends).
     """
+
     def _confirms_dead(resp) -> bool:
         return resp is not None and resp.status_code >= 400 and resp.status_code not in (405, 501)
 
@@ -519,8 +595,7 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
         # refusal shapes report status "blocked" (see the bot-protection branch
         # below), so anything offering a force-subscribe must tell them apart —
         # use refusal_is_forceable() rather than reading status directly.
-        return {"status": "blocked", "reason": "unsafe", "feeds": [],
-                "message": "That address is not allowed (private/loopback target)."}
+        return {"status": "blocked", "reason": "unsafe", "feeds": [], "message": "That address is not allowed (private/loopback target)."}
     except httpx.TimeoutException:
         return {"status": "error", "feeds": [], "message": "Connection timed out."}
     except Exception as exc:
@@ -611,8 +686,7 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
                 "feeds": live,
                 "message": "",
             }
-        _LOGGER.info("discovery: all %d advertised feed link(s) on %s look dead; probing conventional paths",
-                     len(feeds), final_url)
+        _LOGGER.info("discovery: all %d advertised feed link(s) on %s look dead; probing conventional paths", len(feeds), final_url)
 
     # Probe common path suffixes: first from the site root, then relative to the page path.
     path_hit = _probe_conventional_paths(final_url, headers=_probe_headers)
@@ -718,8 +792,7 @@ def suggest_feed_migration(feed_url: str, *, timeout: float = 10.0) -> dict:
             canonical = urljoin(str(resp.url), attrs["href"].strip())
             break
     if not canonical:
-        return {"status": "none", "feeds": [],
-                "message": "No canonical link on the page FeedBurner is serving — nothing to follow."}
+        return {"status": "none", "feeds": [], "message": "No canonical link on the page FeedBurner is serving — nothing to follow."}
     canonical_host = (urlparse(canonical).hostname or "").lower()
     if not canonical_host or canonical_host in _DEAD_END_FEED_HOSTS:
         return {"status": "none", "feeds": [], "message": "The canonical link doesn't lead off FeedBurner."}
@@ -731,13 +804,9 @@ def suggest_feed_migration(feed_url: str, *, timeout: float = 10.0) -> dict:
     # this function was called to escape, so it comes back looking "live."
     # Drop candidates that are just the dead-end host in disguise; if that
     # was the only thing found, this origin has no other recoverable feed.
-    live_feeds = [
-        f for f in (result.get("feeds") or [])
-        if (urlparse(f["url"]).hostname or "").lower() not in _DEAD_END_FEED_HOSTS
-    ]
+    live_feeds = [f for f in (result.get("feeds") or []) if (urlparse(f["url"]).hostname or "").lower() not in _DEAD_END_FEED_HOSTS]
     if not live_feeds:
-        return {"status": "none", "feeds": [],
-                "message": "The origin site only advertises its old FeedBurner address."}
+        return {"status": "none", "feeds": [], "message": "The origin site only advertises its old FeedBurner address."}
     return {**result, "status": "feed" if len(live_feeds) == 1 else "feeds", "feeds": live_feeds}
 
 

@@ -5,6 +5,7 @@ defensible are the parts worth pinning: the scope is kept articles only, the
 pacing is shared with the CLI rather than reimplemented, the estimate accounts
 for the per-host delay, and two runs cannot overlap.
 """
+
 from __future__ import annotations
 
 import json
@@ -37,17 +38,14 @@ def configured(tmp_path):
             reader.add_feed(feed, allow_invalid_url=True, exist_ok=True)
             reader.disable_feed_updates(feed)
         for eid in ("starred", "tagged", "plain", "relative"):
-            reader.add_entry({"feed_url": FEED_A, "id": eid,
-                              "link": f"https://a.test/{eid}"})
-        reader.add_entry({"feed_url": FEED_B, "id": "starred",
-                          "link": "https://b.test/starred"})
+            reader.add_entry({"feed_url": FEED_A, "id": eid, "link": f"https://a.test/{eid}"})
+        reader.add_entry({"feed_url": FEED_B, "id": "starred", "link": "https://b.test/starred"})
         # No usable link at all — must not reach the fetcher.
         reader.add_entry({"feed_url": FEED_A, "id": "nolink", "link": ""})
         reader.set_tag((FEED_A, "tagged"), f"{MTAG}python")
     with main.get_meta_connection() as conn:
         for feed, eid in ((FEED_A, "starred"), (FEED_B, "starred"), (FEED_A, "nolink")):
-            conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
-                         (feed, eid))
+            conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (feed, eid))
         conn.commit()
     main._refetch_jobs.clear()
     try:
@@ -98,8 +96,7 @@ def test_interleaving_never_puts_two_hits_on_one_host_back_to_back():
     rows = [("f", str(i), "https://one.test/x") for i in range(3)]
     rows += [("f", str(i), "https://two.test/x") for i in range(3)]
 
-    hosts = [refetch_batch.host_of(link) for _f, _e, link in
-             refetch_batch.interleave_by_host(rows)]
+    hosts = [refetch_batch.host_of(link) for _f, _e, link in refetch_batch.interleave_by_host(rows)]
 
     assert all(a != b for a, b in zip(hosts, hosts[1:], strict=False))
 
@@ -109,8 +106,10 @@ def test_the_job_and_the_cli_share_one_set_of_delays():
     import scripts.refetch_scope as cli
 
     assert (cli._GLOBAL_DELAY, cli._PER_HOST_DELAY, cli._HOST_FAILURE_LIMIT) == (
-        refetch_batch.GLOBAL_DELAY, refetch_batch.PER_HOST_DELAY,
-        refetch_batch.HOST_FAILURE_LIMIT)
+        refetch_batch.GLOBAL_DELAY,
+        refetch_batch.PER_HOST_DELAY,
+        refetch_batch.HOST_FAILURE_LIMIT,
+    )
 
 
 # ── the route ──
@@ -140,6 +139,7 @@ class _Req:
 
 def _start(payload):
     import asyncio
+
     resp = asyncio.run(main.start_refetch_scope(cast(Request, _Req(payload))))
     return resp.status_code, json.loads(bytes(resp.body))
 
@@ -188,7 +188,7 @@ def test_the_queue_is_visible_in_the_status(configured):
     assert body["running"] is True
     assert (body["done"], body["total"], body["scope"]) == (2, 5, "A")
     assert [q["count"] for q in body["queue"]] == [2]
-    assert "list_feed_url" not in body["queue"][0]   # label/count only, not internals
+    assert "list_feed_url" not in body["queue"][0]  # label/count only, not internals
 
 
 def test_the_status_payload_never_exposes_the_cancel_flag(configured):
@@ -254,18 +254,20 @@ def test_batch_forwards_the_jobs_date_choice(configured, monkeypatch):
 def test_outcomes_are_counted_apart(configured, monkeypatch):
     """A refusal is not a failure: the guard did its job and the stored copy was
     deliberately left alone. Lumping them together would read as breakage."""
-    outcomes = [{"ok": True}, {"ok": True, "from_archive": True},
-                {"ok": False, "mismatch": True}, {"ok": False, "dead": True},
-                {"ok": False}]
+    outcomes = [
+        {"ok": True},
+        {"ok": True, "from_archive": True},
+        {"ok": False, "mismatch": True},
+        {"ok": False, "dead": True},
+        {"ok": False},
+    ]
     seq = iter(outcomes)
-    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user",
-                        lambda *a, **k: next(seq))
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda *a, **k: next(seq))
     monkeypatch.setattr(main.time, "sleep", lambda _s: None)
 
     job, _ = _run(outcomes)
 
-    assert (job["ok"], job["archive"], job["refused"], job["dead"], job["failed"]) == (
-        1, 1, 1, 1, 1)
+    assert (job["ok"], job["archive"], job["refused"], job["dead"], job["failed"]) == (1, 1, 1, 1, 1)
 
 
 def test_one_exploding_entry_does_not_end_the_run(configured, monkeypatch):
@@ -286,8 +288,7 @@ def test_one_exploding_entry_does_not_end_the_run(configured, monkeypatch):
 def test_a_host_that_keeps_failing_is_dropped(configured, monkeypatch):
     """Hammering a site that has failed four times running is exactly the
     behaviour a polite client must not have."""
-    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user",
-                        lambda *a, **k: {"ok": False})
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda *a, **k: {"ok": False})
     monkeypatch.setattr(main.time, "sleep", lambda _s: None)
     rows = [("f", str(i), "https://flaky.test/x") for i in range(10)]
 
@@ -302,7 +303,7 @@ def test_cancel_stops_the_run_partway(configured, monkeypatch):
     job = {"running": True, "cancel": False}
 
     def _one(*_a, **_k):
-        job["cancel"] = True          # cancelled while the first entry is in flight
+        job["cancel"] = True  # cancelled while the first entry is in flight
         return {"ok": True}
 
     monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", _one)
@@ -324,7 +325,7 @@ def test_a_queued_scope_can_be_dropped_without_stopping_the_run(configured):
     asyncio.run(main.cancel_refetch_scope(cast(Request, _Req({"queued_index": 0}))))
 
     assert job["queue"] == []
-    assert job["running"] is True          # the batch in flight is untouched
+    assert job["running"] is True  # the batch in flight is untouched
 
 
 def test_cancel_all_empties_the_queue_too(configured):
@@ -343,8 +344,7 @@ def test_cancel_all_empties_the_queue_too(configured):
 def test_the_worker_drains_the_queue_and_stays_running_throughout(configured, monkeypatch):
     """`running` must not blink off between scopes — the status pill reads it, and
     a pill that vanishes mid-queue is the same invisibility this fixed."""
-    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user",
-                        lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda *a, **k: {"ok": True})
     monkeypatch.setattr(main.time, "sleep", lambda _s: None)
     seen_running = []
     real = main._run_refetch_batch
@@ -357,31 +357,26 @@ def test_the_worker_drains_the_queue_and_stays_running_throughout(configured, mo
 
     job = main._refetch_job_state(create=True)
     main._refetch_begin(job, "A", [("f", "x", "https://a.test/x")], 10)
-    job["queue"] = [{"folder_id": None, "list_feed_url": FEED_A,
-                     "label": "B", "count": 2, "estimate_seconds": 20}]
+    job["queue"] = [{"folder_id": None, "list_feed_url": FEED_A, "label": "B", "count": 2, "estimate_seconds": 20}]
 
     main._refetch_worker([("f", "x", "https://a.test/x")], job)
 
-    assert seen_running == [True, True]     # never observed as stopped mid-queue
-    assert job["running"] is False          # ... but off once the queue drained
+    assert seen_running == [True, True]  # never observed as stopped mid-queue
+    assert job["running"] is False  # ... but off once the queue drained
     assert [h["scope"] for h in job["history"]] == ["A", "B"]
 
 
-def test_a_queued_scope_is_resolved_when_it_starts_not_when_it_is_queued(configured,
-                                                                        monkeypatch):
+def test_a_queued_scope_is_resolved_when_it_starts_not_when_it_is_queued(configured, monkeypatch):
     """An hour in a queue is long enough for what is kept in the scope to change,
     so re-fetching the list captured at queue time would act on stale membership."""
-    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user",
-                        lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda *a, **k: {"ok": True})
     monkeypatch.setattr(main.time, "sleep", lambda _s: None)
     resolved = []
-    monkeypatch.setattr(main, "_scope_refetchable",
-                        lambda fid, feed: resolved.append((fid, feed)) or [])
+    monkeypatch.setattr(main, "_scope_refetchable", lambda fid, feed: resolved.append((fid, feed)) or [])
 
     job = main._refetch_job_state(create=True)
     main._refetch_begin(job, "A", [], 0)
-    job["queue"] = [{"folder_id": None, "list_feed_url": FEED_A,
-                     "label": "B", "count": 99, "estimate_seconds": 20}]
+    job["queue"] = [{"folder_id": None, "list_feed_url": FEED_A, "label": "B", "count": 99, "estimate_seconds": 20}]
 
     main._refetch_worker([], job)
 

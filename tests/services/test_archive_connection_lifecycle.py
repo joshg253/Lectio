@@ -3,6 +3,7 @@ connection per call, and `with conn:` is a *transaction* manager that commits
 without closing. Every call site used to leak its handle to the garbage
 collector. These pin the two halves of the fix — the service closes what it
 opens, and it still commits what it wrote."""
+
 from __future__ import annotations
 
 import sqlite3

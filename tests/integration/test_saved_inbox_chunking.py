@@ -5,6 +5,7 @@ REVERSE of star order, so a result sorted by the wrong column can never
 accidentally look right. An earlier version of this seed let received order
 coincide with star order, and the broken code passed it. See Plan.md §0b.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -48,19 +49,19 @@ def seeded(tmp_path):
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
         for n in range(STAR_COUNT):
-            reader.add_entry({
-                "feed_url": FEED,
-                "id": f"e{n:02d}",
-                "title": f"post {n:02d}",
-                "link": f"https://example.test/{n:02d}",
-                "published": base + timedelta(days=n),
-            })
+            reader.add_entry(
+                {
+                    "feed_url": FEED,
+                    "id": f"e{n:02d}",
+                    "title": f"post {n:02d}",
+                    "link": f"https://example.test/{n:02d}",
+                    "published": base + timedelta(days=n),
+                }
+            )
     with main.get_meta_connection() as conn:
         conn.executemany(
             "INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
-            [(FEED, f"e{n:02d}",
-              (base + timedelta(days=STAR_COUNT - 1 - n)).isoformat())
-             for n in range(STAR_COUNT)],
+            [(FEED, f"e{n:02d}", (base + timedelta(days=STAR_COUNT - 1 - n)).isoformat()) for n in range(STAR_COUNT)],
         )
         conn.commit()
     try:
@@ -102,12 +103,10 @@ def test_each_chunk_is_the_right_slice_of_the_star_order(seeded, chunk):
     limit = chunk * CHUNK
     page = _inbox_page(limit)
 
-    assert page == _BY_STAR_DESC[:limit], (
-        f"chunk {chunk} (limit={limit}) is not a prefix of the star order"
-    )
+    assert page == _BY_STAR_DESC[:limit], f"chunk {chunk} (limit={limit}) is not a prefix of the star order"
     # What the route actually renders for this chunk.
-    delta = page[(chunk - 1) * CHUNK:chunk * CHUNK]
-    assert delta == _BY_STAR_DESC[(chunk - 1) * CHUNK:chunk * CHUNK]
+    delta = page[(chunk - 1) * CHUNK : chunk * CHUNK]
+    assert delta == _BY_STAR_DESC[(chunk - 1) * CHUNK : chunk * CHUNK]
 
 
 def test_chunks_tile_the_list_without_gaps_or_repeats(seeded):
@@ -116,7 +115,7 @@ def test_chunks_tile_the_list_without_gaps_or_repeats(seeded):
     seen: list[str] = []
     for chunk in (1, 2, 3):
         page = _inbox_page(chunk * CHUNK)
-        seen.extend(page[(chunk - 1) * CHUNK:chunk * CHUNK])
+        seen.extend(page[(chunk - 1) * CHUNK : chunk * CHUNK])
 
     assert seen == _BY_STAR_DESC
     assert len(set(seen)) == len(seen), "a chunk repeated an entry from another"
@@ -126,8 +125,13 @@ def test_longest_starred_reverses_every_chunk(seeded):
     """The asc direction takes a different path (need_all), so it is not implied
     by the desc case."""
     posts = main.list_entries_for_feeds(
-        {FEED}, limit=CHUNK, sort_by="starred", sort_dir="asc",
-        read_filter="all", star_only=True, kept_scope="starred",
+        {FEED},
+        limit=CHUNK,
+        sort_by="starred",
+        sort_dir="asc",
+        read_filter="all",
+        star_only=True,
+        kept_scope="starred",
     )
     assert [p["id"] for p in posts] == list(reversed(_BY_STAR_DESC))[:CHUNK]
 
@@ -138,8 +142,10 @@ def test_longest_starred_reverses_every_chunk(seeded):
 # is exactly why the bug went unexplained: the query layer is correct, so the
 # reordering has to happen somewhere between the request and the template.
 
+
 class _FakeRequest:
     """The minimum of a Request that _home_inner touches."""
+
     def __init__(self):
         self.headers: dict[str, str] = {}
         self.cookies: dict[str, str] = {}
@@ -148,16 +154,14 @@ class _FakeRequest:
         self.url = "http://testserver/"
 
 
-def _inbox_chunk_via_route(monkeypatch, chunk: int | None,
-                           chunk_delta: str | None = None) -> list[str]:
+def _inbox_chunk_via_route(monkeypatch, chunk: int | None, chunk_delta: str | None = None) -> list[str]:
     """The ids _home_inner hands the template. The response itself streams, so
     the context is captured at the render call rather than read off the result."""
     ids, _next_chunk = _inbox_chunk_via_route_full(monkeypatch, chunk, chunk_delta)
     return ids
 
 
-def _inbox_chunk_via_route_full(monkeypatch, chunk: int | None,
-                                chunk_delta: str | None = None) -> tuple[list[str], int]:
+def _inbox_chunk_via_route_full(monkeypatch, chunk: int | None, chunk_delta: str | None = None) -> tuple[list[str], int]:
     """Like _inbox_chunk_via_route, but also returns next_chunk -- the offset
     (real items delivered so far) the route hands back for the client to
     request next. `chunk`, for a chunk_delta request, is itself now that same
@@ -213,7 +217,7 @@ def test_route_chunk_delta_returns_that_page_of_the_star_order(seeded, monkeypat
     assert ids0 == _BY_STAR_DESC[:CHUNK]
     for expected_page in range(1, 3):
         ids, offset = _inbox_chunk_via_route_full(monkeypatch, offset, chunk_delta="1")
-        expected = _BY_STAR_DESC[expected_page * CHUNK:(expected_page + 1) * CHUNK]
+        expected = _BY_STAR_DESC[expected_page * CHUNK : (expected_page + 1) * CHUNK]
         assert ids == expected, f"page {expected_page}"
 
 
@@ -239,9 +243,7 @@ def _saved_all_via_route(monkeypatch, **kwargs) -> list[str]:
     monkeypatch.setattr(main.templates.env, "get_template", _capture_template)
     with main.get_meta_connection() as conn:
         root_id = main.get_root_folder_id(conn)
-    main._home_inner(
-        cast(Request, _FakeRequest()), folder_id=root_id, star_only="1", read_filter="all", **kwargs
-    )
+    main._home_inner(cast(Request, _FakeRequest()), folder_id=root_id, star_only="1", read_filter="all", **kwargs)
     return [p["id"] for p in captured["context"]["posts"]]
 
 
@@ -257,7 +259,7 @@ def test_chunk_request_after_the_initial_inbox_load(seeded, monkeypatch):
     assert ids0 == _BY_STAR_DESC[:CHUNK]
     for expected_page in range(1, 3):
         ids, offset = _inbox_chunk_via_route_full(monkeypatch, offset, chunk_delta="1")
-        expected = _BY_STAR_DESC[expected_page * CHUNK:(expected_page + 1) * CHUNK]
+        expected = _BY_STAR_DESC[expected_page * CHUNK : (expected_page + 1) * CHUNK]
         assert ids == expected, f"page {expected_page} after landing"
 
 
@@ -271,7 +273,7 @@ def test_inbox_chunks_survive_a_remembered_saved_sort(seeded, monkeypatch):
     assert ids0 == _BY_STAR_DESC[:CHUNK]
     for expected_page in range(1, 3):
         ids, offset = _inbox_chunk_via_route_full(monkeypatch, offset, chunk_delta="1")
-        expected = _BY_STAR_DESC[expected_page * CHUNK:(expected_page + 1) * CHUNK]
+        expected = _BY_STAR_DESC[expected_page * CHUNK : (expected_page + 1) * CHUNK]
         assert ids == expected, f"page {expected_page}"
 
     # And Saved still remembers what the user chose, not the Inbox's default.
@@ -320,21 +322,29 @@ def seeded_with_a_duplicate(tmp_path):
         reader.add_feed(FEED, exist_ok=True)
         reader.add_feed(OTHER_FEED, exist_ok=True)
         for n in range(STAR_COUNT):
-            reader.add_entry({
-                "feed_url": FEED, "id": f"e{n:02d}", "title": f"post {n:02d}",
-                "link": f"https://example.test/{n:02d}", "published": base + timedelta(days=n),
-            })
+            reader.add_entry(
+                {
+                    "feed_url": FEED,
+                    "id": f"e{n:02d}",
+                    "title": f"post {n:02d}",
+                    "link": f"https://example.test/{n:02d}",
+                    "published": base + timedelta(days=n),
+                }
+            )
         # Same link + title as e05 — build_entry_dedupe_key collides.
-        reader.add_entry({
-            "feed_url": OTHER_FEED, "id": "e05dup", "title": "post 05",
-            "link": "https://example.test/05", "published": base + timedelta(days=5),
-        })
+        reader.add_entry(
+            {
+                "feed_url": OTHER_FEED,
+                "id": "e05dup",
+                "title": "post 05",
+                "link": "https://example.test/05",
+                "published": base + timedelta(days=5),
+            }
+        )
     with main.get_meta_connection() as conn:
         conn.executemany(
             "INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
-            [(FEED, f"e{n:02d}",
-              (base + timedelta(days=STAR_COUNT - 1 - n)).isoformat())
-             for n in range(STAR_COUNT)],
+            [(FEED, f"e{n:02d}", (base + timedelta(days=STAR_COUNT - 1 - n)).isoformat()) for n in range(STAR_COUNT)],
         )
         # Ranks immediately after e05 (older star than e05, newer than e06) --
         # loses the dedup collision (older star = lower saved_sort_value), so

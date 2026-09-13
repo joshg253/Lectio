@@ -11,6 +11,7 @@ value made it through, without needing real reader/kept-entry fixtures.
 _run_in_user_context is stubbed (main's own function, not stdlib threading)
 so the spawned thread has nothing real to do.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -23,9 +24,13 @@ import main
 @pytest.fixture(autouse=True)
 def _isolated_refetch_jobs(monkeypatch):
     monkeypatch.setattr(main, "_refetch_jobs", {})
-    monkeypatch.setattr(main, "_scope_refetchable", lambda folder_id, list_feed_url: [
-        ("https://example.test/feed", "https://example.test/post", "https://example.test/post"),
-    ])
+    monkeypatch.setattr(
+        main,
+        "_scope_refetchable",
+        lambda folder_id, list_feed_url: [
+            ("https://example.test/feed", "https://example.test/post", "https://example.test/post"),
+        ],
+    )
     monkeypatch.setattr(main.refetch_batch, "estimate_seconds", lambda rows: 5)
     monkeypatch.setattr(main, "_run_in_user_context", lambda uid, fn, *a, **kw: None)
 

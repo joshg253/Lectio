@@ -16,41 +16,114 @@ Security model (this is the whole point of the feature — "no scripts"):
   - only keep a curated presentation/geometry attribute allowlist, and within
     those reject any ``url(...)`` that isn't an internal ``url(#fragment)``.
 """
+
 from __future__ import annotations
 
 from urllib.parse import quote
 
 # Presentation/structure elements we keep. Everything else (including the
 # dangerous set below) is dropped subtree-and-all.
-_ALLOWED_TAGS = frozenset({
-    "svg", "g", "defs", "title", "desc", "symbol", "marker",
-    "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
-    "text", "tspan",
-    "lineargradient", "radialgradient", "stop",
-    "clippath", "mask",
-})
+_ALLOWED_TAGS = frozenset(
+    {
+        "svg",
+        "g",
+        "defs",
+        "title",
+        "desc",
+        "symbol",
+        "marker",
+        "path",
+        "rect",
+        "circle",
+        "ellipse",
+        "line",
+        "polyline",
+        "polygon",
+        "text",
+        "tspan",
+        "lineargradient",
+        "radialgradient",
+        "stop",
+        "clippath",
+        "mask",
+    }
+)
 # Elements that can execute, embed, or fetch — remove with their children.
 # Note: ``a`` is intentionally NOT here — it's simply not in _ALLOWED_TAGS, so it
 # unwraps (drops the link + its href, keeps any geometry children).
-_DROP_TAGS = frozenset({
-    "script", "style", "foreignobject", "image", "use", "iframe",
-    "audio", "video", "animate", "animatetransform", "animatemotion",
-    "set", "handler", "filter", "feimage",
-})
+_DROP_TAGS = frozenset(
+    {
+        "script",
+        "style",
+        "foreignobject",
+        "image",
+        "use",
+        "iframe",
+        "audio",
+        "video",
+        "animate",
+        "animatetransform",
+        "animatemotion",
+        "set",
+        "handler",
+        "filter",
+        "feimage",
+    }
+)
 # Curated attribute allowlist applied to every kept element. No ``href`` /
 # ``xlink:href`` (external refs), no ``style`` (url() leaks), no ``on*``.
-_ALLOWED_ATTRS = frozenset({
-    "xmlns", "viewbox", "version", "preserveaspectratio", "class",
-    "width", "height", "x", "y", "x1", "y1", "x2", "y2",
-    "cx", "cy", "r", "rx", "ry", "points", "d", "transform", "offset",
-    "fill", "fill-rule", "fill-opacity", "clip-rule", "clip-path",
-    "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin",
-    "stroke-dasharray", "stroke-dashoffset", "stroke-opacity", "stroke-miterlimit",
-    "opacity", "color", "stop-color", "stop-opacity",
-    "gradientunits", "gradienttransform", "spreadmethod",
-    "clippathunits", "maskunits", "maskcontentunits", "markerwidth",
-    "markerheight", "id",
-})
+_ALLOWED_ATTRS = frozenset(
+    {
+        "xmlns",
+        "viewbox",
+        "version",
+        "preserveaspectratio",
+        "class",
+        "width",
+        "height",
+        "x",
+        "y",
+        "x1",
+        "y1",
+        "x2",
+        "y2",
+        "cx",
+        "cy",
+        "r",
+        "rx",
+        "ry",
+        "points",
+        "d",
+        "transform",
+        "offset",
+        "fill",
+        "fill-rule",
+        "fill-opacity",
+        "clip-rule",
+        "clip-path",
+        "stroke",
+        "stroke-width",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "stroke-dasharray",
+        "stroke-dashoffset",
+        "stroke-opacity",
+        "stroke-miterlimit",
+        "opacity",
+        "color",
+        "stop-color",
+        "stop-opacity",
+        "gradientunits",
+        "gradienttransform",
+        "spreadmethod",
+        "clippathunits",
+        "maskunits",
+        "maskcontentunits",
+        "markerwidth",
+        "markerheight",
+        "id",
+    }
+)
 
 # Default color so a ``currentColor``-driven monochrome icon stays visible in a
 # standalone <img> (which has no parent to inherit from). Mid-gray reads on both
@@ -66,7 +139,7 @@ def _attr_value_safe(value: str) -> bool:
     low = value.lower()
     idx = low.find("url(")
     while idx != -1:
-        rest = low[idx + 4:].lstrip(" '\"")
+        rest = low[idx + 4 :].lstrip(" '\"")
         if not rest.startswith("#"):
             return False
         idx = low.find("url(", idx + 4)
@@ -142,8 +215,10 @@ def sanitize_svg(markup: str) -> str | None:
             except ValueError:
                 vw = vh = 0.0
             if vw > 0 and vh > 0:
+
                 def _fmt(n: float) -> str:
                     return str(int(n)) if n == int(n) else str(n)
+
                 if "width" not in _attr_keys:
                     root.attrs["width"] = _fmt(vw)
                 if "height" not in _attr_keys:
@@ -157,8 +232,7 @@ def sanitize_svg(markup: str) -> str | None:
     if not rebuilt or len(rebuilt.encode("utf-8")) > _MAX_SVG_BYTES:
         return None
     # A sanitized shell with no drawing primitives isn't a real image.
-    if not any(t in rebuilt.lower() for t in ("<path", "<rect", "<circle", "<ellipse",
-                                              "<line", "<polyline", "<polygon", "<text")):
+    if not any(t in rebuilt.lower() for t in ("<path", "<rect", "<circle", "<ellipse", "<line", "<polyline", "<polygon", "<text")):
         return None
     return rebuilt
 

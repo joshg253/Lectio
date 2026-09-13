@@ -1,4 +1,5 @@
 """On-star → send-to-destination: fires configured destinations for a starred entry."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -30,9 +31,15 @@ def env(tmp_path, monkeypatch):
     main.ensure_meta_schema()
     reader = main.get_reader()
     reader.add_feed(FEED, allow_invalid_url=True)
-    reader.add_entry({"feed_url": FEED, "id": "e1", "title": "Vid",
-                      "link": f"https://www.youtube.com/watch?v={VID}",
-                      "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)})
+    reader.add_entry(
+        {
+            "feed_url": FEED,
+            "id": "e1",
+            "title": "Vid",
+            "link": f"https://www.youtube.com/watch?v={VID}",
+            "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        }
+    )
     monkeypatch.setattr(main, "get_youtube_oauth_token", lambda: "tok")
     try:
         yield
@@ -68,8 +75,7 @@ def test_instapaper_and_playlist_fire(env, monkeypatch):
 
 def test_quire_fires_on_star(env, monkeypatch):
     tasks = []
-    monkeypatch.setattr(main.quire_service, "create_task",
-                        lambda tok, oid, name, desc="": tasks.append((oid, name, desc)))
+    monkeypatch.setattr(main.quire_service, "create_task", lambda tok, oid, name, desc="": tasks.append((oid, name, desc)))
     monkeypatch.setattr(main, "get_quire_user_token", lambda: "qtok")
     with main.get_meta_connection() as conn:
         main.set_setting(conn, main.SETTING_QUIRE_ACCESS_TOKEN, "qtok")
@@ -85,8 +91,7 @@ def test_quire_fires_on_star(env, monkeypatch):
 
 def test_quire_skipped_when_no_project(env, monkeypatch):
     tasks = []
-    monkeypatch.setattr(main.quire_service, "create_task",
-                        lambda *a, **k: tasks.append(a))
+    monkeypatch.setattr(main.quire_service, "create_task", lambda *a, **k: tasks.append(a))
     monkeypatch.setattr(main, "get_quire_user_token", lambda: "qtok")
     with main.get_meta_connection() as conn:
         main.set_setting(conn, main.SETTING_QUIRE_ACCESS_TOKEN, "qtok")

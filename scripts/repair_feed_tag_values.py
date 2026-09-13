@@ -22,6 +22,7 @@ terminators, and splitting them raw would turn ``C&#43;&#43;`` into fragments.
     uv run python scripts/repair_feed_tag_values.py            # dry run
     uv run python scripts/repair_feed_tag_values.py --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -44,8 +45,7 @@ def _repaired(raw: str) -> list[str]:
 
 
 def main_cli() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
     args = ap.parse_args()
@@ -63,9 +63,7 @@ def _repair_user(uid: str, apply: bool) -> int:
     conn = sqlite3.connect(str(db), timeout=30.0)
     conn.row_factory = sqlite3.Row
 
-    rows = conn.execute(
-        "SELECT feed_url, entry_id, tag, first_seen_at FROM entry_feed_tags"
-    ).fetchall()
+    rows = conn.execute("SELECT feed_url, entry_id, tag, first_seen_at FROM entry_feed_tags").fetchall()
     changes: list[dict] = []
     dropped = 0
     for row in rows:
@@ -82,12 +80,20 @@ def _repair_user(uid: str, apply: bool) -> int:
             # separate decision from rewriting history.
             dropped += 1
             continue
-        changes.append({"feed_url": str(row["feed_url"]), "entry_id": str(row["entry_id"]),
-                        "from": raw, "to": fixed,
-                        "first_seen_at": float(row["first_seen_at"])})
+        changes.append(
+            {
+                "feed_url": str(row["feed_url"]),
+                "entry_id": str(row["entry_id"]),
+                "from": raw,
+                "to": fixed,
+                "first_seen_at": float(row["first_seen_at"]),
+            }
+        )
 
-    print(f"[{uid}] {len(rows):,} stored tags; {len(changes):,} need repair"
-          f"{f'; {dropped:,} left alone (clean to nothing)' if dropped else ''}")
+    print(
+        f"[{uid}] {len(rows):,} stored tags; {len(changes):,} need repair"
+        f"{f'; {dropped:,} left alone (clean to nothing)' if dropped else ''}"
+    )
     for c in changes[:20]:
         print(f"  {c['from']!r} -> {c['to']}")
     if len(changes) > 20:
@@ -109,8 +115,7 @@ def _repair_user(uid: str, apply: bool) -> int:
             # deleted 124 rows while writing none. OR IGNORE hides schema
             # mistakes; name all the columns and let a real error surface.
             conn.execute(
-                "INSERT OR REPLACE INTO entry_feed_tags"
-                " (feed_url, entry_id, tag, first_seen_at) VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO entry_feed_tags (feed_url, entry_id, tag, first_seen_at) VALUES (?, ?, ?, ?)",
                 (c["feed_url"], c["entry_id"], tag, c["first_seen_at"]),
             )
     conn.commit()

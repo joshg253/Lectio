@@ -1,4 +1,5 @@
 """Dump all entry_lead_images rows from the meta DB for inspection."""
+
 import sqlite3
 
 conn = sqlite3.connect("lectio_meta.sqlite3")

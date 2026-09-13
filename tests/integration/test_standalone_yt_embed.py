@@ -1,4 +1,5 @@
 """Standalone bare YouTube links in feed content → inline player."""
+
 from __future__ import annotations
 
 import main
@@ -63,9 +64,7 @@ def test_inline_embed_url_mention_left_alone():
 
 
 def test_video_id_extracted_from_an_embed_url():
-    assert main.youtube_duration_service.extract_video_id(
-        f"https://www.youtube.com/embed/{VID}?si=abc"
-    ) == VID
+    assert main.youtube_duration_service.extract_video_id(f"https://www.youtube.com/embed/{VID}?si=abc") == VID
 
 
 # A link inline-wrapped (<em>/<strong>/etc.) for emphasis has that tag, not <p>,

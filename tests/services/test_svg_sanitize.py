@@ -1,4 +1,5 @@
 """Tests for inline-SVG sanitization (PR5: inline <svg> thumbnails / lead images)."""
+
 from __future__ import annotations
 
 from services.svg_sanitize import sanitize_svg, svg_to_data_uri
@@ -41,10 +42,7 @@ def test_drops_script_subtree():
 
 
 def test_drops_foreignobject_and_iframe():
-    out = sanitize_svg(
-        '<svg><foreignObject><iframe src="javascript:alert(1)"></iframe>'
-        '</foreignObject><path d="M0 0"/></svg>'
-    )
+    out = sanitize_svg('<svg><foreignObject><iframe src="javascript:alert(1)"></iframe></foreignObject><path d="M0 0"/></svg>')
     assert out is not None
     assert "foreignobject" not in out.lower()
     assert "iframe" not in out.lower()
@@ -89,9 +87,7 @@ def test_viewbox_only_gets_intrinsic_size():
 
 
 def test_existing_width_height_preserved():
-    out = sanitize_svg(
-        '<svg viewBox="0 0 10 10" width="40" height="20"><path d="M0 0"/></svg>'
-    )
+    out = sanitize_svg('<svg viewBox="0 0 10 10" width="40" height="20"><path d="M0 0"/></svg>')
     assert out is not None
     assert 'width="40"' in out and 'height="20"' in out
 

@@ -1,4 +1,5 @@
 """YouTube quota meter: per-user Pacific-day spend tally + the service sinks."""
+
 from __future__ import annotations
 
 import httpx
@@ -63,15 +64,27 @@ def test_oauth_insert_bills_50(env, monkeypatch):
     billed = []
     yt.set_quota_sink(lambda u: billed.append(u))
     try:
+
         class _Resp:
             status_code = 200
             text = ""
-            def json(self): return {"id": "item1"}
+
+            def json(self):
+                return {"id": "item1"}
+
         class _Client:
-            def __init__(self, *a, **k): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
-            def post(self, *a, **k): return _Resp()
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, *a, **k):
+                return _Resp()
+
         monkeypatch.setattr(httpx, "Client", _Client)
         yt.add_video_to_playlist("tok", "PL1", "vid12345678")
         assert billed == [50]

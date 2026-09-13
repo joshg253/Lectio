@@ -1,4 +1,5 @@
 """GReader (Google Reader-compatible) API implementation for Lectio."""
+
 from __future__ import annotations
 
 import hmac as _hmac
@@ -47,9 +48,7 @@ class GReaderService:
             self._tokens[token] = expires_at
         try:
             with self._get_meta() as conn:
-                conn.execute(
-                    "DELETE FROM greader_tokens WHERE expires_at <= ?", (now,)
-                )
+                conn.execute("DELETE FROM greader_tokens WHERE expires_at <= ?", (now,))
                 conn.execute(
                     "INSERT OR REPLACE INTO greader_tokens (token, expires_at) VALUES (?, ?)",
                     (token, expires_at),
@@ -67,9 +66,7 @@ class GReaderService:
         # Not in memory — check DB (survives restarts).
         try:
             with self._get_meta() as conn:
-                row = conn.execute(
-                    "SELECT expires_at FROM greader_tokens WHERE token = ?", (token,)
-                ).fetchone()
+                row = conn.execute("SELECT expires_at FROM greader_tokens WHERE token = ?", (token,)).fetchone()
             if row and float(row["expires_at"]) > now:
                 with self._tokens_lock:
                     self._tokens[token] = float(row["expires_at"])
@@ -208,7 +205,7 @@ class GReaderService:
             yield from reader.get_entries(feed=stream_id[5:], read=read_filter)
 
         elif stream_id.startswith("user/-/label/"):
-            label = stream_id[len("user/-/label/"):]
+            label = stream_id[len("user/-/label/") :]
             with self._get_meta() as conn:
                 root_row = conn.execute(
                     "SELECT id FROM folders WHERE name=? AND parent_id IS NULL",
@@ -254,8 +251,7 @@ class GReaderService:
             ).fetchone()
             folder_rows = (
                 conn.execute(
-                    "SELECT name FROM folders WHERE parent_id=?"
-                    " AND name NOT LIKE '\\_%' ESCAPE '\\'",
+                    "SELECT name FROM folders WHERE parent_id=? AND name NOT LIKE '\\_%' ESCAPE '\\'",
                     (root_row["id"],),
                 ).fetchall()
                 if root_row
@@ -266,11 +262,13 @@ class GReaderService:
             {"id": "user/-/state/com.google/kept-unread", "sortid": "00000001"},
         ]
         for i, row in enumerate(folder_rows):
-            tags.append({
-                "id": f"user/-/label/{row['name']}",
-                "sortid": f"{i + 2:08d}",
-                "type": "folder",
-            })
+            tags.append(
+                {
+                    "id": f"user/-/label/{row['name']}",
+                    "sortid": f"{i + 2:08d}",
+                    "type": "folder",
+                }
+            )
         return {"tags": tags}
 
     def get_subscription_list(self) -> dict[str, Any]:
@@ -280,22 +278,21 @@ class GReaderService:
         subs: list[dict] = []
         for feed in reader.get_feeds():
             url = str(feed.url)
-            cats = [
-                {"id": f"user/-/label/{name}", "label": name}
-                for name in feed_folder_map.get(url, [])
-            ]
-            subs.append({
-                "id": f"feed/{url}",
-                # Prefer the user's overridden feed name (what the Lectio sidebar
-                # shows) so synced clients (Capy, etc.) match the web UI.
-                "title": getattr(feed, "user_title", None) or feed.title or url,
-                "categories": cats,
-                "url": url,
-                "htmlUrl": str(feed.link or ""),
-                "iconUrl": "",
-                "firstitemmsec": "0",
-                "sortid": "00000000",
-            })
+            cats = [{"id": f"user/-/label/{name}", "label": name} for name in feed_folder_map.get(url, [])]
+            subs.append(
+                {
+                    "id": f"feed/{url}",
+                    # Prefer the user's overridden feed name (what the Lectio sidebar
+                    # shows) so synced clients (Capy, etc.) match the web UI.
+                    "title": getattr(feed, "user_title", None) or feed.title or url,
+                    "categories": cats,
+                    "url": url,
+                    "htmlUrl": str(feed.link or ""),
+                    "iconUrl": "",
+                    "firstitemmsec": "0",
+                    "sortid": "00000000",
+                }
+            )
         return {"subscriptions": subs}
 
     def get_unread_counts(self) -> dict[str, Any]:
@@ -322,11 +319,13 @@ class GReaderService:
 
         result = list(counts.values())
         if total:
-            result.append({
-                "id": "user/-/state/com.google/reading-list",
-                "count": total,
-                "newestItemTimestampUsec": newest_global,
-            })
+            result.append(
+                {
+                    "id": "user/-/state/com.google/reading-list",
+                    "count": total,
+                    "newestItemTimestampUsec": newest_global,
+                }
+            )
         return {"max": 1000, "unreadcounts": result}
 
     def get_stream_item_ids(
@@ -382,11 +381,13 @@ class GReaderService:
             fid = pair_to_id.get((str(entry.feed_url), str(entry.id)))
             if fid is None:
                 continue
-            item_refs.append({
-                "id": str(fid),
-                "timestampUsec": str(self._entry_usec(entry)),
-                "directStreamIds": [f"feed/{entry.feed_url}"],
-            })
+            item_refs.append(
+                {
+                    "id": str(fid),
+                    "timestampUsec": str(self._entry_usec(entry)),
+                    "directStreamIds": [f"feed/{entry.feed_url}"],
+                }
+            )
 
         result: dict[str, Any] = {"itemRefs": item_refs}
         if has_more and page:
@@ -405,16 +406,10 @@ class GReaderService:
                 f"SELECT id, feed_url, entry_id FROM fever_entry_map WHERE id IN ({ph})",
                 integers,
             ).fetchall()
-            saved_set = {
-                (r["feed_url"], r["entry_id"])
-                for r in conn.execute("SELECT feed_url, entry_id FROM saved_entries").fetchall()
-            }
+            saved_set = {(r["feed_url"], r["entry_id"]) for r in conn.execute("SELECT feed_url, entry_id FROM saved_entries").fetchall()}
             feed_folder_map = self._build_feed_folder_map(conn)
 
-        feed_info = {
-            str(f.url): (getattr(f, "user_title", None) or f.title or str(f.url), str(f.link or ""))
-            for f in reader.get_feeds()
-        }
+        feed_info = {str(f.url): (getattr(f, "user_title", None) or f.title or str(f.url), str(f.link or "")) for f in reader.get_feeds()}
 
         items = []
         for row in map_rows:
@@ -441,8 +436,11 @@ class GReaderService:
         oldest_first: bool = False,
     ) -> dict[str, Any]:
         ids_result = self.get_stream_item_ids(
-            stream_id, count=count, continuation=continuation,
-            exclude_read=exclude_read, oldest_first=oldest_first,
+            stream_id,
+            count=count,
+            continuation=continuation,
+            exclude_read=exclude_read,
+            oldest_first=oldest_first,
         )
         item_ids = [self._format_item_id(int(ref["id"])) for ref in ids_result["itemRefs"]]
         contents = self.get_items_contents(item_ids)
