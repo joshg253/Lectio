@@ -36,6 +36,14 @@ def test_ignores_bare_domain_tld_lookalikes():
     assert main.candidate_attachment_links_in_html(html, "https://example.test/post") == []
 
 
+def test_ignores_a_bluesky_handle_link_bare_domain_lookalike():
+    """A bsky.app profile link's path is the handle itself
+    (.../profile/name.bsky.social) -- ".social" read as a file extension.
+    Reported live 2026-09-13 as a bare domain showing up under Attachments."""
+    html = '<a href="https://bsky.app/profile/jolexxa.bsky.social">bsky</a>'
+    assert main.candidate_attachment_links_in_html(html, "https://example.test/post") == []
+
+
 def test_query_string_does_not_turn_a_page_into_a_file():
     html = '<a href="https://example.test/post.php?file=x.pdf">page</a>'
     assert main.candidate_attachment_links_in_html(html, "https://example.test/post") == []

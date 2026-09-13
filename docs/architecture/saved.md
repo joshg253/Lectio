@@ -797,6 +797,31 @@ article" above): scanning page chrome for file-like links would offer the
 user "save" buttons for a site's nav/footer/related-posts links that were
 never part of the article.
 
+**Enclosure-only files need their own candidate source — the body scan alone
+was a real gap.** A magazine's issue PDF/EPUB (Full Circle) or a devblog's
+demo video is routinely declared *only* as an `<enclosure>`, never linked
+anywhere in the article body — `_render_entry_attachments`'s own docstring
+says as much. Reported live 2026-09-13, twice within minutes of each other:
+untagging+unstarring one of these (which deletes the whole archive once
+nothing keeps it) left the file with **no way back into the panel at all** —
+kept correctly emptied, but "available" stayed empty too, since the body
+scan had nothing to find. `_filtered_file_enclosures` (the same
+audio/image/page-type exclusions `_render_entry_attachments` already applied,
+now shared rather than duplicated) is added as a second candidate source
+alongside the body scan in `_entry_content_html_and_base`; an orphan has no
+enclosure data preserved in the archive, so this only ever adds candidates
+for a live entry.
+
+**A bare social-handle link is a bare-domain problem, not a new one.**
+`scan_feed_attachment_extensions` already excludes `_TLD_LOOKALIKES` (a link
+to a bare domain leaves its TLD looking like a file extension — the reason
+`.il`/`.com`/etc. exist in that set at all), and `candidate_attachment_links_in_html`
+reuses the exact same set. Reported live 2026-09-13: a Bluesky profile link
+(`bsky.app/profile/<handle>.bsky.social`) showed up as an "available"
+attachment because its path ends in `.social`, which wasn't in the list.
+Added `"social"` to `_TLD_LOOKALIKES` — the list was already the right
+mechanism, just missing an entry a Bluesky-embedding feed made newly common.
+
 **A server-rendered row's `href` isn't reliable as a row identity.** It's the
 local `/starred-asset/<hash>` copy when one exists (`_attachment_list_item`'s
 "local copy wins" rule) — so `_attachment_list_item` also stamps

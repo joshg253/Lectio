@@ -11051,7 +11051,7 @@ _ARCHIVED_IMAGE_EXTS = frozenset({
 # file extension. Nothing else distinguishes it from a real one.
 _TLD_LOOKALIKES = frozenset({
     "com", "org", "net", "io", "co", "us", "uk", "eu", "de", "fr", "jp", "ru",
-    "tv", "me", "info", "biz", "app", "dev", "xyz",
+    "tv", "me", "info", "biz", "app", "dev", "xyz", "social",
 })
 
 
@@ -12841,6 +12841,42 @@ def _url_ext(url: str) -> str:
     return path[dot + 1:] if dot >= 0 else ""
 
 
+def _filtered_file_enclosures(entry, audio_url: str | None) -> list:
+    """Enclosures on *entry* that look like a real attached file, in order,
+    deduped by URL -- shared by `_render_entry_attachments` (which lists
+    every one, kept or not) and the Attachments panel's "available to save"
+    scan (`entry_attachments_route`), which needs the exact same "is this
+    actually a file" rule for enclosures that never appear as a body link at
+    all (Full Circle Magazine's issue PDF/EPUB, a devblog's demo .mp4) --
+    without this, un-keeping one left it with no way back into the panel:
+    reported live 2026-09-13, twice, right after shipping the panel.
+
+    Excludes audio (surfaced as the player), image (surfaced as the lead
+    image), and page-typed enclosures (Standard Ebooks' "read online"
+    single-page edition), and the audio enclosure already playing.
+    """
+    seen: set[str] = set()
+    out: list = []
+    for enc in (getattr(entry, "enclosures", None) or []):
+        enc_url = (getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
+        if not enc_url or enc_url in seen:
+            continue
+        enc_type = (getattr(enc, "type", None) or "").lower()
+        if enc_type.startswith("audio/") or _url_has_audio_ext(enc_url):
+            continue
+        if enc_type.startswith("image/") or _url_has_image_ext(enc_url):
+            continue
+        if enc_type in _PAGE_ENCLOSURE_TYPES:
+            continue
+        if not enc_type and _url_ext(enc_url) in _NEVER_ATTACHMENT_EXTS:
+            continue
+        if audio_url and enc_url == audio_url:
+            continue
+        seen.add(enc_url)
+        out.append(enc)
+    return out
+
+
 def _render_entry_attachments(entry, audio_url: str | None,
                               asset_map: dict[str, str] | None = None) -> str:
     """Render a footer "Attachments" section for non-audio enclosures.
@@ -12870,32 +12906,11 @@ def _render_entry_attachments(entry, audio_url: str | None,
     asset_map = asset_map or {}
     seen: set[str] = set()
     items: list[str] = []
-    for enc in (getattr(entry, "enclosures", None) or []):
+    for enc in _filtered_file_enclosures(entry, audio_url):
         enc_url = (getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
-        if not enc_url or enc_url in seen:
+        if enc_url in seen:
             continue
         enc_type = (getattr(enc, "type", None) or "").lower()
-        if enc_type.startswith("audio/") or _url_has_audio_ext(enc_url):
-            continue  # surfaced as the audio player
-        # Image enclosures are the post's lead/inline image (e.g. gottadeal's deal
-        # photo) — surfaced as the lead image, not a download link. Listing them
-        # here also poisoned the lead-image dedup (the URL appearing in the
-        # attachments markup made the lead look "already in content", nulling it).
-        if enc_type.startswith("image/") or _url_has_image_ext(enc_url):
-            continue
-        # A page is not a download. Standard Ebooks attaches its "read online"
-        # single-page edition as an enclosure typed application/xhtml+xml, which
-        # listed a webpage among the epubs — with a size, as though it were a
-        # file, and a label ("single-page") taken from a URL that has no
-        # extension to give it a better one. _NEVER_ATTACHMENT_EXTS already
-        # refuses these by extension for body links; this is the same rule for
-        # an enclosure that states its type outright.
-        if enc_type in _PAGE_ENCLOSURE_TYPES:
-            continue
-        if not enc_type and _url_ext(enc_url) in _NEVER_ATTACHMENT_EXTS:
-            continue
-        if audio_url and enc_url == audio_url:
-            continue
         seen.add(enc_url)
         label = html.escape(_enclosure_label(enc_url, enc_type))
         size = _format_enclosure_size(getattr(enc, "length", None))
@@ -32050,20 +32065,40 @@ def set_feed_attachment_exts_route(feed_url: str = Form(...), exts: str = Form("
     return JSONResponse({"ok": True, "exts": kept, "dropped": sorted(set(dropped))})
 
 
-def _entry_content_html_and_base(feed_url: str, entry_id: str) -> tuple[str, str]:
-    """Content HTML + base URL for the per-entry Attachments panel's candidate
-    scan -- the same source a live entry's pane already renders from, or (for
-    an orphan whose feed is gone) the readability capture from the archive.
-    Never the raw fetched page: that's what the 2026-09-12 image-scope fix
-    stopped scanning for exactly this reason (page chrome, not the article)."""
+def _entry_content_html_and_base(feed_url: str, entry_id: str) -> tuple[str, str, list[str]]:
+    """Content HTML + base URL + file-enclosure URLs for the per-entry
+    Attachments panel's candidate scan -- the same content source a live
+    entry's pane already renders from, or (for an orphan whose feed is gone)
+    the readability capture from the archive. Never the raw fetched page:
+    that's what the 2026-09-12 image-scope fix stopped scanning for exactly
+    this reason (page chrome, not the article).
+
+    Enclosure URLs are returned alongside content_html because a magazine's
+    issue PDF/EPUB or a devblog's demo video are routinely declared ONLY as
+    an ``<enclosure>`` -- never linked anywhere in the body -- so scanning
+    content_html alone misses them entirely (see _filtered_file_enclosures).
+    An orphan has no enclosure data preserved in the archive, so this is
+    always [] for that branch.
+    """
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
     if entry is not None:
-        return _resolve_entry_content_html(entry) or "", str(getattr(entry, "link", None) or entry_id)
+        content_html = _resolve_entry_content_html(entry) or ""
+        base_url = str(getattr(entry, "link", None) or entry_id)
+        # No audio_url passed through here (unlike _render_entry_attachments):
+        # _filtered_file_enclosures already excludes anything typed audio/* or
+        # audio-extensioned on its own, and resolving the exact playing URL
+        # needs a meta connection and can enqueue a background media scan as
+        # a side effect -- more than a read-only attachments list should cost.
+        enclosure_urls = [
+            (getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
+            for enc in _filtered_file_enclosures(entry, None)
+        ]
+        return content_html, base_url, [u for u in enclosure_urls if u]
     detail = starred_archive_service.get_archived_entry_detail(feed_url, entry_id)
     if detail:
-        return detail.get("content_html") or "", str(detail.get("link") or entry_id)
-    return "", entry_id
+        return detail.get("content_html") or "", str(detail.get("link") or entry_id), []
+    return "", entry_id, []
 
 
 @app.get("/entries/attachments")
@@ -32080,9 +32115,19 @@ def entry_attachments_route(feed_url: str = Query(...), entry_id: str = Query(..
     for item in kept:
         item["local_url"] = f"{STARRED_ASSET_URL_PREFIX}{item.pop('asset_hash')}"
     kept_urls = {k["source_url"] for k in kept}
-    content_html, base_url = _entry_content_html_and_base(feed_url, entry_id)
+    content_html, base_url, enclosure_urls = _entry_content_html_and_base(feed_url, entry_id)
     candidates = candidate_attachment_links_in_html(content_html, base_url)
-    available = [u for u in candidates if u not in kept_urls]
+    # Enclosure-declared files (a magazine's issue PDF/EPUB, a devblog's demo
+    # video) routinely never appear as a body link at all -- see
+    # _filtered_file_enclosures. Without adding these, un-keeping one left no
+    # way for the panel to offer it again.
+    all_candidates = list(candidates)
+    seen_candidates = set(candidates)
+    for url in enclosure_urls:
+        if url not in seen_candidates:
+            all_candidates.append(url)
+            seen_candidates.add(url)
+    available = [u for u in all_candidates if u not in kept_urls]
     return JSONResponse({"ok": True, "kept": kept, "available": available})
 
 
