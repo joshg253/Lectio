@@ -1147,6 +1147,20 @@ Other unbuilt cleanups:
   Worth doing with either real browser access or characterization tests
   written first — not as a blind text refactor.
 
+**Look into `ruff format`'s opt-in `docstring-code-format`** (raised 2026-09-13).
+Reformats Python code samples embedded in docstrings (doctest blocks, fenced
+```` ```python ```` blocks, RST literal blocks) when `ruff format` runs. The
+real decision is bigger than this one flag, though: the project doesn't run
+`ruff format` at all today — CLAUDE.md calls current formatting "a hand
+convention, not enforced," so `docstring-code-format` is inert until (if)
+`ruff format` itself gets adopted project-wide. Worth weighing against
+whatever the original reason was for leaving formatting unenforced (most
+likely: keeping diffs free of pure-formatter noise) before deciding either
+way. If adopted: one isolated "Reformat with ruff format" commit, no logic
+changes mixed in, its hash added to `.git-blame-ignore-revs` so `git blame`
+skips past it, and any docstring-code-format oddities needing a hand-fix
+follow up as their own separate commit.
+
 - ~~**Centralize schemeless-URL normalization**~~ — DONE 2026-08-28. New
   `assume_https_if_schemeless()` in main.py replaces the duplicated one-liner
   in `/feeds/discover` and Change URL. The add-feed dialog's own JS keeps its
