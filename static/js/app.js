@@ -10261,7 +10261,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       if (!(form instanceof HTMLFormElement)) return;
       const feedUrl = form.querySelector('input[name="feed_url"]')?.value || '';
       const entryId = form.querySelector('input[name="entry_id"]')?.value || '';
-      applyPostItemKeptState(feedUrl, entryId, Array.isArray(data?.tags) && data.tags.length > 0);
+      const hasTags = Array.isArray(data?.tags) && data.tags.length > 0;
+      applyPostItemKeptState(feedUrl, entryId, hasTags);
+      // data-post-kept (above) folds star-or-tag together; the post list's
+      // own tag glyph is a separate indicator and needs its own sync, or it
+      // only catches up on the next full list reload -- reported live
+      // 2026-09-13 as the postlist/article-header tag glyphs going out of
+      // sync until re-open/refresh.
+      applyPostItemHasTagsState(feedUrl, entryId, hasTags);
     }
 
     function applyEntryPaneSavedState(isSaved) {
