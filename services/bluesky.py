@@ -91,15 +91,30 @@ def _images_from_post(post: dict) -> list[str]:
 
 
 def _video_from_embed(embed: object) -> dict[str, str] | None:
-    """Return {"thumbnail", "playlist"} for a video embed (recursing into
-    recordWithMedia), or None if the post has no video."""
+    """Return {"thumbnail", "playlist", "width", "height"} for a video embed
+    (recursing into recordWithMedia), or None if the post has no video.
+
+    width/height (from the embed's own aspectRatio, when present) are the
+    video's real dimensions -- a portrait clip (height > width, common for a
+    phone-shot vertical video) stretched to the article's full column width
+    via the plain CSS width:100%/height:auto rule renders extremely tall.
+    Carried through as HTML width/height attributes so the same portrait-cap
+    treatment images already get (applyPortraitImageCap) can size it correctly
+    without needing metadata to load first -- the video is preload="none",
+    so videoWidth/videoHeight aren't available until playback starts.
+    """
     if not isinstance(embed, dict):
         return None
     etype = str(embed.get("$type") or "")
     if etype.startswith("app.bsky.embed.video"):
         thumb, playlist = embed.get("thumbnail"), embed.get("playlist")
         if thumb and playlist:
-            return {"thumbnail": str(thumb), "playlist": str(playlist)}
+            out = {"thumbnail": str(thumb), "playlist": str(playlist)}
+            aspect = embed.get("aspectRatio")
+            if isinstance(aspect, dict) and aspect.get("width") and aspect.get("height"):
+                out["width"] = str(int(aspect["width"]))
+                out["height"] = str(int(aspect["height"]))
+            return out
         return None
     if etype.startswith("app.bsky.embed.recordWithMedia"):
         return _video_from_embed(embed.get("media"))

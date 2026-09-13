@@ -99,6 +99,39 @@ def test_video_from_embed():
     }
 
 
+def test_video_from_embed_carries_aspect_ratio_as_width_height():
+    """A portrait (height > width) video stretched to the article's full
+    column width via plain CSS renders extremely tall -- width/height let the
+    same portrait-cap treatment images get apply here too, without waiting
+    for playback (the video is preload="none", so videoWidth/videoHeight
+    aren't available until then). Reported live 2026-09-13 as "video is
+    super huge and does not play" -- a real 1080x1920 post."""
+    embed = {
+        "$type": "app.bsky.embed.video#view",
+        "thumbnail": "https://video.bsky.app/watch/did%3Aplc%3Aabc/x/thumbnail.jpg",
+        "playlist": "https://video.bsky.app/watch/did%3Aplc%3Aabc/x/playlist.m3u8",
+        "aspectRatio": {"width": 1080, "height": 1920},
+    }
+    assert bluesky._video_from_embed(embed) == {
+        "thumbnail": "https://video.bsky.app/watch/did%3Aplc%3Aabc/x/thumbnail.jpg",
+        "playlist": "https://video.bsky.app/watch/did%3Aplc%3Aabc/x/playlist.m3u8",
+        "width": "1080",
+        "height": "1920",
+    }
+
+
+def test_video_from_embed_missing_aspect_ratio_omits_width_height():
+    embed = {
+        "$type": "app.bsky.embed.video#view",
+        "thumbnail": "https://video.bsky.app/watch/did%3Aplc%3Aabc/x/thumbnail.jpg",
+        "playlist": "https://video.bsky.app/watch/did%3Aplc%3Aabc/x/playlist.m3u8",
+    }
+    result = bluesky._video_from_embed(embed)
+    assert result is not None
+    assert "width" not in result
+    assert "height" not in result
+
+
 def test_video_from_embed_missing_playlist_or_thumbnail():
     assert bluesky._video_from_embed({"$type": "app.bsky.embed.video#view", "thumbnail": "t"}) is None
     assert bluesky._video_from_embed({"$type": "app.bsky.embed.video#view", "playlist": "p"}) is None

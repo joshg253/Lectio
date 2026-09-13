@@ -4412,7 +4412,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       videos.forEach((video) => {
         const src = video.dataset.bskyHlsSrc;
         delete video.dataset.bskyHlsSrc; // don't re-process on the next pane-render pass
-        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        // canPlayType returns "probably", "maybe", or "" -- any non-empty
+        // string is truthy, and Chromium returns "maybe" for this MIME type
+        // too (confirmed live), not just Safari. Only "probably" (Safari's
+        // real answer, a genuine native decoder) means the raw .m3u8 src
+        // will actually play; treating "maybe" the same way set a src
+        // Chromium has no decoder for, so the video silently failed to
+        // play -- reported live 2026-09-13.
+        if (video.canPlayType('application/vnd.apple.mpegurl') === 'probably') {
           video.src = src; // Safari: native HLS, no library needed
           return;
         }
@@ -4447,6 +4454,21 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         };
         if (img.complete) decide();
         else img.addEventListener('load', decide, { once: true });
+      });
+
+      // Same treatment for a portrait Bluesky video. width/height are set
+      // server-side from the post's own aspectRatio (see
+      // services/bluesky.py's _video_from_embed) rather than read from the
+      // video element itself: it's preload="none", so videoWidth/videoHeight
+      // aren't available until playback actually starts -- by then the huge
+      // layout has already been on screen. Reported live 2026-09-13 as
+      // "video is super huge" (a real 1080x1920 clip).
+      root.querySelectorAll('.entry-content video[width][height]').forEach((video) => {
+        if (video.dataset.portraitCapChecked) return;
+        video.dataset.portraitCapChecked = '1';
+        if (video.height > video.width) {
+          video.style.maxWidth = `min(${cap}px, 100%)`;
+        }
       });
     }
 

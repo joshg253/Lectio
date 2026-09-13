@@ -18962,8 +18962,21 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 # picked up by app.js's initBskyVideoPlayers, which attaches
                 # native HLS (Safari) or lazy-loads vendored hls.js for everyone
                 # else. poster keeps today's thumbnail as the pre-play frame.
+                #
+                # width/height (when the embed carried an aspectRatio) let
+                # applyPortraitImageCap cap a portrait video the same way it
+                # already caps a portrait image -- without them, a vertical
+                # phone-shot clip stretched to the article's full column width
+                # via width:100%/height:auto renders extremely tall. The video
+                # itself can't report this on its own before playback starts
+                # (preload="none" means no videoWidth/videoHeight yet).
+                _dims = (
+                    f' width="{html.escape(_bsky_video["width"], quote=True)}"'
+                    f' height="{html.escape(_bsky_video["height"], quote=True)}"'
+                    if _bsky_video.get("width") and _bsky_video.get("height") else ""
+                )
                 content_html = _existing + (
-                    f'<p><video controls preload="none" playsinline'
+                    f'<p><video controls preload="none" playsinline{_dims}'
                     f' poster="{html.escape(_bsky_video["thumbnail"], quote=True)}"'
                     f' data-bsky-hls-src="{html.escape(_bsky_video["playlist"], quote=True)}"'
                     f' style="max-width:100%;"></video></p>'

@@ -306,6 +306,34 @@ same gap as KaTeX above (no `app.js`), so a saved Bluesky video article still
 shows only the static thumbnail there; tracked in Plan.md alongside the KaTeX
 one rather than fixed separately.
 
+**`canPlayType`'s truthy check picked Chromium too, not just Safari — and
+Chromium can't actually decode a bare HLS `src`.** The MIME-type probe
+returns one of `""`/`"maybe"`/`"probably"`; the original code treated any
+non-empty result as "native support," but confirmed live, Chromium's own
+answer for `application/vnd.apple.mpegurl` is `"maybe"` — a hint of
+uncertainty, not a real decoder. That set `video.src` directly to the raw
+`.m3u8` manifest on every non-Safari browser, which has no native way to play
+one, so the video silently failed. Reported live 2026-09-13 as "video is
+super huge and does not play." Fixed by checking `=== "probably"` specifically
+(Safari's real answer) rather than truthiness — everything else falls through
+to `hls.js`, same as before.
+
+**"Super huge" was a second, independent bug: a portrait video with nothing
+capping its height.** `.entry-content video { width:100%; height:auto }`
+(and the tag's own inline `max-width:100%`) constrain width but let a tall
+clip's height scale right along with it — a 1080×1920 phone-shot vertical
+video stretched to a ~600px column renders over 1000px tall. Images get the
+equivalent problem capped already (`applyPortraitImageCap`, keyed off
+`img.naturalWidth/Height` once the image decodes), but a video can't supply
+that signal the same way: it's `preload="none"`, so `videoWidth`/`videoHeight`
+stay `0` until playback actually starts — by which point the oversized layout
+has already shipped to the screen. Fixed by carrying the post's own
+`aspectRatio` (already present in the AT Protocol embed) through as HTML
+`width`/`height` attributes (`_video_from_embed`, services/bluesky.py) —
+available synchronously, no decode or playback required — and extending
+`applyPortraitImageCap` to also check `.entry-content video[width][height]`
+using those attributes directly.
+
 ## Page weight: lazy HTML fragments
 
 At thousands of feeds, any template section that renders a row per feed is
