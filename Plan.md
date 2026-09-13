@@ -456,6 +456,48 @@ backlog yet — needs a dry-run count first to gauge how much of the batch is
 actually still resignable (a dead deviation with no fresh URL to fetch just
 stays unpinned).
 
+### Recapture the rest of the archive under the 2026-09-12 image-scope/enclosure fixes
+
+Two go-forward-only fixes shipped 2026-09-12 (source_html dropped from the
+image scan; enclosures gated by the per-feed attachment policy) stop *new*
+captures from over-archiving, but neither shrinks what was already captured
+under the old rules. `scripts/recapture_archived_entries.py` (delete the
+archive row + its now-orphaned assets, re-enqueue, the live worker refetches
+under current rules) exists and was run entry-at-a-time against the top ~25
+biggest saved articles the same night — 22 of 25 shrunk (several dramatically:
+a Windows blog post went from 54.2MB to 107KB), 3 failed because their reader
+entries no longer exist. The rest of the library (anything archived before
+that date, sorted by size, isn't checked past the top 25) is unaudited —
+worth a size-sorted sweep before assuming the backlog is clean, same shape as
+the size/date backfills below: dry-run a count first, since recapturing means
+a real re-fetch per entry, not just a local recomputation.
+
+Related, smaller: no audit has been done for feeds that relied on the *old*
+unconditional-enclosure-capture default (no `attachment_exts` ever configured)
+and may now silently stop keeping files they used to — this needs an explicit
+per-feed extension list going forward, and nothing currently surfaces which
+feeds are in that position.
+
+### Second pass on the ~1,651 entries fetch_missing_publish_dates.py couldn't date
+
+Ran live 2026-09-12 (library-wide, not just GuitarWorld): 1,904 of 3,555
+epoch-dated entries recovered a real published date (tried 2,998, no date
+604, wrong page 410, failed 80, skipped-after-repeated-failures 557). What's
+left is concentrated in two buckets that didn't move at all during the run —
+1,240 `lectio:saved` captures and 392 remaining GuitarWorld entries — which
+strongly suggests dead/parked links rather than a fixable gap (the script's
+own per-host failure limit gives up on a host after 5 misses, and an old
+read-later backlog skews far more toward dead links than an actively
+published blog does). The script uses a plain direct fetch
+(`url_guard.build_client`, honest Lectio UA) with none of the proxy/
+FlareSolverr escalation feed-refresh gets — some of the 80 "failed" and part
+of the 410 "wrong page" (bot-challenge interstitials) are exactly what that
+ladder exists to get past. Not worth building today; if the remainder still
+bothers Josh later, routing this script's fetches through the same
+escalation the feed-refresh path uses is the way to claw back more, though it
+has no natural per-article hook into the feed-scoped proxy/FlareSolverr state
+the way a feed URL does.
+
 ### Uncategorized orphan-feed cleanup — 9 stragglers left (manual)
 
 9 feeds are dead/one-shot/ambiguous (an Instagram post URL, a single Vice

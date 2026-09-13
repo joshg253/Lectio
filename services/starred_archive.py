@@ -86,7 +86,9 @@ class StarredArchiveService:
         background_user_ids: Callable[[], list[str]] | None = None,
         on_canonical_link: Callable[[str, str, str, str], bool] | None = None,
         find_attachments=None,
+        attachment_allowed: Callable[[str, str], bool] | None = None,
         manually_tagged_keys: Callable[[], set[tuple[str, str]]] | None = None,
+        archived_keys: Callable[[], set[tuple[str, str]]] | None = None,
     ) -> None:
         self._get_archive_connection = get_archive_connection
         self._get_meta_connection = get_meta_connection
@@ -102,11 +104,22 @@ class StarredArchiveService:
         # "has a complete archive" no longer implies "was starred" — see
         # backfill_saved_entries_from_archive.
         self._manually_tagged_keys = manually_tagged_keys
+        # Every (feed_url, entry_id) marked Archived (done), fetched in bulk.
+        # Same reasoning as manually_tagged_keys, one axis over: Archive keeps
+        # an entry's capture on unstar too (entry_has_keep_signal in main.py),
+        # so "has a complete archive" doesn't imply "was starred" here either
+        # — see backfill_saved_entries_from_archive.
+        self._archived_keys = archived_keys
         # Given (feed_url, html, base_url), returns absolute URLs of linked
         # FILES this feed is configured to keep (tabs, PDFs). Injected rather
         # than implemented here: which extensions a feed keeps is a per-feed
         # setting in the meta DB, and that policy belongs with the rest of it.
         self._find_attachments = find_attachments
+        # Given (feed_url, url), whether this feed's attachment-extension
+        # policy allows keeping it. Same policy as _find_attachments, reused
+        # for enclosures (see the "4a" comment below) so one per-feed setting
+        # governs every non-image file regardless of how it was found.
+        self._attachment_allowed = attachment_allowed
         # Which users the worker should scan each cycle. The archive DB is
         # resolved per-user through the context-bound get_archive_connection,
         # so the worker must bind each user in turn — a single global thread
@@ -761,7 +774,7 @@ class StarredArchiveService:
                 rows = conn.execute(
                     """
                     SELECT feed_url, entry_id, title, link, feed_title, author,
-                           published_at, received_at, starred_at
+                           published_at, received_at, starred_at, content_size_bytes
                       FROM archived_entry
                      WHERE status = 'complete'
                     """
@@ -828,6 +841,9 @@ class StarredArchiveService:
                     # When the star was made — the Inbox's "Recently starred"
                     # order. Orphans have no saved_entries row to read it from.
                     "starred_at": float(row["starred_at"]) if row["starred_at"] is not None else None,
+                    "content_size_bytes": (
+                        int(row["content_size_bytes"]) if row["content_size_bytes"] is not None else None
+                    ),
                 }
             )
         return out
@@ -900,14 +916,22 @@ class StarredArchiveService:
         the whole of the orphaned-star-row mystery; it also made a one-off sweep
         pointless, since the next startup re-created every row it deleted.
 
-        **Never restore a star for a manually tagged entry.** This function
-        infers "had a complete archive" ⇒ "was starred", which was true when it
-        was written and became false at the tag-as-keep flip: a tag now archives
-        too, so ``archived_entry`` is a superset of the starred set. Without the
-        check, retro-archiving tagged entries (Part C pass 1) silently converted
-        them into *starred* entries at the next boot — manufacturing exactly the
-        redundant stars that the "unstar tagged items" cleanup exists to remove.
-        An entry that is both starred and tagged is skipped too: this is a
+        **Never restore a star for a manually tagged entry, or one marked
+        Archived (done).** This function infers "had a complete archive" ⇒
+        "was starred", which was true when it was written and became false at
+        the tag-as-keep flip: a tag now archives too, so ``archived_entry`` is
+        a superset of the starred set. The Archive (done) axis is the same
+        shape and just as real a reason: unstarring an Archived, untagged
+        entry deliberately leaves its capture in place (``entry_has_keep_signal``
+        in main.py — Archive keeps the offline copy by design, and
+        ``apply_star_state`` never enqueues its removal), which is
+        indistinguishable here from "meta DB lost the star row" unless this
+        function also excludes it. Without that exclusion, unstarring anything
+        Archived got the star silently put back at the next restart — reported
+        live 2026-09-12 as "it keeps coming back after I unstarred it", after
+        several restarts during one session raced ahead of a fix that would
+        otherwise be invisible in a longer-lived deployment. An entry that is
+        both starred and tagged/archived is skipped too: this is a
         disaster-recovery path, and failing to restore one real star is far
         cheaper than inventing thousands.
         """
@@ -934,9 +958,20 @@ class StarredArchiveService:
             )
             return 0
 
+        try:
+            archived = self._archived_keys() if self._archived_keys else set()
+        except Exception as exc:  # noqa: BLE001
+            # Same reasoning as the tag lookup above — without it, every
+            # Archived entry would get its star silently put back.
+            LOGGER.warning(
+                "starred archive: backfill_saved_entries skipped, archived-keys lookup failed: %s", exc
+            )
+            return 0
+
         inserted = 0
         stale = 0
         tag_explained = 0
+        archived_explained = 0
         try:
             with self._get_meta_connection() as meta_conn, self._get_reader() as reader:
                 for row in rows:
@@ -944,6 +979,9 @@ class StarredArchiveService:
                     entry_id = str(row["entry_id"])
                     if (feed_url, entry_id) in tagged:
                         tag_explained += 1
+                        continue
+                    if (feed_url, entry_id) in archived:
+                        archived_explained += 1
                         continue
                     try:
                         entry = reader.get_entry((feed_url, entry_id), None)
@@ -972,6 +1010,11 @@ class StarredArchiveService:
             LOGGER.info(
                 "starred archive: skipped %d archive row(s) explained by a manual tag, not a star",
                 tag_explained,
+            )
+        if archived_explained:
+            LOGGER.info(
+                "starred archive: skipped %d archive row(s) explained by Archive (done), not a star",
+                archived_explained,
             )
         return inserted
 
@@ -1344,16 +1387,36 @@ class StarredArchiveService:
                     LOGGER.debug("readability extract failed for %s: %s", entry_link, exc)
 
         # 3. Collect every distinct image URL referenced anywhere we know about.
+        #
+        # Deliberately NOT source_html here: that's the whole fetched page
+        # (nav, sidebar, related-posts widgets, footer), not the article, and
+        # scanning it for <img> tags archived every image on the page -- most
+        # never rendered anywhere a saved article is shown. Reported live
+        # 2026-09-12: a Dropbox blog post whose real content (readability_html)
+        # has zero <img> tags had 1053 assets archived (145MB) this way,
+        # because the raw page itself has 1620 <img> tags in its chrome.
+        # content_html/summary_html/readability_html are what actually gets
+        # rendered, so what's found in them is what's worth keeping.
+        # source_html stays in play for the readability extraction above and
+        # for the separate linked-FILE attachment scan below (base_urls),
+        # which is opt-in per feed via the attachment-extension policy and
+        # doesn't carry this cost the same way an unconditional image grab does.
+        image_scan_sources: list[tuple[str, str]] = [
+            (content_html, entry_link or feed_url),
+            (summary_html, entry_link or feed_url),
+            (readability_html, entry_link or feed_url),
+        ]
+        image_urls: set[str] = set()
+        for html_text, base_url in image_scan_sources:
+            if html_text:
+                image_urls.update(self._extract_image_urls(html_text, base_url))
+
         base_urls: list[tuple[str, str]] = [
             (content_html, entry_link or feed_url),
             (summary_html, entry_link or feed_url),
             (source_html, entry_link or feed_url),
             (readability_html, entry_link or feed_url),
         ]
-        image_urls: set[str] = set()
-        for html_text, base_url in base_urls:
-            if html_text:
-                image_urls.update(self._extract_image_urls(html_text, base_url))
 
         # 3b. Lead image (if cached) — may not appear inline if the renderer
         #     promoted it from <head> meta.
@@ -1367,10 +1430,20 @@ class StarredArchiveService:
 
         # 4a. Enclosures — the publisher DECLARING that a file belongs to this
         #     post (Standard Ebooks attaches the epub, magazine feeds the issue
-        #     PDF). That is a stronger claim than a link in the body, so these
-        #     are kept unconditionally rather than behind the per-feed extension
-        #     list. Audio is skipped: podcast enclosures are large and stream
-        #     fine, and images are already collected above.
+        #     PDF; a software project's release-notes feed attaches an
+        #     installer). Gated by the SAME per-feed attachment-extension
+        #     policy as body-linked files (4b) — it used to be unconditional
+        #     on the theory that a declared enclosure is a stronger claim than
+        #     a body link, but that left no way to opt out of a large
+        #     installer/binary an unconfigured feed happened to attach:
+        #     reported live 2026-09-12, a feed explicitly configured to keep
+        #     no attachments at all still archived ~200MB of them via
+        #     enclosures, which this path never checked. A feed relying on the
+        #     PREVIOUS unconditional behavior (no extension list configured at
+        #     all) now needs its extensions added explicitly, same as any
+        #     body-linked attachment always has. Audio is skipped: podcast
+        #     enclosures are large and stream fine, and images are already
+        #     collected above.
         for enc in (getattr(entry, "enclosures", None) or []):
             enc_url = str(getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
             if not enc_url:
@@ -1379,6 +1452,8 @@ class StarredArchiveService:
             if enc_type.startswith(("audio/", "image/")):
                 continue
             if enc_url in image_urls:
+                continue
+            if self._attachment_allowed is not None and not self._attachment_allowed(feed_url, enc_url):
                 continue
             self._archive_asset(feed_url, entry_id, enc_url, max_bytes=ATTACHMENT_MAX_BYTES)
 
@@ -1409,15 +1484,30 @@ class StarredArchiveService:
         # entry that links it is deliberate here — it is what this entry
         # actually costs to keep captured, not what deleting it alone would
         # free. See Plan.md "Saved: see and sort by item size".
+        #
+        # DISTINCT on asset_hash, not a raw SUM over the join: the same image
+        # is routinely discovered at more than one URL for the SAME entry
+        # (e.g. a raw CDN download link and a display-CDN mirror of the exact
+        # same file) — archived_asset_link's key is (feed_url, entry_id,
+        # source_url), so that's two link rows for one already-deduped asset.
+        # A raw SUM over the join counted that asset's bytes once per link
+        # row instead of once per distinct asset, doubling (or worse) the
+        # reported size for any entry with such a duplicate — reported live
+        # 2026-09-12 as "some Saved articles are basically empty yet a couple
+        # hundred MB"; confirmed directly (a GitLab post with 17 distinct
+        # assets, several double-linked, reported 498.5MB where the correct
+        # distinct total is 249.4MB).
         content_size_bytes = (
             len(source_blob or b"") + len(readability_blob or b"") + len(content_blob or b"")
         )
         try:
             with self._archive_conn() as conn:
                 asset_total = conn.execute(
-                    "SELECT COALESCE(SUM(a.byte_size), 0) FROM archived_asset_link l"
-                    " JOIN archived_asset a ON a.asset_hash = l.asset_hash"
-                    " WHERE l.feed_url = ? AND l.entry_id = ?",
+                    "SELECT COALESCE(SUM(byte_size), 0) FROM ("
+                    "  SELECT DISTINCT a.asset_hash, a.byte_size"
+                    "  FROM archived_asset_link l JOIN archived_asset a ON a.asset_hash = l.asset_hash"
+                    "  WHERE l.feed_url = ? AND l.entry_id = ?"
+                    ")",
                     (feed_url, entry_id),
                 ).fetchone()[0]
             content_size_bytes += int(asset_total or 0)

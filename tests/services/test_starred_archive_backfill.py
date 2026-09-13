@@ -68,7 +68,8 @@ def dbs(tmp_path):
     meta.close()
 
 
-def _service(archive, meta, reader, tagged=None, tagged_raises=False):
+def _service(archive, meta, reader, tagged=None, tagged_raises=False,
+             archived=None, archived_raises=False):
     # A fresh connection per call, as the app's factory does: the service
     # closes what it opens, so handing it the fixture's own handle would close
     # it out from under the test's assertions.
@@ -84,6 +85,11 @@ def _service(archive, meta, reader, tagged=None, tagged_raises=False):
             raise RuntimeError("reader db unavailable")
         return set(tagged or ())
 
+    def archived_keys():
+        if archived_raises:
+            raise RuntimeError("meta db unavailable")
+        return set(archived or ())
+
     return StarredArchiveService(
         get_archive_connection=get_archive_connection,
         get_meta_connection=lambda: meta,
@@ -91,6 +97,7 @@ def _service(archive, meta, reader, tagged=None, tagged_raises=False):
         user_agent="test",
         sanitize_readability_html=lambda h: h,
         manually_tagged_keys=manually_tagged_keys,
+        archived_keys=archived_keys,
     )
 
 
@@ -236,3 +243,51 @@ def test_real_feed_rows_are_restored_too(dbs):
 
     assert svc.backfill_saved_entries_from_archive() == 1
     assert _stars(meta) == {("https://example.com/feed", "e1")}
+
+
+def test_an_archived_done_entry_is_never_restarred(dbs):
+    """The exact reported bug (2026-09-12): unstarring an Archived (done),
+    untagged entry deliberately leaves its capture in place -- Archive keeps
+    the offline copy on unstar by design (entry_has_keep_signal, main.py) --
+    so a complete archive row no longer implies the entry was starred here
+    either. Every restart before this fix silently put the star back."""
+    archive, meta = dbs
+    _add_archive(archive, "archived-only", feed=SAVED_FEED)
+    svc = _service(
+        archive, meta, _FakeReader({(SAVED_FEED, "archived-only")}),
+        archived={(SAVED_FEED, "archived-only")},
+    )
+
+    assert svc.backfill_saved_entries_from_archive() == 0
+    assert _stars(meta) == set()
+
+
+def test_archived_and_untouched_are_separated_in_one_batch(dbs):
+    archive, meta = dbs
+    _add_archive(archive, "starred-only", feed="https://example.com/feed")
+    _add_archive(archive, "archived-only", feed="https://example.com/feed")
+    live = {
+        ("https://example.com/feed", "starred-only"),
+        ("https://example.com/feed", "archived-only"),
+    }
+    svc = _service(
+        archive, meta, _FakeReader(live),
+        archived={("https://example.com/feed", "archived-only")},
+    )
+
+    assert svc.backfill_saved_entries_from_archive() == 1
+    assert _stars(meta) == {("https://example.com/feed", "starred-only")}
+
+
+def test_a_failing_archived_lookup_restores_nothing(dbs):
+    """Without the archived set every Archived entry would be starred, so bail
+    entirely rather than guess -- same rule as the tag lookup failure."""
+    archive, meta = dbs
+    _add_archive(archive, "e1", feed="https://example.com/feed")
+    svc = _service(
+        archive, meta, _FakeReader({("https://example.com/feed", "e1")}),
+        archived_raises=True,
+    )
+
+    assert svc.backfill_saved_entries_from_archive() == 0
+    assert _stars(meta) == set()

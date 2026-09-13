@@ -10247,10 +10247,20 @@ starred_archive_service = StarredArchiveService(
     # tag-created archive from a star-created one — since tag-as-keep, an
     # archive row alone no longer means the entry was starred.
     manually_tagged_keys=lambda: _manually_tagged_entry_keys(),
+    # Lazy for the same reason, same purpose one axis over: Archive (done)
+    # also keeps an entry's capture through an unstar (entry_has_keep_signal),
+    # so an archive row alone doesn't mean "was starred" here either.
+    archived_keys=lambda: get_archived_saved_keys(),
     # Lazy for the same reason. Per-feed policy (which extensions this feed
     # keeps) plus the link scan, so the service only has to ask one question.
     find_attachments=lambda feed_url, html, base: attachment_links_in_html(
         html, base, get_feed_attachment_exts(feed_url)),
+    # Same per-feed policy, reused to gate enclosures (see the "4a" comment
+    # in starred_archive.py) so one setting governs every non-image file
+    # regardless of whether it was declared as an enclosure or found in the
+    # body.
+    attachment_allowed=lambda feed_url, url: _attachment_ext_matches(
+        _url_ext(url), get_feed_attachment_exts(feed_url)),
 )
 
 
@@ -16602,6 +16612,7 @@ def merge_orphan_saved_entries(
     sort_key = {
         "post": "post_sort_value",
         "starred": "saved_sort_value",
+        "size": "size_sort_value",
     }.get(normalized_orphan_sort, "received_sort_value")
 
     additions: list[dict] = []
@@ -16627,6 +16638,7 @@ def merge_orphan_saved_entries(
                 "post_sort_value": post_iso,
                 "received_sort_value": recv_iso,
                 "saved_sort_value": _sort_value_from_epoch(orphan.get("starred_at")),
+                "size_sort_value": float(orphan.get("content_size_bytes") or 0),
                 "history_sort_value": "",
                 "post_timestamp": post_iso or None,
                 "received_timestamp": recv_iso or None,
@@ -16638,6 +16650,12 @@ def merge_orphan_saved_entries(
                     datetime.fromtimestamp(orphan["received_at"], tz=timezone.utc) if orphan.get("received_at") else None
                 ),
                 "read_display": None,
+                "size_bytes": orphan.get("content_size_bytes"),
+                "size_display": (
+                    _format_size_bytes(_ob)
+                    if (_ob := orphan.get("content_size_bytes")) is not None
+                    else None
+                ),
                 "duration_seconds": None,
                 "duration_display": None,
                 "is_orphan_archive": True,
@@ -16654,15 +16672,25 @@ def merge_orphan_saved_entries(
             p["received_sort_value"] = p.get("received_timestamp") or ""
         if "saved_sort_value" not in p:
             p["saved_sort_value"] = p.get("saved_timestamp") or ""
+        if "size_sort_value" not in p:
+            # list_entries_for_feeds pops the sort_key it used, same as the ISO
+            # fields above, but "size_bytes" (the raw int, used for the display
+            # badge) survives — re-derive from that instead of a timestamp.
+            p["size_sort_value"] = float(p.get("size_bytes") or 0)
 
     combined = posts + additions
-    combined.sort(key=lambda item: item.get(sort_key) or "", reverse=sort_desc)
+    # size_sort_value is a float (0 for "nothing archived yet"), not an empty
+    # string -- `or ""` here would have coerced a genuine 0-byte/unarchived
+    # item into a string and made it uncomparable against the rest.
+    default_sort_value = 0.0 if sort_key == "size_sort_value" else ""
+    combined.sort(key=lambda item: item.get(sort_key, default_sort_value), reverse=sort_desc)
     combined = combined[:limit]
 
     for p in combined:
         p.pop("post_sort_value", None)
         p.pop("received_sort_value", None)
         p.pop("saved_sort_value", None)
+        p.pop("size_sort_value", None)
         p.pop("history_sort_value", None)
 
     return combined
@@ -20653,8 +20681,23 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
             "title": src.title or "",
             "link": src.link or entry_id,
         }
-        if src.published:
-            ed["published"] = src.published
+        # entry_effective_date, not raw src.published: a source with no real
+        # publication date (published/updated both absent or garbage) left the
+        # synthesized copy with NO published key at all — reader defaults that
+        # to epoch-0 (1970-01-01), while its `added` (ingest time) is simply
+        # now, since it was just created. The result reads as "brand new" in
+        # any date-based view and as "ancient" in any sort keying off the raw
+        # column directly, an inconsistency reported live as "confusing as
+        # hell" 2026-09-12 — dozens of just-moved GuitarWorld posts sitting at
+        # epoch-0 while showing "Now" wherever the effective-date fallback (to
+        # `added`) was what actually got displayed. entry_effective_date is
+        # the same "published, else updated, else received" chain the list
+        # render and mark-older/newer actions already agree on, so the
+        # synthesized copy gets a real date under the identical rule instead
+        # of silently falling through reader's own default.
+        _src_effective_date = entry_effective_date(src)
+        if _src_effective_date:
+            ed["published"] = _src_effective_date
         if getattr(src, "content", None):
             ed["content"] = [{"value": src.content[0].value}]
         elif src.summary:
@@ -31801,8 +31844,11 @@ def migrate_entry_to_new_host(reader, conn, feed, old_id, new_id, new_link) -> s
     if reader.get_entry((feed, new_id), None) is None:
         ed: dict = {"feed_url": feed, "id": new_id, "link": new_link or new_id,
                     "title": src.title or ""}
-        if src.published:
-            ed["published"] = src.published
+        # entry_effective_date, not raw src.published — see the identical fix
+        # (and its rationale) in _move_entry_to_feed's own synth path.
+        _src_effective_date = entry_effective_date(src)
+        if _src_effective_date:
+            ed["published"] = _src_effective_date
         if getattr(src, "content", None):
             ed["content"] = [{"value": src.content[0].value}]
         elif src.summary:

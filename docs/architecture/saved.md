@@ -328,6 +328,26 @@ leaves the source (reader cannot delete feed-provided entries), but
 source is hard-deleted once the move succeeds. Without this the backlog never
 shrank as it was filed, and duplicate scans re-read husks.
 
+**A synthesized target gets a real date, not whatever reader defaults an
+absent one to.** When no existing entry matches in the target feed,
+`_move_entry_to_feed` (and `migrate_entry_to_new_host`'s identical synth path)
+creates one via `reader.add_entry(ed)`. `ed["published"]` used to be set only
+`if src.published:` — true for a real date, but also (falsily) skipped for a
+source whose only "date" is a feed-supplied garbage value real_published_date
+already treats as invalid (e.g. epoch-0), leaving the synthesized copy with no
+`published` key at all. Reader then has nothing to fall back to either, while
+the synthesized entry's own `added` (ingest time) is simply *now*, since it
+was just created — so the same post reads as ancient wherever something sorts
+on the raw column and brand new wherever something displays via the
+`entry_effective_date` fallback (`published`, else `updated`, else `added`).
+Reported live 2026-09-12 (mid-triage, moving misfiled guitarworld.com posts
+into the real feed) as dozens of just-moved entries suddenly at the top of the
+Inbox reading "Now" — "confusing as hell." Fixed by setting
+`ed["published"] = entry_effective_date(src)` instead of the raw attribute:
+the *source's* effective date, under the identical chain every other
+date-based view already agrees on, rather than leaving the synthesized copy
+to fall through reader's own default.
+
 **Barred targets** (`_autofile_excluded_targets`, on preview *and* apply): Saved
 Articles itself, and every YouTube feed — a saved page is never a channel post,
 and channels routinely share a name with the blog they accompany. For the same
@@ -711,11 +731,23 @@ What counts as a file is the whole design:
   `data-file` are decoded and the result still has to satisfy the feed's
   extension list. This widens where links are *found*, not what counts as a file.
 
-**Enclosures are captured unconditionally**, without the extension list: an
-`<enclosure>` is the publisher *declaring* that a file belongs to the post
-(Standard Ebooks attaches the epub), which is a stronger claim than a body link.
-Audio is skipped (podcast enclosures are large and stream fine) and images are
-already captured as images.
+**Enclosures now go through the same extension list** (fixed 2026-09-12; were
+captured unconditionally before). An `<enclosure>` is the publisher *declaring*
+that a file belongs to the post (Standard Ebooks attaches the epub, a
+software project's release-notes feed attaches an installer) — a stronger
+claim than a body link, which is why this was originally left ungated. But
+"stronger claim" isn't "the user wants it kept regardless of their own
+attachment policy": reported live as a feed explicitly configured to keep no
+attachments (`attachment_exts` empty) still archiving ~200MB of installer
+enclosures, because this path never consulted that setting at all. Gated
+through the same `attachment_allowed` callable
+(`StarredArchiveService.__init__`) the body scan already uses — one policy,
+whichever way the file was found. A feed relying on the *previous*
+unconditional behavior (no extension list ever configured) needs its
+extensions added explicitly now, same as any body-linked attachment always
+has. Audio is still skipped outright (podcast enclosures are large and stream
+fine) and images are still captured as images, neither ever consulting this
+policy.
 
 An archived asset is addressed by content hash, so a bare `download` attribute
 made the browser save `cfc24ad676…` with no extension — unopenable and
@@ -746,6 +778,47 @@ across entries — a site's repeated logo, say. Its full `byte_size` is still
 attributed to every entry that links it: the question this size answers is
 "what does keeping *this* item cost," not "what would deleting only this item
 free," and for that the shared bytes really are part of each entry's weight.
+
+**But only once per entry, not once per link.** `archived_asset_link`'s key is
+`(feed_url, entry_id, source_url)`, and the *same* asset routinely gets found
+at more than one URL for one entry — a raw CDN download link and a
+display-CDN mirror of the identical file, say — so a raw `SUM(byte_size)`
+over the join counted that asset once per link row instead of once per
+distinct asset, double-counting (or worse) it within a single entry. Reported
+live 2026-09-12 as "some Saved articles are basically empty yet a couple
+hundred MB": a GitLab post whose real content was ~3KB of text (a handful of
+large tutorial GIFs did the actual work) reported 498.5MB where `SUM` over
+`DISTINCT (asset_hash, byte_size)` gives the correct 249.4MB — 10 of its 17
+distinct assets were each linked twice. Fixed in both
+`StarredArchiveService._archive_entry` (the live capture path) and
+`scripts/backfill_archived_entry_sizes.py` (which had copied the same
+formula); the live library's already-computed sizes needed a second backfill
+run with the corrected query to fix entries affected by this specifically.
+
+**Image harvesting scanned the whole fetched page, not the article.**
+`_archive_entry` collects every `<img>` URL it can find and archives each one
+as an asset. Until 2026-09-12 that scan included `source_html` — the raw
+fetched page, not the article — alongside `content_html`/`summary_html`/
+`readability_html` (what actually gets rendered). A page's chrome (nav,
+sidebar, related-posts rails, footer, author headshots) routinely has far
+more images than the article itself, so this archived a pile of images no
+saved-article view ever shows. Reported live 2026-09-12 on two unrelated
+entries: a Dropbox blog post whose `readability_html` has zero `<img>` tags
+(genuinely a text-only piece) had 1053 assets archived at 145MB, because the
+raw page has 1620 `<img>` tags in its template; an AdGuard blog post with an
+empty extracted body had 65 assets at 29MB, all site-mascot/product-icon
+artwork from the same page chrome, not the post. Fixed by dropping
+`source_html` from the image scan — it stays in play for the readability
+extraction above it and for the separate linked-FILE attachment scan (4b),
+which is opt-in per feed via the attachment-extension policy and doesn't
+share this cost. Like the enclosure and double-counting fixes above, this is
+go-forward only: it stops new captures and re-fetches from repeating the
+problem, but doesn't shrink an entry already archived under the old scan —
+that needs the entry re-captured (delete the archive row and its now-orphaned
+assets, then re-enqueue), which nothing currently automates; doing it by hand
+against the live archive DB was refused by the sandbox's write classifier as
+too risky for an ad-hoc script, so it's Plan.md follow-up work, not something
+done in the moment for the three entries reported live.
 
 **Go-forward only, same as the DeviantArt pinning fix the same night** — until
 `scripts/backfill_archived_entry_sizes.py` (2026-09-11). Reported live as
@@ -781,6 +854,24 @@ Two sort-path consequences worth knowing before touching either:
   strings (ISO-ish) already sort correctly lexically, but a raw byte count
   does not (`"9000" > "10000"` as strings). Zero-padded to a fixed width
   (`f"{n:020d}"`) before merging is what keeps it numeric.
+- **A third merge step has its own, separate sort-key map.** `merge_orphan_saved_entries`
+  (root Inbox/Kept views merge in archive-only orphans whose feed is gone —
+  it runs on every plain root-folder request, not just when orphans exist)
+  re-sorts `posts + additions` itself, with its own `{"post": ..., "starred":
+  ...}` lookup that had no `"size"` entry — so a `sort_by=size` request
+  silently fell through to the default (`received_sort_value`), undoing the
+  size order `list_entries_for_feeds` had just computed and re-clipping to
+  `limit` in received-date order instead. Reported live 2026-09-12 as "sort by
+  Size Big still not quite right — maybe only sorting each chunk": each
+  chunk's own fetch really was sorted by size going in, but this merge step
+  ran on every one of them and re-sorted the result by received date before
+  handing it back. Fixed by adding `"size": "size_sort_value"` to that map,
+  giving orphans a `size_sort_value` from `archived_entry.content_size_bytes`
+  (added to `get_orphan_saved_entries`'s query — it only selected the date
+  columns before) and re-deriving it for existing posts from the surviving
+  `size_bytes` field the same way the date sort keys are re-derived from their
+  `_timestamp` twins, since `list_entries_for_feeds` pops whichever
+  `*_sort_value` it used before returning.
 
 ## Editing a post's published date (overrides)
 
@@ -821,3 +912,31 @@ Settings → Feeds → Utilities → **Archive old stars** clears the Inbox of s
 **Why it shipped with a "DO NOT RUN YET" in Plan.md, and what fixed it.** The cutoff originally sorted only on `saved_entries.saved_at`, which is not a real star date for most rows: the 2026-06 multi-user migration stamped its own run date over years-old Inoreader stars. Measured on the live library, 6,091 of 10,002 stars carry a `saved_at` in that one week; only 419 are a genuine Lectio-made star, the rest (3,492) predate it honestly. A 30-day cutoff would have swept the 6,091 migration-stamped rows in and a 90-day cutoff would have protected them — neither for any date-related reason.
 
 The fix (2026-08-25) is a **date basis**, not a smarter cutoff: `basis="published"` (the default, in both `GET /saved/archive-old/preview` and `POST /saved/archive-old`) measures age off the article's own `entries.published`, read directly from reader's DB (`_bulk_reader_published_dates`, same raw-connection-read pattern as `get_tagged_entry_keys`/`_sorted_star_key_window` — reader's high-level API has no bulk-by-key lookup). `basis="saved"` is kept as an explicit option for anyone who genuinely wants star-date bankruptcy, with its unreliability caveat shown in the UI only when picked. An entry with no date under the chosen basis is left alone rather than guessed at — the same policy `build_archive_plan` already applied to a missing `saved_at`.
+
+## `backfill_saved_entries_from_archive` didn't know about the Archive (done) axis
+
+`backfill_saved_entries_from_archive` (`services/starred_archive.py`, run at
+every startup) exists to recover from a wiped meta DB: if `archived_entry`
+still has a `status='complete'` row for an entry reader still holds, and
+nothing else explains it, it re-inserts the `saved_entries` row. It already
+knew to skip a **manually tagged** entry — tag-as-keep means a tag archives
+too, so "has a complete archive" stopped implying "was starred" the day that
+shipped.
+
+It didn't know about the **Archive (done)** axis, which broke the exact same
+assumption a second way: `entry_has_keep_signal` (main.py) treats Archived as
+a third independent reason to keep an entry's capture, and `apply_star_state`
+correctly never enqueues removal for an Archived-and-unstarred entry — the
+capture is *supposed* to survive. But `backfill_saved_entries_from_archive`
+had no way to tell "Archived, deliberately left unstarred" apart from
+"genuinely lost the star row," so every restart silently put the star back.
+Reported live 2026-09-12 as "it keeps coming back after I unstarred it
+multiple times" — several `make rebuild`s in one working session raced ahead
+of what would otherwise be a rare, invisible bug in a longer-lived deployment.
+
+Fixed the same way the tag case was: a new `archived_keys` callable (bulk
+`get_archived_saved_keys()`, mirroring `manually_tagged_keys`) is checked
+alongside `tagged`, and either explains away a complete archive without
+restoring its star. A failing lookup bails the whole function rather than
+guessing, same as the existing tag-lookup-failure rule — inventing thousands
+of stars is worse than skipping one restart's worth of disaster recovery.

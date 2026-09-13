@@ -110,6 +110,59 @@ def test_kept_scope_is_forwarded_to_the_service(monkeypatch):
     assert seen["kept_scope"] == "starred"
 
 
+def test_size_sort_orders_by_size_not_received_date(monkeypatch):
+    # merge_orphan_saved_entries' sort_key map had no "size" entry, so a
+    # sort_by=size Inbox view (merge runs on every root Inbox request) silently
+    # fell back to sorting the combined posts+orphans list by received date
+    # before re-clipping to `limit` -- undoing the size order list_entries_for_feeds
+    # had already computed. Reported live as "sort by Size Big still not quite
+    # right" on the Inbox, which always triggers this merge (root folder, no
+    # feed/tag selected, read_filter != unread).
+    orphans = [
+        {
+            "feed_url": "http://big.example/feed/",
+            "id": "orphan-huge",
+            "title": "Huge orphaned save",
+            "link": "http://big.example/a",
+            "feed_title": "big",
+            "author": None,
+            "is_starred": True,
+            "manual_tags": [],
+            "published_at": 100.0,
+            "received_at": 999999.0,  # newest by received date, smallest by size
+            "content_size_bytes": 5,
+        },
+        {
+            "feed_url": "http://big.example/feed/",
+            "id": "orphan-small",
+            "title": "Small orphaned save",
+            "link": "http://big.example/b",
+            "feed_title": "big",
+            "author": None,
+            "is_starred": True,
+            "manual_tags": [],
+            "published_at": 50.0,
+            "received_at": 1.0,  # oldest by received date, biggest by size
+            "content_size_bytes": 999_999_999,
+        },
+    ]
+    monkeypatch.setattr(
+        main.starred_archive_service, "get_orphan_saved_entries",
+        lambda live, terms=None, **kw: orphans,
+    )
+    # A live post list_entries_for_feeds would already have sorted biggest-first
+    # and dropped its own "size_sort_value" key (main.py:16006 pops it before
+    # returning) but kept the raw "size_bytes" the display badge uses.
+    live_posts = [
+        {"feed_url": "http://live.example/feed/", "id": "live-mid", "size_bytes": 1_000_000},
+    ]
+    out = main.merge_orphan_saved_entries(
+        live_posts, live_feed_urls=set(), sort_by="size", sort_dir="desc", limit=50,
+    )
+    assert [p["id"] for p in out] == ["orphan-small", "live-mid", "orphan-huge"]
+    assert "size_sort_value" not in out[0]  # popped before returning, like the other sort keys
+
+
 def test_row_saved_and_tags_come_from_the_orphan_not_hardcoded(monkeypatch):
     # Previously every orphan row was rendered with a hardcoded saved=True and
     # manual_tags=[] regardless of the service's answer — a tagged-then-
