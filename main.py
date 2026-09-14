@@ -12586,6 +12586,32 @@ _URL_PUBDATE_RE = re.compile(r"/(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:/|$|\?|\.)")
 # month beats a precise-looking lie.
 _URL_PUBMONTH_RE = re.compile(r"/(\d{4})/(\d{1,2})/(?:$|[^0-9])")
 
+_MONTHNAMES = (
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+)
+
+# datagenetics.com's permalink shape: /blog/march112020/, /blog/august42012/ —
+# month name + a number + year, run together with no separator. That number is
+# NOT the day: the blog's own archive index (blog.html) lists posts within a
+# "March 2020" section in descending-number order, and march112020 sits well
+# after the feed's own <pubDate> for march102020 (2020-03-27) — it's a per-month
+# post sequence, not a day-of-month. datagenetics ships no <pubDate> at all for
+# ~35 older posts and no date anywhere on the article page either, so month
+# precision from the slug is the best available signal — same placeholder-day
+# tradeoff as the WordPress /YYYY/MM/ case above.
+_URL_MONTHNAME_YEAR_RE = re.compile(r"/(" + "|".join(_MONTHNAMES) + r")\d{1,2}((?:19|20)\d{2})/", re.I)
+
 
 def url_inferred_pubdate(link: str | None) -> datetime | None:
     if not link:
@@ -12606,17 +12632,24 @@ def url_inferred_pubdate(link: str | None) -> datetime | None:
 
 
 def url_inferred_pubmonth(link: str | None) -> datetime | None:
-    """The /YYYY/MM/ permalink shape, resolved to the first of that month.
+    """The /YYYY/MM/ or month-name+year permalink shape, resolved to the first
+    of that month.
 
     Month precision, and the day is a placeholder rather than a claim — see
-    ``_URL_PUBMONTH_RE`` for why this is still the best signal those posts have.
+    ``_URL_PUBMONTH_RE`` and ``_URL_MONTHNAME_YEAR_RE`` for why this is still
+    the best signal those posts have.
     """
     if not link:
         return None
     match = _URL_PUBMONTH_RE.search(link)
-    if not match:
-        return None
-    year, month = int(match.group(1)), int(match.group(2))
+    if match:
+        year, month = int(match.group(1)), int(match.group(2))
+    else:
+        match = _URL_MONTHNAME_YEAR_RE.search(link)
+        if not match:
+            return None
+        month = _MONTHNAMES.index(match.group(1).lower()) + 1
+        year = int(match.group(2))
     if not (2000 <= year <= 2099 and 1 <= month <= 12):
         return None
     return datetime(year, month, 1, tzinfo=timezone.utc)
