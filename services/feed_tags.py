@@ -353,6 +353,16 @@ _PATH_TAG_STOPWORDS = frozenset(
 _PATH_TAG_SEGMENT_RE = re.compile(r"^[a-z][a-z0-9-]{2,29}$")
 _MAX_PATH_TAGS = 3
 
+# datagenetics.com fuses its permalink date into one segment — /blog/march112020/
+# — month name + a number + year, no separator. The purely-numeric date guard
+# below only catches split segments like /2026/02/25/, so this fused shape slid
+# through as a normal-looking segment and got suggested as a tag ("march112020").
+# Same job as main.py's url_inferred_pubmonth, but this only needs to recognize
+# the shape, not parse it, so it stays a local regex rather than a cross-layer
+# import (main.py is the UI/API layer; this module must not depend on it).
+_MONTHNAMES = ("january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december")
+_MONTHNAME_YEAR_SEGMENT_RE = re.compile(r"^(?:" + "|".join(_MONTHNAMES) + r")\d{1,2}(?:19|20)\d{2}$", re.I)
+
 
 # Future plc sites (guitarplayer, pcgamer, TechRadar, Tom's Hardware…) publish
 # their taxonomy in one meta tag rather than in links, so no anchor tier sees it:
@@ -424,7 +434,7 @@ def tags_from_url_path(url: str | None) -> list[str]:
     # says nothing about the post. Not a coverage heuristic: it reads the URL's
     # SHAPE, and never looks at how often a tag occurs (see the twice-reverted
     # suppression experiments in Plan.md).
-    if any(seg.isdigit() and len(seg) in (2, 4) for seg in segments):
+    if any((seg.isdigit() and len(seg) in (2, 4)) or _MONTHNAME_YEAR_SEGMENT_RE.match(seg) for seg in segments):
         return []
     out: list[str] = []
     for seg in segments[:-1]:

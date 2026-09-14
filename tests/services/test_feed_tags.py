@@ -897,6 +897,14 @@ def test_a_year_inside_a_slug_is_not_a_date_segment():
     assert tags_from_url_path("https://example.com/section/subsection/a-post-2026-roundup") == ["section", "subsection"]
 
 
+def test_a_fused_monthname_date_segment_yields_nothing():
+    """datagenetics.com fuses its permalink date into one segment —
+    /blog/march112020/ — which slipped past the purely-numeric date guard and
+    got suggested as a tag ("march112020")."""
+    assert tags_from_url_path("http://datagenetics.com/blog/march112020/index.html") == []
+    assert tags_from_url_path("http://www.datagenetics.com/blog/august42012/index.html") == []
+
+
 def test_structure_words_are_dropped():
     assert tags_from_url_path("https://example.com/blog/post/my-title") == []
 
