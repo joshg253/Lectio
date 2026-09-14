@@ -12607,10 +12607,15 @@ _MONTHNAMES = (
 # "March 2020" section in descending-number order, and march112020 sits well
 # after the feed's own <pubDate> for march102020 (2020-03-27) — it's a per-month
 # post sequence, not a day-of-month. datagenetics ships no <pubDate> at all for
-# ~35 older posts and no date anywhere on the article page either, so month
-# precision from the slug is the best available signal — same placeholder-day
-# tradeoff as the WordPress /YYYY/MM/ case above.
-_URL_MONTHNAME_YEAR_RE = re.compile(r"/(" + "|".join(_MONTHNAMES) + r")\d{1,2}((?:19|20)\d{2})/", re.I)
+# ~35 older posts and no date anywhere on the article page either.
+#
+# The number is still used as the returned day (clamped to <=28, so it is
+# always a valid date) rather than always the 1st: real same-month pubDates
+# climb monotonically with it (march1..march10 above run March 4 -> March 27),
+# so a higher number reliably sorts later within the month even though it is
+# not the true day. A distinct, wrong-but-ordered day beats every post in a
+# month colliding on the 1st.
+_URL_MONTHNAME_YEAR_RE = re.compile(r"/(" + "|".join(_MONTHNAMES) + r")(\d{1,2})((?:19|20)\d{2})/", re.I)
 
 
 def url_inferred_pubdate(link: str | None) -> datetime | None:
@@ -12632,15 +12637,16 @@ def url_inferred_pubdate(link: str | None) -> datetime | None:
 
 
 def url_inferred_pubmonth(link: str | None) -> datetime | None:
-    """The /YYYY/MM/ or month-name+year permalink shape, resolved to the first
-    of that month.
+    """The /YYYY/MM/ or month-name+year permalink shape, resolved to that month.
 
-    Month precision, and the day is a placeholder rather than a claim — see
-    ``_URL_PUBMONTH_RE`` and ``_URL_MONTHNAME_YEAR_RE`` for why this is still
-    the best signal those posts have.
+    Month precision — the day is not a claim, only an ordering hint where one is
+    available. See ``_URL_PUBMONTH_RE`` and ``_URL_MONTHNAME_YEAR_RE`` for why
+    this is still the best signal those posts have, and for why the month-name
+    shape's day comes from its counter rather than always being the 1st.
     """
     if not link:
         return None
+    day = 1
     match = _URL_PUBMONTH_RE.search(link)
     if match:
         year, month = int(match.group(1)), int(match.group(2))
@@ -12649,10 +12655,11 @@ def url_inferred_pubmonth(link: str | None) -> datetime | None:
         if not match:
             return None
         month = _MONTHNAMES.index(match.group(1).lower()) + 1
-        year = int(match.group(2))
+        day = min(int(match.group(2)), 28)
+        year = int(match.group(3))
     if not (2000 <= year <= 2099 and 1 <= month <= 12):
         return None
-    return datetime(year, month, 1, tzinfo=timezone.utc)
+    return datetime(year, month, day, tzinfo=timezone.utc)
 
 
 # Some feeds prefix entry titles with the date ("2024-01-15: …", "2024/01/15

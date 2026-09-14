@@ -9,7 +9,10 @@ signal and the only honest one.
 datagenetics.com is why the month tier also matches a month-name-plus-year slug
 (``/blog/march112020/``): ~35 posts ship no ``<pubDate>`` and no date anywhere on
 the article page either, and the number in the slug is a per-month sequence, not
-the day — see ``_URL_MONTHNAME_YEAR_RE`` in main.py.
+the day — see ``_URL_MONTHNAME_YEAR_RE`` in main.py. The sequence number is still
+used as the returned day (clamped to <=28): real same-month pubDates climb
+monotonically with it, so a higher number reliably sorts later even though it is
+not the true day — better than every post in a month colliding on the 1st.
 """
 
 from __future__ import annotations
@@ -69,23 +72,36 @@ def test_nothing_in_nothing_out():
 
 
 # ── month-name-plus-year (datagenetics.com) ──
-def test_a_monthname_slug_resolves_to_the_first_of_the_month():
-    assert main.url_inferred_pubmonth("http://datagenetics.com/blog/march112020/index.html") == _utc(2020, 3, 1)
+def test_a_monthname_slug_resolves_using_its_sequence_number_as_the_day():
+    """march11 is the 11th March-2020 post, not the 11th of March — but using 11
+    as the day still sorts it correctly after march1..march10 within the month,
+    which colliding on the 1st would not."""
+    assert main.url_inferred_pubmonth("http://datagenetics.com/blog/march112020/index.html") == _utc(2020, 3, 11)
 
 
-def test_the_sequence_number_is_not_mistaken_for_a_day():
-    """march112020 is the 11th March-2020 post (per the site's own blog.html
-    archive, which lists it after march102020's real 2020-03-27 pubDate), not
-    the 11th of March — the day tier must not fire on it."""
+def test_the_day_tier_still_declines_a_monthname_slug():
+    """The day tier's job is an exact claim; it must not fire here even though
+    the month tier now borrows this same number as an ordering hint."""
     assert main.url_inferred_pubdate("http://datagenetics.com/blog/march112020/index.html") is None
 
 
 def test_a_two_digit_sequence_number_still_resolves():
-    assert main.url_inferred_pubmonth("http://datagenetics.com/blog/june122020/index.html") == _utc(2020, 6, 1)
+    assert main.url_inferred_pubmonth("http://datagenetics.com/blog/june122020/index.html") == _utc(2020, 6, 12)
+
+
+def test_a_sequence_number_past_28_is_clamped_to_a_valid_day():
+    assert main.url_inferred_pubmonth("https://x.test/blog/february292021/post/") == _utc(2021, 2, 28)
+
+
+def test_higher_sequence_numbers_sort_later_within_the_month():
+    earlier = main.url_inferred_pubmonth("http://datagenetics.com/blog/march32020/index.html")
+    later = main.url_inferred_pubmonth("http://datagenetics.com/blog/march102020/index.html")
+    assert earlier is not None and later is not None
+    assert earlier < later
 
 
 def test_monthname_matching_is_case_insensitive():
-    assert main.url_inferred_pubmonth("http://datagenetics.com/blog/March112020/index.html") == _utc(2020, 3, 1)
+    assert main.url_inferred_pubmonth("http://datagenetics.com/blog/March112020/index.html") == _utc(2020, 3, 11)
 
 
 def test_a_monthname_slug_without_a_sequence_digit_is_not_a_match():
