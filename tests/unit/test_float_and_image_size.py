@@ -147,9 +147,7 @@ def test_the_dedup_decision_is_not_persisted_as_the_lead_image():
     strip_at = src.index("_strip_lead_image_opener(")
     capture_at = src.index("_resolved_lead_for_cache = lead_image_url")
     assert capture_at < strip_at, "must be captured BEFORE the dedup rewrites it"
-    assert re.search(
-        r"persist_lead_image_async\(\s*str\(entry\.feed_url\),\s*str\(entry\.id\),\s*_resolved_lead_for_cache\s*\)", src
-    )
+    assert re.search(r"persist_lead_image_async\(\s*str\(entry\.feed_url\),\s*str\(entry\.id\),\s*_resolved_lead_for_cache\s*\)", src)
 
 
 def test_the_float_is_detected_on_the_wrapper_not_just_the_img():
