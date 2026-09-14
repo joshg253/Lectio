@@ -16,8 +16,16 @@ cannot silently erase it if the feed's own (still-absent) date reappears as NULL
 Manual overrides are never touched. Nothing is fetched — every candidate comes
 from the entry's own stored link/id/title.
 
+`--refresh` recomputes entries this tool *already* wrote an override for (e.g.
+after an improvement to the inference itself — see main.py's url_inferred_pubmonth
+picking up a sequence-number-as-day tier after this script's first run had set
+every datagenetics.com entry to the 1st of its month). It requires --feed: there
+is no "was this override manual or automated" flag on the row, so recomputation
+is bounded to entries in one named feed rather than every override in the DB.
+
     uv run python scripts/backfill_url_inferred_dates.py                          # dry run, all feeds
     uv run python scripts/backfill_url_inferred_dates.py --feed <url> --apply
+    uv run python scripts/backfill_url_inferred_dates.py --feed <url> --refresh --apply
 """
 
 from __future__ import annotations
@@ -39,7 +47,7 @@ _RESTART_NOTE = (
 )
 
 
-def backfill_for_user(uid: str, apply: bool, feed_filter: str | None) -> int:
+def backfill_for_user(uid: str, apply: bool, feed_filter: str | None, refresh: bool) -> int:
     with tenancy.user_context(uid):
         meta = sqlite3.connect(f"file:{tenancy.meta_db_path()}?mode=ro", uri=True, timeout=30.0)
         overrides = {(str(r[0]), str(r[1])) for r in meta.execute("SELECT feed_url, entry_id FROM entry_date_overrides")}
@@ -47,19 +55,30 @@ def backfill_for_user(uid: str, apply: bool, feed_filter: str | None) -> int:
 
         rc = sqlite3.connect(str(tenancy.reader_db_path()), timeout=30.0)
         rc.row_factory = sqlite3.Row
-        query = "SELECT feed, id, link, title FROM entries WHERE published IS NULL AND updated IS NULL"
-        params: tuple = ()
-        if feed_filter:
-            query += " AND feed = ?"
-            params = (feed_filter,)
-        rows = rc.execute(query, params).fetchall()
+        if refresh:
+            refresh_ids = [eid for (furl, eid) in overrides if furl == feed_filter]
+            if not refresh_ids:
+                print(f"[{uid}] no existing override for {feed_filter} to refresh")
+                return 0
+            placeholders = ",".join("?" * len(refresh_ids))
+            rows = rc.execute(
+                f"SELECT feed, id, link, title FROM entries WHERE feed = ? AND id IN ({placeholders})",
+                (feed_filter, *refresh_ids),
+            ).fetchall()
+        else:
+            query = "SELECT feed, id, link, title FROM entries WHERE published IS NULL AND updated IS NULL"
+            params: tuple = ()
+            if feed_filter:
+                query += " AND feed = ?"
+                params = (feed_filter,)
+            rows = rc.execute(query, params).fetchall()
 
         found: list[dict] = []
         by_source: dict[str, int] = {}
         skipped_override = 0
         for row in rows:
             key = (str(row["feed"]), str(row["id"]))
-            if key in overrides:
+            if key in overrides and not refresh:
                 skipped_override += 1
                 continue
             link, ident, title = row["link"], str(row["id"]), row["title"]
@@ -127,10 +146,15 @@ def main_cli() -> int:
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
     ap.add_argument("--feed", default=None, help="restrict to one feed URL")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
+    ap.add_argument("--refresh", action="store_true", help="recompute entries this tool already overrode (requires --feed)")
     args = ap.parse_args()
 
+    if args.refresh and not args.feed:
+        print("--refresh requires --feed")
+        return 1
+
     for uid in [args.user] if args.user else main._background_user_ids():
-        backfill_for_user(uid, args.apply, args.feed)
+        backfill_for_user(uid, args.apply, args.feed, args.refresh)
     return 0
 
 
