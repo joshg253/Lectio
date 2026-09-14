@@ -3907,10 +3907,20 @@ def ensure_meta_schema() -> None:
                 feed_url TEXT NOT NULL,
                 entry_id TEXT NOT NULL,
                 published TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'manual',
                 PRIMARY KEY(feed_url, entry_id)
             )
             """
         )
+        try:
+            # Existing rows predate this column and cannot be told apart after
+            # the fact, so they default to 'manual' — the safe direction, since
+            # scripts/backfill_url_inferred_dates.py's --refresh only recomputes
+            # rows marked 'inferred' (its own writes) and must never touch a
+            # real correction made through /entries/set-date.
+            conn.execute("ALTER TABLE entry_date_overrides ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
+        except Exception:
+            pass  # column already exists
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS entry_title_overrides (
@@ -12655,7 +12665,10 @@ def url_inferred_pubmonth(link: str | None) -> datetime | None:
         if not match:
             return None
         month = _MONTHNAMES.index(match.group(1).lower()) + 1
-        day = min(int(match.group(2)), 28)
+        # Clamped to 1..28: the regex's \d{1,2} accepts 0 (e.g. "march02020"
+        # backtracks to sequence "0"), and datetime() raises on day=0 rather
+        # than being a plausibility check this function can catch below.
+        day = max(1, min(int(match.group(2)), 28))
         year = int(match.group(3))
     if not (2000 <= year <= 2099 and 1 <= month <= 12):
         return None
@@ -32344,7 +32357,7 @@ def _set_orphan_entry_date(feed_url: str, entry_id: str, published: str) -> JSON
             # date already returned 400 before this block), and published hasn't
             # changed since, so re-parsing it here would just repeat that work.
             conn.execute(
-                "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published) VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published, source) VALUES (?, ?, ?, 'manual')",
                 (feed_url, entry_id, dt.strftime("%Y-%m-%d %H:%M:%S")),
             )
     invalidate_unread_counts_cache()
@@ -32395,7 +32408,7 @@ def set_entry_date_route(feed_url: str = Form(...), entry_id: str = Form(...), p
         stored = dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         with get_meta_connection() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published) VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published, source) VALUES (?, ?, ?, 'manual')",
                 (feed_url, entry_id, stored),
             )
         db = reader._storage.get_db()

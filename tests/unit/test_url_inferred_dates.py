@@ -93,6 +93,13 @@ def test_a_sequence_number_past_28_is_clamped_to_a_valid_day():
     assert main.url_inferred_pubmonth("https://x.test/blog/february292021/post/") == _utc(2021, 2, 28)
 
 
+def test_a_sequence_number_of_zero_does_not_crash():
+    """The regex's \\d{1,2} accepts 0 (e.g. "march02020" backtracks to a
+    single-digit sequence "0" so the year still matches) — datetime() raises
+    on day=0 rather than returning None, so this must be clamped up to 1."""
+    assert main.url_inferred_pubmonth("https://x.test/blog/march02020/post/") == _utc(2020, 3, 1)
+
+
 def test_higher_sequence_numbers_sort_later_within_the_month():
     earlier = main.url_inferred_pubmonth("http://datagenetics.com/blog/march32020/index.html")
     later = main.url_inferred_pubmonth("http://datagenetics.com/blog/march102020/index.html")

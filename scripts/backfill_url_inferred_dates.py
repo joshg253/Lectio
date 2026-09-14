@@ -19,9 +19,10 @@ from the entry's own stored link/id/title.
 `--refresh` recomputes entries this tool *already* wrote an override for (e.g.
 after an improvement to the inference itself — see main.py's url_inferred_pubmonth
 picking up a sequence-number-as-day tier after this script's first run had set
-every datagenetics.com entry to the 1st of its month). It requires --feed: there
-is no "was this override manual or automated" flag on the row, so recomputation
-is bounded to entries in one named feed rather than every override in the DB.
+every datagenetics.com entry to the 1st of its month). Only rows this tool itself
+wrote (entry_date_overrides.source = 'inferred') are eligible — a manual
+correction from /entries/set-date is always 'manual' and never recomputed. Also
+requires --feed, as a second, belt-and-suspenders bound on the blast radius.
 
     uv run python scripts/backfill_url_inferred_dates.py                          # dry run, all feeds
     uv run python scripts/backfill_url_inferred_dates.py --feed <url> --apply
@@ -51,14 +52,24 @@ def backfill_for_user(uid: str, apply: bool, feed_filter: str | None, refresh: b
     with tenancy.user_context(uid):
         meta = sqlite3.connect(f"file:{tenancy.meta_db_path()}?mode=ro", uri=True, timeout=30.0)
         overrides = {(str(r[0]), str(r[1])) for r in meta.execute("SELECT feed_url, entry_id FROM entry_date_overrides")}
+        if refresh:
+            # Only rows this tool itself wrote are eligible — a manual
+            # correction from /entries/set-date is always 'manual' and must
+            # never be recomputed away.
+            refresh_ids = [
+                str(r[0])
+                for r in meta.execute(
+                    "SELECT entry_id FROM entry_date_overrides WHERE feed_url = ? AND source = 'inferred'",
+                    (feed_filter,),
+                )
+            ]
         meta.close()
 
         rc = sqlite3.connect(str(tenancy.reader_db_path()), timeout=30.0)
         rc.row_factory = sqlite3.Row
         if refresh:
-            refresh_ids = [eid for (furl, eid) in overrides if furl == feed_filter]
             if not refresh_ids:
-                print(f"[{uid}] no existing override for {feed_filter} to refresh")
+                print(f"[{uid}] no 'inferred' override for {feed_filter} to refresh")
                 return 0
             placeholders = ",".join("?" * len(refresh_ids))
             rows = rc.execute(
@@ -134,7 +145,7 @@ def backfill_for_user(uid: str, apply: bool, feed_filter: str | None, refresh: b
 
         with main.get_meta_connection() as conn:
             conn.executemany(
-                "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published) VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published, source) VALUES (?, ?, ?, 'inferred')",
                 [(f["feed_url"], f["entry_id"], f["published"]) for f in found],
             )
         print(_RESTART_NOTE % (len(found), uid))
