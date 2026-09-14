@@ -14581,6 +14581,19 @@ def _safe_bb_url(raw: str) -> str:
     return stripped if re.match(r"https?://", stripped, re.IGNORECASE) else "#"
 
 
+# IPB/Invision's video tag (Nexus Mods news posts, e.g. "[youtube]CC_O_X6HLkI[/youtube]").
+# Content is normally a bare 11-char video id, but accepts a full watch/share/embed
+# URL too in case another BBCode dialect nests one. Anchored to the WHOLE trimmed
+# tag body so a URL with extra junk after the id (a stray query param, trailing
+# text) is rejected rather than mis-extracting a wrong id — same "never claim what
+# can't be backed" rule the rest of this module follows.
+_BB_YOUTUBE_RE = re.compile(r"\[youtube\](.*?)\[/youtube\]", re.IGNORECASE | re.DOTALL)
+_BB_YOUTUBE_ID_RE = re.compile(
+    r"^(?:https?://)?(?:(?:www\.)?youtube(?:-nocookie)?\.com/(?:embed/|watch\?(?:[^\s]*&)?v=|v/|shorts/)|youtu\.be/)?([A-Za-z0-9_-]{11})\s*$",
+    re.IGNORECASE,
+)
+
+
 def _bbcode_to_html(text: str) -> str:
     """Convert common BBCode tags to HTML.
 
@@ -14654,6 +14667,15 @@ def _bbcode_to_html(text: str) -> str:
         out,
         flags=re.I | re.S,
     )
+
+    def _bb_youtube(m: re.Match) -> str:
+        id_match = _BB_YOUTUBE_ID_RE.match(_html.unescape(m.group(1)).strip())
+        # Leave the tag untouched (not stripped) when the body doesn't parse as a
+        # recognizable id/URL — same fallback the rest of this function uses for
+        # anything it can't safely convert.
+        return _youtube_embed_html(id_match.group(1)) if id_match else m.group(0)
+
+    out = _BB_YOUTUBE_RE.sub(_bb_youtube, out)
 
     # newlines
     out = out.replace("\n", "<br>\n")

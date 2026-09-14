@@ -67,3 +67,34 @@ def test_line_alone_is_not_added_as_a_bbcode_signal():
     text = "fmt = '[marker][line][color]'"
     assert len(main._BBCODE_SIGNAL_RE.findall(text)) == 1
     assert main._looks_like_bbcode(text) is False
+
+
+# --- [youtube]: IPB/Invision's video tag (Nexus Mods) -----------------------
+# Same shape of miss as [line] above — found live 2026-09-13 across 5 real
+# Nexus Mods news posts, rendering as literal "[youtube]CC_O_X6HLkI[/youtube]"
+# text because _bbcode_to_html had no substitution for it.
+
+
+def test_youtube_tag_becomes_an_embed():
+    text = "[b]Watch it here:[/b]<br/>\n<br/>[center]\n<br/>[youtube]CC_O_X6HLkI[/youtube][/center]"
+    assert main._looks_like_bbcode(text) is True
+    converted = main._bbcode_to_html(text)
+    assert "[youtube]" not in converted
+    assert "youtube-embed-container" in converted
+    assert "CC_O_X6HLkI" in converted
+
+
+def test_youtube_tag_accepts_a_full_watch_url_not_just_a_bare_id():
+    text = "[b]x[/b][i]y[/i][youtube]https://www.youtube.com/watch?v=CC_O_X6HLkI[/youtube]"
+    converted = main._bbcode_to_html(text)
+    assert "CC_O_X6HLkI" in converted
+    assert "youtube-embed-container" in converted
+
+
+def test_an_unrecognizable_youtube_tag_body_is_left_untouched():
+    """Anchored to the WHOLE trimmed tag body — junk after what looks like an id
+    must not be silently truncated into a wrong embed."""
+    text = "[b]x[/b][i]y[/i][youtube]not a video id[/youtube]"
+    converted = main._bbcode_to_html(text)
+    assert "[youtube]not a video id[/youtube]" in converted
+    assert "youtube-embed-container" not in converted
