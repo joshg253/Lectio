@@ -3866,6 +3866,39 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         // ignore malformed urls
       }
 
+      // Push/replace HERE, synchronously inside the tap that called this
+      // function — not after the `await fetch` below. Chromium's "history
+      // manipulation intervention" marks an entry pushed without live user
+      // activation as skippable, and Back walks straight past it. The
+      // await was consuming that activation window, so on a real device
+      // (confirmed live on a Galaxy S21+/Vivaldi, matching the exact
+      // device the drawer-spare comment below already calls out for the
+      // same intervention) Back from an opened article skipped past the
+      // list's own entry entirely, landing further back and triggering a
+      // full list re-fetch — the "pops to the top, chunks gone" bug.
+      // Nothing below this point depends on the fetch response to decide
+      // WHAT to push, only onScopeList/pushHistory/url, all already final.
+      if (pushHistory) {
+        const isSinglePaneMode = Boolean(window.isSingleMode && window.isSingleMode());
+        const nextState = { lectioScopePane: true, lectioPaneLevel: isSinglePaneMode ? 1 : 0 };
+        // The drawer's Back handler (index.html) heals its history "spare" by
+        // replaying the last real scope URL onto it when it turns out to be
+        // stale — see armDrawerBack. Stash it on every real scope load so that
+        // heal has something current to reach for.
+        window.__lectioLastScopeUrl = url;
+        // In 1-pane mode, picking a different scope (another folder/feed/tag)
+        // while already standing on a list replaces that list's history entry
+        // instead of stacking a new one on top — otherwise phone Back walked
+        // through every previously viewed folder before it ever reached the
+        // folder drawer. Drilling in from the drawer or from an article still
+        // pushes, same as before (onScopeList is false in both cases).
+        if (onScopeList) {
+          history.replaceState(nextState, '', url);
+        } else {
+          history.pushState(nextState, '', url);
+        }
+      }
+
       try {
         const headers = {
           'X-Requested-With': 'lectio-scope-panes',
@@ -4041,29 +4074,9 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         centerActivePostInView();
         updateScopeActiveState(url);
 
-        if (pushHistory) {
-          const isSinglePaneMode = Boolean(window.isSingleMode && window.isSingleMode());
-          const nextState = { lectioScopePane: true, lectioPaneLevel: isSinglePaneMode ? 1 : 0 };
-          // The drawer's Back handler (index.html) heals its history "spare" by
-          // replaying the last real scope URL onto it when it turns out to be
-          // stale — see armDrawerBack. Stash it on every real scope load so that
-          // heal has something current to reach for.
-          window.__lectioLastScopeUrl = url;
-          // In 1-pane mode, picking a different scope (another folder/feed/tag)
-          // while already standing on a list replaces that list's history entry
-          // instead of stacking a new one on top — otherwise phone Back walked
-          // through every previously viewed folder before it ever reached the
-          // folder drawer. Drilling in from the drawer or from an article still
-          // pushes, same as before (onScopeList is false in both cases).
-          if (onScopeList) {
-            history.replaceState(nextState, '', url);
-          } else {
-            history.pushState(nextState, '', url);
-          }
-        }
-        // Landing on a folder-scoped list re-arms the phone's "Back opens the
-        // folder drawer" step. Must follow the push/replaceState above, which
-        // clears it (push) or leaves it as-is (replace, already correct mid-stack).
+        // push/replaceState already happened before the fetch, above — see
+        // the comment there. Re-arming here still has to follow it (clears
+        // the spare on a push, leaves it as-is on a replace, mid-stack).
         window.armDrawerBack?.();
       } catch (_error) {
         window.location.href = url;
@@ -4558,6 +4571,28 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         currentUrlHasEntry = false;
       }
 
+      // Push/replace HERE, synchronously inside the tap that called this
+      // function — not after the `await fetch` below. See the matching
+      // comment in loadScopePanesWithoutFullRefresh: Chromium's history
+      // manipulation intervention marks an entry pushed without live user
+      // activation as skippable, and phone Back (confirmed on a Galaxy
+      // S21+) walks straight past it instead of landing on the list.
+      // document.title still gets set to the article's real title after the
+      // fetch below, same as before — we're still standing on this same
+      // entry when that happens, so the browser's history-list label for it
+      // updates in step regardless of push order.
+      if (pushHistory) {
+        const isSinglePaneMode = Boolean(window.isSingleMode && window.isSingleMode());
+        const nextState = { lectioEntryPane: true, lectioPaneLevel: isSinglePaneMode ? 2 : 0 };
+        // In 1-pane mode, keep only one "entry" history state so browser back
+        // returns to posts list instead of stepping through prior entry swipes.
+        if (isSinglePaneMode && currentUrlHasEntry) {
+          history.replaceState(nextState, '', url);
+        } else {
+          history.pushState(nextState, '', url);
+        }
+      }
+
       try {
         const headers = { 'X-Requested-With': 'lectio-entry-pane' };
         const requestUrl = new URL(url, window.location.origin);
@@ -4650,17 +4685,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         } catch (e) {
           // ignore
         }
-        if (pushHistory) {
-          const isSinglePaneMode = Boolean(window.isSingleMode && window.isSingleMode());
-          const nextState = { lectioEntryPane: true, lectioPaneLevel: isSinglePaneMode ? 2 : 0 };
-          // In 1-pane mode, keep only one "entry" history state so browser back
-          // returns to posts list instead of stepping through prior entry swipes.
-          if (isSinglePaneMode && currentUrlHasEntry) {
-            history.replaceState(nextState, '', url);
-          } else {
-            history.pushState(nextState, '', url);
-          }
-        }
+        // push/replaceState already happened before the fetch, above.
       } catch (_error) {
         // Full-page fallback ONLY when the pane never made it in (fetch/parse
         // failed). Once the swap has happened the content is on screen — an
