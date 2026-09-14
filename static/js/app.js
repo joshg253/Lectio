@@ -9485,6 +9485,16 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           }
 
           applyPostItemSavedState(postItem, nextIsSaved);
+          // Mirror into the open entry pane if it's showing this same entry —
+          // the header->list direction already does this (see
+          // bindEntryPaneInteractions' entrySaveForm handler); this was the
+          // missing list->header direction. Reported live: unstarring from the
+          // list left the header's star stale until the pane reloaded.
+          const paneTitleForSave = document.querySelector('.entry-pane-title');
+          const paneMatchesForSave = paneTitleForSave instanceof HTMLElement
+            && paneTitleForSave.getAttribute('data-post-feed-url') === postItem.getAttribute('data-post-feed-url')
+            && paneTitleForSave.getAttribute('data-post-entry-id') === postItem.getAttribute('data-post-entry-id');
+          if (paneMatchesForSave) applyEntryPaneSavedState(nextIsSaved);
           // (Un)starring an unread post moves it in/out of the Saved backlog.
           const starredUnread = postItem.getAttribute('data-post-read') === '0';
           if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? +1 : -1);
@@ -9517,6 +9527,16 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           } catch (_error) {
             if (dropFromInbox) postItem.hidden = false;
             applyPostItemSavedState(postItem, !nextIsSaved);
+            // Re-check the pane match rather than trusting paneMatchesForSave:
+            // the fetch above awaited, and if the user opened a DIFFERENT
+            // entry in the meantime, blindly rolling back would flip that
+            // now-displayed pane's header for an entry it was never about.
+            const paneTitleAtRollback = document.querySelector('.entry-pane-title');
+            if (paneTitleAtRollback instanceof HTMLElement
+                && paneTitleAtRollback.getAttribute('data-post-feed-url') === postItem.getAttribute('data-post-feed-url')
+                && paneTitleAtRollback.getAttribute('data-post-entry-id') === postItem.getAttribute('data-post-entry-id')) {
+              applyEntryPaneSavedState(!nextIsSaved);
+            }
             if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? -1 : +1);
             adjustSavedFolderBadge(starFolderId, nextIsSaved ? -1 : +1);
             saveForm.submit();
@@ -10020,12 +10040,25 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     function applyStarStateToSelection(entries, isSaved) {
       const dropFromInbox = !isSaved && isInboxKeptScope();
       const dropped = [];
+      const paneTitle = document.querySelector('.entry-pane-title');
       for (const e of entries) {
         const postItem = document.querySelector(
           `.post-item[data-post-feed-url="${CSS.escape(e.feedUrl)}"][data-post-entry-id="${CSS.escape(e.entryId)}"]`
         );
         if (!postItem) continue;
-        if (!applyPostItemSavedState(postItem, isSaved)) continue;
+        const stateChanged = applyPostItemSavedState(postItem, isSaved);
+        // Same list->header mirror as the single-post toggle — a bulk (un)star
+        // that happens to include the open entry must not leave its header
+        // stale. Runs even when the ROW's own state didn't change: the row
+        // can already show the requested state while the header is the one
+        // that's stale — exactly the desync this mirror exists to fix, so
+        // gating it on stateChanged would skip it in that case.
+        if (paneTitle instanceof HTMLElement
+            && paneTitle.getAttribute('data-post-feed-url') === e.feedUrl
+            && paneTitle.getAttribute('data-post-entry-id') === e.entryId) {
+          applyEntryPaneSavedState(isSaved);
+        }
+        if (!stateChanged) continue;
         const starredUnread = postItem.getAttribute('data-post-read') === '0';
         if (starredUnread) adjustSavedUnreadBadge(isSaved ? +1 : -1);
         adjustSavedFolderBadge(postItem.getAttribute('data-post-folder-id'), isSaved ? +1 : -1);
