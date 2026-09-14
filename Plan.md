@@ -1014,6 +1014,10 @@ Save/re-fetch) can pull the real article from the same feeds. Worth wiring
 the checkbox to run that extraction live when the stored body is thin.
 Not scoped — needs a real example of a thin-stub feed to test against first.
 
+### Email template overhaul
+
+Noted 2026-09-13 after confirming the emailed-article template (`services/email.py`) renders correctly following the ruff-format pass — Josh wants to revisit its look. Not scoped: no specifics yet on what changes.
+
 ### One stored image per entry, but three feeds want two
 
 Found 2026-08-13, **not built.** Three comic feeds want a different image in the
