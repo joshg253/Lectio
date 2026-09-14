@@ -9,6 +9,7 @@ itself (stored blob lengths + linked asset bytes, matching
 StarredArchiveService._archive_entry's own formula) are the two things worth
 pinning down.
 """
+
 from __future__ import annotations
 
 import zlib
@@ -40,10 +41,15 @@ def configured(tmp_path):
         tenancy._layout = saved
 
 
-def _insert_archived_entry(entry_id: str, *, status: str = "complete",
-                            content_size_bytes: int | None = None,
-                            source: bytes | None = None, readability: bytes | None = None,
-                            content: bytes | None = None) -> None:
+def _insert_archived_entry(
+    entry_id: str,
+    *,
+    status: str = "complete",
+    content_size_bytes: int | None = None,
+    source: bytes | None = None,
+    readability: bytes | None = None,
+    content: bytes | None = None,
+) -> None:
     with main.archive_conn() as conn:
         conn.execute(
             "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at,"
@@ -114,8 +120,7 @@ def test_apply_computes_blob_lengths_plus_linked_assets(configured):
     source = zlib.compress(b"<html>source</html>")
     readability = zlib.compress(b"<html>readability body</html>")
     content = zlib.compress(b"<html>content body</html>")
-    _insert_archived_entry("e1", status="complete", content_size_bytes=None,
-                            source=source, readability=readability, content=content)
+    _insert_archived_entry("e1", status="complete", content_size_bytes=None, source=source, readability=readability, content=content)
     _link_asset("e1", "hash-a", 1000)
     _link_asset("e1", "hash-b", 2000)
 
@@ -147,12 +152,12 @@ def test_apply_attributes_a_shared_asset_fully_to_each_linking_entry(configured)
     with main.archive_conn() as conn:
         conn.execute(
             "INSERT INTO archived_asset (asset_hash, data, content_type, byte_size, created_at)"
-            " VALUES ('shared-logo', ?, 'image/png', 5000, 0)", (b"x",),
+            " VALUES ('shared-logo', ?, 'image/png', 5000, 0)",
+            (b"x",),
         )
         conn.executemany(
             "INSERT INTO archived_asset_link (feed_url, entry_id, source_url, asset_hash) VALUES (?, ?, ?, ?)",
-            [(FEED, "post-a", "https://cdn.test/logo", "shared-logo"),
-             (FEED, "post-b", "https://cdn.test/logo", "shared-logo")],
+            [(FEED, "post-a", "https://cdn.test/logo", "shared-logo"), (FEED, "post-b", "https://cdn.test/logo", "shared-logo")],
         )
 
     cli.backfill_for_user("u_test", apply=True, limit=0)
@@ -177,12 +182,15 @@ def test_apply_counts_the_same_asset_once_when_one_entry_links_it_twice(configur
     with main.archive_conn() as conn:
         conn.execute(
             "INSERT INTO archived_asset (asset_hash, data, content_type, byte_size, created_at)"
-            " VALUES ('big-gif', ?, 'image/gif', 50_000_000, 0)", (b"x",),
+            " VALUES ('big-gif', ?, 'image/gif', 50_000_000, 0)",
+            (b"x",),
         )
         conn.executemany(
             "INSERT INTO archived_asset_link (feed_url, entry_id, source_url, asset_hash) VALUES (?, ?, ?, ?)",
-            [(FEED, "gif-post", "https://downloads.cdn.test/image6.gif", "big-gif"),
-             (FEED, "gif-post", "https://res.cloudinary.test/image6.gif", "big-gif")],
+            [
+                (FEED, "gif-post", "https://downloads.cdn.test/image6.gif", "big-gif"),
+                (FEED, "gif-post", "https://res.cloudinary.test/image6.gif", "big-gif"),
+            ],
         )
 
     cli.backfill_for_user("u_test", apply=True, limit=0)

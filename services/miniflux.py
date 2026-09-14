@@ -5,6 +5,7 @@ Implements the subset of the Miniflux v1 API used by popular clients
 update), and bookmarks. Uses per-user miniflux_feed_map / miniflux_entry_map
 tables for stable integer IDs.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -65,10 +66,7 @@ class MinifluxService:
         """Insert new entries for a feed after refresh."""
         reader = self._get_reader()
         feed_rows = [(str(feed_url),)]
-        entry_rows = [
-            (str(e.feed_url), str(e.id))
-            for e in reader.get_entries(feed=feed_url)
-        ]
+        entry_rows = [(str(e.feed_url), str(e.id)) for e in reader.get_entries(feed=feed_url)]
         with self._get_meta() as conn:
             conn.executemany(
                 "INSERT OR IGNORE INTO miniflux_feed_map (feed_url) VALUES (?)",
@@ -142,16 +140,8 @@ class MinifluxService:
             "created_at": _iso(pub),
             "changed_at": _iso(updated),
             "published_at": _iso(pub),
-            "content": (
-                (entry.content[0].value if entry.content else None)
-                or entry.summary
-                or ""
-            ),
-            "author": (
-                ", ".join(a.name for a in entry.authors if a.name)
-                if getattr(entry, "authors", None)
-                else ""
-            ),
+            "content": ((entry.content[0].value if entry.content else None) or entry.summary or ""),
+            "author": (", ".join(a.name for a in entry.authors if a.name) if getattr(entry, "authors", None) else ""),
             "starred": starred,
             "reading_time": 0,
             "enclosures": [],
@@ -185,10 +175,7 @@ class MinifluxService:
                 "SELECT id, name FROM folders WHERE parent_id=?",
                 (root_row["id"],),
             ).fetchall()
-        return [
-            {"id": r["id"], "user_id": 1, "title": r["name"], "hide_globally": False}
-            for r in rows
-        ]
+        return [{"id": r["id"], "user_id": 1, "title": r["name"], "hide_globally": False} for r in rows]
 
     def get_feeds(self) -> list[dict]:
         reader = self._get_reader()
@@ -203,13 +190,9 @@ class MinifluxService:
             folder_feeds: dict[str, int] = {}  # feed_url → category_id (folder.id)
             folder_names: dict[int, str] = {}
             if root_id is not None:
-                for fold in conn.execute(
-                    "SELECT id, name FROM folders WHERE parent_id=?", (root_id,)
-                ).fetchall():
+                for fold in conn.execute("SELECT id, name FROM folders WHERE parent_id=?", (root_id,)).fetchall():
                     folder_names[fold["id"]] = fold["name"]
-                    for ff in conn.execute(
-                        "SELECT feed_url FROM folder_feeds WHERE folder_id=?", (fold["id"],)
-                    ).fetchall():
+                    for ff in conn.execute("SELECT feed_url FROM folder_feeds WHERE folder_id=?", (fold["id"],)).fetchall():
                         folder_feeds[ff["feed_url"]] = fold["id"]
 
         result = []
@@ -225,22 +208,24 @@ class MinifluxService:
                     "title": folder_names.get(cat_id, ""),
                     "hide_globally": False,
                 }
-            result.append({
-                "id": fid,
-                "user_id": 1,
-                "title": getattr(f, "user_title", None) or f.title or url,
-                "site_url": str(f.link or ""),
-                "feed_url": url,
-                "checked_at": _iso(f.updated),
-                "next_check_at": _iso(None),
-                "etag_header": "",
-                "last_modified_header": "",
-                "parsing_error_count": 0,
-                "parsing_error_message": "",
-                "disabled": False,
-                "hide_globally": False,
-                "category": cat,
-            })
+            result.append(
+                {
+                    "id": fid,
+                    "user_id": 1,
+                    "title": getattr(f, "user_title", None) or f.title or url,
+                    "site_url": str(f.link or ""),
+                    "feed_url": url,
+                    "checked_at": _iso(f.updated),
+                    "next_check_at": _iso(None),
+                    "etag_header": "",
+                    "last_modified_header": "",
+                    "parsing_error_count": 0,
+                    "parsing_error_message": "",
+                    "disabled": False,
+                    "hide_globally": False,
+                    "category": cat,
+                }
+            )
         return result
 
     def get_entries(
@@ -263,9 +248,7 @@ class MinifluxService:
         feed_url_filter: str | None = None
         if feed_id is not None:
             with self._get_meta() as conn:
-                row = conn.execute(
-                    "SELECT feed_url FROM miniflux_feed_map WHERE id=?", (feed_id,)
-                ).fetchone()
+                row = conn.execute("SELECT feed_url FROM miniflux_feed_map WHERE id=?", (feed_id,)).fetchone()
             if row:
                 feed_url_filter = row["feed_url"]
             else:
@@ -275,9 +258,7 @@ class MinifluxService:
         category_feed_urls: set[str] | None = None
         if category_id is not None:
             with self._get_meta() as conn:
-                ff_rows = conn.execute(
-                    "SELECT feed_url FROM folder_feeds WHERE folder_id=?", (category_id,)
-                ).fetchall()
+                ff_rows = conn.execute("SELECT feed_url FROM folder_feeds WHERE folder_id=?", (category_id,)).fetchall()
             category_feed_urls = {r["feed_url"] for r in ff_rows}
             if not category_feed_urls:
                 return {"total": 0, "entries": []}
@@ -314,17 +295,13 @@ class MinifluxService:
                 "INSERT OR IGNORE INTO miniflux_entry_map (feed_url, entry_id) VALUES (?, ?)",
                 [(str(e.feed_url), str(e.id)) for e in all_entries],
             )
-            eid_rows = conn.execute(
-                "SELECT id, feed_url, entry_id FROM miniflux_entry_map"
-            ).fetchall()
-        eid_map: dict[tuple[str, str], int] = {
-            (r["feed_url"], r["entry_id"]): r["id"] for r in eid_rows
-        }
+            eid_rows = conn.execute("SELECT id, feed_url, entry_id FROM miniflux_entry_map").fetchall()
+        eid_map: dict[tuple[str, str], int] = {(r["feed_url"], r["entry_id"]): r["id"] for r in eid_rows}
 
         # Sort by published date
         reverse = direction != "asc"
         all_entries.sort(
-            key=lambda e: (e.published or e.updated or datetime.min.replace(tzinfo=timezone.utc)),
+            key=lambda e: e.published or e.updated or datetime.min.replace(tzinfo=timezone.utc),
             reverse=reverse,
         )
 
@@ -333,7 +310,7 @@ class MinifluxService:
             ids = [eid_map.get((str(e.feed_url), str(e.id)), 0) for e in all_entries]
             try:
                 idx = next(i for i, v in enumerate(ids) if v == after_entry_id)
-                all_entries = all_entries[idx + 1:]
+                all_entries = all_entries[idx + 1 :]
             except StopIteration:
                 pass
         if before_entry_id is not None:
@@ -360,12 +337,8 @@ class MinifluxService:
             root_id = root_row["id"] if root_row else None
             folder_feeds: dict[str, int] = {}
             if root_id is not None:
-                for fold in conn.execute(
-                    "SELECT id FROM folders WHERE parent_id=?", (root_id,)
-                ).fetchall():
-                    for ff in conn.execute(
-                        "SELECT feed_url FROM folder_feeds WHERE folder_id=?", (fold["id"],)
-                    ).fetchall():
+                for fold in conn.execute("SELECT id FROM folders WHERE parent_id=?", (root_id,)).fetchall():
+                    for ff in conn.execute("SELECT feed_url FROM folder_feeds WHERE folder_id=?", (fold["id"],)).fetchall():
                         folder_feeds[ff["feed_url"]] = fold["id"]
 
         # Bulk-load saved state for this page
@@ -387,10 +360,7 @@ class MinifluxService:
             if feed_obj is None:
                 continue
             cat_id = folder_feeds.get(fu)
-            entries_out.append(
-                self._entry_to_dict(e, num_id, feed_num_id, feed_obj, cat_id,
-                                    starred=(fu, eid) in saved_set)
-            )
+            entries_out.append(self._entry_to_dict(e, num_id, feed_num_id, feed_obj, cat_id, starred=(fu, eid) in saved_set))
 
         return {"total": total, "entries": entries_out}
 
@@ -416,9 +386,7 @@ class MinifluxService:
             root_id = root_row["id"] if root_row else None
             cat_id: int | None = None
             if root_id is not None:
-                for fold in conn.execute(
-                    "SELECT id FROM folders WHERE parent_id=?", (root_id,)
-                ).fetchall():
+                for fold in conn.execute("SELECT id FROM folders WHERE parent_id=?", (root_id,)).fetchall():
                     r2 = conn.execute(
                         "SELECT feed_url FROM folder_feeds WHERE folder_id=? AND feed_url=?",
                         (fold["id"], row["feed_url"]),

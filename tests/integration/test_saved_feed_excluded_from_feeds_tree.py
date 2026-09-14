@@ -29,6 +29,7 @@ rebuilds its own root/Uncategorized widening from raw `all_reader_feed_urls`,
 so it needed the identical exclusion (and the identical star_only-gated
 re-inclusion) applied a third time, or Feeds-mode Read Mode over Uncategorized
 still surfaced the whole saved-articles backlog."""
+
 from __future__ import annotations
 
 import pytest
@@ -55,17 +56,25 @@ def configured(tmp_path, monkeypatch):
     main.ensure_meta_schema()
     with main.get_reader() as reader:
         saved_articles_service.ensure_saved_feed(reader)
-        reader.add_entry({
-            "feed_url": saved_articles_service.SAVED_FEED_URL, "id": "https://x.test/a",
-            "link": "https://x.test/a", "title": "A saved article",
-        })
+        reader.add_entry(
+            {
+                "feed_url": saved_articles_service.SAVED_FEED_URL,
+                "id": "https://x.test/a",
+                "link": "https://x.test/a",
+                "title": "A saved article",
+            }
+        )
         # An unfoldered feed too, so Uncategorized isn't empty (and its own
         # inclusion behavior stays observable alongside root's).
         reader.add_feed(ORPHAN_FEED, exist_ok=True)
-        reader.add_entry({
-            "feed_url": ORPHAN_FEED, "id": "https://orphan.test/a",
-            "link": "https://orphan.test/a", "title": "An orphan post",
-        })
+        reader.add_entry(
+            {
+                "feed_url": ORPHAN_FEED,
+                "id": "https://orphan.test/a",
+                "link": "https://orphan.test/a",
+                "title": "An orphan post",
+            }
+        )
     with main.get_meta_connection() as conn:
         # A real "save to read later" always stars the entry too — that's
         # what saving means. star_only's kept-entries filter requires it.
@@ -133,18 +142,28 @@ def test_saved_mode_uncategorized_still_reaches_saved_feed(configured):
 
 def test_reader_backlog_feeds_mode_uncategorized_excludes_saved_feed(configured):
     posts = main.resolve_reader_backlog(
-        folder_id=main.UNCATEGORIZED_FOLDER_ID, list_feed_url=None,
-        read_filter="unread", star_only=False, tag=None,
-        sort_by="post", sort_dir="desc", search_query=None,
+        folder_id=main.UNCATEGORIZED_FOLDER_ID,
+        list_feed_url=None,
+        read_filter="unread",
+        star_only=False,
+        tag=None,
+        sort_by="post",
+        sort_dir="desc",
+        search_query=None,
     )
     assert {p["feed_url"] for p in posts} == {ORPHAN_FEED}
 
 
 def test_reader_backlog_feeds_mode_root_excludes_saved_feed(configured):
     posts = main.resolve_reader_backlog(
-        folder_id=None, list_feed_url=None,
-        read_filter="unread", star_only=False, tag=None,
-        sort_by="post", sort_dir="desc", search_query=None,
+        folder_id=None,
+        list_feed_url=None,
+        read_filter="unread",
+        star_only=False,
+        tag=None,
+        sort_by="post",
+        sort_dir="desc",
+        search_query=None,
     )
     assert saved_articles_service.SAVED_FEED_URL not in {p["feed_url"] for p in posts}
     assert ORPHAN_FEED in {p["feed_url"] for p in posts}
@@ -154,8 +173,13 @@ def test_reader_backlog_saved_mode_uncategorized_still_reaches_saved_feed(config
     """Same reachability guarantee as the Feeds-mode page route above, exercised
     directly against the resolver Read Mode actually calls."""
     posts = main.resolve_reader_backlog(
-        folder_id=main.UNCATEGORIZED_FOLDER_ID, list_feed_url=None,
-        read_filter="all", star_only=True, tag=None,
-        sort_by="post", sort_dir="desc", search_query=None,
+        folder_id=main.UNCATEGORIZED_FOLDER_ID,
+        list_feed_url=None,
+        read_filter="all",
+        star_only=True,
+        tag=None,
+        sort_by="post",
+        sort_dir="desc",
+        search_query=None,
     )
     assert saved_articles_service.SAVED_FEED_URL in {p["feed_url"] for p in posts}

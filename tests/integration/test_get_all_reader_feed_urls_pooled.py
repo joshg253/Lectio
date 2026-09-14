@@ -12,6 +12,7 @@ logging on invalidate_meta_structure_cache found zero invalidations in a
 60-minute window despite repeated multi-second "structure_snapshot" stalls,
 which is what pointed at mislabeled timing rather than a caching bug.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -50,8 +51,7 @@ def test_does_not_open_a_fresh_reader_connection(env, monkeypatch):
     def guarded_connect(database, *args, **kwargs):
         if str(database) == reader_path:
             raise AssertionError(
-                "get_all_reader_feed_urls opened a fresh reader-DB connection "
-                "instead of reusing get_reader()'s pooled one"
+                "get_all_reader_feed_urls opened a fresh reader-DB connection instead of reusing get_reader()'s pooled one"
             )
         return real_connect(database, *args, **kwargs)
 
@@ -69,5 +69,6 @@ def test_include_kept_still_excludes_kept_feeds_by_default(env):
 
     assert main.get_all_reader_feed_urls() == {"https://b.example/feed"}
     assert main.get_all_reader_feed_urls(include_kept=True) == {
-        "https://a.example/feed", "https://b.example/feed",
+        "https://a.example/feed",
+        "https://b.example/feed",
     }

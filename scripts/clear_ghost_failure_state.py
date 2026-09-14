@@ -21,6 +21,7 @@ Usage:
 
 Defaults to a dry run; --apply performs the deletes.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -36,9 +37,7 @@ def run(apply: bool) -> int:
         live = {str(f.url) for f in reader.get_feeds()}
 
     with main.get_meta_connection() as conn:
-        rows = conn.execute(
-            "SELECT feed_url, consecutive_failures, last_error FROM feed_failure_state"
-        ).fetchall()
+        rows = conn.execute("SELECT feed_url, consecutive_failures, last_error FROM feed_failure_state").fetchall()
 
     ghosts = [r for r in rows if str(r["feed_url"]) not in live]
     print(f"live feeds:            {len(live)}")

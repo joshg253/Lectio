@@ -1,6 +1,7 @@
 """_display_title recovers a readable title for Blogger posts that ship an empty
 feed <title> (the real title lives in the body heading + URL slug), while leaving
 genuinely-untitled posts on other sites alone."""
+
 from __future__ import annotations
 
 import types
@@ -14,9 +15,7 @@ def _entry(title, feed_url, link):
 
 def test_slug_humanized():
     assert (
-        main._title_from_blogger_slug(
-            "https://treecardgames.blogspot.com/2026/06/gin-rummy-strategies-essential.html"
-        )
+        main._title_from_blogger_slug("https://treecardgames.blogspot.com/2026/06/gin-rummy-strategies-essential.html")
         == "Gin Rummy Strategies Essential"
     )
 

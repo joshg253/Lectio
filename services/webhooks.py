@@ -12,6 +12,7 @@ Two payload formats:
 - ``ifttt``   — IFTTT Maker's ``value1``/``value2``/``value3`` shape
   (title / link / feed title). Batch mode not available for IFTTT.
 """
+
 from __future__ import annotations
 
 import logging

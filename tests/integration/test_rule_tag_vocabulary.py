@@ -6,6 +6,7 @@ scoped the way the rule will be scoped. Both halves are load-bearing: an
 un-normalized suggestion completes to a token that cannot match, and an
 un-scoped one offers a vocabulary from feeds the rule never touches.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -46,11 +47,14 @@ def client():
 
 
 def _seed() -> None:
-    main.feed_tag_service.record_entry_tags(FEED, [
-        ("e1", ["Steam Deck", "Indie Game"]),
-        ("e2", ["Steam Deck"]),
-        ("e3", ["steam deck", "Xbox Series X/S"]),
-    ])
+    main.feed_tag_service.record_entry_tags(
+        FEED,
+        [
+            ("e1", ["Steam Deck", "Indie Game"]),
+            ("e2", ["Steam Deck"]),
+            ("e3", ["steam deck", "Xbox Series X/S"]),
+        ],
+    )
     main.feed_tag_service.record_entry_tags(OTHER, [("e1", ["Knitting"])])
 
 

@@ -37,6 +37,7 @@ anything inferred here.
     uv run python scripts/recover_publish_dates.py            # dry run
     uv run python scripts/recover_publish_dates.py --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -60,15 +61,17 @@ _MIN_YEAR, _MAX_YEAR = 1990, 2027
 _SAVE_SLACK = timedelta(days=1)
 
 _SOURCES: list[tuple[str, re.Pattern[str]]] = [
-    ("og:article:published_time", re.compile(
-        r'<meta[^>]+(?:property|name)=["\']article:published_time["\'][^>]*content=["\']([^"\']+)', re.I)),
-    ("og:reversed-attr-order", re.compile(
-        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']article:published_time["\']', re.I)),
+    (
+        "og:article:published_time",
+        re.compile(r'<meta[^>]+(?:property|name)=["\']article:published_time["\'][^>]*content=["\']([^"\']+)', re.I),
+    ),
+    (
+        "og:reversed-attr-order",
+        re.compile(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']article:published_time["\']', re.I),
+    ),
     ("json-ld:datePublished", re.compile(r'"datePublished"\s*:\s*"([^"]+)"', re.I)),
-    ("itemprop:datePublished", re.compile(
-        r'<meta[^>]+itemprop=["\']datePublished["\'][^>]*content=["\']([^"\']+)', re.I)),
-    ("meta:date", re.compile(
-        r'<meta[^>]+name=["\'](?:date|pubdate|publish-date|DC\.date[^"\']*)["\'][^>]*content=["\']([^"\']+)', re.I)),
+    ("itemprop:datePublished", re.compile(r'<meta[^>]+itemprop=["\']datePublished["\'][^>]*content=["\']([^"\']+)', re.I)),
+    ("meta:date", re.compile(r'<meta[^>]+name=["\'](?:date|pubdate|publish-date|DC\.date[^"\']*)["\'][^>]*content=["\']([^"\']+)', re.I)),
     # Last: a page has many <time> tags and the first may be a comment's.
     ("time:datetime", re.compile(r'<time[^>]+datetime=["\']([^"\']+)', re.I)),
 ]
@@ -102,19 +105,13 @@ def recover_for_user(uid: str, apply: bool) -> int:
     for row in meta.execute("SELECT feed_url, entry_id, saved_at FROM saved_entries"):
         dt = main._parse_stored_dt(row["saved_at"])
         if dt is not None:
-            saved_at[(str(row["feed_url"]), str(row["entry_id"]))] = (
-                dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc))
-    overrides = {
-        (str(r["feed_url"]), str(r["entry_id"]))
-        for r in meta.execute("SELECT feed_url, entry_id FROM entry_date_overrides")
-    }
+            saved_at[(str(row["feed_url"]), str(row["entry_id"]))] = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    overrides = {(str(r["feed_url"]), str(r["entry_id"])) for r in meta.execute("SELECT feed_url, entry_id FROM entry_date_overrides")}
     meta.close()
 
     rc = sqlite3.connect(str(tenancy.reader_db_path()), timeout=30.0)
     rc.row_factory = sqlite3.Row
-    rows = rc.execute(
-        "SELECT feed, id, link, title FROM entries WHERE published LIKE ?", (EPOCH_PREFIX + "%",)
-    ).fetchall()
+    rows = rc.execute("SELECT feed, id, link, title FROM entries WHERE published LIKE ?", (EPOCH_PREFIX + "%",)).fetchall()
 
     ac = sqlite3.connect(f"file:{tenancy.starred_archive_db_path()}?mode=ro", uri=True, timeout=30.0)
 
@@ -130,9 +127,7 @@ def recover_for_user(uid: str, apply: bool) -> int:
         limit = saved_at.get(key)
         candidate = source = None
 
-        arow = ac.execute(
-            "SELECT source_html_zlib FROM archived_entry WHERE feed_url = ? AND entry_id = ?", key
-        ).fetchone()
+        arow = ac.execute("SELECT source_html_zlib FROM archived_entry WHERE feed_url = ? AND entry_id = ?", key).fetchone()
         html = None
         if arow and arow[0]:
             try:
@@ -157,8 +152,7 @@ def recover_for_user(uid: str, apply: bool) -> int:
             stats["no_html"] += 1
 
         if candidate is None:
-            url_dt = (main.url_inferred_pubdate(row["link"])
-                      or main.url_inferred_pubdate(str(row["id"])))
+            url_dt = main.url_inferred_pubdate(row["link"]) or main.url_inferred_pubdate(str(row["id"]))
             source_name = "url-path"
             if url_dt is None:
                 # /YYYY/MM/slug — month precision, first of the month. Last tier
@@ -166,8 +160,7 @@ def recover_for_user(uid: str, apply: bool) -> int:
                 # epoch, and on the hosts that use this permalink the page itself
                 # carries only a `dateModified` that postdates publication by
                 # years. See url_inferred_pubmonth.
-                url_dt = (main.url_inferred_pubmonth(row["link"])
-                          or main.url_inferred_pubmonth(str(row["id"])))
+                url_dt = main.url_inferred_pubmonth(row["link"]) or main.url_inferred_pubmonth(str(row["id"]))
                 source_name = "url-month"
             if url_dt is not None:
                 if url_dt.tzinfo is None:
@@ -182,12 +175,15 @@ def recover_for_user(uid: str, apply: bool) -> int:
 
         assert source is not None  # set alongside every candidate assignment above
 
-        found.append({
-            "feed_url": key[0], "entry_id": key[1],
-            "title": str(row["title"] or "")[:70],
-            "published": candidate.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            "source": source,
-        })
+        found.append(
+            {
+                "feed_url": key[0],
+                "entry_id": key[1],
+                "title": str(row["title"] or "")[:70],
+                "published": candidate.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "source": source,
+            }
+        )
         by_source[source] = by_source.get(source, 0) + 1
 
     ac.close()
@@ -210,7 +206,7 @@ def recover_for_user(uid: str, apply: bool) -> int:
     for start in range(0, len(found), 500):
         rc.executemany(
             "UPDATE entries SET published = ? WHERE feed = ? AND id = ?",
-            [(f["published"], f["feed_url"], f["entry_id"]) for f in found[start:start + 500]],
+            [(f["published"], f["feed_url"], f["entry_id"]) for f in found[start : start + 500]],
         )
     rc.commit()
     rc.close()
@@ -222,18 +218,16 @@ def recover_for_user(uid: str, apply: bool) -> int:
 
 
 def main_cli() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
     args = ap.parse_args()
 
-    for uid in ([args.user] if args.user else main._background_user_ids()):
+    for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
             recover_for_user(uid, args.apply)
     if args.apply:
-        print("\nRestart the app: the unread-count cache is generation-guarded and "
-              "will not self-heal from a behind-the-back write.")
+        print("\nRestart the app: the unread-count cache is generation-guarded and will not self-heal from a behind-the-back write.")
     return 0
 
 

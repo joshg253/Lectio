@@ -12,6 +12,7 @@ Two paths had it, in two different disguises:
     PNG — mode "P", transparency in `img.info` — so exactly the images this
     breaks were the ones it converted to RGB.
 """
+
 from __future__ import annotations
 
 import io
@@ -28,7 +29,7 @@ def _line_art(mode: str) -> bytes:
     fully transparent field, so flattening to black hides the drawing entirely."""
     img = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
     for x in range(5, 35):
-        img.putpixel((x, 20), (0, 0, 0, 255))   # one black stroke
+        img.putpixel((x, 20), (0, 0, 0, 255))  # one black stroke
     if mode == "P":
         img = img.convert("P", palette=Image.Palette.ADAPTIVE)
         img.info["transparency"] = 0
@@ -74,8 +75,7 @@ def test_the_naive_conversion_is_what_went_wrong(mode):
     """Pin the old behavior so the fix cannot be quietly reverted to it."""
     naive = Image.open(io.BytesIO(_line_art(mode))).convert("RGB")
     assert _mean_luma(naive) < 100, (
-        "the naive conversion no longer produces the dark result this guards "
-        "against — re-check whether the fix is still needed"
+        "the naive conversion no longer produces the dark result this guards against — re-check whether the fix is still needed"
     )
 
 
@@ -125,7 +125,6 @@ def test_archive_keeps_transparency(mode):
 def test_archive_palette_without_transparency_becomes_rgb():
     """A plain palette image has no alpha to keep — RGB is right for it."""
     buf = io.BytesIO()
-    Image.new("RGB", (20, 20), (90, 90, 90)).convert(
-        "P", palette=Image.Palette.ADAPTIVE).save(buf, format="PNG")
+    Image.new("RGB", (20, 20), (90, 90, 90)).convert("P", palette=Image.Palette.ADAPTIVE).save(buf, format="PNG")
 
     assert _archive_normalize(buf.getvalue()).mode == "RGB"

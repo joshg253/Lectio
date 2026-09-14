@@ -9,6 +9,7 @@ page," and previously used whatever that harvest found directly — so a
 feed whose only tag was dismissed re-discovered and re-showed that same tag
 on every single open, since the harvest itself doesn't know about dismissal.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -33,9 +34,14 @@ def configured(tmp_path):
     main.ensure_meta_schema()
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
-        reader.add_entry({
-            "feed_url": FEED, "id": ENTRY_LINK, "link": ENTRY_LINK, "title": "Why Rowing?",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": ENTRY_LINK,
+                "link": ENTRY_LINK,
+                "title": "Why Rowing?",
+            }
+        )
     try:
         yield
     finally:
@@ -63,11 +69,13 @@ def _dismiss_after_initial_harvest(monkeypatch):
     # article page didn't stop mentioning rowing news just because the chip
     # was dismissed.
     monkeypatch.setattr(
-        main.lead_image_service, "get_cached_source_html",
+        main.lead_image_service,
+        "get_cached_source_html",
         lambda link: (b"<html></html>", "<html></html>"),
     )
     monkeypatch.setattr(
-        main.feed_tags_service_mod, "extract_page_tags",
+        main.feed_tags_service_mod,
+        "extract_page_tags",
         lambda html, link: ["news"],
     )
 
@@ -84,11 +92,13 @@ def test_get_entry_detail_still_shows_an_undismissed_re_harvested_tag(configured
     # same fallback path — this isn't "the fallback stopped working."
     _stub_outbound_url_check(monkeypatch)
     monkeypatch.setattr(
-        main.lead_image_service, "get_cached_source_html",
+        main.lead_image_service,
+        "get_cached_source_html",
         lambda link: (b"<html></html>", "<html></html>"),
     )
     monkeypatch.setattr(
-        main.feed_tags_service_mod, "extract_page_tags",
+        main.feed_tags_service_mod,
+        "extract_page_tags",
         lambda html, link: ["rowing"],
     )
     detail = main.get_entry_detail(FEED, ENTRY_LINK)
@@ -100,5 +110,6 @@ def test_entry_feed_tags_route_does_not_resurrect_a_dismissed_tag(configured, mo
     _dismiss_after_initial_harvest(monkeypatch)
     resp = main.entry_feed_tags_route(feed_url=FEED, entry_id=ENTRY_LINK)
     import json
+
     body = json.loads(resp.body)
     assert "news" not in body["tags"]

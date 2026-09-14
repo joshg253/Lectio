@@ -5,6 +5,7 @@ parked page or a 404. The case that sent users to archive.org by hand is the one
 that passes every guard: a publisher serving a page that is no longer the
 article (rewritten, truncated, paywalled). Nothing could ask for the archive.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -50,13 +51,12 @@ def test_archive_mode_fetches_the_snapshot_not_the_live_page(configured, monkeyp
 
     monkeypatch.setattr(main, "fetch_readability_article", _fake_extract)
     monkeypatch.setattr(
-        main.saved_articles_service, "refresh_captured_article",
-        lambda reader, conn, f, e, extract, enqueue_archive, **kw: (
-            extract(ENTRY), {"ok": True, "source_url": ENTRY})[1],
+        main.saved_articles_service,
+        "refresh_captured_article",
+        lambda reader, conn, f, e, extract, enqueue_archive, **kw: (extract(ENTRY), {"ok": True, "source_url": ENTRY})[1],
     )
 
-    result = main._refresh_captured_article_for_current_user(
-        FEED, ENTRY, mode=main.CAPTURE_MODE_ARCHIVE)
+    result = main._refresh_captured_article_for_current_user(FEED, ENTRY, mode=main.CAPTURE_MODE_ARCHIVE)
 
     assert result["ok"] is True
     assert fetched == [SNAPSHOT], "went to the live page instead of the snapshot"
@@ -68,8 +68,7 @@ def test_archive_mode_says_so_when_there_is_no_snapshot(configured, monkeypatch)
     get around."""
     monkeypatch.setattr(main, "wayback_snapshot_url", lambda url: None)
 
-    result = main._refresh_captured_article_for_current_user(
-        FEED, ENTRY, mode=main.CAPTURE_MODE_ARCHIVE)
+    result = main._refresh_captured_article_for_current_user(FEED, ENTRY, mode=main.CAPTURE_MODE_ARCHIVE)
 
     assert result["ok"] is False
     assert "Internet Archive" in result["error"]
@@ -77,8 +76,7 @@ def test_archive_mode_says_so_when_there_is_no_snapshot(configured, monkeypatch)
 
 def test_normal_mode_still_fetches_the_live_page(configured, monkeypatch):
     fetched: list[str] = []
-    monkeypatch.setattr(main, "wayback_snapshot_url",
-                        lambda url: pytest.fail("asked the archive unprompted"))
+    monkeypatch.setattr(main, "wayback_snapshot_url", lambda url: pytest.fail("asked the archive unprompted"))
 
     def _fake_extract(url, capture=None):
         fetched.append(url)
@@ -86,9 +84,9 @@ def test_normal_mode_still_fetches_the_live_page(configured, monkeypatch):
 
     monkeypatch.setattr(main, "fetch_readability_article", _fake_extract)
     monkeypatch.setattr(
-        main.saved_articles_service, "refresh_captured_article",
-        lambda reader, conn, f, e, extract, enqueue_archive, **kw: (
-            extract(ENTRY), {"ok": True, "source_url": ENTRY})[1],
+        main.saved_articles_service,
+        "refresh_captured_article",
+        lambda reader, conn, f, e, extract, enqueue_archive, **kw: (extract(ENTRY), {"ok": True, "source_url": ENTRY})[1],
     )
 
     main._refresh_captured_article_for_current_user(FEED, ENTRY)

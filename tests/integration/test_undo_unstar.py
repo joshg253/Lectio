@@ -7,6 +7,7 @@ Raised 2026-08-23: repeat-pressing the star-toggle key by accident unstarred
 ~16 articles with no way to identify which ones afterward -- unlike
 mark-read/unread, there was no undo token for a star toggle.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -28,7 +29,7 @@ def test_table_is_migrated_on_change_feed_url():
     """A short-lived undo token in flight during a Change-URL must survive it
     — entry_unread_batch (the mark-unread equivalent) is already in this
     list for the same reason."""
-    body = _MAIN_SRC[_MAIN_SRC.index("_feed_url_tables = ["):]
+    body = _MAIN_SRC[_MAIN_SRC.index("_feed_url_tables = [") :]
     body = body[: body.index("]")]
     assert '"entry_unstar_batch"' in body
 
@@ -68,10 +69,15 @@ def _add_entry(feed, entry_id, *, disable_updates=True):
         reader.add_feed(feed, allow_invalid_url=True, exist_ok=True)
         if disable_updates:
             reader.disable_feed_updates(feed)
-        reader.add_entry({
-            "feed_url": feed, "id": entry_id, "link": entry_id, "title": "A post",
-            "published": datetime(2021, 1, 1, tzinfo=timezone.utc),
-        })
+        reader.add_entry(
+            {
+                "feed_url": feed,
+                "id": entry_id,
+                "link": entry_id,
+                "title": "A post",
+                "published": datetime(2021, 1, 1, tzinfo=timezone.utc),
+            }
+        )
 
 
 def _star(feed, entry_id, saved_at=None):
@@ -108,18 +114,14 @@ def test_unstar_returns_an_undo_token_and_undo_restores_the_star(tenant):
         assert token
 
         with main.get_meta_connection() as conn:
-            assert not conn.execute(
-                "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (FEED, "e1")
-            ).fetchone()
+            assert not conn.execute("SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (FEED, "e1")).fetchone()
 
         r2 = client.post("/entries/undo-unstar", data={"unstarred_at": token})
         assert r2.status_code == 200
         assert r2.json() == {"ok": True, "restored": 1, "gone": 0}
 
     with main.get_meta_connection() as conn:
-        row = conn.execute(
-            "SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (FEED, "e1")
-        ).fetchone()
+        row = conn.execute("SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (FEED, "e1")).fetchone()
     assert row is not None
     assert row["saved_at"] == "2021-06-01 12:00:00"  # original position preserved, not "now"
 
@@ -177,9 +179,7 @@ def test_second_unstar_of_the_same_entry_replaces_the_first_token(tenant):
         assert fresh.status_code == 200
 
     with main.get_meta_connection() as conn:
-        row = conn.execute(
-            "SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (FEED, "e1")
-        ).fetchone()
+        row = conn.execute("SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (FEED, "e1")).fetchone()
     assert row["saved_at"] == "2022-02-02 00:00:00"
 
 
@@ -227,6 +227,4 @@ def test_undo_refuses_to_resurrect_a_hard_deleted_saved_article_husk(tenant):
         assert r.json()["ok"] is False
 
     with main.get_meta_connection() as conn:
-        assert not conn.execute(
-            "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (SAVED, "husk-1")
-        ).fetchone()
+        assert not conn.execute("SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (SAVED, "husk-1")).fetchone()

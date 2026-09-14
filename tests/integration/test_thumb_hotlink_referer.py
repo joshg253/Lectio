@@ -5,6 +5,7 @@ is honest-first: a host that serves the image gets no Referer. Mirrors api_img_p
 A minimal app mounts just the route so the auth/CSRF middleware is not in play
 (matching test_mark_read_routes.py); /thumb is not an auth-exempt prefix.
 """
+
 from __future__ import annotations
 
 import io

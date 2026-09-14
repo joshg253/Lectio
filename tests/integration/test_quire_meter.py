@@ -1,4 +1,5 @@
 """Quire rate meter: sliding per-minute/per-hour tally + low/blocked states."""
+
 from __future__ import annotations
 
 import time
@@ -86,8 +87,7 @@ def test_detect_plan_enterprise_keeps_default_caps(env, monkeypatch):
 
 def test_detect_plan_noop_without_project(env, monkeypatch):
     monkeypatch.setattr(main, "get_quire_user_token", lambda: "qtok")
-    monkeypatch.setattr(main.quire_service, "get_project_plan",
-                        lambda *a: (_ for _ in ()).throw(AssertionError("should not be called")))
+    monkeypatch.setattr(main.quire_service, "get_project_plan", lambda *a: (_ for _ in ()).throw(AssertionError("should not be called")))
     assert main.detect_quire_plan_and_caps() == ""
 
 
@@ -98,5 +98,5 @@ def test_old_rows_pruned_from_minute_window(env):
         conn.execute("INSERT INTO quire_call_log (ts) VALUES (?)", (old,))
     main.record_quire_call(1)
     st = main.get_quire_usage_status()
-    assert st["minute_used"] == 1   # old row outside the 60s window
-    assert st["hour_used"] == 2     # but still inside the hour window
+    assert st["minute_used"] == 1  # old row outside the 60s window
+    assert st["hour_used"] == 2  # but still inside the hour window

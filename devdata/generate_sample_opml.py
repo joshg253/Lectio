@@ -1,4 +1,5 @@
 """Generate a sample OPML file with placeholder feed entries for testing."""
+
 from __future__ import annotations
 
 import random

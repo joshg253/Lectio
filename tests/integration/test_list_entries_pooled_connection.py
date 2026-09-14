@@ -11,6 +11,7 @@ of a folder with many feeds, with a shorter busy_timeout (5s) than everywhere
 else (10s), and was invisible to slow-SQL logging since a bare sqlite3.connect()
 bypasses _TimedConnection entirely.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -41,13 +42,15 @@ def seeded(tmp_path):
             url = f"https://filler{f}.test/feed"
             reader.add_feed(url, allow_invalid_url=True, exist_ok=True)
             for n in range(2):
-                reader.add_entry({
-                    "feed_url": url,
-                    "id": f"f{f}-{n}",
-                    "title": f"filler {f}-{n}",
-                    "link": f"https://filler{f}.test/{n}",
-                    "published": BASE + timedelta(days=n),
-                })
+                reader.add_entry(
+                    {
+                        "feed_url": url,
+                        "id": f"f{f}-{n}",
+                        "title": f"filler {f}-{n}",
+                        "link": f"https://filler{f}.test/{n}",
+                        "published": BASE + timedelta(days=n),
+                    }
+                )
     try:
         yield tmp_path
     finally:
@@ -66,17 +69,12 @@ def test_many_feed_sort_path_reuses_pooled_reader_connection(seeded, monkeypatch
 
     def guarded_connect(database, *args, **kwargs):
         if str(database) == reader_path:
-            raise AssertionError(
-                "list_entries_for_feeds opened a fresh reader-DB connection "
-                "instead of reusing get_reader()'s pooled one"
-            )
+            raise AssertionError("list_entries_for_feeds opened a fresh reader-DB connection instead of reusing get_reader()'s pooled one")
         return real_connect(database, *args, **kwargs)
 
     monkeypatch.setattr(main.sqlite3, "connect", guarded_connect)
 
-    posts = main.list_entries_for_feeds(
-        _feed_urls(), limit=50, sort_by="post", sort_dir=sort_dir, read_filter="all"
-    )
+    posts = main.list_entries_for_feeds(_feed_urls(), limit=50, sort_by="post", sort_dir=sort_dir, read_filter="all")
 
     assert len(posts) == 50
 
@@ -84,9 +82,13 @@ def test_many_feed_sort_path_reuses_pooled_reader_connection(seeded, monkeypatch
 def test_asc_and_desc_agree_on_membership(seeded):
     """Sanity check that the pooled-connection rewrite didn't change results --
     same entries, just via a different connection."""
-    asc = {(p["feed_url"], p["id"]) for p in main.list_entries_for_feeds(
-        _feed_urls(), limit=200, sort_by="post", sort_dir="asc", read_filter="all")}
-    desc = {(p["feed_url"], p["id"]) for p in main.list_entries_for_feeds(
-        _feed_urls(), limit=200, sort_by="post", sort_dir="desc", read_filter="all")}
+    asc = {
+        (p["feed_url"], p["id"])
+        for p in main.list_entries_for_feeds(_feed_urls(), limit=200, sort_by="post", sort_dir="asc", read_filter="all")
+    }
+    desc = {
+        (p["feed_url"], p["id"])
+        for p in main.list_entries_for_feeds(_feed_urls(), limit=200, sort_by="post", sort_dir="desc", read_filter="all")
+    }
     assert asc == desc
     assert len(asc) == FEED_COUNT * 2

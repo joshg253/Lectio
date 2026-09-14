@@ -2,6 +2,7 @@
 Lectio already catches each one (backoff + problematic-feeds panel). The
 _ReaderUpdateFetchErrorFilter demotes those expected fetch/parse failures to a
 one-line WARNING while leaving genuinely unexpected errors loud."""
+
 from __future__ import annotations
 
 import logging
@@ -27,8 +28,10 @@ def _apply(msg: str, **kw) -> logging.LogRecord:
 
 
 def test_429_demoted_to_warning_without_traceback():
-    r = _apply('updated  status=error feed=https://old.reddit.com/r/x/.rss '
-               'exception="ParseError: bad HTTP status code: 429 Client Error: Too Many Requests"')
+    r = _apply(
+        "updated  status=error feed=https://old.reddit.com/r/x/.rss "
+        'exception="ParseError: bad HTTP status code: 429 Client Error: Too Many Requests"'
+    )
     assert r.levelname == "WARNING"
     assert r.exc_info is None
 

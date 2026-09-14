@@ -14,6 +14,7 @@ from services import takeout_service
 # Helpers: create minimal in-memory DBs
 # ---------------------------------------------------------------------------
 
+
 def _make_meta_db() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -90,6 +91,7 @@ def _make_reader_db(tmp_path: Path) -> Path:
 # Export tests
 # ---------------------------------------------------------------------------
 
+
 def test_export_produces_valid_zip(tmp_path):
     meta = _make_meta_db()
     rpath = _make_reader_db(tmp_path)
@@ -97,9 +99,16 @@ def test_export_produces_valid_zip(tmp_path):
     assert data[:2] == b"PK"
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         names = set(zf.namelist())
-    assert {"manifest.json", "opml.xml", "rules.json", "contacts.json",
-            "settings.json", "tagged_entries.json", "starred_entries.json",
-            "read_history.json"} <= names
+    assert {
+        "manifest.json",
+        "opml.xml",
+        "rules.json",
+        "contacts.json",
+        "settings.json",
+        "tagged_entries.json",
+        "starred_entries.json",
+        "read_history.json",
+    } <= names
 
 
 def test_export_manifest_version(tmp_path):
@@ -114,10 +123,7 @@ def test_export_manifest_version(tmp_path):
 
 def test_export_rules(tmp_path):
     meta = _make_meta_db()
-    meta.execute(
-        "INSERT INTO highlight_keywords (scope, scope_id, keyword, type)"
-        " VALUES ('global', '', 'python', 'highlight')"
-    )
+    meta.execute("INSERT INTO highlight_keywords (scope, scope_id, keyword, type) VALUES ('global', '', 'python', 'highlight')")
     rpath = _make_reader_db(tmp_path)
     data = takeout_service.build_takeout_zip(meta, rpath, "", "x")
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
@@ -161,6 +167,7 @@ def test_export_tagged_entries(tmp_path):
 # Import tests
 # ---------------------------------------------------------------------------
 
+
 def _build_zip(**files) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
@@ -174,10 +181,26 @@ def _build_zip(**files) -> bytes:
 def test_import_rules(tmp_path):
     meta = _make_meta_db()
     rpath = _make_reader_db(tmp_path)
-    rules = [{"scope": "global", "scope_id": "", "keyword": "rust", "type": "highlight",
-               "color": "blue", "is_regex": 0, "enabled": 1, "search_in": "title",
-               "delivery": "immediately", "email_to": "", "batch_time": "", "batch_count": 0,
-               "cc_me": 0, "dedup_window_hours": 24, "exclude_scope_ids": "", "sort_order": 0}]
+    rules = [
+        {
+            "scope": "global",
+            "scope_id": "",
+            "keyword": "rust",
+            "type": "highlight",
+            "color": "blue",
+            "is_regex": 0,
+            "enabled": 1,
+            "search_in": "title",
+            "delivery": "immediately",
+            "email_to": "",
+            "batch_time": "",
+            "batch_count": 0,
+            "cc_me": 0,
+            "dedup_window_hours": 24,
+            "exclude_scope_ids": "",
+            "sort_order": 0,
+        }
+    ]
     zb = _build_zip(**{"rules.json": rules})
     with meta:
         summary = takeout_service.import_takeout_zip(meta, rpath, zb)
@@ -190,10 +213,26 @@ def test_import_rules_no_duplicate(tmp_path):
     meta = _make_meta_db()
     meta.execute("INSERT INTO highlight_keywords (scope, scope_id, keyword) VALUES ('global','','rust')")
     rpath = _make_reader_db(tmp_path)
-    rules = [{"scope": "global", "scope_id": "", "keyword": "rust", "type": "highlight",
-               "color": "yellow", "is_regex": 0, "enabled": 1, "search_in": "title",
-               "delivery": "immediately", "email_to": "", "batch_time": "", "batch_count": 0,
-               "cc_me": 0, "dedup_window_hours": 24, "exclude_scope_ids": "", "sort_order": 0}]
+    rules = [
+        {
+            "scope": "global",
+            "scope_id": "",
+            "keyword": "rust",
+            "type": "highlight",
+            "color": "yellow",
+            "is_regex": 0,
+            "enabled": 1,
+            "search_in": "title",
+            "delivery": "immediately",
+            "email_to": "",
+            "batch_time": "",
+            "batch_count": 0,
+            "cc_me": 0,
+            "dedup_window_hours": 24,
+            "exclude_scope_ids": "",
+            "sort_order": 0,
+        }
+    ]
     zb = _build_zip(**{"rules.json": rules})
     with meta:
         summary = takeout_service.import_takeout_zip(meta, rpath, zb)
@@ -229,8 +268,14 @@ def test_import_history_appends(tmp_path):
     meta = _make_meta_db()
     rpath = _make_reader_db(tmp_path)
     history = [
-        {"feed_url": "https://f.example/rss", "entry_id": "e1",
-         "title": "A Post", "link": "https://post", "feed_title": "F", "read_at": "2026-01-01"},
+        {
+            "feed_url": "https://f.example/rss",
+            "entry_id": "e1",
+            "title": "A Post",
+            "link": "https://post",
+            "feed_title": "F",
+            "read_at": "2026-01-01",
+        },
     ]
     zb = _build_zip(**{"read_history.json": history})
     with meta:
@@ -253,9 +298,7 @@ def test_import_tagged_entries(tmp_path):
         summary = takeout_service.import_takeout_zip(meta, rpath, zb)
     assert summary["tagged_entries"] == 1
     rconn = sqlite3.connect(str(rpath))
-    tags = [r[0] for r in rconn.execute(
-        "SELECT key FROM entry_tags WHERE id='e1'"
-    ).fetchall()]
+    tags = [r[0] for r in rconn.execute("SELECT key FROM entry_tags WHERE id='e1'").fetchall()]
     assert "lectio.manual_tag.rust" in tags
     assert "lectio.manual_tag.cpp" in tags
     rconn.close()
@@ -302,7 +345,9 @@ def test_roundtrip(tmp_path):
     meta.execute("INSERT INTO highlight_keywords (scope, scope_id, keyword, type) VALUES ('global','','roundtrip','highlight')")
     meta.execute("INSERT INTO email_contacts (label, address) VALUES ('Bob','bob@example.com')")
     meta.execute("INSERT INTO app_settings VALUES ('profile_name', 'Test User')")
-    meta.execute("INSERT INTO read_history (feed_url, entry_id, title, link, feed_title, read_at) VALUES ('https://f.example/rss','e1','T','https://l','F','2026-01-01')")
+    meta.execute(
+        "INSERT INTO read_history (feed_url, entry_id, title, link, feed_title, read_at) VALUES ('https://f.example/rss','e1','T','https://l','F','2026-01-01')"
+    )
     rpath = _make_reader_db(tmp_path)
 
     data = takeout_service.build_takeout_zip(meta, rpath, "<opml/>", "test")

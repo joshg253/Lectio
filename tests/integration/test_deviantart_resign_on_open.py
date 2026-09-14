@@ -7,6 +7,7 @@ The cost control is the point of these tests: a permanently-signed image and one
 whose bytes the proxy already holds must never reach the API, or every render of
 a DeviantArt-heavy list would fan out into hundreds of calls.
 """
+
 from __future__ import annotations
 
 import base64
@@ -110,6 +111,7 @@ def test_no_token_available_leaves_the_url_alone(api, monkeypatch):
 
 # ── _wixmp_url_is_live ────────────────────────────────────────────────────────
 
+
 def _mock_client_factory(handler):
     transport = httpx.MockTransport(handler)
     real = httpx.Client
@@ -129,22 +131,25 @@ def _dns_bypass(monkeypatch):
 
 
 def test_wixmp_live_check_true_on_200_image(monkeypatch):
-    monkeypatch.setattr(httpx, "Client", _mock_client_factory(
-        lambda r: httpx.Response(200, headers={"content-type": "image/png"})))
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(lambda r: httpx.Response(200, headers={"content-type": "image/png"})))
     assert main._wixmp_url_is_live("https://images-wixmp.wixmp.com/f/a/b.png?token=x") is True
 
 
 def test_wixmp_live_check_false_on_error_response(monkeypatch):
     """The exact shape observed live: wixmp answers 400 text/plain for a dead
     token, not a 404 or a redirect."""
-    monkeypatch.setattr(httpx, "Client", _mock_client_factory(
-        lambda r: httpx.Response(400, headers={"content-type": "text/plain"}, text="image is invalid")))
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        _mock_client_factory(lambda r: httpx.Response(400, headers={"content-type": "text/plain"}, text="image is invalid")),
+    )
     assert main._wixmp_url_is_live("https://images-wixmp.wixmp.com/f/a/b.png?token=x") is False
 
 
 def test_wixmp_live_check_false_on_network_error(monkeypatch):
     def _raise(request):
         raise httpx.ConnectError("boom", request=request)
+
     monkeypatch.setattr(httpx, "Client", _mock_client_factory(_raise))
     assert main._wixmp_url_is_live("https://images-wixmp.wixmp.com/f/a/b.png?token=x") is False
 

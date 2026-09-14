@@ -6,6 +6,7 @@ whole Tags section looked empty ("No tags in this view") even though the tags
 still existed — alarming after a delete. The landing shows the folder tree, so
 it must show the tag list too, scoped to the folder's feeds.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -33,10 +34,14 @@ def configured(tmp_path, monkeypatch):
     main.user_store = None
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
-        reader.add_entry({
-            "feed_url": FEED, "id": "e1", "title": "Tagged post",
-            "link": "https://example.test/e1",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "e1",
+                "title": "Tagged post",
+                "link": "https://example.test/e1",
+            }
+        )
     # Attach a manual tag to the entry.
     main.set_manual_tags_for_entry(FEED, "e1", "#reads")
     main.invalidate_meta_structure_cache()

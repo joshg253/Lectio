@@ -11,6 +11,7 @@ re-synthesized.
 
 _canonical_feed_url_lookup / _resolve_feed_url are the shared fix; these tests
 exercise them directly and through _apply_migration_items end to end."""
+
 from __future__ import annotations
 
 import json
@@ -45,8 +46,15 @@ def configured(tmp_path):
 
 def _item(**overrides) -> dict:
     base = {
-        "url": "", "feed_url": FEED_CANONICAL, "title": "", "published": None,
-        "feed_title": "", "content": "", "starred": False, "tags": [], "folder": "",
+        "url": "",
+        "feed_url": FEED_CANONICAL,
+        "title": "",
+        "published": None,
+        "feed_title": "",
+        "content": "",
+        "starred": False,
+        "tags": [],
+        "folder": "",
     }
     base.update(overrides)
     return base
@@ -89,15 +97,21 @@ def test_migration_tags_land_on_existing_entry_not_a_synthesized_duplicate(confi
     published = datetime(2026, 1, 1, tzinfo=timezone.utc)
     with main.get_reader() as reader:
         reader.add_feed(FEED_STORED_NONCANONICAL, exist_ok=True)
-        reader.add_entry({
-            "feed_url": FEED_STORED_NONCANONICAL, "id": "https://example.test/a",
-            "link": "https://example.test/a", "title": "A", "published": published,
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED_STORED_NONCANONICAL,
+                "id": "https://example.test/a",
+                "link": "https://example.test/a",
+                "title": "A",
+                "published": published,
+            }
+        )
 
     state: dict = {}
     main._apply_migration_items(
         [_item(url="https://example.test/a", starred=True, tags=["keep"])],
-        state, lambda: None,
+        state,
+        lambda: None,
     )
 
     assert state.get("items_tagged") == 1
@@ -111,9 +125,7 @@ def test_migration_tags_land_on_existing_entry_not_a_synthesized_duplicate(confi
     assert str(entries[0].feed_url) == FEED_STORED_NONCANONICAL
     assert feeds == {FEED_STORED_NONCANONICAL}
     with main.get_meta_connection() as conn:
-        row = conn.execute(
-            "SELECT feed_url FROM saved_entries WHERE entry_id = 'https://example.test/a'"
-        ).fetchone()
+        row = conn.execute("SELECT feed_url FROM saved_entries WHERE entry_id = 'https://example.test/a'").fetchone()
     assert row is not None
     assert row["feed_url"] == FEED_STORED_NONCANONICAL
 
@@ -142,10 +154,28 @@ def _decline(feed_url: str) -> None:
 def test_local_import_loop_skips_a_declined_feed(configured, tmp_path, monkeypatch):
     _decline(DECLINED_FEED)
     items = [
-        {"url": "", "feed_url": DECLINED_FEED, "title": "", "published": None,
-         "feed_title": "", "content": "", "starred": False, "tags": [], "folder": ""},
-        {"url": "", "feed_url": NEW_FEED, "title": "", "published": None,
-         "feed_title": "", "content": "", "starred": False, "tags": [], "folder": ""},
+        {
+            "url": "",
+            "feed_url": DECLINED_FEED,
+            "title": "",
+            "published": None,
+            "feed_title": "",
+            "content": "",
+            "starred": False,
+            "tags": [],
+            "folder": "",
+        },
+        {
+            "url": "",
+            "feed_url": NEW_FEED,
+            "title": "",
+            "published": None,
+            "feed_title": "",
+            "content": "",
+            "starred": False,
+            "tags": [],
+            "folder": "",
+        },
     ]
     monkeypatch.setattr(main.inoreader_service, "parse_export_json", lambda data: items)
     json_path = tmp_path / "export.json"
@@ -168,7 +198,8 @@ def test_drip_step_subscriptions_phase_skips_a_declined_feed(configured, monkeyp
 
     with main.get_meta_connection() as conn:
         main.set_setting(
-            conn, main.SETTING_INOREADER_IMPORT_STATE,
+            conn,
+            main.SETTING_INOREADER_IMPORT_STATE,
             json.dumps({"phase": "subscriptions"}),
         )
 
@@ -191,7 +222,8 @@ def test_drip_step_subscriptions_phase_re_adds_when_nothing_declined(configured,
 
     with main.get_meta_connection() as conn:
         main.set_setting(
-            conn, main.SETTING_INOREADER_IMPORT_STATE,
+            conn,
+            main.SETTING_INOREADER_IMPORT_STATE,
             json.dumps({"phase": "subscriptions"}),
         )
 
@@ -206,19 +238,22 @@ def test_drip_step_subscriptions_phase_places_new_feed_in_its_ino_folder(configu
     """A newly-added feed with a Title-Case (folder-shaped) category lands in
     that folder instead of Uncategorized. The lowercase category on the same
     subscription is an article tag, not a folder, and must be ignored."""
-    subs = [{
-        "feed_url": NEW_FEED,
-        "categories": [
-            {"id": "user/-/label/lessons"},
-            {"id": "user/-/label/Comics & Art"},
-        ],
-    }]
+    subs = [
+        {
+            "feed_url": NEW_FEED,
+            "categories": [
+                {"id": "user/-/label/lessons"},
+                {"id": "user/-/label/Comics & Art"},
+            ],
+        }
+    ]
     monkeypatch.setattr(main, "get_inoreader_token", lambda: "fake-token")
     monkeypatch.setattr(main.inoreader_service, "get_subscriptions", lambda token: (subs, {}))
 
     with main.get_meta_connection() as conn:
         main.set_setting(
-            conn, main.SETTING_INOREADER_IMPORT_STATE,
+            conn,
+            main.SETTING_INOREADER_IMPORT_STATE,
             json.dumps({"phase": "subscriptions"}),
         )
 
@@ -226,8 +261,7 @@ def test_drip_step_subscriptions_phase_places_new_feed_in_its_ino_folder(configu
 
     with main.get_meta_connection() as conn:
         row = conn.execute(
-            "SELECT f.name FROM folder_feeds ff JOIN folders f ON f.id = ff.folder_id"
-            " WHERE ff.feed_url = ?",
+            "SELECT f.name FROM folder_feeds ff JOIN folders f ON f.id = ff.folder_id WHERE ff.feed_url = ?",
             (NEW_FEED,),
         ).fetchone()
     assert row is not None and row[0] == "Comics & Art"
@@ -252,7 +286,8 @@ def test_drip_step_subscriptions_phase_does_not_refolder_an_existing_feed(config
 
     with main.get_meta_connection() as conn:
         main.set_setting(
-            conn, main.SETTING_INOREADER_IMPORT_STATE,
+            conn,
+            main.SETTING_INOREADER_IMPORT_STATE,
             json.dumps({"phase": "subscriptions"}),
         )
 
@@ -260,8 +295,7 @@ def test_drip_step_subscriptions_phase_does_not_refolder_an_existing_feed(config
 
     with main.get_meta_connection() as conn:
         row = conn.execute(
-            "SELECT f.name FROM folder_feeds ff JOIN folders f ON f.id = ff.folder_id"
-            " WHERE ff.feed_url = ?",
+            "SELECT f.name FROM folder_feeds ff JOIN folders f ON f.id = ff.folder_id WHERE ff.feed_url = ?",
             (NEW_FEED,),
         ).fetchone()
     assert row is not None and row[0] == "Somewhere Else"

@@ -3,6 +3,7 @@ tags in entry_feed_tags. The rule spec lives in `keyword` as one comma-separated
 field with three strengths — `-tag` drops, `+tag` (or bare) is a good tag that
 rescues from drops without cutting anything by its absence, `++tag` requires
 (whitelist). Untagged entries are always kept."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -34,19 +35,26 @@ def env(tmp_path):
     reader = main.get_reader()
     reader.add_feed(FEED, allow_invalid_url=True)
     when = dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)
-    for eid, title in [("e-linux", "Linux post"), ("e-win", "Windows post"),
-                       ("e-deal", "Deals post"), ("e-untagged", "No tags"),
-                       ("e-mixed", "Linux deal")]:
-        reader.add_entry({"feed_url": FEED, "id": eid, "title": title,
-                          "link": f"https://example.test/{eid}", "summary": "x",
-                          "published": when})
+    for eid, title in [
+        ("e-linux", "Linux post"),
+        ("e-win", "Windows post"),
+        ("e-deal", "Deals post"),
+        ("e-untagged", "No tags"),
+        ("e-mixed", "Linux deal"),
+    ]:
+        reader.add_entry(
+            {"feed_url": FEED, "id": eid, "title": title, "link": f"https://example.test/{eid}", "summary": "x", "published": when}
+        )
     # Raw (unnormalized) feed tags, as the ingest sink stores them.
-    main.feed_tag_service.record_entry_tags(FEED, [
-        ("e-linux", ["Linux"]),
-        ("e-win", ["Windows 11"]),
-        ("e-deal", ["Deals"]),
-        ("e-mixed", ["Linux", "Deals"]),
-    ])
+    main.feed_tag_service.record_entry_tags(
+        FEED,
+        [
+            ("e-linux", ["Linux"]),
+            ("e-win", ["Windows 11"]),
+            ("e-deal", ["Deals"]),
+            ("e-mixed", ["Linux", "Deals"]),
+        ],
+    )
     try:
         yield
     finally:
@@ -63,17 +71,14 @@ def test_parse_tag_filter_spec():
     # Comma-separated, three strengths: ++require, +good (or bare), -exclude;
     # tokens are normalized, so multi-word tags can be typed with spaces.
     assert main.parse_tag_filter_spec("+python, -rust") == (set(), {"python"}, {"rust"})
-    assert main.parse_tag_filter_spec("++android, Linux, #AI, -Windows 11") == (
-        {"android"}, {"linux", "ai"}, {"windows-11"}
-    )
+    assert main.parse_tag_filter_spec("++android, Linux, #AI, -Windows 11") == ({"android"}, {"linux", "ai"}, {"windows-11"})
     assert main.parse_tag_filter_spec("  , #, -, ++") == (set(), set(), set())
     assert main.parse_tag_filter_spec(None) == (set(), set(), set())
 
 
 def test_rule_persists_spec(env):
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "+linux, -deals", "yellow",
-                                   rule_type="tag_filter", enabled=1)
+        main.add_highlight_keyword(conn, "feed", FEED, "+linux, -deals", "yellow", rule_type="tag_filter", enabled=1)
         r = main.get_highlight_keywords(conn)[0]
     assert r["type"] == "tag_filter"
     assert r["keyword"] == "+linux, -deals"
@@ -161,16 +166,13 @@ def test_empty_lists_error(env):
 
 def test_automation_after_refresh_runs_and_logs(env):
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "-deals", "yellow",
-                                   rule_type="tag_filter", enabled=1)
+        main.add_highlight_keyword(conn, "feed", FEED, "-deals", "yellow", rule_type="tag_filter", enabled=1)
 
     main._run_automation_after_refresh({FEED, OTHER_FEED})
 
     assert _unread_ids() == {"e-linux", "e-win", "e-untagged"}
     with main.get_meta_connection() as conn:
-        log = conn.execute(
-            "SELECT rule_type, scope, scope_id, entries_affected FROM rule_run_log"
-        ).fetchall()
+        log = conn.execute("SELECT rule_type, scope, scope_id, entries_affected FROM rule_run_log").fetchall()
     assert len(log) == 1
     assert log[0]["rule_type"] == "tag_filter"
     assert log[0]["entries_affected"] == 2
@@ -178,18 +180,17 @@ def test_automation_after_refresh_runs_and_logs(env):
 
 def test_disabled_rule_does_not_run(env):
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "-deals", "yellow",
-                                   rule_type="tag_filter", enabled=0)
+        main.add_highlight_keyword(conn, "feed", FEED, "-deals", "yellow", rule_type="tag_filter", enabled=0)
     main._run_automation_after_refresh({FEED})
     assert len(_unread_ids()) == 5
 
 
 # --- post-header chip toggles (toggle_feed_tag_filter) ---
 
+
 def _rule_keyword(conn):
     row = conn.execute(
-        "SELECT keyword, enabled FROM highlight_keywords WHERE type='tag_filter'"
-        " AND scope='feed' AND scope_id=?", (FEED,)
+        "SELECT keyword, enabled FROM highlight_keywords WHERE type='tag_filter' AND scope='feed' AND scope_id=?", (FEED,)
     ).fetchone()
     return (row["keyword"], row["enabled"]) if row else None
 
@@ -210,8 +211,7 @@ def test_toggle_creates_rule_disabled_no_apply(env):
 
 def test_toggle_on_enabled_rule_applies_immediately(env):
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "-sponsored", "yellow",
-                                   rule_type="tag_filter", enabled=1)
+        main.add_highlight_keyword(conn, "feed", FEED, "-sponsored", "yellow", rule_type="tag_filter", enabled=1)
         result = main.toggle_feed_tag_filter(conn, FEED, "deals", "-")
     assert result["spec"] == "-sponsored, -deals"
     assert result["enabled"] is True
@@ -249,8 +249,7 @@ def test_toggle_appends_to_existing_spec(env):
 def test_toggle_preserves_enabled_state(env):
     # Chip edits never flip the switch: a disabled rule stays disabled.
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "-deals", "yellow",
-                                   rule_type="tag_filter", enabled=0)
+        main.add_highlight_keyword(conn, "feed", FEED, "-deals", "yellow", rule_type="tag_filter", enabled=0)
         main.toggle_feed_tag_filter(conn, FEED, "sponsored", "-")
         assert _rule_keyword(conn) == ("-deals, -sponsored", 0)
     assert len(_unread_ids()) == 5
@@ -273,8 +272,7 @@ def test_normalize_strips_disallowed_chars():
 
 def test_toggle_preserves_handwritten_require(env):
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "++linux", "yellow",
-                                   rule_type="tag_filter", enabled=0)
+        main.add_highlight_keyword(conn, "feed", FEED, "++linux", "yellow", rule_type="tag_filter", enabled=0)
         # ▼ on another tag must not downgrade the ++require token…
         result = main.toggle_feed_tag_filter(conn, FEED, "deals", "-")
         assert result["spec"] == "++linux, -deals"
@@ -285,6 +283,7 @@ def test_toggle_preserves_handwritten_require(env):
 
 # --- author pseudo-tag ---
 
+
 def test_author_filter_token():
     assert main.author_filter_token("Steven Parker") == "by-steven-parker"
     assert main.author_filter_token("  ") is None
@@ -294,10 +293,18 @@ def test_author_filter_token():
 def test_author_pseudo_tag_drops_and_rescues(env):
     reader = main.get_reader()
     from reader.types import Author
-    reader.add_entry({"feed_url": FEED, "id": "e-dealguy", "title": "Deal post",
-                      "link": "https://example.test/e-dealguy", "summary": "x",
-                      "authors": [Author(name="Deal Guy")],
-                      "published": dt.datetime(2024, 1, 2, tzinfo=dt.timezone.utc)})
+
+    reader.add_entry(
+        {
+            "feed_url": FEED,
+            "id": "e-dealguy",
+            "title": "Deal post",
+            "link": "https://example.test/e-dealguy",
+            "summary": "x",
+            "authors": [Author(name="Deal Guy")],
+            "published": dt.datetime(2024, 1, 2, tzinfo=dt.timezone.utc),
+        }
+    )
     with main.get_meta_connection() as conn:
         result = main._run_tag_filter(conn, "feed", FEED, "-by-deal-guy")
     # Authored-but-untagged entry is filterable via its author pseudo-tag;
@@ -307,10 +314,17 @@ def test_author_pseudo_tag_drops_and_rescues(env):
 
     # ...and a good tag rescues from an author drop.
     main.feed_tag_service.record_entry_tags(FEED, [("e-linux2", ["Linux"])])
-    reader.add_entry({"feed_url": FEED, "id": "e-linux2", "title": "Linux by Deal Guy",
-                      "link": "https://example.test/e-linux2", "summary": "x",
-                      "authors": [Author(name="Deal Guy")],
-                      "published": dt.datetime(2024, 1, 2, tzinfo=dt.timezone.utc)})
+    reader.add_entry(
+        {
+            "feed_url": FEED,
+            "id": "e-linux2",
+            "title": "Linux by Deal Guy",
+            "link": "https://example.test/e-linux2",
+            "summary": "x",
+            "authors": [Author(name="Deal Guy")],
+            "published": dt.datetime(2024, 1, 2, tzinfo=dt.timezone.utc),
+        }
+    )
     with main.get_meta_connection() as conn:
         result = main._run_tag_filter(conn, "feed", FEED, "+linux, -by-deal-guy")
     assert result["count"] == 0  # rescued by +linux
@@ -325,13 +339,11 @@ def test_a_second_feed_rule_merges_into_the_first(env):
     ran, invisibly — which is what "overlapping tag rules for that feed" was.
     """
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "-rust, -powerbi", "yellow",
-                                   rule_type="tag_filter", enabled=1)
-        main.add_highlight_keyword(conn, "feed", FEED, "-hindi, -aws", "yellow",
-                                   rule_type="tag_filter", enabled=1)
+        main.add_highlight_keyword(conn, "feed", FEED, "-rust, -powerbi", "yellow", rule_type="tag_filter", enabled=1)
+        main.add_highlight_keyword(conn, "feed", FEED, "-hindi, -aws", "yellow", rule_type="tag_filter", enabled=1)
         rows = conn.execute(
-            "SELECT keyword FROM highlight_keywords"
-            " WHERE type = 'tag_filter' AND scope = 'feed' AND scope_id = ?", (FEED,),
+            "SELECT keyword FROM highlight_keywords WHERE type = 'tag_filter' AND scope = 'feed' AND scope_id = ?",
+            (FEED,),
         ).fetchall()
 
     assert len(rows) == 1, "a rival rule was created instead of merging"
@@ -344,28 +356,22 @@ def test_the_incoming_sign_wins_on_merge(env):
     """Re-adding +rust where -rust was set is a correction, not a contradiction to
     preserve."""
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "-rust, -go", "yellow",
-                                   rule_type="tag_filter", enabled=1)
-        main.add_highlight_keyword(conn, "feed", FEED, "+rust", "yellow",
-                                   rule_type="tag_filter", enabled=1)
+        main.add_highlight_keyword(conn, "feed", FEED, "-rust, -go", "yellow", rule_type="tag_filter", enabled=1)
+        main.add_highlight_keyword(conn, "feed", FEED, "+rust", "yellow", rule_type="tag_filter", enabled=1)
         spec = conn.execute(
-            "SELECT keyword FROM highlight_keywords"
-            " WHERE type = 'tag_filter' AND scope = 'feed' AND scope_id = ?", (FEED,),
+            "SELECT keyword FROM highlight_keywords WHERE type = 'tag_filter' AND scope = 'feed' AND scope_id = ?",
+            (FEED,),
         ).fetchone()["keyword"]
 
     assert "+rust" in spec and "-rust" not in spec
-    assert "-go" in spec       # untouched tags survive
+    assert "-go" in spec  # untouched tags survive
 
 
 def test_other_feeds_are_not_merged_into(env):
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "-rust", "yellow",
-                                   rule_type="tag_filter", enabled=1)
-        main.add_highlight_keyword(conn, "feed", OTHER_FEED, "-go", "yellow",
-                                   rule_type="tag_filter", enabled=1)
-        n = conn.execute(
-            "SELECT COUNT(*) FROM highlight_keywords WHERE type = 'tag_filter'"
-        ).fetchone()[0]
+        main.add_highlight_keyword(conn, "feed", FEED, "-rust", "yellow", rule_type="tag_filter", enabled=1)
+        main.add_highlight_keyword(conn, "feed", OTHER_FEED, "-go", "yellow", rule_type="tag_filter", enabled=1)
+        n = conn.execute("SELECT COUNT(*) FROM highlight_keywords WHERE type = 'tag_filter'").fetchone()[0]
 
     assert n == 2
 
@@ -379,18 +385,21 @@ def test_dry_run_reports_what_a_good_tag_rescued(env):
     empty result stops looking identical to a rule that is working."""
     with main.get_meta_connection() as conn:
         result = main._run_tag_filter(conn, "feed", FEED, "-deals, +linux", apply=False)
-    assert result["total_matches"] == 1          # e-deal, untouched by +linux
-    assert result["rescued"] == 1                # e-mixed
+    assert result["total_matches"] == 1  # e-deal, untouched by +linux
+    assert result["rescued"] == 1  # e-mixed
     assert result["rescued_by"] == ["linux"]
 
 
 def test_a_universal_good_tag_cancels_the_whole_rule_and_says_so(env):
     """The live case: on a feed tagging platform availability, every dropped
     post also carries the rescuing tag, so the spec is self-cancelling."""
-    main.feed_tag_service.record_entry_tags(FEED, [
-        ("e-deal", ["Deals", "Linux"]),
-        ("e-mixed", ["Linux", "Deals"]),
-    ])
+    main.feed_tag_service.record_entry_tags(
+        FEED,
+        [
+            ("e-deal", ["Deals", "Linux"]),
+            ("e-mixed", ["Linux", "Deals"]),
+        ],
+    )
     with main.get_meta_connection() as conn:
         result = main._run_tag_filter(conn, "feed", FEED, "-deals, +linux", apply=False)
     assert result["total_matches"] == 0
@@ -438,9 +447,7 @@ def test_more_than_eight_feed_tags_survive_to_the_page(env):
 
 
 def test_the_hard_cap_still_bounds_a_pathological_feed(env):
-    main.feed_tag_service.record_entry_tags(
-        FEED, [("e-linux", [f"tag{i}" for i in range(120)])]
-    )
+    main.feed_tag_service.record_entry_tags(FEED, [("e-linux", [f"tag{i}" for i in range(120)])])
     assert len(main.get_feed_tag_suggestions(FEED, "e-linux")) == main.MAX_FEED_TAG_SUGGESTIONS
 
 

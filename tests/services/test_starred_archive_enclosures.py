@@ -6,6 +6,7 @@ archived ~200MB of installer enclosures, because this path never checked that
 setting. Fixed to gate enclosures through the same `attachment_allowed`
 callable body-linked attachments already use.
 """
+
 from __future__ import annotations
 
 import sqlite3

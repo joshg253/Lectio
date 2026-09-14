@@ -32,6 +32,7 @@ outranks any inference this script can make.
     uv run python scripts/repair_fabricated_publish_dates.py            # dry run
     uv run python scripts/repair_fabricated_publish_dates.py --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -63,18 +64,14 @@ def repair_user(uid: str, apply: bool) -> int:
         (str(r["feed_url"]), str(r["entry_id"])): _sec(r["saved_at"])
         for r in meta.execute("SELECT feed_url, entry_id, saved_at FROM saved_entries")
     }
-    overrides = {
-        (str(r["feed_url"]), str(r["entry_id"]))
-        for r in meta.execute("SELECT feed_url, entry_id FROM entry_date_overrides")
-    }
+    overrides = {(str(r["feed_url"]), str(r["entry_id"])) for r in meta.execute("SELECT feed_url, entry_id FROM entry_date_overrides")}
     meta.close()
 
     reader_path = str(tenancy.reader_db_path())
     rc = sqlite3.connect(reader_path, timeout=30.0)
     rc.row_factory = sqlite3.Row
     rows = rc.execute(
-        "SELECT feed, id, published, first_updated, title FROM entries"
-        " WHERE added_by = 'user' AND published IS NOT NULL"
+        "SELECT feed, id, published, first_updated, title FROM entries WHERE added_by = 'user' AND published IS NOT NULL"
     ).fetchall()
 
     doomed: list[dict] = []
@@ -90,16 +87,21 @@ def repair_user(uid: str, apply: bool) -> int:
             # An explicit correction outranks anything inferred here.
             kept_overrides += 1
             continue
-        doomed.append({
-            "feed_url": key[0], "entry_id": key[1],
-            "title": str(row["title"] or "")[:80],
-            "was": str(row["published"]),
-            "why": "instapaper-save-date" if is_instapaper else "capture-time",
-        })
+        doomed.append(
+            {
+                "feed_url": key[0],
+                "entry_id": key[1],
+                "title": str(row["title"] or "")[:80],
+                "was": str(row["published"]),
+                "why": "instapaper-save-date" if is_instapaper else "capture-time",
+            }
+        )
 
-    print(f"[{uid}] {len(rows):,} user-added entries with a publish date; "
-          f"{len(doomed):,} fabricated"
-          f"{f'; {kept_overrides} left alone (manual override)' if kept_overrides else ''}")
+    print(
+        f"[{uid}] {len(rows):,} user-added entries with a publish date; "
+        f"{len(doomed):,} fabricated"
+        f"{f'; {kept_overrides} left alone (manual override)' if kept_overrides else ''}"
+    )
     for d in doomed[:10]:
         print(f"   {d['was'][:19]}  {d['why']:<20} {d['title'][:48]}")
     if len(doomed) > 10:
@@ -112,7 +114,7 @@ def repair_user(uid: str, apply: bool) -> int:
         return len(doomed)
 
     for start in range(0, len(doomed), 500):
-        chunk = doomed[start:start + 500]
+        chunk = doomed[start : start + 500]
         rc.executemany(
             "UPDATE entries SET published = ? WHERE feed = ? AND id = ?",
             [(EPOCH, d["feed_url"], d["entry_id"]) for d in chunk],
@@ -127,8 +129,7 @@ def repair_user(uid: str, apply: bool) -> int:
 
 
 def main_cli() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
     args = ap.parse_args()
@@ -138,8 +139,7 @@ def main_cli() -> int:
         with tenancy.user_context(uid):
             repair_user(uid, args.apply)
     if args.apply:
-        print("\nRestart the app: the unread-count cache is generation-guarded and "
-              "will not self-heal from a behind-the-back write.")
+        print("\nRestart the app: the unread-count cache is generation-guarded and will not self-heal from a behind-the-back write.")
     return 0
 
 

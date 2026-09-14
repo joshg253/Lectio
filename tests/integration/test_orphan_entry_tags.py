@@ -6,6 +6,7 @@ reader dependency. Manual tags didn't, because they piggyback on reader's own
 entry_tags — an orphan has no reader resource to attach one to, so tagging
 silently no-op'd. orphan_entry_tags gives tags the same independence.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -49,11 +50,13 @@ def archive_spy(monkeypatch):
     archived: list[tuple[str, str]] = []
     removed: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        main.starred_archive_service, "enqueue_archive",
+        main.starred_archive_service,
+        "enqueue_archive",
         lambda f, e: archived.append((f, e)),
     )
     monkeypatch.setattr(
-        main.starred_archive_service, "enqueue_removal",
+        main.starred_archive_service,
+        "enqueue_removal",
         lambda f, e: removed.append((f, e)),
     )
     return archived, removed
@@ -136,11 +139,16 @@ def test_rename_reports_merge_when_target_tag_already_used_on_an_orphan(orphan_e
 def test_build_orphan_entry_detail_surfaces_real_tags(orphan_env, monkeypatch):
     main.set_manual_tags_for_entry(ORPHAN_FEED, ORPHAN_ENTRY, "pshell")
     monkeypatch.setattr(
-        main.starred_archive_service, "get_archived_entry_detail",
+        main.starred_archive_service,
+        "get_archived_entry_detail",
         lambda f, e: {
-            "title": "Working with PowerShell", "link": "https://gone.example/article-1",
-            "content_html": "<p>hi</p>", "feed_title": "Gone", "author": None,
-            "published_at": None, "received_at": None,
+            "title": "Working with PowerShell",
+            "link": "https://gone.example/article-1",
+            "content_html": "<p>hi</p>",
+            "feed_title": "Gone",
+            "author": None,
+            "published_at": None,
+            "received_at": None,
         },
     )
     monkeypatch.setattr(main.starred_archive_service, "get_entry_asset_map", lambda f, e: {})
@@ -152,10 +160,16 @@ def test_build_orphan_entry_detail_surfaces_real_tags(orphan_env, monkeypatch):
 
 def _orphan_detail(monkeypatch):
     monkeypatch.setattr(
-        main.starred_archive_service, "get_archived_entry_detail",
+        main.starred_archive_service,
+        "get_archived_entry_detail",
         lambda f, e: {
-            "title": "t", "link": "https://gone.example/article-1", "content_html": "<p>hi</p>",
-            "feed_title": "Gone", "author": None, "published_at": None, "received_at": None,
+            "title": "t",
+            "link": "https://gone.example/article-1",
+            "content_html": "<p>hi</p>",
+            "feed_title": "Gone",
+            "author": None,
+            "published_at": None,
+            "received_at": None,
         },
     )
     monkeypatch.setattr(main.starred_archive_service, "get_entry_asset_map", lambda f, e: {})
@@ -194,12 +208,12 @@ def test_orphan_with_only_a_star_is_kept_and_saved(orphan_env, monkeypatch):
 # treat a feed_url the starred archive still recognizes as editable, distinct
 # from a genuinely unknown URL.
 
+
 def _seed_archive_row(feed_url=ORPHAN_FEED, entry_id=ORPHAN_ENTRY, feed_title="Gone Blog"):
     main.ensure_starred_archive_schema()
     with main.get_starred_archive_connection() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO archived_entry (feed_url, entry_id, status, starred_at, feed_title)"
-            " VALUES (?, ?, 'complete', 0, ?)",
+            "INSERT OR IGNORE INTO archived_entry (feed_url, entry_id, status, starred_at, feed_title) VALUES (?, ?, 'complete', 0, ?)",
             (feed_url, entry_id, feed_title),
         )
         conn.commit()
@@ -234,9 +248,7 @@ def test_suggested_tags_route_saves_for_a_known_orphan_feed(orphan_env):
 
 
 def test_suggested_tags_route_still_404s_for_a_genuinely_unknown_url(orphan_env):
-    resp = main.set_feed_suggested_tags_route(
-        feed_url="https://never-heard-of.example/feed", tags="c++"
-    )
+    resp = main.set_feed_suggested_tags_route(feed_url="https://never-heard-of.example/feed", tags="c++")
     assert resp.status_code == 404
 
 
@@ -248,13 +260,20 @@ def test_suggested_tags_route_still_404s_for_a_genuinely_unknown_url(orphan_env)
 # showing on article header" bug, one layer past the Feed Properties save
 # itself working.
 
+
 def test_orphan_entry_detail_surfaces_pinned_feed_tags_as_suggestions(orphan_env, monkeypatch):
     main.set_feed_pinned_tags(ORPHAN_FEED, "c++")
     monkeypatch.setattr(
-        main.starred_archive_service, "get_archived_entry_detail",
+        main.starred_archive_service,
+        "get_archived_entry_detail",
         lambda f, e: {
-            "title": "t", "link": "https://gone.example/article-1", "content_html": "<p>hi</p>",
-            "feed_title": "Gone", "author": None, "published_at": None, "received_at": None,
+            "title": "t",
+            "link": "https://gone.example/article-1",
+            "content_html": "<p>hi</p>",
+            "feed_title": "Gone",
+            "author": None,
+            "published_at": None,
+            "received_at": None,
         },
     )
     monkeypatch.setattr(main.starred_archive_service, "get_entry_asset_map", lambda f, e: {})
@@ -267,10 +286,16 @@ def test_orphan_entry_detail_stops_suggesting_a_pinned_tag_once_applied(orphan_e
     main.set_feed_pinned_tags(ORPHAN_FEED, "c++")
     main.set_manual_tags_for_entry(ORPHAN_FEED, ORPHAN_ENTRY, "c++")
     monkeypatch.setattr(
-        main.starred_archive_service, "get_archived_entry_detail",
+        main.starred_archive_service,
+        "get_archived_entry_detail",
         lambda f, e: {
-            "title": "t", "link": "https://gone.example/article-1", "content_html": "<p>hi</p>",
-            "feed_title": "Gone", "author": None, "published_at": None, "received_at": None,
+            "title": "t",
+            "link": "https://gone.example/article-1",
+            "content_html": "<p>hi</p>",
+            "feed_title": "Gone",
+            "author": None,
+            "published_at": None,
+            "received_at": None,
         },
     )
     monkeypatch.setattr(main.starred_archive_service, "get_entry_asset_map", lambda f, e: {})
@@ -281,9 +306,7 @@ def test_orphan_entry_detail_stops_suggesting_a_pinned_tag_once_applied(orphan_e
 
 
 def test_entry_feed_tags_route_404s_for_a_genuinely_unknown_entry(orphan_env):
-    resp = main.entry_feed_tags_route(
-        feed_url="https://never-heard-of.example/feed", entry_id="x"
-    )
+    resp = main.entry_feed_tags_route(feed_url="https://never-heard-of.example/feed", entry_id="x")
     assert resp.status_code == 404
 
 
@@ -293,6 +316,7 @@ def test_entry_feed_tags_route_serves_pinned_tags_for_an_orphan_entry(orphan_env
     resp = main.entry_feed_tags_route(feed_url=ORPHAN_FEED, entry_id=ORPHAN_ENTRY)
     assert resp.status_code == 200
     import json
+
     body = json.loads(resp.body)
     assert body["ok"] is True
     assert body["tags"] == ["c++"]
@@ -305,6 +329,7 @@ def test_entry_feed_tags_route_excludes_already_applied_orphan_tag(orphan_env):
     main.set_manual_tags_for_entry(ORPHAN_FEED, ORPHAN_ENTRY, "c++")
     resp = main.entry_feed_tags_route(feed_url=ORPHAN_FEED, entry_id=ORPHAN_ENTRY)
     import json
+
     body = json.loads(resp.body)
     assert body["tags"] == []
     assert body["manual_tags"] == ["c++"]

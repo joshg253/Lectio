@@ -10,6 +10,7 @@ location by hand and pins it here, then re-fetches the content.
 The load-bearing invariant: only ``link`` changes, never the entry id. For a
 Lectio capture the id is the original URL and it keys the star row, manual
 tags, and archive rows."""
+
 from __future__ import annotations
 
 import pytest
@@ -37,12 +38,14 @@ def configured(tmp_path):
     main.ensure_meta_schema()
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
-        reader.add_entry({
-            "feed_url": FEED,
-            "id": DEAD_LINK,          # a capture keys itself by its source URL
-            "title": "An article that moved",
-            "link": DEAD_LINK,
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": DEAD_LINK,  # a capture keys itself by its source URL
+                "title": "An article that moved",
+                "link": DEAD_LINK,
+            }
+        )
     try:
         yield
     finally:
@@ -58,9 +61,7 @@ def _client() -> TestClient:
 
 def _reader_row() -> dict:
     with main.get_reader() as reader:
-        row = reader._storage.get_db().execute(
-            "SELECT id, link FROM entries WHERE feed = ?", (FEED,)
-        ).fetchone()
+        row = reader._storage.get_db().execute("SELECT id, link FROM entries WHERE feed = ?", (FEED,)).fetchone()
     return {"id": row[0], "link": row[1]}
 
 
@@ -108,7 +109,7 @@ def test_empty_link_clears_the_override(configured):
     "bad",
     [
         "javascript:alert(1)",
-        "mailto:someone@example.com",   # safe as an href, useless as a source URL
+        "mailto:someone@example.com",  # safe as an href, useless as a source URL
         "tel:+15551234",
         "ftp://example.com/a",
         "not a url",

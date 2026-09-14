@@ -3,6 +3,7 @@
 In multi mode the module-level caches must partition by tenancy user so one
 user's cached folder tree / settings / counts never show up for another.
 """
+
 from __future__ import annotations
 
 import main

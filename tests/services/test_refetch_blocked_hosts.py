@@ -7,6 +7,7 @@ source article is gone" and flagged the entry `dead`, which the UI offers to
 delete on. Reported 2026-07-26 against two Medium posts and treblezine, all of
 which open fine in a browser.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -58,8 +59,11 @@ def _raise(status: int):
         # exc.response.status_code, so a real Request/Response is needless
         # ceremony. ty checks the constructor signature, hence the suppression.
         raise httpx.HTTPStatusError(
-            "refused", request=None, response=_Resp(status),  # ty: ignore[invalid-argument-type]
+            "refused",
+            request=None,  # ty: ignore[invalid-argument-type]
+            response=_Resp(status),  # ty: ignore[invalid-argument-type]
         )
+
     return _extract
 
 
@@ -67,7 +71,10 @@ def _raise(status: int):
 def test_a_refusal_is_reported_as_a_block_not_a_deletion(reader, meta_conn, status):
     saved_articles.save_article(reader, meta_conn, "https://example.com/post", extract=_ok_extract)
     result = saved_articles.refresh_captured_article(
-        reader, meta_conn, saved_articles.SAVED_FEED_URL, "https://example.com/post",
+        reader,
+        meta_conn,
+        saved_articles.SAVED_FEED_URL,
+        "https://example.com/post",
         extract=_raise(status),
     )
     assert result["ok"] is False
@@ -83,7 +90,10 @@ def test_a_real_absence_still_flags_dead(reader, meta_conn, status):
     away — this is the distinction the fix rests on."""
     saved_articles.save_article(reader, meta_conn, "https://example.com/post", extract=_ok_extract)
     result = saved_articles.refresh_captured_article(
-        reader, meta_conn, saved_articles.SAVED_FEED_URL, "https://example.com/post",
+        reader,
+        meta_conn,
+        saved_articles.SAVED_FEED_URL,
+        "https://example.com/post",
         extract=_raise(status),
     )
     assert result["ok"] is False

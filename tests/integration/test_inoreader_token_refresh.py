@@ -5,6 +5,7 @@ refresh failure caused by Inoreader permanently rejecting the token
 (invalid_grant), get_inoreader_token now clears the stored tokens so
 inoreader_connected() flips back to False. A transient failure (network blip,
 Inoreader outage) must NOT clear a still-valid token."""
+
 from __future__ import annotations
 
 import pytest

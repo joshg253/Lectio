@@ -14,6 +14,7 @@ There is no JS test harness in this repo, so these are structural guards on the
 two files rather than a behavioral test. They are here because both halves are
 easy to delete while "tidying" and the failure is silent and client-side only.
 """
+
 from __future__ import annotations
 
 import re
@@ -28,7 +29,7 @@ def _inbox_anchor() -> str:
     """The Inbox sidebar anchor, from `<a` to the closing `>` of its open tag."""
     start = _INDEX_HTML.index("saved-inbox-item")
     open_tag_start = _INDEX_HTML.rindex("<a", 0, start)
-    return _INDEX_HTML[open_tag_start:_INDEX_HTML.index(">", start) + 1]
+    return _INDEX_HTML[open_tag_start : _INDEX_HTML.index(">", start) + 1]
 
 
 def test_inbox_anchor_carries_a_folder_id():
@@ -42,18 +43,14 @@ def test_inbox_anchor_requests_the_star_axis():
 
 
 def test_active_state_reads_the_kept_param():
-    assert re.search(r"searchParams\.get\(\s*'kept'\s*\)", _APP_JS), (
-        "the client no longer distinguishes the Inbox from All"
-    )
+    assert re.search(r"searchParams\.get\(\s*'kept'\s*\)", _APP_JS), "the client no longer distinguishes the Inbox from All"
 
 
 def test_all_row_yields_to_the_inbox_and_to_tag_views():
     """`saved-all-item` must not match on star mode alone — the Inbox and tag
     views are their own nodes at the same folder id, and the server's condition
     for this row already excludes both."""
-    match = re.search(
-        r"saved-all-item'\)\)\s*\{\s*isMatch\s*=\s*([^;]+);", _APP_JS
-    )
+    match = re.search(r"saved-all-item'\)\)\s*\{\s*isMatch\s*=\s*([^;]+);", _APP_JS)
     assert match, "could not find the saved-all-item match rule in app.js"
     rule = match.group(1)
     assert "!nextInbox" in rule, f"All row still claims the Inbox: {rule.strip()}"
@@ -61,6 +58,4 @@ def test_all_row_yields_to_the_inbox_and_to_tag_views():
 
 
 def test_inbox_row_has_its_own_match_rule():
-    assert re.search(
-        r"saved-inbox-item'\)\)\s*\{\s*isMatch\s*=\s*nextInbox", _APP_JS
-    ), "the Inbox row has no active-state rule of its own"
+    assert re.search(r"saved-inbox-item'\)\)\s*\{\s*isMatch\s*=\s*nextInbox", _APP_JS), "the Inbox row has no active-state rule of its own"

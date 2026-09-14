@@ -24,6 +24,7 @@ than a publisher's own metadata and must be consulted after it, never instead of
 it. Everything returned is range-checked; nothing here is trusted just because it
 parsed.
 """
+
 from __future__ import annotations
 
 import logging
@@ -40,8 +41,7 @@ LOGGER = logging.getLogger("lectio")
 _MIN_YEAR = 1990
 _FUTURE_SLACK = timedelta(days=2)
 
-_MONTHS = ("january", "february", "march", "april", "may", "june", "july",
-           "august", "september", "october", "november", "december")
+_MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december")
 
 
 def _in_range(dt: datetime | None) -> datetime | None:
@@ -73,9 +73,7 @@ _DATED_ELEMENT_RE = re.compile(
 # The element's text must be a date and nothing else — "Updated April 26, 2026
 # by Chris" is a sentence that contains a date, not a byline date.
 _TEXT_IS_ONLY_A_DATE_RE = re.compile(
-    r"[\s,\u00b7\u2013\u2014-]*(?:"
-    + "|".join(_MONTHS)
-    + r")\s+\d{1,2},?\s+\d{4}[\s,\u00b7\u2013\u2014-]*"
+    r"[\s,\u00b7\u2013\u2014-]*(?:" + "|".join(_MONTHS) + r")\s+\d{1,2},?\s+\d{4}[\s,\u00b7\u2013\u2014-]*"
     r"|[\s]*\d{1,2}\s+(?:" + "|".join(_MONTHS) + r"),?\s+\d{4}[\s]*"
     r"|[\s]*\d{4}-\d{2}-\d{2}[\s]*",
     re.I,
@@ -121,7 +119,7 @@ def _parse_text_date(text: str) -> datetime | None:
             else:
                 year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
             return datetime(year, month, day, tzinfo=timezone.utc)
-        except (ValueError, IndexError):
+        except ValueError, IndexError:
             continue
     return None
 
@@ -218,7 +216,8 @@ def fetch_whatif_index(*, force: bool = False) -> dict[str, datetime]:
     index: dict[str, datetime] = {}
     try:
         with url_guard.build_client(
-            timeout=20.0, follow_redirects=True,
+            timeout=20.0,
+            follow_redirects=True,
             headers={"User-Agent": "Lectio/0.1 (+https://github.com/joshg253/Lectio)"},
         ) as client:
             resp = url_guard.safe_get(client, WHATIF_ARCHIVE_URL)
@@ -228,8 +227,7 @@ def fetch_whatif_index(*, force: bool = False) -> dict[str, datetime]:
             if not number:
                 continue
             try:
-                index[number] = datetime.strptime(
-                    date_text.strip(), "%B %d, %Y").replace(tzinfo=timezone.utc)
+                index[number] = datetime.strptime(date_text.strip(), "%B %d, %Y").replace(tzinfo=timezone.utc)
             except ValueError:
                 continue
     except Exception:  # noqa: BLE001

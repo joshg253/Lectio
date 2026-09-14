@@ -1,6 +1,7 @@
 """extract_source_gallery_urls collects all acceptable article images from a
 cached source page (for feeds with image-less bodies, e.g. paizo), applying the
 same author/site-chrome/related/junk filters as the lead-image scraper."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -193,13 +194,7 @@ def test_gallery_keeps_same_named_images_when_no_slug_match(tmp_path: Path):
     """
     svc = _svc(tmp_path)
     link = "https://x.test/post/my-slug"
-    page = (
-        f"<html><body>{_PAD}"
-        '<img src="https://x.test/img/a/one.jpg">'
-        f"{_PAD}"
-        '<img src="https://x.test/img/b/two.jpg">'
-        "</body></html>"
-    )
+    page = f'<html><body>{_PAD}<img src="https://x.test/img/a/one.jpg">{_PAD}<img src="https://x.test/img/b/two.jpg"></body></html>'
     svc._source_html_cache[link] = (link, page)
     assert svc.extract_source_gallery_urls(link) == [
         "https://x.test/img/a/one.jpg",

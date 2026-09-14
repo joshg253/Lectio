@@ -32,6 +32,7 @@ swap happens at render time), so nothing needs rewriting there.
     uv run python scripts/repair_flattened_archive_images.py --host what-if.xkcd.com --apply
     uv run python scripts/repair_flattened_archive_images.py --apply      # everything
 """
+
 from __future__ import annotations
 
 import argparse
@@ -58,8 +59,8 @@ from services import tenancy, url_guard  # noqa: E402
 
 # Formats that can carry alpha; a JPEG source cannot, so it is never a suspect.
 _ALPHA_CAPABLE_EXT = (".png", ".gif", ".webp")
-_PACE_SECONDS = 0.5           # global floor between requests
-_HOST_PACE_SECONDS = 1.5      # and a wider gap per host
+_PACE_SECONDS = 0.5  # global floor between requests
+_HOST_PACE_SECONDS = 1.5  # and a wider gap per host
 _HOST_FAILURE_LIMIT = 3
 
 
@@ -73,11 +74,11 @@ def _declares_alpha(header: bytes) -> bool | None:
         return None
     fourcc = header[12:16]
     if fourcc == b"VP8X":
-        return bool(header[20] & 0x10)     # ALPHA flag in the extended header
+        return bool(header[20] & 0x10)  # ALPHA flag in the extended header
     if fourcc == b"VP8L":
-        return True                        # lossless webp carries alpha
+        return True  # lossless webp carries alpha
     if fourcc == b"VP8 ":
-        return False                       # simple lossy: no alpha channel
+        return False  # simple lossy: no alpha channel
     return None
 
 
@@ -103,11 +104,9 @@ def _reencode_with_alpha(raw: bytes) -> bytes | None:
     cap = starred_archive_service.ARCHIVE_IMAGE_MAX_DIM
     if longest > cap:
         scale = cap / longest
-        img = img.resize((max(1, round(img.width * scale)), max(1, round(img.height * scale))),
-                         _PILImage.Resampling.LANCZOS)
+        img = img.resize((max(1, round(img.width * scale)), max(1, round(img.height * scale))), _PILImage.Resampling.LANCZOS)
     buf = io.BytesIO()
-    img.save(buf, format="WEBP",
-             quality=starred_archive_service.ARCHIVE_IMAGE_WEBP_QUALITY, method=4)
+    img.save(buf, format="WEBP", quality=starred_archive_service.ARCHIVE_IMAGE_WEBP_QUALITY, method=4)
     return buf.getvalue()
 
 
@@ -133,7 +132,7 @@ def _candidates(conn, host: str | None) -> list[tuple[str, str]]:
         if host and urlparse(src).netloc.lower() != host.lower():
             continue
         if _declares_alpha(bytes(head)) is not False:
-            continue          # already has alpha, or not a WebP we understand
+            continue  # already has alpha, or not a WebP we understand
         out.append((asset_hash, src))
     return out
 
@@ -142,9 +141,9 @@ def repair_for_user(user_id: str, apply: bool, host: str | None, limit: int) -> 
     print(f"[{user_id}] scanning the archive for flattened images…", flush=True)
     with main.archive_conn() as conn:
         cands = _candidates(conn, host)
-    print(f"[{user_id}] {len(cands):,} candidate asset(s)"
-          + (f" on {host}" if host else "") + " — re-fetching to check for alpha",
-          flush=True)
+    print(
+        f"[{user_id}] {len(cands):,} candidate asset(s)" + (f" on {host}" if host else "") + " — re-fetching to check for alpha", flush=True
+    )
     if not cands:
         return 0
 
@@ -167,7 +166,8 @@ def repair_for_user(user_id: str, apply: bool, host: str | None, limit: int) -> 
 
         try:
             with url_guard.build_client(
-                timeout=20.0, follow_redirects=True,
+                timeout=20.0,
+                follow_redirects=True,
                 headers={"User-Agent": main.READABILITY_USER_AGENT},
             ) as client:
                 resp = url_guard.safe_get(client, src)
@@ -178,11 +178,10 @@ def repair_for_user(user_id: str, apply: bool, host: str | None, limit: int) -> 
             print(f"    skip {src[:70]}: {type(exc).__name__}", flush=True)
             continue
         if fresh is None:
-            continue          # source has no transparency; stored copy was fine
+            continue  # source has no transparency; stored copy was fine
 
         new_hash = hashlib.sha256(fresh).hexdigest()
-        repaired.append({"old_hash": asset_hash, "new_hash": new_hash,
-                         "source_url": src, "bytes": len(fresh)})
+        repaired.append({"old_hash": asset_hash, "new_hash": new_hash, "source_url": src, "bytes": len(fresh)})
         print(f"    fixed {src.split('/')[-1][:44]}  {len(fresh):,}B", flush=True)
 
         if not apply:
@@ -196,11 +195,11 @@ def repair_for_user(user_id: str, apply: bool, host: str | None, limit: int) -> 
                 "  (SELECT height FROM archived_asset WHERE asset_hash = ?), ?, ?)",
                 (new_hash, fresh, asset_hash, asset_hash, len(fresh), time.time()),
             )
-            conn.execute("UPDATE archived_asset_link SET asset_hash = ? WHERE asset_hash = ?",
-                         (new_hash, asset_hash))
-            conn.execute("DELETE FROM archived_asset WHERE asset_hash = ?"
-                         " AND NOT EXISTS (SELECT 1 FROM archived_asset_link WHERE asset_hash = ?)",
-                         (asset_hash, asset_hash))
+            conn.execute("UPDATE archived_asset_link SET asset_hash = ? WHERE asset_hash = ?", (new_hash, asset_hash))
+            conn.execute(
+                "DELETE FROM archived_asset WHERE asset_hash = ? AND NOT EXISTS (SELECT 1 FROM archived_asset_link WHERE asset_hash = ?)",
+                (asset_hash, asset_hash),
+            )
             conn.commit()
 
     print(f"  {len(repaired):,} asset(s) had transparency to restore")
@@ -214,15 +213,14 @@ def repair_for_user(user_id: str, apply: bool, host: str | None, limit: int) -> 
 
 
 def main_cli() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
     ap.add_argument("--host", default=None, help="restrict to one image host")
     ap.add_argument("--limit", type=int, default=0, help="stop after N candidates")
     args = ap.parse_args()
 
-    for uid in ([args.user] if args.user else main._background_user_ids()):
+    for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
             repair_for_user(uid, args.apply, args.host, args.limit)
     if args.apply:

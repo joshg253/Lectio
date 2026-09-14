@@ -6,6 +6,7 @@ permalinks say ``/2021/04/`` but whose pages carry only a ``dateModified``
 page would have been wrong by three and a half years, so the URL is both the best
 signal and the only honest one.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -19,8 +20,7 @@ def _utc(*args) -> datetime:
 
 # ── full dates ──
 def test_a_full_date_path_is_read_exactly():
-    assert main.url_inferred_pubdate(
-        "https://x.test/2019/01/22/a-post/") == _utc(2019, 1, 22)
+    assert main.url_inferred_pubdate("https://x.test/2019/01/22/a-post/") == _utc(2019, 1, 22)
 
 
 def test_the_month_tier_declines_a_full_date_path():
@@ -31,23 +31,19 @@ def test_the_month_tier_declines_a_full_date_path():
 
 # ── year-month ──
 def test_a_year_month_permalink_resolves_to_the_first_of_the_month():
-    assert main.url_inferred_pubmonth(
-        "https://blog.guitar-pro.com/2021/04/how-do-i-play-power-chords/"
-    ) == _utc(2021, 4, 1)
+    assert main.url_inferred_pubmonth("https://blog.guitar-pro.com/2021/04/how-do-i-play-power-chords/") == _utc(2021, 4, 1)
 
 
 def test_the_day_tier_does_not_match_a_year_month_permalink():
     """Which is exactly why 67 Guitar Pro entries sat at the Unix epoch: the only
     URL tier required /YYYY/MM/DD/ and WordPress had not written a day."""
-    assert main.url_inferred_pubdate(
-        "https://blog.guitar-pro.com/2021/04/how-do-i-play-power-chords/") is None
+    assert main.url_inferred_pubdate("https://blog.guitar-pro.com/2021/04/how-do-i-play-power-chords/") is None
 
 
 def test_an_opaque_post_id_yields_nothing():
     """The site's current URLs (/blog/p/25431-how-do-i-play-power-chords) carry no
     date at all, which is why the old permalink is the thing worth mining."""
-    assert main.url_inferred_pubmonth(
-        "https://www.guitar-pro.com/blog/p/25431-how-do-i-play-power-chords") is None
+    assert main.url_inferred_pubmonth("https://www.guitar-pro.com/blog/p/25431-how-do-i-play-power-chords") is None
 
 
 # ── refusals ──

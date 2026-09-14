@@ -1,6 +1,7 @@
 """/feeds/discover assumes https for a schemeless paste before probing —
 otherwise the SSRF guard rejects it with a misleading "private target"
 message instead of actually probing it."""
+
 from __future__ import annotations
 
 from fastapi import FastAPI

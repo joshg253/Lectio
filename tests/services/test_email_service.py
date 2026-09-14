@@ -1,4 +1,5 @@
 """Unit tests for the email service: HTML/text rendering and send logic."""
+
 from __future__ import annotations
 
 from services.email import _build_html, _build_text, send_article_email
@@ -42,9 +43,11 @@ def test_build_html_uses_excerpt_html_unescaped_when_given():
     """excerpt_html is pre-sanitized article HTML — embedded as-is, not
     escaped-and-wrapped like the plain excerpt path."""
     out = _build_html(
-        "Title", "Feed", "https://example.com/",
+        "Title",
+        "Feed",
+        "https://example.com/",
         "fallback plain text, should not appear",
-        excerpt_html="<p>Real <b>formatted</b> body with a <a href=\"https://x.com\">link</a>.</p>",
+        excerpt_html='<p>Real <b>formatted</b> body with a <a href="https://x.com">link</a>.</p>',
     )
     assert '<div class="excerpt"><p>Real <b>formatted</b> body' in out
     assert 'href="https://x.com"' in out
@@ -61,7 +64,10 @@ def test_build_html_shrinks_oversized_images_instead_of_clipping():
     """.wrapper clips overflow rather than scrolling it, so a wide article
     image needs its own max-width or its right edge gets cut off."""
     out = _build_html(
-        "Title", "Feed", "https://example.com/", "",
+        "Title",
+        "Feed",
+        "https://example.com/",
+        "",
         excerpt_html='<p><img src="https://example.com/wide.jpg" width="1200" height="800"></p>',
     )
     assert ".excerpt img" in out and "max-width: 100%" in out
@@ -95,6 +101,7 @@ def test_send_article_email_calls_resend(monkeypatch):
             calls.append(payload)
 
     import resend as _resend
+
     monkeypatch.setattr(_resend, "Emails", FakeEmails)
 
     ok, err = send_article_email(
@@ -126,6 +133,7 @@ def test_send_article_email_html_part_uses_excerpt_html(monkeypatch):
             calls.append(payload)
 
     import resend as _resend
+
     monkeypatch.setattr(_resend, "Emails", FakeEmails)
 
     ok, err = send_article_email(
@@ -154,6 +162,7 @@ def test_send_article_email_returns_error_on_exception(monkeypatch):
             raise RuntimeError("API down")
 
     import resend as _resend
+
     monkeypatch.setattr(_resend, "Emails", BrokenEmails)
 
     ok, err = send_article_email("key", "from@x.com", "to@x.com", "T", "F", "https://x.com", "")

@@ -68,10 +68,7 @@ def _tagged_keys() -> set[tuple[str, str]]:
 
 def _starred_keys() -> set[tuple[str, str]]:
     with sqlite3.connect(str(tenancy.meta_db_path()), timeout=10.0) as mc:
-        return {
-            (str(f), str(i))
-            for f, i in mc.execute("SELECT feed_url, entry_id FROM saved_entries")
-        }
+        return {(str(f), str(i)) for f, i in mc.execute("SELECT feed_url, entry_id FROM saved_entries")}
 
 
 def _is_youtube_feed(feed_url: str) -> bool:
@@ -105,7 +102,8 @@ def _at_risk_feeds(dead_threshold: int) -> set[str]:
             pass
         try:
             at_risk |= {
-                str(r[0]) for r in mc.execute(
+                str(r[0])
+                for r in mc.execute(
                     "SELECT feed_url FROM feed_failure_state WHERE consecutive_failures >= ?",
                     (dead_threshold,),
                 )
@@ -118,12 +116,7 @@ def _at_risk_feeds(dead_threshold: int) -> set[str]:
 def _complete_archive_keys() -> set[tuple[str, str]]:
     try:
         with sqlite3.connect(str(tenancy.starred_archive_db_path()), timeout=10.0) as ac:
-            return {
-                (str(f), str(i))
-                for f, i in ac.execute(
-                    "SELECT feed_url, entry_id FROM archived_entry WHERE status = 'complete'"
-                )
-            }
+            return {(str(f), str(i)) for f, i in ac.execute("SELECT feed_url, entry_id FROM archived_entry WHERE status = 'complete'")}
     except sqlite3.Error:
         return set()
 
@@ -136,7 +129,7 @@ def _content_len(rc: sqlite3.Connection, feed: str, entry_id: str) -> int:
     try:
         parts = json.loads(row[0])
         return sum(len(str(p.get("value") or "")) for p in parts if isinstance(p, dict))
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         return len(str(row[0]))
 
 
@@ -158,10 +151,7 @@ def _feed_titles() -> dict[str, str]:
     """feed_url -> display title (user_title preferred), for readable reports."""
     try:
         with sqlite3.connect(str(tenancy.reader_db_path()), timeout=10.0) as rc:
-            return {
-                str(url): str(ut or t or url)
-                for url, t, ut in rc.execute("SELECT url, title, user_title FROM feeds")
-            }
+            return {str(url): str(ut or t or url) for url, t, ut in rc.execute("SELECT url, title, user_title FROM feeds")}
     except sqlite3.Error:
         return {}
 
@@ -248,14 +238,17 @@ def run_for_user(uid: str, args) -> dict:
                 return "never"
             try:
                 return _dt.datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d")
-            except (ValueError, OSError):
+            except ValueError, OSError:
                 return "?"
+
         print(f"  at-risk feeds ({len(feeds)}), by curated posts at stake:")
         for feed in sorted(feeds, key=lambda f: curated_by_feed.get(f, 0), reverse=True):
             fails, err, succ = fail.get(feed, (0, "", None))
             flag = "kept" if feed in kept else "dead"
-            print(f"    curated={curated_by_feed.get(feed, 0):>4}  [{flag}]  fails={fails:>3}  last_ok={_succ(succ)}  "
-                  f"{titles.get(feed, feed)}  <{feed}>  err={err[:60]!r}")
+            print(
+                f"    curated={curated_by_feed.get(feed, 0):>4}  [{flag}]  fails={fails:>3}  last_ok={_succ(succ)}  "
+                f"{titles.get(feed, feed)}  <{feed}>  err={err[:60]!r}"
+            )
         print()
 
     if args.list_empty_feeds and empties:
@@ -271,9 +264,15 @@ def run_for_user(uid: str, args) -> dict:
         print()
 
     stats = {
-        "tagged": len(tagged), "starred": len(starred), "curated": len(curated),
-        "tagged_missing_archive": len(tagged_missing), "empty_curated": len(empties),
-        "archived_enqueued": 0, "wayback_filled": 0, "wayback_available": 0, "wayback_no_snapshot": 0,
+        "tagged": len(tagged),
+        "starred": len(starred),
+        "curated": len(curated),
+        "tagged_missing_archive": len(tagged_missing),
+        "empty_curated": len(empties),
+        "archived_enqueued": 0,
+        "wayback_filled": 0,
+        "wayback_available": 0,
+        "wayback_no_snapshot": 0,
     }
 
     do_archive = args.only in ("all", "archive")
@@ -291,8 +290,10 @@ def run_for_user(uid: str, args) -> dict:
     # Pass 2 — Wayback backfill (or availability probe in dry-run).
     if do_wayback and (args.apply or args.probe_wayback):
         limit = args.limit if args.limit > 0 else len(empties)
-        with httpx.Client(follow_redirects=True, timeout=20.0, headers={"User-Agent": UA}) as client, \
-                sqlite3.connect(str(tenancy.reader_db_path()), timeout=10.0) as rc:
+        with (
+            httpx.Client(follow_redirects=True, timeout=20.0, headers={"User-Agent": UA}) as client,
+            sqlite3.connect(str(tenancy.reader_db_path()), timeout=10.0) as rc,
+        ):
             for feed, eid in empties[:limit]:
                 link = _entry_link(rc, feed, eid)
                 if not link:
@@ -323,14 +324,19 @@ def main_cli() -> None:
     ap.add_argument("--apply", action="store_true", help="Perform writes (default: dry-run report only).")
     ap.add_argument("--probe-wayback", action="store_true", help="Dry-run: probe Archive.org availability (read-only network).")
     ap.add_argument("--only", choices=["all", "archive", "wayback"], default="all")
-    ap.add_argument("--scope", choices=["dead-unsub", "all"], default="dead-unsub",
-                    help="dead-unsub (default): only unsubscribed-kept + dead feeds. all: whole library.")
-    ap.add_argument("--dead-threshold", type=int, default=10,
-                    help="consecutive_failures for a feed to count as 'dead' (default 10).")
-    ap.add_argument("--list-empty-feeds", action="store_true",
-                    help="Dry-run: print the empty-curated (Wayback candidate) post count per feed.")
-    ap.add_argument("--list-dead-feeds", action="store_true",
-                    help="Dry-run: list at-risk (dead/unsub) feeds with curated-post count + failure info.")
+    ap.add_argument(
+        "--scope",
+        choices=["dead-unsub", "all"],
+        default="dead-unsub",
+        help="dead-unsub (default): only unsubscribed-kept + dead feeds. all: whole library.",
+    )
+    ap.add_argument("--dead-threshold", type=int, default=10, help="consecutive_failures for a feed to count as 'dead' (default 10).")
+    ap.add_argument(
+        "--list-empty-feeds", action="store_true", help="Dry-run: print the empty-curated (Wayback candidate) post count per feed."
+    )
+    ap.add_argument(
+        "--list-dead-feeds", action="store_true", help="Dry-run: list at-risk (dead/unsub) feeds with curated-post count + failure info."
+    )
     ap.add_argument("--user", default=None, help="Restrict to one user_id (default: all enabled users).")
     ap.add_argument("--limit", type=int, default=0, help="Cap Wayback URL lookups (0 = no cap).")
     ap.add_argument("--sleep", type=float, default=1.0, help="Seconds between Archive.org requests (throttle).")
@@ -356,9 +362,21 @@ def main_cli() -> None:
         for k, v in s.items():
             totals[k] = totals.get(k, 0) + v
 
-    print("TOTALS:", {k: totals[k] for k in (
-        "tagged_missing_archive", "empty_curated", "wayback_available",
-        "wayback_no_snapshot", "archived_enqueued", "wayback_filled") if k in totals})
+    print(
+        "TOTALS:",
+        {
+            k: totals[k]
+            for k in (
+                "tagged_missing_archive",
+                "empty_curated",
+                "wayback_available",
+                "wayback_no_snapshot",
+                "archived_enqueued",
+                "wayback_filled",
+            )
+            if k in totals
+        },
+    )
     if not args.apply:
         print("\nDry-run only — no changes made. Re-run with --apply to write.")
 

@@ -12,6 +12,7 @@ to 3. Two of those three real groups (folder 9, global) mix colors across
 their rules -- exercised here as the "mismatched" case that must NOT silently
 merge onto one color.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -44,11 +45,19 @@ def env(tmp_path):
 def _add_rule(scope, scope_id, keyword, **kw):
     with main.get_meta_connection() as conn:
         main.add_highlight_keyword(
-            conn, scope, scope_id, keyword,
-            kw.get("color", "yellow"), kw.get("is_regex", False),
-            kw.get("type", "highlight"), kw.get("search_in", "title"),
-            kw.get("delivery", "immediately"), kw.get("email_to", ""),
-            kw.get("batch_time", ""), kw.get("batch_count", 0), kw.get("cc_me", False),
+            conn,
+            scope,
+            scope_id,
+            keyword,
+            kw.get("color", "yellow"),
+            kw.get("is_regex", False),
+            kw.get("type", "highlight"),
+            kw.get("search_in", "title"),
+            kw.get("delivery", "immediately"),
+            kw.get("email_to", ""),
+            kw.get("batch_time", ""),
+            kw.get("batch_count", 0),
+            kw.get("cc_me", False),
             kw.get("enabled", 1),
         )
         conn.commit()
@@ -75,6 +84,7 @@ def _add_feed_to_folder(feed_url, folder_id):
 # ---------------------------------------------------------------------------
 # find_mergeable_rule_groups
 # ---------------------------------------------------------------------------
+
 
 def test_three_same_identity_rules_form_one_group(env):
     fid = _make_folder("Dev")
@@ -180,11 +190,21 @@ def test_merging_one_settings_subgroup_does_not_delete_the_other(env):
     _add_rule("global", "", "Between the Buried and Me", color="orange")
     with main.get_meta_connection() as conn:
         result = main.merge_highlight_rule_group(
-            conn, "highlight", "global", "", "title", False, "orange", "immediately", "", "", 0, False,
+            conn,
+            "highlight",
+            "global",
+            "",
+            "title",
+            False,
+            "orange",
+            "immediately",
+            "",
+            "",
+            0,
+            False,
         )
         conn.commit()
-        rows = {r["keyword"]: r["color"] for r in conn.execute(
-            "SELECT keyword, color FROM highlight_keywords WHERE scope = 'global'")}
+        rows = {r["keyword"]: r["color"] for r in conn.execute("SELECT keyword, color FROM highlight_keywords WHERE scope = 'global'")}
     assert result is not None
     assert result["merged_count"] == 2
     assert rows["Dillinger Escape Plan, Between the Buried and Me"] == "orange"
@@ -206,13 +226,25 @@ def test_mismatched_delivery_settings_are_flagged_not_grouped(env):
 # merge_highlight_rule_group
 # ---------------------------------------------------------------------------
 
+
 def test_merge_joins_plain_keywords_as_a_comma_list(env):
     fid = _make_folder("Dev")
     _add_rule("folder", str(fid), "C#", color="blue", search_in="both")
     _add_rule("folder", str(fid), "C++", color="blue", search_in="both")
     with main.get_meta_connection() as conn:
         result = main.merge_highlight_rule_group(
-            conn, "highlight", "folder", str(fid), "both", False, "blue", "immediately", "", "", 0, False,
+            conn,
+            "highlight",
+            "folder",
+            str(fid),
+            "both",
+            False,
+            "blue",
+            "immediately",
+            "",
+            "",
+            0,
+            False,
         )
         conn.commit()
         rows = conn.execute("SELECT keyword, color FROM highlight_keywords WHERE scope_id = ?", (str(fid),)).fetchall()
@@ -228,7 +260,18 @@ def test_merge_joins_regex_keywords_as_alternation(env):
     _add_rule("global", "", "baz+", is_regex=True)
     with main.get_meta_connection() as conn:
         main.merge_highlight_rule_group(
-            conn, "highlight", "global", "", "title", True, "yellow", "immediately", "", "", 0, False,
+            conn,
+            "highlight",
+            "global",
+            "",
+            "title",
+            True,
+            "yellow",
+            "immediately",
+            "",
+            "",
+            0,
+            False,
         )
         conn.commit()
         rows = conn.execute("SELECT keyword FROM highlight_keywords WHERE scope = 'global'").fetchall()
@@ -243,7 +286,18 @@ def test_merge_dedupes_overlapping_individual_keywords(env):
     _add_rule("global", "", "rust, go")
     with main.get_meta_connection() as conn:
         main.merge_highlight_rule_group(
-            conn, "highlight", "global", "", "title", False, "yellow", "immediately", "", "", 0, False,
+            conn,
+            "highlight",
+            "global",
+            "",
+            "title",
+            False,
+            "yellow",
+            "immediately",
+            "",
+            "",
+            0,
+            False,
         )
         conn.commit()
         rows = conn.execute("SELECT keyword FROM highlight_keywords WHERE scope = 'global'").fetchall()
@@ -256,13 +310,25 @@ def test_merge_preserves_min_sort_order(env):
     _add_rule("global", "", "a")
     _add_rule("global", "", "b")
     with main.get_meta_connection() as conn:
-        before = {r["keyword"]: r["sort_order"] for r in conn.execute(
-            "SELECT keyword, sort_order FROM highlight_keywords WHERE scope = 'global'")}
+        before = {
+            r["keyword"]: r["sort_order"] for r in conn.execute("SELECT keyword, sort_order FROM highlight_keywords WHERE scope = 'global'")
+        }
         conn.execute("UPDATE highlight_keywords SET sort_order = 5 WHERE keyword = 'a'")
         conn.execute("UPDATE highlight_keywords SET sort_order = 9 WHERE keyword = 'b'")
         conn.commit()
         main.merge_highlight_rule_group(
-            conn, "highlight", "global", "", "title", False, "yellow", "immediately", "", "", 0, False,
+            conn,
+            "highlight",
+            "global",
+            "",
+            "title",
+            False,
+            "yellow",
+            "immediately",
+            "",
+            "",
+            0,
+            False,
         )
         conn.commit()
         row = conn.execute("SELECT sort_order FROM highlight_keywords WHERE scope = 'global'").fetchone()
@@ -279,7 +345,18 @@ def test_merge_refuses_when_settings_mismatch(env):
     _add_rule("folder", str(fid), "b", color="green")
     with main.get_meta_connection() as conn:
         result = main.merge_highlight_rule_group(
-            conn, "highlight", "folder", str(fid), "title", False, "blue", "immediately", "", "", 0, False,
+            conn,
+            "highlight",
+            "folder",
+            str(fid),
+            "title",
+            False,
+            "blue",
+            "immediately",
+            "",
+            "",
+            0,
+            False,
         )
         rows = conn.execute("SELECT COUNT(*) FROM highlight_keywords").fetchone()[0]
     assert result is None
@@ -292,7 +369,18 @@ def test_merge_refuses_a_stale_group(env):
     _add_rule("global", "", "a")
     with main.get_meta_connection() as conn:
         result = main.merge_highlight_rule_group(
-            conn, "highlight", "global", "", "title", False, "yellow", "immediately", "", "", 0, False,
+            conn,
+            "highlight",
+            "global",
+            "",
+            "title",
+            False,
+            "yellow",
+            "immediately",
+            "",
+            "",
+            0,
+            False,
         )
         rows = conn.execute("SELECT keyword FROM highlight_keywords").fetchall()
     assert result is None
@@ -305,7 +393,18 @@ def test_merge_refuses_a_non_mergeable_type(env):
     _add_rule("folder", str(fid), "title", type="deduplicate")
     with main.get_meta_connection() as conn:
         result = main.merge_highlight_rule_group(
-            conn, "deduplicate", "folder", str(fid), "title", False, "yellow", "immediately", "", "", 0, False,
+            conn,
+            "deduplicate",
+            "folder",
+            str(fid),
+            "title",
+            False,
+            "yellow",
+            "immediately",
+            "",
+            "",
+            0,
+            False,
         )
     assert result is None
 
@@ -313,6 +412,7 @@ def test_merge_refuses_a_non_mergeable_type(env):
 # ---------------------------------------------------------------------------
 # find_redundant_feed_rules
 # ---------------------------------------------------------------------------
+
 
 def test_feed_rule_covered_by_folder_rule_is_flagged(env):
     fid = _make_folder("Deals")
@@ -394,8 +494,10 @@ def test_live_library_shape_is_reproduced(env):
 # Routes
 # ---------------------------------------------------------------------------
 
+
 def _app():
     from fastapi import FastAPI
+
     app = FastAPI()
     app.get("/highlights/suggestions")(main.get_highlight_suggestions_route)
     app.post("/highlights/merge-group")(main.merge_highlight_group_route)
@@ -427,11 +529,22 @@ def test_merge_group_route_applies_and_persists(env):
     _add_rule("global", "", "a")
     _add_rule("global", "", "b")
     with TestClient(_app()) as client:
-        r = client.post("/highlights/merge-group", data={
-            "type": "highlight", "scope": "global", "scope_id": "", "search_in": "title", "is_regex": "0",
-            "color": "yellow", "delivery": "immediately", "email_to": "", "batch_time": "",
-            "batch_count": "0", "cc_me": "0",
-        })
+        r = client.post(
+            "/highlights/merge-group",
+            data={
+                "type": "highlight",
+                "scope": "global",
+                "scope_id": "",
+                "search_in": "title",
+                "is_regex": "0",
+                "color": "yellow",
+                "delivery": "immediately",
+                "email_to": "",
+                "batch_time": "",
+                "batch_count": "0",
+                "cc_me": "0",
+            },
+        )
     assert r.status_code == 200
     assert r.json()["ok"] is True
     with main.get_meta_connection() as conn:
@@ -444,11 +557,22 @@ def test_merge_group_route_409s_on_a_stale_group(env):
 
     _add_rule("global", "", "a")
     with TestClient(_app()) as client:
-        r = client.post("/highlights/merge-group", data={
-            "type": "highlight", "scope": "global", "scope_id": "", "search_in": "title", "is_regex": "0",
-            "color": "yellow", "delivery": "immediately", "email_to": "", "batch_time": "",
-            "batch_count": "0", "cc_me": "0",
-        })
+        r = client.post(
+            "/highlights/merge-group",
+            data={
+                "type": "highlight",
+                "scope": "global",
+                "scope_id": "",
+                "search_in": "title",
+                "is_regex": "0",
+                "color": "yellow",
+                "delivery": "immediately",
+                "email_to": "",
+                "batch_time": "",
+                "batch_count": "0",
+                "cc_me": "0",
+            },
+        )
     assert r.status_code == 409
     assert r.json()["ok"] is False
 
@@ -461,6 +585,7 @@ def test_merge_group_route_409s_on_a_stale_group(env):
 # offering to fold it in, even though a plain keyword is always representable
 # as an escaped regex.
 # ---------------------------------------------------------------------------
+
 
 def test_a_plain_and_a_regex_rule_on_the_same_scope_are_flagged(env):
     fid = _make_folder("Deals")
@@ -510,6 +635,7 @@ def test_merge_regex_convert_escapes_the_plain_keyword(env):
     # escaping, which turns out to be a non-issue here.
     assert rows[0]["keyword"] == "(Lowe's)|(AirPods|iPhone)"
     import re as _re
+
     assert _re.search(rows[0]["keyword"], "Lowe's has a sale")
     assert _re.search(rows[0]["keyword"], "New AirPods dropped")
     assert not _re.search(rows[0]["keyword"], "Something else entirely")
@@ -535,6 +661,7 @@ def test_merge_regex_convert_splits_a_plain_comma_list(env):
     # term must be its own alternative instead.
     assert keyword == r"(Pixel\ Watch|Ryobi|Google\ Pixel)|(\bDell\b)"
     import re as _re
+
     assert _re.search(keyword, "New Pixel Watch announced")
     assert _re.search(keyword, "Ryobi tools on sale")
     assert _re.search(keyword, "Google Pixel 10 review")
@@ -584,9 +711,15 @@ def test_merge_group_regex_convert_route_applies_and_persists(env):
     app = _app()
     app.post("/highlights/merge-group-regex-convert")(main.merge_highlight_group_regex_convert_route)
     with TestClient(app) as client:
-        r = client.post("/highlights/merge-group-regex-convert", data={
-            "type": "highlight", "scope": "global", "scope_id": "", "search_in": "title",
-        })
+        r = client.post(
+            "/highlights/merge-group-regex-convert",
+            data={
+                "type": "highlight",
+                "scope": "global",
+                "scope_id": "",
+                "search_in": "title",
+            },
+        )
     assert r.status_code == 200
     assert r.json()["ok"] is True
     with main.get_meta_connection() as conn:

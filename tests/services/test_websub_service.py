@@ -74,6 +74,7 @@ def _build_service(db_path: Path) -> WebSubService:
 
 # ------------------------------------------------------------------ callback URL
 
+
 def test_callback_url_for(tmp_path):
     svc = _build_service(tmp_path / "meta.sqlite")
     url = svc.callback_url_for(_FEED_URL)
@@ -82,6 +83,7 @@ def test_callback_url_for(tmp_path):
 
 
 # ------------------------------------------------------------------ hub discovery
+
 
 def test_discover_hub_from_link_header(tmp_path):
     svc = _build_service(tmp_path / "meta.sqlite")
@@ -144,6 +146,7 @@ def test_discover_hub_http_error(tmp_path):
 
 # ------------------------------------------------------------------ verification
 
+
 def _insert_sub(db_path: Path, *, verified: int = 0, hub_url: str = _HUB_URL, secret: str = "s3cr3t"):
     conn = _make_conn(db_path)
     conn.execute(
@@ -189,6 +192,7 @@ def test_handle_verification_no_subscription(tmp_path):
 
 
 # ------------------------------------------------------------------ push HMAC verification
+
 
 def _make_signature(body: bytes, secret: str, alg: str = "sha256") -> str:
     if alg == "sha256":
@@ -265,6 +269,7 @@ def test_verify_push_signature_malformed(tmp_path):
 
 # ------------------------------------------------------------------ renewal
 
+
 def test_renew_expiring_subscriptions_spawns_thread(tmp_path):
     db = tmp_path / "meta.sqlite"
     conn = _make_conn(db)
@@ -283,6 +288,7 @@ def test_renew_expiring_subscriptions_spawns_thread(tmp_path):
 
     svc.subscribe = fake_subscribe  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     import threading
+
     _before = set(threading.enumerate())
     svc.renew_expiring_subscriptions()
 
@@ -331,7 +337,8 @@ def test_discover_hub_refuses_internal_redirect(tmp_path, monkeypatch):
 
     real_client = httpx.Client
     monkeypatch.setattr(
-        websub_mod.httpx, "Client",
+        websub_mod.httpx,
+        "Client",
         lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),  # ty: ignore[invalid-argument-type]
     )
     svc = _build_service(tmp_path / "meta.sqlite")
@@ -348,7 +355,8 @@ def test_subscribe_refuses_unsafe_hub(tmp_path, monkeypatch):
 
     real_client = httpx.Client
     monkeypatch.setattr(
-        websub_mod.httpx, "Client",
+        websub_mod.httpx,
+        "Client",
         lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),  # ty: ignore[invalid-argument-type]
     )
     svc = _build_service(tmp_path / "meta.sqlite")
@@ -368,20 +376,20 @@ def test_unsubscribe_refuses_unsafe_hub(tmp_path, monkeypatch):
 
     real_client = httpx.Client
     monkeypatch.setattr(
-        websub_mod.httpx, "Client",
+        websub_mod.httpx,
+        "Client",
         lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),  # ty: ignore[invalid-argument-type]
     )
     svc = _build_service(db)
     svc.unsubscribe(_FEED_URL, "alice")
     assert posted == []  # no POST to internal hub
     # row still removed regardless (no other subscribers)
-    row = _make_conn(db).execute(
-        "SELECT 1 FROM websub_subscriptions WHERE feed_url=?", (_FEED_URL,)
-    ).fetchone()
+    row = _make_conn(db).execute("SELECT 1 FROM websub_subscriptions WHERE feed_url=?", (_FEED_URL,)).fetchone()
     assert row is None
 
 
 # ------------------------------------------------------------------ maybe_discover_hubs
+
 
 def test_maybe_discover_hubs_skips_known_active(tmp_path):
     db = tmp_path / "meta.sqlite"
@@ -413,6 +421,7 @@ def test_discover_passes_user_id_to_thread(tmp_path):
 
     svc._discover_and_subscribe = fake_discover  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     import threading
+
     _before = set(threading.enumerate())
     svc.maybe_discover_hubs([_FEED_URL], "u_test_websub")
     _join_new_daemon_threads(_before)
@@ -431,6 +440,7 @@ def test_maybe_discover_hubs_triggers_for_unknown(tmp_path):
 
     svc._discover_and_subscribe = fake_discover  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     import threading
+
     _before = set(threading.enumerate())
     svc.maybe_discover_hubs([_FEED_URL], "alice")
 

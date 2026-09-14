@@ -2,6 +2,7 @@
 date into reader's ``entries.published`` column (the list sort happens in SQL on
 that column) plus a meta override row, and the refresh service re-pins the
 override if a refresh re-ingests the feed's original garbage value."""
+
 from __future__ import annotations
 
 import pytest
@@ -27,12 +28,14 @@ def configured(tmp_path):
     main.ensure_meta_schema()
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
-        reader.add_entry({
-            "feed_url": FEED,
-            "id": "e1",
-            "title": "epoch-dated post",
-            "link": "https://example.test/e1",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "e1",
+                "title": "epoch-dated post",
+                "link": "https://example.test/e1",
+            }
+        )
     try:
         yield
     finally:
@@ -48,9 +51,7 @@ def _client() -> TestClient:
 
 def _reader_published() -> str | None:
     with main.get_reader() as reader:
-        row = reader._storage.get_db().execute(
-            "SELECT published FROM entries WHERE feed = ? AND id = 'e1'", (FEED,)
-        ).fetchone()
+        row = reader._storage.get_db().execute("SELECT published FROM entries WHERE feed = ? AND id = 'e1'", (FEED,)).fetchone()
     return row[0] if row else None
 
 
@@ -62,8 +63,8 @@ def _expected_utc(date_only: str) -> str:
     only passed while the code wrongly treated the input as UTC.
     """
     from datetime import datetime, timezone
-    return (datetime.fromisoformat(date_only).astimezone()
-            .astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
+
+    return datetime.fromisoformat(date_only).astimezone().astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def test_set_date_updates_reader_and_records_override(configured):
@@ -72,9 +73,7 @@ def test_set_date_updates_reader_and_records_override(configured):
     assert r.status_code == 200 and r.json()["ok"] is True
     assert _reader_published() == _expected_utc("2023-04-05")
     with main.get_meta_connection() as conn:
-        row = conn.execute(
-            "SELECT published FROM entry_date_overrides WHERE feed_url = ? AND entry_id = 'e1'", (FEED,)
-        ).fetchone()
+        row = conn.execute("SELECT published FROM entry_date_overrides WHERE feed_url = ? AND entry_id = 'e1'", (FEED,)).fetchone()
     assert row and row[0] == _expected_utc("2023-04-05")
 
 
@@ -111,7 +110,7 @@ def test_refresh_repins_reverted_date(configured):
 
 
 def test_a_date_only_input_is_local_midnight_not_utc(configured):
-    """"2023-07-06" from the date picker means midnight where the user is.
+    """ "2023-07-06" from the date picker means midnight where the user is.
 
     It used to be written straight into reader's naive-UTC column, so it came
     back through format_datetime_for_ui's astimezone() as "Jul 5, 2023 5pm" — the
@@ -137,14 +136,15 @@ def test_a_date_only_input_is_local_midnight_not_utc(configured):
 
 def test_an_explicit_offset_is_respected(configured):
     """A caller that states its zone must not be re-interpreted as local."""
-    main.set_entry_date_route(feed_url=FEED, entry_id="e1",
-                              published="2023-07-06T00:00:00+00:00")
+    main.set_entry_date_route(feed_url=FEED, entry_id="e1", published="2023-07-06T00:00:00+00:00")
 
     with main.get_meta_connection() as conn:
-        stored = str(conn.execute(
-            "SELECT published FROM entry_date_overrides WHERE feed_url = ? AND entry_id = ?",
-            (FEED, "e1"),
-        ).fetchone()[0])
+        stored = str(
+            conn.execute(
+                "SELECT published FROM entry_date_overrides WHERE feed_url = ? AND entry_id = ?",
+                (FEED, "e1"),
+            ).fetchone()[0]
+        )
 
     assert stored == "2023-07-06 00:00:00"
 
@@ -162,8 +162,7 @@ def test_refetch_learns_a_date_only_when_we_have_none(configured):
 
     with main.get_reader() as reader:
         db = reader._storage.get_db()
-        db.execute("UPDATE entries SET published = '1970-01-01 00:00:00' WHERE feed = ? AND id = 'e1'",
-                   (FEED,))
+        db.execute("UPDATE entries SET published = '1970-01-01 00:00:00' WHERE feed = ? AND id = 'e1'", (FEED,))
         db.commit()
 
     assert main._apply_mined_publish_date(FEED, "e1", page) == "2019-01-22 10:00:00"
@@ -181,8 +180,7 @@ def test_refetch_never_overrides_a_pinned_date(configured):
     pinned = _reader_published()
     with main.get_reader() as reader:
         db = reader._storage.get_db()
-        db.execute("UPDATE entries SET published = '1970-01-01 00:00:00' WHERE feed = ? AND id = 'e1'",
-                   (FEED,))
+        db.execute("UPDATE entries SET published = '1970-01-01 00:00:00' WHERE feed = ? AND id = 'e1'", (FEED,))
         db.commit()
 
     page = '<meta property="article:published_time" content="2019-01-22T10:00:00+00:00"/>'
@@ -215,8 +213,7 @@ def orphan(configured):
     main.ensure_starred_archive_schema()
     with main.get_starred_archive_connection() as arch:
         arch.execute(
-            "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at, title, link)"
-            " VALUES (?, ?, 'complete', 0, ?, ?)",
+            "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at, title, link) VALUES (?, ?, 'complete', 0, ?, ?)",
             (ORPHAN_FEED, ORPHAN_ID, "orphaned save", "https://gone.test/post"),
         )
     yield
@@ -225,9 +222,14 @@ def orphan(configured):
 def test_orphan_save_can_be_dated(orphan):
     """Reported as "Entry not found." — the route gated on reader, and an orphan
     is by definition not in reader."""
-    resp = _client().post("/entries/set-date", data={
-        "feed_url": ORPHAN_FEED, "entry_id": ORPHAN_ID, "published": "2019-03-14",
-    })
+    resp = _client().post(
+        "/entries/set-date",
+        data={
+            "feed_url": ORPHAN_FEED,
+            "entry_id": ORPHAN_ID,
+            "published": "2019-03-14",
+        },
+    )
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["ok"] is True
@@ -239,15 +241,21 @@ def test_orphan_save_can_be_dated(orphan):
         ).fetchone()[0]
     assert stored is not None
     from datetime import datetime, timezone
+
     assert datetime.fromtimestamp(stored, tz=timezone.utc).date().isoformat() == "2019-03-14"
 
 
 def test_orphan_date_is_also_recorded_as_an_override(orphan):
     """So the two agree if the feed is ever re-subscribed and the entry returns
     to reader."""
-    _client().post("/entries/set-date", data={
-        "feed_url": ORPHAN_FEED, "entry_id": ORPHAN_ID, "published": "2019-03-14",
-    })
+    _client().post(
+        "/entries/set-date",
+        data={
+            "feed_url": ORPHAN_FEED,
+            "entry_id": ORPHAN_ID,
+            "published": "2019-03-14",
+        },
+    )
 
     with main.get_meta_connection() as conn:
         row = conn.execute(
@@ -259,27 +267,45 @@ def test_orphan_date_is_also_recorded_as_an_override(orphan):
 
 def test_orphan_date_can_be_cleared(orphan):
     client = _client()
-    client.post("/entries/set-date", data={
-        "feed_url": ORPHAN_FEED, "entry_id": ORPHAN_ID, "published": "2019-03-14",
-    })
+    client.post(
+        "/entries/set-date",
+        data={
+            "feed_url": ORPHAN_FEED,
+            "entry_id": ORPHAN_ID,
+            "published": "2019-03-14",
+        },
+    )
 
-    resp = client.post("/entries/set-date", data={
-        "feed_url": ORPHAN_FEED, "entry_id": ORPHAN_ID, "published": "",
-    })
+    resp = client.post(
+        "/entries/set-date",
+        data={
+            "feed_url": ORPHAN_FEED,
+            "entry_id": ORPHAN_ID,
+            "published": "",
+        },
+    )
 
     assert resp.status_code == 200
     with main.get_starred_archive_connection() as arch:
-        assert arch.execute(
-            "SELECT published_at FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
-            (ORPHAN_FEED, ORPHAN_ID),
-        ).fetchone()[0] is None
+        assert (
+            arch.execute(
+                "SELECT published_at FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+                (ORPHAN_FEED, ORPHAN_ID),
+            ).fetchone()[0]
+            is None
+        )
 
 
 def test_entry_in_neither_store_still_404s(orphan):
     """The orphan fallback must not turn a genuine miss into a success."""
-    resp = _client().post("/entries/set-date", data={
-        "feed_url": ORPHAN_FEED, "entry_id": "no-such-entry", "published": "2019-03-14",
-    })
+    resp = _client().post(
+        "/entries/set-date",
+        data={
+            "feed_url": ORPHAN_FEED,
+            "entry_id": "no-such-entry",
+            "published": "2019-03-14",
+        },
+    )
     assert resp.status_code == 404
 
 
@@ -328,16 +354,22 @@ def test_the_site_index_dates_an_article_with_no_date_on_it(configured, monkeypa
     from datetime import datetime, timezone
 
     from services import publish_date as pd
+
     monkeypatch.setattr(pd, "_whatif_index", {"157": datetime(2018, 5, 21, tzinfo=timezone.utc)})
 
     with main.get_reader() as reader:
-        reader.add_entry({
-            "feed_url": FEED, "id": "https://what-if.xkcd.com/157/",
-            "title": "Earth-Moon Fire Pole", "link": "https://what-if.xkcd.com/157/",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "https://what-if.xkcd.com/157/",
+                "title": "Earth-Moon Fire Pole",
+                "link": "https://what-if.xkcd.com/157/",
+            }
+        )
         db = reader._storage.get_db()
-        db.execute("UPDATE entries SET published = '1970-01-01 00:00:00' WHERE feed = ? AND id = ?",
-                   (FEED, "https://what-if.xkcd.com/157/"))
+        db.execute(
+            "UPDATE entries SET published = '1970-01-01 00:00:00' WHERE feed = ? AND id = ?", (FEED, "https://what-if.xkcd.com/157/")
+        )
         db.commit()
 
     got = main._apply_mined_publish_date(FEED, "https://what-if.xkcd.com/157/", "<html></html>")
@@ -346,7 +378,8 @@ def test_the_site_index_dates_an_article_with_no_date_on_it(configured, monkeypa
 
 def test_metadata_still_wins_over_the_weaker_sources(configured):
     _set_stored_published("1970-01-01 00:00:00")
-    page = ('<meta property="article:published_time" content="2019-01-22T10:00:00+00:00"/>'
-            '<span class="blogMetaDate">February 03, 2026</span>')
+    page = (
+        '<meta property="article:published_time" content="2019-01-22T10:00:00+00:00"/><span class="blogMetaDate">February 03, 2026</span>'
+    )
 
     assert main._apply_mined_publish_date(FEED, "e1", page) == "2019-01-22 10:00:00"

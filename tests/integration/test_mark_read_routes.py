@@ -36,11 +36,13 @@ def _dummy_meta_conn() -> sqlite3.Connection:
 # /feeds/mark-read
 # ---------------------------------------------------------------------------
 
+
 def _build_feed_mark_read_app(monkeypatch, marked: int = 3) -> FastAPI:
     app = FastAPI()
     app.post("/feeds/mark-read")(main.mark_feed_as_read)
     monkeypatch.setattr(
-        main, "_mark_entries_as_read_for_view",
+        main,
+        "_mark_entries_as_read_for_view",
         lambda _feed_urls, **_kwargs: (marked, "2026-07-17T00:00:00" if marked else None),
     )
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_conn)
@@ -95,13 +97,15 @@ def test_feed_mark_read_async_zero_marked(monkeypatch):
 # /folders/mark-read
 # ---------------------------------------------------------------------------
 
+
 def _build_folder_mark_read_app(monkeypatch, marked: int = 7) -> FastAPI:
     app = FastAPI()
     app.post("/folders/mark-read")(main.mark_folder_as_read)
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_conn)
     monkeypatch.setattr(main, "get_folder_feed_urls", lambda _conn, _fid: {"https://a.com/f", "https://b.com/f"})
     monkeypatch.setattr(
-        main, "_mark_entries_as_read_for_view",
+        main,
+        "_mark_entries_as_read_for_view",
         lambda _feed_urls, **_kwargs: (marked, "2026-07-17T00:00:00" if marked else None),
     )
     monkeypatch.setattr(main, "unread_counts_cache", {})
@@ -153,6 +157,7 @@ def test_folder_mark_read_async_no_redirect(monkeypatch):
 # ---------------------------------------------------------------------------
 # /entries/mark-older-than-read
 # ---------------------------------------------------------------------------
+
 
 def _build_older_than_app(monkeypatch) -> FastAPI:
     app = FastAPI()
@@ -227,19 +232,17 @@ def test_older_than_marks_entries_dated_only_by_added(monkeypatch):
     old = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=30)
     recent = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=1)
     entries = [
-        _FakeEntry("e_added_old", published=None, updated=None, added=old),   # marked
-        _FakeEntry("e_pub_old", published=old, added=recent),                 # marked
-        _FakeEntry("e_recent", published=recent, added=old),                  # skipped (published recent)
-        _FakeEntry("e_no_date", published=None, updated=None, added=None),    # skipped
+        _FakeEntry("e_added_old", published=None, updated=None, added=old),  # marked
+        _FakeEntry("e_pub_old", published=old, added=recent),  # marked
+        _FakeEntry("e_recent", published=recent, added=old),  # skipped (published recent)
+        _FakeEntry("e_no_date", published=None, updated=None, added=None),  # skipped
     ]
     fake = _FakeReader(entries)
 
     def _meta_conn_with_read_state():
         conn = _dummy_meta_conn()
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS entry_read_state ("
-            "feed_url TEXT, entry_id TEXT, read_at TEXT,"
-            "PRIMARY KEY (feed_url, entry_id))"
+            "CREATE TABLE IF NOT EXISTS entry_read_state (feed_url TEXT, entry_id TEXT, read_at TEXT,PRIMARY KEY (feed_url, entry_id))"
         )
         return conn
 
@@ -254,7 +257,8 @@ def test_older_than_marks_entries_dated_only_by_added(monkeypatch):
     # filtering -- stub list_entries_for_feeds (which needs a real meta-DB
     # schema this fixture doesn't set up) to allow every fake entry through.
     monkeypatch.setattr(
-        main, "list_entries_for_feeds",
+        main,
+        "list_entries_for_feeds",
         lambda *_a, **_kw: [{"feed_url": "http://feed/", "id": e.id} for e in entries],
     )
 
@@ -278,6 +282,7 @@ def test_older_than_marks_entries_dated_only_by_added(monkeypatch):
 # the write landed in the default user's DB, so a post marked read kept showing
 # as unread for the actual user.
 # ---------------------------------------------------------------------------
+
 
 class _FakeThread:
     """Captures Thread(target=..., args=...) without ever running it."""
@@ -329,9 +334,7 @@ def test_run_in_user_context_binds_user_inside_worker():
     """The helper must actually bind the user for the duration of the call —
     a bare thread would observe the default user instead."""
     seen = []
-    main._run_in_user_context(
-        "u_worker", lambda: seen.append(tenancy.current_user_id())
-    )
+    main._run_in_user_context("u_worker", lambda: seen.append(tenancy.current_user_id()))
     assert seen == ["u_worker"]
     # And it restores the prior binding afterward.
     assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
@@ -340,6 +343,7 @@ def test_run_in_user_context_binds_user_inside_worker():
 # ---------------------------------------------------------------------------
 # Unread-count cache generation guard (mark-read "revert" race)
 # ---------------------------------------------------------------------------
+
 
 def test_cold_compute_discards_stale_counts_after_generation_bump(monkeypatch):
     """A slow cold-cache scan that finishes *after* a mark-read bumped the
@@ -380,6 +384,7 @@ def test_cold_compute_caches_counts_when_generation_stable(monkeypatch):
 # /entries/mark-newer-than-unread  (the mirror action)
 # ---------------------------------------------------------------------------
 
+
 class _UnreadEntry:
     def __init__(self, eid, published, important=False):
         self.id = eid
@@ -416,10 +421,8 @@ def _unread_meta_conn(saved=()) -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute("CREATE TABLE saved_entries (feed_url TEXT, entry_id TEXT)")
-    conn.execute("CREATE TABLE entry_read_state (feed_url TEXT, entry_id TEXT, read_at TEXT,"
-                 " PRIMARY KEY (feed_url, entry_id))")
-    conn.execute("CREATE TABLE entry_unread_batch (feed_url TEXT, entry_id TEXT, unread_at TEXT,"
-                 " PRIMARY KEY (feed_url, entry_id))")
+    conn.execute("CREATE TABLE entry_read_state (feed_url TEXT, entry_id TEXT, read_at TEXT, PRIMARY KEY (feed_url, entry_id))")
+    conn.execute("CREATE TABLE entry_unread_batch (feed_url TEXT, entry_id TEXT, unread_at TEXT, PRIMARY KEY (feed_url, entry_id))")
     # Seeded per connection because each call builds a fresh in-memory DB — a row inserted by the test
     # would land in a different database than the one the route opens.
     for _feed_url, _entry_id in saved:
@@ -444,13 +447,12 @@ def _build_newer_than_app(monkeypatch, entries, kept=frozenset(), saved=()):
 
 def test_newer_than_unread_marks_recent_and_skips_old(monkeypatch):
     from datetime import datetime, timedelta, timezone
+
     now = datetime.now(timezone.utc)
-    entries = [_UnreadEntry("recent", now - timedelta(hours=2)),
-               _UnreadEntry("old", now - timedelta(days=40))]
+    entries = [_UnreadEntry("recent", now - timedelta(hours=2)), _UnreadEntry("old", now - timedelta(days=40))]
     app, reader, *_ = _build_newer_than_app(monkeypatch, entries)
     with TestClient(app) as client:
-        r = client.post("/entries/mark-newer-than-unread",
-                        data={"folder_id": "1", "min_age_days": "7"}, headers=_ASYNC_HEADER)
+        r = client.post("/entries/mark-newer-than-unread", data={"folder_id": "1", "min_age_days": "7"}, headers=_ASYNC_HEADER)
     assert r.status_code == 200
     assert [e for _f, e in reader.unread] == ["recent"]
     assert r.json()["unmarked"] == 1
@@ -460,51 +462,47 @@ def test_kept_posts_are_skipped(monkeypatch):
     """Starred or tagged means you already dealt with it — marking it unread
     drags it back into the Inbox as though it were new."""
     from datetime import datetime, timedelta, timezone
+
     now = datetime.now(timezone.utc)
-    entries = [_UnreadEntry("plain", now - timedelta(hours=1)),
-               _UnreadEntry("starred", now - timedelta(hours=1), important=True),
-               _UnreadEntry("tagged", now - timedelta(hours=1))]
-    app, reader, *_ = _build_newer_than_app(
-        monkeypatch, entries, kept={("http://feed/", "tagged")})
+    entries = [
+        _UnreadEntry("plain", now - timedelta(hours=1)),
+        _UnreadEntry("starred", now - timedelta(hours=1), important=True),
+        _UnreadEntry("tagged", now - timedelta(hours=1)),
+    ]
+    app, reader, *_ = _build_newer_than_app(monkeypatch, entries, kept={("http://feed/", "tagged")})
     with TestClient(app) as client:
-        client.post("/entries/mark-newer-than-unread",
-                    data={"folder_id": "1", "min_age_days": "7"}, headers=_ASYNC_HEADER)
+        client.post("/entries/mark-newer-than-unread", data={"folder_id": "1", "min_age_days": "7"}, headers=_ASYNC_HEADER)
     assert [e for _f, e in reader.unread] == ["plain"]
 
 
 def test_undo_token_is_returned_for_a_non_empty_batch(monkeypatch):
     from datetime import datetime, timedelta, timezone
+
     now = datetime.now(timezone.utc)
-    app, _reader, *_ = _build_newer_than_app(
-        monkeypatch, [_UnreadEntry("a", now - timedelta(hours=1))])
+    app, _reader, *_ = _build_newer_than_app(monkeypatch, [_UnreadEntry("a", now - timedelta(hours=1))])
     with TestClient(app) as client:
-        body = client.post("/entries/mark-newer-than-unread",
-                           data={"folder_id": "1", "min_age_days": "7"},
-                           headers=_ASYNC_HEADER).json()
+        body = client.post("/entries/mark-newer-than-unread", data={"folder_id": "1", "min_age_days": "7"}, headers=_ASYNC_HEADER).json()
     assert body["undo_token"]
 
 
 def test_no_undo_token_when_nothing_matched(monkeypatch):
     from datetime import datetime, timedelta, timezone
+
     now = datetime.now(timezone.utc)
-    app, _reader, *_ = _build_newer_than_app(
-        monkeypatch, [_UnreadEntry("old", now - timedelta(days=90))])
+    app, _reader, *_ = _build_newer_than_app(monkeypatch, [_UnreadEntry("old", now - timedelta(days=90))])
     with TestClient(app) as client:
-        body = client.post("/entries/mark-newer-than-unread",
-                           data={"folder_id": "1", "min_age_days": "7"},
-                           headers=_ASYNC_HEADER).json()
+        body = client.post("/entries/mark-newer-than-unread", data={"folder_id": "1", "min_age_days": "7"}, headers=_ASYNC_HEADER).json()
     assert body["undo_token"] is None
     assert body["unmarked"] == 0
 
 
 def test_newer_than_unread_sync_redirects(monkeypatch):
     from datetime import datetime, timedelta, timezone
+
     now = datetime.now(timezone.utc)
-    app, _reader, *_ = _build_newer_than_app(
-        monkeypatch, [_UnreadEntry("a", now - timedelta(hours=1))])
+    app, _reader, *_ = _build_newer_than_app(monkeypatch, [_UnreadEntry("a", now - timedelta(hours=1))])
     with TestClient(app) as client:
-        r = client.post("/entries/mark-newer-than-unread",
-                        data={"folder_id": "1", "min_age_days": "7"}, follow_redirects=False)
+        r = client.post("/entries/mark-newer-than-unread", data={"folder_id": "1", "min_age_days": "7"}, follow_redirects=False)
     assert r.status_code == 303
 
 
@@ -513,15 +511,13 @@ def test_saved_posts_are_skipped_too(monkeypatch):
     covered; a regression in the saved lookup would have gone unnoticed and quietly resurfaced articles the
     user had explicitly put aside."""
     from datetime import datetime, timedelta, timezone
+
     now = datetime.now(timezone.utc)
-    entries = [_UnreadEntry("plain", now - timedelta(hours=1)),
-               _UnreadEntry("saved", now - timedelta(hours=1))]
-    app, reader, *_ = _build_newer_than_app(
-        monkeypatch, entries, saved=[("http://feed/", "saved")])
+    entries = [_UnreadEntry("plain", now - timedelta(hours=1)), _UnreadEntry("saved", now - timedelta(hours=1))]
+    app, reader, *_ = _build_newer_than_app(monkeypatch, entries, saved=[("http://feed/", "saved")])
 
     with TestClient(app) as client:
-        client.post("/entries/mark-newer-than-unread",
-                    data={"folder_id": "1", "min_age_days": "7"}, headers=_ASYNC_HEADER)
+        client.post("/entries/mark-newer-than-unread", data={"folder_id": "1", "min_age_days": "7"}, headers=_ASYNC_HEADER)
 
     assert [e for _f, e in reader.unread] == ["plain"]
 
@@ -530,11 +526,12 @@ def test_an_undo_token_with_a_timezone_offset_is_not_a_500():
     """The token is echoed back by the client, so it is untrusted. fromisoformat returns an AWARE datetime
     for anything carrying an offset, and subtracting that from a naive datetime.now() raises TypeError —
     a crafted value turned the undo endpoints into a 500."""
-    assert main._undo_token_problem("2026-08-18T12:00:00+01:00") is not None   # window, not a crash
+    assert main._undo_token_problem("2026-08-18T12:00:00+01:00") is not None  # window, not a crash
     assert main._undo_token_problem("2026-08-18T12:00:00Z") is not None
     assert main._undo_token_problem("not a timestamp") is not None
     # And a fresh naive token still passes.
     from datetime import datetime
+
     assert main._undo_token_problem(datetime.now().isoformat()) is None
 
 
@@ -542,4 +539,5 @@ def test_a_fresh_aware_token_is_accepted(monkeypatch):
     """Aware must mean 'compared correctly', not 'always rejected' — an offset-carrying token that is
     inside the window has to work."""
     from datetime import datetime, timezone
+
     assert main._undo_token_problem(datetime.now(timezone.utc).isoformat()) is None

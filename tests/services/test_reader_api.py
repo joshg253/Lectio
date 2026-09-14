@@ -11,6 +11,7 @@ def test_reader_api_client_uses_configured_db_path(monkeypatch):
 
     class FakeParser:
         lazy_init_funcs: list = []
+
         def lazy_init(self, fn):
             return fn
 
@@ -152,6 +153,7 @@ def _capture_make_reader_kwargs(monkeypatch) -> dict:
 
     class FakeParser:
         lazy_init_funcs: list = []
+
         def lazy_init(self, fn):
             return fn
 
@@ -199,6 +201,7 @@ def test_session_timeout_omitted_keeps_readers_default(monkeypatch):
 # downstream as a raw AttributeError crash in reader's own parser instead of a
 # labeled bot-challenge failure.
 
+
 class _FakeRaw:
     def __init__(self, data: bytes):
         self._data = data
@@ -242,6 +245,7 @@ def test_empty_body_with_no_challenge_header_returns_none_as_before():
 # session.proxies directly, right before send. See ReaderApi._make_proxy_
 # request_hook's docstring for why that's safe (refresh is sequential).
 
+
 class _FakeProxySession:
     def __init__(self):
         self.proxies: dict = {}
@@ -252,6 +256,7 @@ def test_proxy_hook_sets_session_proxies_when_resolver_returns_url():
     hook = api._make_proxy_request_hook()
 
     import requests
+
     session = _FakeProxySession()
     req = requests.Request("GET", "https://example.test/feed")
     out = hook(session, req)
@@ -268,6 +273,7 @@ def test_proxy_hook_clears_session_proxies_when_resolver_returns_none():
     hook = api._make_proxy_request_hook()
 
     import requests
+
     session = _FakeProxySession()
     session.proxies = {"http": "socks5h://gluetun:1080", "https": "socks5h://gluetun:1080"}
     hook(session, requests.Request("GET", "https://fine.test/feed"))
@@ -283,6 +289,7 @@ def test_proxy_hook_swallows_resolver_exceptions():
     hook = api._make_proxy_request_hook()
 
     import requests
+
     session = _FakeProxySession()
     session.proxies = {"http": "socks5h://gluetun:1080", "https": "socks5h://gluetun:1080"}
     out = hook(session, requests.Request("GET", "https://example.test/feed"))
@@ -330,12 +337,14 @@ def test_proxy_hook_not_registered_when_no_resolver(monkeypatch):
 
 # --- FlareSolverr request hook: redirects the whole request, not just a header ---
 
+
 def _load_json_body(data):
     """req.data is typed as a broad Request.data union; the hook always sets
     it to real JSON bytes, so assert that rather than fighting the type
     checker with a cast at every call site."""
     assert isinstance(data, bytes)
     import json as _json
+
     return _json.loads(data)
 
 
@@ -440,10 +449,12 @@ def test_flaresolverr_hook_is_idempotent_across_a_second_invocation():
 #     feed bytes, exactly what _fix_feed_response (registered right after)
 #     expects to clean up next. ---
 
+
 class _FlareSolverrRequest:
     """Minimal stand-in for the (already request-hook-mutated) Request object
     reader passes into response hooks — only what _fix_flaresolverr_response
     reads."""
+
     def __init__(self, url: str, via_flaresolverr: bool = False):
         self.url = url
         if via_flaresolverr:
@@ -452,10 +463,13 @@ class _FlareSolverrRequest:
 
 def _flaresolverr_json_body(html_response: str, status: int = 200, top_status: str = "ok") -> bytes:
     import json as _json
-    return _json.dumps({
-        "status": top_status,
-        "solution": {"status": status, "response": html_response},
-    }).encode("utf-8")
+
+    return _json.dumps(
+        {
+            "status": top_status,
+            "solution": {"status": status, "response": html_response},
+        }
+    ).encode("utf-8")
 
 
 def test_flaresolverr_response_ignored_when_marker_absent():
@@ -474,8 +488,8 @@ def test_flaresolverr_response_unwraps_pre_wrapped_xml():
     wrapped = (
         '<html><head></head><body><pre style="white-space: pre-wrap;">'
         '&lt;?xml version="1.0"?&gt;&lt;rss&gt;&lt;channel&gt;&lt;title&gt;T&lt;/title&gt;'
-        '&lt;/channel&gt;&lt;/rss&gt;'
-        '</pre></body></html>'
+        "&lt;/channel&gt;&lt;/rss&gt;"
+        "</pre></body></html>"
     )
     response = _FakeResponse({}, body=_flaresolverr_json_body(wrapped, status=200))
     request = _FlareSolverrRequest("http://flaresolverr:8191/v1", via_flaresolverr=True)
@@ -511,8 +525,8 @@ def test_flaresolverr_response_is_idempotent_across_a_second_invocation():
     wrapped = (
         '<html><head></head><body><pre style="white-space: pre-wrap;">'
         '&lt;?xml version="1.0"?&gt;&lt;rss&gt;&lt;channel&gt;&lt;title&gt;T&lt;/title&gt;'
-        '&lt;/channel&gt;&lt;/rss&gt;'
-        '</pre></body></html>'
+        "&lt;/channel&gt;&lt;/rss&gt;"
+        "</pre></body></html>"
     )
     response = _FakeResponse({}, body=_flaresolverr_json_body(wrapped, status=200))
     request = _FlareSolverrRequest("http://flaresolverr:8191/v1", via_flaresolverr=True)

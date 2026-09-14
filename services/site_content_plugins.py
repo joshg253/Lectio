@@ -13,6 +13,7 @@ rather than its lead image. Two things a site can ask for:
 Both hooks are optional and default to "no opinion", so a site with no plugin
 behaves exactly as before.
 """
+
 from __future__ import annotations
 
 import json
@@ -118,17 +119,23 @@ class BasslessonsPlugin:
         # is revealed by JS, so it is invisible on the site itself, but it is
         # first in the DOM and ~700 characters of cookie policy.
         return (
-            "#cookieInfoBanner", ".cookie-info-banner",
-            ".header-top", ".header",        # log-in strip and the desktop nav
-            ".nav-mobile-header", ".nav-mobile-footer", ".nav-mobile-social",
-            ".innerNav", ".transSupport",    # breadcrumb and the donation pitch
-            ".transNav",                     # the Previous/Next pager
-            ".modal",                        # a hidden "latest updates" dialog
+            "#cookieInfoBanner",
+            ".cookie-info-banner",
+            ".header-top",
+            ".header",  # log-in strip and the desktop nav
+            ".nav-mobile-header",
+            ".nav-mobile-footer",
+            ".nav-mobile-social",
+            ".innerNav",
+            ".transSupport",  # breadcrumb and the donation pitch
+            ".transNav",  # the Previous/Next pager
+            ".modal",  # a hidden "latest updates" dialog
             # The empty player and its "Searching far and wide for the video"
             # placeholder: extra_embed_html appends the real iframe, so leaving
             # these in shows the site still looking for a video that is right
             # there. The comment form is a form — it cannot work from a capture.
-            ".video-container", ".commentSection",
+            ".video-container",
+            ".commentSection",
         )
 
     def content_selectors(self, *, source_url: str) -> tuple[str, ...]:
@@ -145,9 +152,7 @@ class BasslessonsPlugin:
             return None
         try:
             with url_guard.build_client(timeout=_EMBED_FETCH_TIMEOUT) as client:
-                response = url_guard.safe_post(
-                    client, self._RESOLVER, data={"trans_id": trans_id}
-                )
+                response = url_guard.safe_post(client, self._RESOLVER, data={"trans_id": trans_id})
             if not response.is_success:
                 return None
             payload = json.loads(response.text)
@@ -195,7 +200,7 @@ class PaizoBlogPlugin:
         return self._is_blog_post(source_url)
 
     def prefers_full_page(self, *, source_url: str) -> bool:
-        return False          # the content selector already narrows this
+        return False  # the content selector already narrows this
 
     def strip_selectors(self, *, source_url: str) -> tuple[str, ...]:
         # Nothing. The closing "Join the conversation in the Paizo Forums!"
@@ -225,9 +230,7 @@ DEFAULT_SITE_CONTENT_PLUGINS: tuple[SiteContentPlugin, ...] = (
 )
 
 
-def plugin_for(
-    source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS
-) -> SiteContentPlugin | None:
+def plugin_for(source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS) -> SiteContentPlugin | None:
     for plugin in plugins:
         try:
             if plugin.handles(source_url=source_url):
@@ -237,9 +240,7 @@ def plugin_for(
     return None
 
 
-def prefers_full_page(
-    source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS
-) -> bool:
+def prefers_full_page(source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS) -> bool:
     plugin = plugin_for(source_url, plugins)
     if plugin is None:
         return False
@@ -249,9 +250,7 @@ def prefers_full_page(
         return False
 
 
-def strip_selectors(
-    source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS
-) -> tuple[str, ...]:
+def strip_selectors(source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS) -> tuple[str, ...]:
     plugin = plugin_for(source_url, plugins)
     if plugin is None:
         return ()
@@ -271,15 +270,11 @@ def _flag(source_url: str, name: str, plugins: tuple[SiteContentPlugin, ...]) ->
         return False
 
 
-def embed_at_top(
-    source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS
-) -> bool:
+def embed_at_top(source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS) -> bool:
     return _flag(source_url, "embed_at_top", plugins)
 
 
-def content_selectors(
-    source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS
-) -> tuple[str, ...]:
+def content_selectors(source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS) -> tuple[str, ...]:
     plugin = plugin_for(source_url, plugins)
     if plugin is None:
         return ()

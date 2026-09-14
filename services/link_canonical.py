@@ -7,16 +7,19 @@ years of starred articles on dead URLs. Detection lives here so ingest-time
 (Inoreader import), star-time (starred-archive capture), and backfill code
 share one definition.
 """
+
 from __future__ import annotations
 
 from urllib.parse import urlparse
 
-REDIRECTOR_HOSTS = frozenset({
-    "feedproxy.google.com",
-    "feeds.feedburner.com",
-    "feedsportal.com",
-    "rss.feedsportal.com",
-})
+REDIRECTOR_HOSTS = frozenset(
+    {
+        "feedproxy.google.com",
+        "feeds.feedburner.com",
+        "feedsportal.com",
+        "rss.feedsportal.com",
+    }
+)
 
 
 def is_redirector_link(url: str) -> bool:

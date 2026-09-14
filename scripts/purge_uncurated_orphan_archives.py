@@ -21,6 +21,7 @@ Usage (inside the app container):
     uv run scripts/purge_uncurated_orphan_archives.py --apply
     uv run scripts/purge_uncurated_orphan_archives.py --apply --user u_x
 """
+
 from __future__ import annotations
 
 import argparse
@@ -40,19 +41,12 @@ def run_for_user(uid: str, apply: bool) -> dict:
         live_feed_urls = {str(u) for (u,) in rc.execute("SELECT url FROM feeds")}
 
     with sqlite3.connect(f"file:{tenancy.meta_db_path()}?mode=ro", uri=True, timeout=30.0) as mc:
-        starred = {
-            (str(f), str(e)) for f, e in mc.execute("SELECT feed_url, entry_id FROM saved_entries")
-        }
-        tagged = {
-            (str(f), str(e)) for f, e in
-            mc.execute("SELECT DISTINCT feed_url, entry_id FROM orphan_entry_tags")
-        }
+        starred = {(str(f), str(e)) for f, e in mc.execute("SELECT feed_url, entry_id FROM saved_entries")}
+        tagged = {(str(f), str(e)) for f, e in mc.execute("SELECT DISTINCT feed_url, entry_id FROM orphan_entry_tags")}
 
     apath = str(tenancy.starred_archive_db_path())
     with sqlite3.connect(f"file:{apath}?mode=ro", uri=True, timeout=30.0) as ac:
-        rows = ac.execute(
-            "SELECT feed_url, entry_id FROM archived_entry WHERE status = 'complete'"
-        ).fetchall()
+        rows = ac.execute("SELECT feed_url, entry_id FROM archived_entry WHERE status = 'complete'").fetchall()
 
     stats: Counter[str] = Counter()
     by_feed: Counter[str] = Counter()
@@ -74,9 +68,7 @@ def run_for_user(uid: str, apply: bool) -> dict:
 
 
 def main_cli() -> None:
-    ap = argparse.ArgumentParser(
-        description="Delete orphan-archive captures with no star or tag (unreachable, unkept)."
-    )
+    ap = argparse.ArgumentParser(description="Delete orphan-archive captures with no star or tag (unreachable, unkept).")
     ap.add_argument("--apply", action="store_true", help="Perform deletions (default: dry-run).")
     ap.add_argument("--user", default=None)
     args = ap.parse_args()

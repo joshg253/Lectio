@@ -1,4 +1,4 @@
-""""Move all shown to feed…" resolves the move server-side, against the whole
+""" "Move all shown to feed…" resolves the move server-side, against the whole
 current view rather than the page the browser happens to hold.
 
 The id-list sibling (/entries/move-to-feed-batch) can only ever send what is
@@ -7,6 +7,7 @@ silent fraction of it. These tests pin the two properties that fixes: the move
 spans the whole view, and the filter term matches the same three fields the
 browser-side filter box matches (title, link, feed name).
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -64,10 +65,15 @@ def _add_entries(feed_url, specs):
     """specs: iterable of (entry_id, title, link)."""
     with main.get_reader() as reader:
         for i, (entry_id, title, link) in enumerate(specs):
-            reader.add_entry({
-                "feed_url": feed_url, "id": entry_id, "title": title, "link": link,
-                "published": datetime(2021, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=i),
-            })
+            reader.add_entry(
+                {
+                    "feed_url": feed_url,
+                    "id": entry_id,
+                    "title": title,
+                    "link": link,
+                    "published": datetime(2021, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=i),
+                }
+            )
 
 
 def _post(client, **overrides):
@@ -86,9 +92,7 @@ def test_move_spans_the_whole_view_not_the_first_page(tenant):
     250. Moving "all shown" must move 300."""
     _add_feed(FEED)
     _add_feed(DST)
-    _add_entries(FEED, [
-        (f"{FEED}post-{i:03d}", f"Post {i}", f"{FEED}post-{i:03d}") for i in range(300)
-    ])
+    _add_entries(FEED, [(f"{FEED}post-{i:03d}", f"Post {i}", f"{FEED}post-{i:03d}") for i in range(300)])
 
     with TestClient(_app()) as client:
         data = _post(client)
@@ -102,9 +106,7 @@ def test_move_spans_the_whole_view_not_the_first_page(tenant):
 def test_dry_run_reports_the_count_and_moves_nothing(tenant):
     _add_feed(FEED)
     _add_feed(DST)
-    _add_entries(FEED, [
-        (f"{FEED}post-{i:03d}", f"Post {i}", f"{FEED}post-{i:03d}") for i in range(300)
-    ])
+    _add_entries(FEED, [(f"{FEED}post-{i:03d}", f"Post {i}", f"{FEED}post-{i:03d}") for i in range(300)])
 
     with TestClient(_app()) as client:
         data = _post(client, dry_run="1")
@@ -116,11 +118,14 @@ def test_dry_run_reports_the_count_and_moves_nothing(tenant):
 def test_filter_term_narrows_to_matching_titles(tenant):
     _add_feed(FEED)
     _add_feed(DST)
-    _add_entries(FEED, [
-        ("keep-1", "Guitar lesson one", "https://blog.example.com/a"),
-        ("keep-2", "Another guitar lesson", "https://blog.example.com/b"),
-        ("skip-1", "Bass workshop", "https://blog.example.com/c"),
-    ])
+    _add_entries(
+        FEED,
+        [
+            ("keep-1", "Guitar lesson one", "https://blog.example.com/a"),
+            ("keep-2", "Another guitar lesson", "https://blog.example.com/b"),
+            ("skip-1", "Bass workshop", "https://blog.example.com/c"),
+        ],
+    )
 
     with TestClient(_app()) as client:
         assert _post(client, filter_term="guitar", dry_run="1")["count"] == 2
@@ -135,10 +140,13 @@ def test_filter_term_matches_link_host_and_is_case_insensitive(tenant):
     domain lives — a title-only filter could not express it."""
     _add_feed(FEED)
     _add_feed(DST)
-    _add_entries(FEED, [
-        ("keep-1", "Untitled", "https://guitarplayer.com/lessons/one"),
-        ("skip-1", "Untitled two", "https://example.com/other"),
-    ])
+    _add_entries(
+        FEED,
+        [
+            ("keep-1", "Untitled", "https://guitarplayer.com/lessons/one"),
+            ("skip-1", "Untitled two", "https://example.com/other"),
+        ],
+    )
 
     with TestClient(_app()) as client:
         data = _post(client, filter_term="GuitarPlayer.COM")
@@ -170,19 +178,21 @@ def test_duration_filter_narrows_within_the_yt_folder(tenant, monkeypatch):
     yt_feed = "https://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv"
     with main.get_meta_connection() as conn:
         root_id = main.get_root_folder_id(conn)
-        cur = conn.execute(
-            "INSERT INTO folders (name, parent_id) VALUES (?, ?)", (main.get_yt_folder_name(), root_id)
-        )
+        cur = conn.execute("INSERT INTO folders (name, parent_id) VALUES (?, ?)", (main.get_yt_folder_name(), root_id))
         folder_id = cur.lastrowid
         conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (folder_id, yt_feed))
     _add_feed(yt_feed)
     _add_feed(DST)
-    _add_entries(yt_feed, [
-        ("short", "Short one", "https://www.youtube.com/watch?v=shortVID001"),
-        ("long", "Long one", "https://www.youtube.com/watch?v=longVID0001"),
-    ])
+    _add_entries(
+        yt_feed,
+        [
+            ("short", "Short one", "https://www.youtube.com/watch?v=shortVID001"),
+            ("long", "Long one", "https://www.youtube.com/watch?v=longVID0001"),
+        ],
+    )
     monkeypatch.setattr(
-        main.youtube_duration_service, "get_cached_duration",
+        main.youtube_duration_service,
+        "get_cached_duration",
         lambda vid: {"shortVID001": (90, "1:30"), "longVID0001": (5400, "1:30:00")}.get(vid, (None, None)),
     )
 
@@ -213,8 +223,7 @@ def test_move_requires_a_target(tenant):
     _add_entries(FEED, [("keep-1", "Post", "https://a.example/1")])
 
     with TestClient(_app()) as client:
-        resp = client.post("/entries/move-visible-to-feed",
-                           data={"folder_id": str(UNCAT), "target_url": "  "})
+        resp = client.post("/entries/move-visible-to-feed", data={"folder_id": str(UNCAT), "target_url": "  "})
 
     assert resp.status_code == 400
     assert resp.json()["ok"] is False
@@ -225,14 +234,16 @@ def test_star_filter_scopes_the_move_to_kept_posts(tenant):
     filing out of the Saved view is the whole point of the feature."""
     _add_feed(FEED)
     _add_feed(DST)
-    _add_entries(FEED, [
-        ("starred-1", "Post one", "https://a.example/1"),
-        ("plain-1", "Post two", "https://a.example/2"),
-    ])
+    _add_entries(
+        FEED,
+        [
+            ("starred-1", "Post one", "https://a.example/1"),
+            ("plain-1", "Post two", "https://a.example/2"),
+        ],
+    )
     with main.get_meta_connection() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at)"
-            " VALUES (?, ?, '2026-01-01')",
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, '2026-01-01')",
             (FEED, "starred-1"),
         )
 

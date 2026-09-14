@@ -31,6 +31,7 @@ Usage:
     LECTIO_DATA_DIR=/data uv run scripts/find_redirecting_feeds.py --user <id> \\
         [--limit N] [--delay 1.0] [--json out.json] [--apply]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -73,8 +74,7 @@ def _looks_like_same_feed(parsed, original_url: str, stored_title: str) -> tuple
 
 
 def probe_one(client: httpx.Client, url: str, stored_title: str) -> dict:
-    out = {"url": url, "title": stored_title, "final_url": None, "hops": [],
-           "verdict": "direct", "reason": None}
+    out = {"url": url, "title": stored_title, "final_url": None, "hops": [], "verdict": "direct", "reason": None}
     try:
         r = client.get(url)
     except Exception as exc:  # noqa: BLE001
@@ -111,8 +111,7 @@ def probe_one(client: httpx.Client, url: str, stored_title: str) -> dict:
 
 
 def main_cli(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--user", required=True)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--delay", type=float, default=1.0)
@@ -124,7 +123,7 @@ def main_cli(argv: list[str] | None = None) -> int:
     r = sqlite3.connect(f"file:{base}/lectio_reader.sqlite?mode=ro", uri=True)
     targets = [(u, t or "") for u, t in r.execute("SELECT url, title FROM feeds WHERE url LIKE 'http%'")]
     if args.limit:
-        targets = targets[:args.limit]
+        targets = targets[: args.limit]
     print(f"probing {len(targets)} feeds for redirects\n", flush=True)
 
     results = []
@@ -133,21 +132,29 @@ def main_cli(argv: list[str] | None = None) -> int:
             res = probe_one(client, url, title)
             results.append(res)
             if res["verdict"] != "direct":
-                mark = {"candidate": "CANDIDATE", "temporary": "temp    ", "redirects-elsewhere": "elsewhere",
-                        "redirects-to-dead": "dead    ", "redirects-to-non-feed": "non-feed",
-                        "error": "error   "}.get(res["verdict"], res["verdict"])
+                mark = {
+                    "candidate": "CANDIDATE",
+                    "temporary": "temp    ",
+                    "redirects-elsewhere": "elsewhere",
+                    "redirects-to-dead": "dead    ",
+                    "redirects-to-non-feed": "non-feed",
+                    "error": "error   ",
+                }.get(res["verdict"], res["verdict"])
                 print(f"  [{i:>4}/{len(targets)}] {mark}  {url[:60]}", flush=True)
                 if res["final_url"] and res["final_url"] != url:
                     print(f"               -> {res['final_url'][:70]}  ({res['reason']})", flush=True)
             time.sleep(args.delay)
 
-    n = {k: sum(1 for x in results if x["verdict"] == k)
-         for k in ("direct", "candidate", "temporary", "redirects-elsewhere", "redirects-to-dead",
-                    "redirects-to-non-feed", "error")}
-    print(f"\ndirect: {n['direct']}   candidates (301, verified same feed): {n['candidate']}   "
-          f"temporary (302 etc): {n['temporary']}   redirects elsewhere: {n['redirects-elsewhere']}   "
-          f"redirects to dead/non-feed: {n['redirects-to-dead'] + n['redirects-to-non-feed']}   "
-          f"errors: {n['error']}")
+    n = {
+        k: sum(1 for x in results if x["verdict"] == k)
+        for k in ("direct", "candidate", "temporary", "redirects-elsewhere", "redirects-to-dead", "redirects-to-non-feed", "error")
+    }
+    print(
+        f"\ndirect: {n['direct']}   candidates (301, verified same feed): {n['candidate']}   "
+        f"temporary (302 etc): {n['temporary']}   redirects elsewhere: {n['redirects-elsewhere']}   "
+        f"redirects to dead/non-feed: {n['redirects-to-dead'] + n['redirects-to-non-feed']}   "
+        f"errors: {n['error']}"
+    )
     if args.json:
         with open(args.json, "w") as fh:
             json.dump(results, fh, indent=2)
@@ -156,6 +163,7 @@ def main_cli(argv: list[str] | None = None) -> int:
     if args.apply:
         import main  # noqa: E402
         from services import tenancy  # noqa: E402
+
         candidates = [x for x in results if x["verdict"] == "candidate"]
         print(f"\napplying {len(candidates)} candidate(s) via change_feed_url_route (force=0)...")
         applied = skipped = 0

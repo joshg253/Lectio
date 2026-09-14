@@ -186,10 +186,7 @@ def test_standard_ebooks_cover_on_fast_path(tmp_path: Path):
 def test_promote_known_thumbnail_is_noop_for_other_urls(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
     # Substring-but-not-segment must not be rewritten.
-    assert (
-        service._promote_known_thumbnail("https://x/comicsthumbsfoo/a.jpg")
-        == "https://x/comicsthumbsfoo/a.jpg"
-    )
+    assert service._promote_known_thumbnail("https://x/comicsthumbsfoo/a.jpg") == "https://x/comicsthumbsfoo/a.jpg"
     assert service._promote_known_thumbnail(None) is None
 
 
@@ -220,14 +217,8 @@ def test_inline_thumb_url_promotes_bare_plaintext_image_url(tmp_path: Path):
             "&lt;br&gt;\nAoTM June Round 1 has closed and we have a winner!&lt;br&gt;"
         ),
     )
-    assert (
-        service.extract_inline_thumb_url(entry)
-        == "https://i.ibb.co/Zp25NHbV/2-Sd-RZ3-GBUz.jpg"
-    )
-    assert (
-        service.extract_entry_thumbnail_url(entry)
-        == "https://i.ibb.co/Zp25NHbV/2-Sd-RZ3-GBUz.jpg"
-    )
+    assert service.extract_inline_thumb_url(entry) == "https://i.ibb.co/Zp25NHbV/2-Sd-RZ3-GBUz.jpg"
+    assert service.extract_entry_thumbnail_url(entry) == "https://i.ibb.co/Zp25NHbV/2-Sd-RZ3-GBUz.jpg"
 
 
 def test_bare_url_promotion_skips_non_image_urls(tmp_path: Path):
@@ -323,10 +314,7 @@ def test_font_awesome_inline_icon_is_decorative(tmp_path: Path):
         '<svg class="fa-lg svg-inline--fa fa-chevron-left fa-w-10" color="#888" '
         'height="512" viewBox="0 0 320 512" width="320"><path d="M8 1z"/></svg>'
     )
-    tags = (
-        '<svg class="fa-lg svg-inline--fa fa-tags fa-w-20" height="512" '
-        'viewBox="0 0 640 512" width="640"><path d="M8 1z"/></svg>'
-    )
+    tags = '<svg class="fa-lg svg-inline--fa fa-tags fa-w-20" height="512" viewBox="0 0 640 512" width="640"><path d="M8 1z"/></svg>'
     hero = '<svg viewBox="0 0 800 450"><rect width="800" height="450"/></svg>'
 
     assert service._is_decorative_inline_svg(chevron) is True
@@ -344,8 +332,7 @@ def test_plain_fa_prefixed_class_is_not_treated_as_an_icon(tmp_path: Path):
     `alfa-romeo-art` contains "fa-" but is article art, not a glyph.
     """
     service = _build_service(tmp_path / "meta.sqlite", [])
-    art = ('<svg class="alfa-romeo-art" viewBox="0 0 800 450">'
-           '<rect width="800" height="450"/></svg>')
+    art = '<svg class="alfa-romeo-art" viewBox="0 0 800 450"><rect width="800" height="450"/></svg>'
     assert service._is_decorative_inline_svg(art) is False
 
 
@@ -652,8 +639,7 @@ def test_do_backfill_entry_list_batches_meta_writes_across_feeds(tmp_path: Path,
         service,
         "_fetch_feed_media_thumbnails",
         lambda feed_url: {
-            f"https://example.com/{feed_url}/article-{i}": f"https://cdn.example.com/{feed_url}-{i}.jpg"
-            for i in range(entries_per_feed)
+            f"https://example.com/{feed_url}/article-{i}": f"https://cdn.example.com/{feed_url}-{i}.jpg" for i in range(entries_per_feed)
         },
     )
 
@@ -751,9 +737,9 @@ def test_do_backfill_entry_list_flushes_pending_on_exception(tmp_path: Path, mon
 
     monkeypatch.setattr(service, "_fetch_feed_media_thumbnails", fake_media_thumbnails)
 
-    posts = [
-        {"feed_url": "feed-0", "id": f"p-0-{i}", "link": f"https://example.com/feed-0/article-{i}"} for i in range(5)
-    ] + [{"feed_url": "feed-1", "id": "p-1-0", "link": "https://example.com/feed-1/article-0"}]
+    posts = [{"feed_url": "feed-0", "id": f"p-0-{i}", "link": f"https://example.com/feed-0/article-{i}"} for i in range(5)] + [
+        {"feed_url": "feed-1", "id": "p-1-0", "link": "https://example.com/feed-1/article-0"}
+    ]
 
     with pytest.raises(RuntimeError, match="boom"):
         service._do_backfill_entry_list(posts)
@@ -832,9 +818,7 @@ def test_negative_retry_window_retries_after_4h(tmp_path: Path):
 def test_og_image_regex_matches_name_attribute():
     """og:image with name= attribute order (not property=) must be found."""
     service = _build_service(Path("/tmp"), [])
-    html = (
-        '<meta name="og:image" content="https://cdn.example.com/hero.png" data-next-head=""/>'
-    )
+    html = '<meta name="og:image" content="https://cdn.example.com/hero.png" data-next-head=""/>'
     result = service._extract_meta_image_url_from_html(html, "https://example.com/article")
     assert result == "https://cdn.example.com/hero.png"
 
@@ -859,15 +843,13 @@ def test_og_image_extensionless_cdn_url_accepted():
     """Extensionless og:image URLs (e.g. CDN token URLs) must not be rejected."""
     service = _build_service(Path("/tmp"), [])
     # CDN URL with no file extension — common for DO / Fastly image URLs.
-    html = (
-        '<meta property="og:image" '
-        'content="https://community-cdn-example.global.ssl.fastly.net/ABC123"/>'
-    )
+    html = '<meta property="og:image" content="https://community-cdn-example.global.ssl.fastly.net/ABC123"/>'
     result = service._extract_meta_image_url_from_html(html, "https://example.com/article")
     assert result == "https://community-cdn-example.global.ssl.fastly.net/ABC123"
 
 
 # --- _AVATAR_HINT_PATTERNS word-boundary fix ---
+
 
 def test_avatar_hint_does_not_match_authorities():
     """'author' in _AVATAR_HINT_PATTERNS must not match substrings like 'authorities'."""
@@ -891,6 +873,7 @@ def test_avatar_hint_does_not_match_authoritative():
 
 # --- css_bg before preferred → promote to full-res img ---
 
+
 def test_css_bg_before_preferred_returns_fullres_img(tmp_path):
     """When a CSS background (resized crop) appears before the body-scanner winner
     and a full-res <img> with the same filename stem is present, the full-res URL
@@ -902,14 +885,14 @@ def test_css_bg_before_preferred_returns_fullres_img(tmp_path):
     service = _build_service(tmp_path / "meta.sqlite", [])
     fake_html = (
         "<html><head></head><body>"
-        "<header class=\"detail-view-header\">"
-        "<div class=\"bg-blur\" style=\"background-image:"
+        '<header class="detail-view-header">'
+        '<div class="bg-blur" style="background-image:'
         " url('https://cdn.example.com/uploads/U40-Header-576x324.jpg')\"></div>"
-        "<img alt=\"\" src=\"https://cdn.example.com/uploads/U40-Header-616x347.jpg\"/>"
+        '<img alt="" src="https://cdn.example.com/uploads/U40-Header-616x347.jpg"/>'
         "</header>"
         "<article>"
-        "<img src=\"https://cdn.example.com/uploads/U40-Body1-1920x1080.jpg\""
-        " srcset=\"U40-Body1-1920x1080.jpg 1920w, U40-Body1-768x432.jpg 768w\"/>"
+        '<img src="https://cdn.example.com/uploads/U40-Body1-1920x1080.jpg"'
+        ' srcset="U40-Body1-1920x1080.jpg 1920w, U40-Body1-768x432.jpg 768w"/>'
         "</article>"
         "</body></html>"
     )
@@ -927,11 +910,11 @@ def test_css_bg_after_preferred_does_not_override(tmp_path):
     fake_html = (
         "<html><head></head><body>"
         "<article>"
-        "<img src=\"https://cdn.example.com/uploads/article-hero.jpg\""
-        " srcset=\"article-hero.jpg 1920w\"/>"
+        '<img src="https://cdn.example.com/uploads/article-hero.jpg"'
+        ' srcset="article-hero.jpg 1920w"/>'
         "</article>"
         "<footer>"
-        "<div style=\"background-image:"
+        '<div style="background-image:'
         " url('https://cdn.example.com/uploads/footer-decor-576x324.jpg')\"></div>"
         "</footer>"
         "</body></html>"
@@ -954,9 +937,7 @@ def test_extract_thumbnail_uses_reader_enclosure_href(tmp_path: Path):
         entry_id="https://www.invisibleoranges.com/?p=63411",
         link="https://www.invisibleoranges.com/upcoming-metal-releases",
     )
-    entry.enclosures = (
-        Enclosure(href="https://media.invisibleoranges.com/uploads/2025/04/25/UMR.png", type="image/png", length=286389),
-    )
+    entry.enclosures = (Enclosure(href="https://media.invisibleoranges.com/uploads/2025/04/25/UMR.png", type="image/png", length=286389),)
 
     thumb = service.extract_entry_thumbnail_url(entry)
 
@@ -982,9 +963,7 @@ def test_blogger_chrome_domain_rejected(tmp_path: Path):
     button) — never article images (regression: greasespot.net lead image)."""
     service = _build_service(tmp_path / "meta.sqlite", [])
 
-    assert not service._is_image_url_acceptable(
-        "https://www.blogger.com/buttons/blogger-simple-kahki.gif", None, None
-    )
+    assert not service._is_image_url_acceptable("https://www.blogger.com/buttons/blogger-simple-kahki.gif", None, None)
 
 
 def test_webcomic_class_matches_wp_post_image():
@@ -1003,12 +982,8 @@ def test_badge_and_kofi_widgets_rejected(tmp_path: Path):
     grabbed the Ko-fi button) — never the post's lead image."""
     service = _build_service(tmp_path / "meta.sqlite", [])
 
-    assert not service._is_image_url_acceptable(
-        "https://img.shields.io/twitter/follow/openmw_org?style=social", None, None
-    )
-    assert not service._is_image_url_acceptable(
-        "https://storage.ko-fi.com/cdn/kofi3.png?v=3", None, None
-    )
+    assert not service._is_image_url_acceptable("https://img.shields.io/twitter/follow/openmw_org?style=social", None, None)
+    assert not service._is_image_url_acceptable("https://storage.ko-fi.com/cdn/kofi3.png?v=3", None, None)
 
 
 def test_nav_directory_icons_rejected(tmp_path: Path):
@@ -1017,14 +992,10 @@ def test_nav_directory_icons_rejected(tmp_path: Path):
     the 'Account' nav icon)."""
     service = _build_service(tmp_path / "meta.sqlite", [])
 
-    assert not service._is_image_url_acceptable(
-        "https://cdn.paizo.com/image/navigation/Personal-Account.png", None, None
-    )
+    assert not service._is_image_url_acceptable("https://cdn.paizo.com/image/navigation/Personal-Account.png", None, None)
     # A path that merely contains the word "navigation" as part of a segment
     # (not its own directory) is still a valid article image.
-    assert service._is_image_url_acceptable(
-        "https://cdn.example.com/blog/ship-navigation-guide/hero.jpg", None, None
-    )
+    assert service._is_image_url_acceptable("https://cdn.example.com/blog/ship-navigation-guide/hero.jpg", None, None)
 
 
 def test_source_scan_prefers_article_image_over_nav_icon(tmp_path: Path):
@@ -1048,13 +1019,9 @@ def test_wordpress_blank_placeholder_rejected(tmp_path: Path):
     """WordPress.com ships s0.wp.com/i/blank.jpg as the og:image for image-less
     posts — a 200x200 white box (regression: giodicanio.com C++ article)."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    assert not service._is_image_url_acceptable(
-        "https://s0.wp.com/i/blank.jpg?m=1383295312i", 200, 200, allow_extensionless=True
-    )
+    assert not service._is_image_url_acceptable("https://s0.wp.com/i/blank.jpg?m=1383295312i", 200, 200, allow_extensionless=True)
     # A real .jpg is still fine.
-    assert service._is_image_url_acceptable(
-        "https://cdn.example.com/uploads/hero.jpg", None, None
-    )
+    assert service._is_image_url_acceptable("https://cdn.example.com/uploads/hero.jpg", None, None)
 
 
 def test_statcounter_pixel_rejected(tmp_path: Path):
@@ -1062,9 +1029,7 @@ def test_statcounter_pixel_rejected(tmp_path: Path):
     lead image — they ship as a 1x1 GIF that scales to a grey thumbnail
     (regression: andreinc.net image-less post)."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    assert not service._is_image_url_acceptable(
-        "https://c.statcounter.com/7153286/0/b3053c1d/1/", None, None, allow_extensionless=True
-    )
+    assert not service._is_image_url_acceptable("https://c.statcounter.com/7153286/0/b3053c1d/1/", None, None, allow_extensionless=True)
     # skip_logo_patterns=True is used at the render cache-gate; the tracker check
     # still fires there, so a stale cached statcounter URL is dropped on display.
     assert not service._is_image_url_acceptable(
@@ -1080,9 +1045,7 @@ def test_addtoany_share_button_rejected(tmp_path: Path):
     """AddToAny/AddThis share-button sprites (alt='Share') are social widgets,
     not article images (regression: nuonsoft.com 'Share' caption)."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    assert not service._is_image_url_acceptable(
-        "https://static.addtoany.com/buttons/share_save_171_16.png", None, None
-    )
+    assert not service._is_image_url_acceptable("https://static.addtoany.com/buttons/share_save_171_16.png", None, None)
 
 
 def test_emoji_sprite_rejected_as_lead_image(tmp_path: Path):
@@ -1090,9 +1053,7 @@ def test_emoji_sprite_rejected_as_lead_image(tmp_path: Path):
     a post's lead image (regression: nuonsoft ➡, Vintage Story 🙃). They remain
     inline at render — only lead-image selection rejects them."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    assert not service._is_image_url_acceptable(
-        "https://s.w.org/images/core/emoji/17.0.2/72x72/27a1.png", None, None
-    )
+    assert not service._is_image_url_acceptable("https://s.w.org/images/core/emoji/17.0.2/72x72/27a1.png", None, None)
     assert not service._is_image_url_acceptable(
         "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f643.png",
         None,
@@ -1109,13 +1070,9 @@ def test_emoji_sprite_rejected_as_lead_image(tmp_path: Path):
     )
     # A non-emoji asset that merely carries "twemoji" in its query string is NOT
     # rejected (host+path match only).
-    assert service._is_image_url_acceptable(
-        "https://cdn.example.com/uploads/hero.jpg?ref=twemoji", None, None
-    )
+    assert service._is_image_url_acceptable("https://cdn.example.com/uploads/hero.jpg?ref=twemoji", None, None)
     # A normal article image on an unrelated CDN is unaffected.
-    assert service._is_image_url_acceptable(
-        "https://cdn.example.com/uploads/hero.jpg", None, None
-    )
+    assert service._is_image_url_acceptable("https://cdn.example.com/uploads/hero.jpg", None, None)
 
 
 def test_source_scan_skips_share_button(tmp_path: Path):
@@ -1149,9 +1106,7 @@ def test_megaphone_featured_image_beats_recent_episodes_widget(tmp_path: Path):
     The fix must (a) strip the recent-episodes widget and (b) accept the square
     featured image despite the headshot/site-chrome heuristics."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    page = (
-        "https://se-radio.net/2026/06/se-radio-725-danny-yang-and-sam-goldman/"
-    )
+    page = "https://se-radio.net/2026/06/se-radio-725-danny-yang-and-sam-goldman/"
     html = (
         "<html><body>"
         '<nav class="navbar"><ul><li><a href="#">Menu</a></li></ul></nav>'
@@ -1215,8 +1170,7 @@ def test_shopify_blog_posts_row_is_stripped_before_scanning(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
     page = "https://www.gamersguildusa.com/blogs/news/cosplay-products-are-coming-soon"
     body_img = (
-        "https://cdn.shopify.com/s/files/1/0565/9705/3645/files/"
-        "CosplayComingSoon_4x5_ce6091b6-ea05-4036-afe4-967ed9b49cb8_600x600.png"
+        "https://cdn.shopify.com/s/files/1/0565/9705/3645/files/CosplayComingSoon_4x5_ce6091b6-ea05-4036-afe4-967ed9b49cb8_600x600.png"
     )
     html = (
         "<html><body>"
@@ -1246,9 +1200,7 @@ def test_og_image_query_dimensions_beat_a_misleading_aspect_ratio_filename(tmp_p
         "CosplayComingSoon_4x3_1a15d919-9934-4802-8766-d11603d1b610.png"
         "?crop=center&height=500&v=1788365944&width=600"
     )
-    assert service._is_image_url_acceptable(
-        url, None, None, allow_extensionless=True, skip_logo_patterns=True
-    ) is True
+    assert service._is_image_url_acceptable(url, None, None, allow_extensionless=True, skip_logo_patterns=True) is True
 
 
 def test_webcomic_alt_prefers_img_title_over_og_description(tmp_path: Path):
@@ -1263,18 +1215,14 @@ def test_webcomic_alt_prefers_img_title_over_og_description(tmp_path: Path):
         'src="https://www.smbc-comics.com/comics/1780608554-20260605.png" id="cc-comic" />'
         "</body></html>"
     )
-    assert service._extract_webcomic_alt_text(fake_html) == (
-        "This sort of thing is why I will likely never write fantasy."
-    )
+    assert service._extract_webcomic_alt_text(fake_html) == ("This sort of thing is why I will likely never write fantasy.")
 
 
 def test_webcomic_alt_falls_back_to_og_description(tmp_path: Path):
     """When the comic <img> carries no title/alt, og:description is still used."""
     service = _build_service(tmp_path / "meta.sqlite", [])
     fake_html = (
-        "<html><head>"
-        '<meta property="og:description" content="the secret hover joke" />'
-        "</head><body><p>no comic img here</p></body></html>"
+        '<html><head><meta property="og:description" content="the secret hover joke" /></head><body><p>no comic img here</p></body></html>'
     )
     assert service._extract_webcomic_alt_text(fake_html) == "the secret hover joke"
 
@@ -1287,23 +1235,15 @@ def test_advertisement_images_rejected(tmp_path: Path):
     # URL ad-token (".../Cert-ad1.png", "/ads/...") rejected.
     assert not service._is_image_url_acceptable(
         "https://se-radio.net/wp-content/uploads/2026/04/2026-Software-Pro-Cert-ad1.png",
-        320, 100,
+        320,
+        100,
     )
-    assert not service._is_image_url_acceptable(
-        "https://cdn.example.com/ads/leaderboard.png", None, None
-    )
+    assert not service._is_image_url_acceptable("https://cdn.example.com/ads/leaderboard.png", None, None)
     # Words containing the "ad" substring are not ads.
-    assert service._is_image_url_acceptable(
-        "https://cdn.example.com/wp-content/uploads/2026/hero.jpg", None, None
-    )
+    assert service._is_image_url_acceptable("https://cdn.example.com/wp-content/uploads/2026/hero.jpg", None, None)
     # alt-flagged ad rejected by the feed-content inline extractor.
-    banner_html = (
-        '<img src="https://example.com/promo/spring.png" width="320" height="100" '
-        'alt="banner ad that says subscribe now">'
-    )
-    assert service._extract_first_image_url_from_html(
-        banner_html, "https://example.com/article", allow_extensionless=True
-    ) is None
+    banner_html = '<img src="https://example.com/promo/spring.png" width="320" height="100" alt="banner ad that says subscribe now">'
+    assert service._extract_first_image_url_from_html(banner_html, "https://example.com/article", allow_extensionless=True) is None
 
 
 def test_extreme_aspect_logo_rejected(tmp_path: Path):
@@ -1313,17 +1253,17 @@ def test_extreme_aspect_logo_rejected(tmp_path: Path):
 
     assert not service._is_image_url_acceptable(
         "https://se-radio.net/wp-content/uploads/2024/01/SE-radio-logo-color-600x100-1.png",
-        None, None,
+        None,
+        None,
     )
     assert not service._is_image_url_acceptable(
         "https://se-radio.net/wp-content/uploads/seradio-20th-site-logo-200x1500-2.png",
-        None, None,
+        None,
+        None,
     )
     # A logo-named image with a content-like aspect ratio still passes (e.g. an
     # article about a logo, sized 1200x630).
-    assert service._is_image_url_acceptable(
-        "https://cdn.example.com/articles/imdb-logo-1200x630.jpg", None, None
-    )
+    assert service._is_image_url_acceptable("https://cdn.example.com/articles/imdb-logo-1200x630.jpg", None, None)
 
 
 def test_source_scan_skips_nav_menu_icons(tmp_path: Path):
@@ -1362,10 +1302,7 @@ def test_webcomic_panel_wins_over_generic_og_image(tmp_path: Path):
     service._fetch_page_html = lambda url, **kw: (fake_html, url, False)
 
     # Without webcomic mode the curated og:image banner wins (existing behaviour).
-    assert (
-        service._fetch_source_lead_image("https://www.everblue-comic.com/comic/x")
-        == "https://www.everblue-comic.com/files/og-image.jpg"
-    )
+    assert service._fetch_source_lead_image("https://www.everblue-comic.com/comic/x") == "https://www.everblue-comic.com/files/og-image.jpg"
     # In webcomic mode the comic panel wins over the generic banner.
     assert (
         service._fetch_source_lead_image("https://www.everblue-comic.com/comic/x", is_webcomic=True)
@@ -1384,9 +1321,7 @@ def test_backfill_webcomic_prefers_source_panel_over_enclosure(tmp_path: Path):
         link="https://www.everblue-comic.com/comic/p",
     )
     # RSS enclosure is the small thumbnail variant.
-    entry.enclosures = (
-        {"href": "https://www.everblue-comic.com/comicsthumbs/x-thumb.jpg", "type": "image/jpeg"},
-    )
+    entry.enclosures = ({"href": "https://www.everblue-comic.com/comicsthumbs/x-thumb.jpg", "type": "image/jpeg"},)
     service = _build_service(tmp_path / "meta.sqlite", [entry])
     service.store_feed_strategy(feed_url, "webcomic", manual=True)
 
@@ -1429,33 +1364,28 @@ def test_source_scan_skips_widget_images_but_keeps_article_image(tmp_path: Path)
 
 # --- piwik/matomo tracker URLs rejected ---
 
+
 def test_piwik_url_rejected_as_tracker(tmp_path: Path):
     """piwik.php tracking pixels must be rejected (regression: krita.org 1×1 image)."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    assert not service._is_image_url_acceptable(
-        "https://stats.kde.org/piwik.php?idsite=13", None, None
-    )
-    assert not service._is_image_url_acceptable(
-        "https://example.com/matomo/matomo.php?idsite=1", None, None
-    )
+    assert not service._is_image_url_acceptable("https://stats.kde.org/piwik.php?idsite=13", None, None)
+    assert not service._is_image_url_acceptable("https://example.com/matomo/matomo.php?idsite=1", None, None)
 
 
 # --- tiny explicit dimensions rejected as spacers/tracking pixels ---
+
 
 def test_small_explicit_dims_rejected(tmp_path: Path):
     """Images with both explicit dims ≤ 10px must be rejected as tracking/spacer pixels."""
     service = _build_service(tmp_path / "meta.sqlite", [])
     # Classic 1×1 tracking pixel
-    assert not service._is_source_image_tag_acceptable(
-        {"width": "1", "height": "1"}, "https://stats.example.com/tracker.gif"
-    )
+    assert not service._is_source_image_tag_acceptable({"width": "1", "height": "1"}, "https://stats.example.com/tracker.gif")
     # 10×10 is still within the tiny-dims threshold
-    assert not service._is_source_image_tag_acceptable(
-        {"width": "10", "height": "10"}, "https://cdn.example.com/spacer.gif"
-    )
+    assert not service._is_source_image_tag_acceptable({"width": "10", "height": "10"}, "https://cdn.example.com/spacer.gif")
 
 
 # --- enclosure fallback in test_entry_strategies media_rss card ---
+
 
 def test_strategy_test_includes_enclosure_in_media_rss(tmp_path: Path, monkeypatch):
     """Tuning tab media_rss card must fall back to entry enclosures when the feed has
@@ -1488,6 +1418,7 @@ def test_strategy_test_includes_enclosure_in_media_rss(tmp_path: Path, monkeypat
 
 # --- WebP picture <source srcset> fallback for alt/title ---
 
+
 def test_fetch_caption_webp_picture_fallback(tmp_path: Path):
     """Alt/title from <img> inside <picture>/<source type=image/webp> must be returned
     when lead_image_url is the WebP srcset URL (regression: Wondermark captions)."""
@@ -1513,6 +1444,7 @@ def test_fetch_caption_webp_picture_fallback(tmp_path: Path):
 
 # --- Webcomic hover-text balloon / og:description fallback ---
 
+
 def test_webcomic_caption_uses_alt_text_balloon(tmp_path: Path):
     """When the comic <img> has no alt/title, the WordPress Webcomic plugin's
     comic-alt-text balloon supplies the hover joke (regression: Wondermark)."""
@@ -1529,9 +1461,7 @@ def test_webcomic_caption_uses_alt_text_balloon(tmp_path: Path):
     )
     service._source_html_cache[entry_link] = (entry_link, html)
 
-    alt, title = service.fetch_entry_image_caption(
-        entry_link, lead_image_url=img_url, is_webcomic=True
-    )
+    alt, title = service.fetch_entry_image_caption(entry_link, lead_image_url=img_url, is_webcomic=True)
 
     assert alt is None
     assert title == "The joke in the hover text."
@@ -1551,9 +1481,7 @@ def test_webcomic_caption_falls_back_to_og_description(tmp_path: Path):
     )
     service._source_html_cache[entry_link] = (entry_link, html)
 
-    alt, title = service.fetch_entry_image_caption(
-        entry_link, lead_image_url=img_url, is_webcomic=True
-    )
+    alt, title = service.fetch_entry_image_caption(entry_link, lead_image_url=img_url, is_webcomic=True)
 
     assert title == "Otto needs investment capital."
 
@@ -1573,9 +1501,7 @@ def test_non_webcomic_does_not_use_og_description(tmp_path: Path):
     )
     service._source_html_cache[entry_link] = (entry_link, html)
 
-    alt, title = service.fetch_entry_image_caption(
-        entry_link, lead_image_url=img_url, is_webcomic=False
-    )
+    alt, title = service.fetch_entry_image_caption(entry_link, lead_image_url=img_url, is_webcomic=False)
 
     assert alt is None
     assert title is None
@@ -1583,15 +1509,14 @@ def test_non_webcomic_does_not_use_og_description(tmp_path: Path):
 
 # --- BBCode [img] conversion ---
 
+
 def test_bbcode_img_converted_before_extraction(tmp_path: Path):
     """[img]…[/img] BBCode must be converted to <img src=…> before inline extraction
     (regression: Nexus Mods Tuning tab showed no images)."""
     service = _build_service(tmp_path / "meta.sqlite", [])
 
     # Converter unit test
-    assert service._bbcode_img_to_html("[img]https://cdn.example.com/art.jpg[/img]") == (
-        '<img src="https://cdn.example.com/art.jpg">'
-    )
+    assert service._bbcode_img_to_html("[img]https://cdn.example.com/art.jpg[/img]") == ('<img src="https://cdn.example.com/art.jpg">')
 
     # End-to-end: extract_inline_thumb_url must surface the image
     entry = _FakeEntry(
@@ -1626,16 +1551,9 @@ def test_source_image_ignores_related_posts_section(tmp_path: Path):
     # A post with no og:image and no hero of its own must not borrow a sibling
     # post's thumbnail from the "related posts" widget.
     service = _build_service(tmp_path / "meta.sqlite", [])
-    html = (
-        "<main></main>"
-        '<section class="related-posts">'
-        '<img src="https://site.example/other/cover.jpg" width="800" height="450">'
-        "</section>"
-    )
+    html = '<main></main><section class="related-posts"><img src="https://site.example/other/cover.jpg" width="800" height="450"></section>'
 
-    url = service._extract_preferred_source_image_url(
-        html, "https://site.example/post/", "https://site.example/post/"
-    )
+    url = service._extract_preferred_source_image_url(html, "https://site.example/post/", "https://site.example/post/")
 
     assert url is None
 
@@ -1669,13 +1587,9 @@ def test_twitter_card_and_brand_logo_rejected(tmp_path: Path):
         None,
         None,
     )
-    assert not service._is_image_url_acceptable(
-        "https://www.c-sharpcorner.com/images/csharp-corner-new.png", None, None
-    )
+    assert not service._is_image_url_acceptable("https://www.c-sharpcorner.com/images/csharp-corner-new.png", None, None)
     # A real per-article image on the same host stays acceptable.
-    assert service._is_image_url_acceptable(
-        "https://www.c-sharpcorner.com/article/post/Media/hero.jpg", 800, 450
-    )
+    assert service._is_image_url_acceptable("https://www.c-sharpcorner.com/article/post/Media/hero.jpg", 800, 450)
 
 
 def test_template_placeholder_url_rejected(tmp_path: Path):
@@ -1687,22 +1601,15 @@ def test_template_placeholder_url_rejected(tmp_path: Path):
         None,
         None,
     )
-    assert not service._is_image_url_acceptable(
-        "https://example.com/img/{{thumbnail}}.jpg", None, None
-    )
-    assert service._is_image_url_acceptable(
-        "https://example.com/article/hero.jpg", 800, 450
-    )
+    assert not service._is_image_url_acceptable("https://example.com/img/{{thumbnail}}.jpg", None, None)
+    assert service._is_image_url_acceptable("https://example.com/article/hero.jpg", 800, 450)
 
 
 def test_avatar_hint_not_triggered_by_profile_in_artwork_title(tmp_path: Path):
     # A DeviantArt piece titled "…Profile…" carries "profile" as a title word in
     # its filename (preceded by "_"); it must not be mistaken for an author headshot.
     service = _build_service(tmp_path / "meta.sqlite", [])
-    art = (
-        "/f/xx/dmdcn02.jpg/v1/fill/w_1280,h_854,q_75,strp/"
-        "collared_peccary_profile__enclosure__by_artist_dmdcn02-fullview.jpg"
-    )
+    art = "/f/xx/dmdcn02.jpg/v1/fill/w_1280,h_854,q_75,strp/collared_peccary_profile__enclosure__by_artist_dmdcn02-fullview.jpg"
     assert service._AVATAR_HINT_PATTERNS.search(art) is None
     # Real profile/avatar paths still flagged.
     assert service._AVATAR_HINT_PATTERNS.search("/users/profile.jpg") is not None
@@ -1717,8 +1624,7 @@ def test_inline_from_reader_falls_back_to_feed_content_image(tmp_path: Path):
         entry_id="https://www.artstation.com/artwork/abc",
         link="https://www.artstation.com/artwork/abc",
         content_html=(
-            '<p><a href="https://cdn.artstation.com/p/large/art.jpg">'
-            '<img src="https://cdn.artstation.com/p/large/art.jpg" /></a></p>'
+            '<p><a href="https://cdn.artstation.com/p/large/art.jpg"><img src="https://cdn.artstation.com/p/large/art.jpg" /></a></p>'
         ),
     )
     service = _build_service(tmp_path / "meta.sqlite", [entry])
@@ -1754,9 +1660,7 @@ def test_forge_avatar_urls_rejected(tmp_path: Path):
     assert service._is_image_url_acceptable("https://gitea.com/delvh.png", None, None) is False
     assert service._is_image_url_acceptable("https://github.com/octocat.png", None, None) is False
     # Repo/asset paths (more than one segment) are NOT avatars.
-    assert service._is_image_url_acceptable(
-        "https://github.com/owner/repo/raw/main/hero.png", None, None
-    ) is True
+    assert service._is_image_url_acceptable("https://github.com/owner/repo/raw/main/hero.png", None, None) is True
 
 
 def test_og_scrape_manual_keeps_inline_when_source_misses(tmp_path: Path, monkeypatch):
@@ -1780,9 +1684,7 @@ def test_og_scrape_manual_keeps_inline_when_source_misses(tmp_path: Path, monkey
     service.fetch_and_store_lead_images_for_feed(feed, force_retry_negative=True)
 
     with _make_conn(db_path) as conn:
-        row = conn.execute(
-            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-og",)
-        ).fetchone()
+        row = conn.execute("SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-og",)).fetchone()
     assert row is not None
     assert row["image_url"] == inline_img, "transient source miss clobbered the inline image"
 
@@ -1816,9 +1718,7 @@ def test_detected_og_scrape_prefers_source_over_a_mid_body_image(tmp_path: Path,
     service.fetch_and_store_lead_images_for_feed(feed, force_retry_negative=True)
 
     with _make_conn(db_path) as conn:
-        row = conn.execute(
-            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-sonar",)
-        ).fetchone()
+        row = conn.execute("SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-sonar",)).fetchone()
     assert row is not None
     assert row["image_url"] == og_img, "mid-body screenshot won over the publisher's og:image"
 
@@ -1845,9 +1745,7 @@ def test_detected_og_scrape_keeps_inline_when_source_misses(tmp_path: Path, monk
     service.fetch_and_store_lead_images_for_feed(feed, force_retry_negative=True)
 
     with _make_conn(db_path) as conn:
-        row = conn.execute(
-            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-fresh",)
-        ).fetchone()
+        row = conn.execute("SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-fresh",)).fetchone()
     assert row is not None
     assert row["image_url"] == body_img
 
@@ -1878,18 +1776,13 @@ def test_detected_inline_feed_still_short_circuits(tmp_path: Path, monkeypatch):
     service.fetch_and_store_lead_images_for_feed(feed, force_retry_negative=True)
 
     with _make_conn(db_path) as conn:
-        row = conn.execute(
-            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-inline",)
-        ).fetchone()
+        row = conn.execute("SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-inline",)).fetchone()
     assert row is not None and row["image_url"] == body_img
 
 
 # --- inline <svg> thumbnails (PR5) -----------------------------------------
 
-_INLINE_SVG = (
-    '<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">'
-    '<path d="M1 1H9V9Z" fill="currentColor"></path></svg>'
-)
+_INLINE_SVG = '<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg"><path d="M1 1H9V9Z" fill="currentColor"></path></svg>'
 
 
 def test_inline_svg_used_as_thumb_when_no_raster(tmp_path: Path):
@@ -1960,9 +1853,7 @@ def test_persist_lead_image_async_writes_when_changed(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "_enqueue_write", lambda uid, fn: fn())
     service.persist_lead_image_async("https://f/x.xml", "e1", "https://img/a.jpg")
     with _make_conn(db) as conn:
-        row = conn.execute(
-            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("e1",)
-        ).fetchone()
+        row = conn.execute("SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("e1",)).fetchone()
     assert row is not None and row["image_url"] == "https://img/a.jpg"
 
 
@@ -2003,13 +1894,11 @@ def test_write_worker_drains_queue(tmp_path):
         service.store_entry_lead_image("https://f/x.xml", "e9", "https://img/z.jpg")
         ok_ran.set()
 
-    service._enqueue_write("u", _boom)   # failure is logged, worker keeps going
+    service._enqueue_write("u", _boom)  # failure is logged, worker keeps going
     service._enqueue_write("u", _ok)
     assert ok_ran.wait(timeout=5) and boom_ran.is_set()
     with _make_conn(db) as conn:
-        row = conn.execute(
-            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("e9",)
-        ).fetchone()
+        row = conn.execute("SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("e9",)).fetchone()
     assert row is not None and row["image_url"] == "https://img/z.jpg"
 
 
@@ -2018,13 +1907,14 @@ def test_og_image_beats_preload_hint(tmp_path: Path, monkeypatch):
     chart, e.g. usafacts.org's answer-page-card) and must NOT override the
     publisher's curated og:image. Regression for wrong lead images on usafacts."""
     import services.lead_images as li_mod
+
     monkeypatch.setattr(li_mod, "is_safe_outbound_url", lambda *a, **k: True)
     service = _build_service(tmp_path / "m.sqlite", [])
     html = (
-        '<html><head>'
+        "<html><head>"
         '<link rel="preload" as="image" href="https://cdn.example.com/widget-chart.png">'
         '<meta property="og:image" content="https://cdn.example.com/real-hero.jpg">'
-        '</head><body><p>article</p></body></html>'
+        "</head><body><p>article</p></body></html>"
     )
     service._fetch_page_html = lambda link, **kw: (html, "https://site.test/a", False)
     assert service._fetch_source_lead_image("https://site.test/a") == "https://cdn.example.com/real-hero.jpg"
@@ -2033,13 +1923,10 @@ def test_og_image_beats_preload_hint(tmp_path: Path, monkeypatch):
 def test_preload_used_when_no_og_image(tmp_path: Path, monkeypatch):
     """With no og:image, the preload hint is still a valid fallback."""
     import services.lead_images as li_mod
+
     monkeypatch.setattr(li_mod, "is_safe_outbound_url", lambda *a, **k: True)
     service = _build_service(tmp_path / "m.sqlite", [])
-    html = (
-        '<html><head>'
-        '<link rel="preload" as="image" href="https://cdn.example.com/hero.jpg">'
-        '</head><body><p>article</p></body></html>'
-    )
+    html = '<html><head><link rel="preload" as="image" href="https://cdn.example.com/hero.jpg"></head><body><p>article</p></body></html>'
     service._fetch_page_html = lambda link, **kw: (html, "https://site.test/a", False)
     assert service._fetch_source_lead_image("https://site.test/a") == "https://cdn.example.com/hero.jpg"
 
@@ -2049,24 +1936,19 @@ def test_logo_with_digit_suffix_rejected(tmp_path: Path):
     became a lead image via the old [a-zA-Z0-9] lookahead); letter compounds
     like imdblogo stay content."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    assert service._is_image_url_acceptable(
-        "https://questionablecontent.net/images/logo2026.png", None, None) is False
-    assert service._is_image_url_acceptable(
-        "https://www.therockcocks.com/the-rock-cocks/images/logo.png", None, None) is False
+    assert service._is_image_url_acceptable("https://questionablecontent.net/images/logo2026.png", None, None) is False
+    assert service._is_image_url_acceptable("https://www.therockcocks.com/the-rock-cocks/images/logo.png", None, None) is False
     # Compound words with letters keep passing (imdblogo precedent).
-    assert service._is_image_url_acceptable(
-        "https://example.com/media/imdblogo-poster.jpg", None, None) is True
+    assert service._is_image_url_acceptable("https://example.com/media/imdblogo-poster.jpg", None, None) is True
 
 
 def test_social_badge_basename_rejected(tmp_path: Path):
     """A bare social-platform basename is a header/footer link badge
     (meetingcpp.com/files/meetup.png won the body scan on og:image-less pages)."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    assert service._is_image_url_acceptable(
-        "https://www.meetingcpp.com/files/meetup.png", None, None) is False
+    assert service._is_image_url_acceptable("https://www.meetingcpp.com/files/meetup.png", None, None) is False
     # A platform name inside a longer basename is not a badge.
-    assert service._is_image_url_acceptable(
-        "https://example.com/photos/meetup-group-photo.jpg", None, None) is True
+    assert service._is_image_url_acceptable("https://example.com/photos/meetup-group-photo.jpg", None, None) is True
 
 
 def test_plugin_fallback_urls_are_validated(tmp_path: Path):
@@ -2084,14 +1966,20 @@ def test_plugin_fallback_urls_are_validated(tmp_path: Path):
             return "https://www.therockcocks.com/comics/1783297346-RockCocks_1256.png"
 
     service._plugins = [_LogoPlugin()]
-    assert service._plugin_fallback_lead_image_url(
-        entry_link="https://www.therockcocks.com/the-rock-cocks/page-1256-nsfw",
-        content_html=None, summary=None) is None
+    assert (
+        service._plugin_fallback_lead_image_url(
+            entry_link="https://www.therockcocks.com/the-rock-cocks/page-1256-nsfw", content_html=None, summary=None
+        )
+        is None
+    )
 
     service._plugins = [_LogoPlugin(), _ComicPlugin()]
-    assert service._plugin_fallback_lead_image_url(
-        entry_link="https://www.therockcocks.com/the-rock-cocks/page-1256-nsfw",
-        content_html=None, summary=None) == "https://www.therockcocks.com/comics/1783297346-RockCocks_1256.png"
+    assert (
+        service._plugin_fallback_lead_image_url(
+            entry_link="https://www.therockcocks.com/the-rock-cocks/page-1256-nsfw", content_html=None, summary=None
+        )
+        == "https://www.therockcocks.com/comics/1783297346-RockCocks_1256.png"
+    )
 
 
 def test_support_platform_link_context_is_chrome(tmp_path: Path):
@@ -2122,9 +2010,7 @@ def test_bare_comic_class_wins_the_panel_scan(tmp_path: Path):
         '<img src="feedrss.gif" class="feedicon">'
         "</body></html>"
     )
-    assert service._extract_webcomic_panel_image(html, page, page) == (
-        "http://www.qwantz.com/comics/comic2-5197.png"
-    )
+    assert service._extract_webcomic_panel_image(html, page, page) == ("http://www.qwantz.com/comics/comic2-5197.png")
 
 
 def test_bare_comic_match_does_not_leak_into_hyphenated_classes(tmp_path: Path):
@@ -2181,6 +2067,7 @@ def test_social_link_anchors_are_stripped_before_scoring():
     share is an enclosing <a> pointing at the network itself.
     """
     import main
+
     svc = main.lead_image_service
     html = (
         '<a href="https://bsky.app/profile/x"><img src="/img/bsky.png"></a>'
@@ -2190,7 +2077,7 @@ def test_social_link_anchors_are_stripped_before_scoring():
     out = svc._strip_social_link_images(html)
     assert "bsky.png" not in out
     assert "mastadon.png" not in out
-    assert "real-photo.jpg" in out          # a content link keeps its image
+    assert "real-photo.jpg" in out  # a content link keeps its image
 
 
 def test_social_link_detection():
@@ -2198,7 +2085,7 @@ def test_social_link_detection():
 
     assert L.is_social_link_href("https://bsky.app/profile/x")
     assert L.is_social_link_href("https://mastodon.social/@ACCU")
-    assert L.is_social_link_href("https://fosstodon.org/@someone")   # any instance
+    assert L.is_social_link_href("https://fosstodon.org/@someone")  # any instance
     assert L.is_social_link_href("https://www.github.com/accu-org")
     # A link to an article that merely mentions a network is not a social link.
     assert not L.is_social_link_href("https://blog.example.com/2026/07/twitter-analysis")
@@ -2230,10 +2117,13 @@ def test_a_platforms_own_media_is_not_a_share_icon():
     platform.
     """
     import main
+
     svc = main.lead_image_service
 
-    comic = ('<a href="https://theycantalk.tumblr.com/post/823519750908002304">'
-             '<img src="https://64.media.tumblr.com/a/s1280x1920/comic.jpg"></a>')
+    comic = (
+        '<a href="https://theycantalk.tumblr.com/post/823519750908002304">'
+        '<img src="https://64.media.tumblr.com/a/s1280x1920/comic.jpg"></a>'
+    )
     assert "comic.jpg" in svc._strip_social_link_images(comic)
 
     icon = '<a href="https://bsky.app/profile/accuorg"><img src="/img/bsky.png"></a>'
@@ -2245,10 +2135,10 @@ def test_service_cdn_media_survives():
     YouTube poster (i.ytimg.com) linking to youtube.com reads as "site icon
     linking out" and gets stripped."""
     import main
+
     svc = main.lead_image_service
 
-    html = ('<a href="https://www.youtube.com/watch?v=x">'
-            '<img src="https://i.ytimg.com/vi/x/hqdefault.jpg"></a>')
+    html = '<a href="https://www.youtube.com/watch?v=x"><img src="https://i.ytimg.com/vi/x/hqdefault.jpg"></a>'
     assert "hqdefault.jpg" in svc._strip_social_link_images(html)
 
 
@@ -2318,7 +2208,8 @@ def test_a_storing_path_honors_a_plugin_that_forbids_the_source_page(tmp_path: P
 
 def test_a_storing_path_still_scrapes_for_hosts_no_plugin_claims(tmp_path: Path):
     entry = _FakeEntry(
-        feed_url="https://example.test/feed", entry_id="e1",
+        feed_url="https://example.test/feed",
+        entry_id="e1",
         link="https://ordinary.test/post/1",
     )
     svc = _build_service(tmp_path / "meta.sqlite3", [entry])
@@ -2327,14 +2218,13 @@ def test_a_storing_path_still_scrapes_for_hosts_no_plugin_claims(tmp_path: Path)
     )
     svc._plugin_should_skip_source_lookup = lambda *, entry_link: False  # type: ignore[method-assign]
 
-    assert svc._plugin_or_source_lead_image(
-        entry, entry.link, is_webcomic=False
-    ) == "https://cdn.test/og.jpg"
+    assert svc._plugin_or_source_lead_image(entry, entry.link, is_webcomic=False) == "https://cdn.test/og.jpg"
 
 
 def test_a_forbidding_plugin_with_no_answer_yields_none_not_a_scrape(tmp_path: Path):
     entry = _FakeEntry(
-        feed_url="https://example.test/feed", entry_id="e1",
+        feed_url="https://example.test/feed",
+        entry_id="e1",
         link="https://plugin-owned.test/episode/1",
     )
     svc = _build_service(tmp_path / "meta.sqlite3", [entry])
@@ -2361,8 +2251,7 @@ def test_a_uuid_filename_is_not_read_as_an_ad_slot(tmp_path: Path):
         "https://cdn.test/6566d9f3-5857-4a02-98f2-f1941bb0f8f0.png",
         # Webtoons appends a numeric id straight onto the UUID's last group
         # with no separator, which a trailing-separator-only rule missed.
-        "https://swebtoon-phinf.pstatic.net/20251231_227/x_JPEG/"
-        "53e3fa05-ad49-4593-b2ac-782469d45a9212398245534840153981.jpg",
+        "https://swebtoon-phinf.pstatic.net/20251231_227/x_JPEG/53e3fa05-ad49-4593-b2ac-782469d45a9212398245534840153981.jpg",
     ):
         assert svc._is_image_url_acceptable(url, None, None) is True, url
 
@@ -2380,18 +2269,14 @@ def test_a_real_ad_slot_name_is_still_rejected(tmp_path: Path):
 
 def test_a_uuid_name_with_a_suffix_is_still_opaque(tmp_path: Path):
     svc = _build_service(tmp_path / "meta.sqlite3", [])
-    assert svc._is_image_url_acceptable(
-        "https://cdn.test/ff52deff-c6a8-448d-ad27-a3c3d14c719c-1200x800.jpg", None, None
-    ) is True
+    assert svc._is_image_url_acceptable("https://cdn.test/ff52deff-c6a8-448d-ad27-a3c3d14c719c-1200x800.jpg", None, None) is True
 
 
 def test_path_based_rejections_survive_an_opaque_name(tmp_path: Path):
     """Only *name* heuristics are skipped — a UUID sitting in an ads directory
     is still an ad."""
     svc = _build_service(tmp_path / "meta.sqlite3", [])
-    assert svc._is_image_url_acceptable(
-        "https://example.test/ads/ff52deff-c6a8-448d-ad27-a3c3d14c719c.jpg", None, None
-    ) is False
+    assert svc._is_image_url_acceptable("https://example.test/ads/ff52deff-c6a8-448d-ad27-a3c3d14c719c.jpg", None, None) is False
 
 
 def test_the_on_open_fetch_is_skipped_for_a_plugin_owned_host(tmp_path: Path):
@@ -2475,15 +2360,12 @@ def test_the_size_segment_must_be_a_whole_segment(tmp_path: Path):
 # compare against. Nothing in a single page marks it as boilerplate — what marks
 # it is that it does not vary.
 
-_PA_TAGLINE = ("Videogaming-related online strip by Mike Krahulik and Jerry Holkins. "
-               "Includes news and commentary.")
+_PA_TAGLINE = "Videogaming-related online strip by Mike Krahulik and Jerry Holkins. Includes news and commentary."
 
 
 def _stored_title(db_path: Path, entry_id: str) -> str | None:
     with _make_conn(db_path) as conn:
-        row = conn.execute(
-            "SELECT image_title FROM entry_lead_images WHERE entry_id = ?", (entry_id,)
-        ).fetchone()
+        row = conn.execute("SELECT image_title FROM entry_lead_images WHERE entry_id = ?", (entry_id,)).fetchone()
     return row["image_title"] if row else None
 
 
@@ -2530,9 +2412,7 @@ def test_another_feeds_identical_caption_is_not_affected(tmp_path: Path):
     service.store_entry_image_alt("feed-a", "e1", None, title_text=_PA_TAGLINE)
     service.store_entry_image_alt("feed-b", "e1", None, title_text=_PA_TAGLINE)
     with _make_conn(db) as conn:
-        rows = conn.execute(
-            "SELECT feed_url, image_title FROM entry_lead_images ORDER BY feed_url"
-        ).fetchall()
+        rows = conn.execute("SELECT feed_url, image_title FROM entry_lead_images ORDER BY feed_url").fetchall()
     assert [r["image_title"] for r in rows] == [_PA_TAGLINE, _PA_TAGLINE]
 
 
@@ -2542,9 +2422,7 @@ def test_alt_text_is_untouched_by_the_guard(tmp_path: Path):
     service.store_entry_image_alt("f", "e1", "alt one", title_text=_PA_TAGLINE)
     service.store_entry_image_alt("f", "e2", "alt two", title_text=_PA_TAGLINE)
     with _make_conn(db) as conn:
-        rows = conn.execute(
-            "SELECT entry_id, image_alt FROM entry_lead_images ORDER BY entry_id"
-        ).fetchall()
+        rows = conn.execute("SELECT entry_id, image_alt FROM entry_lead_images ORDER BY entry_id").fetchall()
     assert [r["image_alt"] for r in rows] == ["alt one", "alt two"]
 
 
@@ -2588,19 +2466,19 @@ def test_a_comic_whose_title_contains_those_words_survives(tmp_path: Path):
 
 def test_rollover_nav_sprites_are_rejected(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
-    for url in ("http://monstersoupcomic.com/images/blog_on.png",
-                "http://x.test/images/home_off.gif",
-                "http://x.test/nav/about_on.jpg"):
+    for url in ("http://monstersoupcomic.com/images/blog_on.png", "http://x.test/images/home_off.gif", "http://x.test/nav/about_on.jpg"):
         assert _acceptable(service, url) is False, url
 
 
 def test_a_filename_merely_ending_in_those_letters_survives(tmp_path: Path):
     """Anchored to the whole basename, so real titles are unaffected."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    for url in ("http://x.test/comics/lights-on.jpg",
-                "http://x.test/comics/the_one.png",
-                "http://x.test/comics/switched_on_and_off_again.png",
-                "http://x.test/comics/2026-08-13-showdown.jpg"):
+    for url in (
+        "http://x.test/comics/lights-on.jpg",
+        "http://x.test/comics/the_one.png",
+        "http://x.test/comics/switched_on_and_off_again.png",
+        "http://x.test/comics/2026-08-13-showdown.jpg",
+    ):
         assert _acceptable(service, url) is True, url
 
 
@@ -2616,11 +2494,7 @@ def test_a_filename_merely_ending_in_those_letters_survives(tmp_path: Path):
 
 def test_script_written_img_tags_are_not_candidates(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
-    page = (
-        '<p><img src="/real.jpg"></p>'
-        "<script>document.write('<img src=\"'+imgTag+'\">')</script>"
-        '<img src="/also-real.png">'
-    )
+    page = '<p><img src="/real.jpg"></p><script>document.write(\'<img src="\'+imgTag+\'">\')</script><img src="/also-real.png">'
     out = service._strip_script_blocks(page)
     assert "imgTag" not in out
     assert "/real.jpg" in out and "/also-real.png" in out
@@ -2650,22 +2524,26 @@ def test_meta_tags_survive_script_stripping(tmp_path: Path):
 
 def test_comic_nav_arrows_are_rejected(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
-    for url in ("https://dresdencodak.com/wp-content/uploads/2019/03/prev_002.png",
-                "https://dresdencodak.com/wp-content/uploads/2019/03/first_001.png",
-                "https://x.test/img/next.gif",
-                "https://x.test/img/previous-1.png",
-                "https://x.test/img/last.png"):
+    for url in (
+        "https://dresdencodak.com/wp-content/uploads/2019/03/prev_002.png",
+        "https://dresdencodak.com/wp-content/uploads/2019/03/first_001.png",
+        "https://x.test/img/next.gif",
+        "https://x.test/img/previous-1.png",
+        "https://x.test/img/last.png",
+    ):
         assert _acceptable(service, url) is False, url
 
 
 def test_comics_named_after_those_words_survive(tmp_path: Path):
     """These are ordinary English, so the match is anchored to a bare basename."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    for url in ("https://x.test/comics/first-contact.jpg",
-                "https://x.test/comics/next-door.png",
-                "https://x.test/comics/the-last-stand.jpg",
-                "https://x.test/comics/back-to-school.png",
-                "https://dresdencodak.com/wp-content/uploads/2026/08/dc_minis_27.jpg"):
+    for url in (
+        "https://x.test/comics/first-contact.jpg",
+        "https://x.test/comics/next-door.png",
+        "https://x.test/comics/the-last-stand.jpg",
+        "https://x.test/comics/back-to-school.png",
+        "https://dresdencodak.com/wp-content/uploads/2026/08/dc_minis_27.jpg",
+    ):
         assert _acceptable(service, url) is True, url
 
 
@@ -2713,16 +2591,18 @@ def test_dark_science_derives_nothing(tmp_path: Path):
     check; it declines where it does not know.
     """
     service = _build_service(tmp_path / "meta.sqlite", [])
-    for lead in ("https://dresdencodak.com/wp-content/uploads/2026/06/ds_187_silder.jpg",
-                 "https://dresdencodak.com/wp-content/uploads/2026/06/ds_185.jpg"):
+    for lead in (
+        "https://dresdencodak.com/wp-content/uploads/2026/06/ds_187_silder.jpg",
+        "https://dresdencodak.com/wp-content/uploads/2026/06/ds_185.jpg",
+    ):
         assert service._plugin_thumbnail_variant(entry_link=_DC_LINK, lead_url=lead) is None
 
 
 def test_another_hosts_dc_minis_name_is_not_claimed(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
-    assert service._plugin_thumbnail_variant(
-        entry_link="https://example.test/x/", lead_url="https://example.test/img/dc_minis_9.jpg"
-    ) is None
+    assert (
+        service._plugin_thumbnail_variant(entry_link="https://example.test/x/", lead_url="https://example.test/img/dc_minis_9.jpg") is None
+    )
 
 
 def test_the_site_crop_is_not_demoted_while_scoring(tmp_path: Path):
@@ -2734,17 +2614,19 @@ def test_the_site_crop_is_not_demoted_while_scoring(tmp_path: Path):
     """
     service = _build_service(tmp_path / "meta.sqlite", [])
     src = "https://dresdencodak.com/2026/08/09/dc-minis-27-birthday-blues/"
-    assert service._plugin_source_score_adjustment(
-        source_url=src, attrs={}, resolved_url=_DC_THUMB) == 0
+    assert service._plugin_source_score_adjustment(source_url=src, attrs={}, resolved_url=_DC_THUMB) == 0
 
 
 def test_penny_arcade_panel_derivation_is_unaffected(tmp_path: Path):
     """Two plugins now answer thumbnail_from_lead_image; neither may shadow the other."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    assert service._plugin_thumbnail_variant(
-        entry_link="https://www.penny-arcade.com/comic/2026/07/27/x",
-        lead_url="https://assets.penny-arcade.com/comics/2026-x.jpg",
-    ) == "https://assets.penny-arcade.com/comics/panels/2026-x-p1.jpg"
+    assert (
+        service._plugin_thumbnail_variant(
+            entry_link="https://www.penny-arcade.com/comic/2026/07/27/x",
+            lead_url="https://assets.penny-arcade.com/comics/2026-x.jpg",
+        )
+        == "https://assets.penny-arcade.com/comics/panels/2026-x-p1.jpg"
+    )
 
 
 def test_script_end_tags_with_attributes_are_still_stripped(tmp_path: Path):
@@ -2754,9 +2636,11 @@ def test_script_end_tags_with_attributes_are_still_stripped(tmp_path: Path):
     and its document.write('<img …>') was scanned anyway (CodeQL py/bad-tag-filter).
     """
     service = _build_service(tmp_path / "meta.sqlite", [])
-    for page in ('<script>x<img src="/bad.png"></script foo>',
-                 '<script>x<img src="/bad.png"></script\t\n bar>',
-                 '<script>x<img src="/bad.png"></SCRIPT >'):
+    for page in (
+        '<script>x<img src="/bad.png"></script foo>',
+        '<script>x<img src="/bad.png"></script\t\n bar>',
+        '<script>x<img src="/bad.png"></SCRIPT >',
+    ):
         assert "/bad.png" not in service._strip_script_blocks(page), page
 
 
@@ -2843,14 +2727,11 @@ _JW_AVATAR_URL_1X = (
     "fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com"
     "%2Fpublic%2Fimages%2F54836094-23db-4ca4-a3c3-cb767307db3e_2000x2000.png"
 )
-_JW_REAL_IMAGE = (
-    "https://images.unsplash.com/photo-1517816428104-797678c7cf0c"
-    "?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080"
-)
+_JW_REAL_IMAGE = "https://images.unsplash.com/photo-1517816428104-797678c7cf0c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080"
 _JW_BODY_HTML = (
     f'<img alt="JA Westenberg\'s avatar" class="img-OACg1c pencraft pc-reset" '
     f'height="36" src="{_JW_AVATAR_URL_1X}" srcset="{_JW_AVATAR_SRCSET}">'
-    f'<p>Some newsletter musings.</p>'
+    f"<p>Some newsletter musings.</p>"
     f'<img alt="orange megaphone on orange wall" class="sizing-normal" height="720" '
     f'src="{_JW_REAL_IMAGE}" width="1080">'
 )
@@ -2891,9 +2772,7 @@ def test_avatar_alt_text_rejected_in_feed_body_scan(tmp_path: Path):
     URL, only in the alt text)."""
     service = _build_service(tmp_path / "meta.sqlite", [])
 
-    result = service._extract_first_image_url_from_html(
-        _JW_BODY_HTML, "https://www.joanwestenberg.com/p/nobody-wants-your-newsletter-you"
-    )
+    result = service._extract_first_image_url_from_html(_JW_BODY_HTML, "https://www.joanwestenberg.com/p/nobody-wants-your-newsletter-you")
 
     assert result == _JW_REAL_IMAGE
 
@@ -2948,6 +2827,7 @@ def test_extract_webcomic_lock_until_parses_the_real_unlock_date(tmp_path: Path)
     """Confirmed live 2026-09-06 against a real cad-comic.com locked strip."""
     service = _build_service(tmp_path / "meta.sqlite", [])
     import datetime as _dt
+
     locked_until = service._extract_webcomic_lock_until(_CAD_COMIC_LOCKED_HTML)
     assert locked_until is not None
     assert _dt.datetime.fromtimestamp(locked_until, _dt.timezone.utc) == _dt.datetime(2027, 1, 17, tzinfo=_dt.timezone.utc)
@@ -2955,7 +2835,7 @@ def test_extract_webcomic_lock_until_parses_the_real_unlock_date(tmp_path: Path)
 
 def test_extract_webcomic_lock_until_none_for_a_normal_page(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
-    normal_html = "<html><body><article><img src=\"https://ex.test/panel.png\"></article></body></html>"
+    normal_html = '<html><body><article><img src="https://ex.test/panel.png"></article></body></html>'
     assert service._extract_webcomic_lock_until(normal_html) is None
 
 
@@ -2997,7 +2877,7 @@ def test_check_and_cache_webcomic_lock_clears_when_unlocked(tmp_path: Path):
     service._source_html_cache[link] = (link, _CAD_COMIC_LOCKED_HTML)
     service.check_and_cache_webcomic_lock(feed_url, entry_id, link)
 
-    unlocked_html = "<html><body><article><img src=\"https://cad-comic.com/panel.png\"></article></body></html>"
+    unlocked_html = '<html><body><article><img src="https://cad-comic.com/panel.png"></article></body></html>'
     service._source_html_cache[link] = (link, unlocked_html)
     service.check_and_cache_webcomic_lock(feed_url, entry_id, link)
 

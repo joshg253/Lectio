@@ -6,6 +6,7 @@ teaches us nothing again.
 
 **It worked.** On 2026-08-09 the flake fired on PR #188 and the dump named the
 cause outright; the last test here pins the fix."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -111,6 +112,5 @@ def test_the_list_render_backfill_daemon_is_gated_in_tests():
     spawn = src.find("threading.Thread(", start)
     assert spawn != -1
     assert "LECTIO_DISABLE_STARTUP_BACKFILL" in src[start:spawn], (
-        "this daemon must honour the same switch as the startup and media-scan "
-        "daemons, or it races the test's own DB"
+        "this daemon must honour the same switch as the startup and media-scan daemons, or it races the test's own DB"
     )

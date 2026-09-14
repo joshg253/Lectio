@@ -28,5 +28,5 @@ def test_wordpress_align_classes_become_inline_floats():
 def test_feed_bodies_get_floats_lifted_not_just_scraped_pages():
     """The two pre-existing call sites are both source-page extraction; a feed body reached neither."""
     assert MAIN.count("lift_float_classes(") >= 3
-    detail = MAIN[MAIN.index("def get_entry_detail"):]
+    detail = MAIN[MAIN.index("def get_entry_detail") :]
     assert "lift_float_classes(content_html)" in detail

@@ -6,6 +6,7 @@ whose feed still advertises the dead one) is fixed by editing the Website, which
 rewrites the post links/ids, carries the star/tag/read state, and records the
 rule so re-ingested items and the link-rebase stay corrected.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -52,11 +53,15 @@ def _seed_old_domain_posts():
         reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
         reader.disable_feed_updates(FEED)
         for eid in (OLD, OLD2):
-            reader.add_entry({
-                "feed_url": FEED, "id": eid, "link": eid,
-                "title": eid.rsplit("/", 2)[-2],
-                "published": datetime(2020, 1, 1, tzinfo=timezone.utc),
-            })
+            reader.add_entry(
+                {
+                    "feed_url": FEED,
+                    "id": eid,
+                    "link": eid,
+                    "title": eid.rsplit("/", 2)[-2],
+                    "published": datetime(2020, 1, 1, tzinfo=timezone.utc),
+                }
+            )
         # Star + read the first, manually tag the second.
         reader.mark_entry_as_read((FEED, OLD))
         reader.set_tag((FEED, OLD2), f"{main.MANUAL_TAG_KEY_PREFIX}keep")
@@ -96,13 +101,9 @@ def test_edit_website_migrates_posts_and_seeds_rule(tenant):
         assert any(str(t).endswith("keep") for t in tags)
 
     with main.get_meta_connection() as conn:
-        star = conn.execute(
-            "SELECT entry_id FROM saved_entries WHERE feed_url = ?", (FEED,)
-        ).fetchall()
+        star = conn.execute("SELECT entry_id FROM saved_entries WHERE feed_url = ?", (FEED,)).fetchall()
         assert [row[0] for row in star] == [NEW]  # star re-keyed, old removed
-        rule = conn.execute(
-            "SELECT from_host, to_host FROM feed_url_rewrites WHERE feed_url = ?", (FEED,)
-        ).fetchone()
+        rule = conn.execute("SELECT from_host, to_host FROM feed_url_rewrites WHERE feed_url = ?", (FEED,)).fetchone()
         assert tuple(rule) == ("tushar.lol", "tush.ar")
 
 

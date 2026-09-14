@@ -8,6 +8,7 @@ candidate was a scraped single-article stub that would have swallowed 303
 articles — so filing stays behind the per-host review, where the evidence is
 visible and nothing is pre-checked.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -42,21 +43,21 @@ def configured(tmp_path, monkeypatch):
     )
     main.ensure_meta_schema()
     main.user_store = None
-    monkeypatch.setattr(
-        main.starred_archive_service, "enqueue_archive", lambda feed_url, entry_id: None
-    )
+    monkeypatch.setattr(main.starred_archive_service, "enqueue_archive", lambda feed_url, entry_id: None)
     # A well-stocked subscribed feed on blog.example.test: enough supporting
     # entries to clear MIN_SUPPORT, so its host matches confidently.
     with main.get_reader() as reader:
         reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
         reader.disable_feed_updates(REAL_FEED)
         for i in range(8):
-            reader.add_entry({
-                "feed_url": REAL_FEED,
-                "id": f"existing-{i}",
-                "link": f"https://blog.example.test/existing-{i}",
-                "title": f"Existing {i}",
-            })
+            reader.add_entry(
+                {
+                    "feed_url": REAL_FEED,
+                    "id": f"existing-{i}",
+                    "link": f"https://blog.example.test/existing-{i}",
+                    "title": f"Existing {i}",
+                }
+            )
     try:
         yield
     finally:
@@ -84,18 +85,13 @@ def test_nothing_is_actually_filed(configured):
     _import()
     with main.get_reader() as reader:
         db = reader._storage.get_db()
-        feeds = dict(db.execute(
-            "SELECT feed, COUNT(*) FROM entries GROUP BY feed"
-        ).fetchall())
+        feeds = dict(db.execute("SELECT feed, COUNT(*) FROM entries GROUP BY feed").fetchall())
     assert feeds[SAVED_FEED_URL] == 3
     assert feeds[REAL_FEED] == 8  # untouched — no imports moved in
 
 
 def test_an_import_with_no_matches_reports_zero(configured):
-    summary = _import(
-        "URL,Title,Selection,Folder,Timestamp\n"
-        "https://unknown.test/a,A,,Unread,1600000000\n"
-    )
+    summary = _import("URL,Title,Selection,Folder,Timestamp\nhttps://unknown.test/a,A,,Unread,1600000000\n")
     assert summary["imported"] == 1
     assert summary["filable"] == 0
     assert summary["filable_hosts"] == 0
@@ -107,12 +103,14 @@ def test_matching_only_considers_the_newly_imported_articles(configured):
     # Pre-existing unfiled save on the matching host, from an earlier session.
     with main.get_reader() as reader:
         main.saved_articles_service.ensure_saved_feed(reader)
-        reader.add_entry({
-            "feed_url": SAVED_FEED_URL,
-            "id": "https://blog.example.test/older",
-            "link": "https://blog.example.test/older",
-            "title": "Older",
-        })
+        reader.add_entry(
+            {
+                "feed_url": SAVED_FEED_URL,
+                "id": "https://blog.example.test/older",
+                "link": "https://blog.example.test/older",
+                "title": "Older",
+            }
+        )
     with main.get_meta_connection() as conn:
         conn.execute(
             "INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
@@ -129,7 +127,8 @@ def test_a_matcher_failure_never_fails_the_import(configured, monkeypatch):
     that has already committed; it must not turn a successful import into an
     error."""
     monkeypatch.setattr(
-        main, "_current_autofile_plan",
+        main,
+        "_current_autofile_plan",
         lambda restrict_to=None: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     summary = _import()

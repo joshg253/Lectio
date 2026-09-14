@@ -5,6 +5,7 @@ hanselman.com prints `<span class="blogMetaDate">February 03, 2026</span>` and
 ships nothing machine-readable, and what-if.xkcd.com articles carry no date at
 all while the site's archive index lists every one.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -22,12 +23,15 @@ def test_reads_the_labelled_date_element():
     assert pd.from_visible_text(html) == datetime(2026, 2, 3, tzinfo=timezone.utc)
 
 
-@pytest.mark.parametrize("html,expected", [
-    ('<div class="post-date">3 February 2026</div>', datetime(2026, 2, 3, tzinfo=timezone.utc)),
-    ('<p class="published">2026-02-03</p>', datetime(2026, 2, 3, tzinfo=timezone.utc)),
-    ('<time class="timestamp">March 9, 2021</time>', datetime(2021, 3, 9, tzinfo=timezone.utc)),
-    ('<span id="entry-date">October 21, 2024</span>', datetime(2024, 10, 21, tzinfo=timezone.utc)),
-])
+@pytest.mark.parametrize(
+    "html,expected",
+    [
+        ('<div class="post-date">3 February 2026</div>', datetime(2026, 2, 3, tzinfo=timezone.utc)),
+        ('<p class="published">2026-02-03</p>', datetime(2026, 2, 3, tzinfo=timezone.utc)),
+        ('<time class="timestamp">March 9, 2021</time>', datetime(2021, 3, 9, tzinfo=timezone.utc)),
+        ('<span id="entry-date">October 21, 2024</span>', datetime(2024, 10, 21, tzinfo=timezone.utc)),
+    ],
+)
 def test_common_shapes(html, expected):
     assert pd.from_visible_text(html) == expected
 
@@ -35,15 +39,14 @@ def test_common_shapes(html, expected):
 def test_unlabelled_dates_are_ignored():
     """A page is full of date-shaped text — a copyright line, an article body
     mentioning a date. Only an element the publisher labelled counts."""
-    html = '<footer>Copyright January 1, 2001</footer><p>born on May 5, 1999</p>'
+    html = "<footer>Copyright January 1, 2001</footer><p>born on May 5, 1999</p>"
     assert pd.from_visible_text(html) is None
 
 
 def test_first_labelled_date_wins_over_later_ones():
     """Publishers put the post's date above the fold; comment timestamps and
     "related posts" rails come after."""
-    html = ('<span class="blogMetaDate">February 03, 2026</span>'
-            '<div class="comment-date">March 15, 2026</div>')
+    html = '<span class="blogMetaDate">February 03, 2026</span><div class="comment-date">March 15, 2026</div>'
     assert pd.from_visible_text(html) == datetime(2026, 2, 3, tzinfo=timezone.utc)
 
 
@@ -68,17 +71,24 @@ def test_no_html_is_not_an_error():
 
 @pytest.fixture
 def stub_whatif_index(monkeypatch):
-    monkeypatch.setattr(pd, "_whatif_index", {
-        "157": datetime(2018, 5, 21, tzinfo=timezone.utc),
-        "1": datetime(2012, 7, 10, tzinfo=timezone.utc),
-    })
+    monkeypatch.setattr(
+        pd,
+        "_whatif_index",
+        {
+            "157": datetime(2018, 5, 21, tzinfo=timezone.utc),
+            "1": datetime(2012, 7, 10, tzinfo=timezone.utc),
+        },
+    )
 
 
-@pytest.mark.parametrize("url", [
-    "https://what-if.xkcd.com/157/",
-    "http://what-if.xkcd.com/157",
-    "https://www.what-if.xkcd.com/157/",
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://what-if.xkcd.com/157/",
+        "http://what-if.xkcd.com/157",
+        "https://www.what-if.xkcd.com/157/",
+    ],
+)
 def test_site_index_dates_an_article_by_number(stub_whatif_index, url):
     """http/https, www or not, trailing slash or not — the number is the identity."""
     assert pd.from_site_index(url) == datetime(2018, 5, 21, tzinfo=timezone.utc)
@@ -86,8 +96,7 @@ def test_site_index_dates_an_article_by_number(stub_whatif_index, url):
 
 def test_site_index_needs_no_page_html(stub_whatif_index):
     """The whole point: these articles have no date on them to fetch."""
-    assert pd.resolve(None, "https://what-if.xkcd.com/157/") == (
-        datetime(2018, 5, 21, tzinfo=timezone.utc), "site-index")
+    assert pd.resolve(None, "https://what-if.xkcd.com/157/") == (datetime(2018, 5, 21, tzinfo=timezone.utc), "site-index")
 
 
 def test_unknown_article_number_yields_nothing(stub_whatif_index):
@@ -100,6 +109,7 @@ def test_unregistered_host_yields_nothing():
 
 def test_a_failing_resolver_never_raises(monkeypatch):
     """A date is a bonus; a resolver blowing up must not fail the re-fetch."""
+
     def _boom(_url):
         raise RuntimeError("archive down")
 
@@ -114,13 +124,19 @@ def test_empty_index_is_not_cached(monkeypatch):
 
     class _Resp:
         text = "<html>nothing we recognize</html>"
-        def raise_for_status(self): pass
+
+        def raise_for_status(self):
+            pass
 
     class _Client:
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
 
     from services import url_guard
+
     monkeypatch.setattr(url_guard, "build_client", lambda **kw: _Client())
     monkeypatch.setattr(url_guard, "safe_get", lambda *a, **kw: _Resp())
 

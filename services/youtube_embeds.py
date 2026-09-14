@@ -9,6 +9,7 @@ entry, so the app can rebuild a player.
 
 Pure parsing only — fetching and persistence live in the app layer.
 """
+
 from __future__ import annotations
 
 import re
@@ -28,9 +29,7 @@ _YT_ID_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 # Signals that an entry *intended* a YouTube embed even if no id is recoverable
 # (so the app can record a negative result and stop re-scanning).
-_YT_MARKER = re.compile(
-    r"is-provider-youtube|wp-block-embed-youtube|youtube(?:-nocookie)?\.com|youtu\.be", re.I
-)
+_YT_MARKER = re.compile(r"is-provider-youtube|wp-block-embed-youtube|youtube(?:-nocookie)?\.com|youtu\.be", re.I)
 
 
 def _entry_html(entry: dict) -> str:
@@ -44,8 +43,7 @@ def _video_ids(blob: str) -> list[str]:
     seen: set[str] = set()
     ids: list[str] = []
     for m in re.finditer(
-        r"(?:youtube(?:-nocookie)?\.com/(?:embed/|watch\?[^\"'<>\s]*v=|v/|shorts/)|youtu\.be/)"
-        + _VIDEO_ID,
+        r"(?:youtube(?:-nocookie)?\.com/(?:embed/|watch\?[^\"'<>\s]*v=|v/|shorts/)|youtu\.be/)" + _VIDEO_ID,
         blob,
         re.I,
     ):

@@ -8,6 +8,7 @@ Feeds are stored as file:// RSS 2.0 XML files under DATA_DIR/scraped-feeds/. The
 library natively supports file:// URIs, so these feeds are treated exactly like remote
 feeds — read/unread state, starring, tags, and automation rules all work out of the box.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -55,7 +56,7 @@ def scraped_feed_id_from_url(file_url: str) -> str | None:
     """
     if not file_url.startswith("file://"):
         return None
-    p = Path(file_url[len("file://"):])
+    p = Path(file_url[len("file://") :])
     if p.parent != _dir():
         return None
     return p.stem or None
@@ -64,6 +65,7 @@ def scraped_feed_id_from_url(file_url: str) -> str | None:
 # ---------------------------------------------------------------------------
 # HTTP + HTML helpers
 # ---------------------------------------------------------------------------
+
 
 def _fetch_html(url: str) -> str:
     # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
@@ -87,6 +89,7 @@ def _page_title(html: str, fallback: str) -> str:
 # RSS file generation
 # ---------------------------------------------------------------------------
 
+
 def _entry_to_item_xml(entry: dict, source_url: str) -> str:
     try:
         dt = datetime.fromisoformat(str(entry["published_at"]))
@@ -100,7 +103,7 @@ def _entry_to_item_xml(entry: dict, source_url: str) -> str:
         "    <item>\n"
         f"      <title><![CDATA[{title}]]></title>\n"
         f"      <link>{link}</link>\n"
-        f"      <guid isPermaLink=\"false\">{entry['id']}</guid>\n"
+        f'      <guid isPermaLink="false">{entry["id"]}</guid>\n'
         f"      {pub_date}\n"
         f"      <description><![CDATA[{content}]]></description>\n"
         "    </item>"
@@ -130,9 +133,7 @@ def _write_feed_file(conn: sqlite3.Connection, feed_id: str) -> None:
     entries = [
         dict(r)
         for r in conn.execute(
-            "SELECT * FROM scraped_entries"
-            " WHERE scraped_feed_id = ? AND NOT hidden"
-            " ORDER BY published_at DESC LIMIT ?",
+            "SELECT * FROM scraped_entries WHERE scraped_feed_id = ? AND NOT hidden ORDER BY published_at DESC LIMIT ?",
             (feed_id, _MAX_ENTRIES_PER_FEED),
         ).fetchall()
     ]
@@ -149,6 +150,7 @@ def _write_empty_feed_file(feed_id: str, feed_title: str, source_url: str) -> No
 # ---------------------------------------------------------------------------
 # Link extraction + selector suggestions (shared by scraping and preview)
 # ---------------------------------------------------------------------------
+
 
 def _article_published_at(entry_url: str) -> str | None:
     """The article's own date, from its page, as an ISO string — or None.
@@ -176,6 +178,7 @@ def _article_published_at(entry_url: str) -> str | None:
         return None
     try:
         from main import mine_publish_date  # local import: main imports this module
+
         dt = mine_publish_date(html)
     except Exception:  # noqa: BLE001
         dt = None
@@ -238,6 +241,7 @@ def _css_ident(value: str) -> str:
     """A CSS class/id token safe to drop into a selector, or '' if unusable
     (dynamic/hashed tokens with odd characters are skipped)."""
     import re as _re
+
     value = value.strip()
     if value and _re.fullmatch(r"[A-Za-z_-][A-Za-z0-9_-]*", value):
         return value
@@ -246,7 +250,7 @@ def _css_ident(value: str) -> str:
 
 def _first_class(node) -> str:
     """First class token on a node that is a usable CSS identifier, or ''."""
-    for c in (node.get("class") or []):
+    for c in node.get("class") or []:
         ident = _css_ident(c)
         if ident:
             return ident
@@ -350,11 +354,13 @@ def suggest_selectors(html: str, source_url: str, limit: int = 6) -> list[dict]:
             continue
         if len(resolved) < 2:
             continue  # a single link isn't a "list" worth suggesting
-        suggestions.append({
-            "selector": selector,
-            "count": len(resolved),
-            "samples": [it["title"] for it in resolved[:3]],
-        })
+        suggestions.append(
+            {
+                "selector": selector,
+                "count": len(resolved),
+                "samples": [it["title"] for it in resolved[:3]],
+            }
+        )
 
     def _rank(s: dict) -> tuple:
         # A generic tag-only descendant selector like "div > div a" usually catches
@@ -374,6 +380,7 @@ def suggest_selectors(html: str, source_url: str, limit: int = 6) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Scraping modes
 # ---------------------------------------------------------------------------
+
 
 def _scrape_change_detect(conn: sqlite3.Connection, feed: dict) -> bool:
     """Hash-compare page (or selected element) content. Creates an entry when content changes."""
@@ -403,8 +410,7 @@ def _scrape_change_detect(conn: sqlite3.Connection, feed: dict) -> bool:
     page_title = _page_title(html, str(feed["feed_title"]))
     entry_id = str(uuid.uuid4())
     conn.execute(
-        "INSERT INTO scraped_entries (id, scraped_feed_id, entry_url, title, content, published_at, hidden)"
-        " VALUES (?, ?, ?, ?, ?, ?, 0)",
+        "INSERT INTO scraped_entries (id, scraped_feed_id, entry_url, title, content, published_at, hidden) VALUES (?, ?, ?, ?, ?, ?, 0)",
         (entry_id, feed["id"], feed["source_url"], f"{page_title} — updated", content[:_MAX_CONTENT_BYTES], now),
     )
     conn.execute(
@@ -428,9 +434,7 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
 
     existing_urls: set[str] = {
         str(r["entry_url"])
-        for r in conn.execute(
-            "SELECT entry_url FROM scraped_entries WHERE scraped_feed_id = ?", (feed["id"],)
-        ).fetchall()
+        for r in conn.execute("SELECT entry_url FROM scraped_entries WHERE scraped_feed_id = ?", (feed["id"],)).fetchall()
     }
 
     now = datetime.now(timezone.utc).isoformat()
@@ -464,6 +468,7 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def preview_page_feed(source_url: str, mode: str, selector: str | None) -> dict:
     """Preview what a page feed would produce, without creating anything.
@@ -521,8 +526,7 @@ def create_scraped_feed(
             feed_title = source_url
 
     conn.execute(
-        "INSERT INTO scraped_feeds (id, source_url, mode, selector, feed_title, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO scraped_feeds (id, source_url, mode, selector, feed_title, created_at) VALUES (?, ?, ?, ?, ?, ?)",
         (feed_id, source_url, mode, selector or None, feed_title, now),
     )
 
@@ -556,8 +560,7 @@ def create_scraped_feed(
                 (initial_hash, now, feed_id),
             )
             conn.execute(
-                "INSERT INTO scraped_entries (id, scraped_feed_id, title, entry_url, content, published_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO scraped_entries (id, scraped_feed_id, title, entry_url, content, published_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (str(uuid.uuid4()), feed_id, feed_title, source_url, content[:_MAX_CONTENT_BYTES], now),
             )
         except Exception as exc:

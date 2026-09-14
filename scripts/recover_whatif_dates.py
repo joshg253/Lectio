@@ -27,6 +27,7 @@ read out of its URL is skipped rather than guessed at.
     uv run python scripts/recover_whatif_dates.py            # dry run
     uv run python scripts/recover_whatif_dates.py --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -68,17 +69,13 @@ def recover_for_user(user_id: str, apply: bool) -> int:
 
     meta = sqlite3.connect(str(tenancy.meta_db_path()))
     meta.row_factory = sqlite3.Row
-    protected = {
-        (r["feed_url"], r["entry_id"])
-        for r in meta.execute("SELECT feed_url, entry_id FROM entry_date_overrides")
-    }
+    protected = {(r["feed_url"], r["entry_id"]) for r in meta.execute("SELECT feed_url, entry_id FROM entry_date_overrides")}
     meta.close()
 
     rc = sqlite3.connect(str(tenancy.reader_db_path()))
     rc.row_factory = sqlite3.Row
     rows = rc.execute(
-        "SELECT feed, id, title, published FROM entries"
-        " WHERE (feed LIKE ? OR id LIKE ?) AND published IS NOT NULL AND published < ?",
+        "SELECT feed, id, title, published FROM entries WHERE (feed LIKE ? OR id LIKE ?) AND published IS NOT NULL AND published < ?",
         (f"%{_HOST}%", f"%{_HOST}%", "1990-01-01"),
     ).fetchall()
 
@@ -93,13 +90,15 @@ def recover_for_user(user_id: str, apply: bool) -> int:
         if dt is None:
             unmatched.append(str(row["id"]))
             continue
-        found.append({
-            "feed_url": key[0],
-            "entry_id": key[1],
-            "title": str(row["title"] or ""),
-            "published": dt.strftime("%Y-%m-%d %H:%M:%S"),
-            "source": "whatif-archive-index",
-        })
+        found.append(
+            {
+                "feed_url": key[0],
+                "entry_id": key[1],
+                "title": str(row["title"] or ""),
+                "published": dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "source": "whatif-archive-index",
+            }
+        )
 
     print(f"  {len(rows):,} sentinel-dated entr(ies); {len(found):,} matched, {len(unmatched):,} not")
     for f in found[:5]:
@@ -127,18 +126,16 @@ def recover_for_user(user_id: str, apply: bool) -> int:
 
 
 def main_cli() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
     args = ap.parse_args()
 
-    for uid in ([args.user] if args.user else main._background_user_ids()):
+    for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
             recover_for_user(uid, args.apply)
     if args.apply:
-        print("\nRestart the app: the unread-count cache is generation-guarded and "
-              "will not self-heal from a behind-the-back write.")
+        print("\nRestart the app: the unread-count cache is generation-guarded and will not self-heal from a behind-the-back write.")
     return 0
 
 

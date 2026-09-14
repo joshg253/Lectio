@@ -6,6 +6,7 @@ the "more images = better" fallback can't rescue it, because the comment avatars
 outnumber the real body's images (a webcomic post-body has ~19 panels vs ~440
 comment avatars). These tests pin that comment containers are removed and the
 real body survives, without touching content that merely mentions comments."""
+
 from __future__ import annotations
 
 import main
@@ -14,12 +15,8 @@ URL = "https://blog.test/post"
 
 
 def _comic_page(comment_imgs: int) -> str:
-    panels = "".join(
-        f'<img src="https://cdn.test/panel{i}.jpg" width="600">' for i in range(19)
-    )
-    avatars = "".join(
-        f'<img src="https://cdn.test/avatar{i}.gif" width="35">' for i in range(comment_imgs)
-    )
+    panels = "".join(f'<img src="https://cdn.test/panel{i}.jpg" width="600">' for i in range(19))
+    avatars = "".join(f'<img src="https://cdn.test/avatar{i}.gif" width="35">' for i in range(comment_imgs))
     return (
         "<html><head><title>Homeopathy</title></head><body>"
         '<div class="post-body entry-content">'
@@ -71,7 +68,7 @@ def test_content_that_merely_mentions_comments_is_kept():
     """No broad [class*=comment] matching — an article *about* comments, or a
     'N comments' badge, must not be deleted."""
     html = (
-        "<html><body><article class=\"commentary\">"
+        '<html><body><article class="commentary">'
         "<p>This essay is a commentary on internet comment culture.</p>"
         '<span class="comment-count">42 comments</span>'
         "</article></body></html>"

@@ -7,6 +7,7 @@ _move_entry_to_feed action live auto-filing uses; an ambiguous group (more
 than one real-feed member sharing a canonical link) is reported and never
 guessed at; dry-run touches nothing.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -62,6 +63,7 @@ def _add_entry(feed_url: str, entry_id: str, link: str, title: str = "Article") 
 
 def _run(apply: bool, limit: int = 0):
     import scripts.merge_saved_vs_real_duplicates as cli
+
     return cli.run_for_user("test-uid", apply, limit)
 
 
@@ -91,12 +93,8 @@ def test_apply_merges_a_clean_pair(env):
     assert result["safe_pairs"] == 1
     assert result["merged"] == 1
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id=?", (REAL_A, "real1")
-        ).fetchone()
-        assert not conn.execute(
-            "SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id=?", (SAVED, "saved1")
-        ).fetchone()
+        assert conn.execute("SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id=?", (REAL_A, "real1")).fetchone()
+        assert not conn.execute("SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id=?", (SAVED, "saved1")).fetchone()
     with main.get_reader() as reader:
         # lectio:saved is user-added, not feed-provided, so _move_entry_to_feed
         # hard-deletes the source entirely instead of leaving a read husk --

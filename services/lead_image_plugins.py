@@ -30,7 +30,7 @@ _WP_COMIC_UPLOAD_RE = re.compile(
     r'https?://[^"\'<>\s]+/wp-content/uploads/[^"\'<>\s]+\.(?:jpe?g|png|webp|gif)',
     re.IGNORECASE,
 )
-_PDL_NAV_RE = re.compile(r'arrow|(?:^|[/_-])(?:prev|next)(?:[/_.-]|$)', re.IGNORECASE)
+_PDL_NAV_RE = re.compile(r"arrow|(?:^|[/_-])(?:prev|next)(?:[/_.-]|$)", re.IGNORECASE)
 _MATURE_GATE_PATTERNS = re.compile(
     r"(?:mature|warning|nsfw|adult|age[\-_]?gate|18[\-_+](?:plus|only))",
     re.IGNORECASE,
@@ -1090,9 +1090,7 @@ class OglafPlugin:
         comic_url = self._comic_url(entry_link)
         if comic_url:
             try:
-                resp = url_guard.safe_head(
-                    comic_url, timeout=2.0, headers={"User-Agent": "Mozilla/5.0"}
-                )
+                resp = url_guard.safe_head(comic_url, timeout=2.0, headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     _OGLAF_COMIC_ACCESSIBLE[slug] = True
                     return comic_url
@@ -1221,6 +1219,7 @@ class WinPenPackPlugin:
             )
             if m:
                 from urllib.parse import urljoin
+
                 return urljoin(str(r.url), m.group(1).strip())
         except Exception:
             pass

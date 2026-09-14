@@ -8,6 +8,7 @@ The deletion itself is deferred to the nightly maintenance sweep
 see apply_star_state's docstring. Doing it inline would delete the entry a
 just-issued undo token still promises to restore, making the undo toast lie.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -56,10 +57,15 @@ def _add_saved(feed, entry_id, *, star=True):
     with main.get_reader() as reader:
         reader.add_feed(feed, allow_invalid_url=True, exist_ok=True)
         reader.disable_feed_updates(feed)
-        reader.add_entry({
-            "feed_url": feed, "id": entry_id, "link": entry_id, "title": "Saved thing",
-            "published": datetime(2021, 1, 1, tzinfo=timezone.utc),
-        })
+        reader.add_entry(
+            {
+                "feed_url": feed,
+                "id": entry_id,
+                "link": entry_id,
+                "title": "Saved thing",
+                "published": datetime(2021, 1, 1, tzinfo=timezone.utc),
+            }
+        )
     if star:
         with main.get_meta_connection() as conn:
             conn.execute(
@@ -86,9 +92,7 @@ def test_unstarring_an_untagged_saved_article_is_swept_after_its_undo_window(ten
     assert token
 
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (SAVED, eid)
-        ).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (SAVED, eid)).fetchone()[0] == 0
 
     # Right after unstarring, the live undo token still protects it.
     assert main._sweep_husked_saved_articles() == 0
@@ -98,15 +102,13 @@ def test_unstarring_an_untagged_saved_article_is_swept_after_its_undo_window(ten
     # Once its undo window has passed, the sweep hard-deletes it.
     stale = (datetime.now() - timedelta(minutes=30)).isoformat()
     with main.get_meta_connection() as conn:
-        conn.execute("UPDATE entry_unstar_batch SET unstarred_at = ? WHERE feed_url = ? AND entry_id = ?",
-                     (stale, SAVED, eid))
+        conn.execute("UPDATE entry_unstar_batch SET unstarred_at = ? WHERE feed_url = ? AND entry_id = ?", (stale, SAVED, eid))
         conn.commit()
     assert main._sweep_husked_saved_articles() == 1
     with main.get_reader() as reader:
-        assert reader.get_entry((SAVED, eid), None) is None   # husk removed, not left behind
+        assert reader.get_entry((SAVED, eid), None) is None  # husk removed, not left behind
     with main.get_meta_connection() as conn:
-        assert not conn.execute("SELECT 1 FROM entry_unstar_batch WHERE feed_url = ? AND entry_id = ?",
-                                 (SAVED, eid)).fetchone()
+        assert not conn.execute("SELECT 1 FROM entry_unstar_batch WHERE feed_url = ? AND entry_id = ?", (SAVED, eid)).fetchone()
 
 
 def test_sweep_deletes_a_husk_with_no_unstar_batch_row_at_all(tenant):

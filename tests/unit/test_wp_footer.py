@@ -1,6 +1,7 @@
 """_fix_wp_post_footer tidies the WordPress 'The post … appeared … on …' RSS
 footer: keep one, drop plugin duplicates, and clean the double-encoded literal
 '<p>' tag artifacts — without touching real content."""
+
 from __future__ import annotations
 
 import main
@@ -20,15 +21,12 @@ def test_dedupes_to_single_footer_keeps_content():
 
 
 def test_cleans_double_encoded_literal_p_tags():
-    html = (
-        "<figure>img</figure>"
-        '<p>&lt;p&gt;The post <a href="z">Title</a> first appeared on <a href="w">site</a>.&lt;/p&gt;</p>'
-    )
+    html = '<figure>img</figure><p>&lt;p&gt;The post <a href="z">Title</a> first appeared on <a href="w">site</a>.&lt;/p&gt;</p>'
     out = main._fix_wp_post_footer(html)
     assert "<figure>" in out
-    assert "The post" in out          # footer text kept
-    assert "&lt;p&gt;" not in out      # literal opening tag gone
-    assert "&lt;/p&gt;" not in out     # literal closing tag gone
+    assert "The post" in out  # footer text kept
+    assert "&lt;p&gt;" not in out  # literal opening tag gone
+    assert "&lt;/p&gt;" not in out  # literal closing tag gone
 
 
 def test_leaves_legit_trailing_paragraph():

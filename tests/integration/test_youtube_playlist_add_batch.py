@@ -10,6 +10,7 @@ function, which is where that logic actually lives now. Exercises the
 youtube_oauth_service calls monkeypatched, since the service layer itself
 just wraps the YouTube Data API.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -73,8 +74,15 @@ def _run_worker(video_ids: list[str], playlist_id: str = "", new_title: str = ""
     "failed", only touched on an actual failure) still reads as its real
     starting value rather than raising KeyError."""
     job: dict = {
-        "running": True, "done": False, "error": None, "phase": "checking_existing",
-        "total": len(video_ids), "processed": 0, "added": 0, "duplicate": 0, "failed": 0,
+        "running": True,
+        "done": False,
+        "error": None,
+        "phase": "checking_existing",
+        "total": len(video_ids),
+        "processed": 0,
+        "added": 0,
+        "duplicate": 0,
+        "failed": 0,
         "message": None,
     }
     main._run_yt_playlist_batch_add(video_ids, playlist_id, new_title, job)
@@ -83,12 +91,11 @@ def _run_worker(video_ids: list[str], playlist_id: str = "", new_title: str = ""
 
 # --- worker logic (dedup, creation, quota) ---
 
+
 def test_batch_add_skips_videos_already_in_playlist(env, monkeypatch):
-    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids",
-                        lambda token, pid: {"already1"})
+    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids", lambda token, pid: {"already1"})
     added = []
-    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist",
-                        lambda token, pid, vid: added.append(vid) or {"id": "item"})
+    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist", lambda token, pid, vid: added.append(vid) or {"id": "item"})
     job = _run_worker(["already1", "new1", "new2"], playlist_id="PL1")
     assert job["added"] == 2 and job["duplicate"] == 1 and job["failed"] == 0
     assert job["done"] and not job["running"]
@@ -99,30 +106,29 @@ def test_batch_add_skips_videos_already_in_playlist(env, monkeypatch):
 
 
 def test_batch_add_skips_duplicates_within_the_same_batch(env, monkeypatch):
-    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids",
-                        lambda token, pid: set())
+    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids", lambda token, pid: set())
     added = []
-    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist",
-                        lambda token, pid, vid: added.append(vid) or {"id": "item"})
+    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist", lambda token, pid, vid: added.append(vid) or {"id": "item"})
     job = _run_worker(["v1", "v1", "v2"], playlist_id="PL1")
     assert job["added"] == 2 and job["duplicate"] == 1
     assert added == ["v1", "v2"]
 
 
 def test_batch_add_creates_playlist_when_no_id_given(env, monkeypatch):
-    monkeypatch.setattr(main.youtube_oauth_service, "create_playlist",
-                        lambda token, title, privacy="private": {"id": "NEWPL", "title": title, "count": 0})
+    monkeypatch.setattr(
+        main.youtube_oauth_service, "create_playlist", lambda token, title, privacy="private": {"id": "NEWPL", "title": title, "count": 0}
+    )
     added = []
-    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist",
-                        lambda token, pid, vid: added.append((pid, vid)) or {"id": "item"})
+    monkeypatch.setattr(
+        main.youtube_oauth_service, "add_video_to_playlist", lambda token, pid, vid: added.append((pid, vid)) or {"id": "item"}
+    )
     job = _run_worker(["v1", "v2"], new_title="Watch Later")
     assert job["playlist_id"] == "NEWPL" and job["added"] == 2
     assert added == [("NEWPL", "v1"), ("NEWPL", "v2")]
 
 
 def test_batch_add_stops_on_quota_but_reports_partial_success(env, monkeypatch):
-    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids",
-                        lambda token, pid: set())
+    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids", lambda token, pid: set())
     calls = []
 
     def _add(token, pid, vid):
@@ -141,8 +147,7 @@ def test_batch_add_stops_on_quota_but_reports_partial_success(env, monkeypatch):
 
 
 def test_a_failed_video_is_excluded_from_auto_mark_read(env, monkeypatch):
-    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids",
-                        lambda token, pid: set())
+    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids", lambda token, pid: set())
 
     def _add(token, pid, vid):
         if vid == "bad":
@@ -156,6 +161,7 @@ def test_a_failed_video_is_excluded_from_auto_mark_read(env, monkeypatch):
 
 
 # --- route: validation, start-a-job, status polling ---
+
 
 def test_batch_add_rejects_oversize_and_missing_target(env):
     data = _call({"video_ids": [str(i) for i in range(main._MOVE_BATCH_CAP + 1)], "playlist_id": "PL1"})
@@ -171,10 +177,8 @@ def test_batch_add_requires_connection(env, monkeypatch):
 
 
 def test_batch_add_route_starts_a_job_and_status_reports_completion(env, monkeypatch):
-    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids",
-                        lambda token, pid: set())
-    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist",
-                        lambda token, pid, vid: {"id": "item"})
+    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids", lambda token, pid: set())
+    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist", lambda token, pid, vid: {"id": "item"})
 
     data = _call({"video_ids": ["v1", "v2"], "playlist_id": "PL1"})
     assert data["ok"] and data["started"] and data["total"] == 2
@@ -200,19 +204,15 @@ def test_batch_add_rejects_a_second_job_while_one_is_running(env, monkeypatch):
 
 
 def test_start_response_carries_a_job_id(env, monkeypatch):
-    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids",
-                        lambda token, pid: set())
-    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist",
-                        lambda token, pid, vid: {"id": "item"})
+    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids", lambda token, pid: set())
+    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist", lambda token, pid, vid: {"id": "item"})
     data = _call({"video_ids": ["v1"], "playlist_id": "PL1"})
     assert data["ok"] and data["job_id"]
 
 
 def test_status_with_the_matching_job_id_reports_real_progress(env, monkeypatch):
-    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids",
-                        lambda token, pid: set())
-    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist",
-                        lambda token, pid, vid: {"id": "item"})
+    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids", lambda token, pid: set())
+    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist", lambda token, pid, vid: {"id": "item"})
     data = _call({"video_ids": ["v1"], "playlist_id": "PL1"})
     resp = main.youtube_playlist_add_batch_status_route(job_id=data["job_id"])
     body = json.loads(bytes(resp.body))
@@ -224,10 +224,8 @@ def test_status_with_a_stale_job_id_reports_not_running_instead_of_the_new_batch
     -- raised in review 2026-08-31: with no id, a fast-finishing batch
     followed immediately by a new one meant the first poller could read the
     second batch's progress and mark the wrong posts read."""
-    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids",
-                        lambda token, pid: set())
-    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist",
-                        lambda token, pid, vid: {"id": "item"})
+    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids", lambda token, pid: set())
+    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist", lambda token, pid, vid: {"id": "item"})
     _call({"video_ids": ["v1"], "playlist_id": "PL1"})
     resp = main.youtube_playlist_add_batch_status_route(job_id="not-the-real-job-id")
     body = json.loads(bytes(resp.body))
@@ -237,10 +235,8 @@ def test_status_with_a_stale_job_id_reports_not_running_instead_of_the_new_batch
 def test_status_with_no_job_id_still_works(env, monkeypatch):
     """Back-compat: a caller that predates job_id gets whatever job is
     currently tracked, same as before."""
-    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids",
-                        lambda token, pid: set())
-    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist",
-                        lambda token, pid, vid: {"id": "item"})
+    monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids", lambda token, pid: set())
+    monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist", lambda token, pid, vid: {"id": "item"})
     _call({"video_ids": ["v1"], "playlist_id": "PL1"})
     resp = main.youtube_playlist_add_batch_status_route(job_id=None)
     body = json.loads(bytes(resp.body))

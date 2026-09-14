@@ -2,6 +2,7 @@
 transport (session/hooks). See tests/services/test_feed_fetch_escalation.py
 and tests/integration/test_proxy_feeds.py for the escalation ladder itself.
 """
+
 from __future__ import annotations
 
 import pytest

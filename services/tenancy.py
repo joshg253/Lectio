@@ -49,9 +49,7 @@ DEFAULT_USER_ID = "default"
 # backstop (defense in depth — the resolver is the last line before the FS).
 _VALID_USER_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
-_current_user: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "lectio_current_user", default=DEFAULT_USER_ID
-)
+_current_user: contextvars.ContextVar[str] = contextvars.ContextVar("lectio_current_user", default=DEFAULT_USER_ID)
 
 
 def is_valid_user_id(user_id: str) -> bool:
@@ -102,9 +100,7 @@ def configure(
 
 def _layout_or_raise() -> _Layout:
     if _layout is None:
-        raise RuntimeError(
-            "tenancy.configure() must be called before resolving DB paths"
-        )
+        raise RuntimeError("tenancy.configure() must be called before resolving DB paths")
     return _layout
 
 

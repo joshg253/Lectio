@@ -48,6 +48,7 @@ with --limit before committing to a full pass.
     uv run python scripts/fetch_missing_publish_dates.py --limit 25     # sample
     uv run python scripts/fetch_missing_publish_dates.py --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -68,15 +69,16 @@ from services import tenancy, url_guard  # noqa: E402
 from services.saved_articles import _page_is_a_different_article  # noqa: E402
 
 EPOCH_PREFIX = "1970-01-01"
-_GLOBAL_DELAY = 1.0        # seconds between requests, whatever the host
-_PER_HOST_DELAY = 5.0      # and at least this long between two hits on one host
-_HOST_FAILURE_LIMIT = 5    # drop a host after this many consecutive failures
+_GLOBAL_DELAY = 1.0  # seconds between requests, whatever the host
+_PER_HOST_DELAY = 5.0  # and at least this long between two hits on one host
+_HOST_FAILURE_LIMIT = 5  # drop a host after this many consecutive failures
 _TIMEOUT = 12.0
 _SAVE_SLACK = timedelta(days=1)
 
 
 def _page_title(raw_html: str) -> str:
     import re
+
     m = re.search(r"<title[^>]*>(.*?)</title>", raw_html or "", re.I | re.S)
     return " ".join((m.group(1) if m else "").split())[:200]
 
@@ -88,18 +90,15 @@ def run_for_user(uid: str, apply: bool, limit: int | None) -> dict:
     for row in meta.execute("SELECT feed_url, entry_id, saved_at FROM saved_entries"):
         dt = main._parse_stored_dt(row["saved_at"])
         if dt is not None:
-            saved_at[(str(row["feed_url"]), str(row["entry_id"]))] = (
-                dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc))
-    overrides = {
-        (str(r["feed_url"]), str(r["entry_id"]))
-        for r in meta.execute("SELECT feed_url, entry_id FROM entry_date_overrides")
-    }
+            saved_at[(str(row["feed_url"]), str(row["entry_id"]))] = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    overrides = {(str(r["feed_url"]), str(r["entry_id"])) for r in meta.execute("SELECT feed_url, entry_id FROM entry_date_overrides")}
     meta.close()
 
     rc = sqlite3.connect(str(tenancy.reader_db_path()), timeout=30.0)
     rc.row_factory = sqlite3.Row
     rows = [
-        r for r in rc.execute(
+        r
+        for r in rc.execute(
             "SELECT feed, id, link, title FROM entries WHERE published LIKE ?",
             (EPOCH_PREFIX + "%",),
         ).fetchall()
@@ -169,12 +168,10 @@ def run_for_user(uid: str, apply: bool, limit: int | None) -> dict:
             continue
 
         stored = mined.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        found.append({"feed_url": key[0], "entry_id": key[1],
-                      "title": str(r["title"] or "")[:70], "published": stored})
+        found.append({"feed_url": key[0], "entry_id": key[1], "title": str(r["title"] or "")[:70], "published": stored})
         stats["dated"] += 1
         if apply:
-            rc.execute("UPDATE entries SET published = ? WHERE feed = ? AND id = ?",
-                       (stored, key[0], key[1]))
+            rc.execute("UPDATE entries SET published = ? WHERE feed = ? AND id = ?", (stored, key[0], key[1]))
             if len(found) % 25 == 0:
                 rc.commit()
                 print(f"   … {stats['dated']:,} dated, {stats['tried']:,} tried")
@@ -185,23 +182,24 @@ def run_for_user(uid: str, apply: bool, limit: int | None) -> dict:
         out.write_text(json.dumps(found, indent=2))
         print(f"   log: {out}")
     rc.close()
-    print(f"[{uid}] tried {stats['tried']:,} | dated {stats['dated']:,} | "
-          f"no date {stats['no_date']:,} | wrong page {stats['mismatch']:,} | "
-          f"failed {stats['failed']:,} | skipped (dead host) {stats['skipped_host']:,}")
+    print(
+        f"[{uid}] tried {stats['tried']:,} | dated {stats['dated']:,} | "
+        f"no date {stats['no_date']:,} | wrong page {stats['mismatch']:,} | "
+        f"failed {stats['failed']:,} | skipped (dead host) {stats['skipped_host']:,}"
+    )
     if not apply:
         print("   dry run — re-run with --apply to write")
     return stats
 
 
 def main_cli() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="write dates (default: dry run)")
     ap.add_argument("--limit", type=int, default=None, help="stop after N fetches")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
     args = ap.parse_args()
 
-    for uid in ([args.user] if args.user else main._background_user_ids()):
+    for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
             run_for_user(uid, args.apply, args.limit)
     return 0

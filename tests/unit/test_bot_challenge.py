@@ -6,6 +6,7 @@ second. Poorly Drawn Lines returned a SiteGround captcha as **HTTP 202** for
 months and was recorded as "could not be parsed as a valid RSS/Atom document",
 so it never appeared in any count of blocked feeds.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -15,21 +16,18 @@ from services.bot_challenge import FeedBlockedError, detect_challenge, detect_ch
 SITEGROUND = (
     b'<html><head><link rel="icon" href="data:;"><meta http-equiv="refresh" '
     b'content="0;/.well-known/sgcaptcha/?r=%2Ffeed&y=ipr:203.0.113.9:1786511699"></meta>'
-    b'</head></html>'
+    b"</head></html>"
 )
 CLOUDFLARE = (
-    b'<!DOCTYPE html><html><head><title>Just a moment...</title>'
+    b"<!DOCTYPE html><html><head><title>Just a moment...</title>"
     b'<script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"></script>'
-    b'</head><body></body></html>'
+    b"</head><body></body></html>"
 )
 REAL_FEED = (
     b'<?xml version="1.0"?><rss version="2.0"><channel><title>A feed</title>'
-    b'<item><title>On Cloudflare challenge pages</title></item></channel></rss>'
+    b"<item><title>On Cloudflare challenge pages</title></item></channel></rss>"
 )
-PLAIN_HOMEPAGE = (
-    b'<!DOCTYPE html><html><head><title>My Blog</title></head>'
-    b'<body><h1>Welcome</h1><p>Posts below.</p></body></html>'
-)
+PLAIN_HOMEPAGE = b"<!DOCTYPE html><html><head><title>My Blog</title></head><body><h1>Welcome</h1><p>Posts below.</p></body></html>"
 
 
 def test_siteground_captcha_is_detected():
@@ -88,6 +86,7 @@ def test_the_error_message_is_greppable_and_names_the_vendor():
 # above never gets a chance (empty bodies return None on sight), and the empty
 # response used to fall through as a raw AttributeError crash in reader's own
 # parser instead of a labeled block.
+
 
 def test_aws_waf_challenge_header_is_detected_with_no_body():
     assert detect_challenge_headers({"x-amzn-waf-action": "challenge"}) == "AWS WAF challenge"

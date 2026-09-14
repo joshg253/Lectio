@@ -10,16 +10,12 @@ THUMB = "https://img.example.com/thumb.php?pid=99&shadow=0&size=350"
 
 
 def test_named_param_is_raised():
-    assert upgrade(THUMB, "size=1600") == (
-        "https://img.example.com/thumb.php?pid=99&shadow=0&size=1600"
-    )
+    assert upgrade(THUMB, "size=1600") == ("https://img.example.com/thumb.php?pid=99&shadow=0&size=1600")
 
 
 def test_whitespace_around_the_rule_is_tolerated():
     """`partition` + `strip` accept a hand-typed rule; pin that it is deliberate."""
-    assert upgrade(THUMB, "   size   =   1600   ") == (
-        "https://img.example.com/thumb.php?pid=99&shadow=0&size=1600"
-    )
+    assert upgrade(THUMB, "   size   =   1600   ") == ("https://img.example.com/thumb.php?pid=99&shadow=0&size=1600")
 
 
 def test_other_params_and_order_survive():
@@ -28,22 +24,20 @@ def test_other_params_and_order_survive():
 
 
 def test_every_occurrence_is_raised():
-    assert upgrade("https://img.example.com/i?w=100&w=200", "w=800") == (
-        "https://img.example.com/i?w=800&w=800"
-    )
+    assert upgrade("https://img.example.com/i?w=100&w=200", "w=800") == ("https://img.example.com/i?w=800&w=800")
 
 
 @pytest.mark.parametrize(
     "url, rule",
     [
-        ("https://img.example.com/plain.png", "size=1600"),   # no query at all
-        (THUMB, "width=1600"),                                # param not present
-        (THUMB, None),                                        # no rule
-        (THUMB, ""),                                          # empty rule
-        (THUMB, "size"),                                      # malformed
-        (THUMB, "size="),                                     # no value
-        (THUMB, "size=abc"),                                  # non-numeric
-        (THUMB, "=1600"),                                     # no param
+        ("https://img.example.com/plain.png", "size=1600"),  # no query at all
+        (THUMB, "width=1600"),  # param not present
+        (THUMB, None),  # no rule
+        (THUMB, ""),  # empty rule
+        (THUMB, "size"),  # malformed
+        (THUMB, "size="),  # no value
+        (THUMB, "size=abc"),  # non-numeric
+        (THUMB, "=1600"),  # no param
     ],
 )
 def test_inert_when_it_does_not_apply(url, rule):

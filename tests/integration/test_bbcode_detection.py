@@ -6,6 +6,7 @@ HTML was treated as BBCode, _bbcode_to_html's newline->`<br>` step ran over the
 newline-formatted source and shredded every paragraph into one line per break
 ("poem" layout). Genuine HTML (block tags) must therefore never be seen as BBCode.
 """
+
 from __future__ import annotations
 
 import main
@@ -19,10 +20,7 @@ _ELI_HTML = (
     'and <img alt="\\[I=\\frac{-x\\cdot cos(kx)}{k}\\]" class="align-center">.</p>\n'
 )
 
-_NEXUS_BBCODE_WITH_BR = (
-    "Check this [b]mod[/b] out!<br/>It is [i]great[/i] and "
-    "[url=https://x]here[/url].<br/>Download now."
-)
+_NEXUS_BBCODE_WITH_BR = "Check this [b]mod[/b] out!<br/>It is [i]great[/i] and [url=https://x]here[/url].<br/>Download now."
 _PURE_BBCODE = "[b]Title[/b]\n[i]desc[/i] and [url=https://x]link[/url]"
 
 
@@ -51,6 +49,7 @@ def test_html_content_keeps_newlines_unconverted():
 # converted correctly ([size=5] etc.), because _bbcode_to_html had no
 # substitution for it at all.
 
+
 def test_line_tag_becomes_hr():
     text = "[b]Some text.[/b]<br/>\n<br/>[line]\n<br/>\n<br/>[size=5]More[/size]"
     assert main._looks_like_bbcode(text) is True
@@ -60,7 +59,7 @@ def test_line_tag_becomes_hr():
 
 
 def test_line_alone_is_not_added_as_a_bbcode_signal():
-    """"line" must NOT be added to _BBCODE_SIGNAL_RE: real prose documenting
+    """ "line" must NOT be added to _BBCODE_SIGNAL_RE: real prose documenting
     matplotlib's fmt string ("[marker][line][color]", freecodecamp.org) would
     then read as BBCode (color already signals once; line would make two) and
     get corrupted. Only [color] should fire here — one signal, below the

@@ -12,6 +12,7 @@ main.py reads them from each user's app-settings.
 
 Phase 2 (watch-list sync via the authorization_code grant) builds on this.
 """
+
 from __future__ import annotations
 
 import base64
@@ -54,6 +55,7 @@ def set_lead_image_sink(fn) -> None:
     global _lead_image_sink
     _lead_image_sink = fn
 
+
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 4.0  # seconds; doubles each retry on HTTP 429
 
@@ -69,8 +71,7 @@ class DeviantArtRateLimited(RuntimeError):
         self.retry_after = retry_after
 
 
-def _request(method: str, url: str, *, headers: dict, params: dict | None = None,
-             data: dict | None = None, timeout: float = 20.0):
+def _request(method: str, url: str, *, headers: dict, params: dict | None = None, data: dict | None = None, timeout: float = 20.0):
     """HTTP request with short backoff on 429; raises DeviantArtRateLimited if the
     quota stays exhausted (so bulk callers can stop fast instead of churning)."""
     delay = _RETRY_BASE_DELAY
@@ -102,6 +103,7 @@ def _request(method: str, url: str, *, headers: dict, params: dict | None = None
             pass
     raise DeviantArtRateLimited(msg, retry_after=retry_after_s)
 
+
 # Cache of client_id -> (access_token, expires_at_epoch). Tokens are app-scoped,
 # so one per client_id is correct even across users sharing creds.
 _token_cache: dict[str, tuple[str, float]] = {}
@@ -129,7 +131,7 @@ def deviantart_feed_id_from_url(file_url: str) -> str | None:
     """
     if not file_url.startswith("file://"):
         return None
-    p = Path(file_url[len("file://"):])
+    p = Path(file_url[len("file://") :])
     if p.parent != _dir():
         return None
     return p.stem or None
@@ -138,6 +140,7 @@ def deviantart_feed_id_from_url(file_url: str) -> str | None:
 # ---------------------------------------------------------------------------
 # URL parsing
 # ---------------------------------------------------------------------------
+
 
 def username_from_url(url: str) -> str | None:
     """Pull a DeviantArt gallery username from any DA URL form, else None.
@@ -159,7 +162,7 @@ def username_from_url(url: str) -> str | None:
     if host == "backend.deviantart.com":
         q = parse_qs(u.query).get("q", [""])[0]
         if q.startswith("gallery:"):
-            name = q[len("gallery:"):].split("/")[0].strip()
+            name = q[len("gallery:") :].split("/")[0].strip()
             return name or None
         return None
 
@@ -184,6 +187,7 @@ def is_deviantart_url(url: str) -> bool:
 # ---------------------------------------------------------------------------
 # API
 # ---------------------------------------------------------------------------
+
 
 def _get_token(client_id: str, client_secret: str) -> str:
     cached = _token_cache.get(client_id)
@@ -219,13 +223,15 @@ def verify_credentials(client_id: str, client_secret: str) -> tuple[bool, str]:
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
         if "invalid_client" in msg or "public client" in msg.lower():
-            return False, ("Saved. Key validation isn't available for public-client apps — "
-                           "just click “Connect DeviantArt account” to authorize.")
+            return False, (
+                "Saved. Key validation isn't available for public-client apps — just click “Connect DeviantArt account” to authorize."
+            )
         return False, msg
 
 
-def fetch_gallery(client_id: str, client_secret: str, username: str,
-                  limit: int = _MAX_ENTRIES_PER_FEED, access_token: str = "") -> list[dict]:
+def fetch_gallery(
+    client_id: str, client_secret: str, username: str, limit: int = _MAX_ENTRIES_PER_FEED, access_token: str = ""
+) -> list[dict]:
     """Fetch up to `limit` deviations from a user's 'all' gallery.
 
     Uses the provided user `access_token` when given (required for apps DeviantArt
@@ -237,9 +243,17 @@ def fetch_gallery(client_id: str, client_secret: str, username: str,
     out: list[dict] = []
     offset = 0
     while len(out) < limit:
-        resp = _request("GET", f"{_API_BASE}/gallery/all", headers=headers, params={
-            "username": username, "offset": offset, "limit": _PAGE_SIZE, "mature_content": "true",
-        })
+        resp = _request(
+            "GET",
+            f"{_API_BASE}/gallery/all",
+            headers=headers,
+            params={
+                "username": username,
+                "offset": offset,
+                "limit": _PAGE_SIZE,
+                "mature_content": "true",
+            },
+        )
         if resp.status_code != 200:
             raise RuntimeError(f"gallery fetch failed for {username}: HTTP {resp.status_code}: {resp.text[:200]}")
         data = resp.json()
@@ -261,8 +275,12 @@ def fetch_watch_feed(access_token: str, limit: int = _MAX_ENTRIES_PER_FEED) -> l
     out: list[dict] = []
     offset = 0
     while len(out) < limit:
-        resp = _request("GET", f"{_API_BASE}/browse/deviantsyouwatch", headers=headers,
-                        params={"offset": offset, "limit": _PAGE_SIZE, "mature_content": "true"})
+        resp = _request(
+            "GET",
+            f"{_API_BASE}/browse/deviantsyouwatch",
+            headers=headers,
+            params={"offset": offset, "limit": _PAGE_SIZE, "mature_content": "true"},
+        )
         if resp.status_code != 200:
             raise RuntimeError(f"watch feed fetch failed: HTTP {resp.status_code}: {resp.text[:200]}")
         data = resp.json()
@@ -277,8 +295,7 @@ def fetch_watch_feed(access_token: str, limit: int = _MAX_ENTRIES_PER_FEED) -> l
 _METADATA_BATCH = 50  # /deviation/metadata accepts up to 50 ids per call
 
 
-def _fetch_deviation_metadata(client_id: str, client_secret: str, deviation_ids: list[str],
-                              access_token: str = "") -> list[dict]:
+def _fetch_deviation_metadata(client_id: str, client_secret: str, deviation_ids: list[str], access_token: str = "") -> list[dict]:
     """Batch /deviation/metadata lookups, raw — one API call per 50 ids.
 
     Shared by the tags and author backfills, which each need a different field
@@ -289,17 +306,17 @@ def _fetch_deviation_metadata(client_id: str, client_secret: str, deviation_ids:
     headers = {"User-Agent": _USER_AGENT, "Authorization": f"Bearer {token}"}
     out: list[dict] = []
     for i in range(0, len(deviation_ids), _METADATA_BATCH):
-        batch = deviation_ids[i:i + _METADATA_BATCH]
-        resp = _request("GET", f"{_API_BASE}/deviation/metadata", headers=headers,
-                        params={"deviationids[]": batch, "mature_content": "true"})
+        batch = deviation_ids[i : i + _METADATA_BATCH]
+        resp = _request(
+            "GET", f"{_API_BASE}/deviation/metadata", headers=headers, params={"deviationids[]": batch, "mature_content": "true"}
+        )
         if resp.status_code != 200:
             raise RuntimeError(f"metadata fetch failed: HTTP {resp.status_code}: {resp.text[:200]}")
         out.extend(resp.json().get("metadata") or [])
     return out
 
 
-def fetch_deviation_tags(client_id: str, client_secret: str, deviation_ids: list[str],
-                         access_token: str = "") -> dict[str, list[str]]:
+def fetch_deviation_tags(client_id: str, client_secret: str, deviation_ids: list[str], access_token: str = "") -> dict[str, list[str]]:
     """Batch /deviation/metadata lookups → {deviationid: [tag_name, ...]}.
 
     Browse/gallery responses don't include deviation tags; metadata does, at one
@@ -308,16 +325,11 @@ def fetch_deviation_tags(client_id: str, client_secret: str, deviation_ids: list
     for m in _fetch_deviation_metadata(client_id, client_secret, deviation_ids, access_token=access_token):
         devid = m.get("deviationid")
         if devid:
-            out[str(devid)] = [
-                str(t.get("tag_name"))
-                for t in (m.get("tags") or [])
-                if isinstance(t, dict) and t.get("tag_name")
-            ]
+            out[str(devid)] = [str(t.get("tag_name")) for t in (m.get("tags") or []) if isinstance(t, dict) and t.get("tag_name")]
     return out
 
 
-def fetch_deviation_authors(client_id: str, client_secret: str, deviation_ids: list[str],
-                           access_token: str = "") -> dict[str, str]:
+def fetch_deviation_authors(client_id: str, client_secret: str, deviation_ids: list[str], access_token: str = "") -> dict[str, str]:
     """Batch /deviation/metadata lookups → {deviationid: artist username}.
 
     Same endpoint and cost as fetch_deviation_tags — used for entries stored
@@ -331,9 +343,9 @@ def fetch_deviation_authors(client_id: str, client_secret: str, deviation_ids: l
     return out
 
 
-def fetch_and_store_missing_tags(conn: sqlite3.Connection, feed_id: str, client_id: str,
-                                 client_secret: str, access_token: str = "",
-                                 max_lookups: int = _METADATA_BATCH) -> int:
+def fetch_and_store_missing_tags(
+    conn: sqlite3.Connection, feed_id: str, client_id: str, client_secret: str, access_token: str = "", max_lookups: int = _METADATA_BATCH
+) -> int:
     """Fill in tags for this feed's entries that were never metadata-checked.
 
     Best-effort and quota-polite: at most one metadata call per refresh
@@ -364,17 +376,16 @@ def fetch_and_store_missing_tags(conn: sqlite3.Connection, feed_id: str, client_
     for devid in ids:
         tags = tag_map.get(devid) or []
         conn.execute(
-            "UPDATE deviantart_entries SET tags = ?, tags_fetched_at = ?"
-            " WHERE deviantart_feed_id = ? AND deviationid = ?",
+            "UPDATE deviantart_entries SET tags = ?, tags_fetched_at = ? WHERE deviantart_feed_id = ? AND deviationid = ?",
             (",".join(tags), now, feed_id, devid),
         )
         tagged += 1 if tags else 0
     return tagged
 
 
-def fetch_and_store_missing_authors(conn: sqlite3.Connection, feed_id: str, client_id: str,
-                                    client_secret: str, access_token: str = "",
-                                    max_lookups: int = _METADATA_BATCH) -> int:
+def fetch_and_store_missing_authors(
+    conn: sqlite3.Connection, feed_id: str, client_id: str, client_secret: str, access_token: str = "", max_lookups: int = _METADATA_BATCH
+) -> int:
     """Backfill ``author`` for entries stored before that column existed.
 
     Same shape and cost as fetch_and_store_missing_tags — one metadata call per
@@ -405,8 +416,7 @@ def fetch_and_store_missing_authors(conn: sqlite3.Connection, feed_id: str, clie
     for devid in ids:
         author = author_map.get(devid) or ""
         conn.execute(
-            "UPDATE deviantart_entries SET author = ?, author_fetched_at = ?"
-            " WHERE deviantart_feed_id = ? AND deviationid = ?",
+            "UPDATE deviantart_entries SET author = ?, author_fetched_at = ? WHERE deviantart_feed_id = ? AND deviationid = ?",
             (author, now, feed_id, devid),
         )
         filled += 1 if author else 0
@@ -436,14 +446,10 @@ def _deviation_to_entry(d: dict) -> dict | None:
     if img:
         parts.append(f'<p><a href="{_esc(link)}"><img src="{_esc(img)}" alt="{_esc(title)}"></a></p>')
     if author:
-        parts.append(f'<p>by {_esc(author)} on DeviantArt</p>')
+        parts.append(f"<p>by {_esc(author)} on DeviantArt</p>")
     # DA browse/gallery responses don't include deviation tags (those need
     # /deviation/metadata calls); carry them through if a caller supplies them.
-    tags = [
-        str(name)
-        for t in (d.get("tags") or [])
-        if (name := t.get("tag_name") if isinstance(t, dict) else t)
-    ]
+    tags = [str(name) for t in (d.get("tags") or []) if (name := t.get("tag_name") if isinstance(t, dict) else t)]
     return {
         "id": str(devid),
         "title": title,
@@ -461,6 +467,7 @@ def _deviation_to_entry(d: dict) -> dict | None:
 # RSS file generation
 # ---------------------------------------------------------------------------
 
+
 def _item_xml(e: dict) -> str:
     try:
         dt = datetime.fromisoformat(str(e["published_at"]))
@@ -473,7 +480,7 @@ def _item_xml(e: dict) -> str:
         "    <item>\n"
         f"      <title><![CDATA[{e['title']}]]></title>\n"
         f"      <link>{_esc(str(e['entry_url']))}</link>\n"
-        f"      <guid isPermaLink=\"false\">{_esc(str(e['id']))}</guid>\n"
+        f'      <guid isPermaLink="false">{_esc(str(e["id"]))}</guid>\n'
         f"      {pub}\n"
         f"{author_xml}"
         # Plain (non-email) text — feedparser resolves this straight into
@@ -482,10 +489,7 @@ def _item_xml(e: dict) -> str:
         f"      <description><![CDATA[{e.get('content') or ''}]]></description>\n"
         # <category> per tag: ingest captures these into entry_feed_tags
         # (suggestion chips) via the sanitizing parser's tag sink.
-        + "".join(
-            f"      <category>{_esc(str(t))}</category>\n"
-            for t in (e.get("tags") or [])
-        )
+        + "".join(f"      <category>{_esc(str(t))}</category>\n" for t in (e.get("tags") or []))
         + "    </item>"
     )
 
@@ -515,15 +519,19 @@ def _write_feed_file(conn: sqlite3.Connection, feed_id: str) -> None:
     if not row:
         return
     rows = conn.execute(
-        "SELECT * FROM deviantart_entries WHERE deviantart_feed_id = ?"
-        " ORDER BY published_at DESC LIMIT ?",
+        "SELECT * FROM deviantart_entries WHERE deviantart_feed_id = ? ORDER BY published_at DESC LIMIT ?",
         (feed_id, _MAX_ENTRIES_PER_FEED),
     ).fetchall()
     entries = [
-        {"id": r["deviationid"], "title": r["title"], "entry_url": r["entry_url"],
-         "content": r["content"], "published_at": r["published_at"],
-         "tags": [t for t in str(r["tags"] or "").split(",") if t],
-         "author": r["author"]}
+        {
+            "id": r["deviationid"],
+            "title": r["title"],
+            "entry_url": r["entry_url"],
+            "content": r["content"],
+            "published_at": r["published_at"],
+            "tags": [t for t in str(r["tags"] or "").split(",") if t],
+            "author": r["author"],
+        }
         for r in rows
     ]
     xml = _generate_rss_xml(str(row["feed_title"]), _gallery_page_url(str(row["username"])), entries)
@@ -550,8 +558,15 @@ def _upsert_entries(conn: sqlite3.Connection, feed_id: str, deviations: list[dic
             " (id, deviantart_feed_id, deviationid, title, entry_url, content, published_at, tags, author)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                str(uuid.uuid4()), feed_id, e["id"], e["title"], e["entry_url"],
-                e["content"], e["published_at"], tags_csv, e.get("author") or "",
+                str(uuid.uuid4()),
+                feed_id,
+                e["id"],
+                e["title"],
+                e["entry_url"],
+                e["content"],
+                e["published_at"],
+                tags_csv,
+                e.get("author") or "",
             ),
         )
         added += cur.rowcount
@@ -575,6 +590,7 @@ def _upsert_entries(conn: sqlite3.Connection, feed_id: str, deviations: list[dic
 # ---------------------------------------------------------------------------
 # Feed lifecycle
 # ---------------------------------------------------------------------------
+
 
 def create_deviantart_feed(
     conn: sqlite3.Connection,
@@ -602,8 +618,7 @@ def create_deviantart_feed(
     feed_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
-        "INSERT INTO deviantart_feeds (id, username, feed_title, created_at, last_synced_at)"
-        " VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO deviantart_feeds (id, username, feed_title, created_at, last_synced_at) VALUES (?, ?, ?, ?, ?)",
         (feed_id, username, title, now, now),
     )
     _upsert_entries(conn, feed_id, deviations)
@@ -618,16 +633,14 @@ def create_deviantart_feed(
     return feed_id, file_url
 
 
-def create_watch_feed(conn: sqlite3.Connection, reader, access_token: str,
-                      feed_title: str = "DeviantArt Watching") -> tuple[str, str]:
+def create_watch_feed(conn: sqlite3.Connection, reader, access_token: str, feed_title: str = "DeviantArt Watching") -> tuple[str, str]:
     """Create the single combined 'deviations from everyone you Watch' feed."""
     if not access_token:
         raise ValueError("DeviantArt account not connected")
     feed_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
-        "INSERT INTO deviantart_feeds (id, username, feed_title, created_at, last_synced_at, source)"
-        " VALUES (?, ?, ?, ?, ?, 'watch')",
+        "INSERT INTO deviantart_feeds (id, username, feed_title, created_at, last_synced_at, source) VALUES (?, ?, ?, ?, ?, 'watch')",
         (feed_id, "deviantsyouwatch", feed_title, now, now),
     )
     _upsert_entries(conn, feed_id, fetch_watch_feed(access_token))
@@ -644,12 +657,13 @@ def create_watch_feed(conn: sqlite3.Connection, reader, access_token: str,
 def _feed_source(row) -> str:
     try:
         return str(row["source"] or "gallery")
-    except (IndexError, KeyError):
+    except IndexError, KeyError:
         return "gallery"
 
 
-def refresh_deviantart_feed_by_id(conn: sqlite3.Connection, feed_id: str, client_id: str,
-                                  client_secret: str, access_token: str = "") -> int:
+def refresh_deviantart_feed_by_id(
+    conn: sqlite3.Connection, feed_id: str, client_id: str, client_secret: str, access_token: str = ""
+) -> int:
     """Re-fetch a gallery (or the watch stream) and rewrite its file. Returns new entries."""
     row = conn.execute("SELECT * FROM deviantart_feeds WHERE id = ?", (feed_id,)).fetchone()
     if not row:
@@ -683,16 +697,15 @@ def refresh_deviantart_feed_by_id(conn: sqlite3.Connection, feed_id: str, client
 # active artists refresh slowly. Dormant feeds are checked rarely; the combined
 # "watch" stream is always due.
 _DA_RESYNC_INTERVAL_HOURS = (
-    (30, 1),        # posted within 30 days  → at most hourly
-    (180, 6),       # within ~6 months        → every 6h
-    (730, 48),      # within ~2 years         → every 2 days
-    (99999, 168),   # older / unknown-old     → weekly
+    (30, 1),  # posted within 30 days  → at most hourly
+    (180, 6),  # within ~6 months        → every 6h
+    (730, 48),  # within ~2 years         → every 2 days
+    (99999, 168),  # older / unknown-old     → weekly
 )
 _DA_NEVER_POSTED_INTERVAL_HOURS = 72  # empty feed: might start posting; check every 3d
 
 
-def _da_resync_due(source: str, last_synced_at: str | None, newest_post_at: str | None,
-                   now: datetime) -> bool:
+def _da_resync_due(source: str, last_synced_at: str | None, newest_post_at: str | None, now: datetime) -> bool:
     """True if a feed should be refreshed this cycle. The combined watch stream
     and never-synced feeds are always due; otherwise the allowed gap scales with
     how recently the artist posted (active → often, dormant → weekly)."""
@@ -711,15 +724,16 @@ def _da_resync_due(source: str, last_synced_at: str | None, newest_post_at: str 
                 post = post.replace(tzinfo=timezone.utc)
             post_age_days = max(0.0, (now - post).total_seconds() / 86400)
             interval_h = next(h for cap, h in _DA_RESYNC_INTERVAL_HOURS if post_age_days <= cap)
-        except (ValueError, StopIteration):
+        except ValueError, StopIteration:
             interval_h = _DA_RESYNC_INTERVAL_HOURS[-1][1]
     else:
         interval_h = _DA_NEVER_POSTED_INTERVAL_HOURS
     return (now - last).total_seconds() >= interval_h * 3600
 
 
-def refresh_all_deviantart_feeds(conn: sqlite3.Connection, client_id: str, client_secret: str,
-                                 access_token: str = "", max_feeds: int = 40) -> None:
+def refresh_all_deviantart_feeds(
+    conn: sqlite3.Connection, client_id: str, client_secret: str, access_token: str = "", max_feeds: int = 40
+) -> None:
     """Refresh DeviantArt feeds due for a resync, oldest-synced first, capped at
     `max_feeds` per call.
 
@@ -747,10 +761,7 @@ def refresh_all_deviantart_feeds(conn: sqlite3.Connection, client_id: str, clien
         LOGGER.info("[deviantart] %d feed(s) but no credentials configured; skipping refresh", len(rows))
         return
     now = datetime.now(timezone.utc)
-    due = [
-        r for r in rows
-        if _da_resync_due(_feed_source(r), r["last_synced_at"], r["newest_post_at"], now)
-    ]
+    due = [r for r in rows if _da_resync_due(_feed_source(r), r["last_synced_at"], r["newest_post_at"], now)]
     if max_feeds and max_feeds > 0:
         due = due[:max_feeds]
     if not due:
@@ -784,6 +795,7 @@ def delete_deviantart_feed(conn: sqlite3.Connection, reader, feed_id: str) -> No
 # OAuth2 authorization_code flow (Phase 2: watch-list sync)
 # ---------------------------------------------------------------------------
 
+
 def generate_pkce_pair() -> tuple[str, str]:
     """Return (code_verifier, code_challenge) for the PKCE S256 flow.
 
@@ -792,15 +804,15 @@ def generate_pkce_pair() -> tuple[str, str]:
     import base64
     import hashlib
     import secrets
+
     verifier = secrets.token_urlsafe(64)  # 86 chars, within the 43–128 range
-    challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(verifier.encode()).digest()
-    ).rstrip(b"=").decode()
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     return verifier, challenge
 
 
 def authorize_url(client_id: str, redirect_uri: str, state: str, code_challenge: str) -> str:
     from urllib.parse import urlencode
+
     params = {
         "response_type": "code",
         "client_id": client_id,
@@ -834,22 +846,30 @@ def _post_token(payload: dict, client_secret: str, what: str) -> dict:
 
 def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: str, code_verifier: str) -> dict:
     """Exchange an authorization code for access + refresh tokens (PKCE)."""
-    return _post_token({
-        "grant_type": "authorization_code",
-        "client_id": client_id,
-        "code": code,
-        "redirect_uri": redirect_uri,
-        "code_verifier": code_verifier,
-    }, client_secret, "token exchange")
+    return _post_token(
+        {
+            "grant_type": "authorization_code",
+            "client_id": client_id,
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "code_verifier": code_verifier,
+        },
+        client_secret,
+        "token exchange",
+    )
 
 
 def refresh_access_token(client_id: str, client_secret: str, refresh_token: str) -> dict:
     """Refresh an expired access token. Returns the new token dict."""
-    return _post_token({
-        "grant_type": "refresh_token",
-        "client_id": client_id,
-        "refresh_token": refresh_token,
-    }, client_secret, "token refresh")
+    return _post_token(
+        {
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": refresh_token,
+        },
+        client_secret,
+        "token refresh",
+    )
 
 
 def _user_headers(access_token: str) -> dict:
@@ -870,8 +890,7 @@ def list_watching(access_token: str, username: str) -> list[str]:
     offset = 0
     headers = _user_headers(access_token)
     while True:
-        resp = _request("GET", f"{_API_BASE}/user/friends/{username}", headers=headers,
-                        params={"offset": offset, "limit": 50})
+        resp = _request("GET", f"{_API_BASE}/user/friends/{username}", headers=headers, params={"offset": offset, "limit": 50})
         if resp.status_code != 200:
             raise RuntimeError(f"friends list failed: HTTP {resp.status_code}: {resp.text[:200]}")
         data = resp.json()
@@ -887,8 +906,9 @@ def list_watching(access_token: str, username: str) -> list[str]:
 
 def watch_user(access_token: str, username: str) -> tuple[bool, str]:
     """Add `username` to the authenticated user's Watch list. Returns (ok, message)."""
-    body = {f"watch[{k}]": "1" for k in
-            ("friend", "deviations", "journals", "forum_threads", "critiques", "scraps", "activity", "collections")}
+    body = {
+        f"watch[{k}]": "1" for k in ("friend", "deviations", "journals", "forum_threads", "critiques", "scraps", "activity", "collections")
+    }
     resp = _request("POST", f"{_API_BASE}/user/friends/watch/{username}", headers=_user_headers(access_token), data=body)
     is_json = resp.headers.get("content-type", "").startswith("application/json")
     if resp.status_code == 200 and (resp.json().get("success") if is_json else False):
@@ -931,7 +951,8 @@ def fetch_fresh_image_url(deviation_id: str, access_token: str) -> str | None:
         return None
     try:
         resp = _request(
-            "GET", f"{_API_BASE}/deviation/{deviation_id}",
+            "GET",
+            f"{_API_BASE}/deviation/{deviation_id}",
             headers=_user_headers(access_token),
         )
         if resp.status_code != 200:

@@ -1,4 +1,5 @@
 """Unit tests for the GReader-compatible API service."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -116,6 +117,7 @@ def _seed_entry(db_path: Path, feed_url: str = _FEED_URL, entry_id: str = _ENTRY
 
 # ------------------------------------------------------------------ auth
 
+
 def test_authenticate_correct(tmp_path):
     svc = _build_service(tmp_path / "meta.sqlite")
     token = svc.authenticate(_USERNAME, _PASSWORD)
@@ -147,6 +149,7 @@ def test_check_token_invalid(tmp_path):
 
 # ------------------------------------------------------------------ ID parsing
 
+
 def test_parse_item_id_decimal(tmp_path):
     svc = _build_service(tmp_path / "meta.sqlite")
     assert svc._parse_item_id("42") == 42
@@ -175,6 +178,7 @@ def test_format_item_id(tmp_path):
 
 # ------------------------------------------------------------------ user info
 
+
 def test_get_user_info(tmp_path):
     svc = _build_service(tmp_path / "meta.sqlite")
     info = svc.get_user_info()
@@ -183,6 +187,7 @@ def test_get_user_info(tmp_path):
 
 
 # ------------------------------------------------------------------ tag list
+
 
 def test_get_tag_list_default_states(tmp_path):
     svc = _build_service(tmp_path / "meta.sqlite")
@@ -222,6 +227,7 @@ def test_get_tag_list_excludes_system_folders(tmp_path):
 
 # ------------------------------------------------------------------ subscription list
 
+
 def test_get_subscription_list(tmp_path):
     db = tmp_path / "meta.sqlite"
     conn = _make_meta(db)
@@ -260,6 +266,7 @@ def test_subscription_list_prefers_user_title(tmp_path):
 
 # ------------------------------------------------------------------ unread counts
 
+
 def test_get_unread_counts(tmp_path):
     db = tmp_path / "meta.sqlite"
     conn = _make_meta(db)
@@ -290,6 +297,7 @@ def test_get_unread_counts_empty(tmp_path):
 
 # ------------------------------------------------------------------ stream item IDs
 
+
 def test_get_stream_item_ids_reading_list(tmp_path):
     db = tmp_path / "meta.sqlite"
     entry = _mock_entry()
@@ -312,21 +320,15 @@ def test_get_stream_item_ids_exclude_read(tmp_path):
     mock_reader.get_entries.return_value = [unread]  # reader already filters when read=False passed
     svc = _build_service(db, mock_reader)
 
-    result = svc.get_stream_item_ids(
-        "user/-/state/com.google/reading-list", exclude_read=True
-    )
+    result = svc.get_stream_item_ids("user/-/state/com.google/reading-list", exclude_read=True)
     assert len(result["itemRefs"]) == 1
 
 
 def test_get_stream_item_ids_continuation(tmp_path):
     db = tmp_path / "meta.sqlite"
     # Two entries with different timestamps.
-    old_entry = _mock_entry(
-        entry_id=_ENTRY_ID, published=datetime(2024, 1, 1, tzinfo=timezone.utc)
-    )
-    new_entry = _mock_entry(
-        entry_id=_ENTRY_ID2, published=datetime(2024, 12, 1, tzinfo=timezone.utc)
-    )
+    old_entry = _mock_entry(entry_id=_ENTRY_ID, published=datetime(2024, 1, 1, tzinfo=timezone.utc))
+    new_entry = _mock_entry(entry_id=_ENTRY_ID2, published=datetime(2024, 12, 1, tzinfo=timezone.utc))
     mock_reader = MagicMock()
     mock_reader.get_feeds.return_value = []
     mock_reader.get_entries.return_value = [new_entry, old_entry]
@@ -338,15 +340,14 @@ def test_get_stream_item_ids_continuation(tmp_path):
     assert "continuation" in result
 
     # Second page: use continuation to get older entry.
-    result2 = svc.get_stream_item_ids(
-        "user/-/state/com.google/reading-list", count=1, continuation=result["continuation"]
-    )
+    result2 = svc.get_stream_item_ids("user/-/state/com.google/reading-list", count=1, continuation=result["continuation"])
     assert len(result2["itemRefs"]) == 1
     # Timestamps should be different entries.
     assert result["itemRefs"][0]["timestampUsec"] != result2["itemRefs"][0]["timestampUsec"]
 
 
 # ------------------------------------------------------------------ item contents
+
 
 def test_get_items_contents(tmp_path):
     db = tmp_path / "meta.sqlite"
@@ -405,6 +406,7 @@ def test_get_items_contents_starred_flag(tmp_path):
 
 # ------------------------------------------------------------------ edit tag
 
+
 def test_edit_tag_mark_read(tmp_path):
     db = tmp_path / "meta.sqlite"
     fever_id = _seed_entry(db)
@@ -443,9 +445,7 @@ def test_edit_tag_star(tmp_path):
     svc.edit_tag([str(fever_id)], ["user/-/state/com.google/starred"], [])
 
     conn = _make_meta(db)
-    row = conn.execute(
-        "SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id=?", (_FEED_URL, _ENTRY_ID)
-    ).fetchone()
+    row = conn.execute("SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id=?", (_FEED_URL, _ENTRY_ID)).fetchone()
     assert row is not None
 
 
@@ -465,9 +465,7 @@ def test_edit_tag_unstar(tmp_path):
     svc.edit_tag([str(fever_id)], [], ["user/-/state/com.google/starred"])
 
     conn = _make_meta(db)
-    row = conn.execute(
-        "SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id=?", (_FEED_URL, _ENTRY_ID)
-    ).fetchone()
+    row = conn.execute("SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id=?", (_FEED_URL, _ENTRY_ID)).fetchone()
     assert row is None
 
 

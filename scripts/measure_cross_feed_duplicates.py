@@ -14,6 +14,7 @@ whether a group's members span more than one feed_url.
 Usage (inside the app container):
     uv run scripts/measure_cross_feed_duplicates.py [--user u_x] [--json out.json]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -40,6 +41,7 @@ def _is_homepage_link(link: str) -> bool:
     scan."""
     try:
         from urllib.parse import urlparse
+
         # romhacking.net's actual path is "//" (a feed-generator artifact,
         # base path + trailing slash concatenated) -- strip("/") == "" catches
         # that along with the plain "" and "/" cases a naive equality check
@@ -76,16 +78,18 @@ def _load_records(uid: str) -> list[dict]:
             body = html_module.unescape(body)
             body = " ".join(body.split())[:_BODY_HEAD_CHARS].lower()
         ntitle = main.normalize_entry_title_for_dedupe(title)
-        records.append({
-            "entry_id": str(entry_id),
-            "feed_url": str(feed_url),
-            "link": link,
-            "title": str(title or ""),
-            "_canon": main.normalize_entry_link_for_dedupe(link, host_aliases),
-            "_slug": main._saved_dup_host_slug(link, host_aliases),
-            "_ntitle": ntitle if len(ntitle.split()) >= main._SAFE_DEDUP_MIN_TITLE_WORDS else "",
-            "_body": body if len(body) >= main._SAFE_DEDUP_MIN_BODY_CHARS else "",
-        })
+        records.append(
+            {
+                "entry_id": str(entry_id),
+                "feed_url": str(feed_url),
+                "link": link,
+                "title": str(title or ""),
+                "_canon": main.normalize_entry_link_for_dedupe(link, host_aliases),
+                "_slug": main._saved_dup_host_slug(link, host_aliases),
+                "_ntitle": ntitle if len(ntitle.split()) >= main._SAFE_DEDUP_MIN_TITLE_WORDS else "",
+                "_body": body if len(body) >= main._SAFE_DEDUP_MIN_BODY_CHARS else "",
+            }
+        )
     return records
 
 
@@ -128,10 +132,7 @@ def measure_for_user(uid: str) -> dict:
         "groups_possible": len(possible),
         "extra_copies": extra_copies,
         "by_class": dict(by_class),
-        "biggest_groups": [
-            {"size": len(g), "title": g[0]["title"], "feeds": sorted({r["feed_url"] for r in g})}
-            for g in biggest
-        ],
+        "biggest_groups": [{"size": len(g), "title": g[0]["title"], "feeds": sorted({r["feed_url"] for r in g})} for g in biggest],
     }
 
 

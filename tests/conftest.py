@@ -1,4 +1,5 @@
 """Shared pytest fixtures: sys.path setup and in-memory app client."""
+
 from __future__ import annotations
 
 import os
@@ -151,6 +152,7 @@ def pytest_exception_interact(node, call, report):
     else:
         print(banner + text, file=_sys.stderr)
 
+
 _real_connect = socket.socket.connect
 _real_create_connection = socket.create_connection
 _LOCAL_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", ""})
@@ -181,20 +183,19 @@ def _block_outbound_network(monkeypatch):
     surfacing as an unrelated assertion failure minutes later. A test that truly
     needs the network should mock the client, not unblock this.
     """
+
     def _blocked(self, address, *args, **kwargs):
         if _host_of(address) in _LOCAL_HOSTS:
             return _real_connect(self, address, *args, **kwargs)
         raise RuntimeError(
-            f"outbound network blocked in tests: {_host_of(address)!r}. "
-            "Mock the HTTP client instead of reaching the internet."
+            f"outbound network blocked in tests: {_host_of(address)!r}. Mock the HTTP client instead of reaching the internet."
         )
 
     def _blocked_create(address, *args, **kwargs):
         if _host_of(address) in _LOCAL_HOSTS:
             return _real_create_connection(address, *args, **kwargs)
         raise RuntimeError(
-            f"outbound network blocked in tests: {_host_of(address)!r}. "
-            "Mock the HTTP client instead of reaching the internet."
+            f"outbound network blocked in tests: {_host_of(address)!r}. Mock the HTTP client instead of reaching the internet."
         )
 
     monkeypatch.setattr(socket.socket, "connect", _blocked)
@@ -211,6 +212,7 @@ def _disable_yt_quota_sink():
     try:
         import main
         from services import youtube_oauth, youtube_sync
+
         if getattr(main, "youtube_duration_service", None) is not None:
             main.youtube_duration_service._quota_sink = None
         youtube_oauth.set_quota_sink(None)

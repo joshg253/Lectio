@@ -1,4 +1,5 @@
 """Tests for the opt-in app-emitted security headers middleware."""
+
 from __future__ import annotations
 
 import asyncio

@@ -3,6 +3,7 @@
 Folders render without their feed rows (an empty <ul data-lazy-feeds>) unless
 selected; rows come from /tree/folder-feeds/{folder_id} on first expand.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -28,12 +29,14 @@ def configured(tmp_path, monkeypatch):
     main.ensure_meta_schema()
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
-        reader.add_entry({
-            "feed_url": FEED,
-            "id": "e1",
-            "title": "post e1",
-            "link": "https://example.test/e1",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "e1",
+                "title": "post e1",
+                "link": "https://example.test/e1",
+            }
+        )
     with main.get_meta_connection() as conn:
         root_id = main.get_root_folder_id(conn)
         cur = conn.execute(

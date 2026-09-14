@@ -74,17 +74,14 @@ class UserStore:
 
     def ensure_schema(self) -> None:
         with self._connect() as conn:
-            tables = {r["name"] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
 
             # Defensive upgrade from the pre-user_id schema (username was the PK).
             # Multi-user was never released, so this only ever sees dev DBs; map
             # user_id := username to keep any existing users/<username>/ dirs valid.
             if "users" in tables:
                 cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
-                table_sql = (conn.execute(
-                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
-                ).fetchone() or [""])[0] or ""
+                table_sql = (conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone() or [""])[0] or ""
                 # Rebuild to add user_id (pre-user_id schema) and/or case-insensitive
                 # username uniqueness (NOCASE collation).
                 if "user_id" not in cols or "NOCASE" not in table_sql.upper():
@@ -149,8 +146,15 @@ class UserStore:
             conn.execute(
                 "INSERT INTO users (user_id, username, password_hash, is_admin, disabled, created_at, api_token) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (uid, d["username"], d["password_hash"], d.get("is_admin", 0),
-                 d.get("disabled", 0), d.get("created_at", time.time()), d.get("api_token")),
+                (
+                    uid,
+                    d["username"],
+                    d["password_hash"],
+                    d.get("is_admin", 0),
+                    d.get("disabled", 0),
+                    d.get("created_at", time.time()),
+                    d.get("api_token"),
+                ),
             )
         conn.execute("DROP TABLE _users_old")
 
@@ -163,8 +167,7 @@ class UserStore:
     def _row(self, where: str, value: str) -> dict | None:
         with self._connect() as conn:
             row = conn.execute(
-                f"SELECT user_id, username, password_hash, is_admin, disabled, created_at, api_token "
-                f"FROM users WHERE {where} = ?",
+                f"SELECT user_id, username, password_hash, is_admin, disabled, created_at, api_token FROM users WHERE {where} = ?",
                 (value,),
             ).fetchone()
         return dict(row) if row is not None else None
@@ -182,8 +185,7 @@ class UserStore:
     def list_users(self) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT user_id, username, is_admin, disabled, created_at, last_seen_at "
-                "FROM users ORDER BY username"
+                "SELECT user_id, username, is_admin, disabled, created_at, last_seen_at FROM users ORDER BY username"
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -194,8 +196,7 @@ class UserStore:
 
     # --- mutations --------------------------------------------------------
 
-    def create(self, username: str, password: str, *, is_admin: bool = False,
-               scheme: str = passwords.DEFAULT_SCHEME) -> str:
+    def create(self, username: str, password: str, *, is_admin: bool = False, scheme: str = passwords.DEFAULT_SCHEME) -> str:
         """Create a user and return its new stable user_id. Raises ValueError for
         an invalid username/password, UserExistsError if the username is taken."""
         if not tenancy.is_valid_user_id(username):
@@ -232,8 +233,7 @@ class UserStore:
         except sqlite3.IntegrityError as exc:
             raise UserExistsError(new_username) from exc
 
-    def set_password(self, user_id: str, password: str,
-                     *, scheme: str = passwords.DEFAULT_SCHEME) -> None:
+    def set_password(self, user_id: str, password: str, *, scheme: str = passwords.DEFAULT_SCHEME) -> None:
         self._set_password_hash(user_id, passwords.hash_password(password, scheme))
 
     def _set_password_hash(self, user_id: str, password_hash: str) -> None:
@@ -262,8 +262,7 @@ class UserStore:
 
     # --- auth (inputs are typed usernames; outputs are stable user_ids) ---
 
-    def verify_login(self, username: str, password: str,
-                     *, default_scheme: str = passwords.DEFAULT_SCHEME) -> str | None:
+    def verify_login(self, username: str, password: str, *, default_scheme: str = passwords.DEFAULT_SCHEME) -> str | None:
         """Return the user_id on success, else None. Timing-equalized for unknown
         accounts; transparently re-hashes to ``default_scheme`` on success."""
         row = self.get(username)
@@ -315,9 +314,7 @@ class UserStore:
         if not token:
             return None
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT user_id, api_token FROM users WHERE disabled = 0 AND api_token IS NOT NULL"
-            ).fetchall()
+            rows = conn.execute("SELECT user_id, api_token FROM users WHERE disabled = 0 AND api_token IS NOT NULL").fetchall()
         match: str | None = None
         for r in rows:
             if hmac.compare_digest(token, r["api_token"]):
@@ -333,9 +330,7 @@ class UserStore:
             return None
         api_key = api_key.lower()
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT user_id, username, api_token FROM users WHERE disabled = 0 AND api_token IS NOT NULL"
-            ).fetchall()
+            rows = conn.execute("SELECT user_id, username, api_token FROM users WHERE disabled = 0 AND api_token IS NOT NULL").fetchall()
         match: str | None = None
         for r in rows:
             # MD5 is mandated by the Fever API spec (feedafever.com/api); not used for password storage.
@@ -377,9 +372,7 @@ class UserStore:
         if not token:
             return None
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT user_id, api_token FROM users WHERE disabled = 0 AND api_token IS NOT NULL"
-            ).fetchall()
+            rows = conn.execute("SELECT user_id, api_token FROM users WHERE disabled = 0 AND api_token IS NOT NULL").fetchall()
         for r in rows:
             if r["api_token"] and hmac.compare_digest(token, r["api_token"]):
                 return r["user_id"]

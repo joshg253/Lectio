@@ -10,6 +10,7 @@ server. The demo feeds must already be served at ``DEMO_BASE_URL`` (the
 orchestrator starts that static server). This script subscribes them, refreshes
 once, and sets a realistic read/saved/tag state.
 """
+
 from __future__ import annotations
 
 import os
@@ -61,8 +62,13 @@ def main() -> int:
     # Give the library a lived-in look: mark most entries read, save a couple,
     # and apply a few manual tags. Deterministic so screenshots are stable.
     tags_by_position = {
-        1: "favorite", 4: "favorite", 8: "favorite", 11: "favorite",
-        3: "to-read", 9: "to-read", 6: "reference",
+        1: "favorite",
+        4: "favorite",
+        8: "favorite",
+        11: "favorite",
+        3: "to-read",
+        9: "to-read",
+        6: "reference",
     }
     saved_positions = {2, 5}
     # Stars, separately from saved_entries: the Saved Inbox and Read Mode's Inbox
@@ -83,10 +89,16 @@ def main() -> int:
                     reader.mark_entry_as_read(rid)
                     # Mirror the open into the Read History log (newest first).
                     read_at = (datetime.now() - timedelta(hours=pos * 5)).isoformat()
-                    read_history_rows.append((
-                        rid[0], rid[1], str(entry.title or ""), str(entry.link or ""),
-                        feed_titles.get(rid[0], ""), read_at,
-                    ))
+                    read_history_rows.append(
+                        (
+                            rid[0],
+                            rid[1],
+                            str(entry.title or ""),
+                            str(entry.link or ""),
+                            feed_titles.get(rid[0], ""),
+                            read_at,
+                        )
+                    )
                 tag = tags_by_position.get(pos)
                 if tag:
                     reader.set_tag(rid, f"{app.MANUAL_TAG_KEY_PREFIX}{tag}")
@@ -99,8 +111,7 @@ def main() -> int:
                         rid,
                     )
             conn.executemany(
-                "INSERT OR IGNORE INTO read_history"
-                " (feed_url, entry_id, title, link, feed_title, read_at) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO read_history (feed_url, entry_id, title, link, feed_title, read_at) VALUES (?, ?, ?, ?, ?, ?)",
                 read_history_rows,
             )
             conn.commit()
@@ -117,27 +128,37 @@ def main() -> int:
                     conn.execute(
                         "INSERT INTO feed_fetch_history (feed_url, fetched_at, status,"
                         " http_status, new_entries, duration_ms, error) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (url, fetched_at, "error", 503, None, 4200,
-                         "Server error (HTTP 503)"),
+                        (url, fetched_at, "error", 503, None, 4200, "Server error (HTTP 503)"),
                     )
                 else:
                     conn.execute(
                         "INSERT INTO feed_fetch_history (feed_url, fetched_at, status,"
                         " http_status, new_entries, duration_ms, error) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (url, fetched_at, "ok", 200, (2 if h == 0 else 0),
-                         140 + (h * 37 + fi * 11) % 480, None),
+                        (url, fetched_at, "ok", 200, (2 if h == 0 else 0), 140 + (h * 37 + fi * 11) % 480, None),
                     )
         conn.commit()
 
     # A couple of automation rules so the Automation tab has real content.
     with app.get_meta_connection() as conn:
         app.add_highlight_keyword(
-            conn, "global", "", "local-first", "green",
-            rule_type="highlight", search_in="title", enabled=1,
+            conn,
+            "global",
+            "",
+            "local-first",
+            "green",
+            rule_type="highlight",
+            search_in="title",
+            enabled=1,
         )
         app.add_highlight_keyword(
-            conn, "global", "", "sponsored", "orange",
-            rule_type="mark_as_read", search_in="title", enabled=1,
+            conn,
+            "global",
+            "",
+            "sponsored",
+            "orange",
+            rule_type="mark_as_read",
+            search_in="title",
+            enabled=1,
         )
         conn.commit()
 

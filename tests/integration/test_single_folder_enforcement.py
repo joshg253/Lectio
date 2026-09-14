@@ -1,6 +1,7 @@
 """A feed belongs to exactly one folder. Adding it to a new folder moves it
 rather than leaving stale memberships behind, and the multi-folder cleanup
 collapses feeds that drifted into several folders."""
+
 from __future__ import annotations
 
 import pytest
@@ -41,12 +42,7 @@ def configured(tmp_path):
 
 def _folders_for(feed_url: str) -> set[int]:
     with main.get_meta_connection() as conn:
-        return {
-            r[0]
-            for r in conn.execute(
-                "SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (feed_url,)
-            ).fetchall()
-        }
+        return {r[0] for r in conn.execute("SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (feed_url,)).fetchall()}
 
 
 def test_add_feed_to_folder_moves_instead_of_duplicating(configured):
@@ -73,9 +69,7 @@ def test_multi_folder_cleanup_query_and_resolve(configured):
     assert {f["id"] for f in report["feeds"][0]["folders"]} == {folder_a, folder_b}
 
     with main.get_meta_connection() as conn:
-        conn.execute(
-            "DELETE FROM folder_feeds WHERE feed_url = ? AND folder_id != ?", (FEED, folder_b)
-        )
+        conn.execute("DELETE FROM folder_feeds WHERE feed_url = ? AND folder_id != ?", (FEED, folder_b))
     assert _folders_for(FEED) == {folder_b}
 
 

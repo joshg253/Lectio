@@ -1,6 +1,7 @@
 """Integration tests for /feeds/reparse — the per-feed 'Backfill embeds' button
 that forces reader to re-fetch + re-parse so older entries regain embeds stripped
 before ingest stopped sanitizing feed HTML."""
+
 from __future__ import annotations
 
 import contextlib

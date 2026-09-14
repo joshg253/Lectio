@@ -7,6 +7,7 @@ are sparse, so a tagged entry older than that window never surfaced — clicking
 tag showed nothing. The fix pushes the tag into reader's native ``tags=``
 argument so the match happens in SQL across the whole library, before the limit.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -63,9 +64,7 @@ def test_tagged_entry_outside_fetch_window_is_returned(reader_with_entries):
     # page limit under the old post-filter behavior.
     main.set_manual_tags_for_entry(FEED, "e0", "mytag")
 
-    posts = main.list_entries_for_feeds(
-        {FEED}, limit=2, sort_dir="desc", selected_tag="mytag"
-    )
+    posts = main.list_entries_for_feeds({FEED}, limit=2, sort_dir="desc", selected_tag="mytag")
 
     assert [p["id"] for p in posts] == ["e0"]
 
@@ -77,9 +76,7 @@ def test_tagged_entry_returned_with_ascending_sort(reader_with_entries):
     # still comes back via the reader tags= filter.
     main.set_manual_tags_for_entry(FEED, "e5", "mytag")
 
-    posts = main.list_entries_for_feeds(
-        {FEED}, limit=2, sort_dir="asc", selected_tag="mytag"
-    )
+    posts = main.list_entries_for_feeds({FEED}, limit=2, sort_dir="asc", selected_tag="mytag")
 
     assert [p["id"] for p in posts] == ["e5"]
 
@@ -88,9 +85,7 @@ def test_tag_filter_excludes_untagged_entries(reader_with_entries):
     main.set_manual_tags_for_entry(FEED, "e0", "mytag")
     main.set_manual_tags_for_entry(FEED, "e3", "mytag")
 
-    posts = main.list_entries_for_feeds(
-        {FEED}, limit=250, sort_dir="desc", selected_tag="mytag"
-    )
+    posts = main.list_entries_for_feeds({FEED}, limit=250, sort_dir="desc", selected_tag="mytag")
 
     assert sorted(p["id"] for p in posts) == ["e0", "e3"]
 
@@ -98,8 +93,6 @@ def test_tag_filter_excludes_untagged_entries(reader_with_entries):
 def test_unknown_tag_returns_nothing(reader_with_entries):
     main.set_manual_tags_for_entry(FEED, "e0", "mytag")
 
-    posts = main.list_entries_for_feeds(
-        {FEED}, limit=250, sort_dir="desc", selected_tag="nope"
-    )
+    posts = main.list_entries_for_feeds({FEED}, limit=250, sort_dir="desc", selected_tag="nope")
 
     assert posts == []

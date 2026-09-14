@@ -3,6 +3,7 @@
 The entry pane's embed branch linkifies a tag-less body, and it escaped that
 body again — so "Sources &amp; further reading" reached the browser as
 "&amp;amp;" and rendered as a literal "&amp;"."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -14,9 +15,11 @@ from services import tenancy
 
 FEED = "https://www.youtube.com/feeds/videos.xml?channel_id=UCtest"
 VIDEO = "w5RZfxQHxyY"
-SUMMARY = ("Antidepressants change how brain cells communicate.\n"
-           "Sources &amp; further reading: https://example.test/sources?a=1&amp;b=2\n"
-           "DISCUSSIONS &amp; SOCIAL MEDIA")
+SUMMARY = (
+    "Antidepressants change how brain cells communicate.\n"
+    "Sources &amp; further reading: https://example.test/sources?a=1&amp;b=2\n"
+    "DISCUSSIONS &amp; SOCIAL MEDIA"
+)
 
 
 @pytest.fixture
@@ -36,12 +39,16 @@ def env(tmp_path, monkeypatch):
     main.ensure_meta_schema()
     reader = main.get_reader()
     reader.add_feed(FEED, allow_invalid_url=True)
-    reader.add_entry({
-        "feed_url": FEED, "id": f"yt:video:{VIDEO}",
-        "link": f"https://www.youtube.com/watch?v={VIDEO}",
-        "title": "How Antidepressants Work", "summary": SUMMARY,
-        "published": dt.datetime(2026, 8, 1, tzinfo=dt.timezone.utc),
-    })
+    reader.add_entry(
+        {
+            "feed_url": FEED,
+            "id": f"yt:video:{VIDEO}",
+            "link": f"https://www.youtube.com/watch?v={VIDEO}",
+            "title": "How Antidepressants Work",
+            "summary": SUMMARY,
+            "published": dt.datetime(2026, 8, 1, tzinfo=dt.timezone.utc),
+        }
+    )
     try:
         yield
     finally:

@@ -6,6 +6,7 @@ live 404 and failed a test that passed in isolation and on re-run, which is the
 worst shape a failure can take. The autouse guard in conftest blocks outbound
 sockets; these tests pin it so it can't be quietly removed.
 """
+
 from __future__ import annotations
 
 import socket

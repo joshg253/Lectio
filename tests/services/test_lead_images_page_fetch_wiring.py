@@ -11,6 +11,7 @@ tenancy: the background thread must resolve backends for the SAME user that
 queued the fetch, not whichever user happens to be bound when the ladder
 resolves settings.
 """
+
 from __future__ import annotations
 
 import sqlite3

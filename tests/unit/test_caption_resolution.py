@@ -1,5 +1,6 @@
 """Unit tests for the caption-resolution helpers extracted from get_entry_detail:
 _initial_image_caption, _suppress_junk_caption, _apply_caption_source_pref."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ def _entry(title="Title", feed_url="https://f.test/feed", entry_id="e1", summary
 
 
 # --- _initial_image_caption -------------------------------------------------
+
 
 def test_initial_caption_prefers_lead_img_title(monkeypatch):
     monkeypatch.setattr(main.lead_image_service, "get_entry_image_alt", lambda *a: None)
@@ -31,6 +33,7 @@ def test_initial_caption_persisted_overrides(monkeypatch):
 
 
 # --- _suppress_junk_caption -------------------------------------------------
+
 
 def test_suppress_trivial_alt():
     assert main._suppress_junk_caption("Share", _entry()) is None
@@ -56,6 +59,7 @@ def test_keeps_real_caption():
 
 # --- _apply_caption_source_pref ---------------------------------------------
 
+
 def test_caption_pref_none():
     assert main._apply_caption_source_pref("x", {"caption_source": "none"}, _entry(), "<p>c</p>") is None
 
@@ -80,6 +84,7 @@ def test_caption_pref_auto_runs_suppression(monkeypatch):
 
 
 # --- should_show_caption -----------------------------------------------------
+
 
 def test_show_caption_suppresses_a_genuinely_visible_figcaption():
     html = '<img src="https://x.test/a.jpg"><figcaption>a clever joke</figcaption>'

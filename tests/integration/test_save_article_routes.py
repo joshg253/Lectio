@@ -1,4 +1,5 @@
 """Integration tests for the Save Article routes (/articles/save, /api/save)."""
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -108,8 +109,15 @@ def test_modal_post_unknown_mode_falls_back_to_readability(monkeypatch):
 
 
 def test_modal_post_error_returns_400(monkeypatch):
-    bad = {"ok": False, "error": "Enter a valid http(s) article URL.", "duplicate": False,
-           "extracted": False, "feed_url": "lectio:saved", "entry_id": None, "title": None}
+    bad = {
+        "ok": False,
+        "error": "Enter a valid http(s) article URL.",
+        "duplicate": False,
+        "extracted": False,
+        "feed_url": "lectio:saved",
+        "entry_id": None,
+        "title": None,
+    }
     app, _ = _build_app(monkeypatch, bad)
     with TestClient(app) as client:
         r = client.post(

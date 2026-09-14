@@ -1,4 +1,5 @@
 """Tests for GUID-churn suppression (_suppress_guid_churn)."""
+
 from __future__ import annotations
 
 import sqlite3

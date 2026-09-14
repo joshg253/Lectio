@@ -28,6 +28,7 @@ Usage (inside the app container):
     uv run scripts/backfill_expired_deviantart_thumbnails.py --apply
     uv run scripts/backfill_expired_deviantart_thumbnails.py --apply --user u_x --limit 500
 """
+
 from __future__ import annotations
 
 import argparse
@@ -53,8 +54,7 @@ def _candidates(limit: int) -> list[tuple[str, str, str]]:
     with sqlite3.connect(f"file:{tenancy.meta_db_path()}?mode=ro", uri=True, timeout=30.0) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT feed_url, entry_id, image_url FROM entry_lead_images"
-            " WHERE image_url LIKE '%wixmp%' ORDER BY feed_url, entry_id"
+            "SELECT feed_url, entry_id, image_url FROM entry_lead_images WHERE image_url LIKE '%wixmp%' ORDER BY feed_url, entry_id"
         ).fetchall()
     out = []
     for r in rows:
@@ -84,8 +84,7 @@ def backfill_for_user(uid: str, apply: bool, limit: int, delay: float) -> dict:
         else:
             stats["could_not_pin"] += 1
         if i % 100 == 0:
-            print(f"  [{uid}] {i}/{len(candidates)} (pinned={stats['pinned']} "
-                  f"failed={stats['could_not_pin']})", flush=True)
+            print(f"  [{uid}] {i}/{len(candidates)} (pinned={stats['pinned']} failed={stats['could_not_pin']})", flush=True)
         time.sleep(delay)
     return {"candidates": len(candidates), **stats}
 

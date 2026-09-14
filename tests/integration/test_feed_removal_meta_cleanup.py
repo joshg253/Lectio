@@ -9,6 +9,7 @@ tables. 1,923 of the orphaned rows were still being displayed.
 So the rule is per entry: a surviving `archived_entry` row protects its meta,
 everything else goes.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -44,31 +45,31 @@ def env(tmp_path, monkeypatch):
 def _seed_meta(entry_id: str) -> None:
     with main.get_meta_connection() as conn:
         conn.execute(
-            "INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at)"
-            " VALUES (?, ?, ?, ?)", (FEED, entry_id, "https://cdn.test/i.jpg", 1.0))
+            "INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at) VALUES (?, ?, ?, ?)",
+            (FEED, entry_id, "https://cdn.test/i.jpg", 1.0),
+        )
+        conn.execute("INSERT INTO entry_title_overrides (feed_url, entry_id, title) VALUES (?, ?, ?)", (FEED, entry_id, "corrected"))
         conn.execute(
-            "INSERT INTO entry_title_overrides (feed_url, entry_id, title) VALUES (?, ?, ?)",
-            (FEED, entry_id, "corrected"))
-        conn.execute(
-            "INSERT INTO read_history (feed_url, entry_id, title, link, feed_title, read_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (FEED, entry_id, "t", entry_id, "Gone", "2026-08-09T00:00:00"))
+            "INSERT INTO read_history (feed_url, entry_id, title, link, feed_title, read_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (FEED, entry_id, "t", entry_id, "Gone", "2026-08-09T00:00:00"),
+        )
         conn.commit()
 
 
 def _capture(entry_id: str) -> None:
     with main.archive_conn() as arch:
         arch.execute(
-            "INSERT OR REPLACE INTO archived_entry (feed_url, entry_id, status, starred_at)"
-            " VALUES (?, ?, 'complete', ?)", (FEED, entry_id, 1.0))
+            "INSERT OR REPLACE INTO archived_entry (feed_url, entry_id, status, starred_at) VALUES (?, ?, 'complete', ?)",
+            (FEED, entry_id, 1.0),
+        )
 
 
 def _counts(entry_id: str) -> dict[str, int]:
     with main.get_meta_connection() as conn:
-        return {t: conn.execute(
-            f"SELECT COUNT(*) FROM {t} WHERE feed_url = ? AND entry_id = ?",
-            (FEED, entry_id)).fetchone()[0]
-            for t in ("entry_lead_images", "entry_title_overrides", "read_history")}
+        return {
+            t: conn.execute(f"SELECT COUNT(*) FROM {t} WHERE feed_url = ? AND entry_id = ?", (FEED, entry_id)).fetchone()[0]
+            for t in ("entry_lead_images", "entry_title_overrides", "read_history")
+        }
 
 
 def test_a_captured_entry_keeps_its_meta(env):
@@ -116,14 +117,13 @@ def test_another_feeds_meta_is_untouched(env):
     other = "https://other.test/feed"
     with main.get_meta_connection() as conn:
         conn.execute(
-            "INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at)"
-            " VALUES (?, ?, ?, ?)", (other, DEAD_ID, "https://cdn.test/x.jpg", 1.0))
+            "INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at) VALUES (?, ?, ?, ?)",
+            (other, DEAD_ID, "https://cdn.test/x.jpg", 1.0),
+        )
         conn.commit()
         main._purge_dead_entry_meta(conn, FEED)
         conn.commit()
-        assert conn.execute(
-            "SELECT COUNT(*) FROM entry_lead_images WHERE feed_url = ?", (other,)
-        ).fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM entry_lead_images WHERE feed_url = ?", (other,)).fetchone()[0] == 1
 
 
 def test_purging_a_feed_runs_the_cleanup(env):
@@ -146,8 +146,8 @@ def test_purging_a_feed_clears_its_failure_state(env):
     """
     with main.get_meta_connection() as conn:
         conn.execute(
-            "INSERT INTO feed_failure_state (feed_url, consecutive_failures, last_error)"
-            " VALUES (?, ?, ?)", (FEED, 9, "404 Not Found"))
+            "INSERT INTO feed_failure_state (feed_url, consecutive_failures, last_error) VALUES (?, ?, ?)", (FEED, 9, "404 Not Found")
+        )
         conn.commit()
 
     with main.get_reader() as reader:
@@ -157,17 +157,13 @@ def test_purging_a_feed_clears_its_failure_state(env):
             conn.commit()
 
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM feed_failure_state WHERE feed_url = ?", (FEED,)
-        ).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM feed_failure_state WHERE feed_url = ?", (FEED,)).fetchone()[0] == 0
 
 
 def test_purging_leaves_another_feeds_failure_state_alone(env):
     other = "https://live.test/feed"
     with main.get_meta_connection() as conn:
-        conn.execute(
-            "INSERT INTO feed_failure_state (feed_url, consecutive_failures, last_error)"
-            " VALUES (?, ?, ?)", (other, 3, "timeout"))
+        conn.execute("INSERT INTO feed_failure_state (feed_url, consecutive_failures, last_error) VALUES (?, ?, ?)", (other, 3, "timeout"))
         conn.commit()
 
     with main.get_reader() as reader:
@@ -177,10 +173,7 @@ def test_purging_leaves_another_feeds_failure_state_alone(env):
             conn.commit()
 
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM feed_failure_state WHERE feed_url = ?", (other,)
-        ).fetchone()[0] == 1
-
+        assert conn.execute("SELECT COUNT(*) FROM feed_failure_state WHERE feed_url = ?", (other,)).fetchone()[0] == 1
 
 
 # --- tags must survive an unsubscribe, the way stars already do ---------------
@@ -217,8 +210,7 @@ def test_a_captured_entrys_tags_survive_the_unsubscribe(env):
 
     _purge()
 
-    assert main.get_manual_tags_for_entry(FEED, TAGGED_ID) == ["gamedev"], \
-        "tag lost on unsubscribe — the orphan now reads as uncurated"
+    assert main.get_manual_tags_for_entry(FEED, TAGGED_ID) == ["gamedev"], "tag lost on unsubscribe — the orphan now reads as uncurated"
 
 
 def test_the_carried_tag_still_counts_as_a_keep_signal(env):
@@ -236,10 +228,13 @@ def test_an_uncaptured_entrys_tags_are_not_carried(env):
     _purge()
 
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ?",
-            (FEED, DEAD_ID),
-        ).fetchone()[0] == 0
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ?",
+                (FEED, DEAD_ID),
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_multiple_tags_all_carry(env):

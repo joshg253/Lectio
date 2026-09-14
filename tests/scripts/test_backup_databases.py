@@ -54,8 +54,7 @@ def test_discover_sources_includes_auth_and_per_user_dbs(tmp_path: Path):
 def test_prune_old_keeps_n_most_recent(tmp_path: Path):
     dest_dir = tmp_path / "backups"
     dest_dir.mkdir()
-    for ts in ["20260101-000000", "20260102-000000", "20260103-000000",
-               "20260104-000000", "20260105-000000"]:
+    for ts in ["20260101-000000", "20260102-000000", "20260103-000000", "20260104-000000", "20260105-000000"]:
         gen_dir = dest_dir / ts
         gen_dir.mkdir()
         (gen_dir / "lectio_meta.sqlite3").write_bytes(b"\x00" * 16)
@@ -74,11 +73,20 @@ def test_prune_old_keeps_n_most_recent(tmp_path: Path):
 import pytest  # noqa: E402
 
 
-@pytest.mark.parametrize("text,expected", [
-    ("1024", 1024), ("1K", 1024), ("1KB", 1024), ("2M", 2 * 1024**2),
-    ("3G", 3 * 1024**3), ("1T", 1024**4), ("1.5G", int(1.5 * 1024**3)),
-    ("  20g  ", 20 * 1024**3), ("0", 0),
-])
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("1024", 1024),
+        ("1K", 1024),
+        ("1KB", 1024),
+        ("2M", 2 * 1024**2),
+        ("3G", 3 * 1024**3),
+        ("1T", 1024**4),
+        ("1.5G", int(1.5 * 1024**3)),
+        ("  20g  ", 20 * 1024**3),
+        ("0", 0),
+    ],
+)
 def test_parse_size(text, expected):
     assert backup_databases.parse_size(text) == expected
 

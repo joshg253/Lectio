@@ -19,6 +19,7 @@ Usage:
     LECTIO_DATA_DIR=/data uv run scripts/probe_dead_feeds.py --user <id> \\
         [--limit N] [--delay 1.5] [--json out.json]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -58,8 +59,7 @@ def _looks_like_same_feed(parsed, original_url: str, stored_title: str) -> tuple
 
 
 def probe_one(client: httpx.Client, url: str, stored_title: str) -> dict:
-    out = {"url": url, "title": stored_title, "status": None,
-           "candidate": None, "reason": None, "verdict": "dead"}
+    out = {"url": url, "title": stored_title, "status": None, "candidate": None, "reason": None, "verdict": "dead"}
     try:
         r = client.get(url)
         out["status"] = r.status_code
@@ -82,6 +82,7 @@ def probe_one(client: httpx.Client, url: str, stored_title: str) -> dict:
         return out
 
     from services import feed_discovery
+
     try:
         cands = feed_discovery.discover_feed_urls(root, timeout=TIMEOUT) or []
     except Exception:  # noqa: BLE001
@@ -112,8 +113,7 @@ def probe_one(client: httpx.Client, url: str, stored_title: str) -> dict:
 
 
 def main_cli(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--user", required=True)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--delay", type=float, default=1.5)
@@ -124,17 +124,17 @@ def main_cli(argv: list[str] | None = None) -> int:
     m = sqlite3.connect(f"file:{base}/lectio_meta.sqlite3?mode=ro", uri=True)
     r = sqlite3.connect(f"file:{base}/lectio_reader.sqlite?mode=ro", uri=True)
     live = {u: t for u, t in r.execute("SELECT url, title FROM feeds")}
-    targets = [(u, live.get(u, "")) for u, e in
-               m.execute("SELECT feed_url,last_error FROM feed_failure_state "
-                         "WHERE consecutive_failures>0 AND last_error IS NOT NULL")
-               if u in live and "404" in (e or "")]
+    targets = [
+        (u, live.get(u, ""))
+        for u, e in m.execute("SELECT feed_url,last_error FROM feed_failure_state WHERE consecutive_failures>0 AND last_error IS NOT NULL")
+        if u in live and "404" in (e or "")
+    ]
     if args.limit:
-        targets = targets[:args.limit]
+        targets = targets[: args.limit]
     print(f"probing {len(targets)} feeds\n", flush=True)
 
     results = []
-    with httpx.Client(headers={"User-Agent": UA}, timeout=TIMEOUT,
-                      follow_redirects=True) as client:
+    with httpx.Client(headers={"User-Agent": UA}, timeout=TIMEOUT, follow_redirects=True) as client:
         for i, (url, title) in enumerate(targets, 1):
             res = probe_one(client, url, title)
             results.append(res)
@@ -145,8 +145,7 @@ def main_cli(argv: list[str] | None = None) -> int:
             time.sleep(args.delay)
 
     n = {k: sum(1 for x in results if x["verdict"] == k) for k in ("replacement", "recovered", "dead")}
-    print(f"\nreplacement found: {n['replacement']}   original alive again: {n['recovered']}   "
-          f"no feed found: {n['dead']}")
+    print(f"\nreplacement found: {n['replacement']}   original alive again: {n['recovered']}   no feed found: {n['dead']}")
     if args.json:
         with open(args.json, "w") as fh:
             json.dump(results, fh, indent=2)

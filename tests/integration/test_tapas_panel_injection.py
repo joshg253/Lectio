@@ -5,6 +5,7 @@ is the episode's actual content, one URL per panel, so a four-panel episode
 arrives in the feed as a single image. Reported as "comic img is wrong, but good
 for thumb".
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -22,8 +23,7 @@ PANELS = [
     "https://us-a.tapas.io/c/a1/aeb9bd84-3708-4c09-bd3b-a946d00059a3.jpg?__token__=exp=1~acl=/c/a1/c.jpg",
     "https://us-a.tapas.io/c/f4/f7cdce51-1eb5-44e4-a5b9-a3af85518d29.jpg?__token__=exp=1~acl=/c/f4/d.jpg",
 ]
-PAGE = "<html><body>" + "".join(f'<img src="{u}">' for u in PANELS) + \
-       f'<img src="{SERIES_ART}"></body></html>'
+PAGE = "<html><body>" + "".join(f'<img src="{u}">' for u in PANELS) + f'<img src="{SERIES_ART}"></body></html>'
 
 
 class _Entry:
@@ -34,19 +34,14 @@ class _Entry:
 
 
 def _inject(body, page=PAGE, entry=None):
-    with patch.object(main.lead_image_service, "fetch_source_html_now",
-                      return_value=(LINK, page) if page is not None else None):
-        return main._inject_tapas_episode_panels(
-            body, entry or _Entry(), "https://tapas.io/rss/series/2007", SERIES_ART
-        )
+    with patch.object(main.lead_image_service, "fetch_source_html_now", return_value=(LINK, page) if page is not None else None):
+        return main._inject_tapas_episode_panels(body, entry or _Entry(), "https://tapas.io/rss/series/2007", SERIES_ART)
 
 
 def test_every_panel_lands_in_the_article_in_order():
     html_out, lead = _inject(FEED_BODY)
     assert html_out.count("<img") == 4, "a four-panel episode is four panels"
-    assert [u.split("?")[0] for u in PANELS] == [
-        s.split("?")[0] for s in __import__("re").findall(r'src="([^"]+)"', html_out)
-    ]
+    assert [u.split("?")[0] for u in PANELS] == [s.split("?")[0] for s in __import__("re").findall(r'src="([^"]+)"', html_out)]
     assert lead is None, "the hero is dropped or the thumbnail sits above its own comic"
 
 
@@ -84,23 +79,21 @@ def test_a_failed_fetch_keeps_the_series_art():
     assert out == FEED_BODY and lead == SERIES_ART
 
 
-@pytest.mark.parametrize("link", [
-    "https://example.com/post/1",
-    "https://nottapas.io/episode/1",
-])
+@pytest.mark.parametrize(
+    "link",
+    [
+        "https://example.com/post/1",
+        "https://nottapas.io/episode/1",
+    ],
+)
 def test_other_hosts_are_untouched_and_never_fetched(link):
     with patch.object(main.lead_image_service, "fetch_source_html_now") as fetch:
-        out, lead = main._inject_tapas_episode_panels(
-            FEED_BODY, _Entry(link), "https://example.com/feed", SERIES_ART
-        )
+        out, lead = main._inject_tapas_episode_panels(FEED_BODY, _Entry(link), "https://example.com/feed", SERIES_ART)
     assert out == FEED_BODY and lead == SERIES_ART
     fetch.assert_not_called()
 
 
 def test_the_panel_count_is_capped():
-    many = "".join(
-        f'<img src="https://us-a.tapas.io/c/{i:02d}/x{i}.jpg?__token__=exp=1">'
-        for i in range(200)
-    )
+    many = "".join(f'<img src="https://us-a.tapas.io/c/{i:02d}/x{i}.jpg?__token__=exp=1">' for i in range(200))
     out, _ = _inject(FEED_BODY, page=many)
     assert out.count("<img") == main._TAPAS_MAX_PANELS

@@ -9,6 +9,7 @@ the whole library wearing an inbox label.
 Filed items stay reachable through the tag tree, which is why the tag counts here
 must keep counting *filed* items rather than inbox ones.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -119,8 +120,7 @@ def test_leaving_the_inbox_does_not_drag_its_sort_along(configured):
 
 def test_starred_sort_is_hidden_in_the_feeds_scope(configured):
     """Feed entries mostly have no star date, so the order would be arbitrary."""
-    keys = {o["key"] for o in main._read_mode_sort_options(
-        "new", lambda k: "/read", include_starred=False)}
+    keys = {o["key"] for o in main._read_mode_sort_options("new", lambda k: "/read", include_starred=False)}
 
     assert "starred" not in keys
     assert {"new", "old", "recent"} <= keys
@@ -137,29 +137,52 @@ def test_recently_starred_orders_by_star_date_not_publish_date(configured):
     sorts before 'T'.
     """
     with main.get_reader() as reader:
-        reader.add_entry({"feed_url": FEED, "id": "old-post-new-star",
-                          "link": "https://example.test/o", "title": "Old post",
-                          "published": datetime(2019, 1, 1, tzinfo=timezone.utc)})
-        reader.add_entry({"feed_url": FEED, "id": "new-post-old-star",
-                          "link": "https://example.test/n", "title": "New post",
-                          "published": datetime(2026, 7, 1, tzinfo=timezone.utc)})
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "old-post-new-star",
+                "link": "https://example.test/o",
+                "title": "Old post",
+                "published": datetime(2019, 1, 1, tzinfo=timezone.utc),
+            }
+        )
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "new-post-old-star",
+                "link": "https://example.test/n",
+                "title": "New post",
+                "published": datetime(2026, 7, 1, tzinfo=timezone.utc),
+            }
+        )
     with main.get_meta_connection() as conn:
         conn.execute("DELETE FROM saved_entries")
         # Starred minutes apart on the same day, in the two different formats.
-        conn.execute("INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)",
-                     (FEED, "new-post-old-star", "2026-07-20T09:00:00+00:00"))
-        conn.execute("INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)",
-                     (FEED, "old-post-new-star", "2026-07-20 17:00:00"))
+        conn.execute(
+            "INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)",
+            (FEED, "new-post-old-star", "2026-07-20T09:00:00+00:00"),
+        )
+        conn.execute(
+            "INSERT INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?,?,?)", (FEED, "old-post-new-star", "2026-07-20 17:00:00")
+        )
         conn.commit()
 
     posts = main.list_entries_for_feeds(
-        {FEED}, sort_by="starred", sort_dir="desc", star_only=True, kept_scope="starred",
+        {FEED},
+        sort_by="starred",
+        sort_dir="desc",
+        star_only=True,
+        kept_scope="starred",
     )
     assert [p["id"] for p in posts] == ["old-post-new-star", "new-post-old-star"]
 
     # Publish order is the opposite, which is what makes this worth asserting.
     posts = main.list_entries_for_feeds(
-        {FEED}, sort_by="post", sort_dir="desc", star_only=True, kept_scope="starred",
+        {FEED},
+        sort_by="post",
+        sort_dir="desc",
+        star_only=True,
+        kept_scope="starred",
     )
     assert [p["id"] for p in posts] == ["new-post-old-star", "old-post-new-star"]
 
@@ -181,13 +204,19 @@ def test_all_saved_node_spans_kept_not_just_starred(configured):
     tagged-but-unstarred items exist in one mode and not the other, which is the
     exact cross-mode mismatch Read Mode is meant not to have."""
     ctx = main._build_read_mode_context(
-        _NO_REQUEST, folder_id=None, tag=None, archived=False, q=None, items=[],
-        node_selected=True, all_saved=True,
+        _NO_REQUEST,
+        folder_id=None,
+        tag=None,
+        archived=False,
+        q=None,
+        items=[],
+        node_selected=True,
+        all_saved=True,
     )
     nodes = {n["label"]: n for n in ctx["folder_nodes"]}
 
-    assert nodes["Inbox"]["count"] == 2            # todo, both
-    assert nodes["All Saved"]["count"] == 3        # + filed
+    assert nodes["Inbox"]["count"] == 2  # todo, both
+    assert nodes["All Saved"]["count"] == 3  # + filed
     assert nodes["All Saved"]["active"] is True
     assert nodes["Inbox"]["active"] is False
     assert "kept=all" in nodes["All Saved"]["href"]
@@ -218,9 +247,17 @@ def test_archive_view_finds_its_items_in_every_sort_order(configured, sort_key):
     """
     sort_by, sort_dir = main._READ_SORTS[sort_key]
     rows = main.resolve_reader_backlog(
-        folder_id=None, list_feed_url=None, read_filter="all", star_only=True,
-        tag=None, sort_by=sort_by, sort_dir=sort_dir, search_query=None,
-        archived=True, limit=150, kept_scope="kept",
+        folder_id=None,
+        list_feed_url=None,
+        read_filter="all",
+        star_only=True,
+        tag=None,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        search_query=None,
+        archived=True,
+        limit=150,
+        kept_scope="kept",
     )
     assert [r["id"] for r in rows] == ["done"]
 
@@ -233,9 +270,17 @@ def test_archive_view_reaches_an_untagged_unstarred_item(configured):
     main.set_entry_archived(FEED, "bare", True)
 
     rows = main.resolve_reader_backlog(
-        folder_id=None, list_feed_url=None, read_filter="all", star_only=True,
-        tag=None, sort_by="post", sort_dir="desc", search_query=None,
-        archived=True, limit=150, kept_scope="kept",
+        folder_id=None,
+        list_feed_url=None,
+        read_filter="all",
+        star_only=True,
+        tag=None,
+        sort_by="post",
+        sort_dir="desc",
+        search_query=None,
+        archived=True,
+        limit=150,
+        kept_scope="kept",
     )
     assert "bare" in {r["id"] for r in rows}
 
@@ -246,19 +291,27 @@ def test_inbox_excludes_archived_in_every_sort_order(configured):
     for sort_key in ("new", "old", "recent", "starred"):
         sort_by, sort_dir = main._READ_SORTS[sort_key]
         rows = main.resolve_reader_backlog(
-            folder_id=None, list_feed_url=None, read_filter="all", star_only=True,
-            tag=None, sort_by=sort_by, sort_dir=sort_dir, search_query=None,
-            archived=False, limit=150, kept_scope="starred",
+            folder_id=None,
+            list_feed_url=None,
+            read_filter="all",
+            star_only=True,
+            tag=None,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            search_query=None,
+            archived=False,
+            limit=150,
+            kept_scope="starred",
         )
         assert "done" not in {r["id"] for r in rows}, sort_key
 
 
 # --- node bulk actions ----------------------------------------------------
 def test_scope_starred_keys_honors_tag_and_feed_together(configured):
-    """"Drilled down to a single feed with stars I don't need" means feed AND tag,
+    """ "Drilled down to a single feed with stars I don't need" means feed AND tag,
     not either alone."""
     keys = main._scope_starred_keys(None, None, "python")
-    assert {e for _f, e in keys} == {"both"}          # starred AND tagged python
+    assert {e for _f, e in keys} == {"both"}  # starred AND tagged python
 
     # Same tag, a feed that holds none of it.
     assert main._scope_starred_keys(None, "https://other.test/feed", "python") == []
@@ -279,27 +332,36 @@ def test_unstar_scope_removes_stars_and_keeps_tags(configured):
     main.apply_unstar_scope(cast(Request, _Req()), folder_id=None, list_feed_url=None, tag="python")
 
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT 1 FROM saved_entries WHERE entry_id = 'both'").fetchone() is None
+        assert conn.execute("SELECT 1 FROM saved_entries WHERE entry_id = 'both'").fetchone() is None
     # The tag is untouched: dropping a tag is a different action entirely.
     assert main.get_manual_tags_for_entry(FEED, "both") == ["python"]
     # An untagged star elsewhere in the library is out of scope and survives.
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT 1 FROM saved_entries WHERE entry_id = 'todo'").fetchone() is not None
+        assert conn.execute("SELECT 1 FROM saved_entries WHERE entry_id = 'todo'").fetchone() is not None
 
 
 def test_delete_tag_takes_two_taps(configured):
     """Irreversible, so the first tap only arms it — a browser confirm() is an
     awkward thing to hit on the Supernote's WebView."""
     armed = main._build_read_mode_context(
-        _NO_REQUEST, folder_id=1, tag="python", archived=False, q=None, items=[],
-        node_selected=True, confirm_delete_tag="1",
+        _NO_REQUEST,
+        folder_id=1,
+        tag="python",
+        archived=False,
+        q=None,
+        items=[],
+        node_selected=True,
+        confirm_delete_tag="1",
     )
     assert armed["node_actions"]["confirm_delete_tag"] is True
 
     unarmed = main._build_read_mode_context(
-        _NO_REQUEST, folder_id=1, tag="python", archived=False, q=None, items=[],
+        _NO_REQUEST,
+        folder_id=1,
+        tag="python",
+        archived=False,
+        q=None,
+        items=[],
         node_selected=True,
     )
     assert unarmed["node_actions"]["confirm_delete_tag"] is False
@@ -309,7 +371,12 @@ def test_delete_tag_takes_two_taps(configured):
 def test_no_actions_row_on_the_archive_node(configured):
     """Archive is a review surface, not a place to bulk-destroy curation."""
     ctx = main._build_read_mode_context(
-        _NO_REQUEST, folder_id=None, tag=None, archived=True, q=None, items=[],
+        _NO_REQUEST,
+        folder_id=None,
+        tag=None,
+        archived=True,
+        q=None,
+        items=[],
         node_selected=True,
     )
     assert ctx["node_actions"] is None
@@ -381,7 +448,7 @@ def test_saved_folder_nodes_count_kept_not_starred(configured):
     """
     inbox, _feed_counts, _archived, filed = main._read_mode_saved_index()
 
-    assert {e for _f, e in inbox} == {"todo", "both"}          # starred only
+    assert {e for _f, e in inbox} == {"todo", "both"}  # starred only
     assert {e for _f, e in (inbox | filed)} == {"todo", "both", "filed"}
 
 
@@ -390,14 +457,13 @@ def test_reader_images_are_proxied_to_the_same_origin():
     """The precache manifest can only list same-origin URLs, so an article with
     absolute image srcs cached its HTML and none of its pictures — it read fine
     offline with every image broken."""
-    html = main.proxy_all_body_images(
-        '<p>x</p><img src="http://3.bp.blogspot.com/x/Boil.JPG">')
+    html = main.proxy_all_body_images('<p>x</p><img src="http://3.bp.blogspot.com/x/Boil.JPG">')
 
     assert 'src="/api/img?u=http%3A%2F%2F3.bp.blogspot.com%2Fx%2FBoil.JPG"' in html
 
 
 def test_proxying_leaves_alone_what_is_already_safe():
-    for src in ('/api/img?u=x', 'data:image/png;base64,AAAA'):
+    for src in ("/api/img?u=x", "data:image/png;base64,AAAA"):
         html = f'<img src="{src}">'
         assert main.proxy_all_body_images(html) == html
 
@@ -405,8 +471,7 @@ def test_proxying_leaves_alone_what_is_already_safe():
 def test_srcset_is_dropped_so_the_browser_cannot_route_around_the_proxy():
     """Left in place the browser picks a direct URL over the proxied src, and the
     manifest misses the image again."""
-    out = main.proxy_all_body_images(
-        '<img src="https://x.test/a.jpg" srcset="https://x.test/a-2x.jpg 2x">')
+    out = main.proxy_all_body_images('<img src="https://x.test/a.jpg" srcset="https://x.test/a-2x.jpg 2x">')
 
     assert "srcset" not in out
     assert "/api/img?u=https%3A%2F%2Fx.test%2Fa.jpg" in out
@@ -429,8 +494,7 @@ def test_dead_feed_beacons_are_dropped_rather_than_proxied():
     the URLs answer 404 with an HTML error page. Proxying them turned each into a
     fetch that could only fail, and /api/img rejecting the non-image response
     logged a 422 per beacon per article view."""
-    for u in ("http://feeds.feedburner.com/~ff/Blog?d=yIl2AUoC8zA",
-              "http://feedproxy.google.com/~r/Blog/~4/abc"):
+    for u in ("http://feeds.feedburner.com/~ff/Blog?d=yIl2AUoC8zA", "http://feedproxy.google.com/~r/Blog/~4/abc"):
         assert main._drop_feed_beacon_images(f'<img src="{u}">') == ""
 
 

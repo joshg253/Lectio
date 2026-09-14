@@ -8,6 +8,7 @@ per-entry audio URL, so the app can fill in a player as a fallback.
 
 Pure parsing only — fetching and persistence live in the app layer.
 """
+
 from __future__ import annotations
 
 from urllib.parse import urlparse
@@ -18,8 +19,17 @@ import feedparser
 # strings (common on podcast CDNs) don't defeat the check. Mirrors the app's
 # enclosure detection.
 _AUDIO_EXTS = (
-    ".mp3", ".m4a", ".m4b", ".aac", ".ogg", ".oga", ".opus",
-    ".flac", ".wav", ".mp4", ".m4v",
+    ".mp3",
+    ".m4a",
+    ".m4b",
+    ".aac",
+    ".ogg",
+    ".oga",
+    ".opus",
+    ".flac",
+    ".wav",
+    ".mp4",
+    ".m4v",
 )
 
 

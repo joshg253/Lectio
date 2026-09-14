@@ -5,6 +5,7 @@ so these tests are about the matcher: it must find the node the user clicked
 even when the stored tree has drifted from the rendered one, and must refuse to
 guess when it can't.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -12,11 +13,7 @@ from bs4 import BeautifulSoup
 
 from services import content_edits
 
-HTML = (
-    "<p>First paragraph.</p>"
-    '<div class="related alignright"><a href="/x">Related junk</a></div>'
-    "<p>Second paragraph.</p>"
-)
+HTML = '<p>First paragraph.</p><div class="related alignright"><a href="/x">Related junk</a></div><p>Second paragraph.</p>'
 
 
 def _op(html: str, path: list[int], op: str = content_edits.OP_REMOVE) -> dict:
@@ -36,9 +33,7 @@ def test_remove_by_path():
 
 
 def test_isolate_keeps_only_the_selection():
-    new_html, applied, unmatched = content_edits.apply_ops(
-        HTML, [_op(HTML, [2], content_edits.OP_ISOLATE)]
-    )
+    new_html, applied, unmatched = content_edits.apply_ops(HTML, [_op(HTML, [2], content_edits.OP_ISOLATE)])
     assert applied == 1 and unmatched == []
     assert new_html.strip() == "<p>Second paragraph.</p>"
 
@@ -82,8 +77,7 @@ def test_unmatched_op_is_reported_not_guessed():
 def test_ambiguous_fingerprint_is_left_unmatched():
     """Two identical nodes and a path that resolves to neither: refuse."""
     html = "<ul><li>same</li><li>same</li></ul>"
-    op = {"op": "remove", "path": [9], "fp": content_edits.fingerprint(
-        BeautifulSoup("<li>same</li>", "html.parser").li)}
+    op = {"op": "remove", "path": [9], "fp": content_edits.fingerprint(BeautifulSoup("<li>same</li>", "html.parser").li)}
     _new_html, applied, unmatched = content_edits.apply_ops(html, [op])
     assert applied == 0 and len(unmatched) == 1
 
@@ -109,14 +103,17 @@ def test_empty_body_is_refused():
         content_edits.apply_ops("   ", [{"op": "remove", "path": [0], "fp": {"tag": "p"}}])
 
 
-@pytest.mark.parametrize("payload", [
-    "not json",
-    "[]",
-    '[{"op": "explode", "path": [0], "fp": {}}]',
-    '[{"op": "remove", "path": [], "fp": {}}]',
-    '[{"op": "remove", "path": [-1], "fp": {}}]',
-    '[{"op": "remove", "path": [0]}]',
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not json",
+        "[]",
+        '[{"op": "explode", "path": [0], "fp": {}}]',
+        '[{"op": "remove", "path": [], "fp": {}}]',
+        '[{"op": "remove", "path": [-1], "fp": {}}]',
+        '[{"op": "remove", "path": [0]}]',
+    ],
+)
 def test_parse_ops_rejects_malformed_payloads(payload):
     with pytest.raises(content_edits.ContentEditError):
         content_edits.parse_ops(payload)
@@ -136,15 +133,18 @@ def test_every_refusal_carries_a_code_the_route_can_map():
     import main
 
     codes = set()
-    for payload in ("not json", "[]", '[{"op": "explode", "path": [0], "fp": {}}]',
-                    '[{"op": "remove", "path": [], "fp": {}}]',
-                    '[{"op": "remove", "path": [0]}]'):
+    for payload in (
+        "not json",
+        "[]",
+        '[{"op": "explode", "path": [0], "fp": {}}]',
+        '[{"op": "remove", "path": [], "fp": {}}]',
+        '[{"op": "remove", "path": [0]}]',
+    ):
         try:
             content_edits.parse_ops(payload)
         except content_edits.ContentEditError as exc:
             codes.add(exc.code)
-    for html_in, ops in (("   ", [{"op": "remove", "path": [0], "fp": {"tag": "p"}}]),
-                         ("<p>only</p>", [_op("<p>only</p>", [0])])):
+    for html_in, ops in (("   ", [{"op": "remove", "path": [0], "fp": {"tag": "p"}}]), ("<p>only</p>", [_op("<p>only</p>", [0])])):
         try:
             content_edits.apply_ops(html_in, ops)
         except content_edits.ContentEditError as exc:
@@ -157,10 +157,12 @@ def test_every_refusal_carries_a_code_the_route_can_map():
 
 def test_too_many_ops_is_mapped_too():
     import main
+
     try:
         content_edits.parse_ops([{"op": "remove", "path": [0], "fp": {}}] * (content_edits.MAX_OPS + 1))
     except content_edits.ContentEditError as exc:
         assert exc.code in main._CLEANUP_ERROR_MESSAGES
+
 
 # --- text as the last resort -------------------------------------------------
 #
@@ -170,15 +172,12 @@ def test_too_many_ops_is_mapped_too():
 # disagrees for nodes that are plainly the same paragraph, which is how
 # "remove this boilerplate" reported that nothing could be matched.
 
-_BOILER = ("I am the author. I write essays about technology and philosophy, "
-           "and here are a few things I have built.")
+_BOILER = "I am the author. I write essays about technology and philosophy, and here are a few things I have built."
 
 
 def test_a_node_is_found_by_text_when_structure_disagrees():
     stored = f'<p class="stored-only">{_BOILER}</p><p>The actual article.</p>'
-    ops = [{"op": "remove", "path": [99],
-            "fp": {"tag": "p", "id": "", "cls": ["rendered-only"],
-                   "text": _BOILER, "kids": 0, "src": ""}}]
+    ops = [{"op": "remove", "path": [99], "fp": {"tag": "p", "id": "", "cls": ["rendered-only"], "text": _BOILER, "kids": 0, "src": ""}}]
 
     html, applied, unmatched = content_edits.apply_ops(stored, ops)
 
@@ -190,9 +189,7 @@ def test_a_node_is_found_by_text_when_structure_disagrees():
 def test_ambiguous_text_is_refused():
     """Deleting the wrong paragraph is worse than declining to delete one."""
     stored = f"<p>{_BOILER}</p><p>{_BOILER}</p>"
-    ops = [{"op": "remove", "path": [99],
-            "fp": {"tag": "p", "id": "", "cls": ["x"], "text": _BOILER,
-                   "kids": 0, "src": ""}}]
+    ops = [{"op": "remove", "path": [99], "fp": {"tag": "p", "id": "", "cls": ["x"], "text": _BOILER, "kids": 0, "src": ""}}]
 
     _html, applied, unmatched = content_edits.apply_ops(stored, ops)
 
@@ -205,17 +202,14 @@ def test_short_text_is_not_enough_for_the_TEXT_fallback():
     structural scorer can still match a short node on its own evidence (exact
     text plus child count), and that behaviour is deliberately unchanged."""
     root = BeautifulSoup('<div><p class="a">Read more</p></div>', "html.parser").div
-    target = {"tag": "p", "id": "", "cls": ["b"], "text": "Read more",
-              "kids": 0, "src": ""}
+    target = {"tag": "p", "id": "", "cls": ["b"], "text": "Read more", "kids": 0, "src": ""}
 
     assert content_edits._resolve_by_text(root, target) is None
 
 
 def test_a_different_tag_is_never_matched_by_text():
     stored = f"<div>{_BOILER}</div>"
-    ops = [{"op": "remove", "path": [99],
-            "fp": {"tag": "p", "id": "", "cls": [], "text": _BOILER,
-                   "kids": 0, "src": ""}}]
+    ops = [{"op": "remove", "path": [99], "fp": {"tag": "p", "id": "", "cls": [], "text": _BOILER, "kids": 0, "src": ""}}]
 
     _html, applied, _unmatched = content_edits.apply_ops(stored, ops)
 
@@ -228,14 +222,14 @@ def test_a_fingerprint_truncated_by_utf16_units_still_matches():
     compared equal — a post whose first paragraph began with an emoji could not
     be cleaned up at all. cleanup.js slices by code point now; this covers ops
     recorded before that, and any future divergence of the same shape."""
-    body = ("\U0001F355 I am the author. I write essays about technology and "
-            "philosophy, and here are a few things I have built for you to read.")
+    body = (
+        "\U0001f355 I am the author. I write essays about technology and "
+        "philosophy, and here are a few things I have built for you to read."
+    )
     stored = f"<p>{body}</p><p>The actual article.</p>"
     # Exactly what the old client sent: truncation counted in UTF-16 units.
-    js_text = body.encode("utf-16-le")[: content_edits._TEXT_PREFIX_LEN * 2].decode(
-        "utf-16-le", errors="ignore")
-    ops = [{"op": "remove", "path": [99],
-            "fp": {"tag": "p", "id": "", "cls": [], "text": js_text, "kids": 0, "src": ""}}]
+    js_text = body.encode("utf-16-le")[: content_edits._TEXT_PREFIX_LEN * 2].decode("utf-16-le", errors="ignore")
+    ops = [{"op": "remove", "path": [99], "fp": {"tag": "p", "id": "", "cls": [], "text": js_text, "kids": 0, "src": ""}}]
 
     html, applied, unmatched = content_edits.apply_ops(stored, ops)
 
@@ -249,8 +243,7 @@ def test_the_text_fallback_needs_a_long_enough_passage():
     match a short node on its own evidence (exact text, unique in the document),
     and that behaviour is deliberately unchanged."""
     root = BeautifulSoup("<div><p>Short lead in.</p></div>", "html.parser").div
-    target = {"tag": "p", "id": "", "cls": [], "text": "Short lead in.",
-              "kids": 0, "src": ""}
+    target = {"tag": "p", "id": "", "cls": [], "text": "Short lead in.", "kids": 0, "src": ""}
 
     assert content_edits._resolve_by_text(root, target) is None
 
@@ -258,8 +251,7 @@ def test_the_text_fallback_needs_a_long_enough_passage():
 def test_the_text_fallback_refuses_two_candidates_sharing_a_prefix():
     """A prefix long enough to pass the floor still must not be ambiguous."""
     lead = "I am the author and I write essays about technology and philosophy"
-    root = BeautifulSoup(
-        f"<div><p>{lead} one.</p><p>{lead} two.</p></div>", "html.parser").div
+    root = BeautifulSoup(f"<div><p>{lead} one.</p><p>{lead} two.</p></div>", "html.parser").div
     target = {"tag": "p", "id": "", "cls": [], "text": lead, "kids": 0, "src": ""}
 
     assert content_edits._resolve_by_text(root, target) is None

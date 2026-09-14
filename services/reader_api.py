@@ -56,8 +56,12 @@ class _TimedCursor(sqlite3.Cursor):
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d sql=%s",
-                            int(elapsed_ms), conn._lectio_progress_steps, " ".join(str(sql).split())[:200])
+                LOGGER.info(
+                    "[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d sql=%s",
+                    int(elapsed_ms),
+                    conn._lectio_progress_steps,
+                    " ".join(str(sql).split())[:200],
+                )
 
     def executemany(self, sql, parameters):
         conn = cast("_TimedConnection", self.connection)
@@ -68,8 +72,12 @@ class _TimedCursor(sqlite3.Cursor):
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d executemany sql=%s",
-                            int(elapsed_ms), conn._lectio_progress_steps, " ".join(str(sql).split())[:200])
+                LOGGER.info(
+                    "[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d executemany sql=%s",
+                    int(elapsed_ms),
+                    conn._lectio_progress_steps,
+                    " ".join(str(sql).split())[:200],
+                )
 
     def fetchall(self):
         # `execute()` above only times statement *preparation*; a plain SELECT
@@ -88,8 +96,12 @@ class _TimedCursor(sqlite3.Cursor):
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
                 sql = getattr(self, "_lectio_sql", "?")
-                LOGGER.info("[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d fetchall sql=%s",
-                            int(elapsed_ms), conn._lectio_progress_steps - steps_before, " ".join(str(sql).split())[:200])
+                LOGGER.info(
+                    "[perf] slow_sql db=reader elapsed_ms=%d progress_steps=%d fetchall sql=%s",
+                    int(elapsed_ms),
+                    conn._lectio_progress_steps - steps_before,
+                    " ".join(str(sql).split())[:200],
+                )
 
 
 class _TimedConnection(sqlite3.Connection):
@@ -132,16 +144,14 @@ if os.getenv("LECTIO_PERF_DEBUG", "0") == "1":
 class _ExtraReaderKwargs(TypedDict, total=False):
     session_timeout: tuple[float, float]
 
+
 # Honest default identity for feed fetches — names the app + links the repo.
 _HONEST_USER_AGENT = "Lectio/0.1 (+https://github.com/joshg253/Lectio)"
 # Browser identity used ONLY for feeds an honest fetch was refused on (403/415/
 # 429/503/hang). A full header set, not just the UA — some WAFs (e.g. nginx 415)
 # sniff for Sec-Fetch-*/Accept-Language, not the UA alone. Applied via a per-feed
 # request hook, never preemptively. See main.get_browser_ua_feed_urls.
-_BROWSER_USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
+_BROWSER_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 _BROWSER_HEADERS = {
     "User-Agent": _BROWSER_USER_AGENT,
     "Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.7",
@@ -201,6 +211,7 @@ class _LectioReaderStorage(_ReaderStorage):
             db.execute("PRAGMA synchronous=NORMAL")
         except Exception:
             pass
+
 
 # Some feeds have a leading newline (or other whitespace) before their <?xml
 # declaration, which violates the XML spec and causes Python's expat parser to
@@ -319,9 +330,7 @@ def _fix_feed_response(session, response, request, **kwargs):
     # left to fail as a parse error so the recorded failure says so — see
     # services.bot_challenge for why the status code cannot be used to tell them
     # apart (SiteGround serves its captcha as a 202).
-    _challenge = bot_challenge.detect_challenge(
-        response.headers.get("Content-Type"), raw_bytes
-    )
+    _challenge = bot_challenge.detect_challenge(response.headers.get("Content-Type"), raw_bytes)
     if _challenge:
         response.raw = io.BytesIO(raw_bytes)
         response._content = raw_bytes
@@ -406,14 +415,12 @@ class ReaderApi:
         # waits. It is a per-socket-read deadline, not a total one — a host that
         # trickles bytes can still outlast it, which is what the scheduler watchdog
         # in main.py is for.
-        extra: _ExtraReaderKwargs = (
-            {} if self._session_timeout is None else {"session_timeout": self._session_timeout}
-        )
+        extra: _ExtraReaderKwargs = {} if self._session_timeout is None else {"session_timeout": self._session_timeout}
         r = make_reader(
             self._db_path,
-            feed_root='',
+            feed_root="",
             _storage=storage,
-            plugins=['.entry_dedupe', '.enclosure_dedupe'],
+            plugins=[".entry_dedupe", ".enclosure_dedupe"],
             **extra,
         )
 
@@ -423,26 +430,26 @@ class ReaderApi:
         # retriever exists when we try to access it.  Inserting at position 0 puts
         # our hook first in the list → it gets popped last → runs after post_init.
         def _add_response_hook(parser: object) -> None:
-            for prefix in ('https://', 'http://'):
+            for prefix in ("https://", "http://"):
                 retr = parser.retrievers.get(prefix)  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
                 if retr is None:
                     continue
                 # FRB080/082/086: identify as Lectio, not as the underlying library.
-                if hasattr(retr, 'session'):
-                    retr.session.headers['User-Agent'] = _HONEST_USER_AGENT
+                if hasattr(retr, "session"):
+                    retr.session.headers["User-Agent"] = _HONEST_USER_AGENT
                 # Per-feed browser-identity escalation for feeds an honest fetch was
                 # refused on. Runs before the request is sent and only swaps headers
                 # for flagged feeds — every other feed keeps the honest UA.
-                if hasattr(retr, 'request_hooks') and self._browser_ua_provider is not None:
+                if hasattr(retr, "request_hooks") and self._browser_ua_provider is not None:
                     retr.request_hooks.append(self._make_browser_ua_request_hook())
-                if hasattr(retr, 'request_hooks') and self._proxy_resolver is not None:
+                if hasattr(retr, "request_hooks") and self._proxy_resolver is not None:
                     retr.request_hooks.append(self._make_proxy_request_hook())
                 # Last among request hooks: for a flagged feed it replaces the
                 # request outright (method/url/body), so it must have final say
                 # over whatever the browser-UA/proxy hooks did to it first.
-                if hasattr(retr, 'request_hooks') and self._flaresolverr_resolver is not None:
+                if hasattr(retr, "request_hooks") and self._flaresolverr_resolver is not None:
                     retr.request_hooks.append(self._make_flaresolverr_request_hook())
-                if hasattr(retr, 'response_hooks'):
+                if hasattr(retr, "response_hooks"):
                     # Must run BEFORE _fix_feed_response: it unwraps FlareSolverr's
                     # JSON envelope back into plain feed bytes, which _fix_feed_response
                     # then cleans up exactly like any other fetch's response.
@@ -490,7 +497,7 @@ class ReaderApi:
                 proxy_url = resolver(str(request.url)) if resolver else None
             except Exception:
                 pass  # never let proxy selection break a fetch
-            if hasattr(session, 'proxies'):
+            if hasattr(session, "proxies"):
                 session.proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else {}
             return request
 

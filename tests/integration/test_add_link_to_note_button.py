@@ -1,4 +1,4 @@
-""""Add link to Note" quick-capture (raised 2026-08-30, corrected 2026-08-31):
+""" "Add link to Note" quick-capture (raised 2026-08-30, corrected 2026-08-31):
 a fast way to drop a link into the Global Note while browsing, e.g. to report
 a problem with a specific entry. The entry-pane button appends the current
 Lectio page URL (this entry, in this app) rather than the source article's
@@ -6,6 +6,7 @@ own link -- that's the link that's actually useful for reporting a problem
 back, since it reopens THIS entry in Lectio. Client-side (window.location.href),
 so the button no longer needs the entry's link stamped on it at render time,
 and renders unconditionally rather than only when the entry has a link."""
+
 from __future__ import annotations
 
 import pytest
@@ -44,14 +45,23 @@ def tenant(tmp_path):
     with main.get_reader() as reader:
         reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
         reader.disable_feed_updates(FEED)
-        reader.add_entry({
-            "feed_url": FEED, "id": "e1", "title": "Post", "link": LINK,
-            "content": [{"value": "<p>hello</p>"}],
-        })
-        reader.add_entry({
-            "feed_url": FEED, "id": "e2", "title": "No-link post",
-            "content": [{"value": "<p>hi</p>"}],
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "e1",
+                "title": "Post",
+                "link": LINK,
+                "content": [{"value": "<p>hello</p>"}],
+            }
+        )
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "e2",
+                "title": "No-link post",
+                "content": [{"value": "<p>hi</p>"}],
+            }
+        )
     try:
         yield
     finally:

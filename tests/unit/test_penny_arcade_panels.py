@@ -12,6 +12,7 @@ article image (the plugin never declared should_skip_source_lookup, so its
 og:image fallback never ran), and the panel-bypass then returned None for the
 thumbnail rather than falling back — so the list showed nothing at all.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -51,21 +52,19 @@ def test_non_comic_entries_are_left_alone(plugin):
 
 
 def test_other_hosts_are_not_rewritten(plugin):
-    assert plugin.thumbnail_from_lead_image(
-        entry_link=COMIC, lead_url="https://example.com/comics/x.jpg") is None
+    assert plugin.thumbnail_from_lead_image(entry_link=COMIC, lead_url="https://example.com/comics/x.jpg") is None
 
 
 @pytest.mark.parametrize("ext", [".jpg", ".jpeg", ".png", ".webp"])
 def test_each_image_extension_is_handled(plugin, ext):
-    out = plugin.thumbnail_from_lead_image(
-        entry_link=COMIC, lead_url=f"https://assets.penny-arcade.com/comics/abc{ext}")
+    out = plugin.thumbnail_from_lead_image(entry_link=COMIC, lead_url=f"https://assets.penny-arcade.com/comics/abc{ext}")
     assert out == f"https://assets.penny-arcade.com/comics/panels/abc-p1{ext}"
 
 
 def test_a_url_that_is_not_a_comic_image_is_ignored(plugin):
-    assert plugin.thumbnail_from_lead_image(
-        entry_link=COMIC,
-        lead_url="https://assets.penny-arcade.com/img/avatars/avatar-tycho.jpg") is None
+    assert (
+        plugin.thumbnail_from_lead_image(entry_link=COMIC, lead_url="https://assets.penny-arcade.com/img/avatars/avatar-tycho.jpg") is None
+    )
 
 
 # ── The render path must not undo the resolution ─────────────────────────────
@@ -73,6 +72,7 @@ def test_a_url_that_is_not_a_comic_image_is_ignored(plugin):
 # re-scanned the source page at render time for a bodyless webcomic entry and
 # injected whatever it found — panel 1 — discarding the full strip that had just
 # been resolved. Three places had to agree before the article was right.
+
 
 def test_a_plugin_owned_host_is_not_rescanned_at_render_time(monkeypatch):
     import main
@@ -85,9 +85,7 @@ def test_a_plugin_owned_host_is_not_rescanned_at_render_time(monkeypatch):
 
     monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image", _boom)
     monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
-    monkeypatch.setattr(
-        main.lead_image_service, "_plugin_should_skip_source_lookup",
-        lambda *, entry_link: True)
+    monkeypatch.setattr(main.lead_image_service, "_plugin_should_skip_source_lookup", lambda *, entry_link: True)
 
     entry = type("E", (), {"link": COMIC})()
     out, hero = main._inject_webcomic_panel_into_bodyless_entry("", entry, "f", FULL)
@@ -102,12 +100,10 @@ def test_a_host_with_no_plugin_opinion_still_scans(monkeypatch):
     import main
 
     monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
+    monkeypatch.setattr(main.lead_image_service, "_plugin_should_skip_source_lookup", lambda *, entry_link: False)
     monkeypatch.setattr(
-        main.lead_image_service, "_plugin_should_skip_source_lookup",
-        lambda *, entry_link: False)
-    monkeypatch.setattr(
-        main.lead_image_service, "_fetch_source_lead_image",
-        lambda link, is_webcomic=False: "https://cdn.example.com/real-comic.png")
+        main.lead_image_service, "_fetch_source_lead_image", lambda link, is_webcomic=False: "https://cdn.example.com/real-comic.png"
+    )
 
     entry = type("E", (), {"link": "https://mahonoir.com/comic/1"})()
     out, hero = main._inject_webcomic_panel_into_bodyless_entry("", entry, "f", "https://cdn.example.com/share-card.png")
@@ -133,15 +129,12 @@ def test_a_body_that_already_had_its_own_image_is_not_rescanned(monkeypatch):
 
     monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image", _boom)
     monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
-    monkeypatch.setattr(
-        main.lead_image_service, "_plugin_should_skip_source_lookup",
-        lambda *, entry_link: False)
+    monkeypatch.setattr(main.lead_image_service, "_plugin_should_skip_source_lookup", lambda *, entry_link: False)
 
     entry = type("E", (), {"link": "https://www.misfile.com/hell-high/9426"})()
     lead = "https://www.misfile.com/comics/1788467221-page1528.jpg"
     body = '<p><a href="https://www.misfile.com/hell-high/9426"><br/>New comic!</a><br/>Today\'s News:<br/></p>'
-    out, hero = main._inject_webcomic_panel_into_bodyless_entry(
-        body, entry, "f", lead, body_had_image=True)
+    out, hero = main._inject_webcomic_panel_into_bodyless_entry(body, entry, "f", lead, body_had_image=True)
 
     assert out == body, "the text-only body should be left exactly as-is"
     assert hero == lead, "the already-resolved lead must stay the hero, not be dropped"
@@ -168,15 +161,12 @@ def test_body_had_image_does_not_suppress_injection_when_lead_is_hidden(monkeypa
 
     monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image", _fake_scan)
     monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
-    monkeypatch.setattr(
-        main.lead_image_service, "_plugin_should_skip_source_lookup",
-        lambda *, entry_link: False)
+    monkeypatch.setattr(main.lead_image_service, "_plugin_should_skip_source_lookup", lambda *, entry_link: False)
 
     entry = type("E", (), {"link": "https://www.misfile.com/hell-high/9426"})()
     lead = "https://www.misfile.com/comics/1788467221-page1528.jpg"
     body = '<p><a href="https://www.misfile.com/hell-high/9426"><br/>New comic!</a><br/>Today\'s News:<br/></p>'
-    out, hero = main._inject_webcomic_panel_into_bodyless_entry(
-        body, entry, "f", lead, body_had_image=True, show_lead_in_article=False)
+    out, hero = main._inject_webcomic_panel_into_bodyless_entry(body, entry, "f", lead, body_had_image=True, show_lead_in_article=False)
 
     assert scanned, "the comic must still be fetched when nothing will render the hero"
     assert "real-comic.png" in out

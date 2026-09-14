@@ -10,6 +10,7 @@ Key virtual feed IDs (used in getHeadlines):
   -3  Fresh articles
   -4  All articles
 """
+
 from __future__ import annotations
 
 import httpx
@@ -27,6 +28,7 @@ class AuthError(RuntimeError):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _api_url(base_url: str) -> str:
     # SSRF guard: the single JSON-RPC endpoint all requests POST to. Validating
@@ -57,6 +59,7 @@ def _rpc(client: httpx.Client, url: str, sid: str | None, op: str, **params) -> 
 # Auth
 # ---------------------------------------------------------------------------
 
+
 def login(base_url: str, username: str, password: str) -> str:
     """Return a session_id string or raise AuthError / RuntimeError."""
     url = _api_url(base_url)
@@ -81,6 +84,7 @@ def test_connection(base_url: str, username: str, password: str) -> dict:
 # ---------------------------------------------------------------------------
 # Data fetchers
 # ---------------------------------------------------------------------------
+
 
 def get_categories(base_url: str, sid: str) -> list[dict]:
     """Return user-defined categories (folders). Skips virtual negative-ID cats."""
@@ -120,9 +124,11 @@ def get_starred_headlines(
     url = _api_url(base_url)
     with httpx.Client(timeout=_TIMEOUT) as client:
         content = _rpc(
-            client, url, sid,
+            client,
+            url,
+            sid,
             "getHeadlines",
-            feed_id=-1,          # -1 = Starred articles virtual feed
+            feed_id=-1,  # -1 = Starred articles virtual feed
             view_mode="all_articles",
             show_content=True,
             include_attachments=False,
@@ -149,6 +155,7 @@ def get_labels(base_url: str, sid: str) -> list[dict]:
 # Item normaliser
 # ---------------------------------------------------------------------------
 
+
 def normalize_headline(
     headline: dict,
     feed_info_map: dict[int, dict],
@@ -167,11 +174,7 @@ def normalize_headline(
 
     # Labels: [[id, caption, fg, bg, checked], ...]
     raw_labels = headline.get("labels") or []
-    tags = [
-        row[1].lower()
-        for row in raw_labels
-        if isinstance(row, list) and len(row) >= 2 and row[1]
-    ]
+    tags = [row[1].lower() for row in raw_labels if isinstance(row, list) and len(row) >= 2 and row[1]]
 
     published = headline.get("updated") or headline.get("published")
 

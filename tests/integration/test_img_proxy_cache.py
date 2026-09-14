@@ -4,6 +4,7 @@ SSRF wiring is covered in test_img_proxy_ssrf.py; here we test the cache itself:
 hit/miss, downscaling on store, no-upscale, animated/unknown pass-through, the
 last-accessed TTL eviction, and that a hit bumps last_accessed.
 """
+
 from __future__ import annotations
 
 import io
@@ -218,7 +219,10 @@ def test_flaresolverr_cookies_reused_for_image_fetch(monkeypatch):
     to hand back an image's raw bytes and a plain request without the cookie
     would just 403 again."""
     main.page_fetcher._state.record_cookies(
-        main.page_fetcher._user_id(), "waf.test", (("cf_clearance", "solved-token", None),), now=time.time(),
+        main.page_fetcher._user_id(),
+        "waf.test",
+        (("cf_clearance", "solved-token", None),),
+        now=time.time(),
     )
 
     captured_kwargs = []

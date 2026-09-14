@@ -1,6 +1,7 @@
 """The Saved Articles view: star_only composes with the unread read filter
 (the sidebar Saved view can narrow to unread), and the sidebar badge counts
 only unread starred entries."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -27,12 +28,14 @@ def configured(tmp_path):
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
         for i, read in (("e1", False), ("e2", True), ("e3", False)):
-            reader.add_entry({
-                "feed_url": FEED,
-                "id": i,
-                "title": f"post {i}",
-                "link": f"https://example.test/{i}",
-            })
+            reader.add_entry(
+                {
+                    "feed_url": FEED,
+                    "id": i,
+                    "title": f"post {i}",
+                    "link": f"https://example.test/{i}",
+                }
+            )
             if read:
                 reader.set_entry_read((FEED, i), True)
     # Star e1 (unread) and e2 (read); e3 stays unstarred.
@@ -80,10 +83,14 @@ def test_read_filter_starred_is_literal_stars_not_tagged(configured):
     """Requirement: literal stars only, not the broader star-OR-tag "kept"
     signal — a manually tagged-but-unstarred entry must not appear."""
     with main.get_reader() as reader:
-        reader.add_entry({
-            "feed_url": FEED, "id": "e4", "title": "post e4",
-            "link": "https://example.test/e4",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "e4",
+                "title": "post e4",
+                "link": "https://example.test/e4",
+            }
+        )
     main.set_manual_tags_for_entry(FEED, "e4", "keep")
     posts = main.list_entries_for_feeds({FEED}, read_filter="starred")
     assert _ids(posts) == ["e1", "e2"]
@@ -103,13 +110,15 @@ def test_old_starred_entries_survive_the_fetch_window(configured):
     with main.get_reader() as reader:
         # e1/e2 are starred (from the fixture); bury them under newer noise.
         for i in range(10):
-            reader.add_entry({
-                "feed_url": FEED,
-                "id": f"noise-{i}",
-                "title": f"noise {i}",
-                "link": f"https://example.test/noise-{i}",
-                "published": datetime(2026, 7, 1, i, tzinfo=timezone.utc),
-            })
+            reader.add_entry(
+                {
+                    "feed_url": FEED,
+                    "id": f"noise-{i}",
+                    "title": f"noise {i}",
+                    "link": f"https://example.test/noise-{i}",
+                    "published": datetime(2026, 7, 1, i, tzinfo=timezone.utc),
+                }
+            )
     # A tiny limit forces the old windowed fetch to see only the noise.
     posts = main.list_entries_for_feeds({FEED}, limit=3, read_filter="all", star_only=True)
     assert _ids(posts) == ["e1", "e2"]
@@ -118,11 +127,13 @@ def test_old_starred_entries_survive_the_fetch_window(configured):
 def test_saved_counts_by_folder_totals(configured):
     """Sublist badges are TOTAL saved per folder (the Saved view defaults to
     All), keyed by the folder→feeds map; folders without saves are omitted."""
-    counts = main.get_saved_counts_by_folder({
-        1: {FEED, "https://other.test/feed"},   # root-ish: both starred entries
-        7: {FEED},                               # folder holding the feed: 2 saves
-        9: {"https://other.test/feed"},          # no saves here
-    })
+    counts = main.get_saved_counts_by_folder(
+        {
+            1: {FEED, "https://other.test/feed"},  # root-ish: both starred entries
+            7: {FEED},  # folder holding the feed: 2 saves
+            9: {"https://other.test/feed"},  # no saves here
+        }
+    )
     assert counts == {1: 2, 7: 2}
 
 
@@ -139,12 +150,14 @@ def test_search_matches_all_terms(configured):
     FTS index, which is retired. Terms AND together, and the match must work
     beyond the newest-N window semantics of the old scan."""
     with main.get_reader() as reader:
-        reader.add_entry({
-            "feed_url": FEED,
-            "id": "searchable",
-            "title": "The bottle burger viral puzzle",
-            "link": "https://example.test/bottle",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "searchable",
+                "title": "The bottle burger viral puzzle",
+                "link": "https://example.test/bottle",
+            }
+        )
     posts = main.list_entries_for_feeds({FEED}, search_query="bottle burger", read_filter="all")
     assert [p["id"] for p in posts] == ["searchable"]
     # No cross-term false positives.

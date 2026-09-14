@@ -3,6 +3,7 @@ reads. Some columns were added by ALTER statements that ran *before* their
 table's CREATE, so on a fresh DB the ALTER hit "no such table" (swallowed) and
 the base CREATE made the table without them — get_feed_properties then raised
 "no such column: image_alt". The columns are now in the base CREATE."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -131,9 +132,7 @@ def test_existing_db_missing_columns_is_upgraded(tmp_path):
 
 def test_fresh_schema_has_entry_feed_tags(fresh_meta):
     assert "entry_feed_tags" in _tables(fresh_meta)
-    assert {"feed_url", "entry_id", "tag", "first_seen_at"} <= _columns(
-        fresh_meta, "entry_feed_tags"
-    )
+    assert {"feed_url", "entry_id", "tag", "first_seen_at"} <= _columns(fresh_meta, "entry_feed_tags")
 
 
 def test_existing_db_gains_entry_feed_tags(tmp_path):
@@ -216,9 +215,7 @@ def test_archived_at_column_lifts_into_archived_entries(tmp_path):
         # re-lift it: un-archiving deleted the archived_entries row, the column
         # survived, and the next deploy resurrected the item. Reported live as
         # "I've unarchived them 3 times now and they keep coming back".
-        assert conn.execute(
-            "SELECT COUNT(*) FROM saved_entries WHERE archived_at IS NOT NULL"
-        ).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM saved_entries WHERE archived_at IS NOT NULL").fetchone()[0] == 0
 
         # The real test of one-time-ness: un-archive, reboot, stay un-archived.
         main.set_entry_archived("f", "archived", False)

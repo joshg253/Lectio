@@ -15,6 +15,7 @@ able and this must not be able to eat one.
     uv run python scripts/purge_html_assets.py            # dry run
     uv run python scripts/purge_html_assets.py --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -45,20 +46,18 @@ def purge_for_user(user_id: str, apply: bool) -> int:
     total = sum(int(r["byte_size"] or 0) for r in rows)
     print(f"[{user_id}] {len(rows):,} HTML asset(s), {total / 1e9:.2f} GB", flush=True)
     for r in rows[:5]:
-        print(f"    {int(r['byte_size'] or 0):>9,}B  {str(r['src'] or '(unlinked)')[:76]}",
-              flush=True)
+        print(f"    {int(r['byte_size'] or 0):>9,}B  {str(r['src'] or '(unlinked)')[:76]}", flush=True)
     if not rows:
         return 0
     if not apply:
         print("  dry run — re-run with --apply to delete", flush=True)
         return len(rows)
 
-    log = [{"asset_hash": str(r["asset_hash"]), "byte_size": int(r["byte_size"] or 0),
-            "source_url": str(r["src"] or "")} for r in rows]
+    log = [{"asset_hash": str(r["asset_hash"]), "byte_size": int(r["byte_size"] or 0), "source_url": str(r["src"] or "")} for r in rows]
     hashes = [str(r["asset_hash"]) for r in rows]
     with main.archive_conn() as conn:
         for start in range(0, len(hashes), 500):
-            chunk = hashes[start:start + 500]
+            chunk = hashes[start : start + 500]
             marks = ",".join("?" * len(chunk))
             conn.execute(f"DELETE FROM archived_asset_link WHERE asset_hash IN ({marks})", chunk)
             conn.execute(f"DELETE FROM archived_asset WHERE asset_hash IN ({marks})", chunk)
@@ -67,19 +66,17 @@ def purge_for_user(user_id: str, apply: bool) -> int:
     out = tenancy.meta_db_path().parent / f"purged_html_assets_{datetime.now():%Y%m%d-%H%M%S}.json"
     out.write_text(json.dumps(log, indent=2))
     print(f"  deleted {len(rows):,} asset(s), {total / 1e9:.2f} GB. Log: {out}", flush=True)
-    print("  Run VACUUM on the archive DB to hand the space back to the filesystem.",
-          flush=True)
+    print("  Run VACUUM on the archive DB to hand the space back to the filesystem.", flush=True)
     return len(rows)
 
 
 def main_cli() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="delete (default: dry run)")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
     args = ap.parse_args()
 
-    for uid in ([args.user] if args.user else main._background_user_ids()):
+    for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
             purge_for_user(uid, args.apply)
     return 0

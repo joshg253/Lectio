@@ -1,6 +1,7 @@
 """Scheduled refresh processes users sequentially within a tick. To avoid a
 fixed first-mover bias (and so a slow/hanging user doesn't always delay the same
 downstream users), the per-tick user order rotates round-robin."""
+
 from __future__ import annotations
 
 import pytest

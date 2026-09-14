@@ -33,6 +33,7 @@ Respects the same _YT_PLAYLIST_AUTO_PER_RUN_CAP (25 adds/call) as the live
 automation -- if a run reports exactly that many added, some may still be
 missing; re-run to continue.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -111,11 +112,13 @@ def _missing_against_live(rule: dict, feed_urls: set[str], cutoff: datetime, liv
         if vid in live_ids or vid in seen:
             continue
         seen.add(vid)
-        found.append({
-            "feed": str(getattr(entry, "feed_url", "") or ""),
-            "title": str(getattr(entry, "title", "") or ""),
-            "video_id": vid,
-        })
+        found.append(
+            {
+                "feed": str(getattr(entry, "feed_url", "") or ""),
+                "title": str(getattr(entry, "title", "") or ""),
+                "video_id": vid,
+            }
+        )
     return found
 
 
@@ -145,16 +148,14 @@ def _seed_already_present(rule: dict, feed_urls: set[str], cutoff: datetime, liv
 def run_for_user(uid: str, args: argparse.Namespace, cutoff: datetime) -> None:
     with main.get_meta_connection() as conn:
         all_rules = main.get_highlight_keywords(conn)
-        yt_rules = [
-            r for r in all_rules
-            if r.get("enabled") and r.get("type") == "youtube_playlist" and r.get("yt_playlist_id")
-        ]
+        yt_rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "youtube_playlist" and r.get("yt_playlist_id")]
         if not yt_rules:
             print(f"[{uid}] no enabled youtube_playlist rules")
             return
         folder_feed_map = {
             int(r["scope_id"]): main.get_folder_feed_urls(conn, int(r["scope_id"]))
-            for r in yt_rules if r["scope"] == "folder" and str(r.get("scope_id", "")).isdigit()
+            for r in yt_rules
+            if r["scope"] == "folder" and str(r.get("scope_id", "")).isdigit()
         }
         scope_feeds = [_rule_scope_feed_urls(conn, r) for r in yt_rules]
 
@@ -184,7 +185,12 @@ def run_for_user(uid: str, args: argparse.Namespace, cutoff: datetime) -> None:
         return
 
     added = main._apply_youtube_playlist_rules(
-        all_feed_urls, cutoff, yt_rules, folder_feed_map, token, trigger="backfill",
+        all_feed_urls,
+        cutoff,
+        yt_rules,
+        folder_feed_map,
+        token,
+        trigger="backfill",
     )
     print(f"[{uid}] added {added} video(s)")
     if added >= main._YT_PLAYLIST_AUTO_PER_RUN_CAP:
@@ -196,7 +202,8 @@ def main_cli() -> None:
     ap.add_argument("--apply", action="store_true", help="Perform writes/API calls (default: dry-run report only).")
     ap.add_argument("--user", default=None, help="Restrict to one user_id (default: all enabled users).")
     ap.add_argument(
-        "--since", default=(datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d"),
+        "--since",
+        default=(datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d"),
         help="Only consider entries added on/after this date, YYYY-MM-DD (default: 60 days back).",
     )
     args = ap.parse_args()

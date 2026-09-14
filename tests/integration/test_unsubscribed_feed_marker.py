@@ -9,6 +9,7 @@ that feed.
 A feed in no folder is NOT unsubscribed: it lives under the virtual
 Uncategorized folder, and marking it would be wrong.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -39,8 +40,7 @@ def env(tmp_path, monkeypatch):
             reader.add_feed(url, allow_invalid_url=True, exist_ok=True)
     with main.get_meta_connection() as conn:
         root = main.get_root_folder_id(conn)
-        conn.execute("INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
-                     (root, LIVE))
+        conn.execute("INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (root, LIVE))
         conn.execute("INSERT OR IGNORE INTO kept_feeds (feed_url) VALUES (?)", (KEPT,))
         conn.commit()
     try:

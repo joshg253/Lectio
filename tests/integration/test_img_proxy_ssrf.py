@@ -5,6 +5,7 @@ here we confirm the /api/img route maps the helper's outcomes to the right HTTP
 status codes. /api/img is auth-exempt, so no login is needed. safe_get_async is
 stubbed so the test does no network or DNS I/O.
 """
+
 from __future__ import annotations
 
 import io

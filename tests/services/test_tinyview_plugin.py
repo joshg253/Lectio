@@ -6,6 +6,7 @@ should be — reported as "loads a mockup of the whole webpage sans imgs". The
 panels are in that HTML all along, as absolute cdn.tinyview.com URLs, so the
 plugin only has to prefer that host over assets.tinyview.com.
 """
+
 from __future__ import annotations
 
 from services.lead_image_plugins import TinyviewPlugin
@@ -25,9 +26,7 @@ def test_panels_outscore_site_assets():
 
 def test_other_sites_are_untouched():
     p = TinyviewPlugin()
-    assert p.source_score_adjustment(
-        source_url="https://example.com/post", attrs={}, resolved_url=PANEL
-    ) == 0
+    assert p.source_score_adjustment(source_url="https://example.com/post", attrs={}, resolved_url=PANEL) == 0
 
 
 def test_a_cached_site_asset_is_bypassed():
@@ -40,6 +39,4 @@ def test_a_cached_site_asset_is_bypassed():
 
 def test_non_tinyview_entries_keep_their_cache():
     p = TinyviewPlugin()
-    assert p.should_bypass_cached_url(
-        entry_link="https://example.com/post", cached_url=SKELETON
-    ) is False
+    assert p.should_bypass_cached_url(entry_link="https://example.com/post", cached_url=SKELETON) is False

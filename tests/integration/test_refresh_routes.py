@@ -1,4 +1,5 @@
 """Integration tests for manual and scheduled feed refresh HTTP routes."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -157,6 +158,7 @@ def test_refresh_feed_route_throttled_skips_update(monkeypatch):
 # half, which is what actually carries the value into the redirect.
 # ---------------------------------------------------------------------------
 
+
 def _refresh_ok(monkeypatch):
     monkeypatch.setattr(main, "check_and_mark_manual_refresh", lambda: 0)
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_connection)
@@ -182,8 +184,7 @@ def test_feed_refresh_with_empty_sort_fields_does_not_put_one_in_the_redirect(mo
     with TestClient(app) as client:
         response = client.post(
             "/refresh/feed",
-            data={"folder_id": "2", "feed_url": "https://feed.example/rss.xml",
-                  "sort_by": "", "sort_dir": ""},
+            data={"folder_id": "2", "feed_url": "https://feed.example/rss.xml", "sort_by": "", "sort_dir": ""},
             follow_redirects=False,
         )
     assert "sort_dir=" not in response.headers["location"]

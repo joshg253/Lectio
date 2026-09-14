@@ -1,6 +1,7 @@
 """Readability strips all <iframe> embeds and sometimes keeps the lead image
 twice. _reinject_readability_embeds recovers allowlisted players from the raw
 page; _dedupe_readability_images drops the duplicate <img>."""
+
 from __future__ import annotations
 
 import main
@@ -50,11 +51,7 @@ def test_absolutizes_relative_media_urls():
     """Reader view is served from Lectio's origin, so relative image/link URLs
     (e.g. fabiensanglard.net's page-relative `model_m.webp`) must be resolved
     against the source page or they 404."""
-    html = (
-        '<article><img src="model_m.webp">'
-        '<img src="../2168/keyboard/the_precious.webp">'
-        '<a href="more.html">link</a></article>'
-    )
+    html = '<article><img src="model_m.webp"><img src="../2168/keyboard/the_precious.webp"><a href="more.html">link</a></article>'
     out = main._absolutize_article_urls(html, "https://fabiensanglard.net/keyboards/index.html")
     assert 'src="https://fabiensanglard.net/keyboards/model_m.webp"' in out
     assert 'src="https://fabiensanglard.net/2168/keyboard/the_precious.webp"' in out
@@ -77,14 +74,11 @@ def test_unwraps_wayback_image_proxy_url():
     fragile proxy."""
     html = (
         '<figure><img src="http://web.archive.org/web/20251005150628im_/'
-        'https://beehiiv-images-production.s3.amazonaws.com/uploads/asset/file/'
+        "https://beehiiv-images-production.s3.amazonaws.com/uploads/asset/file/"
         'x/max.jpg?t=1759359474"></figure>'
     )
     out = main._unwrap_wayback_image_urls(html)
-    assert (
-        'src="https://beehiiv-images-production.s3.amazonaws.com/uploads/asset/file/'
-        'x/max.jpg?t=1759359474"' in out
-    )
+    assert 'src="https://beehiiv-images-production.s3.amazonaws.com/uploads/asset/file/x/max.jpg?t=1759359474"' in out
     assert "web.archive.org" not in out
 
 

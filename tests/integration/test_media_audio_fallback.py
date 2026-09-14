@@ -2,6 +2,7 @@
 re-parses the raw feed in the background and caches per-entry audio URLs in
 entry_media_audio; _resolve_entry_audio_url consults that cache (and only
 re-scans a feed when its TTL is due)."""
+
 from __future__ import annotations
 
 import time
@@ -120,14 +121,11 @@ def test_failed_borrow_records_not_ok(configured, monkeypatch):
         content = b'<?xml version="1.0"?><rss version="2.0"><channel><title>T</title></channel></rss>'
 
     monkeypatch.setattr(main.url_guard, "safe_get", lambda client, url, **kw: _Resp())
-    monkeypatch.setattr(main, "_discover_suggested_audio_feed",
-                        lambda fu: "https://feeds.buzzsprout.com/1.rss")
+    monkeypatch.setattr(main, "_discover_suggested_audio_feed", lambda fu: "https://feeds.buzzsprout.com/1.rss")
     monkeypatch.setattr(main, "_borrow_audio_from_feed", lambda fu, host: None)
     main._scan_feed_media_audio(FEED)
     with main.get_meta_connection() as conn:
-        row = conn.execute(
-            "SELECT found, ok FROM feed_media_scan WHERE feed_url = ?", (FEED,)
-        ).fetchone()
+        row = conn.execute("SELECT found, ok FROM feed_media_scan WHERE feed_url = ?", (FEED,)).fetchone()
         assert tuple(row) == (0, 0)
         assert main._media_scan_due(conn, FEED) is False  # just scanned; not due yet
 
@@ -139,14 +137,11 @@ def test_clean_empty_scan_records_ok(configured, monkeypatch):
         content = b'<?xml version="1.0"?><rss version="2.0"><channel><title>T</title></channel></rss>'
 
     monkeypatch.setattr(main.url_guard, "safe_get", lambda client, url, **kw: _Resp())
-    monkeypatch.setattr(main, "_discover_suggested_audio_feed",
-                        lambda fu: "https://feeds.buzzsprout.com/1.rss")
+    monkeypatch.setattr(main, "_discover_suggested_audio_feed", lambda fu: "https://feeds.buzzsprout.com/1.rss")
     monkeypatch.setattr(main, "_borrow_audio_from_feed", lambda fu, host: {})
     main._scan_feed_media_audio(FEED)
     with main.get_meta_connection() as conn:
-        row = conn.execute(
-            "SELECT found, ok FROM feed_media_scan WHERE feed_url = ?", (FEED,)
-        ).fetchone()
+        row = conn.execute("SELECT found, ok FROM feed_media_scan WHERE feed_url = ?", (FEED,)).fetchone()
         assert tuple(row) == (0, 1)
 
 
@@ -155,12 +150,10 @@ def test_suggested_audio_feed_stored_when_no_media(configured, monkeypatch):
     # discovering a podcast-host feed and record the suggestion.
     class _Resp:
         status_code = 200
-        content = (b'<?xml version="1.0"?><rss version="2.0"><channel><title>T</title>'
-                   b"<item><guid>e1</guid></item></channel></rss>")
+        content = b'<?xml version="1.0"?><rss version="2.0"><channel><title>T</title><item><guid>e1</guid></item></channel></rss>'
 
     monkeypatch.setattr(main.url_guard, "safe_get", lambda client, url, **kw: _Resp())
-    monkeypatch.setattr(main, "_discover_suggested_audio_feed",
-                        lambda fu: "https://feeds.libsyn.com/21070/rss")
+    monkeypatch.setattr(main, "_discover_suggested_audio_feed", lambda fu: "https://feeds.libsyn.com/21070/rss")
     main._scan_feed_media_audio(FEED)
     with main.get_meta_connection() as conn:
         assert main._get_suggested_audio_feed(conn, FEED) == "https://feeds.libsyn.com/21070/rss"
@@ -173,7 +166,7 @@ def test_scan_persists_recovered_youtube_ids(configured, monkeypatch):
         '<?xml version="1.0"?>'
         '<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">'
         "<channel><title>T</title>"
-        '<item><guid>e1</guid><content:encoded><![CDATA['
+        "<item><guid>e1</guid><content:encoded><![CDATA["
         '<figure class="wp-block-embed-youtube"><iframe '
         'src="https://www.youtube.com/embed/weFUWLfaP28"></iframe></figure>'
         "]]></content:encoded></item></channel></rss>"
@@ -192,8 +185,7 @@ def test_scan_persists_recovered_youtube_ids(configured, monkeypatch):
 
 
 def test_inject_recovered_youtube_embeds_rebuilds_player():
-    stored = ('<p>x</p><figure class="wp-block-embed is-provider-youtube">'
-              '<div class="wp-block-embed__wrapper"></div></figure>')
+    stored = '<p>x</p><figure class="wp-block-embed is-provider-youtube"><div class="wp-block-embed__wrapper"></div></figure>'
     out = main._inject_recovered_youtube_embeds(stored, ["weFUWLfaP28"])
     assert "youtube-nocookie.com/embed/weFUWLfaP28" in out
     assert "wp-block-embed__wrapper" not in out
@@ -204,8 +196,7 @@ def test_inject_recovered_youtube_embeds_rebuilds_player():
 def test_inject_recovered_youtube_embeds_fills_artstation_video_wrapper():
     # ArtStation leaves an empty <div class="video-wrapper"> (not a wp figure)
     # when the embed iframe is stripped at ingest.
-    stored = ('<p>intro</p>'
-              '<div class="video-wrapper media-asset-container media-asset"></div>')
+    stored = '<p>intro</p><div class="video-wrapper media-asset-container media-asset"></div>'
     out = main._inject_recovered_youtube_embeds(stored, ["oDMjofFNLSk"])
     assert "youtube-nocookie.com/embed/oDMjofFNLSk" in out
     assert 'class="video-wrapper' not in out
@@ -223,16 +214,16 @@ def _capture_uas(monkeypatch):
     class _FakeClient:
         def __init__(self, *a, headers=None, **kw):
             uas.append((headers or {}).get("User-Agent"))
+
         def __enter__(self):
             return self
+
         def __exit__(self, *a):
             return False
 
     @contextlib.contextmanager
     def _fake_reader():
-        yield SimpleNamespace(
-            get_entries=lambda **kw: [SimpleNamespace(link="https://ep.test/1")]
-        )
+        yield SimpleNamespace(get_entries=lambda **kw: [SimpleNamespace(link="https://ep.test/1")])
 
     monkeypatch.setattr(main, "get_reader", _fake_reader)
     monkeypatch.setattr(main.httpx, "Client", _FakeClient)
@@ -263,8 +254,7 @@ def test_discovery_escalates_to_browser_ua_only_on_403(configured, monkeypatch):
         SimpleNamespace(status_code=403, text="blocked", content=b"blocked"),
         SimpleNamespace(status_code=200, text="<html>https://feeds.buzzsprout.com/1.rss</html>"),
     ]
-    monkeypatch.setattr(main.url_guard, "safe_get",
-                        lambda client, url, **kw: responses.pop(0))
+    monkeypatch.setattr(main.url_guard, "safe_get", lambda client, url, **kw: responses.pop(0))
     found = main._discover_suggested_audio_feed(FEED)
     assert found == "https://feeds.buzzsprout.com/1.rss"
     assert uas == [main.LECTIO_HONEST_USER_AGENT, main.PODCAST_FETCH_USER_AGENT]

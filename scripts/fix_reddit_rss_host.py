@@ -9,6 +9,7 @@ rows, failure-state reset, and seeds the feed_url_rewrites alias.
     uv run python scripts/fix_reddit_rss_host.py            # dry run
     uv run python scripts/fix_reddit_rss_host.py --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -54,12 +55,14 @@ def main_cli() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="migrate them (default: dry run)")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
-    ap.add_argument("--force", action="store_true",
-                     help="skip Change URL's probe validation (avoids the HEAD-cascade "
-                          "fallback that trips reddit's anon rate limit on a 429)")
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="skip Change URL's probe validation (avoids the HEAD-cascade fallback that trips reddit's anon rate limit on a 429)",
+    )
     args = ap.parse_args()
 
-    for uid in ([args.user] if args.user else main._background_user_ids()):
+    for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
             fix_for_user(uid, args.apply, force=1 if args.force else 0)
     return 0

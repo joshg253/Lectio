@@ -3,6 +3,7 @@ archive is kept while it's starred OR tagged, and unsubscribed-but-curated feeds
 are retained (hidden from the tree) so their items stay browsable in the Kept
 (Saved) view.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -59,11 +60,13 @@ def archive_spy(monkeypatch):
     archived: list[tuple[str, str]] = []
     removed: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        main.starred_archive_service, "enqueue_archive",
+        main.starred_archive_service,
+        "enqueue_archive",
         lambda f, e: archived.append((f, e)),
     )
     monkeypatch.setattr(
-        main.starred_archive_service, "enqueue_removal",
+        main.starred_archive_service,
+        "enqueue_removal",
         lambda f, e: removed.append((f, e)),
     )
     return archived, removed
@@ -80,6 +83,7 @@ def _star(feed_url: str, entry_id: str) -> None:
 # ---------------------------------------------------------------------------
 # Part A — archive keep-guard
 # ---------------------------------------------------------------------------
+
 
 def test_tagging_enqueues_archive(reader_with_entries, archive_spy):
     archived, removed = archive_spy
@@ -134,8 +138,8 @@ def test_star_off_keeps_archive_when_still_tagged(reader_with_entries, archive_s
     resp = _unstar_via_route(FEED, "e0")
 
     assert resp.status_code == 200
-    assert main._entry_is_starred(FEED, "e0") is False   # star cleared
-    assert (FEED, "e0") not in removed                    # tag still keeps the archive
+    assert main._entry_is_starred(FEED, "e0") is False  # star cleared
+    assert (FEED, "e0") not in removed  # tag still keeps the archive
 
 
 def test_star_off_releases_archive_when_untagged(reader_with_entries, archive_spy):
@@ -146,7 +150,7 @@ def test_star_off_releases_archive_when_untagged(reader_with_entries, archive_sp
     resp = _unstar_via_route(FEED, "e1")
 
     assert resp.status_code == 200
-    assert (FEED, "e1") in removed                        # no keep signal left → released
+    assert (FEED, "e1") in removed  # no keep signal left → released
 
 
 def test_should_keep_archive_truth_table(reader_with_entries):
@@ -161,32 +165,33 @@ def test_should_keep_archive_truth_table(reader_with_entries):
 
 def test_delete_everywhere_releases_archive_for_last_unstarred_tag(reader_with_entries, archive_spy):
     archived, removed = archive_spy
-    main.set_manual_tags_for_entry(FEED, "e0", "shared")   # unstarred → release
+    main.set_manual_tags_for_entry(FEED, "e0", "shared")  # unstarred → release
     main.set_manual_tags_for_entry(FEED, "e1", "shared keep")  # keeps 'keep'
     _star(FEED, "e2")
-    main.set_manual_tags_for_entry(FEED, "e2", "shared")   # starred → keep
+    main.set_manual_tags_for_entry(FEED, "e2", "shared")  # starred → keep
 
     removed.clear()
     main.delete_manual_tag_everywhere("shared")
 
-    assert (FEED, "e0") in removed        # lost its only tag, unstarred
-    assert (FEED, "e1") not in removed    # still has 'keep'
-    assert (FEED, "e2") not in removed    # still starred
+    assert (FEED, "e0") in removed  # lost its only tag, unstarred
+    assert (FEED, "e1") not in removed  # still has 'keep'
+    assert (FEED, "e2") not in removed  # still starred
 
 
 # ---------------------------------------------------------------------------
 # Part B — unified Kept view + kept-feed state
 # ---------------------------------------------------------------------------
 
+
 def test_kept_view_includes_tagged_not_starred(reader_with_entries, archive_spy):
     main.set_manual_tags_for_entry(FEED, "e0", "todo")  # tagged, not starred
-    _star(FEED, "e1")                                   # starred, not tagged
+    _star(FEED, "e1")  # starred, not tagged
     # e2, e3 untouched — neither kept
 
     posts = main.list_entries_for_feeds({FEED}, star_only=True, sort_dir="desc")
     ids = {p["id"] for p in posts}
-    assert "e0" in ids   # tagged surfaces in the Kept view
-    assert "e1" in ids   # starred still surfaces
+    assert "e0" in ids  # tagged surfaces in the Kept view
+    assert "e1" in ids  # starred still surfaces
     assert "e2" not in ids
     assert "e3" not in ids
 
@@ -195,7 +200,7 @@ def test_kept_feed_hidden_from_reader_feed_urls(reader_with_entries):
     assert FEED in main.get_all_reader_feed_urls()
     with main.get_meta_connection() as conn:
         conn.execute("INSERT OR IGNORE INTO kept_feeds (feed_url) VALUES (?)", (FEED,))
-    assert FEED not in main.get_all_reader_feed_urls()          # hidden from tree/All Feeds
+    assert FEED not in main.get_all_reader_feed_urls()  # hidden from tree/All Feeds
     assert FEED in main.get_all_reader_feed_urls(include_kept=True)
     assert FEED in main.get_kept_feed_urls()
 

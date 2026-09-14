@@ -1,5 +1,6 @@
 """FeedTagService: persistence of feed-provided entry tags (entry_feed_tags),
 plus the parser-side capture sink in reader_sanitize."""
+
 from __future__ import annotations
 
 import io
@@ -136,18 +137,13 @@ def test_extract_whitespace_compaction():
 
 
 def _feed_xml(items: str) -> bytes:
-    return (
-        '<?xml version="1.0"?><rss version="2.0">'
-        f"<channel><title>T</title>{items}</channel></rss>"
-    ).encode()
+    return (f'<?xml version="1.0"?><rss version="2.0"><channel><title>T</title>{items}</channel></rss>').encode()
 
 
 @pytest.fixture
 def sink():
     captured = []
-    reader_sanitize.set_entry_tag_sink(
-        lambda url, pairs: captured.append((url, pairs))
-    )
+    reader_sanitize.set_entry_tag_sink(lambda url, pairs: captured.append((url, pairs)))
     yield captured
     reader_sanitize.set_entry_tag_sink(None)
 
@@ -163,9 +159,7 @@ def test_parser_captures_category_tags(sink):
 
 
 def test_parser_guidless_rss_maps_by_link(sink):
-    raw = _feed_xml(
-        "<item><link>https://x.test/1</link><category>tagged</category></item>"
-    )
+    raw = _feed_xml("<item><link>https://x.test/1</link><category>tagged</category></item>")
     SanitizingFeedparserParser()(FEED, io.BytesIO(raw), {})
     assert sink == [(FEED, [("https://x.test/1", ["tagged"])])]
 
@@ -199,10 +193,7 @@ def test_raising_sink_does_not_break_parse():
 
     reader_sanitize.set_entry_tag_sink(boom)
     try:
-        raw = _feed_xml(
-            "<item><guid>e1</guid><link>https://x.test/1</link>"
-            "<category>Python</category></item>"
-        )
+        raw = _feed_xml("<item><guid>e1</guid><link>https://x.test/1</link><category>Python</category></item>")
         _feed, entries = SanitizingFeedparserParser()(FEED, io.BytesIO(raw), {})
         assert len(entries) == 1
     finally:
@@ -211,10 +202,7 @@ def test_raising_sink_does_not_break_parse():
 
 def test_no_sink_registered_is_fine():
     reader_sanitize.set_entry_tag_sink(None)
-    raw = _feed_xml(
-        "<item><guid>e1</guid><link>https://x.test/1</link>"
-        "<category>Python</category></item>"
-    )
+    raw = _feed_xml("<item><guid>e1</guid><link>https://x.test/1</link><category>Python</category></item>")
     _feed, entries = SanitizingFeedparserParser()(FEED, io.BytesIO(raw), {})
     assert len(entries) == 1
 
@@ -225,11 +213,11 @@ from services.feed_tags import extract_page_tags, tags_from_mrf_meta, tags_from_
 
 
 def test_page_tags_article_tag_metas():
-    html = '''<html><head>
+    html = """<html><head>
       <meta property="article:tag" content="Windows 11">
       <meta property="article:tag" content="Backup">
       <meta name="article:tag" content="Storage">
-    </head><body></body></html>'''
+    </head><body></body></html>"""
     assert extract_page_tags(html) == ["Windows 11", "Backup", "Storage"]
 
 
@@ -238,14 +226,14 @@ def test_page_tags_og_article_tag_metas():
     one-tag-per-meta convention (Open Graph's own og: prefix on the
     article: namespace), found live 2026-08-31 surveying untagged feeds
     once the page-fetch escalation fix made the page reachable at all."""
-    html = '''<meta property="og:article:section" content="Programming"/>
+    html = """<meta property="og:article:section" content="Programming"/>
       <meta property="og:article:tag" content="programming"/>
-      <meta property="og:article:tag" content="coding"/>'''
+      <meta property="og:article:tag" content="coding"/>"""
     assert extract_page_tags(html) == ["programming", "coding"]
 
 
 def test_page_tags_keywords_split_and_dedupe():
-    html = '''<meta name="keywords" content="python, AI,  python , machine learning">'''
+    html = """<meta name="keywords" content="python, AI,  python , machine learning">"""
     assert extract_page_tags(html) == ["python", "AI", "machine learning"]
 
 
@@ -258,8 +246,7 @@ def test_page_tags_keywords_falls_back_to_space_split_when_long_and_comma_free()
     """sethmlarson.dev: keywords ships space-separated, not comma-separated.
     Left whole this always exceeds the length cap and is silently dropped —
     found live 2026-08-31 surveying untagged feeds."""
-    html = ('<meta name="keywords" content="python pypi open source maintainer '
-            'urllib3 requests http networking security oss"/>')
+    html = '<meta name="keywords" content="python pypi open source maintainer urllib3 requests http networking security oss"/>'
     out = extract_page_tags(html)
     assert "python" in out
     assert "urllib3" in out
@@ -274,10 +261,14 @@ def test_page_tags_keywords_short_comma_free_value_stays_one_tag():
 
 
 def test_page_tags_ignores_other_metas_and_junk():
-    html = '''<meta property="og:title" content="Not a tag">
+    html = (
+        '''<meta property="og:title" content="Not a tag">
       <meta name="description" content="prose, with, commas">
       <meta property="article:tag" content="">
-      <meta property="article:tag" content="''' + ("x" * 80) + '''">'''
+      <meta property="article:tag" content="'''
+        + ("x" * 80)
+        + """">"""
+    )
     assert extract_page_tags(html) == []
 
 
@@ -287,6 +278,7 @@ def test_page_tags_ignores_other_metas_and_junk():
 # unrelated YouTube channels all produced the byte-identical six "tags"
 # ("Video, share, camera phone, video phone, free, upload", German shown
 # here). No other tier has anything real to key on for a YouTube page either.
+
 
 def test_youtube_watch_page_yields_nothing_even_with_a_keywords_meta():
     html = '<meta name="keywords" content="Video, teilen, Kamerahandy, Videohandy, kostenlos, hochladen">'
@@ -316,6 +308,7 @@ def test_non_youtube_host_is_unaffected():
 # not per-release taxonomy. Found live 2026-08-31 backfilling 7 different
 # repos' releases.atom feeds: every one produced the same four junk tags.
 
+
 def test_github_release_page_yields_nothing_even_with_real_looking_anchors():
     html = '<a rel="tag" href="/topics/devops">DevOps</a><a rel="tag" href="/topics/security">Security</a>'
     assert extract_page_tags(html, "https://github.com/dborth/fceugx/releases/tag/4.0.1") == []
@@ -341,6 +334,7 @@ def test_github_blog_is_unaffected():
 # semantic <nav> landmark (global mega-menu) and a second <ul class="nav-
 # secondary-menu"> sitting right after </nav> closes, neither wrapped in
 # anything the earlier tiers already knew to ignore.
+
 
 def test_semantic_nav_landmark_is_stripped():
     html = (
@@ -411,7 +405,8 @@ def test_junk_tags_dropped_at_capture():
 
 
 class _Tag:
-    def __init__(self, term): self.term, self.label, self.scheme = term, None, None
+    def __init__(self, term):
+        self.term, self.label, self.scheme = term, None, None
 
 
 class _Entry:
@@ -426,9 +421,15 @@ def test_html_entities_in_tags_are_decoded():
     """Feeds ship C&#43;&#43; for C++, &amp; for &, &#xF1; for ñ. Undecoded,
     each is a distinct tag from its readable twin and matches nothing a user
     would ever type. 99 such rows were live when this was found."""
-    out = extract_feed_entry_tags(_Entry(tags=[
-        _Tag("C&#43;&#43;"), _Tag("bricks &amp; minifigs"), _Tag("Bu&#xF1;uel"),
-    ]))
+    out = extract_feed_entry_tags(
+        _Entry(
+            tags=[
+                _Tag("C&#43;&#43;"),
+                _Tag("bricks &amp; minifigs"),
+                _Tag("Bu&#xF1;uel"),
+            ]
+        )
+    )
     assert out == ["C++", "bricks & minifigs", "Buñuel"]
 
 
@@ -475,8 +476,7 @@ def test_taxonomy_url_anchors_are_tags_whatever_their_class():
     misses Hugo's /tags/ and /categories/ entirely.
     """
     out = extract_page_tags(
-        '<a href="https://x.test/categories/personal/">personal</a>'
-        '<a href="https://x.test/tags/motivation/">#motivation</a>'
+        '<a href="https://x.test/categories/personal/">personal</a><a href="https://x.test/tags/motivation/">#motivation</a>'
     )
     assert out == ["personal", "motivation"]
 
@@ -501,8 +501,7 @@ def test_anchor_text_beats_the_slug():
     tag had been the surrounding sentence ("in XXX, YYY") instead of the anchors.
     """
     out = extract_page_tags(
-        '<p>Posted on 7/29/26 in <a href="/category/woot/">Woot!</a>, '
-        '<a href="/category/pet-supplies/">Pet Supplies</a></p>'
+        '<p>Posted on 7/29/26 in <a href="/category/woot/">Woot!</a>, <a href="/category/pet-supplies/">Pet Supplies</a></p>'
     )
     assert out == ["Woot!", "Pet Supplies"]
 
@@ -511,9 +510,7 @@ def test_a_leading_hash_is_stripped():
     """Display chrome, not part of the name — and Lectio uses "#" as its own tag
     marker everywhere. Stripping it also folds a term linked once as a category
     and once as a hash-prefixed tag."""
-    out = extract_page_tags(
-        '<a href="/categories/python/">python</a><a href="/tags/python/">#python</a>'
-    )
+    out = extract_page_tags('<a href="/categories/python/">python</a><a href="/tags/python/">#python</a>')
     assert out == ["python"]
 
 
@@ -624,11 +621,14 @@ def test_numbers_only_tags_are_dropped_from_both_sources():
     A stray "84" was harvested from lemire.me this way, and 580 stored rows were
     bare numbers.
     """
+
     class _Tag:
-        def __init__(self, term): self.term, self.label, self.scheme = term, None, None
+        def __init__(self, term):
+            self.term, self.label, self.scheme = term, None, None
 
     class _Entry:
-        def __init__(self, tags): self.tags = tags
+        def __init__(self, tags):
+            self.tags = tags
 
     assert extract_page_tags('<a href="/tag/84/">84</a><a href="/tag/rust/">rust</a>') == ["rust"]
     assert extract_feed_entry_tags(_Entry([_Tag("2014"), _Tag("666")])) == []
@@ -636,16 +636,27 @@ def test_numbers_only_tags_are_dropped_from_both_sources():
 
 def test_mixed_tags_containing_digits_survive():
     """Anything with a non-digit is real vocabulary and must be kept."""
+
     class _Tag:
-        def __init__(self, term): self.term, self.label, self.scheme = term, None, None
+        def __init__(self, term):
+            self.term, self.label, self.scheme = term, None, None
 
     class _Entry:
-        def __init__(self, tags): self.tags = tags
+        def __init__(self, tags):
+            self.tags = tags
 
-    out = extract_feed_entry_tags(_Entry([
-        _Tag("80s"), _Tag("3d"), _Tag("2.5 Admins"), _Tag("2020 election"),
-        _Tag("Windows 11"), _Tag("Doom (1993)"),
-    ]))
+    out = extract_feed_entry_tags(
+        _Entry(
+            [
+                _Tag("80s"),
+                _Tag("3d"),
+                _Tag("2.5 Admins"),
+                _Tag("2020 election"),
+                _Tag("Windows 11"),
+                _Tag("Doom (1993)"),
+            ]
+        )
+    )
     assert out == ["80s", "3d", "2.5 Admins", "2020 election", "Windows 11", "Doom (1993)"]
 
 
@@ -672,11 +683,14 @@ def test_one_or_two_years_on_a_page_survive():
 
 
 def test_vocabulary_counts_entries_and_orders_by_use(service):
-    service.record_entry_tags(FEED, [
-        ("e1", ["Python", "AI"]),
-        ("e2", ["Python"]),
-        ("e3", ["Python", "Rust"]),
-    ])
+    service.record_entry_tags(
+        FEED,
+        [
+            ("e1", ["Python", "AI"]),
+            ("e2", ["Python"]),
+            ("e3", ["Python", "Rust"]),
+        ],
+    )
     assert service.tag_vocabulary([FEED]) == [("Python", 3), ("AI", 1), ("Rust", 1)]
 
 
@@ -733,12 +747,12 @@ def test_prose_anchor_text_falls_back_to_the_slug():
 
 
 def test_a_long_link_text_is_not_a_tag():
-    html = ('<a href="https://x.test/tag/linux/">'
-            'Read our complete guide to everything Linux on the desktop</a>')
+    html = '<a href="https://x.test/tag/linux/">Read our complete guide to everything Linux on the desktop</a>'
     assert extract_page_tags(html) == ["linux"]
 
 
 # --- Taxonomy carried in the query string, not the path -----------------
+
 
 def test_query_string_taxonomy_is_read_as_a_tag():
     """Google Developers Blog's "posted in:" block. The path says /search/,
@@ -792,7 +806,7 @@ ARTSTATION_TAGS = (
     ' href="/search?query=Illustration"> #Illustration </a></li>'
     '<li class="project-tag"><a target="_blank" class="project-tag-item badge label-tag"'
     ' href="/search?query=Environmental Concept Art &amp; Design">'
-    ' #Environmental Concept Art &amp; Design </a></li>'
+    " #Environmental Concept Art &amp; Design </a></li>"
     '<li class="project-tag"><a target="_blank" class="project-tag-item badge label-tag"'
     ' href="/search?query=NoAI"> #NoAI </a></li><!----></ul></div>'
 )
@@ -800,7 +814,10 @@ ARTSTATION_TAGS = (
 
 def test_artstation_tag_block_is_harvested():
     assert extract_page_tags(ARTSTATION_TAGS) == [
-        "Digital 2D", "Illustration", "Environmental Concept Art & Design", "NoAI",
+        "Digital 2D",
+        "Illustration",
+        "Environmental Concept Art & Design",
+        "NoAI",
     ]
 
 
@@ -822,13 +839,15 @@ def test_taxonomy_href_anchor_survives_a_decorative_icon():
     around the visible "C++" label. Found live 2026-08-31 — the anchor was
     entirely invisible to every tier (not just this one) because the old
     120-char _ANCHOR_RE cap could never reach </a>."""
-    html = ('<a href="/tags/cpp/" class="relative pr-2 text-lg" data-x="y">'
-            '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
-            'class="inline-block opacity-80 -mr-3.5 size-4">'
-            '<path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M5 9l14 0" />'
-            '<path d="M5 15l14 0" /><path d="M11 4l-4 16" /><path d="M17 4l-4 16" /></svg>'
-            '&nbsp;<span>C++</span> </a>')
+    html = (
+        '<a href="/tags/cpp/" class="relative pr-2 text-lg" data-x="y">'
+        '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+        'class="inline-block opacity-80 -mr-3.5 size-4">'
+        '<path stroke="none" d="M0 0h24v24H0z" fill="none" /><path d="M5 9l14 0" />'
+        '<path d="M5 15l14 0" /><path d="M11 4l-4 16" /><path d="M17 4l-4 16" /></svg>'
+        "&nbsp;<span>C++</span> </a>"
+    )
     assert extract_page_tags(html) == ["C++"]
 
 
@@ -848,10 +867,9 @@ def test_titled_anchor_still_uses_its_title():
 # refuses us: gottadeal and realpython 403 even a browser identity, and their
 # section is right there in the link.
 
+
 def test_section_and_subsection_from_path():
-    assert tags_from_url_path(
-        "https://www.guitarplayer.com/lessons/advice-tips/some-long-headline"
-    ) == ["lessons", "advice tips"]
+    assert tags_from_url_path("https://www.guitarplayer.com/lessons/advice-tips/some-long-headline") == ["lessons", "advice tips"]
 
 
 def test_single_section():
@@ -876,9 +894,7 @@ def test_a_dated_permalink_yields_nothing():
 
 
 def test_a_year_inside_a_slug_is_not_a_date_segment():
-    assert tags_from_url_path(
-        "https://example.com/section/subsection/a-post-2026-roundup"
-    ) == ["section", "subsection"]
+    assert tags_from_url_path("https://example.com/section/subsection/a-post-2026-roundup") == ["section", "subsection"]
 
 
 def test_structure_words_are_dropped():
@@ -890,9 +906,7 @@ def test_front_main_routing_segments_are_dropped():
     2026-08-31 in the untagged-feed survey. "front"/"main" are this site's
     own URL routing, not a subject, same class as blog/entry/page already
     in the stopword list."""
-    assert tags_from_url_path(
-        "https://netbeans.apache.org/front/main/blogs/entry/netbeans-status-interview-at-javaone/"
-    ) == []
+    assert tags_from_url_path("https://netbeans.apache.org/front/main/blogs/entry/netbeans-status-interview-at-javaone/") == []
 
 
 def test_bad_input_is_safe():
@@ -901,15 +915,12 @@ def test_bad_input_is_safe():
 
 
 def test_path_tags_join_the_page_tags():
-    out = extract_page_tags('<a rel="tag" href="/x">Woot!</a>',
-                            "https://gottadeal.com/deals/a-slug-1")
+    out = extract_page_tags('<a rel="tag" href="/x">Woot!</a>', "https://gottadeal.com/deals/a-slug-1")
     assert "Woot!" in out and "deals" in out
 
 
 def test_path_tags_work_with_no_html_at_all():
-    assert extract_page_tags(None, "https://www.guitarplayer.com/lessons/advice-tips/x") == [
-        "lessons", "advice tips"
-    ]
+    assert extract_page_tags(None, "https://www.guitarplayer.com/lessons/advice-tips/x") == ["lessons", "advice tips"]
 
 
 # --- "Posted ... in <a>Category</a>, <a>Category</a>" byline ---------------
@@ -920,10 +931,13 @@ def test_path_tags_work_with_no_html_at_all():
 # match the /tag//category/ URL-shape tier either, since "deals" is the
 # site's own top-level section, not a taxonomy word.
 
+
 def test_posted_in_byline_anchors_are_captured():
-    html = ('<font color=#888888>Posted on 8/31/26 in '
-            '<a href="/deals/target">Target</a>, '
-            '<a href="/deals/household-essentials">Household Essentials</a></font>')
+    html = (
+        "<font color=#888888>Posted on 8/31/26 in "
+        '<a href="/deals/target">Target</a>, '
+        '<a href="/deals/household-essentials">Household Essentials</a></font>'
+    )
     out = extract_page_tags(html, "https://gottadeal.com/deals/some-slug-476534")
     assert "Target" in out
     assert "Household Essentials" in out
@@ -945,8 +959,7 @@ def test_posted_in_requires_an_adjacent_anchor():
 def test_posted_in_does_not_reach_past_a_run_of_anchors():
     """A sentence AFTER the anchor run must not get pulled in — only the
     anchors themselves are tags."""
-    html = ('Posted in <a href="/deals/target">Target</a> and other places '
-            'you might not expect to find a bargain this good.')
+    html = 'Posted in <a href="/deals/target">Target</a> and other places you might not expect to find a bargain this good.'
     out = extract_page_tags(html)
     assert out == ["Target"]
 
@@ -966,9 +979,12 @@ def test_filed_under_byline_anchors_are_captured():
 # taxonomy-href tier either ("tagged" isn't "tag"/"tags"). Found live
 # 2026-08-31.
 
+
 def test_itemprop_keywords_anchors_are_captured():
-    html = ('<a itemProp="keywords" href="/articles/tagged/developer-life">#developer-life</a>'
-            '<a itemProp="keywords" href="/articles/tagged/blogging">#blogging</a>')
+    html = (
+        '<a itemProp="keywords" href="/articles/tagged/developer-life">#developer-life</a>'
+        '<a itemProp="keywords" href="/articles/tagged/blogging">#blogging</a>'
+    )
     out = extract_page_tags(html)
     assert "developer-life" in out
     assert "blogging" in out
@@ -980,9 +996,9 @@ def test_itemprop_keywords_anchors_are_captured():
 # shape either — the accessibility label is the only signal. Found live
 # 2026-08-31 in the same untagged-feed survey as the og:article:tag fix.
 
+
 def test_aria_label_tagged_with_is_captured():
-    html = ('<a href="/google-calendar" aria-label="View all posts tagged with Google Calendar">'
-            '#google calendar</a>')
+    html = '<a href="/google-calendar" aria-label="View all posts tagged with Google Calendar">#google calendar</a>'
     assert extract_page_tags(html) == ["Google Calendar"]
 
 
@@ -992,21 +1008,24 @@ def test_aria_label_tagged_with_single_quotes():
 
 
 def test_aria_label_scoped_to_the_attribute_not_page_prose():
-    """"tagged with" appearing elsewhere on the page (not inside an
+    """ "tagged with" appearing elsewhere on the page (not inside an
     aria-label) must not become a tag."""
     html = "<p>This post is tagged with enthusiasm and a healthy dose of sarcasm.</p>"
     assert extract_page_tags(html) == []
 
 
 def test_aria_label_multiple_chips_all_captured():
-    html = ('<a aria-label="View all posts tagged with Google Calendar">a</a>'
-            '<a aria-label="View all posts tagged with Mail Merge for Gmail">b</a>')
+    html = (
+        '<a aria-label="View all posts tagged with Google Calendar">a</a>'
+        '<a aria-label="View all posts tagged with Mail Merge for Gmail">b</a>'
+    )
     out = extract_page_tags(html)
     assert "Google Calendar" in out
     assert "Mail Merge for Gmail" in out
 
 
 # --- the same taxonomy stated twice ----------------------------------------
+
 
 def test_meta_and_path_forms_collapse_to_one_chip():
     """A page can state one taxonomy two ways — a meta tag "Advice & Tips" and
@@ -1023,9 +1042,11 @@ def test_meta_and_path_forms_collapse_to_one_chip():
 
 # --- Future plc mrf:tags ---------------------------------------------------
 
+
 def test_mrf_meta_taxonomy():
-    html = ('<meta property="mrf:tags" content="region:GB;articleType:Deals;'
-            'channel:Music tech;control:serversidehawk;freeform:Joe Bonamassa">')
+    html = (
+        '<meta property="mrf:tags" content="region:GB;articleType:Deals;channel:Music tech;control:serversidehawk;freeform:Joe Bonamassa">'
+    )
     out = tags_from_mrf_meta(html)
     assert out == ["Deals", "Music tech", "Joe Bonamassa"]
 
@@ -1033,9 +1054,7 @@ def test_mrf_meta_taxonomy():
 def test_mrf_entities_do_not_split_the_pairs():
     """Pairs are ';'-separated and values carry entities that also end in ';',
     so a naive split yields 'Advice &amp' plus a stray 'Tips'."""
-    assert tags_from_mrf_meta(
-        '<meta property="mrf:tags" content="category:Advice &amp; Tips;channel:X">'
-    ) == ["Advice & Tips", "X"]
+    assert tags_from_mrf_meta('<meta property="mrf:tags" content="category:Advice &amp; Tips;channel:X">') == ["Advice & Tips", "X"]
 
 
 def test_mrf_absent_is_cheap_and_safe():
@@ -1063,6 +1082,7 @@ _SHOPIFY_ATOM = """<?xml version="1.0" encoding="UTF-8"?>
 
 def _first_entry(xml: str):
     import feedparser
+
     return feedparser.parse(xml.encode()).entries[0]
 
 
@@ -1087,9 +1107,8 @@ def test_vendor_folds_into_an_identical_category():
     """Case-insensitive dedupe: a store that also files the artist as a category
     must not produce the same chip twice."""
     import feedparser
-    entry = feedparser.FeedParserDict(
-        tags=[feedparser.FeedParserDict(term="Pearl Jam", label=None, scheme=None)],
-        s_vendor="pearl jam")
+
+    entry = feedparser.FeedParserDict(tags=[feedparser.FeedParserDict(term="Pearl Jam", label=None, scheme=None)], s_vendor="pearl jam")
     assert extract_feed_entry_tags(entry) == ["Pearl Jam"]
 
 

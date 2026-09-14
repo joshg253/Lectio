@@ -8,6 +8,7 @@ the real origin, then runs normal discovery (probe_url) there. This is a
 "suggest fix" affordance for the Failing Feeds panel -- never applied
 automatically, just pre-fills the existing (already-verified) Change URL flow.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -56,15 +57,13 @@ class TestSuggestFeedMigration:
         assert result["feeds"] == []
 
     def test_non_success_response_is_an_error(self):
-        with patch("services.feed_discovery._guarded_get",
-                    return_value=_mock_response(FEEDBURNER, "text/xml", status=404)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response(FEEDBURNER, "text/xml", status=404)):
             result = suggest_feed_migration(FEEDBURNER)
         assert result["status"] == "error"
 
     def test_no_canonical_link_yields_no_suggestion(self):
         html = "<html><head><title>Domain parked</title></head><body>For sale</body></html>"
-        with patch("services.feed_discovery._guarded_get",
-                    return_value=_mock_response(FEEDBURNER, "text/xml", html)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response(FEEDBURNER, "text/xml", html)):
             result = suggest_feed_migration(FEEDBURNER)
         assert result["status"] == "none"
         assert result["feeds"] == []
@@ -72,8 +71,7 @@ class TestSuggestFeedMigration:
 
     def test_canonical_pointing_back_at_feedburner_is_not_a_candidate(self):
         html = '<link rel="canonical" href="https://feeds.feedburner.com/JohnResig" />'
-        with patch("services.feed_discovery._guarded_get",
-                    return_value=_mock_response(FEEDBURNER, "text/xml", html)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response(FEEDBURNER, "text/xml", html)):
             result = suggest_feed_migration(FEEDBURNER)
         assert result["status"] == "none"
         assert result["feeds"] == []
@@ -81,10 +79,7 @@ class TestSuggestFeedMigration:
     def test_canonical_origin_resolved_via_probe_url(self):
         """The realistic John Resig case: canonical points off-host, and the
         origin's own page directly advertises its real feed."""
-        fb_html = (
-            '<link href="https://johnresig.com/style.css" rel="stylesheet" />'
-            '<link rel="canonical" href="https://johnresig.com/" />'
-        )
+        fb_html = '<link href="https://johnresig.com/style.css" rel="stylesheet" /><link rel="canonical" href="https://johnresig.com/" />'
         origin_html = (
             '<link rel="alternate" type="application/rss+xml" href="/feed/" title="RSS" />'
             + "<!-- padding so the body isn't mistaken for a bot-wall challenge page -->"
@@ -114,10 +109,7 @@ class TestSuggestFeedMigration:
         That must not come back as "found a candidate" — it's the same URL
         the caller already knows is broken."""
         fb_html = '<link rel="canonical" href="https://johnresig.com/" />'
-        origin_html = (
-            f'<link rel="alternate" type="application/rss+xml" href="{FEEDBURNER}" title="RSS" />'
-            + ("x" * 512)
-        )
+        origin_html = f'<link rel="alternate" type="application/rss+xml" href="{FEEDBURNER}" title="RSS" />' + ("x" * 512)
 
         def fake_get(url, **_kwargs):
             if url == FEEDBURNER:
@@ -155,8 +147,7 @@ class TestSuggestFeedMigration:
 
     def test_feeds2_host_also_supported(self):
         html = "<html></html>"
-        with patch("services.feed_discovery._guarded_get",
-                    return_value=_mock_response(FEEDBURNER2, "text/xml", html)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response(FEEDBURNER2, "text/xml", html)):
             result = suggest_feed_migration(FEEDBURNER2)
         assert result["status"] == "none"
         assert result["message"] != "No known migration for this feed's host."

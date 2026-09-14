@@ -30,8 +30,8 @@ from pathlib import Path
 from scripts.categorize_uncategorized import RULES  # heuristic fallback
 
 PFX = "lectio.manual_tag."
-THRESH = 0.60      # top folder must own >= 60% of a tag's foldered feeds
-MIN_FEEDS = 2      # ...backed by at least this many feeds
+THRESH = 0.60  # top folder must own >= 60% of a tag's foldered feeds
+MIN_FEEDS = 2  # ...backed by at least this many feeds
 EXCLUDE_FOLDERS = {"All Feeds", "_Lectio"}
 
 
@@ -73,7 +73,7 @@ def main() -> None:
 
     feed_tags: dict[str, set[str]] = defaultdict(set)
     for feed, key in rc.execute(f"SELECT DISTINCT feed, key FROM entry_tags WHERE key LIKE '{PFX}%'"):
-        feed_tags[feed].add(key[len(PFX):])
+        feed_tags[feed].add(key[len(PFX) :])
 
     # 1. tag -> folder distribution from foldered feeds
     tag_folder: dict[str, Counter] = defaultdict(Counter)
@@ -119,12 +119,16 @@ def main() -> None:
             folder = _heuristic(f + " || " + titles.get(f, "") + " || " + " || ".join(samples.get(f, [])))
             method = "heuristic" if folder else ""
         m[method or "blank"] += 1
-        rows.append({
-            "feed_url": f, "title": titles.get(f, f), "suggested_folder": folder,
-            "method": method,
-            "tags": ",".join(sorted(feed_tags.get(f, ()))),
-            "samples": " | ".join(samples.get(f, [])),
-        })
+        rows.append(
+            {
+                "feed_url": f,
+                "title": titles.get(f, f),
+                "suggested_folder": folder,
+                "method": method,
+                "tags": ",".join(sorted(feed_tags.get(f, ()))),
+                "samples": " | ".join(samples.get(f, [])),
+            }
+        )
 
     with open(args.out, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=["feed_url", "title", "suggested_folder", "method", "tags", "samples"])

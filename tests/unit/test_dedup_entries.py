@@ -1,4 +1,5 @@
 """Tests that _run_now_dedup returns an 'entries' list for history logging."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -135,8 +136,7 @@ def test_slug_dedup_returns_kept_list(monkeypatch):
     e2 = _fake_entry("https://feed2.example.com/rss", "id2", "https://example.com/article/some-post", "Some Post", "Feed 2")
     monkeypatch.setattr(main, "get_reader", lambda: _fake_reader_ctx_per_feed([e1, e2]))
 
-    result = main._run_now_dedup(conn=conn, scope="folder", scope_id="1",
-                                 match_method="slug", window_hours=168)
+    result = main._run_now_dedup(conn=conn, scope="folder", scope_id="1", match_method="slug", window_hours=168)
 
     assert result["count"] == 1
     assert "kept" in result and len(result["kept"]) == 1
@@ -169,8 +169,7 @@ def test_safe_dedup_returns_kept_list(monkeypatch):
     e2.summary = body
     monkeypatch.setattr(main, "get_reader", lambda: _fake_reader_ctx_per_feed([e1, e2]))
 
-    result = main._run_now_dedup(conn=conn, scope="folder", scope_id="1",
-                                 match_method="safe", window_hours=168)
+    result = main._run_now_dedup(conn=conn, scope="folder", scope_id="1", match_method="safe", window_hours=168)
 
     assert result["count"] == 1
     assert len(result["kept"]) == 1

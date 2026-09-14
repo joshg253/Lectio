@@ -24,6 +24,7 @@ Usage:
 
 Defaults to a dry run; --apply rewrites the rows.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -37,19 +38,14 @@ import main  # noqa: E402
 def find_bad() -> list[tuple[str, str, str, str]]:
     svc = main.lead_image_service
     with main.get_meta_connection() as conn:
-        feeds = [
-            str(r[0]) for r in conn.execute(
-                "SELECT feed_url FROM feed_lead_image_strategy WHERE strategy = 'webcomic'"
-            )
-        ]
+        feeds = [str(r[0]) for r in conn.execute("SELECT feed_url FROM feed_lead_image_strategy WHERE strategy = 'webcomic'")]
 
     bad: list[tuple[str, str, str, str]] = []
     with main.get_reader() as reader:
         for feed in feeds:
             with main.get_meta_connection() as conn:
                 rows = conn.execute(
-                    "SELECT entry_id, image_url FROM entry_lead_images"
-                    " WHERE feed_url = ? AND image_url IS NOT NULL", (feed,)
+                    "SELECT entry_id, image_url FROM entry_lead_images WHERE feed_url = ? AND image_url IS NOT NULL", (feed,)
                 ).fetchall()
             for row in rows:
                 entry_id, cached = str(row["entry_id"]), str(row["image_url"])
@@ -57,9 +53,7 @@ def find_bad() -> list[tuple[str, str, str, str]]:
                 link = str(getattr(entry, "link", "") or "") if entry else entry_id
                 if not link.startswith(("http://", "https://")):
                     continue
-                lead = svc._plugin_fallback_lead_image_url(
-                    entry_link=link, content_html=None, summary=None
-                )
+                lead = svc._plugin_fallback_lead_image_url(entry_link=link, content_html=None, summary=None)
                 if not lead or lead == cached:
                     continue
                 variant = svc._plugin_thumbnail_variant(entry_link=link, lead_url=lead)

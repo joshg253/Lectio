@@ -90,7 +90,7 @@ def _verify_scrypt(password: str, stored: str) -> bool:
         n, r, p = int(n_s), int(r_s), int(p_s)
         salt = _b64d(salt_b64)
         expected = _b64d(hash_b64)
-    except (ValueError, binascii.Error):
+    except ValueError, binascii.Error:
         return False
     dk = hashlib.scrypt(
         password.encode("utf-8"),
@@ -116,7 +116,7 @@ def _verify_pbkdf2(password: str, stored: str) -> bool:
         iters = int(iters_s)
         salt = _b64d(salt_b64)
         expected = _b64d(hash_b64)
-    except (ValueError, binascii.Error):
+    except ValueError, binascii.Error:
         return False
     dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iters, len(expected))
     return hmac.compare_digest(dk, expected)

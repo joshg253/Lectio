@@ -17,6 +17,7 @@ Usage (inside the app container):
     /app/.venv/bin/python scripts/repair_relative_image_urls.py --apply
     /app/.venv/bin/python scripts/repair_relative_image_urls.py --apply --user u_x
 """
+
 from __future__ import annotations
 
 import argparse
@@ -44,7 +45,7 @@ _PER_HOST_DELAY = refetch_batch.PER_HOST_DELAY
 class _Prober:
     """HEAD (falling back to GET) with the same pacing the re-fetch batch uses."""
 
-    _CACHE_CAP = 5000                 # a run probes one feed's images; this is slack
+    _CACHE_CAP = 5000  # a run probes one feed's images; this is slack
 
     def __init__(self) -> None:
         self._cache: dict[str, int | str] = {}
@@ -73,23 +74,21 @@ class _Prober:
         except Exception as exc:  # noqa: BLE001 — a dead host is a result, not a crash
             out = type(exc).__name__
         if len(self._cache) >= self._CACHE_CAP:
-            self._cache.clear()       # bounded: a repeat probe costs one request
+            self._cache.clear()  # bounded: a repeat probe costs one request
         self._cache[url] = out
         return out
 
 
 def _suspects(summary: str, feed_dir: str, entry_dir: str) -> list[str]:
     """Stored img URLs that sit under the feed's directory but not the item's."""
-    return [u for u in (m.group(2) for m in _IMG_SRC.finditer(summary or ""))
-            if u.startswith(feed_dir) and not u.startswith(entry_dir)]
+    return [u for u in (m.group(2) for m in _IMG_SRC.finditer(summary or "")) if u.startswith(feed_dir) and not u.startswith(entry_dir)]
 
 
 def run(uid: str, apply: bool, only_feed: str | None) -> None:
     with main.get_reader() as reader:
         db = reader._storage.get_db()
         rows = db.execute(
-            "SELECT feed, id, link, summary, content FROM entries"
-            " WHERE summary LIKE '%<img%' AND link IS NOT NULL AND link != ''"
+            "SELECT feed, id, link, summary, content FROM entries WHERE summary LIKE '%<img%' AND link IS NOT NULL AND link != ''"
         ).fetchall()
 
     candidates: list[tuple] = []
@@ -98,7 +97,7 @@ def run(uid: str, apply: bool, only_feed: str | None) -> None:
             continue
         feed_dir, entry_dir = urljoin(feed, "."), urljoin(link, ".")
         if entry_dir == feed_dir:
-            continue                     # same directory: the base never mattered
+            continue  # same directory: the base never mattered
         hits = _suspects(summary, feed_dir, entry_dir)
         if hits:
             candidates.append((feed, entry_id, link, summary, content, feed_dir, entry_dir, hits))
@@ -110,27 +109,26 @@ def run(uid: str, apply: bool, only_feed: str | None) -> None:
     print(f"[{uid}] {len(candidates)} candidate entries across {len(hosts)} host(s); probing…")
 
     prober = _Prober()
-    writes: list[tuple] = []          # applied once at the end, on one connection
+    writes: list[tuple] = []  # applied once at the end, on one connection
     fixed: Counter = Counter()
     skipped_ok: Counter = Counter()
     dead: Counter = Counter()
     for feed, entry_id, link, summary, content, feed_dir, _entry_dir, hits in candidates:
         rewrites: dict[str, str] = {}
         for stored in dict.fromkeys(hits):
-            repaired = urljoin(link, stored[len(feed_dir):])
+            repaired = urljoin(link, stored[len(feed_dir) :])
             if repaired == stored:
                 continue
             if prober.status(stored) == 200:
-                skipped_ok[feed] += 1     # stored URL is fine — root-relative original
+                skipped_ok[feed] += 1  # stored URL is fine — root-relative original
                 continue
             if prober.status(repaired) == 200:
                 rewrites[stored] = repaired
             else:
-                dead[feed] += 1           # gone from the server either way
+                dead[feed] += 1  # gone from the server either way
         if not rewrites:
             continue
-        new_summary = _IMG_SRC.sub(
-            lambda m, _r=rewrites: m.group(1) + _r.get(m.group(2), m.group(2)) + m.group(3), summary)
+        new_summary = _IMG_SRC.sub(lambda m, _r=rewrites: m.group(1) + _r.get(m.group(2), m.group(2)) + m.group(3), summary)
         new_content = content
         if content:
             for old, new in rewrites.items():
@@ -145,16 +143,13 @@ def run(uid: str, apply: bool, only_feed: str | None) -> None:
         # connection setup and a commit for each one.
         with main.get_reader() as reader:
             db = reader._storage.get_db()
-            db.executemany(
-                "UPDATE entries SET summary = ?, content = ? WHERE feed = ? AND id = ?", writes)
+            db.executemany("UPDATE entries SET summary = ?, content = ? WHERE feed = ? AND id = ?", writes)
             db.commit()
 
-    print(f"\n[{uid}] {'repaired' if apply else 'would repair'}: "
-          f"{sum(fixed.values())} images in {len(fixed)} feed(s)")
+    print(f"\n[{uid}] {'repaired' if apply else 'would repair'}: {sum(fixed.values())} images in {len(fixed)} feed(s)")
     for feed, n in fixed.most_common():
         print(f"     {n:>4}  {urlparse(feed).netloc}")
-    print(f"[{uid}] left alone: {sum(skipped_ok.values())} already-working, "
-          f"{sum(dead.values())} missing from the server")
+    print(f"[{uid}] left alone: {sum(skipped_ok.values())} already-working, {sum(dead.values())} missing from the server")
 
 
 def main_cli() -> int:
@@ -163,7 +158,7 @@ def main_cli() -> int:
     ap.add_argument("--user", default=None, help="restrict to one user_id")
     ap.add_argument("--feed", default=None, help="restrict to one feed URL")
     args = ap.parse_args()
-    for uid in ([args.user] if args.user else main._background_user_ids()):
+    for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
             run(uid, args.apply, args.feed)
     if not args.apply:

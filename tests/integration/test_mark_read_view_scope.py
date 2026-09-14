@@ -8,6 +8,7 @@ fields but only used them to build the redirect URL, silently marking
 everything in the folder/feed regardless of what was on screen. Only
 /entries/mark-range-read ("Read above/below") was already scoped correctly.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -49,10 +50,15 @@ def configured(tmp_path):
 
 
 def _seed_entry(reader, *, feed_url: str, entry_id: str, published=OLD) -> None:
-    reader.add_entry({
-        "feed_url": feed_url, "id": entry_id, "link": f"{feed_url}#{entry_id}",
-        "title": f"Post {entry_id}", "published": published,
-    })
+    reader.add_entry(
+        {
+            "feed_url": feed_url,
+            "id": entry_id,
+            "link": f"{feed_url}#{entry_id}",
+            "title": f"Post {entry_id}",
+            "published": published,
+        }
+    )
 
 
 def _folder_app():
@@ -81,9 +87,14 @@ def test_folder_mark_read_respects_tag_filter(configured):
     main.set_manual_tags_for_entry(FEED_A, "tagged", "widgets")
 
     with TestClient(_folder_app()) as client:
-        r = client.post("/folders/mark-read", data={
-            "folder_id": str(UNCAT), "tag": "widgets",
-        }, headers=_ASYNC_HEADER)
+        r = client.post(
+            "/folders/mark-read",
+            data={
+                "folder_id": str(UNCAT),
+                "tag": "widgets",
+            },
+            headers=_ASYNC_HEADER,
+        )
     assert r.status_code == 200
     assert r.json()["marked"] == 1
 
@@ -102,9 +113,14 @@ def test_folder_mark_read_respects_star_only(configured):
         conn.commit()
 
     with TestClient(_folder_app()) as client:
-        r = client.post("/folders/mark-read", data={
-            "folder_id": str(UNCAT), "star_only": "1",
-        }, headers=_ASYNC_HEADER)
+        r = client.post(
+            "/folders/mark-read",
+            data={
+                "folder_id": str(UNCAT),
+                "star_only": "1",
+            },
+            headers=_ASYNC_HEADER,
+        )
     assert r.status_code == 200
     assert r.json()["marked"] == 1
 
@@ -142,8 +158,7 @@ def test_folder_mark_read_respects_locked_comic_hide_pref(configured):
         _seed_entry(reader, feed_url=FEED_A, entry_id="normal")
     with main.get_meta_connection() as conn:
         conn.execute(
-            "INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at, locked_until)"
-            " VALUES (?, ?, NULL, ?, ?)",
+            "INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at, locked_until) VALUES (?, ?, NULL, ?, ?)",
             (FEED_A, "locked", 0, 4102444800.0),  # locked until year 2100
         )
         main.upsert_feed_display_pref(conn, FEED_A, "hide_locked_comics", 1)
@@ -166,9 +181,15 @@ def test_feed_mark_read_respects_tag_filter(configured):
     main.set_manual_tags_for_entry(FEED_A, "tagged", "widgets")
 
     with TestClient(_feed_app()) as client:
-        r = client.post("/feeds/mark-read", data={
-            "folder_id": str(UNCAT), "feed_url": FEED_A, "tag": "widgets",
-        }, headers=_ASYNC_HEADER)
+        r = client.post(
+            "/feeds/mark-read",
+            data={
+                "folder_id": str(UNCAT),
+                "feed_url": FEED_A,
+                "tag": "widgets",
+            },
+            headers=_ASYNC_HEADER,
+        )
     assert r.status_code == 200
     assert r.json()["marked"] == 1
 
@@ -185,9 +206,15 @@ def test_mark_older_than_respects_tag_filter(configured):
     main.set_manual_tags_for_entry(FEED_A, "tagged-old", "widgets")
 
     with TestClient(_older_than_app()) as client:
-        r = client.post("/entries/mark-older-than-read", data={
-            "folder_id": str(UNCAT), "max_age_days": "1", "tag": "widgets",
-        }, headers=_ASYNC_HEADER)
+        r = client.post(
+            "/entries/mark-older-than-read",
+            data={
+                "folder_id": str(UNCAT),
+                "max_age_days": "1",
+                "tag": "widgets",
+            },
+            headers=_ASYNC_HEADER,
+        )
     assert r.status_code == 200
     assert r.json()["marked"] == 1
 

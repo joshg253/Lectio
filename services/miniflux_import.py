@@ -7,6 +7,7 @@ compatibility layer (letting other apps talk TO Lectio as Miniflux).
 Auth: API token sent as ``X-Auth-Token`` header.
 No rate limits (self-hosted), so the full import runs in a single pass.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -38,6 +39,7 @@ def _headers(token: str) -> dict:
 # Connection test
 # ---------------------------------------------------------------------------
 
+
 def test_connection(base_url: str, token: str) -> dict:
     """Return ``{username}`` on success, raise AuthError / RuntimeError on failure."""
     with httpx.Client(timeout=_TIMEOUT) as client:
@@ -54,6 +56,7 @@ def test_connection(base_url: str, token: str) -> dict:
 # Data fetchers
 # ---------------------------------------------------------------------------
 
+
 def get_feeds(base_url: str, token: str) -> list[dict]:
     """Return all subscribed feeds as ``{feed_url, title, folder}`` dicts."""
     with httpx.Client(timeout=_TIMEOUT) as client:
@@ -64,11 +67,13 @@ def get_feeds(base_url: str, token: str) -> list[dict]:
     out = []
     for f in resp.json():
         cat = f.get("category") or {}
-        out.append({
-            "feed_url": f.get("feed_url", ""),
-            "title": f.get("title", ""),
-            "folder": cat.get("title", ""),
-        })
+        out.append(
+            {
+                "feed_url": f.get("feed_url", ""),
+                "title": f.get("title", ""),
+                "folder": cat.get("title", ""),
+            }
+        )
     return out
 
 
@@ -92,18 +97,20 @@ def get_starred_entries(base_url: str, token: str) -> list[dict]:
             for e in entries:
                 feed = e.get("feed") or {}
                 published = _parse_iso(e.get("published_at") or "")
-                cat = (feed.get("category") or {})
-                items.append({
-                    "url": e.get("url", ""),
-                    "title": e.get("title", ""),
-                    "published": published,
-                    "feed_url": feed.get("feed_url", ""),
-                    "feed_title": feed.get("title", ""),
-                    "content": e.get("content", ""),
-                    "starred": True,
-                    "tags": [t for t in (e.get("tags") or []) if t],
-                    "folder": cat.get("title", ""),
-                })
+                cat = feed.get("category") or {}
+                items.append(
+                    {
+                        "url": e.get("url", ""),
+                        "title": e.get("title", ""),
+                        "published": published,
+                        "feed_url": feed.get("feed_url", ""),
+                        "feed_title": feed.get("title", ""),
+                        "content": e.get("content", ""),
+                        "starred": True,
+                        "tags": [t for t in (e.get("tags") or []) if t],
+                        "folder": cat.get("title", ""),
+                    }
+                )
             if len(entries) < limit:
                 break
             offset += limit

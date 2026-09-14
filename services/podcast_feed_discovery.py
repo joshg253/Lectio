@@ -9,6 +9,7 @@ app can suggest it (and, later, borrow its audio).
 
 Pure text scanning — fetching happens in the app layer.
 """
+
 from __future__ import annotations
 
 import re
@@ -79,8 +80,7 @@ def _enclosure_audio_url(entry) -> str:
     for enc in entry.get("enclosures") or []:
         url = (enc.get("href") or enc.get("url") or "").strip()
         etype = (enc.get("type") or "").lower()
-        if url and (etype.startswith("audio/")
-                    or urlparse(url).path.lower().endswith(_AUDIO_EXTS)):
+        if url and (etype.startswith("audio/") or urlparse(url).path.lower().endswith(_AUDIO_EXTS)):
             return url
     return ""
 

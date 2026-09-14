@@ -149,13 +149,28 @@ class _ReaderUpdateFetchErrorFilter(logging.Filter):
 
     # Signatures of expected, Lectio-handled fetch/parse failures.
     _EXPECTED = (
-        "bad http status code",          # any HTTP error status (429/403/404/410/5xx)
-        "too many requests", "forbidden", "not found", "gone", "service unavailable",
-        "timed out", "timeout", "connecttimeout", "readtimeout",
-        "connectionerror", "connection reset", "connection aborted",
-        "name or service not known", "temporary failure in name resolution",
-        "certificate", "ssl", "tlsv1",
-        "nonxmlcontenttype", "no parser", "document declared as", "not well-formed",
+        "bad http status code",  # any HTTP error status (429/403/404/410/5xx)
+        "too many requests",
+        "forbidden",
+        "not found",
+        "gone",
+        "service unavailable",
+        "timed out",
+        "timeout",
+        "connecttimeout",
+        "readtimeout",
+        "connectionerror",
+        "connection reset",
+        "connection aborted",
+        "name or service not known",
+        "temporary failure in name resolution",
+        "certificate",
+        "ssl",
+        "tlsv1",
+        "nonxmlcontenttype",
+        "no parser",
+        "document declared as",
+        "not well-formed",
     )
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -390,6 +405,8 @@ def sort_setting_keys(star_only: bool) -> tuple[str, str]:
     if star_only:
         return SAVED_SORT_BY_SETTING_KEY, SAVED_SORT_DIR_SETTING_KEY
     return SORT_BY_SETTING_KEY, SORT_DIR_SETTING_KEY
+
+
 GLOBAL_NOTE_SETTING_KEY = "global_note"
 PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY = "problematic_feeds_last_viewed_at"
 YOUTUBE_SYNC_LAST_AT_KEY = "youtube_sync_last_at"
@@ -474,10 +491,10 @@ YT_QUOTA_DEFAULT_CAP = 10000
 # checked" scan — see _run_youtube_playlist_rules_after_refresh.
 SETTING_YT_PLAYLIST_AUTO_LAST_CHECK = "yt_playlist_auto_last_check"
 # "On star, also send to…" — per-user destinations fired when an article is starred.
-SETTING_STAR_SEND_INSTAPAPER = "star_send_instapaper"   # "1"/"0"
+SETTING_STAR_SEND_INSTAPAPER = "star_send_instapaper"  # "1"/"0"
 SETTING_STAR_SEND_YT_PLAYLIST = "star_send_yt_playlist"  # playlist id ("" = off)
 SETTING_STAR_SEND_YT_PLAYLIST_TITLE = "star_send_yt_playlist_title"
-SETTING_STAR_SEND_EMAIL = "star_send_email"             # address ("" = off)
+SETTING_STAR_SEND_EMAIL = "star_send_email"  # address ("" = off)
 SETTING_RESEND_API_KEY = "resend_api_key"
 SETTING_EMAIL_FROM = "email_from"
 SETTING_INSTAPAPER_USERNAME = "instapaper_username"
@@ -570,9 +587,9 @@ SETTING_QUIRE_REFRESH_TOKEN = "quire_refresh_token"
 SETTING_QUIRE_TOKEN_EXPIRES_AT = "quire_token_expires_at"
 SETTING_QUIRE_OAUTH_STATE = "quire_oauth_state"
 SETTING_QUIRE_USERNAME = "quire_username"
-SETTING_QUIRE_PROJECT_OID = "quire_project_oid"   # default destination project ("" = none)
+SETTING_QUIRE_PROJECT_OID = "quire_project_oid"  # default destination project ("" = none)
 SETTING_QUIRE_PROJECT_NAME = "quire_project_name"  # cached display name of that project
-SETTING_STAR_SEND_QUIRE = "star_send_quire"        # "1"/"0"
+SETTING_STAR_SEND_QUIRE = "star_send_quire"  # "1"/"0"
 # Quire rate limits are per-organization, per-minute and per-hour (Free: 50/min, 200/hr).
 # These are Lectio's own sliding-window caps used to drive the usage meter + back off.
 SETTING_QUIRE_RATE_CAP_MIN = "quire_rate_cap_min"
@@ -595,10 +612,7 @@ LECTIO_HONEST_USER_AGENT = "Lectio/0.1 (+https://github.com/joshg253/Lectio)"
 # 403s any non-browser UA. We escalate to this browser UA ONLY after the honest
 # request is actually refused (see _polite_safe_get) — never preemptively, so we
 # don't spoof hosts that are happy to serve Lectio.
-PODCAST_FETCH_USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-)
+PODCAST_FETCH_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 # In-memory cache of domains known to have Cross-Origin-Resource-Policy restrictions.
 # Values: True = same-site/same-origin (proxy needed), False = no restriction.
 _CORP_DOMAIN_CACHE: dict[str, bool] = {}
@@ -621,14 +635,15 @@ _CORP_DOMAIN_CACHE: dict[str, bool] = {}
 # through /api/img lets the proxy's same-origin-Referer retry (api_img_proxy)
 # fetch the real bytes. See ARCHITECTURE "Same-origin Referer".
 _HOTLINK_IMG_HOSTS: frozenset[str] = frozenset(
-    {"nanolx.org", "wixmp.com", "private-user-images.githubusercontent.com",
-     "fabiensanglard.net"}
+    {"nanolx.org", "wixmp.com", "private-user-images.githubusercontent.com", "fabiensanglard.net"}
 )
 
 
 def _is_hotlink_img_host(netloc: str) -> bool:
     host = (netloc or "").split("@")[-1].split(":")[0].lower()
     return any(host == h or host.endswith("." + h) for h in _HOTLINK_IMG_HOSTS)
+
+
 MANUAL_TAG_KEY_PREFIX = "lectio.manual_tag."
 MAX_MANUAL_TAGS = 12
 # Hard cap on how many of an entry's feed tags are carried to the page. RPS
@@ -640,6 +655,8 @@ MAX_FEED_TAG_SUGGESTIONS = 40
 # header without wrapping; the rest are one click away rather than absent.
 FEED_TAG_CHIPS_COLLAPSED = 8
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$")
+
+
 def _static_asset_version() -> str:
     """Cache-buster for every ?v=-versioned static asset.
 
@@ -658,14 +675,12 @@ def _static_asset_version() -> str:
     """
     try:
         _static = Path(__file__).parent / "static"
-        paths = sorted(
-            p for p in _static.rglob("*")
-            if p.is_file() and p.suffix in (".css", ".js", ".webmanifest")
-        )
+        paths = sorted(p for p in _static.rglob("*") if p.is_file() and p.suffix in (".css", ".js", ".webmanifest"))
         combined = b"".join(p.read_bytes() for p in paths)
         return hashlib.md5(combined).hexdigest()[:10]
     except Exception:
         return "dev"
+
 
 STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION") or _static_asset_version()
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
@@ -753,17 +768,13 @@ def is_email_configured() -> bool:
 
 
 def is_instapaper_configured() -> bool:
-    return bool(
-        get_runtime_setting(SETTING_INSTAPAPER_USERNAME)
-        and get_runtime_setting(SETTING_INSTAPAPER_PASSWORD)
-    )
-
+    return bool(get_runtime_setting(SETTING_INSTAPAPER_USERNAME) and get_runtime_setting(SETTING_INSTAPAPER_PASSWORD))
 
 
 # --- YouTube subscription sync config — env vars are fallbacks; DB settings take precedence ---
 _ENV_YT_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
 _ENV_YT_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID", "").strip()
-_ENV_YT_FOLDER_NAME = (os.getenv("YOUTUBE_FOLDER_NAME", "").strip() or "YouTube Subscriptions")
+_ENV_YT_FOLDER_NAME = os.getenv("YOUTUBE_FOLDER_NAME", "").strip() or "YouTube Subscriptions"
 # DeviantArt API creds — per-user DB settings take precedence; env is single-user fallback.
 _ENV_DEVIANTART_CLIENT_ID = os.getenv("DEVIANTART_CLIENT_ID", "").strip()
 _ENV_DEVIANTART_CLIENT_SECRET = os.getenv("DEVIANTART_CLIENT_SECRET", "").strip()
@@ -841,8 +852,10 @@ def hide_locked_comics_global() -> bool:
 def _pacific_today() -> str:
     """Today's date (YYYY-MM-DD) in US/Pacific — the timezone YouTube resets quota on."""
     import datetime as _dt
+
     try:
         from zoneinfo import ZoneInfo
+
         return _dt.datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%Y-%m-%d")
     except Exception:
         # Fallback: fixed -08:00 offset (good enough for a day-bucket if tzdata is absent).
@@ -852,7 +865,7 @@ def _pacific_today() -> str:
 def youtube_quota_cap() -> int:
     try:
         return max(1, int(get_runtime_setting(SETTING_YT_QUOTA_CAP, str(YT_QUOTA_DEFAULT_CAP)) or YT_QUOTA_DEFAULT_CAP))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return YT_QUOTA_DEFAULT_CAP
 
 
@@ -864,8 +877,7 @@ def record_yt_quota_spend(units: int) -> None:
     try:
         with get_meta_connection() as conn:
             conn.execute(
-                "INSERT INTO yt_quota_spend (day, units) VALUES (?, ?)"
-                " ON CONFLICT(day) DO UPDATE SET units = units + excluded.units",
+                "INSERT INTO yt_quota_spend (day, units) VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET units = units + excluded.units",
                 (_pacific_today(), int(units)),
             )
     except Exception:
@@ -878,8 +890,7 @@ def mark_yt_quota_exhausted() -> None:
         cap = youtube_quota_cap()
         with get_meta_connection() as conn:
             conn.execute(
-                "INSERT INTO yt_quota_spend (day, units) VALUES (?, ?)"
-                " ON CONFLICT(day) DO UPDATE SET units = MAX(units, excluded.units)",
+                "INSERT INTO yt_quota_spend (day, units) VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET units = MAX(units, excluded.units)",
                 (_pacific_today(), cap),
             )
     except Exception:
@@ -889,9 +900,7 @@ def mark_yt_quota_exhausted() -> None:
 def get_yt_quota_spent_today() -> int:
     try:
         with get_meta_connection() as conn:
-            row = conn.execute(
-                "SELECT units FROM yt_quota_spend WHERE day = ?", (_pacific_today(),)
-            ).fetchone()
+            row = conn.execute("SELECT units FROM yt_quota_spend WHERE day = ?", (_pacific_today(),)).fetchone()
         return int(row["units"]) if row else 0
     except Exception:
         return 0
@@ -1021,12 +1030,16 @@ def get_youtube_oauth_credentials() -> tuple[str, str]:
 
     Resolution: per-user setting → shared-instance (admin's settings) → env var.
     """
-    cid = (get_runtime_setting(SETTING_YT_OAUTH_CLIENT_ID)
-           or _get_shared_credential(SETTING_SHARED_YT_OAUTH_CLIENT_ID)
-           or _ENV_YT_OAUTH_CLIENT_ID)
-    secret = (get_runtime_setting(SETTING_YT_OAUTH_CLIENT_SECRET)
-              or _get_shared_credential(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)
-              or _ENV_YT_OAUTH_CLIENT_SECRET)
+    cid = (
+        get_runtime_setting(SETTING_YT_OAUTH_CLIENT_ID)
+        or _get_shared_credential(SETTING_SHARED_YT_OAUTH_CLIENT_ID)
+        or _ENV_YT_OAUTH_CLIENT_ID
+    )
+    secret = (
+        get_runtime_setting(SETTING_YT_OAUTH_CLIENT_SECRET)
+        or _get_shared_credential(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)
+        or _ENV_YT_OAUTH_CLIENT_SECRET
+    )
     return cid, secret
 
 
@@ -1048,7 +1061,7 @@ def get_youtube_oauth_token() -> str:
         refresh = get_setting(conn, SETTING_YT_OAUTH_REFRESH_TOKEN) or ""
         try:
             expires_at = float(get_setting(conn, SETTING_YT_OAUTH_TOKEN_EXPIRES_AT) or 0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             expires_at = 0.0
     if not refresh:
         return ""
@@ -1073,12 +1086,16 @@ def get_pinterest_oauth_credentials() -> tuple[str, str]:
 
     Resolution: per-user setting → shared-instance (admin's settings) → env var.
     """
-    cid = (get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_ID)
-           or _get_shared_credential(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID)
-           or _ENV_PINTEREST_OAUTH_CLIENT_ID)
-    secret = (get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_SECRET)
-              or _get_shared_credential(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)
-              or _ENV_PINTEREST_OAUTH_CLIENT_SECRET)
+    cid = (
+        get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_ID)
+        or _get_shared_credential(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID)
+        or _ENV_PINTEREST_OAUTH_CLIENT_ID
+    )
+    secret = (
+        get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_SECRET)
+        or _get_shared_credential(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)
+        or _ENV_PINTEREST_OAUTH_CLIENT_SECRET
+    )
     return cid, secret
 
 
@@ -1098,7 +1115,7 @@ def get_pinterest_oauth_token() -> str:
         refresh = get_setting(conn, SETTING_PINTEREST_OAUTH_REFRESH_TOKEN) or ""
         try:
             expires_at = float(get_setting(conn, SETTING_PINTEREST_OAUTH_TOKEN_EXPIRES_AT) or 0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             expires_at = 0.0
     if not refresh:
         return ""
@@ -1124,12 +1141,8 @@ def get_reddit_credentials() -> tuple[str, str]:
     Resolution: per-user setting → shared-instance (admin's settings) → empty.
     No env-var fallback — credentials are DB-only for this integration.
     """
-    cid = (get_runtime_setting(SETTING_REDDIT_CLIENT_ID)
-           or _get_shared_credential(SETTING_SHARED_REDDIT_CLIENT_ID)
-           or "")
-    secret = (get_runtime_setting(SETTING_REDDIT_CLIENT_SECRET)
-              or _get_shared_credential(SETTING_SHARED_REDDIT_CLIENT_SECRET)
-              or "")
+    cid = get_runtime_setting(SETTING_REDDIT_CLIENT_ID) or _get_shared_credential(SETTING_SHARED_REDDIT_CLIENT_ID) or ""
+    secret = get_runtime_setting(SETTING_REDDIT_CLIENT_SECRET) or _get_shared_credential(SETTING_SHARED_REDDIT_CLIENT_SECRET) or ""
     return cid, secret
 
 
@@ -1149,7 +1162,7 @@ def get_reddit_user_token() -> str:
         refresh = get_setting(conn, SETTING_REDDIT_REFRESH_TOKEN) or ""
         try:
             expires_at = float(get_setting(conn, SETTING_REDDIT_TOKEN_EXPIRES_AT) or 0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             expires_at = 0.0
     if not refresh:
         return ""
@@ -1246,7 +1259,7 @@ def get_deviantart_user_token() -> str:
         refresh = get_setting(conn, SETTING_DEVIANTART_REFRESH_TOKEN) or ""
         try:
             expires_at = float(get_setting(conn, SETTING_DEVIANTART_TOKEN_EXPIRES_AT) or 0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             # A corrupt/manually-edited value must not break every token read;
             # treat it as expired so we fall through to a forced refresh.
             expires_at = 0.0
@@ -1312,7 +1325,7 @@ def get_quire_user_token() -> str:
         refresh = get_setting(conn, SETTING_QUIRE_REFRESH_TOKEN) or ""
         try:
             expires_at = float(get_setting(conn, SETTING_QUIRE_TOKEN_EXPIRES_AT) or 0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             expires_at = 0.0
     if not access:
         return ""
@@ -1336,13 +1349,14 @@ def get_quire_user_token() -> str:
 
 def quire_rate_caps() -> tuple[int, int]:
     """(per-minute, per-hour) caps Lectio meters its Quire calls against."""
+
     def _cap(key: str, default: int) -> int:
         try:
             return max(1, int(get_runtime_setting(key, str(default)) or default))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return default
-    return (_cap(SETTING_QUIRE_RATE_CAP_MIN, QUIRE_RATE_DEFAULT_CAP_MIN),
-            _cap(SETTING_QUIRE_RATE_CAP_HOUR, QUIRE_RATE_DEFAULT_CAP_HOUR))
+
+    return (_cap(SETTING_QUIRE_RATE_CAP_MIN, QUIRE_RATE_DEFAULT_CAP_MIN), _cap(SETTING_QUIRE_RATE_CAP_HOUR, QUIRE_RATE_DEFAULT_CAP_HOUR))
 
 
 def record_quire_call(calls: int = 1) -> None:
@@ -1368,20 +1382,15 @@ def get_quire_usage_status() -> dict:
     try:
         now = int(time.time())
         with get_meta_connection() as conn:
-            minute_used = conn.execute(
-                "SELECT COUNT(*) AS n FROM quire_call_log WHERE ts >= ?", (now - 60,)
-            ).fetchone()["n"]
-            hour_used = conn.execute(
-                "SELECT COUNT(*) AS n FROM quire_call_log WHERE ts >= ?", (now - 3600,)
-            ).fetchone()["n"]
+            minute_used = conn.execute("SELECT COUNT(*) AS n FROM quire_call_log WHERE ts >= ?", (now - 60,)).fetchone()["n"]
+            hour_used = conn.execute("SELECT COUNT(*) AS n FROM quire_call_log WHERE ts >= ?", (now - 3600,)).fetchone()["n"]
     except Exception:
         minute_used = hour_used = 0
     minute_used, hour_used = int(minute_used), int(hour_used)
     blocked = minute_used >= cap_min or hour_used >= cap_hour
     low = (minute_used >= cap_min * 0.8) or (hour_used >= cap_hour * 0.8)
     state = "blocked" if blocked else ("low" if low else "ok")
-    return {"minute_used": minute_used, "minute_cap": cap_min,
-            "hour_used": hour_used, "hour_cap": cap_hour, "state": state}
+    return {"minute_used": minute_used, "minute_cap": cap_min, "hour_used": hour_used, "hour_cap": cap_hour, "state": state}
 
 
 def detect_quire_plan_and_caps() -> str:
@@ -1451,8 +1460,12 @@ def _humanize_da_add_error(exc: Exception) -> str:
     DeviantArt gallery fetches raise ``RuntimeError('gallery fetch failed for X:
     HTTP 404: ...')``; surface the status where we can, else a trimmed message."""
     detail = " ".join(str(exc).split())
-    for needle, label in (("Account is inactive", "deactivated"), ("404", "not found"),
-                          ("403", "access denied"), ("500", "DeviantArt error")):
+    for needle, label in (
+        ("Account is inactive", "deactivated"),
+        ("404", "not found"),
+        ("403", "access denied"),
+        ("500", "DeviantArt error"),
+    ):
         if needle in detail:
             return label
     return detail[:120] or "unknown error"
@@ -1466,24 +1479,24 @@ def _load_da_sync_detail() -> dict:
             data = json.loads(raw)
             if isinstance(data, dict):
                 return data
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             pass
     return {"failed": [], "unwatched": []}
 
 
 def _da_deactivated_usernames(conn: sqlite3.Connection) -> set[str]:
     """Lower-cased usernames of watched artists whose DA account is deactivated."""
-    return {str(r["username"]).lower()
-            for r in conn.execute("SELECT username FROM deviantart_deactivated").fetchall()}
+    return {str(r["username"]).lower() for r in conn.execute("SELECT username FROM deviantart_deactivated").fetchall()}
 
 
 def _da_deactivated_list() -> list[dict]:
     """Parked deactivated artists for the Settings UI (opens its own connection)."""
     try:
         with get_meta_connection() as conn:
-            return [{"username": str(r["username"])}
-                    for r in conn.execute(
-                        "SELECT username FROM deviantart_deactivated ORDER BY username").fetchall()]
+            return [
+                {"username": str(r["username"])}
+                for r in conn.execute("SELECT username FROM deviantart_deactivated ORDER BY username").fetchall()
+            ]
     except Exception:  # noqa: BLE001 — table missing mid-migration, etc.
         return []
 
@@ -1518,8 +1531,7 @@ def _schedule_da_sync_resume(uid: str, delay_s: float, next_round: int) -> None:
         except Exception as exc:
             LOGGER.exception("[deviantart] watchlist auto-resume failed")
             with get_meta_connection() as conn:
-                set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS,
-                            f"Sync failed: {_humanize_da_add_error(exc)}. Click Sync to retry.")
+                set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, f"Sync failed: {_humanize_da_add_error(exc)}. Click Sync to retry.")
 
     timer = threading.Timer(delay_s, _run_in_user_context, args=(uid, _resume))
     timer.daemon = True  # lost on restart; the daily maintenance sync catches up
@@ -1570,9 +1582,7 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
         # (otherwise it's perpetually reported as "subscribed but no longer watched").
         existing = {
             str(r["username"]).lower()
-            for r in conn.execute(
-                "SELECT username FROM deviantart_feeds WHERE COALESCE(source, 'gallery') != 'watch'"
-            ).fetchall()
+            for r in conn.execute("SELECT username FROM deviantart_feeds WHERE COALESCE(source, 'gallery') != 'watch'").fetchall()
         }
         # Known-deactivated artists can never be added; skip them here so the sync
         # stops re-probing (and re-failing) them every run. Daily maintenance
@@ -1582,9 +1592,7 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
         # The Watch feed IS the watch list — one feed carrying every watched
         # artist's posts. While it exists, a per-artist gallery feed is a
         # duplicate of what it already delivers.
-        has_watch_feed = bool(conn.execute(
-            "SELECT 1 FROM deviantart_feeds WHERE COALESCE(source, 'gallery') = 'watch' LIMIT 1"
-        ).fetchone())
+        has_watch_feed = bool(conn.execute("SELECT 1 FROM deviantart_feeds WHERE COALESCE(source, 'gallery') = 'watch' LIMIT 1").fetchone())
 
     to_add = [a for a in watching if a.lower() not in existing and a.lower() not in deactivated]
     if has_watch_feed and to_add:
@@ -1597,8 +1605,9 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
         # returned over two runs after the 2026-08-12 consolidation, filed back
         # into the folder, carrying entries the Watch feed had already delivered.
         LOGGER.info(
-            "[deviantart] watchlist sync: Watch feed present — skipping %d per-artist "
-            "gallery feed(s); the Watch feed already covers them", len(to_add))
+            "[deviantart] watchlist sync: Watch feed present — skipping %d per-artist gallery feed(s); the Watch feed already covers them",
+            len(to_add),
+        )
         to_add = []
     LOGGER.info("[deviantart] watchlist sync: %d watched, %d to add into %r", len(watching), len(to_add), folder_name)
     added = 0
@@ -1660,10 +1669,7 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
     # disabling it again every time it still shows up as unwatched.
     watching_lower = {a.lower() for a in watching}
     unwatched = sorted(u for u in existing if u not in watching_lower) if watching else []
-    prior_unwatched_lower = {
-        str(u.get("username") or "").strip().lower()
-        for u in _load_da_sync_detail().get("unwatched", [])
-    }
+    prior_unwatched_lower = {str(u.get("username") or "").strip().lower() for u in _load_da_sync_detail().get("unwatched", [])}
     newly_unwatched = [u for u in unwatched if u not in prior_unwatched_lower]
     if newly_unwatched:
         with get_meta_connection() as conn:
@@ -1677,13 +1683,13 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
             disable_feed(deviantart_service.feed_file_url(str(row["id"])))
         LOGGER.info(
             "[deviantart] %d newly-unwatched artist(s) paused (updates disabled, not unsubscribed): %s",
-            len(rows), ", ".join(sorted(str(r["username"]) for r in rows)),
+            len(rows),
+            ", ".join(sorted(str(r["username"]) for r in rows)),
         )
         with get_meta_connection() as conn:
             set_setting(conn, SETTING_DEVIANTART_UNWATCHED_DIRTY, "1")
     if unwatched:
-        LOGGER.info("[deviantart] %d subscribed artist(s) no longer watched: %s",
-                    len(unwatched), ", ".join(unwatched))
+        LOGGER.info("[deviantart] %d subscribed artist(s) no longer watched: %s", len(unwatched), ", ".join(unwatched))
 
     # Persist the failed/unwatched artists (structured) so the Settings UI can
     # list them as profile links. A fresh sync (round 0) starts clean; auto-resume
@@ -1695,21 +1701,22 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
         prior_failed = _load_da_sync_detail().get("failed", [])
     all_failed = prior_failed + failed_artists
     with get_meta_connection() as conn:
-        set_setting(conn, SETTING_DEVIANTART_SYNC_DETAIL,
-                    json.dumps({"failed": all_failed,
-                                "unwatched": [{"username": u} for u in unwatched]}))
+        set_setting(
+            conn, SETTING_DEVIANTART_SYNC_DETAIL, json.dumps({"failed": all_failed, "unwatched": [{"username": u} for u in unwatched]})
+        )
 
     remaining = len(to_add) - added - failed
     if rate_limited:
         if auto_resume_round < _DA_SYNC_MAX_AUTO_RESUMES:
             delay_s = max(60.0, retry_after_s or _DA_SYNC_RESUME_FALLBACK_S)
             _schedule_da_sync_resume(uid, delay_s, auto_resume_round + 1)
-            final = (f"Rate limited — added {added} so far, ~{remaining} left. "
-                     f"Auto-resuming in ~{int(delay_s // 60) or 1} min "
-                     f"(round {auto_resume_round + 1}/{_DA_SYNC_MAX_AUTO_RESUMES}).")
+            final = (
+                f"Rate limited — added {added} so far, ~{remaining} left. "
+                f"Auto-resuming in ~{int(delay_s // 60) or 1} min "
+                f"(round {auto_resume_round + 1}/{_DA_SYNC_MAX_AUTO_RESUMES})."
+            )
         else:
-            final = (f"Rate limited — added {added} so far, ~{remaining} left. "
-                     "Auto-resume limit reached; click Sync to continue.")
+            final = f"Rate limited — added {added} so far, ~{remaining} left. Auto-resume limit reached; click Sync to continue."
     else:
         # to_add now excludes both already-subscribed and known-deactivated, so
         # derive each count from the watch list directly rather than the residual.
@@ -1727,9 +1734,16 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
         final = ", ".join(parts)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, final)
-    return {"added": added, "failed": failed, "deactivated": deactivated_this_run,
-            "total": len(watching), "folder": folder_name,
-            "rate_limited": rate_limited, "unwatched": unwatched, "failed_artists": all_failed}
+    return {
+        "added": added,
+        "failed": failed,
+        "deactivated": deactivated_this_run,
+        "total": len(watching),
+        "folder": folder_name,
+        "rate_limited": rate_limited,
+        "unwatched": unwatched,
+        "failed_artists": all_failed,
+    }
 
 
 def _deviantart_recheck_deactivated(max_checks: int = 40) -> int:
@@ -1762,7 +1776,8 @@ def _deviantart_recheck_deactivated(max_checks: int = 40) -> int:
                     if folder_id is None:
                         folder_id = _get_or_create_folder_by_name(conn, _deviantart_folder_name())
                     _fid, file_url = deviantart_service.create_deviantart_feed(
-                        conn, reader, artist, cid, secret, access_token=token, limit=24)
+                        conn, reader, artist, cid, secret, access_token=token, limit=24
+                    )
                 conn.execute(
                     "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
                     (folder_id, file_url),
@@ -1919,6 +1934,7 @@ def get_img_target_bytes() -> int:
             pass
     return _ENV_IMG_TARGET_BYTES
 
+
 # --- Auth config ---
 # When set, skip the login form and auto-authenticate as the admin on every request.
 # Intended for local/private-network installs that don't need a password prompt.
@@ -1930,7 +1946,9 @@ PASSWORD_HASH_SCHEME = os.getenv("LECTIO_PASSWORD_HASH_SCHEME", passwords.DEFAUL
 if PASSWORD_HASH_SCHEME not in passwords.available_schemes():
     LOGGER.warning(
         "LECTIO_PASSWORD_HASH_SCHEME=%r not available (have: %s); using %s.",
-        PASSWORD_HASH_SCHEME, ", ".join(passwords.available_schemes()), passwords.DEFAULT_SCHEME,
+        PASSWORD_HASH_SCHEME,
+        ", ".join(passwords.available_schemes()),
+        passwords.DEFAULT_SCHEME,
     )
     PASSWORD_HASH_SCHEME = passwords.DEFAULT_SCHEME
 
@@ -1961,9 +1979,19 @@ _TRUSTED_PROXIES = os.getenv("LECTIO_TRUSTED_PROXIES", "*").strip()
 _SECURITY_HEADERS_ENABLED = os.getenv("LECTIO_SECURITY_HEADERS", "0") == "1"
 # Paths that are always public (no login required)
 _AUTH_EXEMPT_PREFIXES = (
-    "/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save",
-    "/api/bookmarklet/save", "/dev/feeds/", "/fever", "/greader/", "/v1/",
-    "/websub/", "/sw.js",
+    "/login",
+    "/static",
+    "/healthz",
+    "/api/img",
+    "/api/favicon",
+    "/api/save",
+    "/api/bookmarklet/save",
+    "/dev/feeds/",
+    "/fever",
+    "/greader/",
+    "/v1/",
+    "/websub/",
+    "/sw.js",
 )
 
 manual_refresh_lock = threading.Lock()
@@ -2008,6 +2036,8 @@ def _scheduler_stall_seconds() -> float | None:
     if started is None or last is None:
         return None
     return time.monotonic() - float(last)  # ty: ignore[invalid-argument-type]
+
+
 class _PerUserDict:
     """Dict-like cache partitioned by the current tenancy user, so per-user cached
     data (folder structure, unread counts, tags, settings) never bleeds across
@@ -2119,8 +2149,9 @@ def invalidate_meta_structure_cache() -> None:
     # actually fired during a routine refresh pass.
     try:
         caller = sys._getframe(1)
-        LOGGER.info("[perf] invalidate_meta_structure_cache from %s:%d (%s)",
-                    caller.f_code.co_filename, caller.f_lineno, caller.f_code.co_name)
+        LOGGER.info(
+            "[perf] invalidate_meta_structure_cache from %s:%d (%s)", caller.f_code.co_filename, caller.f_lineno, caller.f_code.co_name
+        )
     except Exception:
         pass
 
@@ -2195,6 +2226,7 @@ async def lifespan(app: FastAPI):
         ensure_starred_archive_schema()
         ensure_reader_indexes()
         migrate_spaced_manual_tags()
+
     _for_each_background_user("per-user schema migration", _ensure_user_schema)
 
     # Kill switch for heavy startup work. Set LECTIO_DISABLE_STARTUP_BACKFILL=1
@@ -2264,6 +2296,7 @@ async def lifespan(app: FastAPI):
                 unread_counts_cache["unread_counts"] = (time.time(), counts)
         except Exception:
             LOGGER.debug("unread-counts cache warm failed", exc_info=True)
+
     _for_each_background_user("unread-counts cache warm", _warm_unread_counts)
 
     # Ensure existing scraped file:// feeds have their entries imported into the
@@ -2299,6 +2332,7 @@ async def lifespan(app: FastAPI):
                     pass
         except Exception:
             LOGGER.exception("[scraper] startup scraped-feed sync failed")
+
     if not backfill_disabled:
         threading.Thread(
             target=lambda: _for_each_background_user("scraped-feed sync", _sync_scraped_feeds),
@@ -2414,8 +2448,7 @@ async def lifespan(app: FastAPI):
                 if count > 0:
                     return
                 rows = conn.execute(
-                    "SELECT feed_url, entry_id, read_at FROM entry_read_state"
-                    " ORDER BY read_at DESC LIMIT ?",
+                    "SELECT feed_url, entry_id, read_at FROM entry_read_state ORDER BY read_at DESC LIMIT ?",
                     (READ_HISTORY_CAP,),
                 ).fetchall()
             if not rows:
@@ -2428,14 +2461,16 @@ async def lifespan(app: FastAPI):
                     if entry is None:
                         continue
                     feed = reader.get_feed(feed_url, None)
-                    to_insert.append((
-                        feed_url,
-                        entry_id,
-                        str(getattr(entry, "title", None) or ""),
-                        str(getattr(entry, "link", None) or ""),
-                        str(getattr(feed, "resolved_title", None) or getattr(feed, "title", None) or ""),
-                        read_at,
-                    ))
+                    to_insert.append(
+                        (
+                            feed_url,
+                            entry_id,
+                            str(getattr(entry, "title", None) or ""),
+                            str(getattr(entry, "link", None) or ""),
+                            str(getattr(feed, "resolved_title", None) or getattr(feed, "title", None) or ""),
+                            read_at,
+                        )
+                    )
             if not to_insert:
                 return
             with get_meta_connection() as conn:
@@ -2518,8 +2553,7 @@ async def lifespan(app: FastAPI):
             thread.join(timeout=shutdown_timeout)
             if thread.is_alive():
                 LOGGER.warning(
-                    "[shutdown] refresh worker did not finish within %.0fs; "
-                    "abandoning (daemon thread will be killed by interpreter exit)",
+                    "[shutdown] refresh worker did not finish within %.0fs; abandoning (daemon thread will be killed by interpreter exit)",
                     shutdown_timeout,
                 )
         # Stop the starred archive worker — short timeout, since the only
@@ -2589,9 +2623,7 @@ class _SecurityHeadersMiddleware:
             (b"referrer-policy", b"no-referrer-when-downgrade"),
         ]
         if hsts:
-            self._headers.append(
-                (b"strict-transport-security", b"max-age=31536000; includeSubDomains")
-            )
+            self._headers.append((b"strict-transport-security", b"max-age=31536000; includeSubDomains"))
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
@@ -2693,8 +2725,17 @@ class _TenancyMiddleware:
 # limited separately). /static and /healthz are GET-only anyway, but listing
 # explicitly documents intent.
 _CSRF_EXEMPT_PREFIXES = (
-    "/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save",
-    "/api/bookmarklet/save", "/fever", "/greader/", "/v1/", "/websub/",
+    "/login",
+    "/static",
+    "/healthz",
+    "/api/img",
+    "/api/favicon",
+    "/api/save",
+    "/api/bookmarklet/save",
+    "/fever",
+    "/greader/",
+    "/v1/",
+    "/websub/",
 )
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _CSRF_SESSION_KEY = "csrf_token"
@@ -2855,13 +2896,7 @@ class _RejectPrefetchMiddleware:
         # that isn't an actual API endpoint, with no X-Requested-With from our
         # SPA. Real SPA fetches always send X-Requested-With=lectio-...; real
         # top-level navigations send Sec-Fetch-Dest=document Sec-Fetch-Mode=navigate.
-        if (
-            not is_prefetch
-            and not is_spa_fetch
-            and sec_fetch_dest == b"empty"
-            and sec_fetch_mode == b"cors"
-            and path == "/"
-        ):
+        if not is_prefetch and not is_spa_fetch and sec_fetch_dest == b"empty" and sec_fetch_mode == b"cors" and path == "/":
             is_prefetch = True
 
         # Diagnostic: dump the first few suspect-looking requests so we can
@@ -3035,10 +3070,7 @@ app.add_middleware(
 if _HTTPS_ONLY:
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-    _trusted_hosts = (
-        "*" if _TRUSTED_PROXIES == "*"
-        else [h.strip() for h in _TRUSTED_PROXIES.split(",") if h.strip()]
-    )
+    _trusted_hosts = "*" if _TRUSTED_PROXIES == "*" else [h.strip() for h in _TRUSTED_PROXIES.split(",") if h.strip()]
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_hosts)
 # Drop prefetch traffic before any other middleware does work.
 app.add_middleware(_RejectPrefetchMiddleware)
@@ -3149,8 +3181,12 @@ class _TimedMetaCursor(sqlite3.Cursor):
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d progress_steps=%d sql=%s",
-                            int(elapsed_ms), conn._lectio_progress_steps, " ".join(str(sql).split())[:200])
+                LOGGER.info(
+                    "[perf] slow_sql db=meta elapsed_ms=%d progress_steps=%d sql=%s",
+                    int(elapsed_ms),
+                    conn._lectio_progress_steps,
+                    " ".join(str(sql).split())[:200],
+                )
 
     def executemany(self, sql, parameters):
         conn = cast("_TimedMetaConnection", self.connection)
@@ -3161,8 +3197,12 @@ class _TimedMetaCursor(sqlite3.Cursor):
         finally:
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
-                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d progress_steps=%d executemany sql=%s",
-                            int(elapsed_ms), conn._lectio_progress_steps, " ".join(str(sql).split())[:200])
+                LOGGER.info(
+                    "[perf] slow_sql db=meta elapsed_ms=%d progress_steps=%d executemany sql=%s",
+                    int(elapsed_ms),
+                    conn._lectio_progress_steps,
+                    " ".join(str(sql).split())[:200],
+                )
 
     def fetchall(self):
         # `execute()` above only times statement *preparation*; a plain SELECT
@@ -3181,8 +3221,12 @@ class _TimedMetaCursor(sqlite3.Cursor):
             elapsed_ms = (time.perf_counter() - start) * 1000
             if elapsed_ms > _SLOW_SQL_MS:
                 sql = getattr(self, "_lectio_sql", "?")
-                LOGGER.info("[perf] slow_sql db=meta elapsed_ms=%d progress_steps=%d fetchall sql=%s",
-                            int(elapsed_ms), conn._lectio_progress_steps - steps_before, " ".join(str(sql).split())[:200])
+                LOGGER.info(
+                    "[perf] slow_sql db=meta elapsed_ms=%d progress_steps=%d fetchall sql=%s",
+                    int(elapsed_ms),
+                    conn._lectio_progress_steps - steps_before,
+                    " ".join(str(sql).split())[:200],
+                )
 
 
 class _TimedMetaConnection(sqlite3.Connection):
@@ -3344,8 +3388,16 @@ def _migrate_websub_to_shared() -> None:
                         "(feed_url, hub_url, secret, subscribed_at, verified, "
                         "expires_at, lease_seconds, hub_tried_at) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        (r["feed_url"], r["hub_url"], r["secret"], r["subscribed_at"],
-                         r["verified"], r["expires_at"], r["lease_seconds"], r["hub_tried_at"]),
+                        (
+                            r["feed_url"],
+                            r["hub_url"],
+                            r["secret"],
+                            r["subscribed_at"],
+                            r["verified"],
+                            r["expires_at"],
+                            r["lease_seconds"],
+                            r["hub_tried_at"],
+                        ),
                     )
                     wconn.execute(
                         "INSERT OR IGNORE INTO websub_subscribers (feed_url, user_id) VALUES (?, ?)",
@@ -3396,9 +3448,7 @@ def ensure_img_cache_schema() -> None:
             """
         )
         # Eviction scans by last_accessed; index keeps the daily sweep cheap.
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_img_cache_last_accessed ON img_cache(last_accessed)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_img_cache_last_accessed ON img_cache(last_accessed)")
 
 
 def get_yt_duration_connection() -> sqlite3.Connection:
@@ -3556,14 +3606,9 @@ def ensure_reader_indexes() -> None:
     try:
         conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5)
         try:
-            has_entries = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='entries'"
-            ).fetchone()
+            has_entries = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='entries'").fetchone()
             if has_entries:
-                conn.execute(
-                    "CREATE INDEX IF NOT EXISTS entries_unread_by_feed "
-                    "ON entries(feed) WHERE read=0"
-                )
+                conn.execute("CREATE INDEX IF NOT EXISTS entries_unread_by_feed ON entries(feed) WHERE read=0")
                 conn.commit()
         finally:
             conn.close()
@@ -3639,8 +3684,7 @@ def bootstrap_admin() -> None:
     username = BOOTSTRAP_ADMIN_USERNAME
     if not tenancy.is_valid_user_id(username):
         LOGGER.error(
-            "Cannot bootstrap admin: LECTIO_ADMIN_USERNAME=%r is not a valid "
-            "username (must match {A-Za-z0-9_-}, 1-64 chars).",
+            "Cannot bootstrap admin: LECTIO_ADMIN_USERNAME=%r is not a valid username (must match {A-Za-z0-9_-}, 1-64 chars).",
             username,
         )
         return
@@ -3960,9 +4004,7 @@ def ensure_meta_schema() -> None:
             )
             """
         )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_read_history_read_at ON read_history(read_at DESC)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_read_history_read_at ON read_history(read_at DESC)")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS youtube_video_duration (
@@ -4293,10 +4335,7 @@ def ensure_meta_schema() -> None:
             )
             """
         )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS feed_fetch_history_by_feed"
-            " ON feed_fetch_history (feed_url, fetched_at DESC)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS feed_fetch_history_by_feed ON feed_fetch_history (feed_url, fetched_at DESC)")
         # Recovered media:content podcast audio (reader drops media:content, so we
         # re-parse the raw feed on demand). entry_media_audio holds per-entry audio
         # URLs found; feed_media_scan tracks when a feed was last scanned (and
@@ -4420,8 +4459,7 @@ def ensure_meta_schema() -> None:
         try:
             if get_setting(conn, "dedup_min_title_words_bumped_to_5") != "1":
                 conn.execute(
-                    "UPDATE highlight_keywords SET dedup_min_title_words = 5"
-                    " WHERE type = 'deduplicate' AND dedup_min_title_words = 4"
+                    "UPDATE highlight_keywords SET dedup_min_title_words = 5 WHERE type = 'deduplicate' AND dedup_min_title_words = 4"
                 )
                 set_setting(conn, "dedup_min_title_words_bumped_to_5", "1")
         except Exception:
@@ -4576,10 +4614,7 @@ def ensure_meta_schema() -> None:
             )
             """
         )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS rule_run_log_entries_log_id"
-            " ON rule_run_log_entries (log_id)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS rule_run_log_entries_log_id ON rule_run_log_entries (log_id)")
         try:
             # 'marked' = entry was marked read; 'kept' = the surviving copy of a
             # dedup group, logged so run history shows what each duplicate matched.
@@ -4884,10 +4919,7 @@ def ensure_meta_schema() -> None:
             )
             """
         )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_fever_entry_map_feed"
-            " ON fever_entry_map(feed_url)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_fever_entry_map_feed ON fever_entry_map(feed_url)")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS miniflux_feed_map (
@@ -4906,10 +4938,7 @@ def ensure_meta_schema() -> None:
             )
             """
         )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_miniflux_entry_map_feed"
-            " ON miniflux_entry_map(feed_url)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_miniflux_entry_map_feed ON miniflux_entry_map(feed_url)")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS greader_tokens (
@@ -4929,9 +4958,7 @@ def ensure_meta_schema() -> None:
             )
         if DEBUG_MODE:
             # Ensure the _Lectio system folder exists (used for dev feeds).
-            root_id = conn.execute(
-                "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL", (ROOT_FOLDER_NAME,)
-            ).fetchone()
+            root_id = conn.execute("SELECT id FROM folders WHERE name = ? AND parent_id IS NULL", (ROOT_FOLDER_NAME,)).fetchone()
             if root_id:
                 conn.execute(
                     "INSERT OR IGNORE INTO folders (name, parent_id) VALUES (?, ?)",
@@ -5024,30 +5051,53 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
     conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
 
 
-_DISPLAY_PREF_KEYS = frozenset({
-    "show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption",
-    "hide_shorts", "hide_unpremiered", "hide_members_only", "hide_paywalled", "hide_locked_comics",
-    "inject_source_images",
-})
+_DISPLAY_PREF_KEYS = frozenset(
+    {
+        "show_lead_image_in_article",
+        "show_lead_image_as_thumb",
+        "show_image_caption",
+        "hide_shorts",
+        "hide_unpremiered",
+        "hide_members_only",
+        "hide_paywalled",
+        "hide_locked_comics",
+        "inject_source_images",
+    }
+)
 # Pre-built UPDATE statements (one per column) so conn.execute() never receives an f-string.
 _DISPLAY_PREF_COLS: dict[str, str] = {k: k for k in _DISPLAY_PREF_KEYS}
-_DISPLAY_PREF_SQLS: dict[str, str] = {
-    k: f"UPDATE feed_display_prefs SET {k} = ? WHERE feed_url = ?"
-    for k in _DISPLAY_PREF_KEYS
-}
+_DISPLAY_PREF_SQLS: dict[str, str] = {k: f"UPDATE feed_display_prefs SET {k} = ? WHERE feed_url = ?" for k in _DISPLAY_PREF_KEYS}
 _DISPLAY_PREF_DEFAULTS: dict = {
-    "show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1,
-    "show_image_caption": -1, "hide_shorts": 0, "hide_unpremiered": 0, "hide_members_only": 0, "hide_paywalled": 0,
+    "show_lead_image_in_article": 1,
+    "show_lead_image_as_thumb": 1,
+    "show_image_caption": -1,
+    "hide_shorts": 0,
+    "hide_unpremiered": 0,
+    "hide_members_only": 0,
+    "hide_paywalled": 0,
     "hide_locked_comics": 0,
-    "inject_source_images": 0, "feed_thumbnail_url": None, "thumb_crop": "cover",
-    "thumb_strategy": None, "smart_min_scale": None, "fill_zoom": None,
+    "inject_source_images": 0,
+    "feed_thumbnail_url": None,
+    "thumb_crop": "cover",
+    "thumb_strategy": None,
+    "smart_min_scale": None,
+    "fill_zoom": None,
 }
-_VALID_THUMB_CROPS = frozenset({
-    "cover", "cover-top-left", "cover-top", "cover-top-right",
-    "cover-left", "cover-right",
-    "cover-bottom-left", "cover-bottom", "cover-bottom-right",
-    "contain", "smart",
-})
+_VALID_THUMB_CROPS = frozenset(
+    {
+        "cover",
+        "cover-top-left",
+        "cover-top",
+        "cover-top-right",
+        "cover-left",
+        "cover-right",
+        "cover-bottom-left",
+        "cover-bottom",
+        "cover-bottom-right",
+        "contain",
+        "smart",
+    }
+)
 _VALID_THUMB_STRATEGIES = frozenset({"inline", "media_rss"})
 
 # Caption text that is purely a date (e.g. "June 12, 2026" or "6/12/2026") — strip it.
@@ -5139,13 +5189,21 @@ def upsert_feed_thumb_strategy(conn: sqlite3.Connection, feed_url: str, strategy
     )
 
 
-_HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'})
-_HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed', 'feeds', 'folders'})
+_HIGHLIGHT_VALID_COLORS = frozenset({"yellow", "green", "blue", "pink", "orange"})
+_HIGHLIGHT_VALID_SCOPES = frozenset({"global", "folder", "feed", "feeds", "folders"})
 
 
 _HIGHLIGHT_VALID_TYPES = {
-    "highlight", "mark_as_read", "email_article", "deduplicate", "webhook",
-    "youtube_playlist", "instapaper", "quire", "tag_filter", "save_article",
+    "highlight",
+    "mark_as_read",
+    "email_article",
+    "deduplicate",
+    "webhook",
+    "youtube_playlist",
+    "instapaper",
+    "quire",
+    "tag_filter",
+    "save_article",
 }
 _HIGHLIGHT_VALID_SEARCH_IN = {"title", "body", "both"}
 _HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
@@ -5159,11 +5217,12 @@ _DEDUP_FUZZY_PCT_DEFAULT = 80
 # the 4-word band itself added 2 more false collisions and no true ones. Hence 5.
 _DEDUP_MIN_TITLE_WORDS = 5
 
+
 def _clamp_min_title_words(words: int | None) -> int:
     """Title-length floor, clamped. Under 3 words a title is a category label."""
     try:
         v = int(words if words is not None else _DEDUP_MIN_TITLE_WORDS)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         v = _DEDUP_MIN_TITLE_WORDS
     return max(3, min(10, v))
 
@@ -5172,7 +5231,7 @@ def _clamp_fuzzy_pct(pct: int | None) -> int:
     """Percent knob, clamped. Below 50% a fuzzy title match catches near-anything."""
     try:
         v = int(pct if pct is not None else _DEDUP_FUZZY_PCT_DEFAULT)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         v = _DEDUP_FUZZY_PCT_DEFAULT
     return max(50, min(100, v))
 
@@ -5256,23 +5315,45 @@ def find_mergeable_rule_groups(conn: sqlite3.Connection) -> tuple[list[dict], li
         leftover: list[dict] = []
         for settings_rows in by_settings.values():
             if len(settings_rows) >= 2:
-                groups.append({
-                    "type": rule_type, "scope": scope, "scope_id": scope_id,
-                    "search_in": search_in, "is_regex": is_regex, "rules": settings_rows,
-                })
+                groups.append(
+                    {
+                        "type": rule_type,
+                        "scope": scope,
+                        "scope_id": scope_id,
+                        "search_in": search_in,
+                        "is_regex": is_regex,
+                        "rules": settings_rows,
+                    }
+                )
             else:
                 leftover.extend(settings_rows)
         if len(leftover) >= 2:
-            mismatched.append({
-                "type": rule_type, "scope": scope, "scope_id": scope_id,
-                "search_in": search_in, "is_regex": is_regex, "rules": leftover,
-            })
+            mismatched.append(
+                {
+                    "type": rule_type,
+                    "scope": scope,
+                    "scope_id": scope_id,
+                    "search_in": search_in,
+                    "is_regex": is_regex,
+                    "rules": leftover,
+                }
+            )
     return groups, mismatched
 
 
 def merge_highlight_rule_group(
-    conn: sqlite3.Connection, rule_type: str, scope: str, scope_id: str, search_in: str, is_regex: bool,
-    color: str, delivery: str, email_to: str, batch_time: str, batch_count: int, cc_me: bool,
+    conn: sqlite3.Connection,
+    rule_type: str,
+    scope: str,
+    scope_id: str,
+    search_in: str,
+    is_regex: bool,
+    color: str,
+    delivery: str,
+    email_to: str,
+    batch_time: str,
+    batch_count: int,
+    cc_me: bool,
 ) -> dict | None:
     """Collapse every rule sharing (type, scope, scope_id, search_in, is_regex)
     AND the given color/delivery/email/batch/cc_me settings into one, joining
@@ -5296,8 +5377,19 @@ def merge_highlight_rule_group(
         " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND is_regex = ?"
         " AND color = ? AND delivery = ? AND email_to = ? AND batch_time = ? AND batch_count = ? AND cc_me = ?"
         " ORDER BY sort_order ASC, rowid ASC",
-        (rule_type, scope, scope_id, search_in, 1 if is_regex else 0,
-         color, delivery, email_to, batch_time, batch_count, 1 if cc_me else 0),
+        (
+            rule_type,
+            scope,
+            scope_id,
+            search_in,
+            1 if is_regex else 0,
+            color,
+            delivery,
+            email_to,
+            batch_time,
+            batch_count,
+            1 if cc_me else 0,
+        ),
     ).fetchall()
     if len(rows) < 2:
         return None
@@ -5329,18 +5421,48 @@ def merge_highlight_rule_group(
         "DELETE FROM highlight_keywords"
         " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND is_regex = ?"
         " AND color = ? AND delivery = ? AND email_to = ? AND batch_time = ? AND batch_count = ? AND cc_me = ?",
-        (rule_type, scope, scope_id, search_in, 1 if is_regex else 0,
-         color, delivery, email_to, batch_time, batch_count, 1 if cc_me else 0),
+        (
+            rule_type,
+            scope,
+            scope_id,
+            search_in,
+            1 if is_regex else 0,
+            color,
+            delivery,
+            email_to,
+            batch_time,
+            batch_count,
+            1 if cc_me else 0,
+        ),
     )
     add_highlight_keyword(
-        conn, scope, scope_id, merged_keyword, template["color"], is_regex,
-        rule_type, search_in, template["delivery"], template["email_to"],
-        template["batch_time"], template["batch_count"], bool(template["cc_me"]),
-        template["enabled"], template["dedup_window_hours"], template["exclude_scope_ids"],
-        template["dedup_fuzzy_pct"], template["dedup_min_title_words"],
-        template["webhook_url"], template["webhook_format"], bool(template["webhook_batch"]),
-        template["yt_playlist_id"], template["yt_playlist_title"], bool(template["yt_include_shorts"]),
-        bool(template["yt_mark_read"]), template["yt_min_minutes"], template["yt_max_minutes"],
+        conn,
+        scope,
+        scope_id,
+        merged_keyword,
+        template["color"],
+        is_regex,
+        rule_type,
+        search_in,
+        template["delivery"],
+        template["email_to"],
+        template["batch_time"],
+        template["batch_count"],
+        bool(template["cc_me"]),
+        template["enabled"],
+        template["dedup_window_hours"],
+        template["exclude_scope_ids"],
+        template["dedup_fuzzy_pct"],
+        template["dedup_min_title_words"],
+        template["webhook_url"],
+        template["webhook_format"],
+        bool(template["webhook_batch"]),
+        template["yt_playlist_id"],
+        template["yt_playlist_title"],
+        bool(template["yt_include_shorts"]),
+        bool(template["yt_mark_read"]),
+        template["yt_min_minutes"],
+        template["yt_max_minutes"],
         label=str(template.get("label") or ""),
     )
     conn.execute(
@@ -5349,8 +5471,13 @@ def merge_highlight_rule_group(
         (min_sort_order, rule_type, scope, scope_id, search_in, 1 if is_regex else 0, merged_keyword),
     )
     return {
-        "type": rule_type, "scope": scope, "scope_id": scope_id, "search_in": search_in,
-        "is_regex": is_regex, "keyword": merged_keyword, "merged_count": len(rows),
+        "type": rule_type,
+        "scope": scope,
+        "scope_id": scope_id,
+        "search_in": search_in,
+        "is_regex": is_regex,
+        "keyword": merged_keyword,
+        "merged_count": len(rows),
     }
 
 
@@ -5388,15 +5515,24 @@ def find_regex_convertible_rule_groups(conn: sqlite3.Connection) -> list[dict]:
         if len({tuple(r[f] for f in _MERGE_IDENTITY_FIELDS) for r in group_rows}) > 1:
             continue
         rule_type, scope, scope_id, search_in = key
-        groups.append({
-            "type": rule_type, "scope": scope, "scope_id": scope_id,
-            "search_in": search_in, "rules": group_rows,
-        })
+        groups.append(
+            {
+                "type": rule_type,
+                "scope": scope,
+                "scope_id": scope_id,
+                "search_in": search_in,
+                "rules": group_rows,
+            }
+        )
     return groups
 
 
 def merge_regex_convertible_rule_group(
-    conn: sqlite3.Connection, rule_type: str, scope: str, scope_id: str, search_in: str,
+    conn: sqlite3.Connection,
+    rule_type: str,
+    scope: str,
+    scope_id: str,
+    search_in: str,
 ) -> dict | None:
     """Like merge_highlight_rule_group, but across the is_regex boundary: a
     plain-text keyword is escaped (re.escape) before joining, so the result
@@ -5441,19 +5577,37 @@ def merge_regex_convertible_rule_group(
 
     min_sort_order = min(int(r["sort_order"] or 0) for r in rows)
     conn.execute(
-        "DELETE FROM highlight_keywords"
-        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ?",
+        "DELETE FROM highlight_keywords WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ?",
         (rule_type, scope, scope_id, search_in),
     )
     add_highlight_keyword(
-        conn, scope, scope_id, merged_keyword, template["color"], True,
-        rule_type, search_in, template["delivery"], template["email_to"],
-        template["batch_time"], template["batch_count"], bool(template["cc_me"]),
-        template["enabled"], template["dedup_window_hours"], template["exclude_scope_ids"],
-        template["dedup_fuzzy_pct"], template["dedup_min_title_words"],
-        template["webhook_url"], template["webhook_format"], bool(template["webhook_batch"]),
-        template["yt_playlist_id"], template["yt_playlist_title"], bool(template["yt_include_shorts"]),
-        bool(template["yt_mark_read"]), template["yt_min_minutes"], template["yt_max_minutes"],
+        conn,
+        scope,
+        scope_id,
+        merged_keyword,
+        template["color"],
+        True,
+        rule_type,
+        search_in,
+        template["delivery"],
+        template["email_to"],
+        template["batch_time"],
+        template["batch_count"],
+        bool(template["cc_me"]),
+        template["enabled"],
+        template["dedup_window_hours"],
+        template["exclude_scope_ids"],
+        template["dedup_fuzzy_pct"],
+        template["dedup_min_title_words"],
+        template["webhook_url"],
+        template["webhook_format"],
+        bool(template["webhook_batch"]),
+        template["yt_playlist_id"],
+        template["yt_playlist_title"],
+        bool(template["yt_include_shorts"]),
+        bool(template["yt_mark_read"]),
+        template["yt_min_minutes"],
+        template["yt_max_minutes"],
         label=str(template.get("label") or ""),
     )
     conn.execute(
@@ -5462,8 +5616,13 @@ def merge_regex_convertible_rule_group(
         (min_sort_order, rule_type, scope, scope_id, search_in, merged_keyword),
     )
     return {
-        "type": rule_type, "scope": scope, "scope_id": scope_id, "search_in": search_in,
-        "is_regex": True, "keyword": merged_keyword, "merged_count": len(rows),
+        "type": rule_type,
+        "scope": scope,
+        "scope_id": scope_id,
+        "search_in": search_in,
+        "is_regex": True,
+        "keyword": merged_keyword,
+        "merged_count": len(rows),
     }
 
 
@@ -5515,10 +5674,15 @@ def find_redundant_feed_rules(conn: sqlite3.Connection) -> list[dict]:
         for folder_id in feed_folder_ids.get(feed_url, set()):
             covering = folder_keywords.get((r["type"], r["search_in"], str(folder_id)))
             if covering and feed_kws.issubset(covering):
-                redundant.append({
-                    "feed_url": feed_url, "keyword": r["keyword"], "type": r["type"],
-                    "search_in": r["search_in"], "covering_folder_id": folder_id,
-                })
+                redundant.append(
+                    {
+                        "feed_url": feed_url,
+                        "keyword": r["keyword"],
+                        "type": r["type"],
+                        "search_in": r["search_in"],
+                        "covering_folder_id": folder_id,
+                    }
+                )
                 break
     return redundant
 
@@ -5533,15 +5697,13 @@ def _merge_tag_filter_specs(conn: sqlite3.Connection, feed_url: str, incoming: s
     preserve.
     """
     rows = conn.execute(
-        "SELECT rowid, keyword FROM highlight_keywords"
-        " WHERE type = 'tag_filter' AND scope = 'feed' AND scope_id = ?"
-        " ORDER BY rowid",
+        "SELECT rowid, keyword FROM highlight_keywords WHERE type = 'tag_filter' AND scope = 'feed' AND scope_id = ? ORDER BY rowid",
         (feed_url,),
     ).fetchall()
     if not rows:
         return None
 
-    by_tag: dict[str, str] = {}          # tag -> sign, insertion-ordered
+    by_tag: dict[str, str] = {}  # tag -> sign, insertion-ordered
     for source in [str(r["keyword"] or "") for r in rows] + [incoming]:
         for token in source.split(","):
             token = token.strip()
@@ -5550,7 +5712,7 @@ def _merge_tag_filter_specs(conn: sqlite3.Connection, feed_url: str, incoming: s
             sign, tag = "", token
             for prefix in ("++", "+", "-"):
                 if token.startswith(prefix):
-                    sign, tag = prefix, token[len(prefix):]
+                    sign, tag = prefix, token[len(prefix) :]
                     break
             tag = normalize_tag_value(tag)
             if tag:
@@ -5559,7 +5721,8 @@ def _merge_tag_filter_specs(conn: sqlite3.Connection, feed_url: str, incoming: s
     # on the keyword, which the merge has just changed, so leaving the first row
     # behind would leave a rival rather than replace it.
     conn.executemany(
-        "DELETE FROM highlight_keywords WHERE rowid = ?", [(r["rowid"],) for r in rows],
+        "DELETE FROM highlight_keywords WHERE rowid = ?",
+        [(r["rowid"],) for r in rows],
     )
     if len(rows) > 1:
         LOGGER.info("[tag-filter] merged %d duplicate rule(s) for %s", len(rows) - 1, feed_url)
@@ -5627,23 +5790,41 @@ def add_highlight_keyword(
         "  yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
         "  yt_min_minutes, yt_max_minutes, rule_uid, label)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0, 1 if enabled else 0,
-         rule_type, search_in, delivery,
-         email_to.strip(), batch_time.strip(), max(0, int(batch_count or 0)), 1 if cc_me else 0,
-         max(1, int(dedup_window_hours or 168)), exclude_scope_ids.strip(),
-         _clamp_fuzzy_pct(dedup_fuzzy_pct), _clamp_min_title_words(dedup_min_title_words),
-         webhook_url.strip(), webhook_format, 1 if webhook_batch else 0,
-         yt_playlist_id.strip(), yt_playlist_title.strip(),
-         1 if yt_include_shorts else 0, 1 if yt_mark_read else 0,
-         max(0, int(yt_min_minutes or 0)), max(0, int(yt_max_minutes or 0)),
-         rule_uid.strip() or secrets.token_hex(16), label.strip()),
+        (
+            scope,
+            scope_id,
+            keyword.strip(),
+            color,
+            1 if is_regex else 0,
+            1 if enabled else 0,
+            rule_type,
+            search_in,
+            delivery,
+            email_to.strip(),
+            batch_time.strip(),
+            max(0, int(batch_count or 0)),
+            1 if cc_me else 0,
+            max(1, int(dedup_window_hours or 168)),
+            exclude_scope_ids.strip(),
+            _clamp_fuzzy_pct(dedup_fuzzy_pct),
+            _clamp_min_title_words(dedup_min_title_words),
+            webhook_url.strip(),
+            webhook_format,
+            1 if webhook_batch else 0,
+            yt_playlist_id.strip(),
+            yt_playlist_title.strip(),
+            1 if yt_include_shorts else 0,
+            1 if yt_mark_read else 0,
+            max(0, int(yt_min_minutes or 0)),
+            max(0, int(yt_max_minutes or 0)),
+            rule_uid.strip() or secrets.token_hex(16),
+            label.strip(),
+        ),
     )
 
 
 def get_email_contacts(conn: sqlite3.Connection) -> list[dict]:
-    rows = conn.execute(
-        "SELECT id, label, address FROM email_contacts ORDER BY label"
-    ).fetchall()
+    rows = conn.execute("SELECT id, label, address FROM email_contacts ORDER BY label").fetchall()
     return [dict(r) for r in rows]
 
 
@@ -5656,9 +5837,7 @@ def add_email_contact(conn: sqlite3.Connection, label: str, address: str) -> dic
         "INSERT OR IGNORE INTO email_contacts (label, address) VALUES (?, ?)",
         (label, address),
     )
-    row = conn.execute(
-        "SELECT id, label, address FROM email_contacts WHERE address = ?", (address,)
-    ).fetchone()
+    row = conn.execute("SELECT id, label, address FROM email_contacts WHERE address = ?", (address,)).fetchone()
     return dict(row)
 
 
@@ -5673,10 +5852,19 @@ def remove_highlight_keyword(conn: sqlite3.Connection, scope: str, scope_id: str
     )
 
 
-_TRIVIAL_CAPTIONS = frozenset({
-    "responsive image", "image", "photo", "picture", "img",
-    "thumbnail", "banner", "featured image", "header image",
-})
+_TRIVIAL_CAPTIONS = frozenset(
+    {
+        "responsive image",
+        "image",
+        "photo",
+        "picture",
+        "img",
+        "thumbnail",
+        "banner",
+        "featured image",
+        "header image",
+    }
+)
 _FILENAME_CAPTION_RE = re.compile(
     r"(?:\.(jpe?g|png|gif|webp|avif|svg|bmp|tiff?)$|^(?:DSC|IMG|dsc|img)[_-]?\d{3,})",
     re.IGNORECASE,
@@ -6017,8 +6205,12 @@ def get_all_reader_feed_urls(include_kept: bool = False) -> set[str]:
         urls = {str(r[0]) for r in db.execute("SELECT url FROM feeds")}
         _elapsed_ms = int((time.perf_counter() - _start) * 1000)
         if _elapsed_ms > 200:
-            LOGGER.info("[perf] get_all_reader_feed_urls=%dms rows=%d progress_steps=%d",
-                        _elapsed_ms, len(urls), getattr(db, "_lectio_progress_steps", 0))
+            LOGGER.info(
+                "[perf] get_all_reader_feed_urls=%dms rows=%d progress_steps=%d",
+                _elapsed_ms,
+                len(urls),
+                getattr(db, "_lectio_progress_steps", 0),
+            )
     if not include_kept:
         urls -= get_kept_feed_urls()
     return urls
@@ -6073,7 +6265,7 @@ def resolve_rule_feed_urls(conn: sqlite3.Connection, scope: str, scope_id: str) 
     if scope == "folder":
         try:
             return get_folder_feed_urls(conn, int(scope_id))
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return set()
     if scope == "folders":
         feed_urls: set[str] = set()
@@ -6114,7 +6306,8 @@ def get_feed_url_rewrites(feed_url: str) -> list[tuple[str, str]]:
         conn = sqlite3.connect(str(tenancy.meta_db_path()), timeout=5.0)
         try:
             return [
-                (str(f), str(t)) for f, t in conn.execute(
+                (str(f), str(t))
+                for f, t in conn.execute(
                     "SELECT from_host, to_host FROM feed_url_rewrites WHERE feed_url = ?",
                     (feed_url,),
                 )
@@ -6140,9 +6333,7 @@ def get_dedupe_host_aliases() -> dict[str, str]:
         conn = sqlite3.connect(str(tenancy.meta_db_path()), timeout=5.0)
         try:
             aliases: dict[str, str] = {}
-            for f, t in conn.execute(
-                "SELECT DISTINCT from_host, to_host FROM feed_url_rewrites"
-            ):
+            for f, t in conn.execute("SELECT DISTINCT from_host, to_host FROM feed_url_rewrites"):
                 fh = str(f).lower().removeprefix("www.")
                 th = str(t).lower().removeprefix("www.")
                 if fh and th and fh != th:
@@ -6393,9 +6584,7 @@ def _compute_unread_counts_by_feed() -> dict[str, int]:
     try:
         conn = sqlite3.connect(str(tenancy.reader_db_path()), uri=False, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
-        rows = conn.execute(
-            "SELECT feed, COUNT(*) FROM entries WHERE read=0 GROUP BY feed"
-        ).fetchall()
+        rows = conn.execute("SELECT feed, COUNT(*) FROM entries WHERE read=0 GROUP BY feed").fetchall()
         counts = {str(row[0]): int(row[1]) for row in rows}
         _subtract_hidden_locked_comics_from_counts(conn, counts)
         _subtract_hidden_unpremiered_from_counts(conn, counts)
@@ -6436,22 +6625,21 @@ def _subtract_hidden_locked_comics_from_counts(reader_conn: sqlite3.Connection, 
             else:
                 per_feed_feeds = {
                     str(r["feed_url"])
-                    for r in mconn.execute(
-                        "SELECT feed_url FROM feed_display_prefs WHERE hide_locked_comics = 1"
-                    ).fetchall()
+                    for r in mconn.execute("SELECT feed_url FROM feed_display_prefs WHERE hide_locked_comics = 1").fetchall()
                 }
                 if not per_feed_feeds:
                     return
                 _feed_list = list(per_feed_feeds)
                 rows = []
                 for _i in range(0, len(_feed_list), 999):
-                    _chunk = _feed_list[_i:_i + 999]
+                    _chunk = _feed_list[_i : _i + 999]
                     _ph = ",".join("?" for _ in _chunk)
-                    rows.extend(mconn.execute(
-                        f"SELECT feed_url, entry_id FROM entry_lead_images"
-                        f" WHERE locked_until > ? AND feed_url IN ({_ph})",
-                        [time.time(), *_chunk],
-                    ).fetchall())
+                    rows.extend(
+                        mconn.execute(
+                            f"SELECT feed_url, entry_id FROM entry_lead_images WHERE locked_until > ? AND feed_url IN ({_ph})",
+                            [time.time(), *_chunk],
+                        ).fetchall()
+                    )
         if not rows:
             return
         by_feed: dict[str, list[str]] = {}
@@ -6465,7 +6653,7 @@ def _subtract_hidden_locked_comics_from_counts(reader_conn: sqlite3.Connection, 
             # unread total, not just this one feed's.
             hidden_unread = 0
             for _i in range(0, len(entry_ids), 900):
-                _chunk = entry_ids[_i:_i + 900]
+                _chunk = entry_ids[_i : _i + 900]
                 _ph = ",".join("?" for _ in _chunk)
                 hidden_unread += reader_conn.execute(
                     f"SELECT COUNT(*) FROM entries WHERE feed = ? AND read = 0 AND id IN ({_ph})",
@@ -6505,22 +6693,19 @@ def _subtract_hidden_unpremiered_from_counts(reader_conn: sqlite3.Connection, co
             per_feed_on: set[str] = set()
             with get_meta_connection() as mconn:
                 for _i in range(0, len(yt_feeds), 900):
-                    _chunk = yt_feeds[_i:_i + 900]
+                    _chunk = yt_feeds[_i : _i + 900]
                     _ph = ",".join("?" for _ in _chunk)
                     per_feed_on.update(
                         str(r["feed_url"])
                         for r in mconn.execute(
-                            f"SELECT feed_url FROM feed_display_prefs"
-                            f" WHERE hide_unpremiered = 1 AND feed_url IN ({_ph})",
+                            f"SELECT feed_url FROM feed_display_prefs WHERE hide_unpremiered = 1 AND feed_url IN ({_ph})",
                             _chunk,
                         ).fetchall()
                     )
             candidate_feeds = [f for f in yt_feeds if f in per_feed_on]
         for feed_url in candidate_feeds:
             hidden_unread = 0
-            for (link,) in reader_conn.execute(
-                "SELECT link FROM entries WHERE feed = ? AND read = 0", (feed_url,)
-            ).fetchall():
+            for (link,) in reader_conn.execute("SELECT link FROM entries WHERE feed = ? AND read = 0", (feed_url,)).fetchall():
                 if _youtube_unpremiered_video_id(feed_url, link):
                     hidden_unread += 1
             if hidden_unread:
@@ -6570,10 +6755,7 @@ def get_feed_last_post_dates() -> dict[str, datetime]:
     try:
         conn = sqlite3.connect(db_key, uri=False, check_same_thread=False)
         try:
-            rows = conn.execute(
-                "SELECT feed, MAX(COALESCE(published, updated, first_updated)) "
-                "FROM entries GROUP BY feed"
-            ).fetchall()
+            rows = conn.execute("SELECT feed, MAX(COALESCE(published, updated, first_updated)) FROM entries GROUP BY feed").fetchall()
         finally:
             conn.close()
     except Exception:
@@ -6674,7 +6856,7 @@ def real_published_date(value: datetime | None) -> datetime | None:
         # reader stores naive UTC; an aware value may arrive from an override.
         ref = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
         return None if ref < _SENTINEL_DATE_BEFORE else value
-    except (AttributeError, TypeError, ValueError, OverflowError):
+    except AttributeError, TypeError, ValueError, OverflowError:
         return None
 
 
@@ -6737,9 +6919,7 @@ def entry_effective_date(entry) -> datetime | None:
 _DEDUPE_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
 
 
-def normalize_entry_link_for_dedupe(
-    link: str | None, host_aliases: dict[str, str] | None = None
-) -> str | None:
+def normalize_entry_link_for_dedupe(link: str | None, host_aliases: dict[str, str] | None = None) -> str | None:
     """Canonical comparison key for an article link.
 
     The scheme and a leading ``www.`` are folded away: http/https and
@@ -6777,8 +6957,7 @@ def normalize_entry_link_for_dedupe(
 # stays one token rather than becoming "second best cat". Splitting hyphens was
 # measured as strictly worse (30 -> 28 true cross-feed pairs) because it inflates
 # the token count on whichever side spells the compound out.
-_TITLE_QUOTE_FOLD = {ord(c): r for c, r in
-                     [("\u2018", "'"), ("\u2019", "'"), ("\u201c", '"'), ("\u201d", '"'), ("\u2032", "'")]}
+_TITLE_QUOTE_FOLD = {ord(c): r for c, r in [("\u2018", "'"), ("\u2019", "'"), ("\u201c", '"'), ("\u201d", '"'), ("\u2032", "'")]}
 # En/em/figure dashes BETWEEN letters separate phrases ("Title\u2014Subtitle"); a plain
 # hyphen-minus joins a compound and is left alone.
 _TITLE_DASH_BETWEEN = re.compile(r"(?<=\w)[\u2010\u2011\u2012\u2013\u2014\u2015\u2212](?=\w)")
@@ -6806,12 +6985,12 @@ def title_word_similarity(t1: str, t2: str) -> float:
 
 # ── Safe multi-signal dedup ───────────────────────────────────────────────────
 
-_SAFE_DEDUP_FUZZY_THRESH      = 0.80
+_SAFE_DEDUP_FUZZY_THRESH = 0.80
 _SAFE_DEDUP_BODY_FUZZY_THRESH = 0.75
-_SAFE_DEDUP_BODY_CHARS        = 400
-_SAFE_DEDUP_MIN_BODY_CHARS    = 30
-_SAFE_DEDUP_MIN_SLUG_LEN      = 4
-_SAFE_DEDUP_MIN_TITLE_WORDS   = _DEDUP_MIN_TITLE_WORDS
+_SAFE_DEDUP_BODY_CHARS = 400
+_SAFE_DEDUP_MIN_BODY_CHARS = 30
+_SAFE_DEDUP_MIN_SLUG_LEN = 4
+_SAFE_DEDUP_MIN_TITLE_WORDS = _DEDUP_MIN_TITLE_WORDS
 _SAFE_DEDUP_MIN_SLUG_NO_HYPHEN = 16
 
 # Reddit truncates the title-slug in its permalinks to a fixed length, so two
@@ -6820,54 +6999,126 @@ _SAFE_DEDUP_MIN_SLUG_NO_HYPHEN = 16
 # and Prisoner of Azkaban). The unique thing id sits earlier in the path — use
 # it so different posts don't false-match and genuine cross-feed reposts of the
 # same thread still do.
-_REDDIT_THING_ID_RE = re.compile(
-    r"(?:reddit\.com/(?:r/[^/]+/)?comments/|redd\.it/)([a-z0-9]{4,})", re.IGNORECASE
-)
+_REDDIT_THING_ID_RE = re.compile(r"(?:reddit\.com/(?:r/[^/]+/)?comments/|redd\.it/)([a-z0-9]{4,})", re.IGNORECASE)
 
-_SAFE_DEDUP_SLUG_EXTS = frozenset({
-    ".php", ".html", ".htm", ".asp", ".aspx", ".cgi", ".pl", ".jsp", ".cfm", ".shtml"
-})
-_SAFE_DEDUP_SLUG_BLOCKLIST = frozenset({
-    "watch", "shorts", "video", "videos", "post", "posts", "article", "articles",
-    "page", "pages", "index", "home", "feed", "rss", "atom", "news", "story",
-    "entry", "item", "read", "view", "show", "detail", "details", "content",
-    "about", "contact", "search", "archive", "archives", "category", "categories",
-    "tag", "tags", "author", "user", "profile", "default", "main", "welcome",
-    "latest", "recent", "popular", "trending", "featured", "top", "new",
-    "forum", "forums", "thread", "threads", "topic", "topics", "blog",
-    "comic", "comics", "gallery", "photo", "photos", "image", "images",
-    "release", "releases", "pre-release", "download", "downloads", "changelog",
-    "update", "updates",
-    "p", "s", "t", "r", "q", "m", "n", "a", "e",
-})
-_SAFE_DEDUP_UNICODE_TRANS = str.maketrans({
-    '‘': "'", '’': "'",
-    '“': '"', '”': '"',
-    '–': '-', '—': '-',
-    '…': '...',
-    ' ': ' ',
-})
+_SAFE_DEDUP_SLUG_EXTS = frozenset({".php", ".html", ".htm", ".asp", ".aspx", ".cgi", ".pl", ".jsp", ".cfm", ".shtml"})
+_SAFE_DEDUP_SLUG_BLOCKLIST = frozenset(
+    {
+        "watch",
+        "shorts",
+        "video",
+        "videos",
+        "post",
+        "posts",
+        "article",
+        "articles",
+        "page",
+        "pages",
+        "index",
+        "home",
+        "feed",
+        "rss",
+        "atom",
+        "news",
+        "story",
+        "entry",
+        "item",
+        "read",
+        "view",
+        "show",
+        "detail",
+        "details",
+        "content",
+        "about",
+        "contact",
+        "search",
+        "archive",
+        "archives",
+        "category",
+        "categories",
+        "tag",
+        "tags",
+        "author",
+        "user",
+        "profile",
+        "default",
+        "main",
+        "welcome",
+        "latest",
+        "recent",
+        "popular",
+        "trending",
+        "featured",
+        "top",
+        "new",
+        "forum",
+        "forums",
+        "thread",
+        "threads",
+        "topic",
+        "topics",
+        "blog",
+        "comic",
+        "comics",
+        "gallery",
+        "photo",
+        "photos",
+        "image",
+        "images",
+        "release",
+        "releases",
+        "pre-release",
+        "download",
+        "downloads",
+        "changelog",
+        "update",
+        "updates",
+        "p",
+        "s",
+        "t",
+        "r",
+        "q",
+        "m",
+        "n",
+        "a",
+        "e",
+    }
+)
+_SAFE_DEDUP_UNICODE_TRANS = str.maketrans(
+    {
+        "‘": "'",
+        "’": "'",
+        "“": '"',
+        "”": '"',
+        "–": "-",
+        "—": "-",
+        "…": "...",
+        " ": " ",
+    }
+)
 _SAFE_DEDUP_TAG_RE = re.compile(r"<[^>]+>")
 # A tag left unclosed because a fixed-size window truncated the HTML mid-tag.
 _SAFE_DEDUP_UNCLOSED_TAG_RE = re.compile(r"<[^>]*$")
 
-_SAFE_DEDUP_COMBOS: frozenset[frozenset] = frozenset({
-    frozenset({"slug", "title", "body"}),
-    frozenset({"slug", "fuzzy_near", "body"}),
-    frozenset({"title", "body"}),
-    frozenset({"slug", "title", "body_fuzzy"}),
-    frozenset({"slug", "fuzzy_near", "body_fuzzy"}),
-    frozenset({"title", "body_fuzzy"}),
-    frozenset({"slug", "body"}),
-    frozenset({"fuzzy_near", "body_fuzzy"}),
-    frozenset({"fuzzy_near", "body"}),
-    frozenset({"body_fuzzy"}),
-    frozenset({"slug", "title", "body", "body_fuzzy"}),
-    frozenset({"slug", "fuzzy_near", "body", "body_fuzzy"}),
-    frozenset({"title", "body", "body_fuzzy"}),
-    frozenset({"slug", "body", "body_fuzzy"}),
-    frozenset({"fuzzy_near", "body", "body_fuzzy"}),
-})
+_SAFE_DEDUP_COMBOS: frozenset[frozenset] = frozenset(
+    {
+        frozenset({"slug", "title", "body"}),
+        frozenset({"slug", "fuzzy_near", "body"}),
+        frozenset({"title", "body"}),
+        frozenset({"slug", "title", "body_fuzzy"}),
+        frozenset({"slug", "fuzzy_near", "body_fuzzy"}),
+        frozenset({"title", "body_fuzzy"}),
+        frozenset({"slug", "body"}),
+        frozenset({"fuzzy_near", "body_fuzzy"}),
+        frozenset({"fuzzy_near", "body"}),
+        frozenset({"body_fuzzy"}),
+        frozenset({"slug", "title", "body", "body_fuzzy"}),
+        frozenset({"slug", "fuzzy_near", "body", "body_fuzzy"}),
+        frozenset({"title", "body", "body_fuzzy"}),
+        frozenset({"slug", "body", "body_fuzzy"}),
+        frozenset({"fuzzy_near", "body", "body_fuzzy"}),
+    }
+)
 
 
 def _safe_dedup_entry_slug(url: str | None) -> str | None:
@@ -6895,12 +7146,14 @@ def _safe_dedup_norm_title(t: str | None) -> str:
     if not t:
         return ""
     import unicodedata
+
     t = unicodedata.normalize("NFC", t).translate(_SAFE_DEDUP_UNICODE_TRANS)
     return " ".join(t.strip().lower().split())
 
 
 def _safe_dedup_norm_body(entry) -> str:
     import html as _html
+
     raw = ""
     if entry.content:
         raw = entry.content[0].value or ""
@@ -6908,7 +7161,7 @@ def _safe_dedup_norm_body(entry) -> str:
         raw = entry.summary or ""
     text = _SAFE_DEDUP_TAG_RE.sub(" ", raw)
     text = _html.unescape(text)
-    return " ".join(text.split())[: _SAFE_DEDUP_BODY_CHARS].lower()
+    return " ".join(text.split())[:_SAFE_DEDUP_BODY_CHARS].lower()
 
 
 def _safe_dedup_collect(reader, feed_urls: set[str], max_per_feed: int, read_filter) -> list[dict]:
@@ -6923,18 +7176,20 @@ def _safe_dedup_collect(reader, feed_urls: set[str], max_per_feed: int, read_fil
             for entry in reader.get_entries(**kwargs):
                 published = entry_effective_date(entry)
                 ntitle = _safe_dedup_norm_title(entry.title)
-                records.append({
-                    "feed_url":   str(entry.feed_url or ""),
-                    "entry_id":   str(entry.id),
-                    "title":      str(entry.title or ""),
-                    "link":       str(entry.link or ""),
-                    "feed_title": feed_title_map.get(str(entry.feed_url or ""), str(entry.feed_url or "")),
-                    "published":  published.isoformat() if published else None,
-                    "published_ts": published.timestamp() if published else 0.0,
-                    "slug":       _safe_dedup_entry_slug(entry.link),
-                    "ntitle":     ntitle,
-                    "body":       _safe_dedup_norm_body(entry),
-                })
+                records.append(
+                    {
+                        "feed_url": str(entry.feed_url or ""),
+                        "entry_id": str(entry.id),
+                        "title": str(entry.title or ""),
+                        "link": str(entry.link or ""),
+                        "feed_title": feed_title_map.get(str(entry.feed_url or ""), str(entry.feed_url or "")),
+                        "published": published.isoformat() if published else None,
+                        "published_ts": published.timestamp() if published else 0.0,
+                        "slug": _safe_dedup_entry_slug(entry.link),
+                        "ntitle": ntitle,
+                        "body": _safe_dedup_norm_body(entry),
+                    }
+                )
         except Exception:
             LOGGER.exception("safe-dedup: error reading feed %s", feed_url)
     return records
@@ -6961,16 +7216,16 @@ def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[st
                 continue
             _ordered = sorted(entries, key=dedup_order_key)
             for i, a in enumerate(_ordered):
-                for b in _ordered[i + 1:]:
+                for b in _ordered[i + 1 :]:
                     if a["feed_url"] != b["feed_url"] and a["link"] != b["link"]:
                         pairs.add(_mk_pair(a, b))
         return pairs
 
-    slug_idx:  dict = _dd(list)
+    slug_idx: dict = _dd(list)
     title_idx: dict = _dd(list)
-    body_idx:  dict = _dd(list)
-    guid_idx:  dict = _dd(list)
-    by_feed:   dict = _dd(list)
+    body_idx: dict = _dd(list)
+    guid_idx: dict = _dd(list)
+    by_feed: dict = _dd(list)
 
     for r in records:
         # Identical GUID in two different feeds is the publisher's own statement
@@ -6988,10 +7243,10 @@ def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[st
         if r["ntitle"] and len(r["ntitle"].split()) >= _SAFE_DEDUP_MIN_TITLE_WORDS:
             by_feed[r["feed_url"]].append(r)
 
-    slug_pairs  = _index_to_pairs(slug_idx)
+    slug_pairs = _index_to_pairs(slug_idx)
     title_pairs = _index_to_pairs(title_idx)
-    body_pairs  = _index_to_pairs(body_idx)
-    guid_pairs  = _index_to_pairs(guid_idx)
+    body_pairs = _index_to_pairs(body_idx)
+    guid_pairs = _index_to_pairs(guid_idx)
 
     link_feed: dict[str, str] = {r["link"]: r["feed_url"] for r in records if r["link"]}
     cand_pairs: set[tuple[str, str]] = set()
@@ -7001,7 +7256,7 @@ def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[st
         if fu_a and fu_b and fu_a != fu_b:
             cand_pairs.add((min(fu_a, fu_b), max(fu_a, fu_b)))
 
-    fuzzy_pairs:      set[tuple[str, str]] = set()
+    fuzzy_pairs: set[tuple[str, str]] = set()
     body_fuzzy_pairs: set[tuple[str, str]] = set()
 
     for fu_i, fu_j in cand_pairs:
@@ -7012,8 +7267,7 @@ def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[st
                 sim_t = title_word_similarity(a["ntitle"], b["ntitle"])
                 if _SAFE_DEDUP_FUZZY_THRESH <= sim_t < 1.0:
                     fuzzy_pairs.add(_mk_pair(a, b))
-                if (len(a["body"]) >= _SAFE_DEDUP_MIN_BODY_CHARS
-                        and len(b["body"]) >= _SAFE_DEDUP_MIN_BODY_CHARS):
+                if len(a["body"]) >= _SAFE_DEDUP_MIN_BODY_CHARS and len(b["body"]) >= _SAFE_DEDUP_MIN_BODY_CHARS:
                     sim_b = title_word_similarity(a["body"], b["body"])
                     if sim_b >= _SAFE_DEDUP_BODY_FUZZY_THRESH:
                         body_fuzzy_pairs.add(_mk_pair(a, b))
@@ -7076,7 +7330,7 @@ def _resolve_dedup_feed_urls(
     elif scope == "folder":
         try:
             fid = int(scope_id)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return {"error": "invalid scope_id"}
         feed_urls = get_folder_feed_urls(conn, fid)
     elif scope == "folders":
@@ -7128,16 +7382,16 @@ def _dry_run_dedup(
         return feed_urls  # {"error": ...}
     if len(feed_urls) < 2:
         return {
-            "groups": [], "total_entries_scanned": 0, "total_would_mark_read": 0,
+            "groups": [],
+            "total_entries_scanned": 0,
+            "total_would_mark_read": 0,
             "message": "Need at least 2 feeds in scope to deduplicate",
         }
 
     if match_method == "safe":
         per_feed_limit = max(1, max_entries // max(1, len(feed_urls)))
         false_matches: set[str] = set()
-        rows = conn.execute(
-            "SELECT keep_link, mark_link FROM dedup_false_matches"
-        ).fetchall()
+        rows = conn.execute("SELECT keep_link, mark_link FROM dedup_false_matches").fetchall()
         false_matches = {r[0] + "||" + r[1] for r in rows}
         with get_reader() as reader:
             records = _safe_dedup_collect(reader, feed_urls, per_feed_limit, None)
@@ -7146,7 +7400,8 @@ def _dry_run_dedup(
         by_keep: dict[str, dict] = {}
         seen_mark: set[str] = set()
         for (keep_link, mark_link), modes in sorted(
-            pair_modes.items(), key=lambda kv: -len(kv[1])  # most signals first
+            pair_modes.items(),
+            key=lambda kv: -len(kv[1]),  # most signals first
         ):
             if keep_link + "||" + mark_link in false_matches:
                 continue
@@ -7271,7 +7526,7 @@ def _dry_run_dedup(
         feed_list = sorted(u for u in feed_urls if u in fuzzy_entries)
         seen_mark_links: set[str] = set()
         for i, feed_i in enumerate(feed_list):
-            for feed_j in feed_list[i + 1:]:
+            for feed_j in feed_list[i + 1 :]:
                 for ei in fuzzy_entries[feed_i]:
                     for ej in fuzzy_entries[feed_j]:
                         ts_i = ei["published_ts"] or 0.0
@@ -7281,17 +7536,18 @@ def _dry_run_dedup(
                         sim = title_word_similarity(ei["norm_title"], ej["norm_title"])
                         if sim < _FUZZY_THRESHOLD:
                             continue
-                        keep, newer = ((ei, ej) if dedup_order_key(ei) <= dedup_order_key(ej)
-                                       else (ej, ei))
+                        keep, newer = (ei, ej) if dedup_order_key(ei) <= dedup_order_key(ej) else (ej, ei)
                         if newer["link"] in seen_mark_links:
                             continue
                         seen_mark_links.add(newer["link"])
-                        groups.append({
-                            "match_by": "fuzzy",
-                            "matched_value": f"{round(sim * 100)}% similar",
-                            "keep": keep,
-                            "mark_read": [newer],
-                        })
+                        groups.append(
+                            {
+                                "match_by": "fuzzy",
+                                "matched_value": f"{round(sim * 100)}% similar",
+                                "keep": keep,
+                                "mark_read": [newer],
+                            }
+                        )
 
     return {
         "groups": groups,
@@ -7302,10 +7558,7 @@ def _dry_run_dedup(
         # the keeper. A pair whose older copy is already read simply does not form:
         # counting the unread mark alone promised a mark that never came, and Run
         # Now answered "no matching unread entries found".
-        "total_unread_would_mark_read": sum(
-            max(0, sum(1 for e in [g["keep"], *g["mark_read"]] if not e.get("read")) - 1)
-            for g in groups
-        ),
+        "total_unread_would_mark_read": sum(max(0, sum(1 for e in [g["keep"], *g["mark_read"]] if not e.get("read")) - 1) for g in groups),
     }
 
 
@@ -7330,9 +7583,18 @@ def split_keyword_terms(keyword: str) -> list[str]:
 # compare, so it only ever adds matches. Regex mode is left alone — a pattern
 # says what it says.
 _MATCH_FOLD = {
-    ord("\u2018"): "'", ord("\u2019"): "'", ord("\u201b"): "'", ord("\u2032"): "'",
-    ord("\u201c"): '"', ord("\u201d"): '"', ord("\u201e"): '"', ord("\u201f"): '"', ord("\u2033"): '"',
-    ord("\u00a0"): " ", ord("\u2007"): " ", ord("\u202f"): " ",
+    ord("\u2018"): "'",
+    ord("\u2019"): "'",
+    ord("\u201b"): "'",
+    ord("\u2032"): "'",
+    ord("\u201c"): '"',
+    ord("\u201d"): '"',
+    ord("\u201e"): '"',
+    ord("\u201f"): '"',
+    ord("\u2033"): '"',
+    ord("\u00a0"): " ",
+    ord("\u2007"): " ",
+    ord("\u202f"): " ",
 }
 
 
@@ -7403,6 +7665,7 @@ def _dry_run_pattern(
     if not keyword:
         if not match_all_if_empty:
             return {"matches": [], "total_scanned": 0, "total_matches": 0, "truncated": False}
+
         def match_fn(text):
             return True
     else:
@@ -7417,7 +7680,7 @@ def _dry_run_pattern(
     if scope == "folder":
         try:
             int(scope_id)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return {"error": "invalid scope_id"}
     elif scope == "folders" and not parse_folders_scope_id(scope_id):
         return {"error": "invalid scope_id"}
@@ -7454,7 +7717,7 @@ def _dry_run_pattern(
                 break
             if exclude_shorts and _is_youtube_short(entry):
                 continue
-            if (min_secs or max_secs):
+            if min_secs or max_secs:
                 # Duration filter preview: use the entry's primary video (its link).
                 _vid = youtube_duration_service.extract_video_id(str(entry.link or ""))
                 _dur = youtube_duration_service.get_cached_duration(_vid)[0] if _vid else None
@@ -7464,7 +7727,7 @@ def _dry_run_pattern(
             title_text = str(entry.title or "")
             body_text = ""
             if search_in in ("body", "both"):
-                for c in (entry.content or []):
+                for c in entry.content or []:
                     body_text += (c.value or "") + " "
                 body_text += str(entry.summary or "")
 
@@ -7479,14 +7742,16 @@ def _dry_run_pattern(
                 total_matches += 1
                 if len(matches) < result_limit:
                     published = entry_effective_date(entry)
-                    matches.append({
-                        "title": title_text,
-                        "link": str(entry.link or ""),
-                        "feed_url": str(entry.feed_url or ""),
-                        "feed_title": feed_title_map.get(str(entry.feed_url or ""), str(entry.feed_url or "")),
-                        "published": published.isoformat() if published else None,
-                        "read": bool(entry.read),
-                    })
+                    matches.append(
+                        {
+                            "title": title_text,
+                            "link": str(entry.link or ""),
+                            "feed_url": str(entry.feed_url or ""),
+                            "feed_title": feed_title_map.get(str(entry.feed_url or ""), str(entry.feed_url or "")),
+                            "published": published.isoformat() if published else None,
+                            "read": bool(entry.read),
+                        }
+                    )
 
     return {
         "matches": matches,
@@ -7517,9 +7782,7 @@ def _run_now_dedup(
         return {"count": 0, "message": "Need at least 2 feeds in scope"}
 
     if match_method == "safe":
-        false_rows = conn.execute(
-            "SELECT keep_link, mark_link FROM dedup_false_matches"
-        ).fetchall()
+        false_rows = conn.execute("SELECT keep_link, mark_link FROM dedup_false_matches").fetchall()
         false_matches: set[str] = {r[0] + "||" + r[1] for r in false_rows}
         with get_reader() as reader:
             records = _safe_dedup_collect(reader, feed_urls, max_per_feed, False)
@@ -7552,17 +7815,17 @@ def _run_now_dedup(
         rec_map = {(r["feed_url"], r["entry_id"]): r for r in records}
 
         def _rec_info(fu: str, eid: str, matched_link: str | None = None) -> dict:
-            return {"feed_url": fu, "entry_id": eid,
-                    "title": rec_map.get((fu, eid), {}).get("title", ""),
-                    "link": rec_map.get((fu, eid), {}).get("link", ""),
-                    "feed_title": rec_map.get((fu, eid), {}).get("feed_title", ""),
-                    "matched_link": matched_link}
+            return {
+                "feed_url": fu,
+                "entry_id": eid,
+                "title": rec_map.get((fu, eid), {}).get("title", ""),
+                "link": rec_map.get((fu, eid), {}).get("link", ""),
+                "feed_title": rec_map.get((fu, eid), {}).get("feed_title", ""),
+                "matched_link": matched_link,
+            }
 
         matched_entries = [_rec_info(fu, eid, mark_to_keep.get((fu, eid))) for fu, eid in to_mark]
-        kept_entries = [
-            _rec_info(fu, eid, rec_map.get((fu, eid), {}).get("link", ""))
-            for fu, eid in kept_keys - to_mark
-        ]
+        kept_entries = [_rec_info(fu, eid, rec_map.get((fu, eid), {}).get("link", "")) for fu, eid in kept_keys - to_mark]
         return {"count": len(to_mark), "entries": matched_entries, "kept": kept_entries}
 
     slug_index: dict[str, list[dict]] = {}
@@ -7653,7 +7916,7 @@ def _run_now_dedup(
         if match_method == "fuzzy":
             feed_list = sorted(u for u in feed_urls if u in fuzzy_entries)
             for i, feed_i in enumerate(feed_list):
-                for feed_j in feed_list[i + 1:]:
+                for feed_j in feed_list[i + 1 :]:
                     for ei in fuzzy_entries[feed_i]:
                         for ej in fuzzy_entries[feed_j]:
                             ts_i = ei["published_ts"] or 0.0
@@ -7691,18 +7954,18 @@ def _run_now_dedup(
 
     def _entry_info(fu: str, eid: str, matched_link: str | None = None) -> dict:
         info = entry_map.get((fu, eid), {})
-        return {"feed_url": fu, "entry_id": eid,
-                "title": info.get("title", ""),
-                "link": info.get("link", ""),
-                "feed_title": info.get("feed_title", ""),
-                # marked: the kept copy it matched; kept: its own link (group anchor).
-                "matched_link": matched_link}
+        return {
+            "feed_url": fu,
+            "entry_id": eid,
+            "title": info.get("title", ""),
+            "link": info.get("link", ""),
+            "feed_title": info.get("feed_title", ""),
+            # marked: the kept copy it matched; kept: its own link (group anchor).
+            "matched_link": matched_link,
+        }
 
     matched_entries = [_entry_info(fu, eid, mark_to_keep.get((fu, eid))) for fu, eid in to_mark]
-    kept_entries = [
-        _entry_info(fu, eid, entry_map.get((fu, eid), {}).get("link", ""))
-        for fu, eid in kept_keys - to_mark
-    ]
+    kept_entries = [_entry_info(fu, eid, entry_map.get((fu, eid), {}).get("link", "")) for fu, eid in kept_keys - to_mark]
     return {"count": len(to_mark), "entries": matched_entries, "kept": kept_entries}
 
 
@@ -7728,7 +7991,7 @@ def _run_now_pattern(
     if scope == "folder":
         try:
             int(scope_id)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return {"error": "invalid scope_id"}
     elif scope == "folders" and not parse_folders_scope_id(scope_id):
         return {"error": "invalid scope_id"}
@@ -7752,7 +8015,7 @@ def _run_now_pattern(
             title_text = str(entry.title or "")
             body_text = ""
             if search_in in ("body", "both"):
-                for c in (entry.content or []):
+                for c in entry.content or []:
                     body_text += (c.value or "") + " "
                 body_text += str(entry.summary or "")
 
@@ -7773,13 +8036,15 @@ def _run_now_pattern(
                             feed_title_cache[fu] = feed_display_title(f, fu)
                         except Exception:
                             feed_title_cache[fu] = fu
-                    matched_entries.append({
-                        "feed_url": fu,
-                        "entry_id": str(entry.id),
-                        "title": str(entry.title or ""),
-                        "link": str(entry.link or ""),
-                        "feed_title": feed_title_cache.get(fu, fu),
-                    })
+                    matched_entries.append(
+                        {
+                            "feed_url": fu,
+                            "entry_id": str(entry.id),
+                            "title": str(entry.title or ""),
+                            "link": str(entry.link or ""),
+                            "feed_title": feed_title_cache.get(fu, fu),
+                        }
+                    )
 
         for feed_url, entry_id in to_mark:
             reader.mark_entry_as_read((feed_url, entry_id))
@@ -7870,7 +8135,7 @@ def _run_tag_filter(
     if scope == "folder":
         try:
             int(scope_id)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return {"error": "invalid scope_id"}
     elif scope == "folders" and not parse_folders_scope_id(scope_id):
         return {"error": "invalid scope_id"}
@@ -7955,24 +8220,28 @@ def _run_tag_filter(
                 continue
             to_mark.append((fu, eid))
             if apply and len(matched_entries) < _ENTRY_DETAIL_CAP:
-                matched_entries.append({
-                    "feed_url": fu,
-                    "entry_id": eid,
-                    "title": str(entry.title or ""),
-                    "link": str(entry.link or ""),
-                    "feed_title": feed_title(fu),
-                })
+                matched_entries.append(
+                    {
+                        "feed_url": fu,
+                        "entry_id": eid,
+                        "title": str(entry.title or ""),
+                        "link": str(entry.link or ""),
+                        "feed_title": feed_title(fu),
+                    }
+                )
             elif not apply and len(matched_entries) < _DRY_RESULT_LIMIT:
                 published = entry_effective_date(entry)
-                matched_entries.append({
-                    "feed_url": fu,
-                    "entry_id": eid,
-                    "title": str(entry.title or ""),
-                    "link": str(entry.link or ""),
-                    "feed_title": feed_title(fu),
-                    "published": published.isoformat() if published else None,
-                    "read": bool(entry.read),
-                })
+                matched_entries.append(
+                    {
+                        "feed_url": fu,
+                        "entry_id": eid,
+                        "title": str(entry.title or ""),
+                        "link": str(entry.link or ""),
+                        "feed_title": feed_title(fu),
+                        "published": published.isoformat() if published else None,
+                        "read": bool(entry.read),
+                    }
+                )
 
         if apply:
             for feed_url, entry_id in to_mark:
@@ -8011,8 +8280,7 @@ def get_feed_tag_filter_rule(conn: sqlite3.Connection, feed_url: str) -> dict | 
     """The feed-scoped tag_filter rule for feed_url (the one the post-header
     chips manage), or None. Folder/global tag_filter rules are left alone."""
     row = conn.execute(
-        "SELECT rowid, keyword, enabled FROM highlight_keywords"
-        " WHERE type = 'tag_filter' AND scope = 'feed' AND scope_id = ?",
+        "SELECT rowid, keyword, enabled FROM highlight_keywords WHERE type = 'tag_filter' AND scope = 'feed' AND scope_id = ?",
         (feed_url,),
     ).fetchone()
     return dict(row) if row else None
@@ -8069,8 +8337,7 @@ def toggle_feed_tag_filter(conn: sqlite3.Connection, feed_url: str, tag: str, si
             (spec, rule["rowid"]),
         )
     elif tokens:
-        add_highlight_keyword(conn, "feed", feed_url, spec, "yellow",
-                              rule_type="tag_filter", enabled=0)
+        add_highlight_keyword(conn, "feed", feed_url, spec, "yellow", rule_type="tag_filter", enabled=0)
 
     applied = 0
     if tokens and enabled:
@@ -8078,21 +8345,17 @@ def toggle_feed_tag_filter(conn: sqlite3.Connection, feed_url: str, tag: str, si
         if "error" not in result:
             applied = int(result.get("count", 0))
             if applied > 0:
-                _log_auto_run(conn, datetime.now().isoformat(), "tag_filter",
-                              "feed", feed_url, spec, result, trigger="manual")
+                _log_auto_run(conn, datetime.now().isoformat(), "tag_filter", "feed", feed_url, spec, result, trigger="manual")
 
-    return {"spec": spec, "active": {v: ("+" if s == "++" else s) for s, v in tokens},
-            "enabled": enabled, "applied_count": applied}
+    return {"spec": spec, "active": {v: ("+" if s == "++" else s) for s, v in tokens}, "enabled": enabled, "applied_count": applied}
 
 
-def _log_auto_run(conn: sqlite3.Connection, now: str, rule_type: str, scope: str,
-                  scope_id: str, keyword: str, result: dict,
-                  trigger: str = "auto") -> None:
+def _log_auto_run(
+    conn: sqlite3.Connection, now: str, rule_type: str, scope: str, scope_id: str, keyword: str, result: dict, trigger: str = "auto"
+) -> None:
     """Write a rule_run_log row (+ matched entries) in the caller's transaction."""
     cur = conn.execute(
-        "INSERT INTO rule_run_log"
-        " (run_at, rule_type, scope, scope_id, keyword, entries_affected, trigger)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO rule_run_log (run_at, rule_type, scope, scope_id, keyword, entries_affected, trigger) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (now, rule_type, scope, scope_id, keyword, result["count"], trigger),
     )
     rows = [(e, "marked") for e in (result.get("entries") or [])]
@@ -8102,13 +8365,15 @@ def _log_auto_run(conn: sqlite3.Connection, now: str, rule_type: str, scope: str
             "INSERT INTO rule_run_log_entries"
             " (log_id, feed_url, entry_id, title, link, feed_title, role, matched_link)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [(cur.lastrowid, e["feed_url"], e["entry_id"],
-              e["title"], e["link"], e["feed_title"], role, e.get("matched_link"))
-             for e, role in rows],
+            [
+                (cur.lastrowid, e["feed_url"], e["entry_id"], e["title"], e["link"], e["feed_title"], role, e.get("matched_link"))
+                for e, role in rows
+            ],
         )
 
 
 _SHORTS_HASHTAGS = ("#shorts", "#short", "#ytshorts", "#youtubeshorts")
+
 
 def _is_youtube_short(entry: object) -> bool:
     """Return True if the entry is a YouTube Short.
@@ -8126,10 +8391,7 @@ def _is_youtube_short(entry: object) -> bool:
 
     title = (getattr(entry, "title", None) or "").lower()
     summary = (getattr(entry, "summary", None) or "").lower()
-    content_text = "".join(
-        (getattr(c, "value", None) or "").lower()
-        for c in (getattr(entry, "content", None) or [])
-    )
+    content_text = "".join((getattr(c, "value", None) or "").lower() for c in (getattr(entry, "content", None) or []))
     for text in (title, summary, content_text):
         if any(tag in text for tag in _SHORTS_HASHTAGS):
             return True
@@ -8162,9 +8424,7 @@ def _youtube_unpremiered_video_id(feed_url: str | None, link: str | None) -> str
 
 def _is_youtube_unpremiered(entry: object) -> bool:
     """True if entry is a YouTube video that hasn't premiered/gone live yet."""
-    return _youtube_unpremiered_video_id(
-        getattr(entry, "feed_url", None), getattr(entry, "link", None)
-    ) is not None
+    return _youtube_unpremiered_video_id(getattr(entry, "feed_url", None), getattr(entry, "link", None)) is not None
 
 
 def _youtube_premiere_prefix(video_id: str) -> str | None:
@@ -8222,8 +8482,8 @@ def _mark_existing_shorts_read(feed_urls: Iterable[str]) -> int:
     return len(to_mark)
 
 
-_CHURN_TITLE_MIN_WORDS = _DEDUP_MIN_TITLE_WORDS   # avoids "New post" / "Update" false positives
-_CHURN_TITLE_DATE_DAYS  = 7  # published dates must be within this many days of each other
+_CHURN_TITLE_MIN_WORDS = _DEDUP_MIN_TITLE_WORDS  # avoids "New post" / "Update" false positives
+_CHURN_TITLE_DATE_DAYS = 7  # published dates must be within this many days of each other
 
 
 def _suppress_guid_churn(reader, conn, feed_url: str) -> int:
@@ -8298,11 +8558,7 @@ def _suppress_guid_churn(reader, conn, feed_url: str) -> int:
         if entry.title and known_title_dates:
             norm = normalize_entry_title_for_dedupe(entry.title)
             if len(norm.split()) >= _CHURN_TITLE_MIN_WORDS and norm in known_title_dates:
-                entry_pub = (
-                    getattr(entry, "published", None)
-                    or getattr(entry, "updated", None)
-                    or getattr(entry, "added", None)
-                )
+                entry_pub = getattr(entry, "published", None) or getattr(entry, "updated", None) or getattr(entry, "added", None)
                 if entry_pub:
                     threshold = _CHURN_TITLE_DATE_DAYS * 86400
                     for known_pub in known_title_dates[norm]:
@@ -8361,9 +8617,7 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
             slug_entries: dict[str, list] = {}
             title_entries: dict[str, list] = {}
             for entry in reader.get_entries(feed=feed_url, read=False):
-                pub = (getattr(entry, "published", None)
-                       or getattr(entry, "updated", None)
-                       or getattr(entry, "added", None))
+                pub = getattr(entry, "published", None) or getattr(entry, "updated", None) or getattr(entry, "added", None)
                 pub_ts = pub.timestamp() if pub else 0.0
                 if entry.link:
                     slug = _safe_dedup_entry_slug(entry.link)
@@ -8412,9 +8666,7 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
             canon = normalize_entry_link_for_dedupe(entry.link)
             if not canon:
                 continue
-            pub = (getattr(entry, "published", None)
-                   or getattr(entry, "updated", None)
-                   or getattr(entry, "added", None))
+            pub = getattr(entry, "published", None) or getattr(entry, "updated", None) or getattr(entry, "added", None)
             pub_ts = pub.timestamp() if pub else 0.0
             link_entries.setdefault(canon, []).append((pub_ts, entry))
 
@@ -8451,6 +8703,7 @@ def _apply_hide_shorts(refreshed_feed_urls: set[str]) -> int:
     Called from _run_automation_after_refresh right after entries land (link/hashtag
     signals) and again after duration enhancement so ≤60s videos without a #shorts
     tag are also caught. Returns the number of entries marked read."""
+
     def _is_yt_host(u: str) -> bool:
         host = urlparse(u).hostname or ""
         return host == "youtube.com" or host.endswith(".youtube.com")
@@ -8460,16 +8713,11 @@ def _apply_hide_shorts(refreshed_feed_urls: set[str]) -> int:
     try:
         with get_meta_connection() as conn:
             shorts_urls = {
-                str(r["feed_url"])
-                for r in conn.execute(
-                    "SELECT feed_url FROM feed_display_prefs WHERE hide_shorts = 1"
-                ).fetchall()
+                str(r["feed_url"]) for r in conn.execute("SELECT feed_url FROM feed_display_prefs WHERE hide_shorts = 1").fetchall()
             }
         shorts_targets = refreshed_feed_urls & shorts_urls
         if youtube_hide_shorts_global():
-            shorts_targets = shorts_targets | {
-                u for u in refreshed_feed_urls if "youtube.com/feeds/videos.xml" in u
-            }
+            shorts_targets = shorts_targets | {u for u in refreshed_feed_urls if "youtube.com/feeds/videos.xml" in u}
         if shorts_targets:
             return _mark_existing_shorts_read(shorts_targets)
     except Exception:
@@ -8518,10 +8766,7 @@ def _apply_hide_paywalled(refreshed_feed_urls: set[str]) -> int:
     try:
         with get_meta_connection() as conn:
             targets = {
-                str(r["feed_url"])
-                for r in conn.execute(
-                    "SELECT feed_url FROM feed_display_prefs WHERE hide_paywalled = 1"
-                ).fetchall()
+                str(r["feed_url"]) for r in conn.execute("SELECT feed_url FROM feed_display_prefs WHERE hide_paywalled = 1").fetchall()
             } & set(refreshed_feed_urls)
         if not targets:
             return 0
@@ -8571,6 +8816,7 @@ def _apply_hide_members_only(refreshed_feed_urls: set[str]) -> int:
     a video is only ever checked once (the result is cached permanently), and
     only for entries on feeds that opted in.
     """
+
     def _is_yt_host(u: str) -> bool:
         host = urlparse(u).hostname or ""
         return host == "youtube.com" or host.endswith(".youtube.com")
@@ -8580,10 +8826,7 @@ def _apply_hide_members_only(refreshed_feed_urls: set[str]) -> int:
     try:
         with get_meta_connection() as conn:
             members_only_urls = {
-                str(r["feed_url"])
-                for r in conn.execute(
-                    "SELECT feed_url FROM feed_display_prefs WHERE hide_members_only = 1"
-                ).fetchall()
+                str(r["feed_url"]) for r in conn.execute("SELECT feed_url FROM feed_display_prefs WHERE hide_members_only = 1").fetchall()
             }
         # Scoped to YouTube hosts even for the per-feed pref: hide_members_only is a
         # plain feed_display_prefs column with no host constraint of its own, and the
@@ -8594,9 +8837,7 @@ def _apply_hide_members_only(refreshed_feed_urls: set[str]) -> int:
         # fetch and, if flagged, marked read -- on a feed the user never opted in.
         targets = {u for u in (refreshed_feed_urls & members_only_urls) if _is_yt_host(u)}
         if youtube_hide_members_only_global():
-            targets = targets | {
-                u for u in refreshed_feed_urls if "youtube.com/feeds/videos.xml" in u
-            }
+            targets = targets | {u for u in refreshed_feed_urls if "youtube.com/feeds/videos.xml" in u}
         if not targets:
             return 0
         to_mark: list[tuple[str, str]] = []
@@ -8674,13 +8915,10 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
             for r in all_rules:
                 if r.get("enabled"):
                     folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
-            folder_feed_map: dict[int, set[str]] = {
-                fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
-            }
+            folder_feed_map: dict[int, set[str]] = {fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed}
 
         enabled_rules = [
-            r for r in all_rules
-            if r.get("enabled") and r.get("type") in ("mark_as_read", "deduplicate", "email_article", "tag_filter")
+            r for r in all_rules if r.get("enabled") and r.get("type") in ("mark_as_read", "deduplicate", "email_article", "tag_filter")
         ]
         if not enabled_rules:
             return
@@ -8745,7 +8983,11 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
                     exclude_scope_ids = str(rule.get("exclude_scope_ids") or "")
                     with get_meta_connection() as conn:
                         result = _run_now_dedup(
-                            conn, scope, scope_id, match_method, window_hours,
+                            conn,
+                            scope,
+                            scope_id,
+                            match_method,
+                            window_hours,
                             exclude_scope_ids=exclude_scope_ids,
                             fuzzy_threshold=_dedup_fuzzy_threshold(rule.get("dedup_fuzzy_pct")),
                             min_title_words=_clamp_min_title_words(rule.get("dedup_min_title_words")),
@@ -8805,7 +9047,7 @@ def _entry_matches_rule(entry: object, keyword: str, is_regex: bool, search_in: 
     title = str(getattr(entry, "title", None) or "")
     body = ""
     if search_in in ("body", "both"):
-        for c in (getattr(entry, "content", None) or []):
+        for c in getattr(entry, "content", None) or []:
             body += (getattr(c, "value", None) or "") + " "
         body += str(getattr(entry, "summary", None) or "")
 
@@ -8829,6 +9071,7 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
     try:
         from datetime import timedelta
         from datetime import timezone as _tz
+
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -8838,14 +9081,9 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
             for r in all_rules:
                 if r.get("enabled"):
                     folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
-            folder_feed_map: dict[int, set[str]] = {
-                fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
-            }
+            folder_feed_map: dict[int, set[str]] = {fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed}
 
-        email_rules = [
-            r for r in all_rules
-            if r.get("enabled") and r.get("type") == "email_article" and r.get("email_to")
-        ]
+        email_rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "email_article" and r.get("email_to")]
         if not email_rules:
             return
 
@@ -8864,11 +9102,7 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 batch_count = int(rule.get("batch_count") or 0)
                 cc_me = bool(rule.get("cc_me"))
                 # Suppress Cc when profile email is already the To recipient
-                cc_addr = (
-                    profile_email
-                    if cc_me and profile_email and profile_email.lower() != email_to.lower()
-                    else None
-                )
+                cc_addr = profile_email if cc_me and profile_email and profile_email.lower() != email_to.lower() else None
 
                 with get_reader() as reader:
                     feed_title_cache: dict[str, str] = {}
@@ -8908,18 +9142,30 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                 if immediate_sent >= _EMAIL_AUTO_PER_RUN_CAP:
                                     continue
                                 ok, err = send_article_email(
-                                    get_resend_api_key(), get_resend_from(), email_to,
-                                    article["title"], article["feed_title"],
-                                    article["link"], article["excerpt"],
+                                    get_resend_api_key(),
+                                    get_resend_from(),
+                                    email_to,
+                                    article["title"],
+                                    article["feed_title"],
+                                    article["link"],
+                                    article["excerpt"],
                                     cc_addr=cc_addr,
                                 )
                                 if ok:
                                     immediate_sent += 1
                                     with get_meta_connection() as conn:
-                                        _log_auto_run(conn, now_str, "email_article", scope, scope_id, keyword, {
-                                            "count": 1,
-                                            "entries": [article],
-                                        })
+                                        _log_auto_run(
+                                            conn,
+                                            now_str,
+                                            "email_article",
+                                            scope,
+                                            scope_id,
+                                            keyword,
+                                            {
+                                                "count": 1,
+                                                "entries": [article],
+                                            },
+                                        )
                                 else:
                                     LOGGER.warning("[email-auto] send failed: %s", err)
                             else:
@@ -8931,10 +9177,20 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                         "  feed_url, entry_id, title, link, feed_title, excerpt,"
                                         "  email_to, cc_me)"
                                         " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                                        (scope, scope_id, keyword, now_str,
-                                         fu, article["entry_id"], article["title"],
-                                         article["link"], article["feed_title"], article["excerpt"],
-                                         email_to, 1 if cc_me else 0),
+                                        (
+                                            scope,
+                                            scope_id,
+                                            keyword,
+                                            now_str,
+                                            fu,
+                                            article["entry_id"],
+                                            article["title"],
+                                            article["link"],
+                                            article["feed_title"],
+                                            article["excerpt"],
+                                            email_to,
+                                            1 if cc_me else 0,
+                                        ),
                                     )
                                     # Flush immediately if batch_count threshold is reached
                                     if batch_count > 0:
@@ -8946,8 +9202,13 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                         ).fetchone()[0]
                                         if pending >= batch_count:
                                             _flush_email_batch_for_rule(
-                                                conn, scope, scope_id, keyword, email_to,
-                                                cc_addr, now_str,
+                                                conn,
+                                                scope,
+                                                scope_id,
+                                                keyword,
+                                                email_to,
+                                                cc_addr,
+                                                now_str,
                                             )
             except Exception:
                 LOGGER.exception("[email-auto] error processing email rule %s/%s", scope, keyword)
@@ -8966,6 +9227,7 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
     try:
         from datetime import timedelta
         from datetime import timezone as _tz
+
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -8974,14 +9236,9 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
             for r in all_rules:
                 if r.get("enabled"):
                     folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
-            folder_feed_map: dict[int, set[str]] = {
-                fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
-            }
+            folder_feed_map: dict[int, set[str]] = {fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed}
 
-        webhook_rules = [
-            r for r in all_rules
-            if r.get("enabled") and r.get("type") == "webhook" and r.get("webhook_url")
-        ]
+        webhook_rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "webhook" and r.get("webhook_url")]
         if not webhook_rules:
             return
 
@@ -9047,10 +9304,18 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                 if ok:
                                     sent += 1
                                     with get_meta_connection() as conn:
-                                        _log_auto_run(conn, now_str, "webhook", scope, scope_id, keyword, {
-                                            "count": 1,
-                                            "entries": [article],
-                                        })
+                                        _log_auto_run(
+                                            conn,
+                                            now_str,
+                                            "webhook",
+                                            scope,
+                                            scope_id,
+                                            keyword,
+                                            {
+                                                "count": 1,
+                                                "entries": [article],
+                                            },
+                                        )
                                 else:
                                     LOGGER.warning("[webhook-auto] POST failed: %s", err)
 
@@ -9059,10 +9324,18 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                     ok, err = send_webhook(webhook_url, payload)
                     if ok:
                         with get_meta_connection() as conn:
-                            _log_auto_run(conn, now_str, "webhook", scope, scope_id, keyword, {
-                                "count": len(batch_articles),
-                                "entries": batch_articles,
-                            })
+                            _log_auto_run(
+                                conn,
+                                now_str,
+                                "webhook",
+                                scope,
+                                scope_id,
+                                keyword,
+                                {
+                                    "count": len(batch_articles),
+                                    "entries": batch_articles,
+                                },
+                            )
                     else:
                         LOGGER.warning("[webhook-auto] batch POST failed: %s", err)
             except Exception:
@@ -9087,6 +9360,7 @@ def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
     try:
         from datetime import timedelta
         from datetime import timezone as _tz
+
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -9095,9 +9369,7 @@ def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
             for r in all_rules:
                 if r.get("enabled"):
                     folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
-            folder_feed_map: dict[int, set[str]] = {
-                fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
-            }
+            folder_feed_map: dict[int, set[str]] = {fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed}
 
         rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "instapaper"]
         if not rules:
@@ -9142,12 +9414,26 @@ def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                 except Exception:
                                     feed_title_cache[fu] = fu
                             with get_meta_connection() as conn:
-                                _log_auto_run(conn, now_str, "instapaper", scope, scope_id, keyword, {
-                                    "count": 1,
-                                    "entries": [{"feed_url": fu, "entry_id": str(entry.id),
-                                                 "title": str(entry.title or ""), "link": link,
-                                                 "feed_title": feed_title_cache.get(fu, fu)}],
-                                })
+                                _log_auto_run(
+                                    conn,
+                                    now_str,
+                                    "instapaper",
+                                    scope,
+                                    scope_id,
+                                    keyword,
+                                    {
+                                        "count": 1,
+                                        "entries": [
+                                            {
+                                                "feed_url": fu,
+                                                "entry_id": str(entry.id),
+                                                "title": str(entry.title or ""),
+                                                "link": link,
+                                                "feed_title": feed_title_cache.get(fu, fu),
+                                            }
+                                        ],
+                                    },
+                                )
             except Exception:
                 LOGGER.exception("[instapaper-auto] error processing rule %s/%s", scope, keyword)
     except Exception:
@@ -9174,6 +9460,7 @@ def _run_save_article_rules_after_refresh(refreshed_feed_urls: set[str]) -> None
     try:
         from datetime import timedelta
         from datetime import timezone as _tz
+
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -9182,9 +9469,7 @@ def _run_save_article_rules_after_refresh(refreshed_feed_urls: set[str]) -> None
             for r in all_rules:
                 if r.get("enabled"):
                     folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
-            folder_feed_map: dict[int, set[str]] = {
-                fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
-            }
+            folder_feed_map: dict[int, set[str]] = {fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed}
 
         rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "save_article"]
         if not rules:
@@ -9226,12 +9511,26 @@ def _run_save_article_rules_after_refresh(refreshed_feed_urls: set[str]) -> None
                                 except Exception:
                                     feed_title_cache[fu] = fu
                             with get_meta_connection() as conn:
-                                _log_auto_run(conn, now_str, "save_article", scope, scope_id, keyword, {
-                                    "count": 1,
-                                    "entries": [{"feed_url": fu, "entry_id": eid,
-                                                 "title": str(entry.title or ""), "link": str(entry.link or ""),
-                                                 "feed_title": feed_title_cache.get(fu, fu)}],
-                                })
+                                _log_auto_run(
+                                    conn,
+                                    now_str,
+                                    "save_article",
+                                    scope,
+                                    scope_id,
+                                    keyword,
+                                    {
+                                        "count": 1,
+                                        "entries": [
+                                            {
+                                                "feed_url": fu,
+                                                "entry_id": eid,
+                                                "title": str(entry.title or ""),
+                                                "link": str(entry.link or ""),
+                                                "feed_title": feed_title_cache.get(fu, fu),
+                                            }
+                                        ],
+                                    },
+                                )
             except Exception:
                 LOGGER.exception("[save-article-auto] error processing rule %s/%s", scope, keyword)
     except Exception:
@@ -9258,6 +9557,7 @@ def _run_quire_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
     try:
         from datetime import timedelta
         from datetime import timezone as _tz
+
         cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
 
         with get_meta_connection() as conn:
@@ -9266,9 +9566,7 @@ def _run_quire_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
             for r in all_rules:
                 if r.get("enabled"):
                     folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
-            folder_feed_map: dict[int, set[str]] = {
-                fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
-            }
+            folder_feed_map: dict[int, set[str]] = {fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed}
 
         rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "quire"]
         if not rules:
@@ -9319,12 +9617,26 @@ def _run_quire_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                 continue
                             sent += 1
                             with get_meta_connection() as conn:
-                                _log_auto_run(conn, now_str, "quire", scope, scope_id, keyword, {
-                                    "count": 1,
-                                    "entries": [{"feed_url": fu, "entry_id": str(entry.id),
-                                                 "title": str(entry.title or ""), "link": link,
-                                                 "feed_title": feed_title_cache.get(fu, fu)}],
-                                })
+                                _log_auto_run(
+                                    conn,
+                                    now_str,
+                                    "quire",
+                                    scope,
+                                    scope_id,
+                                    keyword,
+                                    {
+                                        "count": 1,
+                                        "entries": [
+                                            {
+                                                "feed_url": fu,
+                                                "entry_id": str(entry.id),
+                                                "title": str(entry.title or ""),
+                                                "link": link,
+                                                "feed_title": feed_title_cache.get(fu, fu),
+                                            }
+                                        ],
+                                    },
+                                )
             except Exception:
                 LOGGER.exception("[quire-auto] error processing rule %s/%s", scope, keyword)
     except Exception:
@@ -9465,11 +9777,15 @@ def _apply_youtube_playlist_rules(
                                     feed_title_cache[fu] = str(getattr(reader.get_feed(fu), "title", None) or fu)
                                 except Exception:
                                     feed_title_cache[fu] = fu
-                            run_entries.append({
-                                "feed_url": fu, "entry_id": eid,
-                                "title": str(entry.title or ""), "link": link,
-                                "feed_title": feed_title_cache.get(fu, fu),
-                            })
+                            run_entries.append(
+                                {
+                                    "feed_url": fu,
+                                    "entry_id": eid,
+                                    "title": str(entry.title or ""),
+                                    "link": link,
+                                    "feed_title": feed_title_cache.get(fu, fu),
+                                }
+                            )
                             if mark_read:
                                 reader.mark_entry_as_read((fu, eid))
                                 marked.append((fu, eid))
@@ -9489,9 +9805,19 @@ def _apply_youtube_playlist_rules(
             _unread_counts_generation += 1
         if run_entries:
             with get_meta_connection() as conn:
-                _log_auto_run(conn, now_str, "youtube_playlist", scope, scope_id, keyword, {
-                    "count": len(run_entries), "entries": run_entries,
-                }, trigger=trigger)
+                _log_auto_run(
+                    conn,
+                    now_str,
+                    "youtube_playlist",
+                    scope,
+                    scope_id,
+                    keyword,
+                    {
+                        "count": len(run_entries),
+                        "entries": run_entries,
+                    },
+                    trigger=trigger,
+                )
         if quota_hit:
             # Quota is exhausted for the day (units are cumulative across
             # rules) — trying the next rule would just fail the same way.
@@ -9538,7 +9864,7 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
                 cutoff = datetime.fromisoformat(last_check_raw)
                 if cutoff.tzinfo is None:
                     cutoff = cutoff.replace(tzinfo=_tz.utc)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 cutoff = None
         if cutoff is None:
             # First run ever (or a corrupt watermark) — the original fixed
@@ -9548,10 +9874,7 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
 
         with get_meta_connection() as conn:
             all_rules = get_highlight_keywords(conn)
-            yt_rules = [
-                r for r in all_rules
-                if r.get("enabled") and r.get("type") == "youtube_playlist" and r.get("yt_playlist_id")
-            ]
+            yt_rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "youtube_playlist" and r.get("yt_playlist_id")]
             if not yt_rules:
                 return
             folder_feed_map: dict[int, set[str]] = {}
@@ -9580,8 +9903,12 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
 
 def _flush_email_batch_for_rule(
     conn: "sqlite3.Connection",
-    scope: str, scope_id: str, keyword: str, email_to: str,
-    cc_addr: str | None, now_str: str,
+    scope: str,
+    scope_id: str,
+    keyword: str,
+    email_to: str,
+    cc_addr: str | None,
+    now_str: str,
 ) -> None:
     """Send a digest email for one rule's queued entries and clear the queue."""
     rows = conn.execute(
@@ -9591,23 +9918,34 @@ def _flush_email_batch_for_rule(
     ).fetchall()
     if not rows:
         return
-    articles = [
-        {"title": r["title"], "link": r["link"], "feed_title": r["feed_title"], "excerpt": r["excerpt"]}
-        for r in rows
-    ]
+    articles = [{"title": r["title"], "link": r["link"], "feed_title": r["feed_title"], "excerpt": r["excerpt"]} for r in rows]
     use_cc = cc_addr if any(r["cc_me"] for r in rows) else None
     ok, err = send_digest_email(
-        get_resend_api_key(), get_resend_from(), email_to, articles, cc_addr=use_cc,
+        get_resend_api_key(),
+        get_resend_from(),
+        email_to,
+        articles,
+        cc_addr=use_cc,
     )
     if ok:
         ids = [r["id"] for r in rows]
         placeholders = ",".join("?" * len(ids))
         conn.execute(f"DELETE FROM email_batch_queue WHERE id IN ({placeholders})", ids)
-        _log_auto_run(conn, now_str, "email_article", scope, scope_id, keyword, {
-            "count": len(articles),
-            "entries": [{"feed_url": "", "entry_id": "", "title": a["title"],
-                         "link": a["link"], "feed_title": a["feed_title"]} for a in articles],
-        })
+        _log_auto_run(
+            conn,
+            now_str,
+            "email_article",
+            scope,
+            scope_id,
+            keyword,
+            {
+                "count": len(articles),
+                "entries": [
+                    {"feed_url": "", "entry_id": "", "title": a["title"], "link": a["link"], "feed_title": a["feed_title"]}
+                    for a in articles
+                ],
+            },
+        )
     else:
         LOGGER.warning("[email-auto] digest send failed for %s/%s: %s", scope, keyword, err)
 
@@ -9628,9 +9966,12 @@ def _flush_all_email_batches() -> None:
             with get_meta_connection() as conn:
                 _flush_email_batch_for_rule(
                     conn,
-                    str(g["rule_scope"]), str(g["rule_scope_id"]),
-                    str(g["rule_keyword"]), str(g["email_to"]),
-                    cc_addr, datetime.now().isoformat(),
+                    str(g["rule_scope"]),
+                    str(g["rule_scope_id"]),
+                    str(g["rule_keyword"]),
+                    str(g["email_to"]),
+                    cc_addr,
+                    datetime.now().isoformat(),
                 )
     except Exception:
         LOGGER.exception("[email-auto] error flushing all email batches")
@@ -9663,15 +10004,16 @@ def _check_and_flush_batch_times() -> None:
             scope_id = str(rule.get("scope_id") or "")
             keyword = str(rule.get("keyword", ""))
             cc_me = bool(rule.get("cc_me"))
-            cc_addr = (
-                profile_email
-                if cc_me and profile_email and profile_email.lower() != email_to.lower()
-                else None
-            )
+            cc_addr = profile_email if cc_me and profile_email and profile_email.lower() != email_to.lower() else None
             with get_meta_connection() as conn:
                 _flush_email_batch_for_rule(
-                    conn, scope, scope_id, keyword, email_to,
-                    cc_addr, datetime.now().isoformat(),
+                    conn,
+                    scope,
+                    scope_id,
+                    keyword,
+                    email_to,
+                    cc_addr,
+                    datetime.now().isoformat(),
                 )
             LOGGER.info("[email-batch] flushed batch for %s/%s at %s", scope, keyword, now_hhmm)
     except Exception:
@@ -10019,15 +10361,11 @@ def _mark_backend_unreachable(feed_url: str) -> None:
     if name == "tailscale":
         with _tailscale_down_lock:
             _tailscale_down_until[uid] = time.monotonic() + _TAILSCALE_DOWN_COOLDOWN_SECONDS
-        LOGGER.warning(
-            "[refresh] tailscale unreachable for user %s — skipping it for %ds", uid, int(_TAILSCALE_DOWN_COOLDOWN_SECONDS)
-        )
+        LOGGER.warning("[refresh] tailscale unreachable for user %s — skipping it for %ds", uid, int(_TAILSCALE_DOWN_COOLDOWN_SECONDS))
     else:
         with _proxy_down_lock:
             _proxy_down_until[uid] = time.monotonic() + _PROXY_DOWN_COOLDOWN_SECONDS
-        LOGGER.warning(
-            "[refresh] proxy unreachable for user %s — skipping it for %ds", uid, int(_PROXY_DOWN_COOLDOWN_SECONDS)
-        )
+        LOGGER.warning("[refresh] proxy unreachable for user %s — skipping it for %ds", uid, int(_PROXY_DOWN_COOLDOWN_SECONDS))
 
 
 def _resolve_proxy_for_fetch(uid: str, feed_url: str) -> str | None:
@@ -10155,6 +10493,8 @@ from services.feed_tags import FeedTagService
 # Feed-provided entry tags (<category>) captured at ingest: the sanitizing
 # feed parser hands raw tag data to this service via the sink below.
 feed_tag_service = FeedTagService(get_meta_connection=get_meta_connection)
+
+
 def _store_feed_window(feed_url: str, entry_ids: list[str]) -> None:
     """Replace the recorded window (entry ids in the latest parse) for a feed.
     Called from the sanitizing parser inside reader's update, under the
@@ -10216,8 +10556,7 @@ lead_image_service = LeadImageService(
 )
 
 
-def _persist_page_tags(feed_url: str, entry_id: str, page_html: str,
-                       source_url: str | None = None) -> None:
+def _persist_page_tags(feed_url: str, entry_id: str, page_html: str, source_url: str | None = None) -> None:
     """Background source-HTML fetch sink: persist article-page tags for
     entries the feed never tagged (feed-provided tags stay authoritative)."""
     if feed_tag_service.get_tags_for_entry(feed_url, entry_id):
@@ -10253,14 +10592,12 @@ starred_archive_service = StarredArchiveService(
     archived_keys=lambda: get_archived_saved_keys(),
     # Lazy for the same reason. Per-feed policy (which extensions this feed
     # keeps) plus the link scan, so the service only has to ask one question.
-    find_attachments=lambda feed_url, html, base: attachment_links_in_html(
-        html, base, get_feed_attachment_exts(feed_url)),
+    find_attachments=lambda feed_url, html, base: attachment_links_in_html(html, base, get_feed_attachment_exts(feed_url)),
     # Same per-feed policy, reused to gate enclosures (see the "4a" comment
     # in starred_archive.py) so one setting governs every non-image file
     # regardless of whether it was declared as an enclosure or found in the
     # body.
-    attachment_allowed=lambda feed_url, url: _attachment_ext_matches(
-        _url_ext(url), get_feed_attachment_exts(feed_url)),
+    attachment_allowed=lambda feed_url, url: _attachment_ext_matches(_url_ext(url), get_feed_attachment_exts(feed_url)),
 )
 
 
@@ -10404,10 +10741,13 @@ def get_manual_tags_for_resource(reader, resource_id: tuple[str, str]) -> list[s
 def _entry_is_starred(feed_url: str, entry_id: str) -> bool:
     """True if the entry has a saved_entries (star) row."""
     with get_meta_connection() as conn:
-        return conn.execute(
-            "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
-            (feed_url, entry_id),
-        ).fetchone() is not None
+        return (
+            conn.execute(
+                "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchone()
+            is not None
+        )
 
 
 def _entry_should_keep_archive(feed_url: str, entry_id: str) -> bool:
@@ -10437,7 +10777,8 @@ def _set_orphan_manual_tags(feed_url: str, entry_id: str, next_tags: list[str]) 
     was newly added (mirrors set_manual_tags_for_entry's added_any)."""
     with get_meta_connection() as conn:
         existing = {
-            str(r[0]) for r in conn.execute(
+            str(r[0])
+            for r in conn.execute(
                 "SELECT tag FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ?",
                 (feed_url, entry_id),
             ).fetchall()
@@ -10525,8 +10866,7 @@ def delete_manual_tag_everywhere(tag: str | None) -> int:
                 # Tag-as-keep: releasing the last tag on an unstarred entry
                 # releases its offline archive too.
                 feed_url, entry_id = entry.resource_id
-                if (not get_manual_tags_for_resource(reader, entry.resource_id)
-                        and not _entry_is_starred(feed_url, entry_id)):
+                if not get_manual_tags_for_resource(reader, entry.resource_id) and not _entry_is_starred(feed_url, entry_id):
                     try:
                         starred_archive_service.enqueue_removal(feed_url, entry_id)
                     except Exception as exc:  # noqa: BLE001
@@ -10537,12 +10877,16 @@ def delete_manual_tag_everywhere(tag: str | None) -> int:
                 failed += 1
                 LOGGER.warning(
                     "delete_manual_tag_everywhere: failed to remove %r from %s",
-                    normalized, entry.resource_id, exc_info=True,
+                    normalized,
+                    entry.resource_id,
+                    exc_info=True,
                 )
     if failed:
         LOGGER.warning(
             "delete_manual_tag_everywhere: %r removed from %d entries, %d failed",
-            normalized, removed, failed,
+            normalized,
+            removed,
+            failed,
         )
 
     # Orphan archives keep this tag in orphan_entry_tags instead of reader's
@@ -10550,9 +10894,7 @@ def delete_manual_tag_everywhere(tag: str | None) -> int:
     # delete-everywhere would silently miss them and the tag would look gone
     # from the sidebar while still sitting on an orphan.
     with get_meta_connection() as conn:
-        orphan_rows = conn.execute(
-            "SELECT feed_url, entry_id FROM orphan_entry_tags WHERE tag = ?", (normalized,)
-        ).fetchall()
+        orphan_rows = conn.execute("SELECT feed_url, entry_id FROM orphan_entry_tags WHERE tag = ?", (normalized,)).fetchall()
         if orphan_rows:
             # One bulk delete rather than per-row: the per-row "any tags left?"
             # check below still needs a query per entry (it's asking about
@@ -10577,9 +10919,7 @@ def delete_manual_tag_everywhere(tag: str | None) -> int:
     return removed
 
 
-def clear_folder_curation(
-    folder_id: int, remove_stars: bool, remove_tags: bool, only_tag: str | None = None
-) -> dict:
+def clear_folder_curation(folder_id: int, remove_stars: bool, remove_tags: bool, only_tag: str | None = None) -> dict:
     """Bulk-remove stars and/or manual tags from every entry in a folder's feeds,
     so a whole folder drops out of the Saved/Kept view — without unsubscribing
     anything (deleting the folder would). The Saved-view counterpart to
@@ -10604,13 +10944,9 @@ def clear_folder_curation(
 
     if remove_stars:
         with get_meta_connection() as conn:
-            starred = [
-                (str(f), str(i)) for f, i in conn.execute(
-                    "SELECT feed_url, entry_id FROM saved_entries"
-                ) if str(f) in feeds
-            ]
+            starred = [(str(f), str(i)) for f, i in conn.execute("SELECT feed_url, entry_id FROM saved_entries") if str(f) in feeds]
             for start in range(0, len(starred), 400):
-                chunk = starred[start:start + 400]
+                chunk = starred[start : start + 400]
                 ph = ",".join("(?,?)" for _ in chunk)
                 conn.execute(
                     f"DELETE FROM saved_entries WHERE (feed_url, entry_id) IN ({ph})",
@@ -10629,7 +10965,7 @@ def clear_folder_curation(
         conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=10.0)
         try:
             for i in range(0, len(feed_list), 900):
-                fchunk = feed_list[i:i + 900]
+                fchunk = feed_list[i : i + 900]
                 fph = ",".join("?" for _ in fchunk)
                 for f, e in conn.execute(
                     f"SELECT DISTINCT feed, id FROM entry_tags WHERE {match_sql} AND feed IN ({fph})",
@@ -10710,30 +11046,25 @@ def tag_alias_preview(alias: str, canonical: str) -> dict:
         out["error"] = "A tag cannot be an alias of itself."
         return out
     with get_reader() as reader:
-        out["manual"] = reader.get_entry_counts(
-            tags=[f"{MANUAL_TAG_KEY_PREFIX}{alias_n}"]).total
+        out["manual"] = reader.get_entry_counts(tags=[f"{MANUAL_TAG_KEY_PREFIX}{alias_n}"]).total
     with get_meta_connection() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) AS n FROM entry_feed_tags WHERE tag = ?", (alias_n,)).fetchone()
+        row = conn.execute("SELECT COUNT(*) AS n FROM entry_feed_tags WHERE tag = ?", (alias_n,)).fetchone()
         out["feed"] = int(row["n"]) if row else 0
         # A canonical that is itself aliased would make the new alias a two-hop
         # chain, and _apply_tag_alias deliberately only resolves one.
         # Chains are refused in BOTH directions, because _apply_tag_alias
         # deliberately takes one hop: a two-step chain would leave the first tag
         # resolving to something that no longer holds anything.
-        chained = conn.execute(
-            "SELECT canonical FROM tag_aliases WHERE alias = ?", (canon_n,)).fetchone()
+        chained = conn.execute("SELECT canonical FROM tag_aliases WHERE alias = ?", (canon_n,)).fetchone()
         if chained:
-            out["error"] = (
-                f"#{canon_n} is itself an alias of #{chained['canonical']} — "
-                f"alias #{alias_n} to that instead.")
+            out["error"] = f"#{canon_n} is itself an alias of #{chained['canonical']} — alias #{alias_n} to that instead."
             return out
-        incoming = conn.execute(
-            "SELECT alias FROM tag_aliases WHERE canonical = ? LIMIT 1", (alias_n,)).fetchone()
+        incoming = conn.execute("SELECT alias FROM tag_aliases WHERE canonical = ? LIMIT 1", (alias_n,)).fetchone()
         if incoming:
             out["error"] = (
                 f"#{incoming['alias']} is already folded into #{alias_n}, so folding "
-                f"#{alias_n} onward would strand it. Re-point #{incoming['alias']} first.")
+                f"#{alias_n} onward would strand it. Re-point #{incoming['alias']} first."
+            )
     return out
 
 
@@ -10765,11 +11096,9 @@ def create_tag_alias(alias: str, canonical: str, *, rewrite: bool = True) -> dic
                 "    AND c.entry_id = entry_feed_tags.entry_id)",
                 (alias_n, canon_n),
             )
-            cur = conn.execute(
-                "UPDATE entry_feed_tags SET tag = ? WHERE tag = ?", (canon_n, alias_n))
+            cur = conn.execute("UPDATE entry_feed_tags SET tag = ? WHERE tag = ?", (canon_n, alias_n))
             preview["feed_moved"] = cur.rowcount
-    LOGGER.info("[tags] alias #%s -> #%s (manual=%s feed=%s)", alias_n, canon_n,
-                preview.get("manual_moved"), preview.get("feed_moved"))
+    LOGGER.info("[tags] alias #%s -> #%s (manual=%s feed=%s)", alias_n, canon_n, preview.get("manual_moved"), preview.get("feed_moved"))
     return preview
 
 
@@ -10786,8 +11115,7 @@ def delete_tag_alias(alias: str) -> bool:
 
 def list_tag_aliases() -> list[dict]:
     with get_meta_connection() as conn:
-        rows = conn.execute(
-            "SELECT alias, canonical, created_at FROM tag_aliases ORDER BY alias").fetchall()
+        rows = conn.execute("SELECT alias, canonical, created_at FROM tag_aliases ORDER BY alias").fetchall()
     return [dict(r) for r in rows]
 
 
@@ -10814,20 +11142,14 @@ def rename_manual_tag_everywhere(old_tag: str | None, new_tag: str | None) -> tu
                 reader.delete_tag(entry.resource_id, old_key)
                 updated += 1
             except Exception:
-                LOGGER.warning(
-                    "rename_manual_tag_everywhere: failed on %s", entry.resource_id, exc_info=True
-                )
+                LOGGER.warning("rename_manual_tag_everywhere: failed on %s", entry.resource_id, exc_info=True)
 
     # Orphan archives keep tags in orphan_entry_tags instead of reader's
     # entry_tags (see set_manual_tags_for_entry) — rename there too.
     with get_meta_connection() as conn:
         if not merged:
-            merged = conn.execute(
-                "SELECT 1 FROM orphan_entry_tags WHERE tag = ? LIMIT 1", (new_norm,)
-            ).fetchone() is not None
-        orphan_rows = conn.execute(
-            "SELECT feed_url, entry_id FROM orphan_entry_tags WHERE tag = ?", (old_norm,)
-        ).fetchall()
+            merged = conn.execute("SELECT 1 FROM orphan_entry_tags WHERE tag = ? LIMIT 1", (new_norm,)).fetchone() is not None
+        orphan_rows = conn.execute("SELECT feed_url, entry_id FROM orphan_entry_tags WHERE tag = ?", (old_norm,)).fetchall()
         for feed_url, entry_id in orphan_rows:
             conn.execute(
                 "DELETE FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ? AND tag = ?",
@@ -10878,7 +11200,7 @@ def migrate_spaced_manual_tags() -> int:
     rewrites = 0
     with get_reader() as reader:
         for old_key in spaced_keys:
-            old_tag = old_key[len(prefix):]
+            old_tag = old_key[len(prefix) :]
             new_norm = normalize_tag_value(old_tag)
             if not new_norm:
                 continue
@@ -10891,9 +11213,7 @@ def migrate_spaced_manual_tags() -> int:
                     reader.delete_tag(entry.resource_id, old_key)
                     rewrites += 1
                 except Exception:
-                    LOGGER.warning(
-                        "migrate_spaced_manual_tags: failed on %s", entry.resource_id, exc_info=True
-                    )
+                    LOGGER.warning("migrate_spaced_manual_tags: failed on %s", entry.resource_id, exc_info=True)
     if rewrites:
         invalidate_has_manual_tags_cache()
         invalidate_tag_counts_cache()
@@ -10978,10 +11298,28 @@ def set_feed_pinned_tags(feed_url: str, raw_value: str) -> list[str]:
 # followed .html/.php would stop being "keep the files this post links to" and
 # become a crawler — and the one thing that reliably distinguishes a file from a
 # page here IS the extension, so this list is what keeps the feature honest.
-_NEVER_ATTACHMENT_EXTS = frozenset({
-    "htm", "html", "xhtml", "shtml", "php", "php3", "php4", "php5", "phtml",
-    "asp", "aspx", "jsp", "jspx", "cgi", "pl", "cfm", "do", "action",
-})
+_NEVER_ATTACHMENT_EXTS = frozenset(
+    {
+        "htm",
+        "html",
+        "xhtml",
+        "shtml",
+        "php",
+        "php3",
+        "php4",
+        "php5",
+        "phtml",
+        "asp",
+        "aspx",
+        "jsp",
+        "jspx",
+        "cgi",
+        "pl",
+        "cfm",
+        "do",
+        "action",
+    }
+)
 # An exact extension ("gp5"), or a PREFIX pattern ("gp*" -> gp, gp3, gp4, gp5,
 # gpx). Guitar Pro alone ships five, so listing them by hand is tedious and
 # guaranteed to miss the next one.
@@ -11011,6 +11349,8 @@ def _attachment_ext_matches(ext: str, patterns: list[str]) -> bool:
         elif ext == pattern:
             return True
     return False
+
+
 # Per-file ceiling. A tab or a lyric sheet is kilobytes; anything past this is
 # not what this feature is for, and the archive is a SQLite blob store.
 ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
@@ -11044,24 +11384,52 @@ def normalize_attachment_exts(raw_value: str) -> list[str]:
 # NB: bare extensions, and deliberately NOT named _IMAGE_EXTS — that name is
 # already taken further down by a tuple of DOTTED suffixes for a different
 # check, and being defined later it would win at import time.
-_ARCHIVED_IMAGE_EXTS = frozenset({
-    "jpg", "jpeg", "png", "gif", "webp", "avif", "svg", "bmp", "ico",
-})
+_ARCHIVED_IMAGE_EXTS = frozenset(
+    {
+        "jpg",
+        "jpeg",
+        "png",
+        "gif",
+        "webp",
+        "avif",
+        "svg",
+        "bmp",
+        "ico",
+    }
+)
 # A link to a bare domain ("https://example.com") leaves the TLD looking like a
 # file extension. Nothing else distinguishes it from a real one.
-_TLD_LOOKALIKES = frozenset({
-    "com", "org", "net", "io", "co", "us", "uk", "eu", "de", "fr", "jp", "ru",
-    "tv", "me", "info", "biz", "app", "dev", "xyz", "social",
-})
+_TLD_LOOKALIKES = frozenset(
+    {
+        "com",
+        "org",
+        "net",
+        "io",
+        "co",
+        "us",
+        "uk",
+        "eu",
+        "de",
+        "fr",
+        "jp",
+        "ru",
+        "tv",
+        "me",
+        "info",
+        "biz",
+        "app",
+        "dev",
+        "xyz",
+        "social",
+    }
+)
 
 
 def suppressed_attachment_exts(feed_url: str) -> set[str]:
     """Extension suggestions the user dismissed for this feed, lowercased for comparison."""
     try:
         with get_meta_connection() as conn:
-            rows = conn.execute(
-                "SELECT ext FROM suppressed_feed_attachment_exts WHERE feed_url = ?", (feed_url,)
-            ).fetchall()
+            rows = conn.execute("SELECT ext FROM suppressed_feed_attachment_exts WHERE feed_url = ?", (feed_url,)).fetchall()
     except Exception:  # noqa: BLE001 — a suggestion is never worth an error
         LOGGER.debug("suppressed attachment ext lookup failed for %s", feed_url, exc_info=True)
         return set()
@@ -11076,8 +11444,7 @@ def set_attachment_ext_suppressed(feed_url: str, ext: str, suppressed: bool) -> 
     with get_meta_connection() as conn:
         if suppressed:
             conn.execute(
-                "INSERT OR REPLACE INTO suppressed_feed_attachment_exts (feed_url, ext, suppressed_at)"
-                " VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO suppressed_feed_attachment_exts (feed_url, ext, suppressed_at) VALUES (?, ?, ?)",
                 (feed_url, clean, time.time()),
             )
         else:
@@ -11128,11 +11495,10 @@ def scan_feed_attachment_extensions(feed_url: str, limit: int = 10) -> list[dict
                     dot = path.rfind(".")
                     if dot < 0:
                         continue
-                    ext = path[dot + 1:]
+                    ext = path[dot + 1 :]
                     if not _ATTACHMENT_EXT_RE.match(ext):
                         continue
-                    if (ext in _NEVER_ATTACHMENT_EXTS or ext in _ARCHIVED_IMAGE_EXTS
-                            or ext in _TLD_LOOKALIKES or ext in dismissed):
+                    if ext in _NEVER_ATTACHMENT_EXTS or ext in _ARCHIVED_IMAGE_EXTS or ext in _TLD_LOOKALIKES or ext in dismissed:
                         continue
                     counts[ext] += 1
     except Exception:  # noqa: BLE001 — a suggestion is never worth an error
@@ -11142,11 +11508,7 @@ def scan_feed_attachment_extensions(feed_url: str, limit: int = 10) -> list[dict
     # ("…/music", "…/bulakhov") always appears once, while anything the feed
     # genuinely publishes recurs. This is a suggestion list, so a rare real type
     # costs nothing — it can still be typed.
-    return [
-        {"ext": ext, "count": n}
-        for ext, n in counts.most_common(limit * 2)
-        if n >= 2
-    ][:limit]
+    return [{"ext": ext, "count": n} for ext, n in counts.most_common(limit * 2) if n >= 2][:limit]
 
 
 def get_feed_attachment_exts(feed_url: str) -> list[str]:
@@ -11238,7 +11600,7 @@ def attachment_links_in_html(content_html: str, base_url: str, exts: list[str]) 
         _dot = path.rfind(".")
         if _dot < 0:
             continue
-        ext = path[_dot + 1:]
+        ext = path[_dot + 1 :]
         if _attachment_ext_matches(ext, wanted) and absolute not in found:
             found.append(absolute)
     return found
@@ -11273,7 +11635,7 @@ def candidate_attachment_links_in_html(content_html: str | None, base_url: str) 
         dot = path.rfind(".")
         if dot < 0:
             continue
-        ext = path[dot + 1:]
+        ext = path[dot + 1 :]
         if not _ATTACHMENT_EXT_RE.match(ext):
             continue
         if ext in _NEVER_ATTACHMENT_EXTS or ext in _ARCHIVED_IMAGE_EXTS or ext in _TLD_LOOKALIKES:
@@ -11331,8 +11693,7 @@ def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     if any((d or "").strip() == FEED_TAGS_SUPPRESS_ALL for d in dismissed):
         return []
     dismissed_norm = {normalize_tag_value(d) for d in dismissed}
-    return [t for t in tags
-            if normalize_tag_value(t) not in dismissed_norm][:MAX_FEED_TAG_SUGGESTIONS]
+    return [t for t in tags if normalize_tag_value(t) not in dismissed_norm][:MAX_FEED_TAG_SUGGESTIONS]
 
 
 _has_manual_tags_cache = _PerUserDict()
@@ -11421,7 +11782,7 @@ def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, s
             else:
                 feed_list = list(feed_urls)
                 for i in range(0, len(feed_list), 900):
-                    chunk = feed_list[i:i + 900]
+                    chunk = feed_list[i : i + 900]
                     ph = ",".join("?" for _ in chunk)
                     for row in db.execute(
                         f"SELECT feed, id FROM entry_tags WHERE key LIKE ? AND feed IN ({ph})",
@@ -11433,8 +11794,13 @@ def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, s
         LOGGER.warning("get_tagged_entry_keys failed: %s", exc)
     elapsed_ms = int((time.perf_counter() - _start) * 1000)
     if elapsed_ms > 200:
-        LOGGER.info("[perf] get_tagged_entry_keys=%dms rows=%d scoped=%s progress_steps=%d",
-                    elapsed_ms, len(keys), feed_urls is not None, _progress_steps)
+        LOGGER.info(
+            "[perf] get_tagged_entry_keys=%dms rows=%d scoped=%s progress_steps=%d",
+            elapsed_ms,
+            len(keys),
+            feed_urls is not None,
+            _progress_steps,
+        )
     return keys
 
 
@@ -11453,7 +11819,7 @@ def get_entry_keys_for_manual_tag(feed_urls: set[str], tag: str) -> set[tuple[st
         try:
             feed_list = list(feed_urls)
             for i in range(0, len(feed_list), 900):
-                chunk = feed_list[i:i + 900]
+                chunk = feed_list[i : i + 900]
                 ph = ",".join("?" for _ in chunk)
                 for row in conn.execute(
                     f"SELECT feed, id FROM entry_tags WHERE key = ? AND feed IN ({ph})",
@@ -11485,7 +11851,7 @@ def get_entry_ids_with_feed_tag(feed_urls: set[str], tag: str) -> set[tuple[str,
     feed_list = list(feed_urls)
     with get_meta_connection() as conn:
         for i in range(0, len(feed_list), 900):
-            chunk = feed_list[i:i + 900]
+            chunk = feed_list[i : i + 900]
             ph = ",".join("?" for _ in chunk)
             for row in conn.execute(
                 f"SELECT feed_url, entry_id, tag FROM entry_feed_tags WHERE feed_url IN ({ph})",
@@ -11531,9 +11897,7 @@ def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
             # via build_entry_dedupe_key. Counting distinct ids keeps the sidebar
             # tally consistent with what clicking the tag actually shows.
             rows = conn.execute(
-                f"SELECT key, COUNT(DISTINCT id) FROM entry_tags"
-                f" WHERE key LIKE ? AND feed IN ({placeholders})"
-                f" GROUP BY key",
+                f"SELECT key, COUNT(DISTINCT id) FROM entry_tags WHERE key LIKE ? AND feed IN ({placeholders}) GROUP BY key",
                 [f"{prefix}%", *sorted_feeds],
             ).fetchall()
         finally:
@@ -11543,7 +11907,7 @@ def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
 
     counts: dict[str, int] = {}
     for raw_key, count in rows:
-        tag = raw_key[len(prefix):].strip().lower()
+        tag = raw_key[len(prefix) :].strip().lower()
         if tag:
             counts[tag] = counts.get(tag, 0) + count
 
@@ -11564,15 +11928,10 @@ def get_all_manual_tag_names() -> list[str]:
     try:
         conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
         try:
-            rows = conn.execute(
-                "SELECT DISTINCT key FROM entry_tags WHERE key LIKE ?", [f"{prefix}%"]
-            ).fetchall()
+            rows = conn.execute("SELECT DISTINCT key FROM entry_tags WHERE key LIKE ?", [f"{prefix}%"]).fetchall()
         finally:
             conn.close()
-        names.update(
-            name for (k,) in rows
-            if (name := str(k)[len(prefix):].strip().lower())
-        )
+        names.update(name for (k,) in rows if (name := str(k)[len(prefix) :].strip().lower()))
     except Exception:  # noqa: BLE001 — autocomplete is a nicety, never fail the page
         pass
     # Orphan-only tags (see set_manual_tags_for_entry) still belong in the
@@ -11580,9 +11939,7 @@ def get_all_manual_tag_names() -> list[str]:
     # via suggestion.
     try:
         with get_meta_connection() as meta_conn:
-            names.update(
-                str(r[0]) for r in meta_conn.execute("SELECT DISTINCT tag FROM orphan_entry_tags").fetchall()
-            )
+            names.update(str(r[0]) for r in meta_conn.execute("SELECT DISTINCT tag FROM orphan_entry_tags").fetchall())
     except Exception:  # noqa: BLE001
         pass
     return sorted(names)
@@ -11639,15 +11996,19 @@ def get_feed_fetch_history(conn, feed_url: str, limit: int = 30) -> list[dict]:
             fetched_at = format_datetime_for_ui(datetime.fromtimestamp(float(raw_at), tz=timezone.utc)) if raw_at else None
         except Exception:
             fetched_at = None
-        history.append({
-            "fetched_at": fetched_at,
-            "status": str(r["status"] or ""),
-            "http_status": r["http_status"],
-            "new_entries": r["new_entries"],
-            "duration_ms": r["duration_ms"],
-            "error": r["error"],
-        })
+        history.append(
+            {
+                "fetched_at": fetched_at,
+                "status": str(r["status"] or ""),
+                "http_status": r["http_status"],
+                "new_entries": r["new_entries"],
+                "duration_ms": r["duration_ms"],
+                "error": r["error"],
+            }
+        )
     return history
+
+
 _AUTOMATION_TYPE_LABELS = {
     "highlight": "Highlight",
     "mark_as_read": "Auto mark read",
@@ -11732,14 +12093,16 @@ def collect_feed_automations(conn, feed_url: str, folder_ids: list[int]) -> dict
         if not applies:
             continue
         rule_type = str(rule.get("type", ""))
-        rules.append({
-            "type": rule_type,
-            "type_label": _AUTOMATION_TYPE_LABELS.get(rule_type, rule_type or "Rule"),
-            "scope_label": _AUTOMATION_SCOPE_LABELS.get(scope, scope),
-            "keyword": str(rule.get("keyword") or ""),
-            "enabled": bool(rule.get("enabled")),
-            "detail": _automation_rule_detail(rule),
-        })
+        rules.append(
+            {
+                "type": rule_type,
+                "type_label": _AUTOMATION_TYPE_LABELS.get(rule_type, rule_type or "Rule"),
+                "scope_label": _AUTOMATION_SCOPE_LABELS.get(scope, scope),
+                "keyword": str(rule.get("keyword") or ""),
+                "enabled": bool(rule.get("enabled")),
+                "detail": _automation_rule_detail(rule),
+            }
+        )
 
     recent_runs: list[dict] = []
     run_rows = conn.execute(
@@ -11757,13 +12120,15 @@ def collect_feed_automations(conn, feed_url: str, folder_ids: list[int]) -> dict
         except Exception:
             run_at = str(run_at_raw or "")
         rule_type = str(r["rule_type"] or "")
-        recent_runs.append({
-            "run_at": run_at,
-            "type_label": _AUTOMATION_TYPE_LABELS.get(rule_type, rule_type or "Rule"),
-            "keyword": str(r["keyword"] or ""),
-            "trigger": str(r["trigger"] or ""),
-            "affected": int(r["affected"] or 0),
-        })
+        recent_runs.append(
+            {
+                "run_at": run_at,
+                "type_label": _AUTOMATION_TYPE_LABELS.get(rule_type, rule_type or "Rule"),
+                "keyword": str(r["keyword"] or ""),
+                "trigger": str(r["trigger"] or ""),
+                "affected": int(r["affected"] or 0),
+            }
+        )
 
     return {"rules": rules, "recent_runs": recent_runs}
 
@@ -11838,10 +12203,14 @@ def get_feed_properties(feed_url: str) -> dict:
                 "SELECT consecutive_failures, next_retry_at FROM feed_failure_state WHERE feed_url = ?",
                 (feed_url,),
             ).fetchone()
-            _domain_backoff_row = _pc.execute(
-                "SELECT consecutive_failures, next_retry_at FROM domain_failure_state WHERE domain = ?",
-                (_feed_domain,),
-            ).fetchone() if _feed_domain else None
+            _domain_backoff_row = (
+                _pc.execute(
+                    "SELECT consecutive_failures, next_retry_at FROM domain_failure_state WHERE domain = ?",
+                    (_feed_domain,),
+                ).fetchone()
+                if _feed_domain
+                else None
+            )
         _strat_cache = [
             {
                 "strategy": r["strategy"],
@@ -11862,8 +12231,7 @@ def get_feed_properties(feed_url: str) -> dict:
         _now_ts = time.time()
         _feed_next_retry = float(_feed_backoff_row["next_retry_at"]) if _feed_backoff_row and _feed_backoff_row["next_retry_at"] else None
         _domain_next_retry = (
-            float(_domain_backoff_row["next_retry_at"])
-            if _domain_backoff_row and _domain_backoff_row["next_retry_at"] else None
+            float(_domain_backoff_row["next_retry_at"]) if _domain_backoff_row and _domain_backoff_row["next_retry_at"] else None
         )
         _feed_failures = int(_feed_backoff_row["consecutive_failures"]) if _feed_backoff_row else 0
         _domain_failures = int(_domain_backoff_row["consecutive_failures"]) if _domain_backoff_row else 0
@@ -11929,9 +12297,7 @@ def get_feed_properties(feed_url: str) -> dict:
             # domains" list under Website, which is the only way to see them —
             # they otherwise act invisibly at ingest and in the global dedupe
             # alias map.
-            "url_rewrites": [
-                {"from_host": f, "to_host": t} for f, t in get_feed_url_rewrites(feed_url)
-            ],
+            "url_rewrites": [{"from_host": f, "to_host": t} for f, t in get_feed_url_rewrites(feed_url)],
             # Dismissed suggestion chips, so a mis-clicked × has a way back.
             "suppressed_tags": feed_tag_service.suppressed_tag_list(feed_url),
             "suggested_tags": get_feed_pinned_tags(feed_url),
@@ -11939,15 +12305,12 @@ def get_feed_properties(feed_url: str) -> dict:
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
             "fetch_history": get_feed_fetch_history(_pc, feed_url),
-            "automations": collect_feed_automations(
-                _pc, feed_url, [int(r["folder_id"]) for r in _folder_id_rows]
-            ),
+            "automations": collect_feed_automations(_pc, feed_url, [int(r["folder_id"]) for r in _folder_id_rows]),
             "backoff_active": _backoff_active,
             "backoff_domain_driven": _backoff_domain_driven,
             "backoff_domain": _feed_domain if _backoff_domain_driven else None,
             "backoff_retry_at": (
-                format_datetime_for_ui(datetime.fromtimestamp(_effective_next_retry, tz=timezone.utc))
-                if _effective_next_retry else None
+                format_datetime_for_ui(datetime.fromtimestamp(_effective_next_retry, tz=timezone.utc)) if _effective_next_retry else None
             ),
             "backoff_feed_failures": _feed_failures,
             "backoff_domain_failures": _domain_failures,
@@ -12040,10 +12403,12 @@ def get_folder_properties(folder_id: int) -> dict:
         deleted_articles = 0
         if feed_urls:
             _ph = ",".join("?" * len(feed_urls))
-            deleted_articles = int(conn.execute(
-                f"SELECT COUNT(*) FROM deleted_entries WHERE feed_url IN ({_ph})",
-                sorted(feed_urls),
-            ).fetchone()[0])
+            deleted_articles = int(
+                conn.execute(
+                    f"SELECT COUNT(*) FROM deleted_entries WHERE feed_url IN ({_ph})",
+                    sorted(feed_urls),
+                ).fetchone()[0]
+            )
 
     if not feed_urls:
         return {
@@ -12091,7 +12456,7 @@ def get_folder_properties(folder_id: int) -> dict:
         # Chunked: the root folder resolves to every feed in the library, well
         # past SQLite's bound-variable limit.
         for start in range(0, len(urls), 900):
-            chunk = urls[start:start + 900]
+            chunk = urls[start : start + 900]
             placeholders = ",".join("?" * len(chunk))
             rows = db.execute(
                 f"""
@@ -12106,17 +12471,15 @@ def get_folder_properties(folder_id: int) -> dict:
                 total_articles += count
                 unread_articles += int(unread or 0)
                 feed_stats[str(feed_url_row)] = {
-                    "title": None, "count": count, "oldest": _as_utc(oldest),
+                    "title": None,
+                    "count": count,
+                    "oldest": _as_utc(oldest),
                 }
 
         for url in list(feed_stats):
             feed_obj = reader.get_feed(url, None)
             if feed_obj:
-                feed_stats[url]["title"] = (
-                    getattr(feed_obj, "resolved_title", None)
-                    or getattr(feed_obj, "title", None)
-                    or url
-                )
+                feed_stats[url]["title"] = getattr(feed_obj, "resolved_title", None) or getattr(feed_obj, "title", None) or url
 
     now = datetime.now(tz=timezone.utc)
     top_feeds = []
@@ -12133,12 +12496,14 @@ def get_folder_properties(folder_id: int) -> dict:
                 avg_per_week = 0.0
         except Exception:
             avg_per_week = 0.0
-        top_feeds.append({
-            "feed_url": url,
-            "title": fs["title"] or url,
-            "avg_per_week": avg_per_week,
-            "total": count,
-        })
+        top_feeds.append(
+            {
+                "feed_url": url,
+                "title": fs["title"] or url,
+                "avg_per_week": avg_per_week,
+                "total": count,
+            }
+        )
 
     top_feeds.sort(key=lambda x: x["avg_per_week"], reverse=True)
 
@@ -12167,7 +12532,7 @@ def format_datetime_for_ui(dt: datetime | None) -> str | None:
     if dt.tzinfo is not None:
         try:
             dt = dt.astimezone()
-        except (OverflowError, ValueError):
+        except OverflowError, ValueError:
             dt = dt.replace(tzinfo=None)
     hour = dt.hour % 12 or 12
     minute = f":{dt.minute:02d}"
@@ -12236,7 +12601,7 @@ def url_inferred_pubdate(link: str | None) -> datetime | None:
         return None
     try:
         return datetime(year, month, day, tzinfo=timezone.utc)
-    except (ValueError, OverflowError):
+    except ValueError, OverflowError:
         return None
 
 
@@ -12277,7 +12642,7 @@ def title_inferred_pubdate(title: str | None) -> datetime | None:
         return None
     try:
         return datetime(year, month, day, tzinfo=timezone.utc)
-    except (ValueError, OverflowError):
+    except ValueError, OverflowError:
         return None
 
 
@@ -12416,16 +12781,15 @@ def append_read_history(
             (feed_url, entry_id, title, link, feed_title, now),
         )
         conn.execute(
-            "DELETE FROM read_history WHERE id NOT IN"
-            " (SELECT id FROM read_history ORDER BY read_at DESC LIMIT ?)",
+            "DELETE FROM read_history WHERE id NOT IN (SELECT id FROM read_history ORDER BY read_at DESC LIMIT ?)",
             (READ_HISTORY_CAP,),
         )
 
 
 _IMG_ATTR_RE = re.compile(r'([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*["\']([^"\']+)["\']')
-_DIV_TAG_RE = re.compile(r'<(/?)div\b[^>]*>', re.IGNORECASE)
+_DIV_TAG_RE = re.compile(r"<(/?)div\b[^>]*>", re.IGNORECASE)
 _AUDIO_SRC_RE = re.compile(r'<audio\b[^>]*\bsrc=["\']([^"\']+)["\']', re.IGNORECASE)
-_KG_AUDIO_CARD_RE = re.compile(r'<div\b[^>]*\bkg-audio-card\b[^>]*>', re.IGNORECASE)
+_KG_AUDIO_CARD_RE = re.compile(r"<div\b[^>]*\bkg-audio-card\b[^>]*>", re.IGNORECASE)
 
 # Webcomic navigation button detection — alt text and src filename patterns.
 _COMIC_NAV_ALT_RE = re.compile(
@@ -12440,19 +12804,21 @@ _COMIC_NAV_SRC_RE = re.compile(
 
 def _strip_comic_nav_images(content: str) -> str:
     """Strip <a href="..."><img alt="prev/next/..."></a> navigation button combos from webcomic feeds."""
+
     def _check_nav(m: re.Match) -> str:
         tag = m.group(0)
         if _COMIC_NAV_ALT_RE.search(tag) or _COMIC_NAV_SRC_RE.search(tag):
             return ""
         return tag
+
     result = re.sub(
-        r'<a\b[^>]*>(?:\s*<img\b[^>]*/?\s*>\s*)+</a>',
+        r"<a\b[^>]*>(?:\s*<img\b[^>]*/?\s*>\s*)+</a>",
         _check_nav,
         content,
         flags=re.IGNORECASE | re.DOTALL,
     )
     # Clean up empty <p> blocks left behind
-    result = re.sub(r'<p\b[^>]*>\s*</p>', "", result, flags=re.IGNORECASE)
+    result = re.sub(r"<p\b[^>]*>\s*</p>", "", result, flags=re.IGNORECASE)
     return result
 
 
@@ -12460,7 +12826,7 @@ def _strip_qwantz_nav(content: str) -> str:
     """Strip site-nav table and prev/next row from Dinosaur Comics (qwantz.com) entries."""
     # Remove the site-nav table that appears before the comic image
     content = re.sub(
-        r'<table\b[^>]*>.*?</table>\s*(?=<img\b)',
+        r"<table\b[^>]*>.*?</table>\s*(?=<img\b)",
         "",
         content,
         count=1,
@@ -12561,7 +12927,7 @@ def _strip_js_dependent_chrome(html: str) -> str:
             if raw.isdigit():
                 sizes.append(int(raw))
         if not sizes:
-            return False          # nothing to judge by — assume art, keep it
+            return False  # nothing to judge by — assume art, keep it
         return max(sizes) < _SVG_ICON_MAX_PX
 
     def _is_textless_chrome(el) -> bool:
@@ -12606,7 +12972,7 @@ def _strip_js_dependent_chrome(html: str) -> str:
 # "<p>...</p>" text). Match the paragraph text tolerantly of leading/trailing
 # literal p-tags, anchored on "The post … appeared … on …".
 _WP_POST_FOOTER_RE = re.compile(
-    r'^\s*(?:</?p>\s*)*The post\b.*?\b(?:first appeared|appeared first)\s+on\b.*?\.\s*(?:</?p>\s*)*$',
+    r"^\s*(?:</?p>\s*)*The post\b.*?\b(?:first appeared|appeared first)\s+on\b.*?\.\s*(?:</?p>\s*)*$",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -12643,6 +13009,7 @@ def _fix_wp_post_footer(content_html: str) -> str:
     # Remove literal "<p>"/"</p>" text artifacts (double-encoded tags) from the
     # kept footer, leaving the sentence intact.
     from bs4 import NavigableString as _NS
+
     for s in list(keep.strings):
         if not isinstance(s, _NS):
             continue
@@ -12706,9 +13073,7 @@ def _url_has_image_ext(url: str) -> bool:
     return urlparse(url.strip()).path.lower().endswith(_IMAGE_EXTS)
 
 
-_BUZZSPROUT_ENCLOSURE_RE = re.compile(
-    r"^(https://(?:www\.)?buzzsprout\.com/\d+/episodes/[^?#]+)\.mp3", re.IGNORECASE
-)
+_BUZZSPROUT_ENCLOSURE_RE = re.compile(r"^(https://(?:www\.)?buzzsprout\.com/\d+/episodes/[^?#]+)\.mp3", re.IGNORECASE)
 
 
 def _derived_entry_link(entry) -> str | None:
@@ -12719,7 +13084,7 @@ def _derived_entry_link(entry) -> str | None:
     somewhere instead of being inert."""
     if getattr(entry, "link", None):
         return None
-    for enc in (getattr(entry, "enclosures", None) or []):
+    for enc in getattr(entry, "enclosures", None) or []:
         url = (getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
         m = _BUZZSPROUT_ENCLOSURE_RE.match(url)
         if m:
@@ -12739,7 +13104,7 @@ def _find_entry_audio_url(entry) -> str | None:
     the reader library keeps standard ``<enclosure>`` elements but drops
     media:content, so it never reaches this entry object.
     """
-    for enc in (getattr(entry, "enclosures", None) or []):
+    for enc in getattr(entry, "enclosures", None) or []:
         enc_url = getattr(enc, "href", None) or getattr(enc, "url", None) or ""
         enc_type = (getattr(enc, "type", None) or "").lower()
         if enc_url and (enc_type.startswith("audio/") or _url_has_audio_ext(enc_url)):
@@ -12758,7 +13123,7 @@ def _format_enclosure_size(length) -> str:
     """
     try:
         size = int(length)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return ""
     if size < 2048:
         return ""
@@ -12792,8 +13157,7 @@ def attachment_filename_for_url(source_url: str) -> str:
     return name[:120] or "attachment"
 
 
-def _attachment_list_item(source_url: str, label: str, meta: str,
-                          asset_map: dict[str, str]) -> str:
+def _attachment_list_item(source_url: str, label: str, meta: str, asset_map: dict[str, str]) -> str:
     """One <li>, pointing at the local copy when there is one.
 
     A saved post whose files still 404 at the publisher has kept the wrong half,
@@ -12803,8 +13167,7 @@ def _attachment_list_item(source_url: str, label: str, meta: str,
     asset_hash = asset_map.get(source_url)
     if asset_hash:
         href = html.escape(f"{STARRED_ASSET_URL_PREFIX}{asset_hash}", quote=True)
-        badge = (' <span class="entry-attachment-saved" '
-                 'style="color:var(--muted,#888);font-size:0.85em;">saved</span>')
+        badge = ' <span class="entry-attachment-saved" style="color:var(--muted,#888);font-size:0.85em;">saved</span>'
     else:
         href = html.escape(source_url, quote=True)
         badge = ""
@@ -12818,17 +13181,22 @@ def _attachment_list_item(source_url: str, label: str, meta: str,
     # a content-hashed local copy.
     src_attr = html.escape(source_url, quote=True)
     kept_attr = ' data-kept="1"' if asset_hash else ""
-    return (f'<li data-source-url="{src_attr}"{kept_attr}>'
-            f'<a href="{href}" target="_blank" rel="noopener noreferrer" '
-            f'download="{dl}">{label}</a>{meta}{badge}</li>')
+    return (
+        f'<li data-source-url="{src_attr}"{kept_attr}>'
+        f'<a href="{href}" target="_blank" rel="noopener noreferrer" '
+        f'download="{dl}">{label}</a>{meta}{badge}</li>'
+    )
 
 
 # Enclosure content types that describe a PAGE rather than a file. Deliberately
 # short: text/plain and application/xml can each be a genuine attachment, and a
 # type this list gets wrong disappears a real download.
-_PAGE_ENCLOSURE_TYPES = frozenset({
-    "text/html", "application/xhtml+xml",
-})
+_PAGE_ENCLOSURE_TYPES = frozenset(
+    {
+        "text/html",
+        "application/xhtml+xml",
+    }
+)
 
 
 def _url_ext(url: str) -> str:
@@ -12838,7 +13206,7 @@ def _url_ext(url: str) -> str:
     except ValueError:
         return ""
     dot = path.rfind(".")
-    return path[dot + 1:] if dot >= 0 else ""
+    return path[dot + 1 :] if dot >= 0 else ""
 
 
 def _filtered_file_enclosures(entry, audio_url: str | None) -> list:
@@ -12857,7 +13225,7 @@ def _filtered_file_enclosures(entry, audio_url: str | None) -> list:
     """
     seen: set[str] = set()
     out: list = []
-    for enc in (getattr(entry, "enclosures", None) or []):
+    for enc in getattr(entry, "enclosures", None) or []:
         enc_url = (getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
         if not enc_url or enc_url in seen:
             continue
@@ -12877,8 +13245,7 @@ def _filtered_file_enclosures(entry, audio_url: str | None) -> list:
     return out
 
 
-def _render_entry_attachments(entry, audio_url: str | None,
-                              asset_map: dict[str, str] | None = None) -> str:
+def _render_entry_attachments(entry, audio_url: str | None, asset_map: dict[str, str] | None = None) -> str:
     """Render a footer "Attachments" section for non-audio enclosures.
 
     Magazine/document feeds (e.g. Full Circle) attach the issue PDF/EPUB as
@@ -12899,8 +13266,7 @@ def _render_entry_attachments(entry, audio_url: str | None,
         # from a path that has no map in hand, and the lookup is one indexed
         # query on the entry's own key.
         try:
-            asset_map = starred_archive_service.get_entry_asset_map(
-                str(entry.feed_url), str(entry.id))
+            asset_map = starred_archive_service.get_entry_asset_map(str(entry.feed_url), str(entry.id))
         except Exception:  # noqa: BLE001 — falls back to publisher URLs
             asset_map = {}
     asset_map = asset_map or {}
@@ -12914,7 +13280,7 @@ def _render_entry_attachments(entry, audio_url: str | None,
         seen.add(enc_url)
         label = html.escape(_enclosure_label(enc_url, enc_type))
         size = _format_enclosure_size(getattr(enc, "length", None))
-        meta = f" <span style=\"color:var(--muted,#888);\">({size})</span>" if size else ""
+        meta = f' <span style="color:var(--muted,#888);">({size})</span>' if size else ""
         items.append(_attachment_list_item(enc_url, label, meta, asset_map))
 
     # Files captured from body links, appended to the same list.
@@ -12922,16 +13288,14 @@ def _render_entry_attachments(entry, audio_url: str | None,
     # ("/avatar/<hash>?s=48") and a CDN path with no extension are both images
     # with nothing in the URL to say so, and they surfaced as "attachments".
     try:
-        file_assets = starred_archive_service.get_entry_file_assets(
-            str(entry.feed_url), str(entry.id))
+        file_assets = starred_archive_service.get_entry_file_assets(str(entry.feed_url), str(entry.id))
     except Exception:  # noqa: BLE001
         file_assets = {}
     for source_url in file_assets:
         if source_url in seen or not source_url:
             continue
         seen.add(source_url)
-        items.append(_attachment_list_item(
-            source_url, html.escape(_enclosure_label(source_url, "")), "", asset_map))
+        items.append(_attachment_list_item(source_url, html.escape(_enclosure_label(source_url, "")), "", asset_map))
 
     if not items:
         return ""
@@ -12951,7 +13315,7 @@ def _render_entry_attachments(entry, audio_url: str | None,
         'justify-content:space-between;gap:0.5em;margin-bottom:0.35em;">'
         '<span style="font-weight:600;">Attachments</span></div>'
         f'<ul id="entry-attachments-list" style="margin:0; padding-left:1.25em;">{"".join(items)}</ul>'
-        '</div>'
+        "</div>"
     )
 
 
@@ -12989,9 +13353,7 @@ def _lookup_media_video(conn: sqlite3.Connection, feed_url: str, entry_id: str) 
 def _media_scan_due(conn: sqlite3.Connection, feed_url: str) -> bool:
     """True if this feed has never been scanned for media:content audio, or its
     cadence TTL has elapsed."""
-    row = conn.execute(
-        "SELECT scanned_at, found, ok FROM feed_media_scan WHERE feed_url = ?", (feed_url,)
-    ).fetchone()
+    row = conn.execute("SELECT scanned_at, found, ok FROM feed_media_scan WHERE feed_url = ?", (feed_url,)).fetchone()
     if not row:
         return True
     if row[1]:
@@ -13011,8 +13373,7 @@ def _scan_feed_media_audio(feed_url: str) -> None:
     found_map: dict[str, str] = {}
     raw_feed: bytes | None = None
     try:
-        with url_guard.build_client(timeout=8.0,
-                          headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+        with url_guard.build_client(timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
             resp = url_guard.safe_get(client, feed_url)
         if resp.status_code == 200 and resp.content:
             raw_feed = resp.content
@@ -13084,8 +13445,7 @@ def _polite_safe_get(url: str, *, timeout: float):
     Returns the final response (caller checks status)."""
     resp = None
     for ua in (LECTIO_HONEST_USER_AGENT, PODCAST_FETCH_USER_AGENT):
-        with url_guard.build_client(timeout=timeout,
-                          headers={"User-Agent": ua}) as client:
+        with url_guard.build_client(timeout=timeout, headers={"User-Agent": ua}) as client:
             resp = url_guard.safe_get(client, url)
         if resp.status_code != 403:
             break  # served (or a non-403 error) — don't escalate
@@ -13134,10 +13494,7 @@ def _borrow_audio_from_feed(feed_url: str, host_feed_url: str) -> dict[str, str]
     backing it off as a settled "no audio" result."""
     try:
         with get_reader() as reader:
-            titles = {
-                str(e.id): (e.title or "")
-                for e in reader.get_entries(feed=feed_url, sort="recent", limit=120)
-            }
+            titles = {str(e.id): (e.title or "") for e in reader.get_entries(feed=feed_url, sort="recent", limit=120)}
         if not titles or not url_guard.is_safe_outbound_url(host_feed_url):
             return {}
         resp = _polite_safe_get(host_feed_url, timeout=10.0)
@@ -13150,9 +13507,7 @@ def _borrow_audio_from_feed(feed_url: str, host_feed_url: str) -> dict[str, str]
 
 
 def _get_suggested_audio_feed(conn: sqlite3.Connection, feed_url: str) -> str | None:
-    row = conn.execute(
-        "SELECT suggested_audio_feed FROM feed_media_scan WHERE feed_url = ?", (feed_url,)
-    ).fetchone()
+    row = conn.execute("SELECT suggested_audio_feed FROM feed_media_scan WHERE feed_url = ?", (feed_url,)).fetchone()
     return (row[0] or None) if row else None
 
 
@@ -13197,7 +13552,10 @@ def _queue_media_audio_scan(feed_url: str) -> None:
 
 
 def _resolve_entry_audio_url(
-    conn: sqlite3.Connection, feed_url: str, entry_id: str, entry,
+    conn: sqlite3.Connection,
+    feed_url: str,
+    entry_id: str,
+    entry,
 ) -> str | None:
     """Standard enclosure/link audio detection, with a media:content fallback.
 
@@ -13241,10 +13599,7 @@ def _transform_kg_audio_cards(content_html: str) -> str:
         src_m = _AUDIO_SRC_RE.search(card_html)
         if src_m:
             src = html.escape(src_m.group(1), quote=True)
-            result.append(
-                f'<audio controls preload="metadata" src="{src}" style="width:100%">'
-                f'<a href="{src}">Download audio</a></audio>'
-            )
+            result.append(f'<audio controls preload="metadata" src="{src}" style="width:100%"><a href="{src}">Download audio</a></audio>')
         else:
             result.append(card_html)
         pos = end_pos
@@ -13284,6 +13639,7 @@ def _reinject_readability_embeds(summary_html: str, raw_html: str) -> str:
         return summary_html
     try:
         from bs4 import BeautifulSoup
+
         raw_soup = BeautifulSoup(raw_html, "html.parser")
     except Exception:
         return summary_html
@@ -13320,6 +13676,7 @@ def _strip_site_chrome(raw_html: str, source_url: str) -> str:
         return raw_html
     try:
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(raw_html, "html.parser")
         removed = False
         for sel in selectors:
@@ -13352,7 +13709,7 @@ def _append_site_embeds(article_html: str, source_url: str, raw_html: str) -> st
         return article_html
     clean = sanitize_readability_html(f'<p class="lectio-embed">{embed}</p>').strip()
     if not clean or "<iframe" not in clean.lower():
-        return article_html          # the sanitizer rejected it — say nothing
+        return article_html  # the sanitizer rejected it — say nothing
     if not site_content_plugins.embed_at_top(source_url):
         return f"{article_html}{clean}"
     # At the top means after the article's own heading, if it has one — above it
@@ -13367,17 +13724,28 @@ def _insert_after_first_heading(article_html: str, block: str) -> str:
     match = _FIRST_HEADING_RE.search(article_html)
     if match is None:
         return f"{block}{article_html}"
-    return f"{article_html[:match.end()]}{block}{article_html[match.end():]}"
+    return f"{article_html[: match.end()]}{block}{article_html[match.end() :]}"
 
 
-_READABILITY_IMG_TAG_RE = re.compile(r'<img\b[^>]*>', re.IGNORECASE)
+_READABILITY_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
 _READABILITY_IMG_SRC_RE = re.compile(r'\bsrc\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
 
 
-_DEDUPE_PRESENTATION_QUERY_KEYS = frozenset({
-    "width", "height", "w", "h", "quality", "q", "fit", "crop",
-    "coordinates", "size", "dpr",
-})
+_DEDUPE_PRESENTATION_QUERY_KEYS = frozenset(
+    {
+        "width",
+        "height",
+        "w",
+        "h",
+        "quality",
+        "q",
+        "fit",
+        "crop",
+        "coordinates",
+        "size",
+        "dpr",
+    }
+)
 
 
 def _dedupe_img_src_key(src: str) -> str:
@@ -13396,10 +13764,7 @@ def _dedupe_img_src_key(src: str) -> str:
     path, _, query = src.partition("?")
     if not query:
         return path.strip().lower()
-    kept = sorted(
-        (k, v) for k, v in parse_qsl(query, keep_blank_values=True)
-        if k.lower() not in _DEDUPE_PRESENTATION_QUERY_KEYS
-    )
+    kept = sorted((k, v) for k, v in parse_qsl(query, keep_blank_values=True) if k.lower() not in _DEDUPE_PRESENTATION_QUERY_KEYS)
     if not kept:
         return path.strip().lower()
     return f"{path.strip().lower()}?{urlencode(kept)}"
@@ -13490,8 +13855,11 @@ def normalize_proxy_lazy_media(content: str) -> str:
         # URL only in data-runner-src, so captures kept an empty box instead
         # of the tablature the lesson is actually about.
         lazy_src = (
-            attrs.get("data-src") or attrs.get("data-lazy-src") or attrs.get("data-original")
-            or attrs.get("data-image") or attrs.get("data-runner-src")
+            attrs.get("data-src")
+            or attrs.get("data-lazy-src")
+            or attrs.get("data-original")
+            or attrs.get("data-image")
+            or attrs.get("data-runner-src")
         )
         lazy_srcset = attrs.get("data-srcset") or attrs.get("data-lazy-srcset")
         current_src = attrs.get("src", "")
@@ -13608,7 +13976,7 @@ def proxy_hotlink_images(content: str) -> str:
         if not _is_hotlink_img_host(urlparse(src).netloc):
             return tag
         proxied = f"/api/img?u={quote(src, safe='')}"
-        tag = tag[: src_m.start()] + f'src="{proxied}"' + tag[src_m.end():]
+        tag = tag[: src_m.start()] + f'src="{proxied}"' + tag[src_m.end() :]
         # Drop srcset/data-* so the browser uses the proxied src, not a direct URL.
         tag = re.sub(
             r'\s+(?:srcset|data-srcset|data-src|data-lazy-src)\s*=\s*(?:"[^"]*"|\x27[^\x27]*\x27)',
@@ -13926,9 +14294,18 @@ def probe_frameability(source_url: str) -> dict[str, object]:
 # broad `[class*=comment]`, which would catch content like "commentary" or a
 # "N comments" badge.
 _COMMENT_SECTION_SELECTORS = (
-    "#comments", ".comments", ".comments-area", ".comment-list",
-    ".comment-thread", ".comment-section", "#comment-holder",
-    "#disqus_thread", ".disqus", "#respond", ".comment-form", "#comment-form",
+    "#comments",
+    ".comments",
+    ".comments-area",
+    ".comment-list",
+    ".comment-thread",
+    ".comment-section",
+    "#comment-holder",
+    "#disqus_thread",
+    ".disqus",
+    "#respond",
+    ".comment-form",
+    "#comment-form",
 )
 
 
@@ -13936,6 +14313,7 @@ def _strip_comment_sections(raw_html: str) -> str:
     """Remove comment-thread containers from page HTML before extraction."""
     try:
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(raw_html, "html.parser")
         removed = False
         for sel in _COMMENT_SECTION_SELECTORS:
@@ -13960,14 +14338,15 @@ def _strip_comment_sections(raw_html: str) -> str:
 _CHROME_MAX_TEXT_SHARE = 0.4
 
 _ARTICLE_CHROME_SELECTORS = (
-    '[class*="flexisites-social"]',   # Future plc social-share bar
+    '[class*="flexisites-social"]',  # Future plc social-share bar
     '[class*="byline-social"]',
-    '.google-follow-us-button',
-    '[class*="hawk-root"]',           # Future plc affiliate/product widget
+    ".google-follow-us-button",
+    '[class*="hawk-root"]',  # Future plc affiliate/product widget
     '[class*="social-share"]',
     '[class*="share-buttons"]',
     '[class*="sharing-buttons"]',
-    '[class*="newsletter"]', '[id*="newsletter"]',
+    '[class*="newsletter"]',
+    '[id*="newsletter"]',
     '[class*="ad-unit"]',
     '[class*="tooltip"]',
     "aside",
@@ -13981,6 +14360,7 @@ def _strip_article_chrome(raw_html: str) -> str:
     otherwise keep because the CMS nests them inside the article body itself."""
     try:
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(raw_html, "html.parser")
         removed = False
         # Chrome is small next to the article it decorates. A match holding most
@@ -14037,6 +14417,7 @@ def _lead_image_from_html(raw_html: str, source_url: str) -> str | None:
     get a logo stamped on every capture."""
     try:
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(raw_html, "html.parser")
         url = ""
         for finder in (
@@ -14078,24 +14459,25 @@ def _bs4_content_fallback(raw_html: str) -> str:
     """
     try:
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(raw_html, "html.parser")
         for tag in soup.find_all(["nav", "header", "footer", "script", "style"]):
             tag.decompose()
         for selector_type, value in [
-            ("id",    "article-body"),     # Future plc (guitarplayer/guitarworld/musicradar/…)
+            ("id", "article-body"),  # Future plc (guitarplayer/guitarworld/musicradar/…)
             ("class", "body-description"),  # RebelMouse CMS (premierguitar.com) — raised
-                                             # 2026-08-31: readability's own scoring locked
-                                             # onto the page's header/hero block instead
-                                             # (<article class="...image-article...">, matched
-                                             # first by the "tag: article" fallback below,
-                                             # before this selector was added), losing every
-                                             # "Ex. N" tab-diagram image in the real lesson body.
-            ("class", "post-body"),       # Blogger
-            ("class", "entry-content"),   # WordPress / Blogger
-            ("class", "post-content"),    # Ghost, common themes
+            # 2026-08-31: readability's own scoring locked
+            # onto the page's header/hero block instead
+            # (<article class="...image-article...">, matched
+            # first by the "tag: article" fallback below,
+            # before this selector was added), losing every
+            # "Ex. N" tab-diagram image in the real lesson body.
+            ("class", "post-body"),  # Blogger
+            ("class", "entry-content"),  # WordPress / Blogger
+            ("class", "post-content"),  # Ghost, common themes
             ("class", "article-body"),
-            ("tag",   "article"),
-            ("tag",   "main"),
+            ("tag", "article"),
+            ("tag", "main"),
         ]:
             if selector_type == "class":
                 elem = soup.find(class_=lambda c, v=value: bool(c) and v in c.split())  # type: ignore[arg-type]
@@ -14113,7 +14495,7 @@ def _bs4_content_fallback(raw_html: str) -> str:
 
 
 _BBCODE_SIGNAL_RE = re.compile(
-    r'\[(?:b|i|u|s|strike|url|img|quote|code|list|color|size|h[1-6]|center|spoiler)[\]=\s/\]]',
+    r"\[(?:b|i|u|s|strike|url|img|quote|code|list|color|size|h[1-6]|center|spoiler)[\]=\s/\]]",
     re.IGNORECASE,
 )
 
@@ -14143,7 +14525,7 @@ def _looks_like_bbcode(text: str) -> bool:
 def _safe_bb_url(raw: str) -> str:
     """Return raw only if it's http(s); block everything else."""
     stripped = raw.strip()
-    return stripped if re.match(r'https?://', stripped, re.IGNORECASE) else '#'
+    return stripped if re.match(r"https?://", stripped, re.IGNORECASE) else "#"
 
 
 def _bbcode_to_html(text: str) -> str:
@@ -14154,54 +14536,48 @@ def _bbcode_to_html(text: str) -> str:
     we leave the existing tags intact and only apply BBCode substitutions.
     """
     import html as _html
-    if re.search(r'<[a-z!]', text, re.IGNORECASE):
+
+    if re.search(r"<[a-z!]", text, re.IGNORECASE):
         out = text  # already has HTML — don't double-escape
     else:
         out = _html.escape(text, quote=False)
 
     # block-level
     def _list_items(s: str) -> str:
-        return re.sub(r'\[\*\]', '<li>', s, flags=re.IGNORECASE)
+        return re.sub(r"\[\*\]", "<li>", s, flags=re.IGNORECASE)
 
-    out = re.sub(r'\[list=1\](.*?)\[/list\]',
-                 lambda m: '<ol>' + _list_items(m.group(1)) + '</ol>', out, flags=re.I | re.S)
-    out = re.sub(r'\[list\](.*?)\[/list\]',
-                 lambda m: '<ul>' + _list_items(m.group(1)) + '</ul>', out, flags=re.I | re.S)
-    out = re.sub(r'\[quote=([^\]]{1,100})\](.*?)\[/quote\]',
-                 r'<blockquote><cite>\1</cite>\2</blockquote>', out, flags=re.I | re.S)
-    out = re.sub(r'\[quote\](.*?)\[/quote\]',
-                 r'<blockquote>\1</blockquote>', out, flags=re.I | re.S)
-    out = re.sub(r'\[code\](.*?)\[/code\]',
-                 r'<pre><code>\1</code></pre>', out, flags=re.I | re.S)
-    out = re.sub(r'\[center\](.*?)\[/center\]',
-                 r'<div style="text-align:center">\1</div>', out, flags=re.I | re.S)
-    out = re.sub(r'\[spoiler(?:=[^\]]*)?\](.*?)\[/spoiler\]',
-                 r'<details><summary>Spoiler</summary>\1</details>', out, flags=re.I | re.S)
-    out = re.sub(r'\[h([1-6])\](.*?)\[/h\1\]',
-                 r'<h\1>\2</h\1>', out, flags=re.I | re.S)
+    out = re.sub(r"\[list=1\](.*?)\[/list\]", lambda m: "<ol>" + _list_items(m.group(1)) + "</ol>", out, flags=re.I | re.S)
+    out = re.sub(r"\[list\](.*?)\[/list\]", lambda m: "<ul>" + _list_items(m.group(1)) + "</ul>", out, flags=re.I | re.S)
+    out = re.sub(r"\[quote=([^\]]{1,100})\](.*?)\[/quote\]", r"<blockquote><cite>\1</cite>\2</blockquote>", out, flags=re.I | re.S)
+    out = re.sub(r"\[quote\](.*?)\[/quote\]", r"<blockquote>\1</blockquote>", out, flags=re.I | re.S)
+    out = re.sub(r"\[code\](.*?)\[/code\]", r"<pre><code>\1</code></pre>", out, flags=re.I | re.S)
+    out = re.sub(r"\[center\](.*?)\[/center\]", r'<div style="text-align:center">\1</div>', out, flags=re.I | re.S)
+    out = re.sub(r"\[spoiler(?:=[^\]]*)?\](.*?)\[/spoiler\]", r"<details><summary>Spoiler</summary>\1</details>", out, flags=re.I | re.S)
+    out = re.sub(r"\[h([1-6])\](.*?)\[/h\1\]", r"<h\1>\2</h\1>", out, flags=re.I | re.S)
     # [line] — IPB/Invision's horizontal-rule tag (Nexus Mods news posts),
     # self-closing with no [/line] counterpart. Not in _BBCODE_SIGNAL_RE:
     # "line" alone would false-positive on real prose like matplotlib's
     # documented fmt string "[marker][line][color]" (freecodecamp.org),
     # confirmed live 2026-09-01 — genuine BBCode posts already carry other
     # signal tags ([size], [url], ...) that trigger detection without it.
-    out = re.sub(r'\[line\]', r'<hr>', out, flags=re.I)
+    out = re.sub(r"\[line\]", r"<hr>", out, flags=re.I)
 
     # inline
-    out = re.sub(r'\[b\](.*?)\[/b\]', r'<strong>\1</strong>', out, flags=re.I | re.S)
-    out = re.sub(r'\[i\](.*?)\[/i\]', r'<em>\1</em>', out, flags=re.I | re.S)
-    out = re.sub(r'\[u\](.*?)\[/u\]', r'<u>\1</u>', out, flags=re.I | re.S)
-    out = re.sub(r'\[s\](.*?)\[/s\]', r'<s>\1</s>', out, flags=re.I | re.S)
-    out = re.sub(r'\[strike\](.*?)\[/strike\]', r'<s>\1</s>', out, flags=re.I | re.S)
-    out = re.sub(r'\[color=([^\]]{1,30})\](.*?)\[/color\]',
-                 r'<span style="color:\1">\2</span>', out, flags=re.I | re.S)
+    out = re.sub(r"\[b\](.*?)\[/b\]", r"<strong>\1</strong>", out, flags=re.I | re.S)
+    out = re.sub(r"\[i\](.*?)\[/i\]", r"<em>\1</em>", out, flags=re.I | re.S)
+    out = re.sub(r"\[u\](.*?)\[/u\]", r"<u>\1</u>", out, flags=re.I | re.S)
+    out = re.sub(r"\[s\](.*?)\[/s\]", r"<s>\1</s>", out, flags=re.I | re.S)
+    out = re.sub(r"\[strike\](.*?)\[/strike\]", r"<s>\1</s>", out, flags=re.I | re.S)
+    out = re.sub(r"\[color=([^\]]{1,30})\](.*?)\[/color\]", r'<span style="color:\1">\2</span>', out, flags=re.I | re.S)
     # [size=1..7] maps to the HTML <font size> scale; larger values treated as px.
     _BB_SIZE_EM = {1: 0.6, 2: 0.75, 3: 1.0, 4: 1.15, 5: 1.4, 6: 2.0, 7: 3.0}
+
     def _bb_size(m: re.Match) -> str:
         n = int(m.group(1))
-        css = f'{_BB_SIZE_EM[n]}em' if n in _BB_SIZE_EM else f'{n}px'
+        css = f"{_BB_SIZE_EM[n]}em" if n in _BB_SIZE_EM else f"{n}px"
         return f'<span style="font-size:{css}">{m.group(2)}</span>'
-    out = re.sub(r'\[size=(\d{1,3})\](.*?)\[/size\]', _bb_size, out, flags=re.I | re.S)
+
+    out = re.sub(r"\[size=(\d{1,3})\](.*?)\[/size\]", _bb_size, out, flags=re.I | re.S)
 
     # links / images — sanitize URLs
     def _url_tag(m: re.Match) -> str:
@@ -14209,22 +14585,25 @@ def _bbcode_to_html(text: str) -> str:
         label = m.group(2).strip() or href
         return f'<a href="{_html.escape(href, quote=True)}" target="_blank" rel="noopener noreferrer">{label}</a>'
 
-    out = re.sub(r'\[url=([^\]]{1,500})\](.*?)\[/url\]', _url_tag, out, flags=re.I | re.S)
+    out = re.sub(r"\[url=([^\]]{1,500})\](.*?)\[/url\]", _url_tag, out, flags=re.I | re.S)
     out = re.sub(
-        r'\[url\](https?://[^\[]{1,500})\[/url\]',
-        lambda m: f'<a href="{_html.escape(_safe_bb_url(_html.unescape(m.group(1))), quote=True)}"'
-                  f' target="_blank" rel="noopener noreferrer">{_html.escape(m.group(1))}</a>',
-        out, flags=re.I | re.S,
+        r"\[url\](https?://[^\[]{1,500})\[/url\]",
+        lambda m: (
+            f'<a href="{_html.escape(_safe_bb_url(_html.unescape(m.group(1))), quote=True)}"'
+            f' target="_blank" rel="noopener noreferrer">{_html.escape(m.group(1))}</a>'
+        ),
+        out,
+        flags=re.I | re.S,
     )
     out = re.sub(
-        r'\[img(?:=[^\]]*)?\](https?://[^\[]{1,500})\[/img\]',
-        lambda m: f'<img src="{_html.escape(_safe_bb_url(_html.unescape(m.group(1))), quote=True)}"'
-                  f' loading="lazy" style="max-width:100%">',
-        out, flags=re.I | re.S,
+        r"\[img(?:=[^\]]*)?\](https?://[^\[]{1,500})\[/img\]",
+        lambda m: f'<img src="{_html.escape(_safe_bb_url(_html.unescape(m.group(1))), quote=True)}" loading="lazy" style="max-width:100%">',
+        out,
+        flags=re.I | re.S,
     )
 
     # newlines
-    out = out.replace('\n', '<br>\n')
+    out = out.replace("\n", "<br>\n")
     return out
 
 
@@ -14241,6 +14620,7 @@ def _bs4_strip_opener(content_html: str, lead_image_url: str) -> str | None:
     """
     try:
         from bs4 import BeautifulSoup, NavigableString
+
         soup = BeautifulSoup(content_html, "html.parser")
         target_img: object = None
         for img in soup.find_all("img"):
@@ -14252,9 +14632,7 @@ def _bs4_strip_opener(content_html: str, lead_image_url: str) -> str | None:
             # Exact URL not found. Try Tumblr CDN size-variant matching:
             # URLs share https://64.media.tumblr.com/{media_hash}/{token}/ across sizes,
             # so a cached s1280x1920 lead can be matched to the s640x960 content image.
-            _TUMBLR_CDN_PREFIX_RE = re.compile(
-                r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/", re.IGNORECASE
-            )
+            _TUMBLR_CDN_PREFIX_RE = re.compile(r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/", re.IGNORECASE)
             _lead_prefix_m = _TUMBLR_CDN_PREFIX_RE.match(lead_image_url)
             if _lead_prefix_m:
                 _lead_prefix = _lead_prefix_m.group(1) + "/"
@@ -14288,10 +14666,7 @@ def _bs4_strip_opener(content_html: str, lead_image_url: str) -> str | None:
             parent = node_to_remove.parent
             if parent is None or getattr(parent, "name", None) == "[document]":
                 break
-            meaningful = [
-                c for c in parent.children
-                if not (isinstance(c, NavigableString) and not str(c).strip())
-            ]
+            meaningful = [c for c in parent.children if not (isinstance(c, NavigableString) and not str(c).strip())]
             if len(meaningful) == 1:
                 node_to_remove = parent  # Container becomes empty — hoist removal
             else:
@@ -14337,6 +14712,7 @@ def _is_markdown_response(content_type: str, url: str) -> bool:
 def markdown_to_article_html(md_text: str, source_url: str) -> tuple[str, str]:
     """Convert Markdown to sanitized article HTML; title = first heading."""
     import markdown as _markdown
+
     html_out = _markdown.markdown(
         md_text,
         extensions=["fenced_code", "tables", "sane_lists"],
@@ -14367,15 +14743,17 @@ _READABILITY_REFUSAL_STATUSES = frozenset({401, 403, 404, 405, 410, 429, 451, 50
 # comment or a "latest posts" rail. Measured over the archive when the recovery
 # script was written: article:published_time carried 1,811 of 2,030 hits.
 _PUBDATE_SOURCES: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("og:article:published_time", re.compile(
-        r'<meta[^>]+(?:property|name)=["\']article:published_time["\'][^>]*content=["\']([^"\']+)', re.I)),
-    ("og:reversed-attr-order", re.compile(
-        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']article:published_time["\']', re.I)),
+    (
+        "og:article:published_time",
+        re.compile(r'<meta[^>]+(?:property|name)=["\']article:published_time["\'][^>]*content=["\']([^"\']+)', re.I),
+    ),
+    (
+        "og:reversed-attr-order",
+        re.compile(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']article:published_time["\']', re.I),
+    ),
     ("json-ld:datePublished", re.compile(r'"datePublished"\s*:\s*"([^"]+)"', re.I)),
-    ("itemprop:datePublished", re.compile(
-        r'<meta[^>]+itemprop=["\']datePublished["\'][^>]*content=["\']([^"\']+)', re.I)),
-    ("meta:date", re.compile(
-        r'<meta[^>]+name=["\'](?:date|pubdate|publish-date|DC\.date[^"\']*)["\'][^>]*content=["\']([^"\']+)', re.I)),
+    ("itemprop:datePublished", re.compile(r'<meta[^>]+itemprop=["\']datePublished["\'][^>]*content=["\']([^"\']+)', re.I)),
+    ("meta:date", re.compile(r'<meta[^>]+name=["\'](?:date|pubdate|publish-date|DC\.date[^"\']*)["\'][^>]*content=["\']([^"\']+)', re.I)),
     ("time:datetime", re.compile(r'<time[^>]+datetime=["\']([^"\']+)', re.I)),
 )
 
@@ -14405,12 +14783,10 @@ def strip_tracking_params(url: str) -> str:
         return url
     if not parts.query:
         return url
-    kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
-            if not _TRACKING_PARAM_RE.match(k)]
+    kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if not _TRACKING_PARAM_RE.match(k)]
     if len(kept) == len(parse_qsl(parts.query, keep_blank_values=True)):
         return url
-    return urlunsplit((parts.scheme, parts.netloc, parts.path,
-                       urlencode(kept, doseq=True), parts.fragment))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(kept, doseq=True), parts.fragment))
 
 
 def wayback_snapshot_url(source_url: str) -> str | None:
@@ -14438,7 +14814,8 @@ def _wayback_lookup(source_url: str) -> str | None:
         headers = {"User-Agent": READABILITY_USER_AGENT}
         with url_guard.build_client(timeout=10.0, headers=headers) as client:
             resp = url_guard.safe_get(
-                client, f"{_WAYBACK_AVAILABILITY}?url={quote_plus(source_url)}",
+                client,
+                f"{_WAYBACK_AVAILABILITY}?url={quote_plus(source_url)}",
                 headers=headers,
             )
         resp.raise_for_status()
@@ -14471,8 +14848,7 @@ def mine_publish_date(raw_html: str | None) -> datetime | None:
                 ymd = re.match(r"(\d{4})-(\d{2})-(\d{2})", raw)
                 if ymd:
                     try:
-                        dt = datetime(int(ymd.group(1)), int(ymd.group(2)), int(ymd.group(3)),
-                                      tzinfo=timezone.utc)
+                        dt = datetime(int(ymd.group(1)), int(ymd.group(2)), int(ymd.group(3)), tzinfo=timezone.utc)
                     except ValueError:
                         dt = None
             if dt is None:
@@ -14616,9 +14992,7 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
         art_img_count = article_html.lower().count("<img")
         # Fall back if readability stripped all images, or if the page is
         # image-heavy (>4 imgs) and readability kept fewer than half of them.
-        needs_fallback = art_img_count == 0 or (
-            raw_img_count > 4 and art_img_count < raw_img_count // 2
-        )
+        needs_fallback = art_img_count == 0 or (raw_img_count > 4 and art_img_count < raw_img_count // 2)
         if needs_fallback:
             # Separate from art_img_count above (which stays <img>-only for the
             # trigger and the whole-body-rescue gate below): the two ACCEPTANCE
@@ -14678,23 +15052,22 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
         lead_host = urlparse(lead).netloc
         already_present = (
             lead in article_html
-            or any(
-                _dedupe_img_src_key(src) == lead_key
-                for src in re.findall(r'src="([^"]*)"', article_html)
+            or any(_dedupe_img_src_key(src) == lead_key for src in re.findall(r'src="([^"]*)"', article_html))
+            or (
+                lead_dim_sig is not None
+                and any(
+                    # Same host too, not dimensions alone (raised in review
+                    # 2026-08-31): a CMS that resizes every hero to one standard
+                    # preset (e.g. every image at 1200x630) would otherwise
+                    # false-positive on any unrelated in-body image sharing that
+                    # size, silently dropping a genuinely different hero. The
+                    # motivating case (Substack) already shares a host between
+                    # og:image and the in-body copy, so this doesn't lose the
+                    # fix it was added for.
+                    urlparse(src).netloc == lead_host and _image_dimension_signature(src) == lead_dim_sig
+                    for src in re.findall(r'src="([^"]*)"', article_html)
+                )
             )
-            or (lead_dim_sig is not None and any(
-                # Same host too, not dimensions alone (raised in review
-                # 2026-08-31): a CMS that resizes every hero to one standard
-                # preset (e.g. every image at 1200x630) would otherwise
-                # false-positive on any unrelated in-body image sharing that
-                # size, silently dropping a genuinely different hero. The
-                # motivating case (Substack) already shares a host between
-                # og:image and the in-body copy, so this doesn't lose the
-                # fix it was added for.
-                urlparse(src).netloc == lead_host
-                and _image_dimension_signature(src) == lead_dim_sig
-                for src in re.findall(r'src="([^"]*)"', article_html)
-            ))
         )
         if not already_present:
             article_html = f'<figure><img src="{html.escape(lead, quote=True)}"></figure>' + article_html
@@ -14752,6 +15125,7 @@ def _page_title_from_html(raw_html: str, source_url: str) -> str:
     then twitter:title, then <title>, then the first <h1>, then the URL."""
     try:
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(raw_html, "html.parser")
         attr_options: tuple[dict[str, str], ...] = ({"property": "og:title"}, {"name": "twitter:title"})
         for attrs in attr_options:
@@ -14804,6 +15178,7 @@ def _whole_body_content(raw_html: str) -> str:
     body_html = raw_html
     try:
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(raw_html, "html.parser")
         for tag in soup.find_all(["script", "style", "nav", "header", "footer"]):
             tag.decompose()
@@ -14883,9 +15258,7 @@ def build_readability_response(source_url: str) -> HTMLResponse:
             "main{max-width:760px;margin:0 auto;padding:1.2rem 1rem 2rem;}"
             "header{font-family:Segoe UI,Arial,sans-serif;margin-bottom:1rem;padding-bottom:.75rem;border-bottom:1px solid #d4dbe5;}"
             "h1{margin:0;font-size:1.28rem;line-height:1.3;}"
-            "a{color:#0a5ca4;}article{font-size:1.05rem;line-height:1.7;}"
-            + _READER_VIEW_MEDIA_CSS +
-            "article pre{white-space:pre-wrap;}"
+            "a{color:#0a5ca4;}article{font-size:1.05rem;line-height:1.7;}" + _READER_VIEW_MEDIA_CSS + "article pre{white-space:pre-wrap;}"
             "article *{color:inherit !important;background-color:transparent !important;}"
             "</style></head>"
             f"<body><main><header><h1>{escaped_title}</h1>"
@@ -14963,9 +15336,7 @@ def _display_title(entry) -> str:
 # scripts/drop_search_index.py reclaims the space on an existing install.
 
 
-def _filter_star_keys_by_search(
-    keys: set[tuple[str, str]], search_terms: list[str]
-) -> set[tuple[str, str]] | None:
+def _filter_star_keys_by_search(keys: set[tuple[str, str]], search_terms: list[str]) -> set[tuple[str, str]] | None:
     """Narrow kept keys to those matching every search term, in SQL. None on
     any error → caller keeps the full set and post-filters in Python.
 
@@ -14991,6 +15362,7 @@ def _filter_star_keys_by_search(
     """
     if not search_terms:
         return keys
+
     # LIKE wildcards in a user's search term are literals, not patterns.
     def _lit(term: str) -> str:
         return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -15011,7 +15383,7 @@ def _filter_star_keys_by_search(
             key_list = list(keys)
             # 2 bound vars per key; stay under SQLite's 999-variable limit.
             for i in range(0, len(key_list), 450):
-                chunk = key_list[i:i + 450]
+                chunk = key_list[i : i + 450]
                 values = ",".join("(?,?)" for _ in chunk)
                 params = [v for pair in chunk for v in pair] + term_params
                 rows = conn.execute(
@@ -15141,9 +15513,7 @@ def _sorted_star_key_window(
     by_star = sort_by == "starred"
     by_size = sort_by == "size"
     sort_expr = (
-        "''" if by_star or by_size
-        else "COALESCE(e.published, e.updated, e.first_updated)"
-        if sort_by == "post" else "e.first_updated"
+        "''" if by_star or by_size else "COALESCE(e.published, e.updated, e.first_updated)" if sort_by == "post" else "e.first_updated"
     )
     read_clause = {
         True: " AND e.read = 1",
@@ -15156,7 +15526,7 @@ def _sorted_star_key_window(
             key_list = list(keys)
             # 2 bound vars per key; stay under SQLite's 999-variable limit.
             for i in range(0, len(key_list), 450):
-                chunk = key_list[i:i + 450]
+                chunk = key_list[i : i + 450]
                 values = ",".join("(?,?)" for _ in chunk)
                 params = [v for pair in chunk for v in pair]
                 rows = conn.execute(
@@ -15179,9 +15549,7 @@ def _sorted_star_key_window(
         try:
             with get_meta_connection() as _mc:
                 _when = {
-                    (str(r[0]), str(r[1])): str(r[2] or "")
-                    for r in _mc.execute(
-                        "SELECT feed_url, entry_id, saved_at FROM saved_entries")
+                    (str(r[0]), str(r[1])): str(r[2] or "") for r in _mc.execute("SELECT feed_url, entry_id, saved_at FROM saved_entries")
                 }
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("star date lookup failed, keeping key order: %s", exc)
@@ -15199,8 +15567,8 @@ def _sorted_star_key_window(
                 _size = {
                     (str(r[0]), str(r[1])): f"{int(r[2] or 0):020d}"
                     for r in _ac.execute(
-                        "SELECT feed_url, entry_id, content_size_bytes FROM archived_entry"
-                        " WHERE content_size_bytes IS NOT NULL")
+                        "SELECT feed_url, entry_id, content_size_bytes FROM archived_entry WHERE content_size_bytes IS NOT NULL"
+                    )
                 }
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("archive size lookup failed, keeping key order: %s", exc)
@@ -15231,6 +15599,7 @@ class _LightEntry:
     summary, authors_str, resource_id) are also omitted: those branches are
     excluded from the gate that makes `_light_entries_from_sql` run at all, so
     reaching them here is a gating bug, and should surface as one."""
+
     feed_url: str
     id: str
     title: str | None
@@ -15252,9 +15621,7 @@ def _reader_ts(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
 
 
-def _enclosures_for_keys(
-    conn: sqlite3.Connection, keys: list[tuple[str, str]]
-) -> dict[tuple[str, str], tuple[_LightEnclosure, ...]]:
+def _enclosures_for_keys(conn: sqlite3.Connection, keys: list[tuple[str, str]]) -> dict[tuple[str, str], tuple[_LightEnclosure, ...]]:
     """Enclosures for specific (feed, id) keys, parsed from reader's stored
     JSON. Used only to back-fill link-less entries (Buzzsprout podcast feeds
     ship no <link>, only an audio enclosure — see `_derived_entry_link`); a
@@ -15262,7 +15629,7 @@ def _enclosures_for_keys(
     with a variable-length JSON column nothing else needs."""
     result: dict[tuple[str, str], tuple[_LightEnclosure, ...]] = {}
     for i in range(0, len(keys), 450):
-        chunk = keys[i:i + 450]
+        chunk = keys[i : i + 450]
         values = ",".join("(?,?)" for _ in chunk)
         params = [v for pair in chunk for v in pair]
         rows = conn.execute(
@@ -15276,9 +15643,7 @@ def _enclosures_for_keys(
                 items = json.loads(row["enclosures"])
             except Exception:  # noqa: BLE001
                 continue
-            result[(str(row["feed"]), str(row["id"]))] = tuple(
-                _LightEnclosure(href=d.get("href")) for d in items
-            )
+            result[(str(row["feed"]), str(row["id"]))] = tuple(_LightEnclosure(href=d.get("href")) for d in items)
     return result
 
 
@@ -15319,15 +15684,17 @@ def _light_entries_from_sql(
             feed_list = list(feed_urls)
             rows: list[sqlite3.Row] = []
             for i in range(0, len(feed_list), 999):
-                chunk = feed_list[i:i + 999]
+                chunk = feed_list[i : i + 999]
                 placeholders = ",".join("?" for _ in chunk)
-                rows.extend(conn.execute(
-                    f"SELECT feed, id, title, link, published, updated, first_updated,"
-                    f" read, read_modified, added_by, {sort_col} AS sort_val"
-                    f" FROM entries WHERE feed IN ({placeholders}){read_clause}"
-                    f" ORDER BY {sort_col} {order} LIMIT ?",
-                    [*chunk, limit],
-                ).fetchall())
+                rows.extend(
+                    conn.execute(
+                        f"SELECT feed, id, title, link, published, updated, first_updated,"
+                        f" read, read_modified, added_by, {sort_col} AS sort_val"
+                        f" FROM entries WHERE feed IN ({placeholders}){read_clause}"
+                        f" ORDER BY {sort_col} {order} LIMIT ?",
+                        [*chunk, limit],
+                    ).fetchall()
+                )
             # Harmless no-op for the (near-universal) single-chunk case; needed
             # for >999 feeds, whose per-chunk LIMITs must be re-applied globally
             # after merging — same reasoning as the existing ASC/DESC SQL paths.
@@ -15451,8 +15818,7 @@ def list_entries_for_feeds(
             # in read order with timestamps. Avoids scanning all read entries in
             # reader's DB when the user has been using the app with this version.
             hist_rows = conn.execute(
-                f"SELECT feed_url, entry_id, read_at FROM read_history"
-                f" WHERE feed_url IN ({placeholders}) ORDER BY read_at DESC LIMIT ?",
+                f"SELECT feed_url, entry_id, read_at FROM read_history WHERE feed_url IN ({placeholders}) ORDER BY read_at DESC LIMIT ?",
                 feed_url_values + (max(1, int(limit)),),
             ).fetchall()
             if hist_rows:
@@ -15507,10 +15873,7 @@ def list_entries_for_feeds(
     # Read Mode's Inbox. The Inbox is a to-do pile, and a tag is filing rather
     # than a to-do — without this the Inbox lists the whole 24k library. The
     # main app's Kept view keeps the default "kept" (star OR tag).
-    kept_entries_set = (
-        set(saved_entries_set) if kept_scope == "starred"
-        else saved_entries_set | tagged_entries_set
-    )
+    kept_entries_set = set(saved_entries_set) if kept_scope == "starred" else saved_entries_set | tagged_entries_set
     # The Archive (done) axis, applied here rather than by the caller because it
     # has to happen BEFORE the limit clip. Filtering afterwards means the caller
     # only ever sees archived items that sorted into the first N of the whole
@@ -15548,11 +15911,9 @@ def list_entries_for_feeds(
             _sm_db = reader._storage.get_db()
             _sm_list = list(feed_urls)
             for _i in range(0, len(_sm_list), 999):
-                _chunk = _sm_list[_i:_i + 999]
+                _chunk = _sm_list[_i : _i + 999]
                 _ph = ",".join("?" for _ in _chunk)
-                for _row in _sm_db.execute(
-                    f"SELECT url, link FROM feeds WHERE url IN ({_ph})", _chunk
-                ).fetchall():
+                for _row in _sm_db.execute(f"SELECT url, link FROM feeds WHERE url IN ({_ph})", _chunk).fetchall():
                     feed_site_map[str(_row[0])] = _row[1] or None
 
         all_feed_entries: list[Any] = []
@@ -15563,11 +15924,7 @@ def list_entries_for_feeds(
         # Previously the tag was applied only as a post-filter on the newest-N
         # window fetched below, so tagged entries outside that window (tags are
         # sparse) never surfaced — clicking a tag showed nothing.
-        tag_filter = (
-            [f"{MANUAL_TAG_KEY_PREFIX}{normalized_selected_tag}"]
-            if normalized_selected_tag
-            else None
-        )
+        tag_filter = [f"{MANUAL_TAG_KEY_PREFIX}{normalized_selected_tag}"] if normalized_selected_tag else None
         PER_FEED_QUERY_THRESHOLD = 32
 
         # enrich=False callers (Read Above/Below, "move visible to feed") only
@@ -15618,9 +15975,7 @@ def list_entries_for_feeds(
                 # Narrow to the tag in SQL BEFORE hydrating. Without this the tag
                 # filter ran in Python after hydrating (and lead-image-fetching)
                 # the whole kept set — ~38s to render an empty `inbox` view.
-                star_keys = kept_entries_set & get_entry_keys_for_manual_tag(
-                    set(feed_urls), normalized_selected_tag
-                )
+                star_keys = kept_entries_set & get_entry_keys_for_manual_tag(set(feed_urls), normalized_selected_tag)
             if archived is not None:
                 # Narrow to the done-axis BEFORE the window clip below, for the
                 # same reason the tag filter moved up here: _sorted_star_key_window
@@ -15629,10 +15984,7 @@ def list_entries_for_feeds(
                 # kept set. With one archived post among 24k kept, "oldest first"
                 # put it far outside the first 150 and the Archive node rendered
                 # "Nothing here" while its count said 1.
-                star_keys = {
-                    k for k in star_keys
-                    if (k in archive_filter_keys) == archived
-                }
+                star_keys = {k for k in star_keys if (k in archive_filter_keys) == archived}
             if search_terms:
                 # Narrow in SQL BEFORE hydrating. This branch runs ahead of the
                 # `elif search_terms` fast path below, so the Saved view was the
@@ -15666,9 +16018,7 @@ def list_entries_for_feeds(
             # only the survivors. Replaces reader's FTS index, whose
             # per-result highlighted snippet was ~95% of a ~10-20s search —
             # see _search_entry_keys_in_sql. Falls back to the Python scan.
-            matched_keys = _search_entry_keys_in_sql(
-                search_terms, feed_urls, reader_read_filter, fetch_limit
-            )
+            matched_keys = _search_entry_keys_in_sql(search_terms, feed_urls, reader_read_filter, fetch_limit)
             if matched_keys is not None:
                 for furl, eid in matched_keys:
                     if furl not in feed_urls:
@@ -15701,8 +16051,7 @@ def list_entries_for_feeds(
                     _feed_list = list(feed_urls)
                     _placeholders = ",".join("?" for _ in _feed_list)
                     rows = _rdb.execute(
-                        f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
-                        f" ORDER BY {_ENTRY_SORT_SQL} ASC LIMIT ?",
+                        f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause} ORDER BY {_ENTRY_SORT_SQL} ASC LIMIT ?",
                         _feed_list + [fetch_limit],
                     ).fetchall()
                 else:
@@ -15713,7 +16062,7 @@ def list_entries_for_feeds(
                     _feed_list = list(feed_urls)
                     batch_rows: list = []
                     for _i in range(0, len(_feed_list), 999):
-                        _chunk = _feed_list[_i:_i + 999]
+                        _chunk = _feed_list[_i : _i + 999]
                         _ph = ",".join("?" for _ in _chunk)
                         chunk_rows = _rdb.execute(
                             f"SELECT feed, id, {_ENTRY_SORT_SQL} AS sort_val FROM entries"
@@ -15755,14 +16104,13 @@ def list_entries_for_feeds(
                 if len(_feed_list) <= 999:
                     _placeholders = ",".join("?" for _ in _feed_list)
                     rows = _rdb.execute(
-                        f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
-                        f" ORDER BY {sort_col} DESC LIMIT ?",
+                        f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause} ORDER BY {sort_col} DESC LIMIT ?",
                         _feed_list + [fetch_limit],
                     ).fetchall()
                 else:
                     batch_rows_desc: list = []
                     for _i in range(0, len(_feed_list), 999):
-                        _chunk = _feed_list[_i:_i + 999]
+                        _chunk = _feed_list[_i : _i + 999]
                         _ph = ",".join("?" for _ in _chunk)
                         chunk_rows = _rdb.execute(
                             f"SELECT feed, id, {sort_col} AS sort_val FROM entries"
@@ -15851,7 +16199,7 @@ def list_entries_for_feeds(
                     # just failing to load a few feeds' worth of rows.
                     _lock_feed_list = list(feed_urls)
                     for _i in range(0, len(_lock_feed_list), 999):
-                        _chunk = _lock_feed_list[_i:_i + 999]
+                        _chunk = _lock_feed_list[_i : _i + 999]
                         _ph = ",".join("?" for _ in _chunk)
                         for _row in _lock_conn.execute(
                             f"SELECT feed_url, entry_id, locked_until FROM entry_lead_images"
@@ -15893,8 +16241,7 @@ def list_entries_for_feeds(
             # mode switch) so it never touches that scope's remembered sort.
             if normalized_read_filter == "starred" and not is_saved:
                 continue
-            if archived is not None and \
-                    (((entry.feed_url, entry.id) in archive_filter_keys) != archived):
+            if archived is not None and (((entry.feed_url, entry.id) in archive_filter_keys) != archived):
                 continue
             # Unread composes with star_only (Saved view narrowed to unread);
             # history stays exclusive with starred (it sorts by read time).
@@ -16026,12 +16373,10 @@ def list_entries_for_feeds(
         no_enrich_ms = int((time.perf_counter() - process_start) * 1000)
         LOGGER.info(
             "[perf] list_entries: entries_processed=%d process_ms=%d (enrich skipped)",
-            len(light_records), no_enrich_ms,
+            len(light_records),
+            no_enrich_ms,
         )
-        return [
-            {k: v for k, v in rec.items() if not k.startswith("_") and k != sort_key}
-            for rec in light_records
-        ]
+        return [{k: v for k, v in rec.items() if not k.startswith("_") and k != sort_key} for rec in light_records]
 
     enrich_start = time.perf_counter()
     # Which of the VISIBLE rows carry a manual tag: one query over the clipped
@@ -16050,7 +16395,7 @@ def list_entries_for_feeds(
             with get_reader() as _r:
                 _tdb = _r._storage.get_db()
                 for _i in range(0, len(_keys), 400):
-                    _chunk = _keys[_i:_i + 400]
+                    _chunk = _keys[_i : _i + 400]
                     _ph = ",".join("(?,?)" for _ in _chunk)
                     _flat = [v for k in _chunk for v in k]
                     for _f, _e in _tdb.execute(
@@ -16191,16 +16536,11 @@ def list_entries_for_feeds(
                 "read_timestamp": read_dt.isoformat() if read_dt else None,
                 # When this was starred — carried so the orphan merge can re-sort
                 # by it after list_entries_for_feeds pops the sort values.
-                "saved_timestamp": (
-                    _sv.isoformat()
-                    if (_sv := saved_at_map.get((feed_url_str, _entry_id))) else None
-                ),
+                "saved_timestamp": (_sv.isoformat() if (_sv := saved_at_map.get((feed_url_str, _entry_id))) else None),
                 "post_display": format_datetime_for_ui(published_dt),
                 "received_display": format_datetime_for_ui(getattr(entry, "added", None)),
                 "read_display": format_datetime_for_ui(read_dt),
-                "size_display": (
-                    _format_size_bytes(_sb) if (_sb := rec.get("size_bytes")) is not None else None
-                ),
+                "size_display": (_format_size_bytes(_sb) if (_sb := rec.get("size_bytes")) is not None else None),
                 "duration_seconds": duration_seconds,
                 "duration_display": duration_display,
                 "video_id": video_id,
@@ -16212,7 +16552,10 @@ def list_entries_for_feeds(
     process_ms = int((time.perf_counter() - process_start) * 1000)
     LOGGER.info(
         "[perf] list_entries: entries_processed=%d filter_ms=%d enrich_ms=%d process_ms=%d",
-        len(entries), filter_ms, enrich_ms, process_ms,
+        len(entries),
+        filter_ms,
+        enrich_ms,
+        process_ms,
     )
 
     return entries
@@ -16224,10 +16567,7 @@ def get_archived_saved_keys() -> set[tuple[str, str]]:
     via the Archive node or Search. Independent of the star: an entry can be
     archived with no saved_entries row at all."""
     with get_meta_connection() as conn:
-        return {
-            (str(row["feed_url"]), str(row["entry_id"]))
-            for row in conn.execute("SELECT feed_url, entry_id FROM archived_entries")
-        }
+        return {(str(row["feed_url"]), str(row["entry_id"])) for row in conn.execute("SELECT feed_url, entry_id FROM archived_entries")}
 
 
 def set_entry_archived(feed_url: str, entry_id: str, archived: bool) -> None:
@@ -16237,8 +16577,7 @@ def set_entry_archived(feed_url: str, entry_id: str, archived: bool) -> None:
     with get_meta_connection() as conn:
         if archived:
             conn.execute(
-                "INSERT OR REPLACE INTO archived_entries (feed_url, entry_id, archived_at) "
-                "VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO archived_entries (feed_url, entry_id, archived_at) VALUES (?, ?, ?)",
                 (feed_url, entry_id, datetime.now(timezone.utc).isoformat()),
             )
         else:
@@ -16252,10 +16591,13 @@ def set_entry_archived(feed_url: str, entry_id: str, archived: bool) -> None:
 def is_entry_archived(feed_url: str, entry_id: str) -> bool:
     """Single-entry Archive check, for the keep-signal test on the unstar path."""
     with get_meta_connection() as conn:
-        return conn.execute(
-            "SELECT 1 FROM archived_entries WHERE feed_url = ? AND entry_id = ?",
-            (feed_url, entry_id),
-        ).fetchone() is not None
+        return (
+            conn.execute(
+                "SELECT 1 FROM archived_entries WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchone()
+            is not None
+        )
 
 
 def entry_has_keep_signal(feed_url: str, entry_id: str, *, starred: bool) -> bool:
@@ -16381,8 +16723,7 @@ def _sweep_husked_saved_articles() -> int:
                 LOGGER.exception("[maintenance] husk sweep: failed to delete %s", entry_id)
                 continue
             with get_meta_connection() as conn:
-                conn.execute("DELETE FROM entry_unstar_batch WHERE feed_url = ? AND entry_id = ?",
-                             (saved_url, entry_id))
+                conn.execute("DELETE FROM entry_unstar_batch WHERE feed_url = ? AND entry_id = ?", (saved_url, entry_id))
                 conn.commit()
     if deleted:
         invalidate_unread_counts_cache()
@@ -16421,9 +16762,7 @@ def restar_curated_entries(feed_url: str) -> int:
     with get_reader() as reader:
         for entry in reader.get_entries(feed=feed_url):
             entry_id = str(entry.id)
-            if entry_has_keep_signal(
-                feed_url, entry_id, starred=_entry_is_starred(feed_url, entry_id)
-            ):
+            if entry_has_keep_signal(feed_url, entry_id, starred=_entry_is_starred(feed_url, entry_id)):
                 curated.append(entry_id)
 
     for entry_id in curated:
@@ -16433,8 +16772,7 @@ def restar_curated_entries(feed_url: str) -> int:
     if curated:
         with get_meta_connection() as conn:
             conn.executemany(
-                "UPDATE saved_entries SET saved_at = CURRENT_TIMESTAMP"
-                " WHERE feed_url = ? AND entry_id = ?",
+                "UPDATE saved_entries SET saved_at = CURRENT_TIMESTAMP WHERE feed_url = ? AND entry_id = ?",
                 [(feed_url, e) for e in curated],
             )
             conn.commit()
@@ -16512,23 +16850,21 @@ def mark_entry_read_everywhere(feed_url: str, entry_id: str) -> None:
             reader.mark_entry_as_read((feed_url, entry_id))
     except Exception:
         entry = feed = None
-        LOGGER.warning("mark_entry_read_everywhere: reader write failed for %s/%s",
-                       feed_url, entry_id, exc_info=True)
+        LOGGER.warning("mark_entry_read_everywhere: reader write failed for %s/%s", feed_url, entry_id, exc_info=True)
     try:
         upsert_entry_read_state(feed_url, entry_id)
     except Exception:
-        LOGGER.warning("mark_entry_read_everywhere: read-state override failed for %s/%s",
-                       feed_url, entry_id, exc_info=True)
+        LOGGER.warning("mark_entry_read_everywhere: read-state override failed for %s/%s", feed_url, entry_id, exc_info=True)
     try:
         append_read_history(
-            feed_url, entry_id,
+            feed_url,
+            entry_id,
             str(getattr(entry, "title", None) or ""),
             str(getattr(entry, "link", None) or ""),
             str(getattr(feed, "resolved_title", None) or getattr(feed, "title", None) or ""),
         )
     except Exception:
-        LOGGER.warning("mark_entry_read_everywhere: history append failed for %s/%s",
-                       feed_url, entry_id, exc_info=True)
+        LOGGER.warning("mark_entry_read_everywhere: history append failed for %s/%s", feed_url, entry_id, exc_info=True)
     invalidate_unread_counts_cache()
 
 
@@ -16553,7 +16889,7 @@ def get_saved_unread_count() -> int:
     with get_reader() as reader:
         db = reader._storage.get_db()
         for i in range(0, len(pairs), 900):
-            chunk = pairs[i:i + 900]
+            chunk = pairs[i : i + 900]
             values_sql = ",".join("(?,?)" for _ in chunk)
             params = [v for pair in chunk for v in pair]
             row = db.execute(
@@ -16573,11 +16909,13 @@ def get_starred_inbox_total() -> int:
     something is not a to-do.
     """
     with get_meta_connection() as conn:
-        return int(conn.execute(
-            "SELECT COUNT(*) FROM saved_entries s WHERE NOT EXISTS ("
-            " SELECT 1 FROM archived_entries a"
-            " WHERE a.feed_url = s.feed_url AND a.entry_id = s.entry_id)"
-        ).fetchone()[0])
+        return int(
+            conn.execute(
+                "SELECT COUNT(*) FROM saved_entries s WHERE NOT EXISTS ("
+                " SELECT 1 FROM archived_entries a"
+                " WHERE a.feed_url = s.feed_url AND a.entry_id = s.entry_id)"
+            ).fetchone()[0]
+        )
 
 
 def get_saved_counts_by_folder(folder_feed_urls_by_id: dict[int, set[str]]) -> dict[int, int]:
@@ -16652,15 +16990,11 @@ def merge_orphan_saved_entries(
     """
     archived_keys = get_archived_saved_keys() if archived is not None else set()
     if archived is not None:
-        posts = [p for p in posts
-                 if ((str(p["feed_url"]), str(p["id"])) in archived_keys) == archived]
+        posts = [p for p in posts if ((str(p["feed_url"]), str(p["id"])) in archived_keys) == archived]
 
-    orphans = starred_archive_service.get_orphan_saved_entries(
-        live_feed_urls, search_terms, kept_scope=kept_scope
-    )
+    orphans = starred_archive_service.get_orphan_saved_entries(live_feed_urls, search_terms, kept_scope=kept_scope)
     if archived is not None:
-        orphans = [o for o in orphans
-                   if ((str(o["feed_url"]), str(o["id"])) in archived_keys) == archived]
+        orphans = [o for o in orphans if ((str(o["feed_url"]), str(o["id"])) in archived_keys) == archived]
     if only_feed_url is not None:
         target = normalize_feed_url(only_feed_url)
         orphans = [o for o in orphans if normalize_feed_url(o["feed_url"]) == target]
@@ -16678,7 +17012,7 @@ def merge_orphan_saved_entries(
             return ""
         try:
             return datetime.fromtimestamp(float(epoch), tz=timezone.utc).isoformat()
-        except (OverflowError, OSError, ValueError):
+        except OverflowError, OSError, ValueError:
             return ""
 
     existing_keys = {(p["feed_url"], p["id"]) for p in posts}
@@ -16724,11 +17058,7 @@ def merge_orphan_saved_entries(
                 ),
                 "read_display": None,
                 "size_bytes": orphan.get("content_size_bytes"),
-                "size_display": (
-                    _format_size_bytes(_ob)
-                    if (_ob := orphan.get("content_size_bytes")) is not None
-                    else None
-                ),
+                "size_display": (_format_size_bytes(_ob) if (_ob := orphan.get("content_size_bytes")) is not None else None),
                 "duration_seconds": None,
                 "duration_display": None,
                 "is_orphan_archive": True,
@@ -16812,16 +17142,14 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     asset_map = starred_archive_service.get_entry_asset_map(feed_url, entry_id)
     content_html = archived.get("content_html")
     if isinstance(content_html, str) and content_html and asset_map:
-        content_html = starred_archive_service.rewrite_html_assets(
-            content_html, asset_map, STARRED_ASSET_URL_PREFIX
-        )
+        content_html = starred_archive_service.rewrite_html_assets(content_html, asset_map, STARRED_ASSET_URL_PREFIX)
 
     def _fmt(epoch: float | None) -> str | None:
         if epoch is None:
             return None
         try:
             dt = datetime.fromtimestamp(float(epoch), tz=timezone.utc)
-        except (OverflowError, OSError, ValueError):
+        except OverflowError, OSError, ValueError:
             return None
         return format_datetime_for_ui(dt)
 
@@ -16830,7 +17158,7 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             return None
         try:
             return datetime.fromtimestamp(float(epoch), tz=timezone.utc).isoformat()
-        except (OverflowError, OSError, ValueError):
+        except OverflowError, OSError, ValueError:
             return None
 
     published_at = archived.get("published_at")
@@ -16854,9 +17182,7 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     # what was pinned to it. Same "already applied -> stop suggesting" rule
     # as the live path (main.entry_pane).
     _manual_now = {normalize_tag_value(t) for t in manual_tags}
-    feed_tag_suggestions = [
-        t for t in get_feed_pinned_tags(feed_url) if t not in _manual_now
-    ]
+    feed_tag_suggestions = [t for t in get_feed_pinned_tags(feed_url) if t not in _manual_now]
 
     return {
         "feed_url": feed_url,
@@ -16920,10 +17246,7 @@ def _rebase_proxy_entry_link(entry_link: str | None, feed_url: str, channel_link
     cp = urlparse(str(channel_link))
     if ep.netloc and ep.netloc == fp.netloc and cp.netloc and cp.netloc != fp.netloc:
         return (
-            cp.scheme + "://" + cp.netloc
-            + ep.path
-            + (("?" + ep.query) if ep.query else "")
-            + (("#" + ep.fragment) if ep.fragment else "")
+            cp.scheme + "://" + cp.netloc + ep.path + (("?" + ep.query) if ep.query else "") + (("#" + ep.fragment) if ep.fragment else "")
         )
     return entry_link
 
@@ -16963,6 +17286,7 @@ def _lead_image_display_url(image_url: str | None, size_rule: str | None = None)
                 _CORP_DOMAIN_CACHE[d] = corp in ("same-site", "same-origin")
             except Exception:
                 _CORP_DOMAIN_CACHE[d] = False
+
         threading.Thread(target=_check_corp, daemon=True).start()
         return image_url
     if _CORP_DOMAIN_CACHE.get(domain):
@@ -17001,9 +17325,7 @@ def _derive_article_lead_image(entry) -> str | None:
             # Prefer a cached *positive*; a cached negative still loses to the
             # inline image, which is the stale-negative case this bypass exists
             # for (claycomix ships the strip inline and is unaffected either way).
-            _cached_full = lead_image_service.get_cached_lead_image_url(
-                feed_url, str(getattr(entry, "id", "") or "")
-            )
+            _cached_full = lead_image_service.get_cached_lead_image_url(feed_url, str(getattr(entry, "id", "") or ""))
             if _cached_full:
                 primary = _cached_full
     elif strategy == "media_rss":
@@ -17015,6 +17337,8 @@ def _derive_article_lead_image(entry) -> str | None:
         or lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
         or lead_image_service.extract_inline_svg_thumb_url(entry)
     )
+
+
 _PLAINTEXT_PROMOTE_RE = re.compile(r"https?://|&lt;br|<br", re.IGNORECASE)
 _BARE_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 # A bare URL that points straight at an image — rendered inline as <img> rather
@@ -17077,12 +17401,13 @@ def _promote_plaintext_summary(summary: str | None) -> str | None:
     def _linkify(m: re.Match) -> str:
         seg = m.group(0)  # already HTML-escaped; src/href-safe (no spaces/quotes)
         if _BARE_IMG_URL_RE.search(html.unescape(seg)):
-            return (f'<img src="{seg}" alt="" loading="lazy" '
-                    f'referrerpolicy="no-referrer" style="max-width:100%;height:auto;">')
+            return f'<img src="{seg}" alt="" loading="lazy" referrerpolicy="no-referrer" style="max-width:100%;height:auto;">'
         return f'<a href="{seg}" target="_blank" rel="noopener noreferrer">{seg}</a>'
 
     escaped = _BARE_URL_RE.sub(_linkify, escaped)
     return escaped.replace("\n", "<br>")
+
+
 def _youtube_embed_html(video_id: str) -> str:
     """Inline YouTube player markup for a video id.
 
@@ -17153,8 +17478,8 @@ def _strip_bandcamp_track_signature(content_html: str) -> str:
 
 _YT_EMBED_SRC_HOST_RE = re.compile(
     r'(?P<pre><iframe\b[^>]*\bsrc=["\']https://)'
-    r'(?:www\.)?youtube(?:-nocookie)?\.com'
-    r'(?P<post>/embed/)',
+    r"(?:www\.)?youtube(?:-nocookie)?\.com"
+    r"(?P<post>/embed/)",
     re.IGNORECASE,
 )
 
@@ -17166,15 +17491,13 @@ def _apply_youtube_embed_host(content_html: str) -> str:
     if not isinstance(content_html, str) or "/embed/" not in content_html:
         return content_html
     host = youtube_embed_host()
-    return _YT_EMBED_SRC_HOST_RE.sub(rf'\g<pre>{host}\g<post>', content_html)
+    return _YT_EMBED_SRC_HOST_RE.sub(rf"\g<pre>{host}\g<post>", content_html)
 
 
 _YT_EMBED_FIGURE_CLASS_RE = re.compile(r"is-provider-youtube|wp-block-embed-youtube", re.I)
 # Empty placeholders left behind when an embed <iframe> was stripped at ingest:
 # WordPress' provider figure, or ArtStation's video-wrapper div.
-_YT_EMBED_PLACEHOLDER_RE = re.compile(
-    r"is-provider-youtube|wp-block-embed-youtube|video-wrapper", re.I
-)
+_YT_EMBED_PLACEHOLDER_RE = re.compile(r"is-provider-youtube|wp-block-embed-youtube|video-wrapper", re.I)
 
 
 def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) -> str:
@@ -17195,8 +17518,7 @@ def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) ->
         classes = " ".join(tag.get("class") or [])  # type: ignore[arg-type]
         if tag.name == "figure" and _YT_EMBED_FIGURE_CLASS_RE.search(classes):
             placeholders.append(tag)
-        elif (tag.name == "div" and "video-wrapper" in classes.lower()
-                and not tag.find(["iframe", "video"])):
+        elif tag.name == "div" and "video-wrapper" in classes.lower() and not tag.find(["iframe", "video"]):
             placeholders.append(tag)
     if not placeholders:
         return content_html
@@ -17212,13 +17534,13 @@ def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) ->
 # function exists to undo. youtube-nocookie is the same URL shape from the
 # privacy host and would otherwise be missed for no reason.
 _YT_WATCH_URL_RE = re.compile(
-    r'^(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/watch\?[^\s]*\bv=|youtu\.be/|'
-    r'youtube\.com/shorts/|(?:youtube|youtube-nocookie)\.com/embed/)[\w-]+',
+    r"^(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/watch\?[^\s]*\bv=|youtu\.be/|"
+    r"youtube\.com/shorts/|(?:youtube|youtube-nocookie)\.com/embed/)[\w-]+",
     re.IGNORECASE,
 )
 
 _BC_URL_RE = re.compile(
-    r'^https?://[^/]*\.bandcamp\.com/(album|track)/[^/?#\s]+',
+    r"^https?://[^/]*\.bandcamp\.com/(album|track)/[^/?#\s]+",
     re.IGNORECASE,
 )
 
@@ -17239,8 +17561,20 @@ _INLINE_WRAPPER_TAGS = {"em", "strong", "b", "i", "span", "small", "mark", "u", 
 # still converted, losing the citation text exactly like the <p> case this
 # function was built to fix.
 _BLOCK_CONTAINER_TAGS = {
-    "p", "div", "li", "td", "th", "blockquote", "section", "article",
-    "aside", "figure", "figcaption", "header", "footer", "main",
+    "p",
+    "div",
+    "li",
+    "td",
+    "th",
+    "blockquote",
+    "section",
+    "article",
+    "aside",
+    "figure",
+    "figcaption",
+    "header",
+    "footer",
+    "main",
 }
 
 
@@ -17303,7 +17637,7 @@ def _extract_bc_numeric_id(page_html: str, embed_type: str) -> str | None:
 
     Tries the EmbeddedPlayer URL (present in og:video and inline scripts) then
     a data-album-id / data-track-id attribute as fallback."""
-    m = re.search(rf'EmbeddedPlayer/{embed_type}=(\d+)', page_html, re.IGNORECASE)
+    m = re.search(rf"EmbeddedPlayer/{embed_type}=(\d+)", page_html, re.IGNORECASE)
     if m:
         return m.group(1)
     m = re.search(rf'data-{embed_type}-id=["\'](\d+)["\']', page_html)
@@ -17324,7 +17658,7 @@ def _bc_embed_html(embed_type: str, numeric_id: str, album_url: str) -> str:
         f'<iframe style="border:0;width:100%;height:{height}"'
         f' src="{src}" seamless>'
         f'<a href="{safe_url}">{html.escape(album_url)}</a>'
-        f'</iframe></p>'
+        f"</iframe></p>"
     )
 
 
@@ -17364,9 +17698,7 @@ def _embed_standalone_bandcamp_links(content_html: str) -> str:
     return str(soup) if changed else content_html
 
 
-def _extract_source_embed_iframes(
-    raw_html: str, existing_html: str = "", limit: int = 8
-) -> list[tuple[str | None, str]]:
+def _extract_source_embed_iframes(raw_html: str, existing_html: str = "", limit: int = 8) -> list[tuple[str | None, str]]:
     """Pull allowlisted media-embed players out of a source page's raw HTML.
 
     Returns ``(canonical_link, embed_html)`` pairs in document order, skipping any
@@ -17386,11 +17718,7 @@ def _extract_source_embed_iframes(
         return []
     lower_html = raw_html.lower()
     has_iframe = "<iframe" in lower_html
-    has_facade = (
-        "ytimg.com/vi/" in lower_html
-        or "youtube.com/vi/" in lower_html
-        or "lite-youtube" in lower_html
-    )
+    has_facade = "ytimg.com/vi/" in lower_html or "youtube.com/vi/" in lower_html or "lite-youtube" in lower_html
     if not (has_iframe or has_facade):
         return []
     from bs4 import BeautifulSoup
@@ -17497,6 +17825,7 @@ def _strip_play_button_glyphs(content_html: str | None) -> str | None:
     if content_html is None or "play-button" not in content_html:
         return content_html
     from bs4 import BeautifulSoup
+
     soup = BeautifulSoup(content_html, "html.parser")
     removed = False
     for svg in soup.find_all("svg"):
@@ -17546,8 +17875,7 @@ def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str
             continue
         repl = BeautifulSoup(embed, "html.parser")
         parent = target.parent
-        if (parent is not None and parent.name == "p"
-                and parent.get_text(strip=True) == target.get_text(strip=True)):
+        if parent is not None and parent.name == "p" and parent.get_text(strip=True) == target.get_text(strip=True):
             parent.replace_with(repl)  # link is the paragraph's sole content
         else:
             target.replace_with(repl)
@@ -17559,8 +17887,7 @@ def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str
         husks = []
         for d in soup.find_all("div"):
             blob = " ".join(d.get("class") or []).lower()
-            if not any(h in blob for h in ("youtube", "video-embed", "video-container", "video-aspect")) \
-                    and blob != "video":
+            if not any(h in blob for h in ("youtube", "video-embed", "video-container", "video-aspect")) and blob != "video":
                 continue
             if d.get_text(strip=True) or d.find(["img", "iframe", "audio", "video"]):
                 continue
@@ -17660,6 +17987,7 @@ def _slice_to_content(raw_html: str, selectors: tuple[str, ...]) -> str | None:
     """
     try:
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(raw_html, "html.parser")
         parts = [str(node) for sel in selectors for node in soup.select(sel)]
     except Exception:  # noqa: BLE001
@@ -17750,30 +18078,54 @@ def _inject_source_gallery(content_html, entry, lead_image_url):
         _gallery = lead_image_service.extract_source_gallery_urls(entry.link, exclude_urls=_exclude_imgs)
     if _gallery:
         _figs = "".join(
-            f'<figure><img src="{html.escape(u, quote=True)}" loading="lazy" '
-            f'referrerpolicy="no-referrer"></figure>'
-            for u in _gallery
+            f'<figure><img src="{html.escape(u, quote=True)}" loading="lazy" referrerpolicy="no-referrer"></figure>' for u in _gallery
         )
         content_html = (content_html or "") + f'<div class="source-gallery">{_figs}</div>'
     return content_html
 
 
-_CAPTION_IMG_TAG_RE = re.compile(r'<img\b[^>]*/?>', re.IGNORECASE | re.DOTALL)
-_CAPTION_ATTR_RE = re.compile(
-    r'\b(src|title)\s*=\s*(?:"([^"]*)"|\x27([^\x27]*)\x27|(\S+))', re.IGNORECASE
+_CAPTION_IMG_TAG_RE = re.compile(r"<img\b[^>]*/?>", re.IGNORECASE | re.DOTALL)
+_CAPTION_ATTR_RE = re.compile(r'\b(src|title)\s*=\s*(?:"([^"]*)"|\x27([^\x27]*)\x27|(\S+))', re.IGNORECASE)
+_TRIVIAL_ALT_TEXTS = frozenset(
+    {
+        "responsive image",
+        "image",
+        "photo",
+        "picture",
+        "img",
+        "thumbnail",
+        "banner",
+        "featured image",
+        "previous",
+        "next",
+        "first",
+        "last",
+        "random",
+        "prev",
+        "newer",
+        "older",
+        # Social share-button / analytics-pixel alt text (AddToAny "Share", statcounter
+        # "Web Analytics") — never a real photo caption.
+        "share",
+        "web analytics",
+        "analytics",
+    }
 )
-_TRIVIAL_ALT_TEXTS = frozenset({
-    "responsive image", "image", "photo", "picture", "img", "thumbnail", "banner",
-    "featured image", "previous", "next", "first", "last", "random", "prev",
-    "newer", "older",
-    # Social share-button / analytics-pixel alt text (AddToAny "Share", statcounter
-    # "Web Analytics") — never a real photo caption.
-    "share", "web analytics", "analytics",
-})
-_DECORATIVE_CAP_WORDS = frozenset({
-    "banner", "header", "image", "cover", "featured", "photo", "thumbnail", "logo",
-    "graphic", "artwork", "illustration",
-})
+_DECORATIVE_CAP_WORDS = frozenset(
+    {
+        "banner",
+        "header",
+        "image",
+        "cover",
+        "featured",
+        "photo",
+        "thumbnail",
+        "logo",
+        "graphic",
+        "artwork",
+        "illustration",
+    }
+)
 
 
 def _initial_image_caption(content_html, entry, lead_image_url):
@@ -17800,9 +18152,15 @@ def _initial_image_caption(content_html, entry, lead_image_url):
             if not _title_val:
                 continue
             _src_val = _tag_attrs.get("src", "")
-            _matches_lead = bool(lead_image_url and _src_val and
-                                 (_src_val in lead_image_url or lead_image_url in _src_val or
-                                  _src_val.split("?")[0].rstrip("/") == lead_image_url.split("?")[0].rstrip("/")))
+            _matches_lead = bool(
+                lead_image_url
+                and _src_val
+                and (
+                    _src_val in lead_image_url
+                    or lead_image_url in _src_val
+                    or _src_val.split("?")[0].rstrip("/") == lead_image_url.split("?")[0].rstrip("/")
+                )
+            )
             if _matches_lead:
                 image_title_text = _title_val
                 in_feed_title_is_lead_img = True
@@ -17877,7 +18235,9 @@ def _apply_caption_source_pref(image_title_text, disp, entry, content_html):
         return f"{_ct} — {_ca}" if (_ct and _ca and _ct != _ca) else (_ct or _ca)
     # "auto": keep the computed caption, but run the auto-suppress heuristic.
     if not should_show_caption(
-        image_title_text, entry_title=entry.title, content_html=content_html,
+        image_title_text,
+        entry_title=entry.title,
+        content_html=content_html,
         pref=int(disp.get("show_image_caption", -1)),
     ):
         return None
@@ -17918,7 +18278,7 @@ _LEAD_IMG_OPENER_RE = re.compile(
     r"(?:<p\b[^>]*>(?:&nbsp;|\s)*</p>\s*)*"
     r"(?:<(?:p|figure|div)\b[^>]*>\s*){0,3}"
     r"(?:<a\b[^>]*>\s*)?"
-    r"(?:<div\b[^>]*>\s*)?"   # allow one extra wrapper div after <a> (e.g. Substack image2-inset)
+    r"(?:<div\b[^>]*>\s*)?"  # allow one extra wrapper div after <a> (e.g. Substack image2-inset)
     r"<img\b[^>]*/?>",
     re.IGNORECASE | re.DOTALL,
 )
@@ -17974,13 +18334,9 @@ def _opener_is_own_full_image(opener_html: str, lead_image_url: str | None) -> b
 
     src_key = _key(m.group(1))
     if not src_key or src_key == _key(lead_image_url):
-        return False        # same picture, resized or relocated — a placeholder
+        return False  # same picture, resized or relocated — a placeholder
 
-    biggest = max(
-        [int(v) for _a, v in _OPENER_DIM_RE.findall(opener_html)]
-        + [int(w) for w in _SRCSET_WIDTH_RE.findall(opener_html)]
-        + [0]
-    )
+    biggest = max([int(v) for _a, v in _OPENER_DIM_RE.findall(opener_html)] + [int(w) for w in _SRCSET_WIDTH_RE.findall(opener_html)] + [0])
     return biggest >= _FULL_SIZE_IMAGE_MIN_PX
 
 
@@ -18059,18 +18415,34 @@ _BLOCK_SPACER_TAGS = frozenset({"div", "p", "span", "i", "b", "em", "strong", "f
 # Real blocks only, for the "is this <br> at a block boundary" test. Inline tags
 # are deliberately absent: a <br> before a <span> is separating text, and removing
 # it would join two lines the author meant to keep apart.
-_REAL_BLOCK_TAGS = frozenset({
-    "div", "p", "figure", "blockquote", "table", "ul", "ol", "li", "pre", "hr",
-    "h1", "h2", "h3", "h4", "h5", "h6",
-    # <img> is inline in the HTML spec but not in Lectio: `.entry-content img`
-    # is `display: block` without exception, so a <br> next to one can never be
-    # separating text — it is always padding the author added to push the next
-    # block down. mahonoir ships `<img><br/><br/><div>…`, which rendered as a
-    # large gap between a single-panel comic and its commentary while its
-    # multi-panel posts (no <br>) sat correctly. The reasoning that keeps inline
-    # tags out of this set is exactly what puts <img> in it.
-    "img",
-})
+_REAL_BLOCK_TAGS = frozenset(
+    {
+        "div",
+        "p",
+        "figure",
+        "blockquote",
+        "table",
+        "ul",
+        "ol",
+        "li",
+        "pre",
+        "hr",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        # <img> is inline in the HTML spec but not in Lectio: `.entry-content img`
+        # is `display: block` without exception, so a <br> next to one can never be
+        # separating text — it is always padding the author added to push the next
+        # block down. mahonoir ships `<img><br/><br/><div>…`, which rendered as a
+        # large gap between a single-panel comic and its commentary while its
+        # multi-panel posts (no <br>) sat correctly. The reasoning that keeps inline
+        # tags out of this set is exactly what puts <img> in it.
+        "img",
+    }
+)
 
 
 def _collapse_block_spacers(content_html):
@@ -18119,8 +18491,7 @@ def _collapse_block_spacers(content_html):
         # block edge clears out one pass at a time.
         prev, nxt = _neighbour(el, False), _neighbour(el, True)
         prev_edge = prev is None or getattr(prev, "name", None) in _REAL_BLOCK_TAGS
-        next_edge = (nxt is None or getattr(nxt, "name", None) in _REAL_BLOCK_TAGS
-                     or getattr(nxt, "name", None) == "br")
+        next_edge = nxt is None or getattr(nxt, "name", None) in _REAL_BLOCK_TAGS or getattr(nxt, "name", None) == "br"
         return prev_edge and next_edge
 
     def _is_spacer_only(el) -> bool:
@@ -18245,9 +18616,7 @@ def _inject_webcomic_panel_into_bodyless_entry(
 # one image per episode, thumbnail-grade, and what the RSS feed ships — while
 # `/c/` is the episode's actual content, one URL per panel. An episode with four
 # panels arrives in the feed as a single `/sa/` picture.
-_TAPAS_CONTENT_IMG_RE = re.compile(
-    r'https://[a-z0-9-]+\.tapas\.io/c/[^"\'\s<>\\]+', re.IGNORECASE
-)
+_TAPAS_CONTENT_IMG_RE = re.compile(r'https://[a-z0-9-]+\.tapas\.io/c/[^"\'\s<>\\]+', re.IGNORECASE)
 # Matching an <img> *and* its src in one pattern needs two `[^"\']*` runs around
 # the host, and on feed-supplied HTML CodeQL rightly called that polynomial: a
 # tag carrying many repetitions of `//x.tapas.io/sa/` backtracks quadratically
@@ -18281,6 +18650,8 @@ def _is_tapas_series_art(src: str) -> bool:
         return False
     host = (parsed.hostname or "").lower()
     return (host == "tapas.io" or host.endswith(".tapas.io")) and parsed.path.startswith("/sa/")
+
+
 # A Tapas body is literally `<p>null</p><img src=…/>` when the author wrote no
 # caption — the API's null serialized into the feed.
 _TAPAS_NULL_PARA_RE = re.compile(r"<p>\s*null\s*</p>", re.IGNORECASE)
@@ -18298,9 +18669,7 @@ def _panels_into_body(content_html, panels: list[str], is_stripped_img):
     """
     body = _strip_imgs(content_html or "", is_stripped_img)
     body = _TAPAS_NULL_PARA_RE.sub("", body).strip()
-    figures = "".join(
-        f'<p><img src="{html.escape(u, quote=True)}" alt="" /></p>' for u in panels
-    )
+    figures = "".join(f'<p><img src="{html.escape(u, quote=True)}" alt="" /></p>' for u in panels)
     return figures + body, None
 
 
@@ -18308,18 +18677,18 @@ def _panels_into_body(content_html, panels: list[str], is_stripped_img):
 # source (the `src` is a spinner placeholder). Bounding on the class matters —
 # the page also embeds a recommendation strip of other series, and a looser scan
 # swept 62 URLs into an episode that has 50.
-_WEBTOONS_SLICE_RE = re.compile(
-    r'<img\b[^>]*\bclass="[^"]*\b_images\b[^"]*"[^>]*>', re.IGNORECASE
-)
+_WEBTOONS_SLICE_RE = re.compile(r'<img\b[^>]*\bclass="[^"]*\b_images\b[^"]*"[^>]*>', re.IGNORECASE)
 _WEBTOONS_DATA_URL_RE = re.compile(r'\bdata-url="([^"]+)"', re.IGNORECASE)
 # The feed's own picture, plus Webtoons page chrome (`webtoons-static`, e.g. the
 # `bg_transparency.png` spacer) — neither belongs in the article once the real
 # slices are in. A host set rather than a regex, for the ReDoS reason above.
-_WEBTOONS_IMG_HOSTS = frozenset({
-    "webtoon-phinf.pstatic.net",
-    "swebtoon-phinf.pstatic.net",
-    "webtoons-static.pstatic.net",
-})
+_WEBTOONS_IMG_HOSTS = frozenset(
+    {
+        "webtoon-phinf.pstatic.net",
+        "swebtoon-phinf.pstatic.net",
+        "webtoons-static.pstatic.net",
+    }
+)
 
 
 def _is_webtoons_body_img(src: str) -> bool:
@@ -18327,6 +18696,8 @@ def _is_webtoons_body_img(src: str) -> bool:
         return (urlparse(src).hostname or "").lower() in _WEBTOONS_IMG_HOSTS
     except ValueError:
         return False
+
+
 _WEBTOONS_MAX_PANELS = 80
 
 
@@ -18342,7 +18713,7 @@ def _webtoons_public_slice_url(url: str) -> str:
     circumvented, and no image-proxy change needed.
     """
     url = html.unescape(url).strip()
-    url = url.split("?", 1)[0]                       # ?type=q90 / ?type=optimize
+    url = url.split("?", 1)[0]  # ?type=q90 / ?type=optimize
     return url.replace("//webtoon-phinf.", "//swebtoon-phinf.")
 
 
@@ -18516,10 +18887,15 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
         if _bs4_stripped is not None:
             _stripped_content = _bs4_stripped or None
             if _stripped_content:
-                _stripped_content = re.sub(
-                    r"^(?:\s*(?:<p\b[^>]*>\s*(?:&nbsp;\s*)*</p>|<br\s*/?>\s*))+",
-                    "", _stripped_content, flags=re.IGNORECASE,
-                ).strip() or None
+                _stripped_content = (
+                    re.sub(
+                        r"^(?:\s*(?:<p\b[^>]*>\s*(?:&nbsp;\s*)*</p>|<br\s*/?>\s*))+",
+                        "",
+                        _stripped_content,
+                        flags=re.IGNORECASE,
+                    ).strip()
+                    or None
+                )
             if _stripped_content:
                 content_html = _stripped_content
             # else: stripping would leave the body empty -- the image WAS the
@@ -18549,19 +18925,17 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
                 return content_html, None
             # Raw-strip the opener; restore any anchored "New comic!" link text.
             _matched_opener = _m.group(0)
-            content_html = content_html[_m.end():].lstrip() or None
+            content_html = content_html[_m.end() :].lstrip() or None
             _a_opener_m = re.search(r"<a\b[^>]*>", _matched_opener, re.IGNORECASE)
             if _a_opener_m and content_html:
                 _close_m = _CLOSE_A_RE.search(content_html)
                 if _close_m:
-                    _between_text = re.sub(r"<[^>]+>", "", content_html[:_close_m.start()]).strip()
+                    _between_text = re.sub(r"<[^>]+>", "", content_html[: _close_m.start()]).strip()
                     if _between_text:
                         content_html = _a_opener_m.group(0) + content_html
                     else:
-                        content_html = content_html[_close_m.end():].lstrip() or None
-        if content_html and lead_image_url and (
-            lead_image_url in content_html or lead_image_url in html.unescape(content_html)
-        ):
+                        content_html = content_html[_close_m.end() :].lstrip() or None
+        if content_html and lead_image_url and (lead_image_url in content_html or lead_image_url in html.unescape(content_html)):
             lead_image_url = None
     elif lead_image_url and (lead_image_url in content_html or lead_image_url in html.unescape(content_html)):
         _entry_strategy, _, _ = lead_image_service.get_feed_strategy(feed_url)
@@ -18627,9 +19001,11 @@ def _resolve_article_lead_image(entry, video_id, show_lead_in_article: bool):
     # false-positive on a full-URL search.
     if lead_image_url:
         _lead_parsed = urlparse(lead_image_url)
-        if (lead_image_service._AVATAR_HINT_PATTERNS.search(_lead_parsed.path)
-                or lead_image_service.is_ad_url(lead_image_url)
-                or lead_image_service.is_social_icon_url(lead_image_url)):
+        if (
+            lead_image_service._AVATAR_HINT_PATTERNS.search(_lead_parsed.path)
+            or lead_image_service.is_ad_url(lead_image_url)
+            or lead_image_service.is_social_icon_url(lead_image_url)
+        ):
             lead_image_url = None
     # Try source scraping when the entry has never been processed (ABSENT cache) and
     # the feed provides no inline image — covers article-only feeds where the best
@@ -18639,9 +19015,7 @@ def _resolve_article_lead_image(entry, video_id, show_lead_in_article: bool):
     _cache_key = (str(entry.feed_url), str(entry.id))
     _cached_val = lead_image_service._cache.get(_cache_key, "ABSENT")
     _should_source_fetch = (
-        _cached_val == "ABSENT"
-        and lead_image_url is None
-        and not lead_image_service._is_feed_none_strategy(str(entry.feed_url))
+        _cached_val == "ABSENT" and lead_image_url is None and not lead_image_service._is_feed_none_strategy(str(entry.feed_url))
     )
     pending = False
     if _should_source_fetch and entry.link:
@@ -18695,9 +19069,9 @@ def _apply_entry_media(content_html, entry, feed_url: str, entry_id: str):
             f'aria-label="Play audio in player">'
             f'<span class="podcast-play-trigger-icon" aria-hidden="true">▶</span>'
             f'<span class="podcast-play-trigger-label">Play audio</span>'
-            f'</button>'
+            f"</button>"
             f'<a class="podcast-download-link" href="{_media_dl_url}" download>Download</a>'
-            f'</div>'
+            f"</div>"
         )
         content_html = _audio_player + (content_html or "")
 
@@ -18737,10 +19111,9 @@ def _richest_content(entry, chosen):
     one entry the fullest is the one a reader wants, so the choice is by visible
     word count, html preferred, with reader's own pick as the tie-break.
     """
-    candidates = [c for c in (getattr(entry, "content", None) or [])
-                  if _visible_word_count(getattr(c, "value", None))]
+    candidates = [c for c in (getattr(entry, "content", None) or []) if _visible_word_count(getattr(c, "value", None))]
     if not candidates:
-        return chosen          # nothing has text; leave reader's choice alone
+        return chosen  # nothing has text; leave reader's choice alone
     html_ones = [c for c in candidates if getattr(c, "is_html", False)]
     best = max(html_ones or candidates, key=lambda c: _visible_word_count(c.value))
     chosen_words = _visible_word_count(getattr(chosen, "value", None)) if chosen is not None else 0
@@ -18788,19 +19161,17 @@ def _resolve_entry_content_html(entry):
     if isinstance(content_html, str) and "%3A/" in content_html:
         content_html = re.sub(
             r'https?://[^"\'<\s]+/(https?)%3A/([^"\'<\s]+)',
-            r'\1://\2',
+            r"\1://\2",
             content_html,
             flags=re.IGNORECASE,
         )
     return content_html
 
 
-_COMICSTHUMBS_IMG_SRC_RE = re.compile(
-    r'(<img\b[^>]*?\bsrc=["\'])([^"\']*?/comicsthumbs/[^"\']+)(["\'])', re.IGNORECASE
-)
+_COMICSTHUMBS_IMG_SRC_RE = re.compile(r'(<img\b[^>]*?\bsrc=["\'])([^"\']*?/comicsthumbs/[^"\']+)(["\'])', re.IGNORECASE)
 # ComicControl filenames carry a cache-bust unix-timestamp prefix, e.g.
 # "1782426356-ARV1701_05.jpg". The stable part is everything after it.
-_COMICCONTROL_TS_PREFIX_RE = re.compile(r'^\d{6,}-')
+_COMICCONTROL_TS_PREFIX_RE = re.compile(r"^\d{6,}-")
 
 
 def _comiccontrol_stable_name(url: str) -> str:
@@ -18827,11 +19198,7 @@ def _promote_comicsthumbs_in_content(content_html: str, full_lead_url: str | Non
     with a 11KB placeholder, so the comic appeared broken until a reload
     (atomic-robo, reported 2026-07-26). A small correct comic beats a big broken
     one, and the promotion still happens on every later view."""
-    lead_name = (
-        _comiccontrol_stable_name(full_lead_url)
-        if full_lead_url and "/comics/" in full_lead_url
-        else None
-    )
+    lead_name = _comiccontrol_stable_name(full_lead_url) if full_lead_url and "/comics/" in full_lead_url else None
 
     def _sub(m: re.Match) -> str:
         src = m.group(2)
@@ -18861,10 +19228,10 @@ def _strip_trailing_recirculation_rail(content_html: str) -> str:
     try:
         from bs4 import BeautifulSoup
         from bs4 import Tag as _Bs4Tag
+
         soup = BeautifulSoup(content_html, "html.parser")
         root = soup.body or soup
-        blocks = [n for n in root.find_all("div")
-                  if "product" in (n.get("class") or [])]
+        blocks = [n for n in root.find_all("div") if "product" in (n.get("class") or [])]
         if not blocks:
             return content_html
         changed = False
@@ -18908,15 +19275,15 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     # NASA Science RSS (earthobservatory.nasa.gov) injects the full site secondary-navigation
     # into content:encoded before the article body. Strip any leading wp-block-nasa-blocks-*
     # divs by tracking div nesting depth so the article starts at actual content.
-    if isinstance(content_html, str) and re.search(r'<div[^>]*\bwp-block-nasa-blocks-', content_html[:300], re.IGNORECASE):
+    if isinstance(content_html, str) and re.search(r"<div[^>]*\bwp-block-nasa-blocks-", content_html[:300], re.IGNORECASE):
         _stripped = content_html
         while True:
-            _nm = re.match(r'\s*<div[^>]*\bwp-block-nasa-blocks-\w', _stripped, re.IGNORECASE)
+            _nm = re.match(r"\s*<div[^>]*\bwp-block-nasa-blocks-\w", _stripped, re.IGNORECASE)
             if not _nm:
                 break
             _depth = 0
             _strip_end = 0
-            for _dm in re.finditer(r'<(/?)div\b[^>]*>', _stripped, re.IGNORECASE):
+            for _dm in re.finditer(r"<(/?)div\b[^>]*>", _stripped, re.IGNORECASE):
                 if _dm.group(1):
                     _depth -= 1
                     if _depth == 0:
@@ -18975,12 +19342,14 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     # class="embed-container" div, leaving an adjacent plain-text YouTube link.
     # Convert these pairs into a proper YouTube embed.
     if isinstance(content_html, str) and "embed-container" in content_html and "strong" in content_html:
+
         def _replace_bad_iframe(m: re.Match) -> str:
             raw_url = m.group(1)
             vid = youtube_duration_service.extract_video_id(raw_url)
             if not vid:
                 return ""
             return _youtube_embed_html(vid)
+
         content_html = re.sub(
             r'<div[^>]*class=["\']embed-container["\'][^>]*>\s*<strong>iframe</strong>\s*</div>'
             r'\s*<a[^>]+href=["\']'
@@ -18998,9 +19367,7 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     # Only needed for entries stored *before* feed ingest stopped stripping
     # iframes (services.reader_sanitize) — newer entries keep the real embed,
     # so skip recovery when an <iframe> is already present.
-    if (isinstance(content_html, str)
-            and _YT_EMBED_PLACEHOLDER_RE.search(content_html)
-            and "<iframe" not in content_html.lower()):
+    if isinstance(content_html, str) and _YT_EMBED_PLACEHOLDER_RE.search(content_html) and "<iframe" not in content_html.lower():
         with get_meta_connection() as _vconn:
             _vids = _lookup_media_video(_vconn, feed_url, entry_id)
         if _vids:
@@ -19072,9 +19439,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 # itself can't report this on its own before playback starts
                 # (preload="none" means no videoWidth/videoHeight yet).
                 _dims = (
-                    f' width="{html.escape(_bsky_video["width"], quote=True)}"'
-                    f' height="{html.escape(_bsky_video["height"], quote=True)}"'
-                    if _bsky_video.get("width") and _bsky_video.get("height") else ""
+                    f' width="{html.escape(_bsky_video["width"], quote=True)}" height="{html.escape(_bsky_video["height"], quote=True)}"'
+                    if _bsky_video.get("width") and _bsky_video.get("height")
+                    else ""
                 )
                 content_html = _existing + (
                     f'<p><video controls preload="none" playsinline{_dims}'
@@ -19088,7 +19455,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     _add = "".join(
                         f'<p><img src="{html.escape(u, quote=True)}" loading="lazy"'
                         f' referrerpolicy="no-referrer" style="max-width:100%;height:auto;"></p>'
-                        for u in _bsky_imgs if u not in _existing
+                        for u in _bsky_imgs
+                        if u not in _existing
                     )
                     content_html = _existing + _add
 
@@ -19097,10 +19465,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # the user just deleted is the one way a cleanup could look undone.
         try:
             with get_meta_connection() as _edit_conn:
-                content_edited = bool(_edit_conn.execute(
-                    "SELECT 1 FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
-                    (feed_url, entry_id),
-                ).fetchone())
+                content_edited = bool(
+                    _edit_conn.execute(
+                        "SELECT 1 FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+                        (feed_url, entry_id),
+                    ).fetchone()
+                )
         except sqlite3.OperationalError:
             content_edited = False  # tenant DB predates the table
 
@@ -19114,8 +19484,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # placeholder to refill. Skips when the body already has an embed; fetch is
         # cached and SSRF-guarded. Runs before the YouTube-feed injection below so
         # that path still wins for native YouTube feeds.
-        if not content_edited and not (isinstance(feed_url, str)
-                and feed_url.startswith("https://www.youtube.com/feeds/videos.xml?")):
+        if not content_edited and not (isinstance(feed_url, str) and feed_url.startswith("https://www.youtube.com/feeds/videos.xml?")):
             content_html = _inject_recovered_source_embeds(content_html, entry)
 
         # Bandcamp single-track esig players are domain-locked to the publisher and
@@ -19154,6 +19523,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 # it again rendered a literal "&amp;" on screen. Unescape first,
                 # exactly as _promote_plaintext_summary does, then escape once.
                 if base_html and not re.search(r"<[a-z]", base_html, re.IGNORECASE):
+
                     def _linkify_url(m: re.Match) -> str:
                         # The match comes out of text this function already escaped,
                         # so escaping it again turns a URL's "&amp;" into
@@ -19162,8 +19532,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                         # same contract _promote_plaintext_summary's linkifier uses.
                         seg = m.group(0)
                         return f'<a href="{seg}" target="_blank" rel="noopener noreferrer">{seg}</a>'
-                    base_html = re.sub(r"https?://[^\s<>\"']+", _linkify_url,
-                                       html.escape(html.unescape(base_html)))
+
+                    base_html = re.sub(r"https?://[^\s<>\"']+", _linkify_url, html.escape(html.unescape(base_html)))
                 content_html = embed_html + f"<div>{base_html}</div>"
 
         # Podcast audio player + footer attachments + (when no audio) a suggestion
@@ -19182,12 +19552,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             try:
                 _cached_page = lead_image_service.get_cached_source_html(str(entry.link))
                 if _cached_page is not None:
-                    _page_tags = feed_tags_service_mod.extract_page_tags(
-                        _cached_page[1], str(entry.link))
+                    _page_tags = feed_tags_service_mod.extract_page_tags(_cached_page[1], str(entry.link))
                     if _page_tags:
-                        feed_tag_service.record_entry_tags(
-                            str(entry.feed_url), [(str(entry.id), _page_tags)]
-                        )
+                        feed_tag_service.record_entry_tags(str(entry.feed_url), [(str(entry.id), _page_tags)])
                         # Re-derive through the dismissal-aware getter rather
                         # than using _page_tags directly: dismissing every
                         # suggested tag for a feed makes get_feed_tag_suggestions
@@ -19216,9 +19583,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # one of them knew about pinned tags, applying one suggestion made the
         # rest disappear.
         entry_pinned_tags = get_feed_pinned_tags(str(entry.feed_url))
-        _publisher_tags = {
-            n for n in (normalize_tag_value(t) for t in raw_feed_tags) if n
-        }
+        _publisher_tags = {n for n in (normalize_tag_value(t) for t in raw_feed_tags) if n}
         # A pinned tag the publisher does NOT also ship gets no filter arrows:
         # they toggle a feed tag_filter rule keyed on the publisher's tags, and
         # filtering on a word this feed never publishes does nothing. One the
@@ -19260,9 +19625,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             _disp = get_feed_display_prefs(_prefs_conn, str(entry.feed_url))
         _show_lead_in_article = bool(_disp.get("show_lead_image_in_article", 1))
 
-        lead_image_url, _pending_lead_image = _resolve_article_lead_image(
-            entry, video_id, _show_lead_in_article
-        )
+        lead_image_url, _pending_lead_image = _resolve_article_lead_image(entry, video_id, _show_lead_in_article)
         # The lead image is what the article actually displays, and it comes from
         # the lead-image cache rather than the body — so a DeviantArt URL here
         # needs the same expiry check the body gets, or the post shows nothing
@@ -19277,6 +19640,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # are typically brand assets or analytics pixels embedded by feed publishers
         # and should not appear as article visuals in the reader.
         if isinstance(content_html, str):
+
             def _strip_bad_img(m: re.Match) -> str:
                 src_m = re.search(r'\bsrc=(?:"([^"]*)"|\x27([^\x27]*)\x27)', m.group(0), re.IGNORECASE)
                 if not src_m:
@@ -19296,6 +19660,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 ):
                     return ""
                 return m.group(0)
+
             content_html = re.sub(r"<img\b[^>]*/?>", _strip_bad_img, content_html, flags=re.IGNORECASE) or None
 
         # Webcomic nav button cleanup — strip <a><img alt="Previous/Next/..."></a> combos
@@ -19310,13 +19675,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if isinstance(content_html, str) and "<source" in content_html.lower():
             try:
                 from bs4 import BeautifulSoup as _BS4
+
                 _src_soup = _BS4(content_html, "html.parser")
                 for _src_tag in _src_soup.find_all("source"):
                     if getattr(_src_tag.parent, "name", None) not in ("video", "picture"):
                         _src_tag.decompose()
-                content_html = (
-                    _src_soup.body.decode_contents() if _src_soup.body else str(_src_soup)
-                ).strip() or None
+                content_html = (_src_soup.body.decode_contents() if _src_soup.body else str(_src_soup)).strip() or None
             except Exception:
                 content_html = re.sub(r"<source\b[^>]*/?>", "", content_html or "", flags=re.IGNORECASE) or None
 
@@ -19356,11 +19720,10 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         # Strip Substack React UI chrome elements that render as broken/orphaned
         # widgets without Substack's CSS (expand buttons, pencraft layout divs).
-        if isinstance(content_html, str) and (
-            "image-link-expand" in content_html or "pencraft" in content_html
-        ):
+        if isinstance(content_html, str) and ("image-link-expand" in content_html or "pencraft" in content_html):
             try:
                 from bs4 import BeautifulSoup
+
                 _cs = BeautifulSoup(content_html, "html.parser")
                 for _junk in _cs.select(".image-link-expand, [class*=pencraft]"):
                     _junk.decompose()
@@ -19377,8 +19740,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if isinstance(content_html, str) and content_html:
             content_html = html_sanitize.lift_float_classes(content_html)
 
-        image_title_text, _in_feed_title_is_lead_img, _persisted_alt, _persisted_title = (
-            _initial_image_caption(content_html, entry, lead_image_url)
+        image_title_text, _in_feed_title_is_lead_img, _persisted_alt, _persisted_title = _initial_image_caption(
+            content_html, entry, lead_image_url
         )
 
         # Strip the opener thumbnail and dedup against the remaining content.
@@ -19409,22 +19772,20 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # source-page fetch this gate exists to avoid. The gate takes max(this,
         # its own later count) so a strip never makes an already-rich post look thin.
         _body_img_count_before_strip = len(re.findall(r"<img\b", content_html or "", re.IGNORECASE))
-        content_html, lead_image_url = _strip_lead_image_opener(
-            content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article
-        )
+        content_html, lead_image_url = _strip_lead_image_opener(content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article)
         # AFTER the strip, deliberately: injecting first would hand the new <img>
         # to _strip_lead_image_opener as the body's opener and it would be
         # removed again.
         content_html, lead_image_url = _inject_webcomic_panel_into_bodyless_entry(
-            content_html, entry, str(entry.feed_url), lead_image_url,
-            body_had_image=_body_had_image_before_strip, show_lead_in_article=_show_lead_in_article,
+            content_html,
+            entry,
+            str(entry.feed_url),
+            lead_image_url,
+            body_had_image=_body_had_image_before_strip,
+            show_lead_in_article=_show_lead_in_article,
         )
-        content_html, lead_image_url = _inject_tapas_episode_panels(
-            content_html, entry, str(entry.feed_url), lead_image_url
-        )
-        content_html, lead_image_url = _inject_webtoons_episode_panels(
-            content_html, entry, str(entry.feed_url), lead_image_url
-        )
+        content_html, lead_image_url = _inject_tapas_episode_panels(content_html, entry, str(entry.feed_url), lead_image_url)
+        content_html, lead_image_url = _inject_webtoons_episode_panels(content_html, entry, str(entry.feed_url), lead_image_url)
         content_html = _collapse_block_spacers(_strip_ad_images(content_html))
 
         # Fallback: check the alt text on the main image on the source page.
@@ -19437,8 +19798,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # fetch) run synchronously — no network cost.  Otherwise queue a background
         # fetch so the render doesn't block on a slow HTTP GET; alt text will appear
         # on the next open once the background thread stores it in the DB.
-        _needs_source_scrape = (image_title_text is None or
-                                (not _in_feed_title_is_lead_img and not _persisted_alt and not _persisted_title))
+        _needs_source_scrape = image_title_text is None or (not _in_feed_title_is_lead_img and not _persisted_alt and not _persisted_title)
         _is_wc_feed = lead_image_service._is_feed_webcomic(str(entry.feed_url))
         if _needs_source_scrape and lead_image_url and entry.link:
             if entry.link in lead_image_service._source_html_cache:
@@ -19519,12 +19879,15 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             # opener strip removes the <img>, that link text is left as an
             # orphaned anchor.  It's redundant because we show the panel inline.
             if isinstance(content_html, str):
-                content_html = re.sub(
-                    r'<a\b[^>]*>(?:\s*<br\s*/?>\s*)*Click here to go see the bonus panel!\s*</a\s*>',
-                    '',
-                    content_html,
-                    flags=re.IGNORECASE,
-                ).strip() or None
+                content_html = (
+                    re.sub(
+                        r"<a\b[^>]*>(?:\s*<br\s*/?>\s*)*Click here to go see the bonus panel!\s*</a\s*>",
+                        "",
+                        content_html,
+                        flags=re.IGNORECASE,
+                    ).strip()
+                    or None
+                )
 
         # Persist off the request thread (and skip when unchanged) so an open
         # never blocks on the meta-DB writer held by the background backfill.
@@ -19539,9 +19902,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # whose image is shown inline instead of hoisted.
         _persist_strategy, _, _ = lead_image_service.get_feed_strategy(str(entry.feed_url))
         if _persist_strategy != "webcomic":
-            lead_image_service.persist_lead_image_async(
-                str(entry.feed_url), str(entry.id), _resolved_lead_for_cache
-            )
+            lead_image_service.persist_lead_image_async(str(entry.feed_url), str(entry.id), _resolved_lead_for_cache)
 
         # If this entry is starred and the archive worker has captured assets,
         # swap inline image URLs to the local /starred-asset route so the
@@ -19550,9 +19911,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             asset_map = starred_archive_service.get_entry_asset_map(str(entry.feed_url), str(entry.id))
             if asset_map:
                 if isinstance(content_html, str) and content_html:
-                    content_html = starred_archive_service.rewrite_html_assets(
-                        content_html, asset_map, STARRED_ASSET_URL_PREFIX
-                    )
+                    content_html = starred_archive_service.rewrite_html_assets(content_html, asset_map, STARRED_ASSET_URL_PREFIX)
                 if lead_image_url and lead_image_url in asset_map:
                     lead_image_url = f"{STARRED_ASSET_URL_PREFIX}{asset_map[lead_image_url]}"
 
@@ -19570,7 +19929,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # lead img & thumb, takes a long time to load" (the images WERE there;
         # the render was just slow enough to look stuck).
         if (
-            _disp.get("inject_source_images") and entry.link
+            _disp.get("inject_source_images")
+            and entry.link
             and max(_body_img_count_before_strip, len(re.findall(r"<img\b", content_html or "", re.IGNORECASE))) < 2
         ):
             # Prefer the source article itself: it carries the images IN PLACE.
@@ -19663,10 +20023,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             # attribute and any other context that cannot render HTML. Everything
             # not on the tiny allowlist stays literal, so `std::vector<T>` in a
             # C++ post title survives — see sanitize_inline_title.
-            "title_html": html_sanitize.sanitize_inline_title(
-                _display_title(entry) or entry.title or ""),
-            "title_plain": html_sanitize.title_plain_text(
-                _display_title(entry) or entry.title or ""),
+            "title_html": html_sanitize.sanitize_inline_title(_display_title(entry) or entry.title or ""),
+            "title_plain": html_sanitize.title_plain_text(_display_title(entry) or entry.title or ""),
             "link": _display_link,
             "summary": _summary,
             "content_html": content_html,
@@ -19776,9 +20134,7 @@ def entry_pane(
             "selected_resume_read_filter": normalized_resume_read_filter,
             "selected_entry": selected_entry,
             "feed_to_folder": feed_to_folder,
-            "unsubscribed_feed_urls": unsubscribed_feed_urls_among(
-                [selected_entry.get("feed_url")] if selected_entry else []
-            ),
+            "unsubscribed_feed_urls": unsubscribed_feed_urls_among([selected_entry.get("feed_url")] if selected_entry else []),
             "email_configured": is_email_configured(),
             "email_to_default": _get_email_to_default(),
             "instapaper_configured": is_instapaper_configured(),
@@ -19923,11 +20279,7 @@ def _is_youtube_host(host: str) -> bool:
     """True for youtube.com / youtu.be and their subdomains (exact suffix match,
     not substring — "youtube.com.evil.com" must not pass)."""
     host = (host or "").lower().rstrip(".")
-    return (
-        host in ("youtube.com", "youtu.be")
-        or host.endswith(".youtube.com")
-        or host.endswith(".youtu.be")
-    )
+    return host in ("youtube.com", "youtu.be") or host.endswith(".youtube.com") or host.endswith(".youtu.be")
 
 
 def normalize_youtube_feed_url(feed_url: str) -> str:
@@ -20027,10 +20379,7 @@ def _format_alternate_urls(url: str) -> list[str]:
     if not parsed.query:
         return []
     pairs = parse_qsl(parsed.query, keep_blank_values=True)
-    matches = [
-        i for i, (k, v) in enumerate(pairs)
-        if k in _FORMAT_SELECTOR_PARAMS and v.lower() in _FORMAT_SELECTOR_VALUES
-    ]
+    matches = [i for i, (k, v) in enumerate(pairs) if k in _FORMAT_SELECTOR_PARAMS and v.lower() in _FORMAT_SELECTOR_VALUES]
     if len(matches) != 1:
         return []
     idx = matches[0]
@@ -20104,9 +20453,10 @@ def normalize_feed_url(feed_url: str) -> str:
     - Other normalization (YouTube links) is handled separately.
     """
     import re as _re
-    _as_m = _re.match(r'(https?)://([^.]+)\.artstation\.com/rss$', feed_url.strip(), _re.IGNORECASE)
+
+    _as_m = _re.match(r"(https?)://([^.]+)\.artstation\.com/rss$", feed_url.strip(), _re.IGNORECASE)
     if _as_m:
-        feed_url = f'{_as_m.group(1)}://www.artstation.com/{_as_m.group(2)}.rss'
+        feed_url = f"{_as_m.group(1)}://www.artstation.com/{_as_m.group(2)}.rss"
     try:
         parsed = urlparse(feed_url)
         if parsed.netloc.lower() in _DOMAIN_ALIASES:
@@ -20121,9 +20471,9 @@ def normalize_feed_url(feed_url: str) -> str:
         path_changed = path != parsed.path
         if parsed.query:
             from urllib.parse import parse_qsl, urlencode
+
             all_pairs = parse_qsl(parsed.query, keep_blank_values=True)
-            kept = [(k, v) for k, v in all_pairs
-                    if not (k in _FORMAT_SELECTOR_PARAMS and _is_format_selector_value(v.lower()))]
+            kept = [(k, v) for k, v in all_pairs if not (k in _FORMAT_SELECTOR_PARAMS and _is_format_selector_value(v.lower()))]
             new_query = urlencode(kept)
             # Never strip a selector down to a bare homepage. On WordPress
             # `?feed=atom` at "/" IS the feed, not a serialization choice
@@ -20333,9 +20683,7 @@ def feed_curation_counts(reader, conn: sqlite3.Connection, feed_url: str) -> dic
     """Count the manual tags and stars a feed carries (curation that would be lost
     on unsubscribe). Returns ``{"tagged": n, "stars": n}`` — ``tagged`` is the number
     of entries with at least one manual tag, ``stars`` the number of saved entries."""
-    stars = conn.execute(
-        "SELECT COUNT(*) FROM saved_entries WHERE feed_url = ?", (feed_url,)
-    ).fetchone()[0]
+    stars = conn.execute("SELECT COUNT(*) FROM saved_entries WHERE feed_url = ?", (feed_url,)).fetchone()[0]
     tagged = 0
     try:
         for e in reader.get_entries(feed=feed_url):
@@ -20352,29 +20700,27 @@ def feed_curation_items(reader, conn: sqlite3.Connection, feed_url: str) -> list
     star) so the unsubscribe dialog can show exactly what would be lost. Each
     item is ``{title, link, starred, tags: [display names]}``. Starred-but-
     untagged and tagged-but-unstarred entries are both included."""
-    starred_ids = {
-        str(r[0]) for r in conn.execute(
-            "SELECT entry_id FROM saved_entries WHERE feed_url = ?", (feed_url,)
-        )
-    }
+    starred_ids = {str(r[0]) for r in conn.execute("SELECT entry_id FROM saved_entries WHERE feed_url = ?", (feed_url,))}
     items: list[dict] = []
     try:
         for e in reader.get_entries(feed=feed_url):
             tags = [
-                key[len(MANUAL_TAG_KEY_PREFIX):].strip()
+                key[len(MANUAL_TAG_KEY_PREFIX) :].strip()
                 for key in (_extract_tag_key(t) for t in reader.get_tags(e.resource_id))
                 if key and key.startswith(MANUAL_TAG_KEY_PREFIX)
             ]
             starred = e.id in starred_ids
             if not tags and not starred:
                 continue
-            items.append({
-                "id": e.id,
-                "title": e.title or e.link or e.id,
-                "link": e.link or "",
-                "starred": starred,
-                "tags": sorted(tags),
-            })
+            items.append(
+                {
+                    "id": e.id,
+                    "title": e.title or e.link or e.id,
+                    "link": e.link or "",
+                    "starred": starred,
+                    "tags": sorted(tags),
+                }
+            )
     except Exception:  # noqa: BLE001
         LOGGER.exception("feed_curation_items failed for %s", feed_url)
     # Starred first, then by title, so the most deliberate curation leads.
@@ -20442,11 +20788,7 @@ def _purge_dead_entry_meta(conn: sqlite3.Connection, feed_url: str) -> int:
     """
     try:
         with archive_conn() as _ac:
-            captured = {
-                str(r[0]) for r in _ac.execute(
-                    "SELECT entry_id FROM archived_entry WHERE feed_url = ?", (feed_url,)
-                )
-            }
+            captured = {str(r[0]) for r in _ac.execute("SELECT entry_id FROM archived_entry WHERE feed_url = ?", (feed_url,))}
     except sqlite3.Error:
         # Cannot prove what is still captured, so delete nothing. Leaking rows
         # is recoverable; blanking a Saved orphan's thumbnail is not.
@@ -20481,8 +20823,7 @@ def _purge_dead_entry_meta(conn: sqlite3.Connection, feed_url: str) -> int:
     for table in _DEAD_ENTRY_META_TABLES:
         try:
             cur = conn.execute(
-                f"DELETE FROM {table} WHERE feed_url = ?"
-                " AND entry_id NOT IN (SELECT entry_id FROM _purge_captured)",
+                f"DELETE FROM {table} WHERE feed_url = ? AND entry_id NOT IN (SELECT entry_id FROM _purge_captured)",
                 (feed_url,),
             )
             deleted += cur.rowcount or 0
@@ -20493,8 +20834,7 @@ def _purge_dead_entry_meta(conn: sqlite3.Connection, feed_url: str) -> int:
     return deleted
 
 
-def _rekey_entry_meta(conn: sqlite3.Connection, from_feed: str, from_id: str,
-                      to_feed: str, to_id: str) -> None:
+def _rekey_entry_meta(conn: sqlite3.Connection, from_feed: str, from_id: str, to_feed: str, to_id: str) -> None:
     """Repoint one entry's meta rows at its new (feed_url, entry_id).
 
     INSERT OR IGNORE then DELETE, per table: the survivor may already have its
@@ -20511,19 +20851,14 @@ def _rekey_entry_meta(conn: sqlite3.Connection, from_feed: str, from_id: str,
             # copying it verbatim collides with the row we are copying *from*,
             # INSERT OR IGNORE drops the copy, and the DELETE below then loses
             # the row outright. Omitting it lets SQLite assign a fresh one.
-            cols = [r[1] for r in info
-                    if not (r[5] and str(r[2] or "").upper() == "INTEGER")]
+            cols = [r[1] for r in info if not (r[5] and str(r[2] or "").upper() == "INTEGER")]
             if not cols:
                 continue
             names = ", ".join(cols)
-            picks = ", ".join(
-                "?" if c == "feed_url" else ("?" if c == "entry_id" else c) for c in cols
-            )
-            params = [to_feed if c == "feed_url" else to_id for c in cols
-                      if c in ("feed_url", "entry_id")]
+            picks = ", ".join("?" if c == "feed_url" else ("?" if c == "entry_id" else c) for c in cols)
+            params = [to_feed if c == "feed_url" else to_id for c in cols if c in ("feed_url", "entry_id")]
             conn.execute(
-                f"INSERT OR IGNORE INTO {table} ({names}) SELECT {picks} FROM {table}"
-                " WHERE feed_url = ? AND entry_id = ?",
+                f"INSERT OR IGNORE INTO {table} ({names}) SELECT {picks} FROM {table} WHERE feed_url = ? AND entry_id = ?",
                 (*params, from_feed, from_id),
             )
             conn.execute(
@@ -20562,11 +20897,7 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
     # discover that most have nothing to move.
     try:
         with archive_conn() as _ac:
-            src_archived_ids = {
-                str(r[0]) for r in _ac.execute(
-                    "SELECT entry_id FROM archived_entry WHERE feed_url = ?", (remove_url,)
-                )
-            }
+            src_archived_ids = {str(r[0]) for r in _ac.execute("SELECT entry_id FROM archived_entry WHERE feed_url = ?", (remove_url,))}
     except sqlite3.OperationalError:
         src_archived_ids = set()
 
@@ -20590,17 +20921,13 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
     src_entries = {e.id: e for e in reader.get_entries(feed=remove_url)}
     src_tags: dict[str, list[str]] = {}
     for eid, e in src_entries.items():
-        keys = [
-            _extract_tag_key(t) for t in reader.get_tags(e.resource_id)
-        ]
+        keys = [_extract_tag_key(t) for t in reader.get_tags(e.resource_id)]
         keys = [k for k in keys if k and k.startswith(MANUAL_TAG_KEY_PREFIX)]
         if keys:
             src_tags[eid] = keys
     # Source stars (meta saved_entries).
     src_stars: dict[str, str] = {
-        r[0]: r[1] for r in conn.execute(
-            "SELECT entry_id, saved_at FROM saved_entries WHERE feed_url = ?", (remove_url,)
-        )
+        r[0]: r[1] for r in conn.execute("SELECT entry_id, saved_at FROM saved_entries WHERE feed_url = ?", (remove_url,))
     }
 
     # Every source entry, not just the curated ones — see the docstring.
@@ -20710,8 +21037,7 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
     return counts
 
 
-def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_id: str,
-                        target_url: str) -> dict:
+def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_id: str, target_url: str) -> dict:
     """Move one entry's curation (star, manual tags, read state) onto *target_url*.
 
     Single-entry counterpart of ``_migrate_curation``: the entry is matched into
@@ -20722,8 +21048,7 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
 
     Returns {"ok": bool, "synth": bool, "tags": n, "star": bool, "error": str|None}.
     """
-    result = {"ok": False, "synth": False, "tags": 0, "star": False,
-              "content_moved": False, "error": None}
+    result = {"ok": False, "synth": False, "tags": 0, "star": False, "content_moved": False, "error": None}
     src = reader.get_entry((feed_url, entry_id), None)
     if src is None:
         result["error"] = "Entry not found."
@@ -20799,8 +21124,14 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
             _tgt_body = (_tgt.content[0].value if getattr(_tgt, "content", None) else "") or _tgt.summary or ""
         if _src_body and len(_src_body) > len(_tgt_body):
             saved_articles_service.replace_entry_content(
-                reader, conn, target_id, "", _src_body, feed_url=target_url,
-                bump_received=False, pin_content=True,
+                reader,
+                conn,
+                target_id,
+                "",
+                _src_body,
+                feed_url=target_url,
+                bump_received=False,
+                pin_content=True,
             )
             result["content_moved"] = True
     except Exception:  # noqa: BLE001 — curation still migrates; body is best-effort
@@ -20908,7 +21239,8 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
                     # move and the root cause is live. Log loudly enough to find.
                     LOGGER.warning(
                         "[move-entry] star row survived the move and was swept: %s %s",
-                        feed_url, entry_id,
+                        feed_url,
+                        entry_id,
                     )
             except Exception:  # noqa: BLE001
                 LOGGER.exception("[move-entry] star sweep failed for %s", entry_id)
@@ -20932,11 +21264,7 @@ def _carry_tags_to_orphan_archive(reader, conn: sqlite3.Connection, feed_url: st
     """
     try:
         with archive_conn() as _ac:
-            captured = {
-                str(r[0]) for r in _ac.execute(
-                    "SELECT entry_id FROM archived_entry WHERE feed_url = ?", (feed_url,)
-                )
-            }
+            captured = {str(r[0]) for r in _ac.execute("SELECT entry_id FROM archived_entry WHERE feed_url = ?", (feed_url,))}
     except sqlite3.Error:
         # Cannot prove what survives, so carry nothing rather than fabricate
         # tag rows for entries that are about to disappear entirely.
@@ -21035,8 +21363,12 @@ def purge_orphaned_feed(
         if migrated["tags"] or migrated["stars"] or migrated["synth"] or migrated["archives"]:
             LOGGER.info(
                 "[dedup] migrated curation %s -> %s: %d tags, %d stars, %d synthesized, %d archives",
-                feed_url, migrate_curation_to,
-                migrated["tags"], migrated["stars"], migrated["synth"], migrated["archives"],
+                feed_url,
+                migrate_curation_to,
+                migrated["tags"],
+                migrated["stars"],
+                migrated["synth"],
+                migrated["archives"],
             )
 
     # Step 2c — carry manual tags across to the orphan-archive side.
@@ -21163,10 +21495,7 @@ def get_push_active_feed_urls() -> set[str]:
         return set()
     try:
         conn = get_websub_connection()
-        rows = conn.execute(
-            "SELECT feed_url FROM websub_subscriptions"
-            " WHERE verified=1 AND hub_url IS NOT NULL"
-        ).fetchall()
+        rows = conn.execute("SELECT feed_url FROM websub_subscriptions WHERE verified=1 AND hub_url IS NOT NULL").fetchall()
         return {str(row["feed_url"]) for row in rows}
     except Exception:
         LOGGER.debug("[websub] could not load push-active feed URLs", exc_info=True)
@@ -21534,8 +21863,7 @@ def scheduler_watchdog_loop(stop_event: threading.Event) -> None:
                 logs = cast(int, _scheduler_state.get("consecutive_stall_logs") or 0)
                 _scheduler_state["consecutive_stall_logs"] = logs + 1
             LOGGER.error(
-                "[scheduler] STALLED: no progress for %ds while doing %r. "
-                "Feeds are not refreshing. Restart threshold: %s",
+                "[scheduler] STALLED: no progress for %ds while doing %r. Feeds are not refreshing. Restart threshold: %s",
                 int(stalled_for),
                 stage,
                 f"{SCHEDULER_STALL_RESTART_SECONDS}s" if SCHEDULER_STALL_RESTART_SECONDS > 0 else "disabled",
@@ -21543,7 +21871,8 @@ def scheduler_watchdog_loop(stop_event: threading.Event) -> None:
             if 0 < SCHEDULER_STALL_RESTART_SECONDS <= stalled_for:
                 LOGGER.error(
                     "[scheduler] stalled %ds at %r — exiting so the container restarts",
-                    int(stalled_for), stage,
+                    int(stalled_for),
+                    stage,
                 )
                 # os._exit, not sys.exit: the point is that a thread is wedged in
                 # a syscall, so an orderly shutdown would block on joining it.
@@ -21583,9 +21912,7 @@ def _scheduled_refresh_tick() -> None:
             if (now_ts - last_ts) < effective_minutes * 60:
                 continue
             # This folder is due — collect its feeds.
-            folder_feed_rows = conn.execute(
-                "SELECT feed_url FROM folder_feeds WHERE folder_id = ?", (fid,)
-            ).fetchall()
+            folder_feed_rows = conn.execute("SELECT feed_url FROM folder_feeds WHERE folder_id = ?", (fid,)).fetchall()
             for row in folder_feed_rows:
                 url = str(row["feed_url"])
                 if url not in disabled:
@@ -21595,14 +21922,8 @@ def _scheduled_refresh_tick() -> None:
         # Uncategorized feeds: those in no folder never appear above, so refresh
         # them as one bucket on the global cadence. update_feeds still applies
         # its own per-feed/domain/429 backoff, so this only decides candidacy.
-        foldered = {
-            str(row["feed_url"])
-            for row in conn.execute("SELECT DISTINCT feed_url FROM folder_feeds")
-        }
-        orphan_feeds = {
-            url for url in enabled_feed_urls
-            if url not in foldered and url not in disabled
-        }
+        foldered = {str(row["feed_url"]) for row in conn.execute("SELECT DISTINCT feed_url FROM folder_feeds")}
+        orphan_feeds = {url for url in enabled_feed_urls if url not in foldered and url not in disabled}
         if orphan_feeds:
             last_ts_str = get_setting(conn, _UNCATEGORIZED_CADENCE_LAST_REFRESH_KEY)
             last_ts = float(last_ts_str) if last_ts_str else 0.0
@@ -21689,7 +22010,9 @@ _DA_IMAGE_REFRESH_MAX_PER_RUN = 100
 
 
 def refresh_expiring_deviantart_images(
-    *, within_seconds: float = 0.0, max_entries: int = _DA_IMAGE_REFRESH_MAX_PER_RUN,
+    *,
+    within_seconds: float = 0.0,
+    max_entries: int = _DA_IMAGE_REFRESH_MAX_PER_RUN,
     apply: bool = True,
 ) -> dict:
     """Re-sign stored DeviantArt image URLs whose token has expired or is close to.
@@ -21701,11 +22024,15 @@ def refresh_expiring_deviantart_images(
     cutoff = time.time() + max(0.0, within_seconds)
     stale: list[tuple[str, str, str]] = []  # (feed, entry_id, column)
     with get_reader() as reader:
-        rows = reader._storage.get_db().execute(
-            "SELECT feed, id, summary, content FROM entries"
-            " WHERE COALESCE(summary, '') LIKE '%wixmp%token=%'"
-            "    OR COALESCE(content, '') LIKE '%wixmp%token=%'"
-        ).fetchall()
+        rows = (
+            reader._storage.get_db()
+            .execute(
+                "SELECT feed, id, summary, content FROM entries"
+                " WHERE COALESCE(summary, '') LIKE '%wixmp%token=%'"
+                "    OR COALESCE(content, '') LIKE '%wixmp%token=%'"
+            )
+            .fetchall()
+        )
     for feed, entry_id, summary, content in rows:
         for column, body in (("summary", summary), ("content", content)):
             if not body or "wixmp" not in body:
@@ -21723,8 +22050,9 @@ def refresh_expiring_deviantart_images(
     # when needed and returning "" when the session is dead.
     token = get_deviantart_user_token()
     if not token:
-        LOGGER.info("[deviantart] %d image(s) need re-signing but no usable access token "
-                    "(not connected, or reconnect required)", len(stale))
+        LOGGER.info(
+            "[deviantart] %d image(s) need re-signing but no usable access token (not connected, or reconnect required)", len(stale)
+        )
         return {"stale": len(stale), "refreshed": 0}
 
     refreshed = 0
@@ -21769,9 +22097,7 @@ def _img_cache_has(url: str) -> bool:
     try:
         key = hashlib.sha256(_img_cache_key_url(url).encode("utf-8")).hexdigest()
         with get_img_cache_connection() as conn:
-            return conn.execute(
-                "SELECT 1 FROM img_cache WHERE cache_key = ? LIMIT 1", (key,)
-            ).fetchone() is not None
+            return conn.execute("SELECT 1 FROM img_cache WHERE cache_key = ? LIMIT 1", (key,)).fetchone() is not None
     except Exception:  # noqa: BLE001 — a cache miss is the safe answer
         return False
 
@@ -21893,9 +22219,7 @@ def _daily_maintenance_for_user() -> None:
     try:
         cutoff = (datetime.now() - timedelta(days=90)).isoformat()
         with get_meta_connection() as conn:
-            old_ids = [r[0] for r in conn.execute(
-                "SELECT id FROM rule_run_log WHERE run_at < ?", (cutoff,)
-            ).fetchall()]
+            old_ids = [r[0] for r in conn.execute("SELECT id FROM rule_run_log WHERE run_at < ?", (cutoff,)).fetchall()]
             if old_ids:
                 placeholders = ",".join("?" * len(old_ids))
                 conn.execute(f"DELETE FROM rule_run_log_entries WHERE log_id IN ({placeholders})", old_ids)
@@ -21936,12 +22260,8 @@ def _daily_maintenance_for_user() -> None:
     # always protected — see _prune_entries).
     try:
         with get_meta_connection() as conn:
-            folder_rows = conn.execute(
-                "SELECT id, name, retention_days FROM folders WHERE retention_days > 0"
-            ).fetchall()
-            retention_folder_feeds = {
-                int(r["id"]): sorted(get_folder_feed_urls(conn, int(r["id"]))) for r in folder_rows
-            }
+            folder_rows = conn.execute("SELECT id, name, retention_days FROM folders WHERE retention_days > 0").fetchall()
+            retention_folder_feeds = {int(r["id"]): sorted(get_folder_feed_urls(conn, int(r["id"]))) for r in folder_rows}
         for row in folder_rows:
             feeds = retention_folder_feeds.get(int(row["id"])) or []
             if not feeds:
@@ -21950,8 +22270,7 @@ def _daily_maintenance_for_user() -> None:
             deleted = _prune_entries(list(feeds), read_cutoff=datetime.now() - timedelta(days=days))
             # Always log (even 0) so a run is auditable — "nothing happened" and
             # "never ran" look identical otherwise.
-            LOGGER.info("[maintenance] retention: deleted %d read post(s) (>%dd after read) from folder %s",
-                        deleted, days, row["name"])
+            LOGGER.info("[maintenance] retention: deleted %d read post(s) (>%dd after read) from folder %s", deleted, days, row["name"])
     except Exception:
         LOGGER.exception("[maintenance] retention prune failed")
 
@@ -21981,8 +22300,7 @@ def _daily_maintenance_for_user() -> None:
                     """,
                     (cutoff,),
                 ).rowcount
-            LOGGER.info("[maintenance] tomb sweep: removed %d tombstone(s) older than %dd and out of window",
-                        swept, sweep_days)
+            LOGGER.info("[maintenance] tomb sweep: removed %d tombstone(s) older than %dd and out of window", swept, sweep_days)
     except Exception:
         LOGGER.exception("[maintenance] tombstone sweep failed")
 
@@ -22007,8 +22325,7 @@ def _daily_maintenance_for_user() -> None:
                 ("feed_failure_state", "feed_url"),
             ]:
                 conn.execute(
-                    f"DELETE FROM {table} WHERE {col} NOT IN "
-                    f"(SELECT feed_url FROM folder_feeds)",
+                    f"DELETE FROM {table} WHERE {col} NOT IN (SELECT feed_url FROM folder_feeds)",
                 )
             # domain_failure_state: remove domains with no remaining feeds
             live_domains = {urlparse(u).netloc.lower() for u in live_urls}
@@ -22029,6 +22346,7 @@ def _daily_maintenance_for_user() -> None:
     # still-starred entry is left for a later retry.
     try:
         with get_reader() as reader, get_meta_connection() as conn:
+
             def _keep(feed_url: str, entry_id: str) -> bool:
                 if conn.execute(
                     "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
@@ -22036,6 +22354,7 @@ def _daily_maintenance_for_user() -> None:
                 ).fetchone():
                     return True
                 return reader.get_entry((feed_url, entry_id), None) is not None
+
             swept = starred_archive_service.sweep_failed_orphans(_keep)
         if swept:
             LOGGER.info("[maintenance] archive orphan sweep: removed %d unrecoverable failed capture(s)", swept)
@@ -22075,8 +22394,7 @@ def _daily_maintenance_for_user() -> None:
             if result.get("error"):
                 LOGGER.error("[maintenance] YouTube sync error: %s", result["error"])
             else:
-                LOGGER.info("[maintenance] YouTube sync: +%d -%d total=%d",
-                            result["added"], result["removed"], result["total"])
+                LOGGER.info("[maintenance] YouTube sync: +%d -%d total=%d", result["added"], result["removed"], result["total"])
         except Exception:
             LOGGER.exception("[maintenance] YouTube sync failed")
 
@@ -22089,11 +22407,14 @@ def _daily_maintenance_for_user() -> None:
             result = sync_deviantart_watchlist()
             rate_suffix = " (rate limited)" if result.get("rate_limited") else ""
             if result.get("error"):
-                LOGGER.error("[maintenance] DeviantArt watch-list sync error%s: %s",
-                             rate_suffix, result["error"])
+                LOGGER.error("[maintenance] DeviantArt watch-list sync error%s: %s", rate_suffix, result["error"])
             else:
-                LOGGER.info("[maintenance] DeviantArt watch-list sync: +%d watched=%d%s",
-                            result.get("added", 0), result.get("total", 0), rate_suffix)
+                LOGGER.info(
+                    "[maintenance] DeviantArt watch-list sync: +%d watched=%d%s",
+                    result.get("added", 0),
+                    result.get("total", 0),
+                    rate_suffix,
+                )
         except Exception:
             LOGGER.exception("[maintenance] DeviantArt watch-list sync failed")
         # 6b. Re-check parked deactivated artists for reactivation.
@@ -22357,9 +22678,7 @@ def import_opml(conn: sqlite3.Connection, opml_data: bytes) -> int:
     # the canonical spelling. Re-importing Lectio's OWN export duplicated 440 of
     # 2,909 foldered feeds that way, which is precisely the restore-from-backup
     # path a user is most likely to take.
-    feeds_with_folder = set(
-        canonical_feed_url(str(row["feed_url"])) for row in conn.execute("SELECT feed_url FROM folder_feeds")
-    )
+    feeds_with_folder = set(canonical_feed_url(str(row["feed_url"])) for row in conn.execute("SELECT feed_url FROM folder_feeds"))
 
     with get_reader() as reader:
 
@@ -22567,9 +22886,7 @@ def _resolve_archived_readability_html(feed_url: str | None, entry_id: str | Non
         return None
     asset_map = starred_archive_service.get_entry_asset_map(feed_url, entry_id)
     if asset_map:
-        archived_html = starred_archive_service.rewrite_html_assets(
-            archived_html, asset_map, STARRED_ASSET_URL_PREFIX
-        )
+        archived_html = starred_archive_service.rewrite_html_assets(archived_html, asset_map, STARRED_ASSET_URL_PREFIX)
     return archived_html
 
 
@@ -22599,9 +22916,7 @@ def _wrap_readability_html(article_html: str, source_url: str) -> HTMLResponse:
             "<style>body{margin:0;background:#f6f8fb;color:#1a2430;font-family:Georgia,serif;}"
             "main{max-width:760px;margin:0 auto;padding:1.2rem 1rem 2rem;}"
             "header{font-family:Segoe UI,Arial,sans-serif;margin-bottom:1rem;padding-bottom:.75rem;border-bottom:1px solid #d4dbe5;}"
-            "a{color:#0a5ca4;}article{font-size:1.05rem;line-height:1.7;}"
-            + _READER_VIEW_MEDIA_CSS +
-            "article pre{white-space:pre-wrap;}"
+            "a{color:#0a5ca4;}article{font-size:1.05rem;line-height:1.7;}" + _READER_VIEW_MEDIA_CSS + "article pre{white-space:pre-wrap;}"
             "article *{color:inherit !important;background-color:transparent !important;}"
             "</style></head>"
             f"<body><main><header>"
@@ -22634,9 +22949,7 @@ def entry_frame_check(url: str):
 # ---------------------------------------------------------------------------
 
 
-def _mark_entry_read_background(
-    feed_url: str, entry_id: str, title: str, link: str, feed_title: str
-) -> None:
+def _mark_entry_read_background(feed_url: str, entry_id: str, title: str, link: str, feed_title: str) -> None:
     """Mark an entry read off the request path. The daemon thread does not
     inherit the request's tenancy contextvars, so capture the current user now
     and re-bind it via _run_in_user_context — otherwise the write lands in the
@@ -22679,15 +22992,11 @@ def _prepend_reader_lead_image(feed_url: str | None, entry_id: str | None, body:
     # showed decibelmagazine's "…-hero-superbanner.gif" above the article even
     # after the body strip removed the mid-article copy. Checked at render, which
     # also means a stale row is harmless rather than needing a sweep.
-    if lead and (lead_image_service.is_ad_url(lead)
-                 or lead_image_service.is_social_icon_url(lead)):
+    if lead and (lead_image_service.is_ad_url(lead) or lead_image_service.is_social_icon_url(lead)):
         return body
     if not lead or lead in body or html.escape(lead, quote=True) in body:
         return body
-    lead_html = (
-        f'<p class="reader-lead"><img src="{html.escape(lead, quote=True)}"'
-        ' alt="" loading="lazy"></p>'
-    )
+    lead_html = f'<p class="reader-lead"><img src="{html.escape(lead, quote=True)}" alt="" loading="lazy"></p>'
     # Route through the same hotlink/no-referrer handling as article images.
     lead_html = add_no_referrer_to_images(proxy_hotlink_images(lead_html))
     return lead_html + body
@@ -22730,8 +23039,7 @@ def _archived_copy_is_plausible(html_text: str) -> bool:
     images count as substance in their own right, or every comic and photo post
     would be judged a failed extraction.
     """
-    return (_reader_text_length(html_text) >= _MIN_ARCHIVED_ARTICLE_TEXT
-            or _reader_img_count(html_text) >= 2)
+    return _reader_text_length(html_text) >= _MIN_ARCHIVED_ARTICLE_TEXT or _reader_img_count(html_text) >= 2
 
 
 def _reader_copy_is_richer(candidate: str, current: str) -> bool:
@@ -22807,7 +23115,7 @@ def proxy_all_body_images(content: str) -> str:
             return m.group(0)
         if not src.lower().startswith(("http://", "https://")):
             return m.group(0)
-        return f'{prefix}{quote_ch}/api/img?u={quote(src, safe="")}{quote_ch}'
+        return f"{prefix}{quote_ch}/api/img?u={quote(src, safe='')}{quote_ch}"
 
     content = _drop_feed_beacon_images(content)
     out = _READER_IMG_SRC_RE.sub(_rewrite, content)
@@ -22817,9 +23125,12 @@ def proxy_all_body_images(content: str) -> str:
     # adversarial input (ReDoS). No real attribute value is anywhere near
     # 10000 chars.
     return re.sub(
-        r'\s+(?:srcset|data-srcset|data-src|data-lazy-src)\s*=\s*'
+        r"\s+(?:srcset|data-srcset|data-src|data-lazy-src)\s*=\s*"
         r'(?:"[^"]{0,10000}"|\'[^\']{0,10000}\')',
-        "", out, flags=re.IGNORECASE)
+        "",
+        out,
+        flags=re.IGNORECASE,
+    )
 
 
 def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link: str) -> str:
@@ -22858,10 +23169,7 @@ def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link
         # Thin, but better than nothing — a genuinely short article ends up here.
         return _prepend_reader_lead_image(feed_url, entry_id, _strip_bandcamp_track_signature(archived_html))
     esc = html.escape(link or "", quote=True)
-    tail = (
-        f" <a href='{esc}' target='_blank' rel='noopener noreferrer'>Open original</a>."
-        if link else ""
-    )
+    tail = f" <a href='{esc}' target='_blank' rel='noopener noreferrer'>Open original</a>." if link else ""
     return f"<p>Could not load this article.{tail}</p>"
 
 
@@ -22907,9 +23215,7 @@ def resolve_reader_backlog(
     # of the exclusion, or Feeds-mode Read Mode over Uncategorized surfaced the
     # whole saved-articles backlog.
     folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls) - {saved_articles_service.SAVED_FEED_URL}
-    folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = (
-        all_reader_feed_urls - all_feed_urls - {saved_articles_service.SAVED_FEED_URL}
-    )
+    folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = all_reader_feed_urls - all_feed_urls - {saved_articles_service.SAVED_FEED_URL}
 
     selected_folder_id = folder_id or root_id
     if list_feed_url:
@@ -22945,12 +23251,7 @@ def resolve_reader_backlog(
     # search query narrows them (metadata match) rather than excluding them —
     # orphans have no reader row for the SQL search path to reach otherwise.
     _merged_orphans = False
-    if (
-        star_only
-        and not list_feed_url
-        and not tag
-        and selected_folder_id == root_id
-    ):
+    if star_only and not list_feed_url and not tag and selected_folder_id == root_id:
         try:
             posts = merge_orphan_saved_entries(
                 posts,
@@ -22970,17 +23271,19 @@ def resolve_reader_backlog(
         # Both list_entries_for_feeds and merge_orphan_saved_entries apply this
         # before their own clips; this covers the path where the merge is skipped.
         archived_keys = get_archived_saved_keys()
-        posts = [
-            p for p in posts
-            if ((str(p["feed_url"]), str(p["id"])) in archived_keys) == archived
-        ]
+        posts = [p for p in posts if ((str(p["feed_url"]), str(p["id"])) in archived_keys) == archived]
     return posts
 
 
 def _read_scope_params(
-    folder_id: int | None, tag: str | None, archived: bool, q: str | None,
-    scope: str = "saved", list_feed_url: str | None = None,
-    sort: str | None = None, resume_sort: str | None = None,
+    folder_id: int | None,
+    tag: str | None,
+    archived: bool,
+    q: str | None,
+    scope: str = "saved",
+    list_feed_url: str | None = None,
+    sort: str | None = None,
+    resume_sort: str | None = None,
     kept_all: bool = False,
 ) -> list[tuple[str, str]]:
     """Read Mode node scope shared by the browse URL and the reader prev/next
@@ -23018,14 +23321,18 @@ def _read_scope_params(
 
 
 def _read_browse_href(
-    folder_id: int | None, tag: str | None, archived: bool, q: str | None,
-    scope: str = "saved", list_feed_url: str | None = None,
-    sort: str | None = None, resume_sort: str | None = None,
+    folder_id: int | None,
+    tag: str | None,
+    archived: bool,
+    q: str | None,
+    scope: str = "saved",
+    list_feed_url: str | None = None,
+    sort: str | None = None,
+    resume_sort: str | None = None,
     kept_all: bool = False,
 ) -> str:
     """The 2-pane browse URL for a Read Mode node (no entry selected)."""
-    params = _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url,
-                                sort, resume_sort, kept_all)
+    params = _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url, sort, resume_sort, kept_all)
     return "/read" + ("?" + urlencode(params) if params else "")
 
 
@@ -23045,8 +23352,7 @@ def _reader_href(
     """Build a /read URL that opens *entry* in the reader while carrying the
     current Read Mode node scope, so prev/next stay within the same list."""
     params = [("feed_url", feed_url), ("entry_id", entry_id)]
-    params += _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url,
-                                 sort, None, kept_all)
+    params += _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url, sort, None, kept_all)
     return "/read?" + urlencode(params)
 
 
@@ -23093,14 +23399,11 @@ def build_reader_page(
     esc_feed = html.escape(feed_url or "", quote=True)
     esc_eid = html.escape(entry_id or "", quote=True)
     esc_csrf = html.escape(csrf_token or "", quote=True)
-    reader_dateline = (
-        f"<p class='reader-dateline'>{html.escape(date_display)}</p>"
-        if date_display else ""
-    )
+    reader_dateline = f"<p class='reader-dateline'>{html.escape(date_display)}</p>" if date_display else ""
     open_original = (
-        f"<a class='reader-ctl' href='{esc_src}' target='_blank' rel='noopener noreferrer'"
-        " title='Open original'>&#8599;</a>"
-        if source_link else ""
+        f"<a class='reader-ctl' href='{esc_src}' target='_blank' rel='noopener noreferrer' title='Open original'>&#8599;</a>"
+        if source_link
+        else ""
     )
     # Archive shows a filled box when already archived (tap = un-archive). Saved
     # actions (Archive/Delete) only apply to the saved scope; the feeds scope is
@@ -23154,37 +23457,38 @@ def build_reader_page(
     # CodeQL js/xss-through-dom false positive on location.assign). Values are
     # server-generated /read paths; JSON-encode + escape "<" against script
     # breakout.
-    nav_json = json.dumps(
-        {"prev": prev_href or "", "next": next_href or "", "back": back_href or "/read"}
-    ).replace("<", "\\u003c")
+    nav_json = json.dumps({"prev": prev_href or "", "next": next_href or "", "back": back_href or "/read"}).replace("<", "\\u003c")
     # The tag vocabulary rides in the same inline-JSON style, for the same reason:
     # nothing the panel acts on is read back out of the DOM. `all` is every tag
     # name in the library so the panel is a tap-list rather than a keyboard task;
     # `current` is what this entry carries.
     tags_json = json.dumps(
-        {"all": list(all_tag_names), "current": list(manual_tags),
-         "feed_url": feed_url, "entry_id": entry_id, "max": MAX_MANUAL_TAGS}
+        {"all": list(all_tag_names), "current": list(manual_tags), "feed_url": feed_url, "entry_id": entry_id, "max": MAX_MANUAL_TAGS}
     ).replace("<", "\\u003c")
     # Rendered empty (the JS fills it) so the tag list can be re-drawn after every
     # toggle without the server re-rendering the page — an e-ink repaint of the
     # whole article per tap would make tagging unusable.
     tag_panel = (
-        "<div id='reader-tag-panel' hidden>"
-        "<div class='reader-tag-head'>Tags"
-        "<button type='button' id='reader-tag-new' class='reader-ctl'>+ New</button>"
-        "<button type='button' id='reader-tag-done' class='reader-ctl'>Done</button>"
-        "</div>"
-        "<form id='reader-tag-newform' hidden autocomplete='off'>"
-        # Space-separated, matching the main app's tag input — the server splits
-        # on whitespace, so "brand new tag" is three tags, not one. Says so,
-        # because there is no autocomplete here to make that obvious.
-        "<input type='text' id='reader-tag-input' placeholder='new tag (spaces split)' "
-        "inputmode='text' autocapitalize='none' spellcheck='false'>"
-        "<button type='submit' class='reader-ctl'>Add</button>"
-        "</form>"
-        "<div id='reader-tag-list'></div>"
-        "</div>"
-    ) if show_saved_actions else ""
+        (
+            "<div id='reader-tag-panel' hidden>"
+            "<div class='reader-tag-head'>Tags"
+            "<button type='button' id='reader-tag-new' class='reader-ctl'>+ New</button>"
+            "<button type='button' id='reader-tag-done' class='reader-ctl'>Done</button>"
+            "</div>"
+            "<form id='reader-tag-newform' hidden autocomplete='off'>"
+            # Space-separated, matching the main app's tag input — the server splits
+            # on whitespace, so "brand new tag" is three tags, not one. Says so,
+            # because there is no autocomplete here to make that obvious.
+            "<input type='text' id='reader-tag-input' placeholder='new tag (spaces split)' "
+            "inputmode='text' autocapitalize='none' spellcheck='false'>"
+            "<button type='submit' class='reader-ctl'>Add</button>"
+            "</form>"
+            "<div id='reader-tag-list'></div>"
+            "</div>"
+        )
+        if show_saved_actions
+        else ""
+    )
     # NOTE: every scalar below is html.escape'd; only `article_html` is embedded
     # raw, and it is always allowlist-sanitized upstream (archived capture, live
     # readability, or stored feed content — all via html_sanitize.sanitize_html),
@@ -23278,9 +23582,7 @@ def _filed_tag_counts(filed: set[tuple[str, str]]) -> dict[str, int]:
     try:
         conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
         try:
-            rows = conn.execute(
-                "SELECT key, feed, id FROM entry_tags WHERE key LIKE ?", [f"{prefix}%"]
-            ).fetchall()
+            rows = conn.execute("SELECT key, feed, id FROM entry_tags WHERE key LIKE ?", [f"{prefix}%"]).fetchall()
         finally:
             conn.close()
     except Exception:
@@ -23288,7 +23590,7 @@ def _filed_tag_counts(filed: set[tuple[str, str]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for key, feed, eid in rows:
         if (str(feed), str(eid)) in filed:
-            name = str(key)[len(prefix):].strip().lower()
+            name = str(key)[len(prefix) :].strip().lower()
             if name:
                 counts[name] = counts.get(name, 0) + 1
     return counts
@@ -23335,9 +23637,7 @@ _READ_SORT_LABELS: dict[str, str] = {
 }
 
 
-def _read_is_inbox_node(folder_id: int | None, tag: str | None,
-                        archived: bool, q: str | None, scope: str,
-                        root_id: int | None) -> bool:
+def _read_is_inbox_node(folder_id: int | None, tag: str | None, archived: bool, q: str | None, scope: str, root_id: int | None) -> bool:
     """Is this the Inbox node? (saved scope, ROOT folder, no tag/archive/search)
 
     The root check is the whole point and was missing: every saved folder node
@@ -23364,16 +23664,14 @@ def _read_sort_for_node(sort: str | None, *, is_inbox: bool) -> str:
     return _READ_SORT_INBOX_DEFAULT if is_inbox else _READ_SORT_DEFAULT
 
 
-def _read_mode_sort_options(current: str, href_for: Callable[[str], str],
-                            *, include_starred: bool = True) -> list[dict]:
+def _read_mode_sort_options(current: str, href_for: Callable[[str], str], *, include_starred: bool = True) -> list[dict]:
     """The sort switcher for the browse pane — one link per order, current marked.
 
     "Recently starred" is offered only where it means something: the saved scope,
     where every row has a star date. In the feeds scope most entries were never
     starred, so the order would be arbitrary."""
     return [
-        {"key": key, "label": _READ_SORT_LABELS[key], "href": href_for(key),
-         "active": key == current}
+        {"key": key, "label": _READ_SORT_LABELS[key], "href": href_for(key), "active": key == current}
         for key in _READ_SORTS
         if not (key == "starred" and not include_starred)
     ]
@@ -23450,23 +23748,31 @@ def _build_feeds_mode_context(
     title_map = get_feed_title_map()
 
     def _feed_nodes(fid: int, feed_urls: list[str]) -> list[dict]:
-        nodes = [{
-            "label": title_map.get(furl, furl),
-            "href": _read_browse_href(fid, None, False, None, "feeds", list_feed_url=furl),
-            "count": unread_by_feed.get(furl, 0),
-            "active": (list_feed_url == furl),
-        } for furl in feed_urls if unread_by_feed.get(furl, 0)]
+        nodes = [
+            {
+                "label": title_map.get(furl, furl),
+                "href": _read_browse_href(fid, None, False, None, "feeds", list_feed_url=furl),
+                "count": unread_by_feed.get(furl, 0),
+                "active": (list_feed_url == furl),
+            }
+            for furl in feed_urls
+            if unread_by_feed.get(furl, 0)
+        ]
         nodes.sort(key=lambda n: str(n["label"]).lower())
         return nodes
 
     on_all = folder_id == root_id and not list_feed_url and not tag and not q
-    folder_nodes: list[dict] = [{
-        # Empty glyph: "All" is plain navigation, so no expand arrow — but the
-        # spacer keeps its label aligned with the folder rows' caret+label.
-        "label": "All", "glyph": "",
-        "href": _read_browse_href(root_id, None, False, None, "feeds"),
-        "count": unread_by_folder.get(root_id, 0), "active": on_all,
-    }]
+    folder_nodes: list[dict] = [
+        {
+            # Empty glyph: "All" is plain navigation, so no expand arrow — but the
+            # spacer keeps its label aligned with the folder rows' caret+label.
+            "label": "All",
+            "glyph": "",
+            "href": _read_browse_href(root_id, None, False, None, "feeds"),
+            "count": unread_by_folder.get(root_id, 0),
+            "active": on_all,
+        }
+    ]
     for row in raw_folder_rows:
         fid = int(row["id"])
         if fid == root_id:
@@ -23475,27 +23781,34 @@ def _build_feeds_mode_context(
         if not c:
             continue
         feeds = _feed_nodes(fid, direct.get(fid, []))
-        folder_nodes.append({
-            "label": str(row["name"]), "glyph": "▸",
-            "href": _read_browse_href(fid, None, False, None, "feeds"),
-            "count": c,
-            "active": (not tag and not list_feed_url and folder_id == fid),
-            "feeds": feeds,
-            "open": any(f["active"] for f in feeds),  # keep expanded if a feed is active
-        })
+        folder_nodes.append(
+            {
+                "label": str(row["name"]),
+                "glyph": "▸",
+                "href": _read_browse_href(fid, None, False, None, "feeds"),
+                "count": c,
+                "active": (not tag and not list_feed_url and folder_id == fid),
+                "feeds": feeds,
+                "open": any(f["active"] for f in feeds),  # keep expanded if a feed is active
+            }
+        )
 
     # Manual-tag buckets — the regular Tags (all entries, NOT saved-only).
-    tag_nodes = [{
-        "label": "#" + str(tr["name"]), "glyph": "",
-        "href": _read_browse_href(None, str(tr["name"]), False, None, "feeds"),
-        "count": int(tr["count"]),
-        "active": (tag == str(tr["name"])),
-    } for tr in get_tag_counts_for_feeds(set(all_reader_feed_urls))]
+    tag_nodes = [
+        {
+            "label": "#" + str(tr["name"]),
+            "glyph": "",
+            "href": _read_browse_href(None, str(tr["name"]), False, None, "feeds"),
+            "count": int(tr["count"]),
+            "active": (tag == str(tr["name"])),
+        }
+        for tr in get_tag_counts_for_feeds(set(all_reader_feed_urls))
+    ]
 
     if not node_selected:
         selected_label = "Feeds"
     elif q:
-        selected_label = f'Search: “{q}”'
+        selected_label = f"Search: “{q}”"
     elif list_feed_url:
         selected_label = title_map.get(list_feed_url, list_feed_url)
     elif tag:
@@ -23503,19 +23816,31 @@ def _build_feeds_mode_context(
     else:
         selected_label = next((n["label"] for n in folder_nodes if n["active"]), "All")
 
-    list_items = [{
-        "title": str(it.get("title") or it.get("link") or "(untitled)"),
-        "title_html": html_sanitize.sanitize_inline_title(
-            str(it.get("title") or it.get("link") or "(untitled)")),
-        "subtitle": str(it.get("feed_title") or ""),
-        "read": bool(it.get("read", False)),
-        "href": _reader_href(str(it["feed_url"]), str(it["id"]),
-                             folder_id=folder_id, tag=tag, archived=False, q=q,
-                             scope="feeds", list_feed_url=list_feed_url),
-    } for it in items]
+    list_items = [
+        {
+            "title": str(it.get("title") or it.get("link") or "(untitled)"),
+            "title_html": html_sanitize.sanitize_inline_title(str(it.get("title") or it.get("link") or "(untitled)")),
+            "subtitle": str(it.get("feed_title") or ""),
+            "read": bool(it.get("read", False)),
+            "href": _reader_href(
+                str(it["feed_url"]),
+                str(it["id"]),
+                folder_id=folder_id,
+                tag=tag,
+                archived=False,
+                q=q,
+                scope="feeds",
+                list_feed_url=list_feed_url,
+            ),
+        }
+        for it in items
+    ]
 
     _feeds_search_fields = _read_mode_search_fields(
-        scope="feeds", folder_id=folder_id, list_feed_url=list_feed_url, tag=tag,
+        scope="feeds",
+        folder_id=folder_id,
+        list_feed_url=list_feed_url,
+        tag=tag,
     )
     return {
         "scope_tabs": _read_mode_scope_tabs("feeds"),
@@ -23574,44 +23899,48 @@ def _build_read_mode_context(
     # Booze read 11 against the main app's 67, and hid outright the three folders
     # whose saved items are all tagged and none starred.
     _feed_kept_counts: dict[str, int] = {}
-    for _f, _e in (inbox | filed):
+    for _f, _e in inbox | filed:
         _feed_kept_counts[_f] = _feed_kept_counts.get(_f, 0) + 1
 
     def _folder_kept_count(fid: int) -> int:
         feeds = folder_feed_urls_by_id.get(fid, set())
         return sum(c for f, c in _feed_kept_counts.items() if f in feeds)
 
-    on_all = (folder_id == root_id and not tag and not archived and not q
-              and not all_saved)
+    on_all = folder_id == root_id and not tag and not archived and not q and not all_saved
     # Links *out* of the Inbox must not carry its most-recently-starred order —
     # that ordering is meaningless in a folder where most items were never
     # starred. Hand back the order you had before entering the Inbox instead.
     outbound_sort = (resume_sort or _READ_SORT_DEFAULT) if on_all else sort
-    folder_nodes: list[dict] = [{
-        # "Inbox", not "All" — this node counts and lists `inbox`, which is
-        # STARRED minus archived, not everything saved. Calling it All was
-        # survivable while Archive held 23 items; now that archiving is half the
-        # triage model it is just wrong, and it sits directly above a node named
-        # Archive holding what it excludes. Filed (tagged) items live in the tag
-        # tree. (The feeds scope keeps "All": no archive axis there.)
-        # Empty glyph: plain navigation, so no expand arrow — but the spacer
-        # keeps its label aligned with the folder rows.
-        "label": "Inbox", "glyph": "",
-        # No sort= (the Inbox picks its own default), but resume_sort carries the
-        # order you were using so stepping out of the Inbox restores it.
-        "href": _read_browse_href(root_id, None, False, None,
-                                  resume_sort=(sort if not on_all else resume_sort)),
-        "count": len(inbox), "active": on_all,
-    }, {
-        # Everything kept minus archived — what the main app's Saved view shows.
-        # The Inbox is deliberately narrower (starred only), so without this node
-        # the ~15k tagged-but-unstarred items would exist in one mode and not the
-        # other. They are all reachable under Tags; this is the flat view.
-        "label": "All Saved", "glyph": "",
-        "href": _read_browse_href(root_id, None, False, None, sort=outbound_sort,
-                                  kept_all=True),
-        "count": len(inbox | filed), "active": all_saved,
-    }]
+    folder_nodes: list[dict] = [
+        {
+            # "Inbox", not "All" — this node counts and lists `inbox`, which is
+            # STARRED minus archived, not everything saved. Calling it All was
+            # survivable while Archive held 23 items; now that archiving is half the
+            # triage model it is just wrong, and it sits directly above a node named
+            # Archive holding what it excludes. Filed (tagged) items live in the tag
+            # tree. (The feeds scope keeps "All": no archive axis there.)
+            # Empty glyph: plain navigation, so no expand arrow — but the spacer
+            # keeps its label aligned with the folder rows.
+            "label": "Inbox",
+            "glyph": "",
+            # No sort= (the Inbox picks its own default), but resume_sort carries the
+            # order you were using so stepping out of the Inbox restores it.
+            "href": _read_browse_href(root_id, None, False, None, resume_sort=(sort if not on_all else resume_sort)),
+            "count": len(inbox),
+            "active": on_all,
+        },
+        {
+            # Everything kept minus archived — what the main app's Saved view shows.
+            # The Inbox is deliberately narrower (starred only), so without this node
+            # the ~15k tagged-but-unstarred items would exist in one mode and not the
+            # other. They are all reachable under Tags; this is the flat view.
+            "label": "All Saved",
+            "glyph": "",
+            "href": _read_browse_href(root_id, None, False, None, sort=outbound_sort, kept_all=True),
+            "count": len(inbox | filed),
+            "active": all_saved,
+        },
+    ]
     for row in raw_folder_rows:
         fid = int(row["id"])
         if fid == root_id:
@@ -23619,31 +23948,41 @@ def _build_read_mode_context(
         c = _folder_kept_count(fid)
         if not c:
             continue
-        folder_nodes.append({
-            "label": str(row["name"]), "glyph": "▸",  # ▸
-            "href": _read_browse_href(fid, None, False, None, sort=outbound_sort),
-            "count": c,
-            "active": (not archived and not tag and folder_id == fid),
-        })
+        folder_nodes.append(
+            {
+                "label": str(row["name"]),
+                "glyph": "▸",  # ▸
+                "href": _read_browse_href(fid, None, False, None, sort=outbound_sort),
+                "count": c,
+                "active": (not archived and not tag and folder_id == fid),
+            }
+        )
     uncat = _folder_kept_count(UNCATEGORIZED_FOLDER_ID)
     if uncat:
-        folder_nodes.append({
-            "label": "Uncategorized", "glyph": "▸",  # ▸
-            "href": _read_browse_href(UNCATEGORIZED_FOLDER_ID, None, False, None, sort=outbound_sort),
-            "count": uncat,
-            "active": (not archived and not tag and folder_id == UNCATEGORIZED_FOLDER_ID),
-        })
+        folder_nodes.append(
+            {
+                "label": "Uncategorized",
+                "glyph": "▸",  # ▸
+                "href": _read_browse_href(UNCATEGORIZED_FOLDER_ID, None, False, None, sort=outbound_sort),
+                "count": uncat,
+                "active": (not archived and not tag and folder_id == UNCATEGORIZED_FOLDER_ID),
+            }
+        )
 
     # Manual-tag buckets restricted to the inbox: only tags on non-archived saved
     # items, counted over them. Tucked in a collapsed <details> (heavy taggers
     # have dozens); clicking narrows the inbox to that tag.
     inbox_tag_counts = _filed_tag_counts(filed)
-    tag_nodes = [{
-        "label": "#" + name, "glyph": "",
-        "href": _read_browse_href(None, name, False, None, sort=outbound_sort),
-        "count": inbox_tag_counts[name],
-        "active": (not archived and tag == name),
-    } for name in sorted(inbox_tag_counts)]
+    tag_nodes = [
+        {
+            "label": "#" + name,
+            "glyph": "",
+            "href": _read_browse_href(None, name, False, None, sort=outbound_sort),
+            "count": inbox_tag_counts[name],
+            "active": (not archived and tag == name),
+        }
+        for name in sorted(inbox_tag_counts)
+    ]
 
     if not node_selected:
         selected_label = "Saved"
@@ -23652,26 +23991,31 @@ def _build_read_mode_context(
     elif archived:
         selected_label = "Archive"
     elif q:
-        selected_label = f'Search: “{q}”'
+        selected_label = f"Search: “{q}”"
     elif tag:
         selected_label = "#" + tag
     else:
         selected_label = next((n["label"] for n in folder_nodes if n["active"]), "Inbox")
 
-    list_items = [{
-        "title": str(it.get("title") or it.get("link") or "(untitled)"),
-        "title_html": html_sanitize.sanitize_inline_title(
-            str(it.get("title") or it.get("link") or "(untitled)")),
-        "subtitle": _read_mode_subtitle(it),
-        "date": _read_mode_date(it),
-        "read": bool(it.get("read", False)),
-        "href": _reader_href(str(it["feed_url"]), str(it["id"]),
-                             folder_id=folder_id, tag=tag, archived=archived, q=q,
-                             sort=sort, kept_all=all_saved),
-    } for it in items]
+    list_items = [
+        {
+            "title": str(it.get("title") or it.get("link") or "(untitled)"),
+            "title_html": html_sanitize.sanitize_inline_title(str(it.get("title") or it.get("link") or "(untitled)")),
+            "subtitle": _read_mode_subtitle(it),
+            "date": _read_mode_date(it),
+            "read": bool(it.get("read", False)),
+            "href": _reader_href(
+                str(it["feed_url"]), str(it["id"]), folder_id=folder_id, tag=tag, archived=archived, q=q, sort=sort, kept_all=all_saved
+            ),
+        }
+        for it in items
+    ]
 
     _saved_search_fields = _read_mode_search_fields(
-        scope="saved", folder_id=folder_id, tag=tag, archived=archived,
+        scope="saved",
+        folder_id=folder_id,
+        tag=tag,
+        archived=archived,
     )
     # Bulk actions for the node you drilled into. Read Mode has no right-click and
     # long-press offers only text selection, so these are visible buttons with big
@@ -23689,13 +24033,12 @@ def _build_read_mode_context(
             # modal: the first re-renders this row with the count spelled out. A
             # browser confirm() is an awkward thing to hit on that WebView.
             "confirm_delete_tag": bool(tag) and confirm_delete_tag == "1",
-            "confirm_href": _read_browse_href(folder_id, tag, False, None, sort=sort,
-                                              list_feed_url=list_feed_url) + (
-                ("&" if "?" in _read_browse_href(folder_id, tag, False, None, sort=sort,
-                                                 list_feed_url=list_feed_url) else "?")
-                + "confirm_delete_tag=1"),
-            "cancel_href": _read_browse_href(folder_id, tag, False, None, sort=sort,
-                                             list_feed_url=list_feed_url),
+            "confirm_href": _read_browse_href(folder_id, tag, False, None, sort=sort, list_feed_url=list_feed_url)
+            + (
+                ("&" if "?" in _read_browse_href(folder_id, tag, False, None, sort=sort, list_feed_url=list_feed_url) else "?")
+                + "confirm_delete_tag=1"
+            ),
+            "cancel_href": _read_browse_href(folder_id, tag, False, None, sort=sort, list_feed_url=list_feed_url),
         }
     return {
         "node_actions": node_actions,
@@ -23704,16 +24047,17 @@ def _build_read_mode_context(
         "csrf_token": _csrf_token_for(request) if request is not None else "",
         "sort_options": _read_mode_sort_options(
             sort,
-            lambda key: _read_browse_href(folder_id, tag, archived, q, sort=key,
-                                          resume_sort=resume_sort, kept_all=all_saved),
+            lambda key: _read_browse_href(folder_id, tag, archived, q, sort=key, resume_sort=resume_sort, kept_all=all_saved),
         ),
         "scope_tabs": _read_mode_scope_tabs("saved"),
         "folder_nodes": folder_nodes,
         "tag_nodes": tag_nodes,
         "archive_node": {
-            "label": "Archive", "glyph": "▤",  # ▤
+            "label": "Archive",
+            "glyph": "▤",  # ▤
             "href": _read_browse_href(None, None, True, None, sort=outbound_sort),
-            "count": archived_count, "active": archived,
+            "count": archived_count,
+            "active": archived,
         },
         "list_items": list_items,
         "selected_label": selected_label,
@@ -23732,9 +24076,9 @@ def _build_read_mode_context(
     }
 
 
-_OFFLINE_IMG_MAX_BYTES = 2 * 1024 * 1024      # per image, inlined as base64
-_OFFLINE_IMG_TOTAL_BYTES = 12 * 1024 * 1024   # whole document budget
-_OFFLINE_IMG_MAX_FETCHES = 20                 # network fetches per saved article
+_OFFLINE_IMG_MAX_BYTES = 2 * 1024 * 1024  # per image, inlined as base64
+_OFFLINE_IMG_TOTAL_BYTES = 12 * 1024 * 1024  # whole document budget
+_OFFLINE_IMG_MAX_FETCHES = 20  # network fetches per saved article
 
 
 def _fetch_image_for_offline(url: str) -> tuple[bytes, str] | None:
@@ -23869,10 +24213,13 @@ def read_offline_copy(
         "</main></body></html>"
     )
     slug = re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-").lower()[:60] or "article"
-    return HTMLResponse(doc, headers={
-        "Content-Disposition": f'attachment; filename="{slug}.html"',
-        "Cache-Control": "no-store",
-    })
+    return HTMLResponse(
+        doc,
+        headers={
+            "Content-Disposition": f'attachment; filename="{slug}.html"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @app.get("/sw.js")
@@ -23891,10 +24238,14 @@ def offline_service_worker():
         body = (Path(__file__).parent / "static" / "sw.js").read_text(encoding="utf-8")
     except Exception:
         return Response(status_code=404)
-    return Response(body, media_type="application/javascript", headers={
-        "Service-Worker-Allowed": "/",
-        "Cache-Control": "no-store",
-    })
+    return Response(
+        body,
+        media_type="application/javascript",
+        headers={
+            "Service-Worker-Allowed": "/",
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 # Distinct User-Agents seen on /read, logged once each (capped) so we can learn
@@ -23957,15 +24308,13 @@ def reader_view(
     # disagreeing about what exists is exactly the mismatch Read Mode is meant
     # not to have.
     all_saved_view = (not is_feeds) and kept == "all"
-    node_selected = (folder_id is not None or bool(feed_scope) or bool(tag_val)
-                     or archived_view or bool(q_val) or all_saved_view)
+    node_selected = folder_id is not None or bool(feed_scope) or bool(tag_val) or archived_view or bool(q_val) or all_saved_view
 
     # The Inbox opens most-recently-starred; every other node keeps newest-first.
     # An explicit ?sort= always wins, so the switcher still works everywhere.
     with get_meta_connection() as _root_conn:
         _read_root_id = get_root_folder_id(_root_conn)
-    is_inbox = (not all_saved_view) and _read_is_inbox_node(
-        folder_id, tag_val, archived_view, q_val, scope, _read_root_id)
+    is_inbox = (not all_saved_view) and _read_is_inbox_node(folder_id, tag_val, archived_view, q_val, scope, _read_root_id)
     sort_val = _read_sort_for_node(sort, is_inbox=is_inbox)
     if is_feeds and sort_val == "starred":
         # Feed entries mostly carry no star date, so this order would be noise.
@@ -23976,11 +24325,16 @@ def reader_view(
 
     def _load_backlog(limit: int) -> list[dict]:
         return resolve_reader_backlog(
-            folder_id=folder_id, list_feed_url=feed_scope,
+            folder_id=folder_id,
+            list_feed_url=feed_scope,
             read_filter=("unread" if is_feeds else "all"),
             star_only=(not is_feeds),
-            tag=tag_val, sort_by=_sort_by, sort_dir=_sort_dir, search_query=q_val,
-            archived=archived_filter, limit=limit,
+            tag=tag_val,
+            sort_by=_sort_by,
+            sort_dir=_sort_dir,
+            search_query=q_val,
+            archived=archived_filter,
+            limit=limit,
             # The Inbox is the to-do pile (starred only); every other saved node
             # — tags, Archive, search — still spans the whole kept set.
             kept_scope=("starred" if is_inbox else "kept"),
@@ -23991,30 +24345,53 @@ def reader_view(
         items = _load_backlog(150) if node_selected else []
         if is_feeds:
             context = _build_feeds_mode_context(
-                request, folder_id=folder_id, list_feed_url=feed_scope, tag=tag_val,
-                q=q_val, items=items, node_selected=node_selected,
+                request,
+                folder_id=folder_id,
+                list_feed_url=feed_scope,
+                tag=tag_val,
+                q=q_val,
+                items=items,
+                node_selected=node_selected,
             )
         else:
             context = _build_read_mode_context(
-                request, folder_id=folder_id, tag=tag_val, list_feed_url=feed_scope,
+                request,
+                folder_id=folder_id,
+                tag=tag_val,
+                list_feed_url=feed_scope,
                 archived=archived_view,
-                q=q_val, items=items, node_selected=node_selected, sort=sort_val,
-                resume_sort=resume_sort_val, all_saved=all_saved_view,
+                q=q_val,
+                items=items,
+                node_selected=node_selected,
+                sort=sort_val,
+                resume_sort=resume_sort_val,
+                all_saved=all_saved_view,
                 confirm_delete_tag=confirm_delete_tag,
             )
         return templates.TemplateResponse(
-            request, "read_mode.html", context, headers={"Cache-Control": "no-store"},
+            request,
+            "read_mode.html",
+            context,
+            headers={"Cache-Control": "no-store"},
         )
 
     # --- READ: an article is selected -> full-screen paginated reader --------
     backlog = _load_backlog(250)
+
     def _href(rec: dict | None) -> str:
         if not rec:
             return ""
         return _reader_href(
-            rec["feed_url"], rec["id"],
-            folder_id=folder_id, tag=tag_val, archived=archived_view, q=q_val, scope=scope,
-            list_feed_url=feed_scope, sort=sort_val, kept_all=all_saved_view,
+            rec["feed_url"],
+            rec["id"],
+            folder_id=folder_id,
+            tag=tag_val,
+            archived=archived_view,
+            q=q_val,
+            scope=scope,
+            list_feed_url=feed_scope,
+            sort=sort_val,
+            kept_all=all_saved_view,
         )
 
     current: dict | None = None
@@ -24153,11 +24530,7 @@ async def login_submit(request: Request, next: str = "/"):
     form = await request.form()
     username = str(form.get("username") or "")
     password = str(form.get("password") or "")
-    resolved = (
-        user_store.verify_login(username, password, default_scheme=PASSWORD_HASH_SCHEME)
-        if user_store is not None
-        else None
-    )
+    resolved = user_store.verify_login(username, password, default_scheme=PASSWORD_HASH_SCHEME) if user_store is not None else None
     if resolved is not None:
         _clear_login_failures(ip)
         request.session.clear()  # rotate session on login (anti-fixation)
@@ -24286,12 +24659,14 @@ def _admin_user_rows() -> list[dict]:
             )
         except Exception:
             LOGGER.debug("admin stats failed for %r", uid, exc_info=True)
-        rows.append({
-            **u,
-            "feed_count": feeds,
-            "db_human": _human_bytes(db_bytes),
-            "last_active": _format_last_active(u.get("last_seen_at")),
-        })
+        rows.append(
+            {
+                **u,
+                "feed_count": feeds,
+                "db_human": _human_bytes(db_bytes),
+                "last_active": _format_last_active(u.get("last_seen_at")),
+            }
+        )
     return rows
 
 
@@ -24351,7 +24726,7 @@ def administration_page(request: Request, msg: str | None = None, error: str | N
             "shared_reddit_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_SECRET, "")),
             # Instance tuning
             "fetch_history_max_age_days": get_fetch_history_max_age_days(),
-        "tombstone_sweep_days": get_tombstone_sweep_days(),
+            "tombstone_sweep_days": get_tombstone_sweep_days(),
             "login_max_failures": get_login_max_failures(),
             "login_window_seconds": get_login_window_seconds(),
             "instance_auto_refresh": get_instance_default_auto_refresh(),
@@ -24581,13 +24956,13 @@ async def admin_vacuum_user(request: Request):
                 # than before. Fold it back and truncate to zero.
                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 conn.close()
-                LOGGER.info("[admin-vacuum] %s %s: %.1f MB -> %.1f MB (incl. sidecars)",
-                            target_id, label, before / 1048576, _dir_bytes(p) / 1048576)
+                LOGGER.info(
+                    "[admin-vacuum] %s %s: %.1f MB -> %.1f MB (incl. sidecars)", target_id, label, before / 1048576, _dir_bytes(p) / 1048576
+                )
             except Exception:
                 LOGGER.exception("[admin-vacuum] %s %s failed", target_id, label)
 
-    threading.Thread(target=_run_in_user_context, args=(target_id, _vacuum),
-                     daemon=True, name=f"admin-vacuum-{target_id[:12]}").start()
+    threading.Thread(target=_run_in_user_context, args=(target_id, _vacuum), daemon=True, name=f"admin-vacuum-{target_id[:12]}").start()
     return JSONResponse({"ok": True, "started": True})
 
 
@@ -24603,7 +24978,7 @@ def _log_line_dt(line: str) -> datetime | None:
         return None
     try:
         return datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S")
-    except (ValueError, IndexError):
+    except ValueError, IndexError:
         return None
 
 
@@ -24626,8 +25001,9 @@ def _parse_local_ts(value: str) -> tuple[datetime | None, bool]:
     return None, False
 
 
-def _read_log_tail(max_lines: int, min_level: str, since: datetime | None = None,
-                   until: datetime | None = None) -> tuple[list[str], bool, bool]:
+def _read_log_tail(
+    max_lines: int, min_level: str, since: datetime | None = None, until: datetime | None = None
+) -> tuple[list[str], bool, bool]:
     """Return (lines, available, truncated). Reads the current lectio.log, keeps
     records at or above ``min_level`` and within [``since``, ``until``] —
     continuation lines like tracebacks stay attached to their record — and
@@ -24655,8 +25031,7 @@ def _read_log_tail(max_lines: int, min_level: str, since: datetime | None = None
             include_current = _LOG_LEVEL_RANK.get(m.group(1), 0) >= threshold
             if include_current and (since is not None or until is not None):
                 dt = _log_line_dt(line)
-                if dt is not None and ((since is not None and dt < since)
-                                       or (until is not None and dt > until)):
+                if dt is not None and ((since is not None and dt < since) or (until is not None and dt > until)):
                     include_current = False
             if include_current:
                 kept.append(line)
@@ -24666,8 +25041,7 @@ def _read_log_tail(max_lines: int, min_level: str, since: datetime | None = None
 
 
 @app.get("/admin/logs")
-def admin_logs(request: Request, lines: int = 5000, level: str = "all",
-               since: str = "", until: str = ""):
+def admin_logs(request: Request, lines: int = 5000, level: str = "all", since: str = "", until: str = ""):
     """Tail the instance log for the Admin → Logs tab. Admin-only.
 
     ``since``/``until`` are optional timestamps (``YYYY-MM-DDTHH:MM`` from the
@@ -24690,8 +25064,7 @@ def admin_logs(request: Request, lines: int = 5000, level: str = "all",
     if until_dt is not None and not until_had_secs:
         until_dt = until_dt.replace(second=59)  # minute-precision picker → inclusive
     log_lines, available, truncated = _read_log_tail(max_lines, min_level, since_dt, until_dt)
-    return JSONResponse({"available": available, "lines": log_lines,
-                         "count": len(log_lines), "truncated": truncated})
+    return JSONResponse({"available": available, "lines": log_lines, "count": len(log_lines), "truncated": truncated})
 
 
 @app.get("/")
@@ -24734,11 +25107,20 @@ def home(
     # All-feeds view on every app open was slow and never a deliberate choice.
     # Chunk params don't exempt: a chunk fetch against a bare URL is the SPA
     # paginating the landing (deliberate views always carry folder/feed/tag).
-    if (folder_id is None and list_feed_url is None and tag is None
-            and feed_url is None and entry_id is None and q is None
-            and subscribe is None and subscribe_to is None
-            and star_only is None and read_filter is None
-            and saved_home is None and home is None):
+    if (
+        folder_id is None
+        and list_feed_url is None
+        and tag is None
+        and feed_url is None
+        and entry_id is None
+        and q is None
+        and subscribe is None
+        and subscribe_to is None
+        and star_only is None
+        and read_filter is None
+        and saved_home is None
+        and home is None
+    ):
         home = 1
 
     # Limit concurrent expensive home renders (DB queries + context building).
@@ -24778,8 +25160,11 @@ def home(
             # Remember the full-app opt-out on this device (Supernote) so later
             # in-app navigation isn't redirected back to Read Mode.
             _resp.set_cookie(
-                "lectio_full_app", "1", max_age=60 * 60 * 24 * 365,
-                httponly=True, samesite="lax",
+                "lectio_full_app",
+                "1",
+                max_age=60 * 60 * 24 * 365,
+                httponly=True,
+                samesite="lax",
             )
         return _resp
     finally:
@@ -24838,6 +25223,7 @@ def _home_inner(
 
     start_req = time.perf_counter()
     _t = time.perf_counter()
+
     def _tick(label: str) -> None:
         nonlocal _t
         ms = int((time.perf_counter() - _t) * 1000)
@@ -24858,8 +25244,7 @@ def _home_inner(
         # "starred" would be silently rewritten to the default on every load —
         # the preference quietly destroying itself.
         _allow_starred_sort = normalize_star_only(star_only)
-        preferred_sort_by = normalize_sort_by(
-            get_setting(conn, _sort_by_key), allow_starred=_allow_starred_sort)
+        preferred_sort_by = normalize_sort_by(get_setting(conn, _sort_by_key), allow_starred=_allow_starred_sort)
         preferred_sort_dir = normalize_sort_dir(get_setting(conn, _sort_dir_key))
         problematic_feeds_last_viewed_at = parse_epoch_setting(get_setting(conn, PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY))
         # The Saved Inbox is the whole star pile — every star, however it was
@@ -24881,8 +25266,7 @@ def _home_inner(
         #     overwrite the order chosen for the rest of Saved. This is the
         #     exact shape of the bug that once left the toolbar reading
         #     "Published newest" over a star-ordered list.
-        selected_sort_by = normalize_sort_by(
-            sort_by or _node_default_sort_by, allow_starred=_allow_starred_sort)
+        selected_sort_by = normalize_sort_by(sort_by or _node_default_sort_by, allow_starred=_allow_starred_sort)
         if selected_sort_by == "starred" and not inbox_view:
             selected_sort_by = normalize_sort_by(preferred_sort_by)
         selected_sort_dir = normalize_sort_dir(sort_dir or _node_default_sort_dir)
@@ -24955,10 +25339,7 @@ def _home_inner(
         _tick("unread_counts")
         disabled_feed_urls = get_disabled_feed_urls(conn)
         # Exclude disabled feeds from unread counts so folder badges stay clean.
-        active_unread_counts_by_feed = {
-            url: count for url, count in unread_counts_by_feed.items()
-            if url not in disabled_feed_urls
-        }
+        active_unread_counts_by_feed = {url: count for url, count in unread_counts_by_feed.items() if url not in disabled_feed_urls}
         unread_counts_by_folder = get_unread_counts_by_folder(
             raw_folder_rows,
             active_unread_counts_by_feed,
@@ -24966,9 +25347,7 @@ def _home_inner(
         )
         # The virtual Uncategorized folder isn't in raw_folder_rows, so count it
         # here and fold it into the root ("All Feeds") total.
-        uncategorized_unread = sum(
-            active_unread_counts_by_feed.get(url, 0) for url in _uncat_display_urls
-        )
+        uncategorized_unread = sum(active_unread_counts_by_feed.get(url, 0) for url in _uncat_display_urls)
         unread_counts_by_folder[UNCATEGORIZED_FOLDER_ID] = uncategorized_unread
         unread_counts_by_folder[root_id] = unread_counts_by_folder.get(root_id, 0) + uncategorized_unread
         _tick("counts_by_folder")
@@ -24981,19 +25360,21 @@ def _home_inner(
         # the tree. Only when it actually holds feeds. `virtual` flags the template
         # and context menu to suppress edit affordances (rename/delete/props).
         if uncategorized_feed_urls:
-            folder_rows.append({
-                "id": UNCATEGORIZED_FOLDER_ID,
-                "name": UNCATEGORIZED_FOLDER_NAME,
-                "cadence_minutes": None,
-                "depth": 1,
-                "path": UNCATEGORIZED_FOLDER_NAME,
-                "feed_count": len(_uncat_display_urls),
-                "unread_count": uncategorized_unread,
-                "virtual": True,
-                # Saved-only membership (just lectio:saved unfoldered): the
-                # feeds tree hides the row; the Saved sublist still shows it.
-                "has_display_feeds": bool(_uncat_display_urls),
-            })
+            folder_rows.append(
+                {
+                    "id": UNCATEGORIZED_FOLDER_ID,
+                    "name": UNCATEGORIZED_FOLDER_NAME,
+                    "cadence_minutes": None,
+                    "depth": 1,
+                    "path": UNCATEGORIZED_FOLDER_NAME,
+                    "feed_count": len(_uncat_display_urls),
+                    "unread_count": uncategorized_unread,
+                    "virtual": True,
+                    # Saved-only membership (just lectio:saved unfoldered): the
+                    # feeds tree hides the row; the Saved sublist still shows it.
+                    "has_display_feeds": bool(_uncat_display_urls),
+                }
+            )
         global_note = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
         email_to_default = get_setting(conn, EMAIL_TO_SETTING_KEY) or "" if is_email_configured() else ""
         highlight_rules = get_highlight_keywords(conn)
@@ -25003,13 +25384,10 @@ def _home_inner(
         _avatar_hash = hashlib.md5(_profile_lower.strip().encode()).hexdigest() if _profile_lower.strip() else ""
         profile_avatar_url = (
             f"https://www.gravatar.com/avatar/{_avatar_hash}?d=identicon&s=128"
-            if _avatar_hash else
-            "https://www.gravatar.com/avatar/?d=identicon&s=128"
+            if _avatar_hash
+            else "https://www.gravatar.com/avatar/?d=identicon&s=128"
         )
-        email_contacts = [
-            c for c in get_email_contacts(conn)
-            if c["address"].lower() != _profile_lower
-        ]
+        email_contacts = [c for c in get_email_contacts(conn) if c["address"].lower() != _profile_lower]
         email_bcc = get_setting(conn, EMAIL_BCC_SETTING_KEY) or ""
         youtube_sync_last_at = get_setting(conn, YOUTUBE_SYNC_LAST_AT_KEY) or ""
         youtube_sync_last_result = get_setting(conn, YOUTUBE_SYNC_LAST_RESULT_KEY) or ""
@@ -25137,11 +25515,7 @@ def _home_inner(
             continue
         if problematic_feeds_last_viewed_at is None or float(pf_last_failure_at) > problematic_feeds_last_viewed_at:
             problematic_unseen_count += 1
-    error_feed_urls: set[str] = {
-        cast(str, pf["feed_url"])
-        for pf in problematic_feeds
-        if not pf.get("acknowledged_at")
-    }
+    error_feed_urls: set[str] = {cast(str, pf["feed_url"]) for pf in problematic_feeds if not pf.get("acknowledged_at")}
     feeds_by_folder: dict[int, list[FeedInFolder]] = {}
     # folder_id → does it hold any ACTIVE feed. The tree needs this for every
     # folder to decide whether to draw an expand toggle, but only needs the rows
@@ -25233,11 +25607,7 @@ def _home_inner(
     # Star mode keeps them: stars are deliberate curation and the saved-folder
     # badges count them, so hiding a disabled feed's saves made a folder show a
     # badge of 4 with an empty list.
-    entry_feed_urls = (
-        filtered_feed_urls
-        if (list_feed_url or selected_star_only)
-        else filtered_feed_urls - disabled_feed_urls
-    )
+    entry_feed_urls = filtered_feed_urls if (list_feed_url or selected_star_only) else filtered_feed_urls - disabled_feed_urls
     # The Kept view browses kept-but-unsubscribed feeds too: they're hidden from
     # the tree/All Feeds but their starred/tagged entries (with real tags) still
     # live in reader, so add them to the scan scope when in the saved/kept view.
@@ -25284,11 +25654,7 @@ def _home_inner(
     #      per-folder views legitimately exclude them.
     #   2. A specific feed selected that is no longer live (the user clicked
     #      the feed link on an orphaned save) — show just that feed's archive.
-    orphan_only_feed = (
-        selected_feed_url
-        if (selected_star_only and selected_feed_url and selected_feed_url not in all_feed_urls)
-        else None
-    )
+    orphan_only_feed = selected_feed_url if (selected_star_only and selected_feed_url and selected_feed_url not in all_feed_urls) else None
     if orphan_only_feed:
         try:
             posts = merge_orphan_saved_entries(
@@ -25406,7 +25772,7 @@ def _home_inner(
     # count, not a page-number multiple -- see next_chunk's comment above.
     try:
         if chunk and chunk_delta and offset is not None:
-            posts = posts[offset:offset + CHUNK_SIZE]
+            posts = posts[offset : offset + CHUNK_SIZE]
     except Exception:
         # On any error, fall back to the cumulative behavior.
         pass
@@ -25478,8 +25844,7 @@ def _home_inner(
         "folder_has_feeds": folder_has_feeds,
         "feed_to_folder": feed_to_folder,
         "unsubscribed_feed_urls": unsubscribed_feed_urls_among(
-            [p.get("feed_url") for p in posts]
-            + ([selected_entry.get("feed_url")] if selected_entry else [])
+            [p.get("feed_url") for p in posts] + ([selected_entry.get("feed_url")] if selected_entry else [])
         ),
         "push_feed_urls": get_push_active_feed_urls(),
         "tag_rows": tag_rows,
@@ -25487,10 +25852,12 @@ def _home_inner(
         "selected_folder_id": selected_folder_id,
         # Labels the phone's "up to the folder" control when the list is scoped
         # to one feed, so the button says where it goes instead of "Folders".
-        "selected_folder_name": (_selected_folder_name_ := next(
-            (str(row["name"]) for row in folder_rows if cast(int, row["id"]) == selected_folder_id),
-            "",
-        )),
+        "selected_folder_name": (
+            _selected_folder_name_ := next(
+                (str(row["name"]) for row in folder_rows if cast(int, row["id"]) == selected_folder_id),
+                "",
+            )
+        ),
         # Gates duration-syntax parsing in "Filter this view" (app.js) to the
         # one folder it's meaningful in, without depending on the Settings
         # modal's lazily-fetched /settings/all data ever having loaded —
@@ -25569,9 +25936,7 @@ def _home_inner(
         "profile_avatar_url": profile_avatar_url,
         "current_user": _current_web_username(request),
         "is_admin": _is_web_admin(_current_web_user(request)),
-        "current_api_token": (
-            user_store.get_api_token(_uid) if (user_store and (_uid := _current_web_user(request))) else ""
-        ),
+        "current_api_token": (user_store.get_api_token(_uid) if (user_store and (_uid := _current_web_user(request))) else ""),
         # Uncategorized-only feeds count (e.g. a fresh install whose first feed
         # is a bookmarklet-created Saved Articles feed) — the toolbar must render.
         "no_feeds": len(all_feed_urls) == 0 and len(all_reader_feed_urls) == 0,
@@ -25651,19 +26016,22 @@ def _make_dev_feed(feed_id: str, title: str, prefix: str, count: int, fmt: str) 
     entry IDs when fetched in the same minute — they all advance together.
     """
     import json as _json
+
     now_ts = time.time()
     minute = int(now_ts / 60) * 60  # floor to minute boundary
 
     entries = []
     for i in range(count):
         entry_minute = minute - i * 60
-        entries.append({
-            "id": f"urn:lectio-dev:{feed_id}:{entry_minute}:{i}",
-            "title": f"{prefix}: Dev article {i + 1} ({entry_minute})",
-            "url": f"https://example.com/dev/{feed_id}/{entry_minute}/{i}",
-            "iso": datetime.fromtimestamp(entry_minute, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "rfc": time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime(entry_minute)),
-        })
+        entries.append(
+            {
+                "id": f"urn:lectio-dev:{feed_id}:{entry_minute}:{i}",
+                "title": f"{prefix}: Dev article {i + 1} ({entry_minute})",
+                "url": f"https://example.com/dev/{feed_id}/{entry_minute}/{i}",
+                "iso": datetime.fromtimestamp(entry_minute, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "rfc": time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime(entry_minute)),
+            }
+        )
 
     if fmt == "atom":
         items_xml = ""
@@ -25701,12 +26069,14 @@ def _make_dev_feed(feed_id: str, title: str, prefix: str, count: int, fmt: str) 
             }
             for e in entries
         ]
-        body = _json.dumps({
-            "version": "https://jsonfeed.org/version/1.1",
-            "title": title,
-            "home_page_url": "https://example.com",
-            "items": items,
-        })
+        body = _json.dumps(
+            {
+                "version": "https://jsonfeed.org/version/1.1",
+                "title": title,
+                "home_page_url": "https://example.com",
+                "items": items,
+            }
+        )
         return Response(content=body, media_type="application/feed+json")
 
     # RSS 2.0 (default)
@@ -25848,16 +26218,16 @@ _THUMB_RENDER_VERSION = "a1"
 
 # Cover-mode crop: map crop value → (horizontal fraction, vertical fraction), 0=start 1=end.
 _THUMB_COVER_POS: dict[str, tuple[float, float]] = {
-    "cover":              (0.5, 0.5),
-    "cover-top-left":     (0.0, 0.0),
-    "cover-top":          (0.5, 0.0),
-    "cover-top-right":    (1.0, 0.0),
-    "cover-left":         (0.0, 0.5),
-    "cover-right":        (1.0, 0.5),
-    "cover-bottom-left":  (0.0, 1.0),
-    "cover-bottom":       (0.5, 1.0),
+    "cover": (0.5, 0.5),
+    "cover-top-left": (0.0, 0.0),
+    "cover-top": (0.5, 0.0),
+    "cover-top-right": (1.0, 0.0),
+    "cover-left": (0.0, 0.5),
+    "cover-right": (1.0, 0.5),
+    "cover-bottom-left": (0.0, 1.0),
+    "cover-bottom": (0.5, 1.0),
     "cover-bottom-right": (1.0, 1.0),
-    "left":               (0.0, 0.5),  # legacy alias
+    "left": (0.0, 0.5),  # legacy alias
 }
 
 
@@ -25906,7 +26276,7 @@ def thumbnail_proxy(
     # nothing to rasterize/crop (they're vector); decode and serve the SVG directly
     # so every /thumb consumer (post list, Feed Properties, previews) renders them.
     if url.startswith("data:image/svg+xml,"):
-        svg = unquote(url[len("data:image/svg+xml,"):])
+        svg = unquote(url[len("data:image/svg+xml,") :])
         return Response(
             content=svg,
             media_type="image/svg+xml",
@@ -25945,7 +26315,7 @@ def thumbnail_proxy(
     # default 0.9). Set in Feed Properties; absent for feeds using the default.
     try:
         _smart_min_scale = min(1.0, max(0.5, float(ms or "0.9")))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         _smart_min_scale = 0.9
 
     # Per-feed Fill zoom multiplier arrives as the `fz` query param (clamped 0.5–2.0,
@@ -25953,7 +26323,7 @@ def thumbnail_proxy(
     # values > 1.0 crop more aggressively than the default tight fill.
     try:
         _fill_zoom = min(2.0, max(0.5, float(fz or "1.0")))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         _fill_zoom = 1.0
 
     # "smart.2" busts old center-crop smart-mode entries when switching to content-aware crop.
@@ -25965,16 +26335,12 @@ def thumbnail_proxy(
         _crop_cache_key = f"{crop}_z{_fill_zoom:.2f}" + ("_p2" if _fill_zoom < 1.0 else "")
     else:
         _crop_cache_key = crop
-    cache_key = hashlib.sha256(
-        f"{url}|{_THUMB_W}|{_THUMB_H}|{_crop_cache_key}|{_THUMB_RENDER_VERSION}".encode()
-    ).hexdigest()
+    cache_key = hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}|{_crop_cache_key}|{_THUMB_RENDER_VERSION}".encode()).hexdigest()
     cached_headers = {"Cache-Control": "public, max-age=604800, immutable"}
 
     try:
         with get_thumb_connection() as conn:
-            row = conn.execute(
-                "SELECT jpeg FROM thumb_cache WHERE cache_key = ?", (cache_key,)
-            ).fetchone()
+            row = conn.execute("SELECT jpeg FROM thumb_cache WHERE cache_key = ?", (cache_key,)).fetchone()
         if row is not None:
             return Response(content=bytes(row["jpeg"]), media_type="image/jpeg", headers=cached_headers)
     except Exception:
@@ -26010,9 +26376,7 @@ def thumbnail_proxy(
     raw: bytes | None = None
     src_content_type = ""
     try:
-        _cached_src = _img_cache_get(
-            hashlib.sha256(_img_cache_key_url(url).encode("utf-8")).hexdigest()
-        )
+        _cached_src = _img_cache_get(hashlib.sha256(_img_cache_key_url(url).encode("utf-8")).hexdigest())
     except Exception:  # noqa: BLE001 — a cache miss is the safe answer
         _cached_src = None
     if _cached_src is not None:
@@ -26075,6 +26439,7 @@ def thumbnail_proxy(
             _sc_done = False
             try:
                 import smartcrop as _sc_mod
+
                 # Downsample before analysis: SmartCrop's scoring is coarse
                 # enough that 800px gives identical results at 2-3× less CPU.
                 _SC_MAX = 800
@@ -26101,7 +26466,7 @@ def thumbnail_proxy(
                 pass
             if not _sc_done:
                 _MAX_CROP = 0.4
-                cover_s   = max(_THUMB_W / iw, _THUMB_H / ih)
+                cover_s = max(_THUMB_W / iw, _THUMB_H / ih)
                 contain_s = min(_THUMB_W / iw, _THUMB_H / ih)
                 cap_w = _THUMB_W / (iw * (1.0 - _MAX_CROP))
                 cap_h = _THUMB_H / (ih * (1.0 - _MAX_CROP))
@@ -26111,10 +26476,8 @@ def thumbnail_proxy(
                 img = img.resize((new_w, new_h), _PILImage.Resampling.LANCZOS)
                 if new_w > _THUMB_W or new_h > _THUMB_H:
                     left = max(0, (new_w - _THUMB_W) // 2)
-                    top  = max(0, (new_h - _THUMB_H) // 2)
-                    img  = img.crop((left, top,
-                                     left + min(new_w, _THUMB_W),
-                                     top  + min(new_h, _THUMB_H)))
+                    top = max(0, (new_h - _THUMB_H) // 2)
+                    img = img.crop((left, top, left + min(new_w, _THUMB_W), top + min(new_h, _THUMB_H)))
         elif crop == "contain":
             # Scale to fit; CSS handles letterboxing / blurred backdrop.
             scale = min(_THUMB_W / iw, _THUMB_H / ih)
@@ -26123,10 +26486,8 @@ def thumbnail_proxy(
             img = img.resize((new_w, new_h), _PILImage.Resampling.LANCZOS)
             if new_w > _THUMB_W or new_h > _THUMB_H:
                 left = max(0, (new_w - _THUMB_W) // 2)
-                top  = max(0, (new_h - _THUMB_H) // 2)
-                img  = img.crop((left, top,
-                                 left + min(new_w, _THUMB_W),
-                                 top  + min(new_h, _THUMB_H)))
+                top = max(0, (new_h - _THUMB_H) // 2)
+                img = img.crop((left, top, left + min(new_w, _THUMB_W), top + min(new_h, _THUMB_H)))
         else:
             scale = max(_THUMB_W / iw, _THUMB_H / ih) * _fill_zoom
             new_w = max(1, round(iw * scale))
@@ -26147,7 +26508,8 @@ def thumbnail_proxy(
                 # it in black reintroduces exactly the black-box look the flatten
                 # above just fixed.
                 canvas = _PILImage.new(
-                    "RGB", (_THUMB_W, _THUMB_H),
+                    "RGB",
+                    (_THUMB_W, _THUMB_H),
                     (255, 255, 255) if _had_alpha else (0, 0, 0),
                 )
                 h_frac, v_frac = _THUMB_COVER_POS.get(crop, (0.5, 0.5))
@@ -26214,6 +26576,7 @@ def starred_asset(asset_hash: str) -> Response:
 @app.get("/feeds/discover")
 def discover_feed_route(url: str = Query(...)):
     from services.feed_discovery import probe_url as _probe_url
+
     # Schemeless paste, assumed https — otherwise the SSRF guard rejects it
     # with a misleading "private target" message instead of actually probing it.
     url = assume_https_if_schemeless(url.strip())
@@ -26231,6 +26594,7 @@ def _guid_type(ids: list[str]) -> str:
 def _compare_one_feed(url: str) -> dict:
     """Fetch and parse one feed URL, returning metadata for the Add Feed comparison picker."""
     from services import url_guard
+
     _headers = {"User-Agent": "Lectio/1.0 (feed comparison; +https://github.com/joshg253/Lectio)"}
     try:
         with url_guard.build_client(timeout=10.0, headers=_headers) as client:
@@ -26248,17 +26612,17 @@ def _compare_one_feed(url: str) -> dict:
     if "json" in ct:
         try:
             import json as _j
+
             data = _j.loads(resp.text)
             items = data.get("items", [])
             image_count = sum(
-                1 for item in items
-                if item.get("image") or item.get("banner_image") or
-                any(a.get("mime_type", "").startswith("image") for a in item.get("attachments") or [])
+                1
+                for item in items
+                if item.get("image")
+                or item.get("banner_image")
+                or any(a.get("mime_type", "").startswith("image") for a in item.get("attachments") or [])
             )
-            full_text_count = sum(
-                1 for item in items
-                if len(item.get("content_html") or item.get("content_text") or "") > 200
-            )
+            full_text_count = sum(1 for item in items if len(item.get("content_html") or item.get("content_text") or "") > 200)
             date_field = "none"
             if items:
                 if items[0].get("date_published"):
@@ -26276,12 +26640,18 @@ def _compare_one_feed(url: str) -> dict:
             sample_title = next((i["title"] for i in items if i.get("title")), None)
             if sample_title:
                 sample_title = html.unescape(sample_title)
-            return {"url": url, "format": "JSON Feed", "title": data.get("title"),
-                    "entry_count": len(items), "image_count": image_count,
-                    "full_text": full_text_count > len(items) // 2 if items else False,
-                    "date_field": date_field,
-                    "guid_type": _guid_type([i.get("id", "") for i in items if i.get("id")]),
-                    "latest_date": latest, "sample_title": sample_title}
+            return {
+                "url": url,
+                "format": "JSON Feed",
+                "title": data.get("title"),
+                "entry_count": len(items),
+                "image_count": image_count,
+                "full_text": full_text_count > len(items) // 2 if items else False,
+                "date_field": date_field,
+                "guid_type": _guid_type([i.get("id", "") for i in items if i.get("id")]),
+                "latest_date": latest,
+                "sample_title": sample_title,
+            }
         except Exception as exc:
             return {"url": url, "error": f"JSON parse error: {exc}"}
 
@@ -26310,8 +26680,12 @@ def _compare_one_feed(url: str) -> dict:
             date_field = "modified_only"
 
     version_map = {
-        "rss20": "RSS 2.0", "rss10": "RSS 1.0", "rss092": "RSS 0.92",
-        "rss091n": "RSS 0.91", "atom10": "Atom 1.0", "atom03": "Atom 0.3",
+        "rss20": "RSS 2.0",
+        "rss10": "RSS 1.0",
+        "rss092": "RSS 0.92",
+        "rss091n": "RSS 0.91",
+        "atom10": "Atom 1.0",
+        "atom03": "Atom 0.3",
     }
     ver = parsed.get("version", "")
     fmt = version_map.get(ver) or (ver.upper() if ver else None)
@@ -26347,17 +26721,24 @@ def _compare_one_feed(url: str) -> dict:
     if sample_title:
         sample_title = html.unescape(sample_title)
 
-    return {"url": url, "format": fmt, "title": parsed.feed.get("title"),
-            "entry_count": len(entries), "image_count": image_count,
-            "full_text": full_text_count > len(entries) // 2 if entries else False,
-            "date_field": date_field,
-            "guid_type": _guid_type([e.get("id", "") for e in entries if e.get("id")]),
-            "latest_date": latest, "sample_title": sample_title}
+    return {
+        "url": url,
+        "format": fmt,
+        "title": parsed.feed.get("title"),
+        "entry_count": len(entries),
+        "image_count": image_count,
+        "full_text": full_text_count > len(entries) // 2 if entries else False,
+        "date_field": date_field,
+        "guid_type": _guid_type([e.get("id", "") for e in entries if e.get("id")]),
+        "latest_date": latest,
+        "sample_title": sample_title,
+    }
 
 
 @app.get("/feeds/compare")
 def compare_feeds_route(urls: list[str] = Query(..., alias="url")):
     from concurrent.futures import ThreadPoolExecutor
+
     capped = [u.strip() for u in urls[:6]]
     with ThreadPoolExecutor(max_workers=len(capped)) as ex:
         results = list(ex.map(_compare_one_feed, capped))
@@ -26432,9 +26813,7 @@ def delete_folder_route(
     try:
         with get_meta_connection() as conn:
             root_id = get_root_folder_id(conn)
-        deleted_folders, deleted_feeds, moved_feeds = delete_folder(
-            folder_id, feed_action=feed_action, move_to_folder_id=move_to_folder_id
-        )
+        deleted_folders, deleted_feeds, moved_feeds = delete_folder(folder_id, feed_action=feed_action, move_to_folder_id=move_to_folder_id)
         if feed_action == "move":
             message = f"Deleted {deleted_folders} folder(s). Moved {moved_feeds} feed(s)."
         else:
@@ -26462,8 +26841,7 @@ def _is_youtube_url(url: str) -> bool:
         return False
 
 
-def _devto_config_from_form(tag: str, top_days: str, english_only: str,
-                            min_reactions: str, tags_exclude: str) -> dict:
+def _devto_config_from_form(tag: str, top_days: str, english_only: str, min_reactions: str, tags_exclude: str) -> dict:
     """Shared form→config parsing for the add-feed and config-update routes.
 
     Checkbox semantics: the dialogs always post english_only as "1"/"0"; an
@@ -26498,9 +26876,7 @@ def create_feed(
     # detects a dev.to URL; a bare POST without them still works with defaults.
     devto_parsed = devto_service.parse_devto_url(url)
     if devto_parsed:
-        config = _devto_config_from_form(
-            devto_tag, devto_top_days, devto_english_only, devto_min_reactions, devto_tags_exclude
-        )
+        config = _devto_config_from_form(devto_tag, devto_top_days, devto_english_only, devto_min_reactions, devto_tags_exclude)
         config["tag"] = config["tag"] or devto_parsed.get("tag") or ""
         try:
             with get_meta_connection() as conn:
@@ -26528,8 +26904,11 @@ def create_feed(
         if token:
             try:
                 ok, detail = deviantart_service.watch_user(token, da_username)
-                msg = (f"Now watching {da_username} on DeviantArt — new posts appear in your Watch feed."
-                       if ok else f"Couldn't watch {da_username}: {detail}")
+                msg = (
+                    f"Now watching {da_username} on DeviantArt — new posts appear in your Watch feed."
+                    if ok
+                    else f"Couldn't watch {da_username}: {detail}"
+                )
             except deviantart_service.DeviantArtRateLimited:
                 msg = "DeviantArt rate limit — try again in a bit."
             except Exception as exc:  # noqa: BLE001
@@ -26539,8 +26918,7 @@ def create_feed(
         cid, secret = get_deviantart_credentials()
         if not cid or not secret:
             return RedirectResponse(
-                url=(f"/?folder_id={folder_id}"
-                     f"&message={quote_plus('Connect your DeviantArt account in Settings first.')}"),
+                url=(f"/?folder_id={folder_id}&message={quote_plus('Connect your DeviantArt account in Settings first.')}"),
                 status_code=303,
             )
         try:
@@ -26576,8 +26954,12 @@ def create_feed(
             # carry a scheme or host. CodeQL does not model the coercion and
             # reads the raw parameter as remote input (py/url-redirection).
             return RedirectResponse(
-                url=("/?folder_id=" + str(int(folder_id)) + "&message="
-                     + quote_plus("That address is not allowed (private/loopback target).")),
+                url=(
+                    "/?folder_id="
+                    + str(int(folder_id))
+                    + "&message="
+                    + quote_plus("That address is not allowed (private/loopback target).")
+                ),
                 status_code=303,
             )
     if not _is_youtube_url(url) and not force:
@@ -26595,21 +26977,19 @@ def create_feed(
             probe = {}
             try:
                 from services.feed_discovery import probe_url as _probe_url
+
                 probe = _probe_url(url)
             except Exception:  # noqa: BLE001 — classification only
                 probe = {}
             from services.feed_discovery import refusal_is_forceable
+
             refused = refusal_is_forceable(probe)
-            note = (
-                "That address could not be read (the site refused us)."
-                if refused else "No RSS/Atom feed found at that URL."
-            )
+            note = "That address could not be read (the site refused us)." if refused else "No RSS/Atom feed found at that URL."
             return RedirectResponse(
                 url=(
                     f"/?folder_id={folder_id}"
                     f"&message={quote_plus(note)}"
-                    f"&no_rss_url={quote_plus(url)}"
-                    + (f"&force_url={quote_plus(url)}" if refused else "")
+                    f"&no_rss_url={quote_plus(url)}" + (f"&force_url={quote_plus(url)}" if refused else "")
                 ),
                 status_code=303,
             )
@@ -26652,10 +27032,7 @@ def create_feed(
     # since a brand-new feed's posts are unread anyway and the user wants to see
     # what landed.
     return RedirectResponse(
-        url=(
-            f"/?folder_id={folder_id}&list_feed_url={quote_plus(target_url)}"
-            f"&read_filter=all&message={quote_plus(message)}"
-        ),
+        url=(f"/?folder_id={folder_id}&list_feed_url={quote_plus(target_url)}&read_filter=all&message={quote_plus(message)}"),
         status_code=303,
     )
 
@@ -26729,7 +27106,10 @@ def create_scraped_feed_route(
         with get_meta_connection() as conn:
             with get_reader() as reader:
                 feed_id, file_url = scraper_service.create_scraped_feed(
-                    conn, reader, source_url, mode,
+                    conn,
+                    reader,
+                    source_url,
+                    mode,
                     selector.strip() or None,
                     feed_title.strip() or None,
                     backfill=backfill in ("1", "true", "on", "yes"),
@@ -26804,9 +27184,7 @@ def update_devto_feed_config_route(
     devto_tags_exclude: str = Form(""),
 ):
     """Update a dev.to feed's filter config from the feed Properties modal."""
-    config = _devto_config_from_form(
-        devto_tag, devto_top_days, devto_english_only, devto_min_reactions, devto_tags_exclude
-    )
+    config = _devto_config_from_form(devto_tag, devto_top_days, devto_english_only, devto_min_reactions, devto_tags_exclude)
     try:
         with get_meta_connection() as conn:
             with get_reader() as reader:
@@ -26838,8 +27216,7 @@ def fix_url_titles():
         stale_urls = [
             f.url
             for f in reader.get_feeds()
-            if not (f.resolved_title or f.title)
-            or (f.resolved_title or f.title or "").lower().startswith("http")
+            if not (f.resolved_title or f.title) or (f.resolved_title or f.title or "").lower().startswith("http")
         ]
     if stale_urls:
         threading.Thread(
@@ -26857,8 +27234,20 @@ def fix_url_titles():
 # exact-match denylist rather than a length heuristic: a short but
 # meaningful title ("Kotaku", "XKCD") must never get flagged.
 _LAZY_TITLE_WORDS = {
-    "news", "update", "updates", "blog", "feed", "feeds", "rss",
-    "article", "articles", "post", "posts", "latest", "home", "newsletter",
+    "news",
+    "update",
+    "updates",
+    "blog",
+    "feed",
+    "feeds",
+    "rss",
+    "article",
+    "articles",
+    "post",
+    "posts",
+    "latest",
+    "home",
+    "newsletter",
 }
 
 
@@ -26934,8 +27323,7 @@ def get_lazy_titles():
     it has one, else guessed from the domain."""
     with get_meta_connection() as conn:
         rows = conn.execute(
-            "SELECT ff.folder_id, ff.feed_url, f.name AS folder_name"
-            " FROM folder_feeds ff JOIN folders f ON f.id = ff.folder_id"
+            "SELECT ff.folder_id, ff.feed_url, f.name AS folder_name FROM folder_feeds ff JOIN folders f ON f.id = ff.folder_id"
         ).fetchall()
     url_folders: dict[str, list[dict]] = {}
     for folder_id, feed_url, folder_name in rows:
@@ -26948,16 +27336,15 @@ def get_lazy_titles():
             if title.casefold() not in _LAZY_TITLE_WORDS:
                 continue
             url = str(f.url)
-            site_name = (
-                (f.subtitle and _site_name_from_subtitle(str(f.subtitle)))
-                or _site_name_from_feed_url(url)
+            site_name = (f.subtitle and _site_name_from_subtitle(str(f.subtitle))) or _site_name_from_feed_url(url)
+            results.append(
+                {
+                    "feed_url": url,
+                    "title": title,
+                    "suggested_title": f"{site_name} - {title}" if site_name else title,
+                    "folders": url_folders.get(url, []),
+                }
             )
-            results.append({
-                "feed_url": url,
-                "title": title,
-                "suggested_title": f"{site_name} - {title}" if site_name else title,
-                "folders": url_folders.get(url, []),
-            })
     results.sort(key=lambda r: r["title"].casefold())
     return JSONResponse({"lazy_titles": results})
 
@@ -27063,8 +27450,7 @@ def _auto_tag_github_release_feeds() -> None:
         with get_meta_connection() as conn:
             now = time.time()
             rows = conn.execute(
-                "SELECT DISTINCT feed_url FROM folder_feeds"
-                " WHERE lower(feed_url) LIKE '%github.com%/releases.atom'"
+                "SELECT DISTINCT feed_url FROM folder_feeds WHERE lower(feed_url) LIKE '%github.com%/releases.atom'"
             ).fetchall()
             for row in rows:
                 feed_url = str(row["feed_url"])
@@ -27174,6 +27560,7 @@ def set_feed_image_strategy(feed_url: str = Form(...), strategy: str = Form(...)
     # chunk-backfill semaphore so this isn't silently dropped if another
     # backfill is in flight.
     if strategy not in ("auto", "none"):
+
         def _refetch(furl: str) -> None:
             try:
                 with get_reader() as reader:
@@ -27201,13 +27588,12 @@ def set_feed_image_strategy(feed_url: str = Form(...), strategy: str = Form(...)
                     lead_image_service._do_backfill_entry_list(posts)
             except Exception:
                 pass
+
         # Capture the request's tenancy user; a raw daemon thread does not
         # inherit contextvars and would otherwise re-fetch as the default user,
         # writing to the wrong DB and leaving this user's cache empty.
         _uid = tenancy.current_user_id()
-        threading.Thread(
-            target=_run_in_user_context, args=(_uid, _refetch, feed_url), daemon=True
-        ).start()
+        threading.Thread(target=_run_in_user_context, args=(_uid, _refetch, feed_url), daemon=True).start()
     return JSONResponse({"ok": True, "strategy": strategy})
 
 
@@ -27240,15 +27626,12 @@ def backfill_hide_shorts_route():
     or cached duration), so previously-missed Shorts get marked read without
     the user having to re-toggle the pref on every feed."""
     with get_meta_connection() as conn:
-        rows = conn.execute(
-            "SELECT feed_url FROM feed_display_prefs WHERE hide_shorts = 1"
-        ).fetchall()
+        rows = conn.execute("SELECT feed_url FROM feed_display_prefs WHERE hide_shorts = 1").fetchall()
     feed_urls = {str(r["feed_url"]) for r in rows}
     if youtube_hide_shorts_global():
         with get_meta_connection() as conn:
             all_yt = conn.execute(
-                "SELECT DISTINCT feed_url FROM feed_display_prefs"
-                " WHERE feed_url LIKE 'https://www.youtube.com/%'"
+                "SELECT DISTINCT feed_url FROM feed_display_prefs WHERE feed_url LIKE 'https://www.youtube.com/%'"
             ).fetchall()
         feed_urls |= {str(r["feed_url"]) for r in all_yt}
     try:
@@ -27307,9 +27690,7 @@ def pinned_feed_thumbnail_keys() -> set[str]:
     """
     try:
         with get_img_cache_connection() as conn:
-            rows = conn.execute(
-                "SELECT cache_key FROM img_cache WHERE cache_key LIKE ?", (_FEED_THUMB_CACHE_PREFIX + "%",)
-            ).fetchall()
+            rows = conn.execute("SELECT cache_key FROM img_cache WHERE cache_key LIKE ?", (_FEED_THUMB_CACHE_PREFIX + "%",)).fetchall()
         return {str(r["cache_key"]) for r in rows}
     except Exception:
         return set()
@@ -27332,9 +27713,7 @@ def _pinned_thumb_response(feed_url: str) -> Response:
 def has_pinned_feed_thumbnail(feed_url: str) -> bool:
     try:
         with get_img_cache_connection() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM img_cache WHERE cache_key = ?", (_feed_thumb_cache_key(feed_url),)
-            ).fetchone()
+            row = conn.execute("SELECT 1 FROM img_cache WHERE cache_key = ?", (_feed_thumb_cache_key(feed_url),)).fetchone()
         return row is not None
     except Exception:
         return False
@@ -27533,6 +27912,7 @@ def set_feed_thumb_strategy_route(
     # entry_lead_images so thumbnails appear without waiting for the next
     # scheduled refresh.  Already-cached entries are skipped by the backfill.
     if not strategy:
+
         def _backfill(furl: str) -> None:
             try:
                 with get_reader() as reader:
@@ -27548,12 +27928,11 @@ def set_feed_thumb_strategy_route(
                 lead_image_service._do_backfill_entry_list(posts)
             except Exception:
                 pass
+
         # Re-bind the request's tenancy user inside the daemon thread; otherwise
         # the backfill runs as the default user and writes to the wrong DB.
         _uid = tenancy.current_user_id()
-        threading.Thread(
-            target=_run_in_user_context, args=(_uid, _backfill, feed_url), daemon=True
-        ).start()
+        threading.Thread(target=_run_in_user_context, args=(_uid, _backfill, feed_url), daemon=True).start()
     return JSONResponse({"ok": True})
 
 
@@ -27594,10 +27973,15 @@ def get_highlight_suggestions_route():
         mergeable, mismatched = find_mergeable_rule_groups(conn)
         redundant = find_redundant_feed_rules(conn)
         regex_convertible = find_regex_convertible_rule_groups(conn)
-    return JSONResponse({
-        "ok": True, "mergeable": mergeable, "mismatched": mismatched, "redundant": redundant,
-        "regex_convertible": regex_convertible,
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "mergeable": mergeable,
+            "mismatched": mismatched,
+            "redundant": redundant,
+            "regex_convertible": regex_convertible,
+        }
+    )
 
 
 @app.post("/highlights/merge-group")
@@ -27616,8 +28000,18 @@ def merge_highlight_group_route(
 ):
     with get_meta_connection() as conn:
         result = merge_highlight_rule_group(
-            conn, type, scope, scope_id, search_in, bool(is_regex),
-            color, delivery, email_to, batch_time, batch_count, bool(cc_me),
+            conn,
+            type,
+            scope,
+            scope_id,
+            search_in,
+            bool(is_regex),
+            color,
+            delivery,
+            email_to,
+            batch_time,
+            batch_count,
+            bool(cc_me),
         )
     if result is None:
         return JSONResponse(
@@ -27648,8 +28042,9 @@ def merge_highlight_group_regex_convert_route(
     return JSONResponse({"ok": True, **result})
 
 
-def _validate_highlight_rule(scope: str, scope_id: str, keyword: str, rule_type: str,
-                             yt_playlist_id: str, webhook_url: str, webhook_format: str) -> str | None:
+def _validate_highlight_rule(
+    scope: str, scope_id: str, keyword: str, rule_type: str, yt_playlist_id: str, webhook_url: str, webhook_format: str
+) -> str | None:
     """Shared by /highlights/add and /highlights/edit — an error message, or
     None if the rule is valid. One copy so a new rule type's validation can't
     drift between the two routes. *keyword* and *webhook_url* are expected
@@ -27699,33 +28094,70 @@ def _validate_highlight_rule(scope: str, scope_id: str, keyword: str, rule_type:
     return None
 
 
-def _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, search_in,
-                             delivery, email_to, batch_time, batch_count, cc_me, enabled,
-                             dedup_window_hours, exclude_scope_ids, dedup_fuzzy_pct,
-                             dedup_min_title_words, webhook_url, webhook_format, webhook_batch,
-                             yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,
-                             yt_min_minutes, yt_max_minutes, label="") -> JSONResponse:
+def _highlight_rule_response(
+    scope,
+    scope_id,
+    keyword,
+    color,
+    is_regex,
+    type,
+    search_in,
+    delivery,
+    email_to,
+    batch_time,
+    batch_count,
+    cc_me,
+    enabled,
+    dedup_window_hours,
+    exclude_scope_ids,
+    dedup_fuzzy_pct,
+    dedup_min_title_words,
+    webhook_url,
+    webhook_format,
+    webhook_batch,
+    yt_playlist_id,
+    yt_playlist_title,
+    yt_include_shorts,
+    yt_mark_read,
+    yt_min_minutes,
+    yt_max_minutes,
+    label="",
+) -> JSONResponse:
     """Shared by /highlights/add and /highlights/edit — the saved rule, in the
     shape the client's rule list expects. *keyword* and *webhook_url* are
     expected already stripped."""
-    return JSONResponse({"ok": True, "scope": scope, "scope_id": scope_id, "keyword": keyword,
-                         "color": color, "is_regex": bool(is_regex), "type": type,
-                         "search_in": search_in, "delivery": delivery,
-                         "email_to": email_to, "batch_time": batch_time, "batch_count": batch_count,
-                         "cc_me": bool(cc_me), "enabled": bool(enabled),
-                         "dedup_window_hours": dedup_window_hours,
-                         "dedup_fuzzy_pct": _clamp_fuzzy_pct(dedup_fuzzy_pct),
-                         "dedup_min_title_words": _clamp_min_title_words(dedup_min_title_words),
-                         "exclude_scope_ids": exclude_scope_ids.strip(),
-                         "webhook_url": webhook_url, "webhook_format": webhook_format,
-                         "webhook_batch": bool(webhook_batch),
-                         "yt_playlist_id": yt_playlist_id.strip(),
-                         "yt_playlist_title": yt_playlist_title.strip(),
-                         "yt_include_shorts": bool(yt_include_shorts),
-                         "yt_mark_read": bool(yt_mark_read),
-                         "yt_min_minutes": max(0, int(yt_min_minutes or 0)),
-                         "yt_max_minutes": max(0, int(yt_max_minutes or 0)),
-                         "label": label.strip()})
+    return JSONResponse(
+        {
+            "ok": True,
+            "scope": scope,
+            "scope_id": scope_id,
+            "keyword": keyword,
+            "color": color,
+            "is_regex": bool(is_regex),
+            "type": type,
+            "search_in": search_in,
+            "delivery": delivery,
+            "email_to": email_to,
+            "batch_time": batch_time,
+            "batch_count": batch_count,
+            "cc_me": bool(cc_me),
+            "enabled": bool(enabled),
+            "dedup_window_hours": dedup_window_hours,
+            "dedup_fuzzy_pct": _clamp_fuzzy_pct(dedup_fuzzy_pct),
+            "dedup_min_title_words": _clamp_min_title_words(dedup_min_title_words),
+            "exclude_scope_ids": exclude_scope_ids.strip(),
+            "webhook_url": webhook_url,
+            "webhook_format": webhook_format,
+            "webhook_batch": bool(webhook_batch),
+            "yt_playlist_id": yt_playlist_id.strip(),
+            "yt_playlist_title": yt_playlist_title.strip(),
+            "yt_include_shorts": bool(yt_include_shorts),
+            "yt_mark_read": bool(yt_mark_read),
+            "yt_min_minutes": max(0, int(yt_min_minutes or 0)),
+            "yt_max_minutes": max(0, int(yt_max_minutes or 0)),
+            "label": label.strip(),
+        }
+    )
 
 
 @app.post("/highlights/add")
@@ -27766,21 +28198,65 @@ def add_highlight_route(
     if err:
         return JSONResponse({"error": err}, status_code=400)
     with get_meta_connection() as conn:
-        add_highlight_keyword(conn, scope, scope_id, keyword, color, bool(is_regex),
-                              type, search_in, delivery, email_to, batch_time, batch_count,
-                              bool(cc_me), enabled, dedup_window_hours, exclude_scope_ids,
-                              _clamp_fuzzy_pct(dedup_fuzzy_pct),
-                              _clamp_min_title_words(dedup_min_title_words),
-                              webhook_url, webhook_format, bool(webhook_batch),
-                              yt_playlist_id, yt_playlist_title,
-                              bool(yt_include_shorts), bool(yt_mark_read),
-                              yt_min_minutes, yt_max_minutes, label=label)
-    return _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, search_in,
-                                    delivery, email_to, batch_time, batch_count, cc_me, enabled,
-                                    dedup_window_hours, exclude_scope_ids, dedup_fuzzy_pct,
-                                    dedup_min_title_words, webhook_url, webhook_format, webhook_batch,
-                                    yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,
-                                    yt_min_minutes, yt_max_minutes, label=label)
+        add_highlight_keyword(
+            conn,
+            scope,
+            scope_id,
+            keyword,
+            color,
+            bool(is_regex),
+            type,
+            search_in,
+            delivery,
+            email_to,
+            batch_time,
+            batch_count,
+            bool(cc_me),
+            enabled,
+            dedup_window_hours,
+            exclude_scope_ids,
+            _clamp_fuzzy_pct(dedup_fuzzy_pct),
+            _clamp_min_title_words(dedup_min_title_words),
+            webhook_url,
+            webhook_format,
+            bool(webhook_batch),
+            yt_playlist_id,
+            yt_playlist_title,
+            bool(yt_include_shorts),
+            bool(yt_mark_read),
+            yt_min_minutes,
+            yt_max_minutes,
+            label=label,
+        )
+    return _highlight_rule_response(
+        scope,
+        scope_id,
+        keyword,
+        color,
+        is_regex,
+        type,
+        search_in,
+        delivery,
+        email_to,
+        batch_time,
+        batch_count,
+        cc_me,
+        enabled,
+        dedup_window_hours,
+        exclude_scope_ids,
+        dedup_fuzzy_pct,
+        dedup_min_title_words,
+        webhook_url,
+        webhook_format,
+        webhook_batch,
+        yt_playlist_id,
+        yt_playlist_title,
+        yt_include_shorts,
+        yt_mark_read,
+        yt_min_minutes,
+        yt_max_minutes,
+        label=label,
+    )
 
 
 @app.post("/highlights/edit")
@@ -27836,8 +28312,7 @@ def edit_highlight_route(
     if err:
         return JSONResponse({"error": err}, status_code=400)
     with get_meta_connection() as conn:
-        same_identity = (scope == old_scope and str(scope_id or "") == str(old_scope_id or "")
-                         and keyword == old_keyword)
+        same_identity = scope == old_scope and str(scope_id or "") == str(old_scope_id or "") and keyword == old_keyword
         # INSERT OR REPLACE below re-creates the row (new rowid) even when the
         # identity is unchanged, so the prior rule_uid must be fetched and
         # carried forward regardless -- otherwise every edit would mint a new
@@ -27849,21 +28324,66 @@ def edit_highlight_route(
         rule_uid = str(old_row["rule_uid"]) if old_row else ""
         if not same_identity:
             remove_highlight_keyword(conn, old_scope, old_scope_id, old_keyword)
-        add_highlight_keyword(conn, scope, scope_id, keyword, color, bool(is_regex),
-                              type, search_in, delivery, email_to, batch_time, batch_count,
-                              bool(cc_me), enabled, dedup_window_hours, exclude_scope_ids,
-                              _clamp_fuzzy_pct(dedup_fuzzy_pct),
-                              _clamp_min_title_words(dedup_min_title_words),
-                              webhook_url, webhook_format, bool(webhook_batch),
-                              yt_playlist_id, yt_playlist_title,
-                              bool(yt_include_shorts), bool(yt_mark_read),
-                              yt_min_minutes, yt_max_minutes, rule_uid, label)
-    return _highlight_rule_response(scope, scope_id, keyword, color, is_regex, type, search_in,
-                                    delivery, email_to, batch_time, batch_count, cc_me, enabled,
-                                    dedup_window_hours, exclude_scope_ids, dedup_fuzzy_pct,
-                                    dedup_min_title_words, webhook_url, webhook_format, webhook_batch,
-                                    yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,
-                                    yt_min_minutes, yt_max_minutes, label=label)
+        add_highlight_keyword(
+            conn,
+            scope,
+            scope_id,
+            keyword,
+            color,
+            bool(is_regex),
+            type,
+            search_in,
+            delivery,
+            email_to,
+            batch_time,
+            batch_count,
+            bool(cc_me),
+            enabled,
+            dedup_window_hours,
+            exclude_scope_ids,
+            _clamp_fuzzy_pct(dedup_fuzzy_pct),
+            _clamp_min_title_words(dedup_min_title_words),
+            webhook_url,
+            webhook_format,
+            bool(webhook_batch),
+            yt_playlist_id,
+            yt_playlist_title,
+            bool(yt_include_shorts),
+            bool(yt_mark_read),
+            yt_min_minutes,
+            yt_max_minutes,
+            rule_uid,
+            label,
+        )
+    return _highlight_rule_response(
+        scope,
+        scope_id,
+        keyword,
+        color,
+        is_regex,
+        type,
+        search_in,
+        delivery,
+        email_to,
+        batch_time,
+        batch_count,
+        cc_me,
+        enabled,
+        dedup_window_hours,
+        exclude_scope_ids,
+        dedup_fuzzy_pct,
+        dedup_min_title_words,
+        webhook_url,
+        webhook_format,
+        webhook_batch,
+        yt_playlist_id,
+        yt_playlist_title,
+        yt_include_shorts,
+        yt_mark_read,
+        yt_min_minutes,
+        yt_max_minutes,
+        label=label,
+    )
 
 
 @app.post("/highlights/remove")
@@ -27978,24 +28498,37 @@ def rules_dry_run_route(
             custom: set[str] | None = None
             if feed_urls:
                 custom = {u.strip() for u in feed_urls.split(",") if u.strip()}
-            result = _dry_run_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
-                                    exclude_scope_ids=exclude_scope_ids, custom_feed_urls=custom,
-                                    fuzzy_threshold=_dedup_fuzzy_threshold(fuzzy_pct),
-                                    min_title_words=_clamp_min_title_words(min_title_words))
-        elif type in ("highlight", "mark_as_read", "email_article", "webhook", "youtube_playlist",
-                      "instapaper", "quire", "save_article"):
+            result = _dry_run_dedup(
+                conn,
+                scope,
+                scope_id,
+                match_method,
+                max(1, dedup_window_hours),
+                exclude_scope_ids=exclude_scope_ids,
+                custom_feed_urls=custom,
+                fuzzy_threshold=_dedup_fuzzy_threshold(fuzzy_pct),
+                min_title_words=_clamp_min_title_words(min_title_words),
+            )
+        elif type in ("highlight", "mark_as_read", "email_article", "webhook", "youtube_playlist", "instapaper", "quire", "save_article"):
             # youtube_playlist's keyword is an optional filter — a blank keyword
             # previews every entry in scope (all videos); Shorts are excluded unless
             # the rule opts in, matching what the rule would actually add.
             _is_yt = type == "youtube_playlist"
             # The save-out rules (yt/instapaper/quire/save_article) treat a blank
             # keyword as "all in scope".
-            result = _dry_run_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in,
-                                      match_all_if_empty=(_is_yt or type in ("instapaper", "quire", "save_article")),
-                                      exclude_shorts=(_is_yt and not yt_include_shorts),
-                                      min_secs=(max(0, yt_min_minutes) * 60 if _is_yt else 0),
-                                      max_secs=(max(0, yt_max_minutes) * 60 if _is_yt else 0),
-                                      unread_only=(type == "mark_as_read"))
+            result = _dry_run_pattern(
+                conn,
+                scope,
+                scope_id,
+                keyword,
+                bool(is_regex),
+                search_in,
+                match_all_if_empty=(_is_yt or type in ("instapaper", "quire", "save_article")),
+                exclude_shorts=(_is_yt and not yt_include_shorts),
+                min_secs=(max(0, yt_min_minutes) * 60 if _is_yt else 0),
+                max_secs=(max(0, yt_max_minutes) * 60 if _is_yt else 0),
+                unread_only=(type == "mark_as_read"),
+            )
         else:
             return JSONResponse({"error": "unknown rule type"}, status_code=400)
     if "error" in result:
@@ -28085,17 +28618,19 @@ def entry_feed_tags_route(
             _req, _good, _exc = parse_tag_filter_spec(str(rule["keyword"] or ""))
             signs = {t: "+" for t in (_req | _good)} | {t: "-" for t in _exc}
 
-    return JSONResponse({
-        "ok": True,
-        "tags": tags,
-        "signs": signs,
-        # Which of them are the user's own pinned tags, so the client can mark
-        # them: they are a different KIND of suggestion (a standing decision
-        # about the feed, not something the publisher said about this post).
-        "pinned": pinned,
-        "pinned_only": pinned_only,
-        "manual_tags": [normalize_tag_value(t) for t in manual_tags],
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "tags": tags,
+            "signs": signs,
+            # Which of them are the user's own pinned tags, so the client can mark
+            # them: they are a different KIND of suggestion (a standing decision
+            # about the feed, not something the publisher said about this post).
+            "pinned": pinned,
+            "pinned_only": pinned_only,
+            "manual_tags": [normalize_tag_value(t) for t in manual_tags],
+        }
+    )
 
 
 @app.post("/rules/tag-filter/toggle")
@@ -28134,11 +28669,17 @@ def rules_run_now_route(
             # 500-per-feed sample (right for post-refresh runs, where fresh dupes
             # are always in the newest slice) misses older duplicates entirely on
             # high-volume feeds — e.g. entries restored to unread days later.
-            result = _run_now_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
-                                    max_per_feed=10000,
-                                    exclude_scope_ids=exclude_scope_ids,
-                                    fuzzy_threshold=_dedup_fuzzy_threshold(fuzzy_pct),
-                                    min_title_words=_clamp_min_title_words(min_title_words))
+            result = _run_now_dedup(
+                conn,
+                scope,
+                scope_id,
+                match_method,
+                max(1, dedup_window_hours),
+                max_per_feed=10000,
+                exclude_scope_ids=exclude_scope_ids,
+                fuzzy_threshold=_dedup_fuzzy_threshold(fuzzy_pct),
+                min_title_words=_clamp_min_title_words(min_title_words),
+            )
         elif type == "mark_as_read":
             result = _run_now_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in)
         elif type == "tag_filter":
@@ -28161,9 +28702,10 @@ def rules_run_now_route(
                 "INSERT INTO rule_run_log_entries"
                 " (log_id, feed_url, entry_id, title, link, feed_title, role, matched_link)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [(log_id, e["feed_url"], e["entry_id"], e["title"], e["link"], e["feed_title"],
-                  role, e.get("matched_link"))
-                 for e, role in log_rows],
+                [
+                    (log_id, e["feed_url"], e["entry_id"], e["title"], e["link"], e["feed_title"], role, e.get("matched_link"))
+                    for e, role in log_rows
+                ],
             )
     result["ok"] = True
     return JSONResponse(result)
@@ -28225,9 +28767,7 @@ def automation_history_entries_route(log_id: int):
 @app.get("/dedup/false-matches")
 def get_dedup_false_matches():
     with get_meta_connection() as conn:
-        rows = conn.execute(
-            "SELECT keep_link, mark_link FROM dedup_false_matches ORDER BY added_at DESC"
-        ).fetchall()
+        rows = conn.execute("SELECT keep_link, mark_link FROM dedup_false_matches ORDER BY added_at DESC").fetchall()
     return JSONResponse({"ok": True, "pairs": [{"keep_link": r[0], "mark_link": r[1]} for r in rows]})
 
 
@@ -28306,7 +28846,7 @@ def verify_deviantart_credentials_route():
 
 def _deviantart_redirect_uri(request: Request) -> str:
     """Callback URL DeviantArt redirects back to (must match the app whitelist)."""
-    base = (os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/"))
+    base = os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/")
     if base:
         return f"{base}/deviantart/callback"
     return str(request.url_for("deviantart_callback"))
@@ -28357,7 +28897,7 @@ def deviantart_callback(request: Request, code: str | None = None, state: str | 
 
 def _quire_redirect_uri(request: Request) -> str:
     """Callback URL Quire redirects back to (must match the app's whitelist)."""
-    base = (os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/"))
+    base = os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/")
     if base:
         return f"{base}/quire/callback"
     return str(request.url_for("quire_callback"))
@@ -28425,7 +28965,7 @@ def quire_projects_route():
 def _youtube_oauth_redirect_uri(request: Request) -> str:
     """Callback URL Google redirects back to — MUST exactly match the URI
     registered on the OAuth client in Google Cloud."""
-    base = (os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/"))
+    base = os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/")
     if base:
         return f"{base}/integrations/youtube/oauth/callback"
     return str(request.url_for("youtube_oauth_callback"))
@@ -28473,8 +29013,12 @@ def youtube_oauth_callback(request: Request, code: str | None = None, state: str
 @app.post("/integrations/youtube/oauth/disconnect")
 def youtube_oauth_disconnect():
     with get_meta_connection() as conn:
-        for key in (SETTING_YT_OAUTH_ACCESS_TOKEN, SETTING_YT_OAUTH_REFRESH_TOKEN,
-                    SETTING_YT_OAUTH_TOKEN_EXPIRES_AT, SETTING_YT_OAUTH_STATE):
+        for key in (
+            SETTING_YT_OAUTH_ACCESS_TOKEN,
+            SETTING_YT_OAUTH_REFRESH_TOKEN,
+            SETTING_YT_OAUTH_TOKEN_EXPIRES_AT,
+            SETTING_YT_OAUTH_STATE,
+        ):
             delete_setting(conn, key)
     return JSONResponse({"ok": True})
 
@@ -28485,7 +29029,7 @@ def youtube_oauth_disconnect():
 def _pinterest_oauth_redirect_uri(request: Request) -> str:
     """Callback URL Pinterest redirects back to — MUST exactly match the URI
     registered on the OAuth app in the Pinterest developer console."""
-    base = (os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/"))
+    base = os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/")
     if base:
         return f"{base}/integrations/pinterest/oauth/callback"
     return str(request.url_for("pinterest_oauth_callback"))
@@ -28533,8 +29077,12 @@ def pinterest_oauth_callback(request: Request, code: str | None = None, state: s
 @app.post("/integrations/pinterest/oauth/disconnect")
 def pinterest_oauth_disconnect():
     with get_meta_connection() as conn:
-        for key in (SETTING_PINTEREST_OAUTH_ACCESS_TOKEN, SETTING_PINTEREST_OAUTH_REFRESH_TOKEN,
-                    SETTING_PINTEREST_OAUTH_TOKEN_EXPIRES_AT, SETTING_PINTEREST_OAUTH_STATE):
+        for key in (
+            SETTING_PINTEREST_OAUTH_ACCESS_TOKEN,
+            SETTING_PINTEREST_OAUTH_REFRESH_TOKEN,
+            SETTING_PINTEREST_OAUTH_TOKEN_EXPIRES_AT,
+            SETTING_PINTEREST_OAUTH_STATE,
+        ):
             delete_setting(conn, key)
     return JSONResponse({"ok": True})
 
@@ -28543,15 +29091,14 @@ def pinterest_oauth_disconnect():
 # Reddit OAuth routes
 # ---------------------------------------------------------------------------
 
+
 @app.get("/integrations/reddit/oauth/connect")
 def reddit_oauth_connect(request: Request):
     """Kick off the Reddit OAuth flow → redirect to Reddit's consent page."""
     cid, secret = get_reddit_credentials()
     if not cid or not secret:
         return RedirectResponse(
-            url="/?message=" + quote_plus(
-                "Reddit OAuth client is not configured (enter client ID and secret in Integrations → Reddit)."
-            ),
+            url="/?message=" + quote_plus("Reddit OAuth client is not configured (enter client ID and secret in Integrations → Reddit)."),
             status_code=303,
         )
     state = secrets.token_urlsafe(24)
@@ -28596,9 +29143,13 @@ def reddit_oauth_callback(request: Request, code: str | None = None, state: str 
 @app.post("/integrations/reddit/oauth/disconnect")
 def reddit_oauth_disconnect():
     with get_meta_connection() as conn:
-        for key in (SETTING_REDDIT_ACCESS_TOKEN, SETTING_REDDIT_REFRESH_TOKEN,
-                    SETTING_REDDIT_TOKEN_EXPIRES_AT, SETTING_REDDIT_OAUTH_STATE,
-                    SETTING_REDDIT_USERNAME):
+        for key in (
+            SETTING_REDDIT_ACCESS_TOKEN,
+            SETTING_REDDIT_REFRESH_TOKEN,
+            SETTING_REDDIT_TOKEN_EXPIRES_AT,
+            SETTING_REDDIT_OAUTH_STATE,
+            SETTING_REDDIT_USERNAME,
+        ):
             delete_setting(conn, key)
     return JSONResponse({"ok": True})
 
@@ -28606,6 +29157,7 @@ def reddit_oauth_disconnect():
 # ---------------------------------------------------------------------------
 # Reddit submit route
 # ---------------------------------------------------------------------------
+
 
 @app.post("/api/reddit/submit")
 async def reddit_submit_route(request: Request):
@@ -28650,6 +29202,7 @@ async def reddit_submit_route(request: Request):
 # Inoreader OAuth + import routes
 # ---------------------------------------------------------------------------
 
+
 def _inoreader_redirect_uri(request: Request) -> str:
     """The registered callback URL — must exactly match Inoreader developer console."""
     base = LECTIO_PUBLIC_URL
@@ -28664,7 +29217,8 @@ def inoreader_oauth_connect(request: Request):
     cid, secret = get_inoreader_credentials()
     if not cid or not secret:
         return RedirectResponse(
-            url="/?message=" + quote_plus(
+            url="/?message="
+            + quote_plus(
                 "Inoreader OAuth client is not configured (set INOREADER_CLIENT_ID/SECRET "
                 "or enter them in Settings → Integrations → Inoreader)."
             ),
@@ -29029,9 +29583,7 @@ def _run_import_loop(json_files: list, state: dict, _save) -> None:
 
                         # Tags from labels: lowercase = Lectio tag, Mixed Case = folder (skip).
                         label_tags = [
-                            f"{MANUAL_TAG_KEY_PREFIX}{lbl.lower()}"
-                            for lbl in item["labels"]
-                            if inoreader_service.label_is_tag(lbl)
+                            f"{MANUAL_TAG_KEY_PREFIX}{lbl.lower()}" for lbl in item["labels"] if inoreader_service.label_is_tag(lbl)
                         ]
                         if label_tags or item["starred"]:
                             entry = None
@@ -29114,8 +29666,11 @@ def _run_import_loop(json_files: list, state: dict, _save) -> None:
     _save()
     LOGGER.info(
         "[inoreader-local] done: %d files, %d subs, %d tagged, %d starred, %d errors",
-        len(json_files), state["subs_added"], state["items_tagged"],
-        state["items_starred"], state["errors"],
+        len(json_files),
+        state["subs_added"],
+        state["items_tagged"],
+        state["items_starred"],
+        state["errors"],
     )
 
 
@@ -29193,13 +29748,15 @@ async def inoreader_import_json(request: Request, file: UploadFile = File(...)):
                     except Exception:
                         pass
 
-    return JSONResponse({
-        "ok": True,
-        "feeds_added": feeds_added,
-        "items_starred": items_starred,
-        "items_tagged": items_tagged,
-        "total_items": len(items),
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "feeds_added": feeds_added,
+            "items_starred": items_starred,
+            "items_tagged": items_tagged,
+            "total_items": len(items),
+        }
+    )
 
 
 def _api_resolve_entry(reader, rconn, feed_url: str, entry_url: str, item: dict):
@@ -29320,11 +29877,7 @@ def _apply_migration_items(items: list[dict], state: dict, save_fn) -> None:
                     if not entry_url:
                         continue
 
-                    tag_keys = [
-                        f"{MANUAL_TAG_KEY_PREFIX}{t.strip().lower()}"
-                        for t in (item.get("tags") or [])
-                        if t and t.strip()
-                    ]
+                    tag_keys = [f"{MANUAL_TAG_KEY_PREFIX}{t.strip().lower()}" for t in (item.get("tags") or []) if t and t.strip()]
                     want_star = bool(item.get("starred"))
                     if not tag_keys and not want_star:
                         continue
@@ -29467,9 +30020,9 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
             calls_made += 1
             state["z1_remaining"] = inoreader_service.z1_remaining(rl)
             label_ids = [
-                t["id"] for t in tags
-                if (name := inoreader_service.label_name_from_tag_id(t.get("id", "")))
-                and inoreader_service.label_is_tag(name)
+                t["id"]
+                for t in tags
+                if (name := inoreader_service.label_name_from_tag_id(t.get("id", ""))) and inoreader_service.label_is_tag(name)
             ]
             state["label_ids"] = label_ids
             state["label_cursor"] = 0
@@ -29504,7 +30057,7 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
                                 entry_url = canonical[0].get("href", "") if canonical else ""
                                 origin = item.get("origin") or {}
                                 raw_stream = origin.get("streamId", "")
-                                feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
+                                feed_url = raw_stream[len("feed/") :] if raw_stream.startswith("feed/") else raw_stream
                                 feed_url = _resolve_feed_url(feed_url, existing)
                                 if not entry_url or not feed_url:
                                     continue
@@ -29546,7 +30099,7 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
                         entry_url = canonical[0].get("href", "") if canonical else ""
                         origin = item.get("origin") or {}
                         raw_stream = origin.get("streamId", "")
-                        feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
+                        feed_url = raw_stream[len("feed/") :] if raw_stream.startswith("feed/") else raw_stream
                         feed_url = _resolve_feed_url(feed_url, existing)
                         if not entry_url or not feed_url:
                             continue
@@ -29590,6 +30143,7 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
 # ---------------------------------------------------------------------------
 # Miniflux migration routes
 # ---------------------------------------------------------------------------
+
 
 @app.post("/integrations/miniflux/import/test")
 async def miniflux_import_test(request: Request):
@@ -29635,8 +30189,14 @@ def miniflux_import_start():
     now = datetime.now(timezone.utc).isoformat()
     state = {
         "phase": "running",
-        "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
-        "done": False, "error": None, "started_at": now, "updated_at": now,
+        "subs_added": 0,
+        "items_starred": 0,
+        "items_tagged": 0,
+        "errors": 0,
+        "done": False,
+        "error": None,
+        "started_at": now,
+        "updated_at": now,
     }
     _uid = tenancy.current_user_id()
     threading.Thread(
@@ -29661,8 +30221,14 @@ def _miniflux_import_worker() -> None:
     now = datetime.now(timezone.utc).isoformat()
     state: dict = {
         "phase": "running",
-        "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
-        "done": False, "error": None, "started_at": now, "updated_at": now,
+        "subs_added": 0,
+        "items_starred": 0,
+        "items_tagged": 0,
+        "errors": 0,
+        "done": False,
+        "error": None,
+        "started_at": now,
+        "updated_at": now,
     }
 
     def _save():
@@ -29676,9 +30242,17 @@ def _miniflux_import_worker() -> None:
         feeds = miniflux_import_service.get_feeds(base_url, token)
         # Subscription-only records (no article to tag/star).
         sub_items = [
-            {"url": "", "title": "", "published": None,
-             "feed_url": f["feed_url"], "feed_title": f["title"],
-             "content": "", "starred": False, "tags": [], "folder": f["folder"]}
+            {
+                "url": "",
+                "title": "",
+                "published": None,
+                "feed_url": f["feed_url"],
+                "feed_title": f["title"],
+                "content": "",
+                "starred": False,
+                "tags": [],
+                "folder": f["folder"],
+            }
             for f in feeds
         ]
         starred = miniflux_import_service.get_starred_entries(base_url, token)
@@ -29688,8 +30262,10 @@ def _miniflux_import_worker() -> None:
         _save()
         LOGGER.info(
             "[miniflux-import] done: %d subs, %d starred, %d tagged, %d errors",
-            state.get("subs_added", 0), state.get("items_starred", 0),
-            state.get("items_tagged", 0), state.get("errors", 0),
+            state.get("subs_added", 0),
+            state.get("items_starred", 0),
+            state.get("items_tagged", 0),
+            state.get("errors", 0),
         )
     except miniflux_import_service.AuthError as exc:
         state["error"] = str(exc)
@@ -29705,6 +30281,7 @@ def _miniflux_import_worker() -> None:
 # ---------------------------------------------------------------------------
 # FreshRSS migration routes
 # ---------------------------------------------------------------------------
+
 
 @app.post("/integrations/freshrss/import/test")
 async def freshrss_import_test(request: Request):
@@ -29752,8 +30329,14 @@ def freshrss_import_start():
     now = datetime.now(timezone.utc).isoformat()
     state = {
         "phase": "running",
-        "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
-        "done": False, "error": None, "started_at": now, "updated_at": now,
+        "subs_added": 0,
+        "items_starred": 0,
+        "items_tagged": 0,
+        "errors": 0,
+        "done": False,
+        "error": None,
+        "started_at": now,
+        "updated_at": now,
     }
     _uid = tenancy.current_user_id()
     threading.Thread(
@@ -29779,8 +30362,14 @@ def _freshrss_import_worker() -> None:
     now = datetime.now(timezone.utc).isoformat()
     state: dict = {
         "phase": "running",
-        "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
-        "done": False, "error": None, "started_at": now, "updated_at": now,
+        "subs_added": 0,
+        "items_starred": 0,
+        "items_tagged": 0,
+        "errors": 0,
+        "done": False,
+        "error": None,
+        "started_at": now,
+        "updated_at": now,
     }
 
     def _save():
@@ -29805,28 +30394,31 @@ def _freshrss_import_worker() -> None:
                 if label and not freshrss_service.label_is_tag(label):
                     folder = label
                     break
-            sub_items.append({
-                "url": "", "title": sub.get("title", ""), "published": None,
-                "feed_url": feed_url, "feed_title": sub.get("title", ""),
-                "content": "", "starred": False, "tags": [], "folder": folder,
-            })
+            sub_items.append(
+                {
+                    "url": "",
+                    "title": sub.get("title", ""),
+                    "published": None,
+                    "feed_url": feed_url,
+                    "feed_title": sub.get("title", ""),
+                    "content": "",
+                    "starred": False,
+                    "tags": [],
+                    "folder": folder,
+                }
+            )
         _apply_migration_items(sub_items, state, _save)
 
         # Phase 2: labels → tags (page through each label stream).
         tags = freshrss_service.get_tags(url, token)
         label_names = [
-            name
-            for t in tags
-            if (name := freshrss_service.label_name_from_tag_id(t.get("id", "")))
-            and freshrss_service.label_is_tag(name)
+            name for t in tags if (name := freshrss_service.label_name_from_tag_id(t.get("id", ""))) and freshrss_service.label_is_tag(name)
         ]
         for label_name in label_names:
             stream_id = freshrss_service.label_stream_id(label_name)
             continuation = None
             while True:
-                items_raw, continuation = freshrss_service.get_stream_contents(
-                    url, token, stream_id, continuation=continuation, n=100
-                )
+                items_raw, continuation = freshrss_service.get_stream_contents(url, token, stream_id, continuation=continuation, n=100)
                 items = [freshrss_service.normalize_item(i) for i in items_raw]
                 for item in items:
                     item["tags"] = [label_name]
@@ -29852,8 +30444,10 @@ def _freshrss_import_worker() -> None:
         _save()
         LOGGER.info(
             "[freshrss-import] done: %d subs, %d starred, %d tagged, %d errors",
-            state.get("subs_added", 0), state.get("items_starred", 0),
-            state.get("items_tagged", 0), state.get("errors", 0),
+            state.get("subs_added", 0),
+            state.get("items_starred", 0),
+            state.get("items_tagged", 0),
+            state.get("errors", 0),
         )
     except freshrss_service.AuthError as exc:
         state["error"] = str(exc)
@@ -29869,6 +30463,7 @@ def _freshrss_import_worker() -> None:
 # ---------------------------------------------------------------------------
 # tt-rss migration routes
 # ---------------------------------------------------------------------------
+
 
 @app.post("/integrations/ttrss/import/test")
 async def ttrss_import_test(request: Request):
@@ -29916,8 +30511,14 @@ def ttrss_import_start():
     now = datetime.now(timezone.utc).isoformat()
     state = {
         "phase": "running",
-        "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
-        "done": False, "error": None, "started_at": now, "updated_at": now,
+        "subs_added": 0,
+        "items_starred": 0,
+        "items_tagged": 0,
+        "errors": 0,
+        "done": False,
+        "error": None,
+        "started_at": now,
+        "updated_at": now,
     }
     _uid = tenancy.current_user_id()
     threading.Thread(
@@ -29943,8 +30544,14 @@ def _ttrss_import_worker() -> None:
     now = datetime.now(timezone.utc).isoformat()
     state: dict = {
         "phase": "running",
-        "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
-        "done": False, "error": None, "started_at": now, "updated_at": now,
+        "subs_added": 0,
+        "items_starred": 0,
+        "items_tagged": 0,
+        "errors": 0,
+        "done": False,
+        "error": None,
+        "started_at": now,
+        "updated_at": now,
     }
 
     def _save():
@@ -29968,11 +30575,19 @@ def _ttrss_import_worker() -> None:
         for idx, f in enumerate(feeds):
             feed_info_map[idx] = f  # placeholder; actual feed_id from headlines
             folder = cat_name_map.get(f.get("cat_id", 0), "")
-            sub_items.append({
-                "url": "", "title": f.get("title", ""), "published": None,
-                "feed_url": f.get("feed_url", ""), "feed_title": f.get("title", ""),
-                "content": "", "starred": False, "tags": [], "folder": folder,
-            })
+            sub_items.append(
+                {
+                    "url": "",
+                    "title": f.get("title", ""),
+                    "published": None,
+                    "feed_url": f.get("feed_url", ""),
+                    "feed_title": f.get("title", ""),
+                    "content": "",
+                    "starred": False,
+                    "tags": [],
+                    "folder": folder,
+                }
+            )
         # Build a real feed_url → cat_id map for headline normalisation.
         url_to_cat: dict[str, int] = {f["feed_url"]: f.get("cat_id", 0) for f in feeds}
         # tt-rss headlines carry feed_id (int), not feed_url; build id→info map via a
@@ -30001,10 +30616,7 @@ def _ttrss_import_worker() -> None:
                         "title": hl_feed_title,
                         "cat_id": cat_id,
                     }
-            items = [
-                ttrss_service.normalize_headline(hl, feed_info_from_hl, cat_name_map)
-                for hl in headlines
-            ]
+            items = [ttrss_service.normalize_headline(hl, feed_info_from_hl, cat_name_map) for hl in headlines]
             _apply_migration_items(items, state, _save)
             if len(headlines) < limit:
                 break
@@ -30015,8 +30627,10 @@ def _ttrss_import_worker() -> None:
         _save()
         LOGGER.info(
             "[ttrss-import] done: %d subs, %d starred, %d tagged, %d errors",
-            state.get("subs_added", 0), state.get("items_starred", 0),
-            state.get("items_tagged", 0), state.get("errors", 0),
+            state.get("subs_added", 0),
+            state.get("items_starred", 0),
+            state.get("items_tagged", 0),
+            state.get("errors", 0),
         )
     except ttrss_service.AuthError as exc:
         state["error"] = str(exc)
@@ -30156,7 +30770,10 @@ def _yt_playlist_job_update(job: dict, fields: dict) -> None:
 
 
 def _run_yt_playlist_batch_add(
-    video_ids: list[str], playlist_id: str, new_title: str, job: dict,
+    video_ids: list[str],
+    playlist_id: str,
+    new_title: str,
+    job: dict,
 ) -> None:
     """Background worker for POST /api/youtube/playlists/add-batch.
 
@@ -30272,16 +30889,26 @@ async def youtube_playlist_add_batch_route(request: Request):
     with _yt_playlist_batch_jobs_lock:
         if job.get("running"):
             return JSONResponse({"ok": False, "error": "busy"}, status_code=409)
-        job.update({
-            "running": True, "done": False, "error": None, "phase": "checking_existing",
-            "total": len(video_ids), "processed": 0, "added": 0, "duplicate": 0, "failed": 0,
-            "message": None, "ok_video_ids": [], "job_id": job_id,
-        })
+        job.update(
+            {
+                "running": True,
+                "done": False,
+                "error": None,
+                "phase": "checking_existing",
+                "total": len(video_ids),
+                "processed": 0,
+                "added": 0,
+                "duplicate": 0,
+                "failed": 0,
+                "message": None,
+                "ok_video_ids": [],
+                "job_id": job_id,
+            }
+        )
 
     uid = tenancy.current_user_id()
     threading.Thread(
-        target=lambda: _run_in_user_context(
-            uid, _run_yt_playlist_batch_add, video_ids, playlist_id, new_title, job),
+        target=lambda: _run_in_user_context(uid, _run_yt_playlist_batch_add, video_ids, playlist_id, new_title, job),
         daemon=True,
     ).start()
     return JSONResponse({"ok": True, "started": True, "total": len(video_ids), "job_id": job_id})
@@ -30316,8 +30943,12 @@ def youtube_playlist_add_batch_status_route(job_id: str | None = Query(default=N
 @app.post("/deviantart/disconnect")
 def deviantart_disconnect():
     with get_meta_connection() as conn:
-        for key in (SETTING_DEVIANTART_ACCESS_TOKEN, SETTING_DEVIANTART_REFRESH_TOKEN,
-                    SETTING_DEVIANTART_TOKEN_EXPIRES_AT, SETTING_DEVIANTART_USERNAME):
+        for key in (
+            SETTING_DEVIANTART_ACCESS_TOKEN,
+            SETTING_DEVIANTART_REFRESH_TOKEN,
+            SETTING_DEVIANTART_TOKEN_EXPIRES_AT,
+            SETTING_DEVIANTART_USERNAME,
+        ):
             delete_setting(conn, key)
     return JSONResponse({"ok": True})
 
@@ -30325,9 +30956,14 @@ def deviantart_disconnect():
 @app.post("/quire/disconnect")
 def quire_disconnect():
     with get_meta_connection() as conn:
-        for key in (SETTING_QUIRE_ACCESS_TOKEN, SETTING_QUIRE_REFRESH_TOKEN,
-                    SETTING_QUIRE_TOKEN_EXPIRES_AT, SETTING_QUIRE_USERNAME,
-                    SETTING_QUIRE_PROJECT_OID, SETTING_QUIRE_PROJECT_NAME):
+        for key in (
+            SETTING_QUIRE_ACCESS_TOKEN,
+            SETTING_QUIRE_REFRESH_TOKEN,
+            SETTING_QUIRE_TOKEN_EXPIRES_AT,
+            SETTING_QUIRE_USERNAME,
+            SETTING_QUIRE_PROJECT_OID,
+            SETTING_QUIRE_PROJECT_NAME,
+        ):
             delete_setting(conn, key)
     return JSONResponse({"ok": True})
 
@@ -30345,16 +30981,14 @@ def deviantart_sync_watchlist_route():
             result = sync_deviantart_watchlist()
             if result.get("skipped"):
                 with get_meta_connection() as conn:
-                    set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS,
-                                "A watch-list sync is already running — hang tight.")
+                    set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, "A watch-list sync is already running — hang tight.")
             elif result.get("error"):
                 with get_meta_connection() as conn:
                     set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, f"Sync error: {result['error']}")
         except Exception as exc:
             LOGGER.exception("[deviantart] background watchlist sync failed")
             with get_meta_connection() as conn:
-                set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS,
-                            f"Sync failed: {_humanize_da_add_error(exc)}. Click Sync to retry.")
+                set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, f"Sync failed: {_humanize_da_add_error(exc)}. Click Sync to retry.")
 
     threading.Thread(target=_run_in_user_context, args=(uid, _job), daemon=True).start()
     return JSONResponse({"started": True})
@@ -30375,8 +31009,7 @@ def deviantart_unsubscribe_unwatched_route(request: Request):
     with get_meta_connection() as conn:
         placeholders = ",".join("?" for _ in usernames)
         rows = conn.execute(
-            f"SELECT id, username FROM deviantart_feeds WHERE username IN ({placeholders})"
-            " AND COALESCE(source, 'gallery') != 'watch'",
+            f"SELECT id, username FROM deviantart_feeds WHERE username IN ({placeholders}) AND COALESCE(source, 'gallery') != 'watch'",
             usernames,
         ).fetchall()
     feed_urls = [deviantart_service.feed_file_url(str(r["id"])) for r in rows]
@@ -30390,10 +31023,7 @@ def deviantart_unsubscribe_unwatched_route(request: Request):
     # Drop the now-unsubscribed artists from the report; anything that
     # couldn't be resolved to a feed (already gone some other way) along
     # with any that arrived after the button was clicked stays listed.
-    detail["unwatched"] = [
-        u for u in detail.get("unwatched", [])
-        if str(u.get("username") or "").strip() not in resolved_usernames
-    ]
+    detail["unwatched"] = [u for u in detail.get("unwatched", []) if str(u.get("username") or "").strip() not in resolved_usernames]
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_DEVIANTART_SYNC_DETAIL, json.dumps(detail))
     return JSONResponse({"ok": True, "count": len(feed_urls)})
@@ -30451,6 +31081,7 @@ def deviantart_add_watch_feed_route():
 @app.get("/settings/all")
 def get_all_settings():
     """Return all user-configurable settings. Sensitive values are masked if set."""
+
     def _masked(val: str) -> str:
         return "••••••••" if val else ""
 
@@ -30463,11 +31094,7 @@ def get_all_settings():
         # since it's already represented by the synthetic "Me" row in the UI.
         all_contacts = get_email_contacts(conn)
         profile_lower = profile_email.lower()
-        contacts = [
-            {"label": c["label"], "address": c["address"]}
-            for c in all_contacts
-            if c["address"].lower() != profile_lower
-        ]
+        contacts = [{"label": c["label"], "address": c["address"]} for c in all_contacts if c["address"].lower() != profile_lower]
 
     yt_api_key = get_yt_api_key()
     resend_key = get_resend_api_key()
@@ -30480,116 +31107,118 @@ def get_all_settings():
     if is_quire_configured() and not get_runtime_setting(SETTING_QUIRE_PLAN):
         detect_quire_plan_and_caps()
 
-    return JSONResponse({
-        "profile_name": profile_name,
-        "profile_email": profile_email,
-        "tz_display": get_runtime_setting(SETTING_TZ_DISPLAY),
-        "portrait_img_max_width": get_portrait_img_max_width(),
-        "proxy_body_images": proxy_body_images_enabled(),
-        # Raw own row ("" = inherit the instance default) vs. the resolved value
-        # actually in effect for this user right now — the UI shows the former
-        # as the select's value and the latter as a hint when it's "inherit".
-        "proxy_mode_own": get_runtime_setting(SETTING_PROXY_MODE, ""),
-        "proxy_mode_effective": get_proxy_mode(),
-        "tz_default": os.environ.get("TZ") or "UTC",
-        "maintenance_hour": get_runtime_setting(SETTING_MAINTENANCE_HOUR),
-        "maintenance_last_ran_at": maint_last,
-        "yt_api_key_set": bool(yt_api_key),
-        "yt_api_key_masked": _masked(yt_api_key),
-        "yt_channel_id": get_yt_channel_id(),
-        "yt_folder_name": get_yt_folder_name(),
-        "yt_embed_account_features": youtube_embed_account_features_enabled(),
-        "yt_hide_shorts_global": youtube_hide_shorts_global(),
-        "yt_hide_unpremiered_global": youtube_hide_unpremiered_global(),
-        "yt_hide_members_only_global": youtube_hide_members_only_global(),
-        "hide_locked_comics_global": hide_locked_comics_global(),
-        "yt_quota": get_yt_quota_status(),
-        "yt_quota_cap": youtube_quota_cap(),
-        "star_send_instapaper": get_runtime_setting(SETTING_STAR_SEND_INSTAPAPER, "0") == "1",
-        "star_send_yt_playlist": get_runtime_setting(SETTING_STAR_SEND_YT_PLAYLIST) or "",
-        "star_send_yt_playlist_title": get_runtime_setting(SETTING_STAR_SEND_YT_PLAYLIST_TITLE) or "",
-        "star_send_email": get_runtime_setting(SETTING_STAR_SEND_EMAIL) or "",
-        "yt_oauth_client_id": get_runtime_setting(SETTING_YT_OAUTH_CLIENT_ID, ""),
-        "yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_YT_OAUTH_CLIENT_SECRET)),
-        "yt_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_YT_OAUTH_CLIENT_SECRET, "")),
-        "yt_oauth_configured": all(get_youtube_oauth_credentials()),
-        "yt_oauth_connected": bool(get_runtime_setting(SETTING_YT_OAUTH_REFRESH_TOKEN)),
-        "shared_yt_oauth_client_id": get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_ID, ""),
-        "shared_yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)),
-        "shared_yt_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET, "")),
-        "pinterest_oauth_client_id": get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_ID, ""),
-        "pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_SECRET)),
-        "pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_SECRET, "")),
-        "pinterest_oauth_configured": all(get_pinterest_oauth_credentials()),
-        "pinterest_oauth_connected": bool(get_runtime_setting(SETTING_PINTEREST_OAUTH_REFRESH_TOKEN)),
-        "shared_pinterest_oauth_client_id": get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, ""),
-        # Miniflux / FreshRSS / tt-rss migrations
-        "miniflux_import_url": get_runtime_setting(SETTING_MINIFLUX_IMPORT_URL, ""),
-        "miniflux_import_token_set": bool(get_runtime_setting(SETTING_MINIFLUX_IMPORT_TOKEN)),
-        "miniflux_import_token_masked": _masked(get_runtime_setting(SETTING_MINIFLUX_IMPORT_TOKEN, "")),
-        "freshrss_url": get_runtime_setting(SETTING_FRESHRSS_URL, ""),
-        "freshrss_username": get_runtime_setting(SETTING_FRESHRSS_USERNAME, ""),
-        "freshrss_password_set": bool(get_runtime_setting(SETTING_FRESHRSS_PASSWORD)),
-        "freshrss_password_masked": _masked(get_runtime_setting(SETTING_FRESHRSS_PASSWORD, "")),
-        "ttrss_url": get_runtime_setting(SETTING_TTRSS_URL, ""),
-        "ttrss_username": get_runtime_setting(SETTING_TTRSS_USERNAME, ""),
-        "ttrss_password_set": bool(get_runtime_setting(SETTING_TTRSS_PASSWORD)),
-        "ttrss_password_masked": _masked(get_runtime_setting(SETTING_TTRSS_PASSWORD, "")),
-        # Inoreader migration
-        "inoreader_client_id": get_runtime_setting(SETTING_INOREADER_CLIENT_ID, _ENV_INOREADER_CLIENT_ID),
-        "inoreader_client_secret_set": bool(get_runtime_setting(SETTING_INOREADER_CLIENT_SECRET, _ENV_INOREADER_CLIENT_SECRET)),
-        "inoreader_client_secret_masked": _masked(get_runtime_setting(SETTING_INOREADER_CLIENT_SECRET, _ENV_INOREADER_CLIENT_SECRET)),
-        "inoreader_configured": bool(all(get_inoreader_credentials())),
-        "inoreader_connected": inoreader_connected(),
-        "inoreader_export_dir": get_runtime_setting(SETTING_INOREADER_EXPORT_DIR, ""),
-        "shared_pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)),
-        "shared_pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET, "")),
-        # Reddit OAuth
-        "reddit_client_id": get_runtime_setting(SETTING_REDDIT_CLIENT_ID, ""),
-        "reddit_client_secret_set": bool(get_runtime_setting(SETTING_REDDIT_CLIENT_SECRET)),
-        "reddit_client_secret_masked": _masked(get_runtime_setting(SETTING_REDDIT_CLIENT_SECRET, "")),
-        "reddit_configured": all(get_reddit_credentials()),
-        "reddit_connected": reddit_connected(),
-        "reddit_username": get_runtime_setting(SETTING_REDDIT_USERNAME, ""),
-        "shared_reddit_client_id": get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_ID, ""),
-        "shared_reddit_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_SECRET)),
-        "shared_reddit_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_SECRET, "")),
-        "star_send_reddit_subreddit": get_runtime_setting(SETTING_STAR_SEND_REDDIT_SUBREDDIT, ""),
-        "resend_api_key_set": bool(resend_key),
-        "resend_api_key_masked": _masked(resend_key),
-        "email_from": get_resend_from(),
-        "instapaper_username": get_runtime_setting(SETTING_INSTAPAPER_USERNAME),
-        "instapaper_password_set": bool(instapaper_pw),
-        "instapaper_password_masked": _masked(instapaper_pw),
-        "deviantart_client_id": da_cid,
-        "deviantart_client_secret_set": bool(da_secret),
-        "deviantart_client_secret_masked": _masked(da_secret),
-        "deviantart_connected": bool(get_runtime_setting(SETTING_DEVIANTART_ACCESS_TOKEN)),
-        "deviantart_username": get_runtime_setting(SETTING_DEVIANTART_USERNAME),
-        "deviantart_sync_status": get_runtime_setting(SETTING_DEVIANTART_SYNC_STATUS),
-        "deviantart_sync_detail": _load_da_sync_detail(),
-        "deviantart_unwatched_dirty": get_runtime_setting(SETTING_DEVIANTART_UNWATCHED_DIRTY) == "1",
-        "deviantart_deactivated": _da_deactivated_list(),
-        "deviantart_folder_name": _deviantart_folder_name(),
-        "quire_client_id": quire_cid,
-        "quire_client_secret_set": bool(quire_secret),
-        "quire_client_secret_masked": _masked(quire_secret),
-        "quire_connected": is_quire_connected(),
-        "quire_username": get_runtime_setting(SETTING_QUIRE_USERNAME),
-        "quire_project_oid": quire_project_oid(),
-        "quire_project_name": get_runtime_setting(SETTING_QUIRE_PROJECT_NAME),
-        "quire_usage": get_quire_usage_status(),
-        "quire_plan": get_runtime_setting(SETTING_QUIRE_PLAN),
-        "star_send_quire": get_runtime_setting(SETTING_STAR_SEND_QUIRE, "0") == "1",
-        "contacts": contacts,
-        "email_to_default": email_to_default,
-        "public_url": LECTIO_PUBLIC_URL,
-        "fetch_history_max_age_days": get_fetch_history_max_age_days(),
-        "tombstone_sweep_days": get_tombstone_sweep_days(),
-        "login_max_failures": get_login_max_failures(),
-        "login_window_seconds": get_login_window_seconds(),
-        "instance_auto_refresh": get_instance_default_auto_refresh(),
-    })
+    return JSONResponse(
+        {
+            "profile_name": profile_name,
+            "profile_email": profile_email,
+            "tz_display": get_runtime_setting(SETTING_TZ_DISPLAY),
+            "portrait_img_max_width": get_portrait_img_max_width(),
+            "proxy_body_images": proxy_body_images_enabled(),
+            # Raw own row ("" = inherit the instance default) vs. the resolved value
+            # actually in effect for this user right now — the UI shows the former
+            # as the select's value and the latter as a hint when it's "inherit".
+            "proxy_mode_own": get_runtime_setting(SETTING_PROXY_MODE, ""),
+            "proxy_mode_effective": get_proxy_mode(),
+            "tz_default": os.environ.get("TZ") or "UTC",
+            "maintenance_hour": get_runtime_setting(SETTING_MAINTENANCE_HOUR),
+            "maintenance_last_ran_at": maint_last,
+            "yt_api_key_set": bool(yt_api_key),
+            "yt_api_key_masked": _masked(yt_api_key),
+            "yt_channel_id": get_yt_channel_id(),
+            "yt_folder_name": get_yt_folder_name(),
+            "yt_embed_account_features": youtube_embed_account_features_enabled(),
+            "yt_hide_shorts_global": youtube_hide_shorts_global(),
+            "yt_hide_unpremiered_global": youtube_hide_unpremiered_global(),
+            "yt_hide_members_only_global": youtube_hide_members_only_global(),
+            "hide_locked_comics_global": hide_locked_comics_global(),
+            "yt_quota": get_yt_quota_status(),
+            "yt_quota_cap": youtube_quota_cap(),
+            "star_send_instapaper": get_runtime_setting(SETTING_STAR_SEND_INSTAPAPER, "0") == "1",
+            "star_send_yt_playlist": get_runtime_setting(SETTING_STAR_SEND_YT_PLAYLIST) or "",
+            "star_send_yt_playlist_title": get_runtime_setting(SETTING_STAR_SEND_YT_PLAYLIST_TITLE) or "",
+            "star_send_email": get_runtime_setting(SETTING_STAR_SEND_EMAIL) or "",
+            "yt_oauth_client_id": get_runtime_setting(SETTING_YT_OAUTH_CLIENT_ID, ""),
+            "yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_YT_OAUTH_CLIENT_SECRET)),
+            "yt_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_YT_OAUTH_CLIENT_SECRET, "")),
+            "yt_oauth_configured": all(get_youtube_oauth_credentials()),
+            "yt_oauth_connected": bool(get_runtime_setting(SETTING_YT_OAUTH_REFRESH_TOKEN)),
+            "shared_yt_oauth_client_id": get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_ID, ""),
+            "shared_yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)),
+            "shared_yt_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET, "")),
+            "pinterest_oauth_client_id": get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_ID, ""),
+            "pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_SECRET)),
+            "pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_SECRET, "")),
+            "pinterest_oauth_configured": all(get_pinterest_oauth_credentials()),
+            "pinterest_oauth_connected": bool(get_runtime_setting(SETTING_PINTEREST_OAUTH_REFRESH_TOKEN)),
+            "shared_pinterest_oauth_client_id": get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, ""),
+            # Miniflux / FreshRSS / tt-rss migrations
+            "miniflux_import_url": get_runtime_setting(SETTING_MINIFLUX_IMPORT_URL, ""),
+            "miniflux_import_token_set": bool(get_runtime_setting(SETTING_MINIFLUX_IMPORT_TOKEN)),
+            "miniflux_import_token_masked": _masked(get_runtime_setting(SETTING_MINIFLUX_IMPORT_TOKEN, "")),
+            "freshrss_url": get_runtime_setting(SETTING_FRESHRSS_URL, ""),
+            "freshrss_username": get_runtime_setting(SETTING_FRESHRSS_USERNAME, ""),
+            "freshrss_password_set": bool(get_runtime_setting(SETTING_FRESHRSS_PASSWORD)),
+            "freshrss_password_masked": _masked(get_runtime_setting(SETTING_FRESHRSS_PASSWORD, "")),
+            "ttrss_url": get_runtime_setting(SETTING_TTRSS_URL, ""),
+            "ttrss_username": get_runtime_setting(SETTING_TTRSS_USERNAME, ""),
+            "ttrss_password_set": bool(get_runtime_setting(SETTING_TTRSS_PASSWORD)),
+            "ttrss_password_masked": _masked(get_runtime_setting(SETTING_TTRSS_PASSWORD, "")),
+            # Inoreader migration
+            "inoreader_client_id": get_runtime_setting(SETTING_INOREADER_CLIENT_ID, _ENV_INOREADER_CLIENT_ID),
+            "inoreader_client_secret_set": bool(get_runtime_setting(SETTING_INOREADER_CLIENT_SECRET, _ENV_INOREADER_CLIENT_SECRET)),
+            "inoreader_client_secret_masked": _masked(get_runtime_setting(SETTING_INOREADER_CLIENT_SECRET, _ENV_INOREADER_CLIENT_SECRET)),
+            "inoreader_configured": bool(all(get_inoreader_credentials())),
+            "inoreader_connected": inoreader_connected(),
+            "inoreader_export_dir": get_runtime_setting(SETTING_INOREADER_EXPORT_DIR, ""),
+            "shared_pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)),
+            "shared_pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET, "")),
+            # Reddit OAuth
+            "reddit_client_id": get_runtime_setting(SETTING_REDDIT_CLIENT_ID, ""),
+            "reddit_client_secret_set": bool(get_runtime_setting(SETTING_REDDIT_CLIENT_SECRET)),
+            "reddit_client_secret_masked": _masked(get_runtime_setting(SETTING_REDDIT_CLIENT_SECRET, "")),
+            "reddit_configured": all(get_reddit_credentials()),
+            "reddit_connected": reddit_connected(),
+            "reddit_username": get_runtime_setting(SETTING_REDDIT_USERNAME, ""),
+            "shared_reddit_client_id": get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_ID, ""),
+            "shared_reddit_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_SECRET)),
+            "shared_reddit_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_SECRET, "")),
+            "star_send_reddit_subreddit": get_runtime_setting(SETTING_STAR_SEND_REDDIT_SUBREDDIT, ""),
+            "resend_api_key_set": bool(resend_key),
+            "resend_api_key_masked": _masked(resend_key),
+            "email_from": get_resend_from(),
+            "instapaper_username": get_runtime_setting(SETTING_INSTAPAPER_USERNAME),
+            "instapaper_password_set": bool(instapaper_pw),
+            "instapaper_password_masked": _masked(instapaper_pw),
+            "deviantart_client_id": da_cid,
+            "deviantart_client_secret_set": bool(da_secret),
+            "deviantart_client_secret_masked": _masked(da_secret),
+            "deviantart_connected": bool(get_runtime_setting(SETTING_DEVIANTART_ACCESS_TOKEN)),
+            "deviantart_username": get_runtime_setting(SETTING_DEVIANTART_USERNAME),
+            "deviantart_sync_status": get_runtime_setting(SETTING_DEVIANTART_SYNC_STATUS),
+            "deviantart_sync_detail": _load_da_sync_detail(),
+            "deviantart_unwatched_dirty": get_runtime_setting(SETTING_DEVIANTART_UNWATCHED_DIRTY) == "1",
+            "deviantart_deactivated": _da_deactivated_list(),
+            "deviantart_folder_name": _deviantart_folder_name(),
+            "quire_client_id": quire_cid,
+            "quire_client_secret_set": bool(quire_secret),
+            "quire_client_secret_masked": _masked(quire_secret),
+            "quire_connected": is_quire_connected(),
+            "quire_username": get_runtime_setting(SETTING_QUIRE_USERNAME),
+            "quire_project_oid": quire_project_oid(),
+            "quire_project_name": get_runtime_setting(SETTING_QUIRE_PROJECT_NAME),
+            "quire_usage": get_quire_usage_status(),
+            "quire_plan": get_runtime_setting(SETTING_QUIRE_PLAN),
+            "star_send_quire": get_runtime_setting(SETTING_STAR_SEND_QUIRE, "0") == "1",
+            "contacts": contacts,
+            "email_to_default": email_to_default,
+            "public_url": LECTIO_PUBLIC_URL,
+            "fetch_history_max_age_days": get_fetch_history_max_age_days(),
+            "tombstone_sweep_days": get_tombstone_sweep_days(),
+            "login_max_failures": get_login_max_failures(),
+            "login_window_seconds": get_login_window_seconds(),
+            "instance_auto_refresh": get_instance_default_auto_refresh(),
+        }
+    )
 
 
 def _keep_existing_sensitive(key: str, str_val: str, sensitive: set[str]) -> bool:
@@ -30606,66 +31235,121 @@ def _keep_existing_sensitive(key: str, str_val: str, sensitive: set[str]) -> boo
 async def save_all_settings(request: Request):
     """Save any subset of user-configurable settings. Empty string clears a value."""
     import json as _json
+
     body = await request.json()
 
-    _SENSITIVE = {SETTING_RESEND_API_KEY, SETTING_YT_API_KEY, SETTING_INSTAPAPER_PASSWORD,
-                  SETTING_DEVIANTART_CLIENT_SECRET, SETTING_QUIRE_CLIENT_SECRET,
-                  SETTING_YT_OAUTH_CLIENT_SECRET, SETTING_PINTEREST_OAUTH_CLIENT_SECRET,
-                  SETTING_SHARED_YT_OAUTH_CLIENT_SECRET, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
-                  SETTING_INOREADER_CLIENT_SECRET,
-                  SETTING_REDDIT_CLIENT_SECRET, SETTING_SHARED_REDDIT_CLIENT_SECRET,
-                  SETTING_MINIFLUX_IMPORT_TOKEN,
-                  SETTING_FRESHRSS_PASSWORD, SETTING_TTRSS_PASSWORD}
+    _SENSITIVE = {
+        SETTING_RESEND_API_KEY,
+        SETTING_YT_API_KEY,
+        SETTING_INSTAPAPER_PASSWORD,
+        SETTING_DEVIANTART_CLIENT_SECRET,
+        SETTING_QUIRE_CLIENT_SECRET,
+        SETTING_YT_OAUTH_CLIENT_SECRET,
+        SETTING_PINTEREST_OAUTH_CLIENT_SECRET,
+        SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
+        SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
+        SETTING_INOREADER_CLIENT_SECRET,
+        SETTING_REDDIT_CLIENT_SECRET,
+        SETTING_SHARED_REDDIT_CLIENT_SECRET,
+        SETTING_MINIFLUX_IMPORT_TOKEN,
+        SETTING_FRESHRSS_PASSWORD,
+        SETTING_TTRSS_PASSWORD,
+    }
     _ALLOWED = {
-        PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
-        SETTING_TZ_DISPLAY, SETTING_PORTRAIT_IMG_MAX_WIDTH, SETTING_PROXY_BODY_IMAGES,
-        SETTING_PROXY_URL, SETTING_PROXY_MODE, SETTING_TAILSCALE_URL, SETTING_FLARESOLVERR_URL,
+        PROFILE_NAME_SETTING_KEY,
+        PROFILE_EMAIL_SETTING_KEY,
+        SETTING_TZ_DISPLAY,
+        SETTING_PORTRAIT_IMG_MAX_WIDTH,
+        SETTING_PROXY_BODY_IMAGES,
+        SETTING_PROXY_URL,
+        SETTING_PROXY_MODE,
+        SETTING_TAILSCALE_URL,
+        SETTING_FLARESOLVERR_URL,
         SETTING_MAINTENANCE_HOUR,
-        SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
-        SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
-        SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL,
-        SETTING_YT_HIDE_UNPREMIERED_GLOBAL, SETTING_YT_HIDE_MEMBERS_ONLY_GLOBAL, SETTING_YT_QUOTA_CAP,
+        SETTING_IMG_CACHE_DAYS,
+        SETTING_IMG_CACHE_MAX_DIM,
+        SETTING_IMG_TARGET_BYTES,
+        SETTING_YT_API_KEY,
+        SETTING_YT_CHANNEL_ID,
+        SETTING_YT_FOLDER_NAME,
+        SETTING_YT_EMBED_ACCOUNT_FEATURES,
+        SETTING_YT_HIDE_SHORTS_GLOBAL,
+        SETTING_YT_HIDE_UNPREMIERED_GLOBAL,
+        SETTING_YT_HIDE_MEMBERS_ONLY_GLOBAL,
+        SETTING_YT_QUOTA_CAP,
         SETTING_HIDE_LOCKED_COMICS_GLOBAL,
-        SETTING_YT_OAUTH_CLIENT_ID, SETTING_YT_OAUTH_CLIENT_SECRET,
-        SETTING_STAR_SEND_INSTAPAPER, SETTING_STAR_SEND_YT_PLAYLIST,
-        SETTING_STAR_SEND_YT_PLAYLIST_TITLE, SETTING_STAR_SEND_EMAIL,
-        SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
-        SETTING_INSTAPAPER_USERNAME, SETTING_INSTAPAPER_PASSWORD,
-        SETTING_DEVIANTART_CLIENT_ID, SETTING_DEVIANTART_CLIENT_SECRET,
+        SETTING_YT_OAUTH_CLIENT_ID,
+        SETTING_YT_OAUTH_CLIENT_SECRET,
+        SETTING_STAR_SEND_INSTAPAPER,
+        SETTING_STAR_SEND_YT_PLAYLIST,
+        SETTING_STAR_SEND_YT_PLAYLIST_TITLE,
+        SETTING_STAR_SEND_EMAIL,
+        SETTING_RESEND_API_KEY,
+        SETTING_EMAIL_FROM,
+        SETTING_INSTAPAPER_USERNAME,
+        SETTING_INSTAPAPER_PASSWORD,
+        SETTING_DEVIANTART_CLIENT_ID,
+        SETTING_DEVIANTART_CLIENT_SECRET,
         SETTING_DEVIANTART_FOLDER_NAME,
-        SETTING_QUIRE_CLIENT_ID, SETTING_QUIRE_CLIENT_SECRET,
-        SETTING_QUIRE_PROJECT_OID, SETTING_QUIRE_PROJECT_NAME, SETTING_STAR_SEND_QUIRE,
-        SETTING_QUIRE_RATE_CAP_MIN, SETTING_QUIRE_RATE_CAP_HOUR,
-        SETTING_PINTEREST_OAUTH_CLIENT_ID, SETTING_PINTEREST_OAUTH_CLIENT_SECRET,
-        SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
-        SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
-        SETTING_INOREADER_CLIENT_ID, SETTING_INOREADER_CLIENT_SECRET,
+        SETTING_QUIRE_CLIENT_ID,
+        SETTING_QUIRE_CLIENT_SECRET,
+        SETTING_QUIRE_PROJECT_OID,
+        SETTING_QUIRE_PROJECT_NAME,
+        SETTING_STAR_SEND_QUIRE,
+        SETTING_QUIRE_RATE_CAP_MIN,
+        SETTING_QUIRE_RATE_CAP_HOUR,
+        SETTING_PINTEREST_OAUTH_CLIENT_ID,
+        SETTING_PINTEREST_OAUTH_CLIENT_SECRET,
+        SETTING_SHARED_YT_OAUTH_CLIENT_ID,
+        SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
+        SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID,
+        SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
+        SETTING_INOREADER_CLIENT_ID,
+        SETTING_INOREADER_CLIENT_SECRET,
         SETTING_INOREADER_EXPORT_DIR,
-        SETTING_MINIFLUX_IMPORT_URL, SETTING_MINIFLUX_IMPORT_TOKEN,
-        SETTING_FRESHRSS_URL, SETTING_FRESHRSS_USERNAME, SETTING_FRESHRSS_PASSWORD,
-        SETTING_TTRSS_URL, SETTING_TTRSS_USERNAME, SETTING_TTRSS_PASSWORD,
-        SETTING_REDDIT_CLIENT_ID, SETTING_REDDIT_CLIENT_SECRET,
-        SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
+        SETTING_MINIFLUX_IMPORT_URL,
+        SETTING_MINIFLUX_IMPORT_TOKEN,
+        SETTING_FRESHRSS_URL,
+        SETTING_FRESHRSS_USERNAME,
+        SETTING_FRESHRSS_PASSWORD,
+        SETTING_TTRSS_URL,
+        SETTING_TTRSS_USERNAME,
+        SETTING_TTRSS_PASSWORD,
+        SETTING_REDDIT_CLIENT_ID,
+        SETTING_REDDIT_CLIENT_SECRET,
+        SETTING_SHARED_REDDIT_CLIENT_ID,
+        SETTING_SHARED_REDDIT_CLIENT_SECRET,
         SETTING_STAR_SEND_REDDIT_SUBREDDIT,
         SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
         SETTING_TOMBSTONE_SWEEP_DAYS,
-        SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
+        SETTING_LOGIN_MAX_FAILURES,
+        SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
-        "email_contacts", EMAIL_TO_SETTING_KEY,
+        "email_contacts",
+        EMAIL_TO_SETTING_KEY,
     }
     # Instance-level config — only admins may change it (in multi mode). Non-admin
     # requests silently drop these keys, even if the client sends them.
     _ADMIN_ONLY = {
-        SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
-        SETTING_PROXY_URL, SETTING_TAILSCALE_URL, SETTING_FLARESOLVERR_URL,
+        SETTING_RESEND_API_KEY,
+        SETTING_EMAIL_FROM,
+        SETTING_PROXY_URL,
+        SETTING_TAILSCALE_URL,
+        SETTING_FLARESOLVERR_URL,
         SETTING_MAINTENANCE_HOUR,
-        SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM, SETTING_IMG_TARGET_BYTES,
-        SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
-        SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
-        SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
+        SETTING_IMG_CACHE_DAYS,
+        SETTING_IMG_CACHE_MAX_DIM,
+        SETTING_IMG_TARGET_BYTES,
+        SETTING_SHARED_YT_OAUTH_CLIENT_ID,
+        SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
+        SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID,
+        SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
+        SETTING_SHARED_REDDIT_CLIENT_ID,
+        SETTING_SHARED_REDDIT_CLIENT_SECRET,
         SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
         SETTING_TOMBSTONE_SWEEP_DAYS,
-        SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
+        SETTING_LOGIN_MAX_FAILURES,
+        SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
         SETTING_INOREADER_EXPORT_DIR,
     }
@@ -30719,7 +31403,8 @@ async def save_all_settings(request: Request):
         threading.Thread(
             target=_run_in_user_context,
             args=(tenancy.current_user_id(), _run_youtube_sync),
-            daemon=True, name="youtube-sync-on-config",
+            daemon=True,
+            name="youtube-sync-on-config",
         ).start()
 
     # Quire destination project changed → detect its org's plan and align the
@@ -30728,7 +31413,8 @@ async def save_all_settings(request: Request):
         threading.Thread(
             target=_run_in_user_context,
             args=(tenancy.current_user_id(), detect_quire_plan_and_caps),
-            daemon=True, name="quire-plan-detect",
+            daemon=True,
+            name="quire-plan-detect",
         ).start()
 
     return JSONResponse({"ok": True})
@@ -30758,12 +31444,14 @@ def refresh_feed_strategy_cache_route(
         sample_entry = next((e for e in entries if str(getattr(e, "id", "")) == entry_id), None)
 
     if sample_entry is None:
+
         def _best_date(e: object) -> float:
             for attr in ("published", "updated", "added"):
                 dt = getattr(e, attr, None)
                 if dt:
                     return dt.timestamp()
             return 0.0
+
         sample_entry = max(entries, key=_best_date)
     strategy_rows = lead_image_service.test_entry_strategies(sample_entry)
 
@@ -30776,17 +31464,18 @@ def refresh_feed_strategy_cache_route(
                 "INSERT OR REPLACE INTO feed_strategy_cache "
                 "(feed_url, strategy, image_url, fetched_at, error, image_alt, image_title) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (feed_url, row["strategy"], row["image_url"], now, row["error"],
-                 row.get("image_alt"), row.get("image_title")),
+                (feed_url, row["strategy"], row["image_url"], now, row["error"], row.get("image_alt"), row.get("image_title")),
             )
-            results.append({
-                "strategy": row["strategy"],
-                "image_url": row["image_url"],
-                "fetched_at": formatted_now,
-                "error": row["error"],
-                "image_alt": row.get("image_alt"),
-                "image_title": row.get("image_title"),
-            })
+            results.append(
+                {
+                    "strategy": row["strategy"],
+                    "image_url": row["image_url"],
+                    "fetched_at": formatted_now,
+                    "error": row["error"],
+                    "image_alt": row.get("image_alt"),
+                    "image_title": row.get("image_title"),
+                }
+            )
 
     # Sync the active strategy's alt/title into entry_lead_images so caption_source
     # rendering can read them immediately without waiting for the next feed refresh.
@@ -30958,8 +31647,14 @@ def move_feed(
         requested_with = (request.headers.get("x-requested-with") or "").lower()
         if "lectio" in requested_with or requested_with == "xmlhttprequest":
             return JSONResponse(
-                {"ok": ok, "message": message, "following": following,
-                 "feed_url": feed_url, "from_folder_id": from_folder_id, "to_folder_id": to_folder_id},
+                {
+                    "ok": ok,
+                    "message": message,
+                    "following": following,
+                    "feed_url": feed_url,
+                    "from_folder_id": from_folder_id,
+                    "to_folder_id": to_folder_id,
+                },
                 status_code=200 if ok else 500,
             )
         return RedirectResponse(url=_dest(message), status_code=303)
@@ -31039,6 +31734,7 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
     # back to a Page Feed — Change URL is for swapping one real feed for another.
     if not force:
         from services.feed_discovery import probe_url as _probe_url
+
         result = _probe_url(new_url)
         feeds = result.get("feeds") or []
         if result.get("status") in ("feed", "feeds") and feeds:
@@ -31051,22 +31747,27 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
             # across hosts is still the same feed, so that resolves silently.
             typed_host = _normalize_alias_host(parsed.netloc)
             resolved_host = _normalize_alias_host(urlparse(resolved).netloc)
-            if (not result.get("direct") and typed_host and resolved_host
-                    and typed_host != resolved_host):
+            if not result.get("direct") and typed_host and resolved_host and typed_host != resolved_host:
                 return JSONResponse(
-                    {"ok": False, "needs_confirm": True, "attempted_url": new_url,
-                     "resolved_url": resolved,
-                     "error": f"That page advertises a feed on a different site:\n\n{resolved}\n\n"
-                              "It may cover much more than the page you pasted. Use it anyway?"},
+                    {
+                        "ok": False,
+                        "needs_confirm": True,
+                        "attempted_url": new_url,
+                        "resolved_url": resolved,
+                        "error": f"That page advertises a feed on a different site:\n\n{resolved}\n\n"
+                        "It may cover much more than the page you pasted. Use it anyway?",
+                    },
                     status_code=422,
                 )
             new_url = resolved
         else:
             return JSONResponse(
-                {"ok": False, "needs_confirm": True,
-                 "error": (result.get("message") or "That URL doesn't look like a feed.")
-                          + " Change anyway?",
-                 "attempted_url": new_url},
+                {
+                    "ok": False,
+                    "needs_confirm": True,
+                    "error": (result.get("message") or "That URL doesn't look like a feed.") + " Change anyway?",
+                    "attempted_url": new_url,
+                },
                 status_code=422,
             )
         if new_url == old_url:
@@ -31076,9 +31777,13 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
         with get_reader() as reader:
             if reader.get_feed(new_url, None) is not None:
                 return JSONResponse(
-                    {"ok": False, "error": f"That resolves to {new_url}, which you are already "
-                     "subscribed to. Consolidate the duplicate instead (Settings → Feeds → Utilities)."},
-                    status_code=409)
+                    {
+                        "ok": False,
+                        "error": f"That resolves to {new_url}, which you are already "
+                        "subscribed to. Consolidate the duplicate instead (Settings → Feeds → Utilities).",
+                    },
+                    status_code=409,
+                )
 
     try:
         with get_reader() as reader:
@@ -31089,15 +31794,20 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
         # redirector resolving to the publisher's own URL). Point the user at
         # a reload rather than the raw reader exception.
         return JSONResponse(
-            {"ok": False, "error": "This feed's current URL has changed (it may have been "
-             "redirected). Reload the page and try again — the Change URL field will show "
-             "the up-to-date URL."},
+            {
+                "ok": False,
+                "error": "This feed's current URL has changed (it may have been "
+                "redirected). Reload the page and try again — the Change URL field will show "
+                "the up-to-date URL.",
+            },
             status_code=409,
         )
     except FeedExistsError:
         return JSONResponse(
-            {"ok": False, "error": "A feed with that URL already exists. Consolidate the "
-             "duplicate instead (Settings → Feeds → Utilities)."},
+            {
+                "ok": False,
+                "error": "A feed with that URL already exists. Consolidate the duplicate instead (Settings → Feeds → Utilities).",
+            },
             status_code=409,
         )
     except Exception as exc:
@@ -31187,14 +31897,12 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
                 ).fetchone()
                 if already is None:
                     conn.execute(
-                        "INSERT OR REPLACE INTO feed_url_rewrites (feed_url, from_host, to_host)"
-                        " VALUES (?, ?, ?)",
+                        "INSERT OR REPLACE INTO feed_url_rewrites (feed_url, from_host, to_host) VALUES (?, ?, ?)",
                         (new_url, _old_host, _new_host),
                     )
             if already is None:
                 stats = migrate_feed_host_rewrite(new_url, {_old_host: _new_host})
-                alias = {"from_host": _old_host, "to_host": _new_host,
-                         "migrated": int(stats.get("migrated", 0) or 0)}
+                alias = {"from_host": _old_host, "to_host": _new_host, "migrated": int(stats.get("migrated", 0) or 0)}
         except Exception:  # noqa: BLE001 — the URL change itself already succeeded
             LOGGER.warning("[change-url] alias seeding failed for %s", new_url, exc_info=True)
 
@@ -31225,17 +31933,20 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
     folder_id = None
     try:
         with get_meta_connection() as conn:
-            row = conn.execute(
-                "SELECT folder_id FROM folder_feeds WHERE feed_url = ? LIMIT 1", (new_url,)
-            ).fetchone()
+            row = conn.execute("SELECT folder_id FROM folder_feeds WHERE feed_url = ? LIMIT 1", (new_url,)).fetchone()
             folder_id = int(row["folder_id"]) if row else None
     except Exception:  # noqa: BLE001 — navigation nicety, never fail the change
         LOGGER.warning("[change-url] folder lookup failed for %s", new_url, exc_info=True)
 
-    return JSONResponse({
-        "ok": True, "new_url": new_url, "folder_id": folder_id,
-        "old_host": _old_host, "alias": alias,
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "new_url": new_url,
+            "folder_id": folder_id,
+            "old_host": _old_host,
+            "alias": alias,
+        }
+    )
 
 
 @app.post("/feeds/unsubscribe")
@@ -31270,9 +31981,7 @@ def unsubscribe_feed(
         # "Unsubscribe and drop everything": strip the keep signals BEFORE the
         # removal, so the purge below finds nothing worth preserving and the
         # posts do not survive in Saved as orphan archives.
-        dropped: dict[str, int] | None = (
-            drop_all_curation(feed_url) if normalize_star_only(drop_curation) else None
-        )
+        dropped: dict[str, int] | None = drop_all_curation(feed_url) if normalize_star_only(drop_curation) else None
 
         with get_meta_connection() as conn:
             conn.execute(
@@ -31294,7 +32003,9 @@ def unsubscribe_feed(
             with get_reader() as reader:
                 with get_meta_connection() as conn:
                     purge_orphaned_feed(
-                        reader, conn, feed_url,
+                        reader,
+                        conn,
+                        feed_url,
                         archive_pending=_migrate_to is None,
                         migrate_curation_to=_migrate_to,
                     )
@@ -31310,10 +32021,7 @@ def unsubscribe_feed(
                 f"{dropped['archives']} offline cop{'y' if dropped['archives'] == 1 else 'ies'} deleted."
             )
         if restarred:
-            message += (
-                f" {restarred} curated post{'' if restarred == 1 else 's'}"
-                " moved to the top of the Inbox."
-            )
+            message += f" {restarred} curated post{'' if restarred == 1 else 's'} moved to the top of the Inbox."
         invalidate_meta_structure_cache()
     except Exception as exc:
         ok = False
@@ -31437,16 +32145,20 @@ def _prune_entries(
 
     to_delete: list[tuple[str, str]] = []
     with get_reader() as reader:
-        rows = reader._storage.get_db().execute(
-            # Manually tagged entries are user-curated — never prune them.
-            f"""SELECT e.feed, e.id, e.link, e.read, e.read_modified, e.published, e.updated, e.first_updated
+        rows = (
+            reader._storage.get_db()
+            .execute(
+                # Manually tagged entries are user-curated — never prune them.
+                f"""SELECT e.feed, e.id, e.link, e.read, e.read_modified, e.published, e.updated, e.first_updated
                 FROM entries e
                 WHERE e.feed IN ({placeholders})
                   AND NOT EXISTS (SELECT 1 FROM entry_tags t
                                   WHERE t.feed = e.feed AND t.id = e.id
                                     AND t.key LIKE '{MANUAL_TAG_KEY_PREFIX}%')""",
-            feed_urls,
-        ).fetchall()
+                feed_urls,
+            )
+            .fetchall()
+        )
 
         for feed, eid, link, read, read_modified, published, updated, first_updated in rows:
             pair = (str(feed), str(eid))
@@ -31463,8 +32175,7 @@ def _prune_entries(
             if published_cutoff is not None:
                 if not read and not include_unread:
                     continue
-                effective = (_parse_stored_dt(published) or _parse_stored_dt(updated)
-                             or _parse_stored_dt(first_updated))
+                effective = _parse_stored_dt(published) or _parse_stored_dt(updated) or _parse_stored_dt(first_updated)
                 if effective is None or effective >= published_cutoff:
                     continue
             to_delete.append(pair)
@@ -31473,13 +32184,13 @@ def _prune_entries(
             return len(to_delete)
 
         for i in range(0, len(to_delete), _PRUNE_DELETE_BATCH):
-            batch = to_delete[i:i + _PRUNE_DELETE_BATCH]
+            batch = to_delete[i : i + _PRUNE_DELETE_BATCH]
             with get_meta_connection() as conn:
                 conn.executemany(
                     "INSERT OR REPLACE INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, ?, ?)",
-                    [(fu, eid, datetime.now().isoformat()) for fu, eid in batch])
-                conn.executemany(
-                    "DELETE FROM entry_read_state WHERE feed_url = ? AND entry_id = ?", batch)
+                    [(fu, eid, datetime.now().isoformat()) for fu, eid in batch],
+                )
+                conn.executemany("DELETE FROM entry_read_state WHERE feed_url = ? AND entry_id = ?", batch)
             reader._storage.delete_entries(batch)
 
     invalidate_unread_counts_cache()
@@ -31640,7 +32351,7 @@ def set_entry_date_route(feed_url: str = Form(...), entry_id: str = Form(...), p
         # format_datetime_for_ui's astimezone() as "Jul 5, 2023 5pm" — the day
         # before. Reported after setting a date to 7/6/23.
         if dt.tzinfo is None:
-            dt = dt.astimezone()      # attaches the local zone (naive == local)
+            dt = dt.astimezone()  # attaches the local zone (naive == local)
         stored = dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         with get_meta_connection() as conn:
             conn.execute(
@@ -31741,9 +32452,7 @@ def set_entry_link_route(feed_url: str = Form(...), entry_id: str = Form(...), l
         # as hrefs but are not source URLs a re-fetch could ever follow.
         parsed = urlparse(link)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            return JSONResponse(
-                {"ok": False, "error": "Enter a valid http(s) URL."}, status_code=400
-            )
+            return JSONResponse({"ok": False, "error": "Enter a valid http(s) URL."}, status_code=400)
         if not html_sanitize.safe_link_url(link):
             return JSONResponse({"ok": False, "error": "That URL isn't safe to link."}, status_code=400)
         with get_meta_connection() as conn:
@@ -31778,7 +32487,9 @@ _CLEANUP_ERROR_FALLBACK = "That cleanup could not be applied."
 
 @app.post("/entries/content/clean")
 def clean_entry_content_route(
-    feed_url: str = Form(...), entry_id: str = Form(...), ops: str = Form(...),
+    feed_url: str = Form(...),
+    entry_id: str = Form(...),
+    ops: str = Form(...),
 ):
     """Apply the reading pane's Aardvark-style cleanup to a post's stored body.
 
@@ -31809,14 +32520,12 @@ def clean_entry_content_route(
             # being argued about. The exception's message still goes to the log.
             LOGGER.info("[cleanup] refused for %s: %s", entry_id, exc)
             return JSONResponse(
-                {"ok": False, "error": _CLEANUP_ERROR_MESSAGES.get(
-                    getattr(exc, "code", ""), _CLEANUP_ERROR_FALLBACK)},
+                {"ok": False, "error": _CLEANUP_ERROR_MESSAGES.get(getattr(exc, "code", ""), _CLEANUP_ERROR_FALLBACK)},
                 status_code=400,
             )
         if not applied:
             return JSONResponse(
-                {"ok": False, "error": "None of those elements could be matched in the stored article.",
-                 "unmatched": unmatched},
+                {"ok": False, "error": "None of those elements could be matched in the stored article.", "unmatched": unmatched},
                 status_code=409,
             )
         # The result is user-directed but still passes the normal allowlist —
@@ -31831,8 +32540,7 @@ def clean_entry_content_route(
                     "INSERT OR IGNORE INTO entry_content_edits"
                     " (feed_url, entry_id, original_content, ops, edited_at)"
                     " VALUES (?, ?, ?, ?, ?)",
-                    (feed_url, entry_id, original_content, "[]",
-                     datetime.now(timezone.utc).isoformat()),
+                    (feed_url, entry_id, original_content, "[]", datetime.now(timezone.utc).isoformat()),
                 )
             existing = conn.execute(
                 "SELECT ops FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
@@ -31842,18 +32550,22 @@ def clean_entry_content_route(
             if existing:
                 try:
                     prior_ops = json.loads(existing[0]) or []
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     prior_ops = []
             conn.execute(
-                "UPDATE entry_content_edits SET ops = ?, edited_at = ?"
-                " WHERE feed_url = ? AND entry_id = ?",
-                (json.dumps(prior_ops + parsed_ops), datetime.now(timezone.utc).isoformat(),
-                 feed_url, entry_id),
+                "UPDATE entry_content_edits SET ops = ?, edited_at = ? WHERE feed_url = ? AND entry_id = ?",
+                (json.dumps(prior_ops + parsed_ops), datetime.now(timezone.utc).isoformat(), feed_url, entry_id),
             )
             conn.commit()
             saved_articles_service.replace_entry_content(
-                reader, conn, entry_id, "", new_html, feed_url=feed_url,
-                bump_received=False, pin_content=True,
+                reader,
+                conn,
+                entry_id,
+                "",
+                new_html,
+                feed_url=feed_url,
+                bump_received=False,
+                pin_content=True,
             )
     return JSONResponse({"ok": True, "applied": applied, "unmatched": unmatched})
 
@@ -31874,7 +32586,7 @@ def entry_has_original_content_route(feed_url: str = Query(...), entry_id: str =
                 (feed_url, entry_id),
             ).fetchone()
     except sqlite3.OperationalError:
-        found = None      # tenant DB predates the table
+        found = None  # tenant DB predates the table
     return JSONResponse({"ok": True, "has_original": bool(found)})
 
 
@@ -31930,8 +32642,7 @@ def migrate_entry_to_new_host(reader, conn, feed, old_id, new_id, new_link) -> s
     if src is None:
         return "gone"
     if reader.get_entry((feed, new_id), None) is None:
-        ed: dict = {"feed_url": feed, "id": new_id, "link": new_link or new_id,
-                    "title": src.title or ""}
+        ed: dict = {"feed_url": feed, "id": new_id, "link": new_link or new_id, "title": src.title or ""}
         # entry_effective_date, not raw src.published — see the identical fix
         # (and its rationale) in _move_entry_to_feed's own synth path.
         _src_effective_date = entry_effective_date(src)
@@ -31980,6 +32691,7 @@ def migrate_feed_host_rewrite(feed_url: str, host_map: dict[str, str]) -> dict:
     an Edit-Website flips old links immediately instead of on the next refresh."""
     import time as _time
     from collections import Counter
+
     stats: Counter[str] = Counter()
     reader = get_reader()
     with get_meta_connection() as conn:
@@ -32030,17 +32742,17 @@ def feed_attachment_candidates_route(feed_url: str = Query(...)):
     library was advised to keep Guitar Pro tabs. Counted from stored entries, so
     it costs no requests.
     """
-    return JSONResponse({
-        "ok": True,
-        "candidates": scan_feed_attachment_extensions(feed_url),
-        "suppressed": suppressed_attachment_ext_list(feed_url),
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "candidates": scan_feed_attachment_extensions(feed_url),
+            "suppressed": suppressed_attachment_ext_list(feed_url),
+        }
+    )
 
 
 @app.post("/feeds/attachment-candidate-suppress")
-def suppress_feed_attachment_candidate_route(
-    feed_url: str = Form(...), ext: str = Form(...), suppressed: str = Form("1")
-):
+def suppress_feed_attachment_candidate_route(feed_url: str = Form(...), ext: str = Form(...), suppressed: str = Form("1")):
     """Dismiss one extension suggestion for one feed, or restore it.
 
     The scanner reads the last dot-segment of a link path, so a bare domain leaves a TLD behind — ".il" was
@@ -32052,11 +32764,13 @@ def suppress_feed_attachment_candidate_route(
             return JSONResponse({"ok": False, "error": "Feed not found."}, status_code=404)
     on = str(suppressed).strip().lower() not in {"0", "false", "no", ""}
     set_attachment_ext_suppressed(feed_url, ext, on)
-    return JSONResponse({
-        "ok": True,
-        "candidates": scan_feed_attachment_extensions(feed_url),
-        "suppressed": suppressed_attachment_ext_list(feed_url),
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "candidates": scan_feed_attachment_extensions(feed_url),
+            "suppressed": suppressed_attachment_ext_list(feed_url),
+        }
+    )
 
 
 @app.post("/feeds/attachment-exts")
@@ -32106,8 +32820,7 @@ def _entry_content_html_and_base(feed_url: str, entry_id: str) -> tuple[str, str
         # needs a meta connection and can enqueue a background media scan as
         # a side effect -- more than a read-only attachments list should cost.
         enclosure_urls = [
-            (getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
-            for enc in _filtered_file_enclosures(entry, None)
+            (getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip() for enc in _filtered_file_enclosures(entry, None)
         ]
         return content_html, base_url, [u for u in enclosure_urls if u]
     detail = starred_archive_service.get_archived_entry_detail(feed_url, entry_id)
@@ -32147,9 +32860,7 @@ def entry_attachments_route(feed_url: str = Query(...), entry_id: str = Query(..
 
 
 @app.post("/entries/attachments/delete")
-def delete_entry_attachment_route(
-    feed_url: str = Form(...), entry_id: str = Form(...), source_url: str = Form(...)
-):
+def delete_entry_attachment_route(feed_url: str = Form(...), entry_id: str = Form(...), source_url: str = Form(...)):
     ok = starred_archive_service.delete_one_attachment(feed_url, entry_id, source_url)
     return JSONResponse({"ok": ok})
 
@@ -32161,17 +32872,13 @@ def delete_all_entry_attachments_route(feed_url: str = Form(...), entry_id: str 
 
 
 @app.post("/entries/attachments/save")
-def save_entry_attachment_route(
-    feed_url: str = Form(...), entry_id: str = Form(...), source_url: str = Form(...)
-):
+def save_entry_attachment_route(feed_url: str = Form(...), entry_id: str = Form(...), source_url: str = Form(...)):
     ok = starred_archive_service.archive_one_attachment(feed_url, entry_id, source_url)
     return JSONResponse({"ok": ok, "error": None if ok else "Couldn't save that file — see server logs."})
 
 
 @app.post("/entries/attachments/save-all")
-def save_all_entry_attachments_route(
-    feed_url: str = Form(...), entry_id: str = Form(...), urls: str = Form(...)
-):
+def save_all_entry_attachments_route(feed_url: str = Form(...), entry_id: str = Form(...), urls: str = Form(...)):
     """Save every URL in *urls* (the panel's own currently-displayed
     "available" list, round-tripped rather than re-resolved here) as an
     attachment. Round-tripping avoids re-scanning under a second's staleness
@@ -32218,9 +32925,11 @@ def set_feed_website_route(feed_url: str = Form(...), website: str = Form(...)):
         # host most posts link to, so we migrate from wherever the posts live.
         if not from_host or from_host == to_host:
             from collections import Counter as _Counter
+
             hosts = _Counter(
                 urlparse(str(e.link)).netloc.split("@")[-1].split(":")[0].lower()
-                for e in reader.get_entries(feed=feed_url) if getattr(e, "link", None)
+                for e in reader.get_entries(feed=feed_url)
+                if getattr(e, "link", None)
             )
             hosts.pop(to_host, None)  # already-correct posts aren't a source
             from_host = hosts.most_common(1)[0][0] if hosts else from_host
@@ -32238,13 +32947,15 @@ def set_feed_website_route(feed_url: str = Form(...), website: str = Form(...)):
     stats = migrate_feed_host_rewrite(feed_url, {from_host: to_host})
     invalidate_unread_counts_cache()
     invalidate_meta_structure_cache()
-    return JSONResponse({
-        "ok": True,
-        "website": f"{parsed.scheme}://{parsed.netloc}/",
-        "from_host": from_host,
-        "to_host": to_host,
-        "migrated": stats.get("migrated", 0),
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "website": f"{parsed.scheme}://{parsed.netloc}/",
+            "from_host": from_host,
+            "to_host": to_host,
+            "migrated": stats.get("migrated", 0),
+        }
+    )
 
 
 def _normalize_alias_host(value: str) -> str:
@@ -32268,7 +32979,9 @@ def _normalize_alias_host(value: str) -> str:
 
 @app.post("/feeds/url-rewrites")
 def add_feed_url_rewrite_route(
-    feed_url: str = Form(...), from_host: str = Form(...), to_host: str = Form(""),
+    feed_url: str = Form(...),
+    from_host: str = Form(...),
+    to_host: str = Form(""),
 ):
     """Declare another domain this feed's author used, from Feed Properties.
 
@@ -32296,9 +33009,7 @@ def add_feed_url_rewrite_route(
         if not to_norm:
             to_norm = _normalize_alias_host(feed_url)
     if not to_norm:
-        return JSONResponse(
-            {"ok": False, "error": "This feed has no Website set — set one first."}, status_code=400
-        )
+        return JSONResponse({"ok": False, "error": "This feed has no Website set — set one first."}, status_code=400)
     if from_norm == to_norm:
         return JSONResponse({"ok": False, "error": "That's already this feed's domain."}, status_code=400)
 
@@ -32311,10 +33022,14 @@ def add_feed_url_rewrite_route(
     stats = migrate_feed_host_rewrite(feed_url, {from_norm: to_norm})
     invalidate_unread_counts_cache()
     invalidate_meta_structure_cache()
-    return JSONResponse({
-        "ok": True, "from_host": from_norm, "to_host": to_norm,
-        "migrated": stats.get("migrated", 0),
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "from_host": from_norm,
+            "to_host": to_norm,
+            "migrated": stats.get("migrated", 0),
+        }
+    )
 
 
 @app.post("/feeds/url-rewrites/delete")
@@ -32364,8 +33079,7 @@ def move_entry_to_feed_route(
     if result["tags"]:
         bits.append(f"{result['tags']} tag{'s' if result['tags'] != 1 else ''}")
     carried = f" (moved {' + '.join(bits)})" if bits else ""
-    return JSONResponse({"ok": True, "synthesized": result["synth"],
-                         "message": f"Entry moved{carried}."})
+    return JSONResponse({"ok": True, "synthesized": result["synth"], "message": f"Entry moved{carried}."})
 
 
 _MOVE_BATCH_CAP = 500
@@ -32413,8 +33127,7 @@ def move_entries_to_feed_batch_route(
                         tags += result["tags"]
                     else:
                         failed += 1
-                        LOGGER.warning("[move-entry] batch item failed %s in %s: %s",
-                                       entry_id, feed_url, result["error"])
+                        LOGGER.warning("[move-entry] batch item failed %s in %s: %s", entry_id, feed_url, result["error"])
     except Exception:  # noqa: BLE001 — details stay in the log, not the response
         LOGGER.exception("[move-entry] batch move to %s failed", target)
         return JSONResponse({"ok": False, "error": "Move failed — see server logs."}, status_code=502)
@@ -32429,8 +33142,7 @@ def move_entries_to_feed_batch_route(
         msg += f" {skipped} already in that feed."
     if failed:
         msg += f" {failed} failed — see server logs."
-    return JSONResponse({"ok": True, "moved": moved, "skipped": skipped,
-                         "failed": failed, "message": msg})
+    return JSONResponse({"ok": True, "moved": moved, "skipped": skipped, "failed": failed, "message": msg})
 
 
 # Effectively unbounded, for the same reason _RANGE_READ_LIMIT is: a whole-set
@@ -32526,10 +33238,7 @@ def _view_filter_predicate(term: str | None, *, folder_id: int | None = None):
             return _matches_duration
 
     def _matches(post: dict) -> bool:
-        return any(
-            needle in str(post.get(key) or "").lower()
-            for key in ("title", "link", "feed_title")
-        )
+        return any(needle in str(post.get(key) or "").lower() for key in ("title", "link", "feed_title"))
 
     return _matches
 
@@ -32632,7 +33341,8 @@ def select_all_visible_entries_route(
     matches_filter = _view_filter_predicate(filter_term, folder_id=folder_id)
     entries = [
         {"feedUrl": str(p["feed_url"]), "entryId": str(p["id"]), "videoId": str(p.get("video_id") or "")}
-        for p in posts if matches_filter(p)
+        for p in posts
+        if matches_filter(p)
     ]
     return JSONResponse({"ok": True, "entries": entries, "count": len(entries)})
 
@@ -32707,8 +33417,7 @@ def move_visible_entries_to_feed_route(
                         tags += result["tags"]
                     else:
                         failed += 1
-                        LOGGER.warning("[move-entry] visible-move item failed %s in %s: %s",
-                                       entry_id, feed_url, result["error"])
+                        LOGGER.warning("[move-entry] visible-move item failed %s in %s: %s", entry_id, feed_url, result["error"])
     except Exception:  # noqa: BLE001 — details stay in the log, not the response
         LOGGER.exception("[move-entry] visible move to %s failed", target)
         return JSONResponse({"ok": False, "error": "Move failed — see server logs."}, status_code=502)
@@ -32724,8 +33433,7 @@ def move_visible_entries_to_feed_route(
         msg += f" {skipped} already in that feed."
     if failed:
         msg += f" {failed} failed — see server logs."
-    return JSONResponse({"ok": True, "moved": moved, "skipped": skipped,
-                         "failed": failed, "message": msg})
+    return JSONResponse({"ok": True, "moved": moved, "skipped": skipped, "failed": failed, "message": msg})
 
 
 @app.get("/feeds/curation-items")
@@ -32772,17 +33480,11 @@ def combine_feeds_route(
                 # nobody has subscribed to yet. Without this it would land
                 # subscribed-but-folderless (invisible in the tree) once its
                 # sources are purged below.
-                already_placed = conn.execute(
-                    "SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (survivor_url,)
-                ).fetchone()
+                already_placed = conn.execute("SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (survivor_url,)).fetchone()
                 if not already_placed:
                     folder_ids: set[int] = set()
                     for src in sources:
-                        folder_ids.update(
-                            int(r[0]) for r in conn.execute(
-                                "SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (src,)
-                            )
-                        )
+                        folder_ids.update(int(r[0]) for r in conn.execute("SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (src,)))
                     if folder_ids:
                         reader.add_feed(survivor_url, exist_ok=True)
                         for fid in folder_ids:
@@ -32795,7 +33497,9 @@ def combine_feeds_route(
                     conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (src,))
                     conn.commit()
                     rescued += purge_orphaned_feed(
-                        reader, conn, src,
+                        reader,
+                        conn,
+                        src,
                         archive_pending=False,
                         rescue_to=survivor_url if do_unread else None,
                         migrate_curation_to=survivor_url,
@@ -32820,13 +33524,15 @@ def combine_feeds_route(
         )
         conn.commit()
 
-    return JSONResponse({
-        "ok": True,
-        "combined": len(sources),
-        "survivor_url": survivor_url,
-        "rescued": rescued,
-        "message": f"Combined {len(sources)} feed{'s' if len(sources) != 1 else ''} into one.",
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "combined": len(sources),
+            "survivor_url": survivor_url,
+            "rescued": rescued,
+            "message": f"Combined {len(sources)} feed{'s' if len(sources) != 1 else ''} into one.",
+        }
+    )
 
 
 @app.get("/feeds/duplicates")
@@ -32877,12 +33583,15 @@ def get_feed_duplicates():
         # against a URL that does not exist, and `url_folders.get(keep)` came
         # back empty so all of them looked cross-folder. Prefer https, then the
         # already-canonical spelling (no trailing slash), then shortest.
-        keep = min(variants, key=lambda u: (
-            not u.startswith("https://"),
-            normalize_feed_url(u) != u,
-            len(u),
-            u,
-        ))
+        keep = min(
+            variants,
+            key=lambda u: (
+                not u.startswith("https://"),
+                normalize_feed_url(u) != u,
+                len(u),
+                u,
+            ),
+        )
         for remove in variants:
             if remove == keep:
                 continue
@@ -32895,28 +33604,34 @@ def get_feed_duplicates():
             # Same-folder entries: both URLs exist in this folder → auto-fix.
             for fid, fname in url_folders.get(remove, []):
                 if fid in keep_folder_ids:
-                    same_folder.append({
-                        "folder_id": fid,
-                        "folder_name": fname,
-                        "keep": keep,
-                        "remove": remove,
-                        "content_identical": content_identical,
-                    })
+                    same_folder.append(
+                        {
+                            "folder_id": fid,
+                            "folder_name": fname,
+                            "keep": keep,
+                            "remove": remove,
+                            "content_identical": content_identical,
+                        }
+                    )
 
             # Cross-folder entries: remove URL is in folders the keep URL is not → user picks.
             if only_in_remove:
                 all_folders = {fid: fname for fid, fname in url_folders.get(keep, []) + url_folders.get(remove, [])}
-                cross_folder.append({
-                    "keep": keep,
-                    "remove": remove,
-                    "keep_folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(keep, [])],
-                    "remove_folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(remove, []) if fid in only_in_remove],
-                    "all_folders": sorted(
-                        [{"id": fid, "name": fname} for fid, fname in all_folders.items()],
-                        key=lambda x: x["name"],
-                    ),
-                    "content_identical": content_identical,
-                })
+                cross_folder.append(
+                    {
+                        "keep": keep,
+                        "remove": remove,
+                        "keep_folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(keep, [])],
+                        "remove_folders": [
+                            {"id": fid, "name": fname} for fid, fname in url_folders.get(remove, []) if fid in only_in_remove
+                        ],
+                        "all_folders": sorted(
+                            [{"id": fid, "name": fname} for fid, fname in all_folders.items()],
+                            key=lambda x: x["name"],
+                        ),
+                        "content_identical": content_identical,
+                    }
+                )
 
     # Upgradable: URL carries a format-selector query param (e.g. ?alt=rss)
     # whose canonical form is not already subscribed anywhere. Deliberately
@@ -32938,9 +33653,7 @@ def get_feed_duplicates():
         # Skip the stripped default if it changed nothing but the path
         # (trailing slash) — that's the same/cross-folder tier's job. Still
         # keep any real alternates found above.
-        offer_canonical = canonical != url and canonical not in url_folders and (
-            urlparse(url).query != urlparse(canonical).query
-        )
+        offer_canonical = canonical != url and canonical not in url_folders and (urlparse(url).query != urlparse(canonical).query)
         # A stripped format-selector has to leave something feed-shaped
         # behind. WordPress's root-level ?feed=rss2 is the failure case
         # (reported 2026-08-10, "seeing some that are bare domains"):
@@ -32953,12 +33666,14 @@ def get_feed_duplicates():
                 offer_canonical = False
         if not offer_canonical and not alternates:
             continue
-        upgradable.append({
-            "current": url,
-            "upgrade_to": canonical if offer_canonical else None,
-            "alternates": alternates,
-            "folders": [{"id": fid, "name": fname} for fid, fname in folders],
-        })
+        upgradable.append(
+            {
+                "current": url,
+                "upgrade_to": canonical if offer_canonical else None,
+                "alternates": alternates,
+                "folders": [{"id": fid, "name": fname} for fid, fname in folders],
+            }
+        )
 
     # Fourth tier: same feed TITLE across genuinely different addresses --
     # catches the same publication subscribed twice under two different URLs
@@ -32988,16 +33703,18 @@ def get_feed_duplicates():
     for entries in by_title.values():
         if len(entries) < 2 or len(entries) > GENERIC_TITLE_GROUP_MAX:
             continue
-        title_groups.append({
-            "title": entries[0][1],
-            "feeds": [
-                {
-                    "feed_url": feed_url,
-                    "folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(feed_url, [])],
-                }
-                for feed_url, _title in entries
-            ],
-        })
+        title_groups.append(
+            {
+                "title": entries[0][1],
+                "feeds": [
+                    {
+                        "feed_url": feed_url,
+                        "folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(feed_url, [])],
+                    }
+                    for feed_url, _title in entries
+                ],
+            }
+        )
     title_groups.sort(key=lambda g: len(g["feeds"]), reverse=True)
 
     # Fifth tier: same host+path, different query -- a real duplicate class
@@ -33039,11 +33756,15 @@ def get_feed_duplicates():
     for variants in by_loose.values():
         if len(variants) < 2:
             continue
-        keep = min(variants, key=lambda u: (
-            not u.startswith("https://"),
-            normalize_feed_url(u) != u,
-            len(u), u,
-        ))
+        keep = min(
+            variants,
+            key=lambda u: (
+                not u.startswith("https://"),
+                normalize_feed_url(u) != u,
+                len(u),
+                u,
+            ),
+        )
         keep_strict = _dupe_group_key(keep)
         for remove in variants:
             if remove == keep or _dupe_group_key(remove) == keep_strict:
@@ -33051,16 +33772,18 @@ def get_feed_duplicates():
                 # cross_folder above; don't list the identical pair twice.
                 continue
             all_folders = {fid: fname for fid, fname in url_folders.get(keep, []) + url_folders.get(remove, [])}
-            query_pairs.append({
-                "keep": keep,
-                "remove": remove,
-                "keep_folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(keep, [])],
-                "remove_folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(remove, [])],
-                "all_folders": sorted(
-                    [{"id": fid, "name": fname} for fid, fname in all_folders.items()],
-                    key=lambda x: x["name"],
-                ),
-            })
+            query_pairs.append(
+                {
+                    "keep": keep,
+                    "remove": remove,
+                    "keep_folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(keep, [])],
+                    "remove_folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(remove, [])],
+                    "all_folders": sorted(
+                        [{"id": fid, "name": fname} for fid, fname in all_folders.items()],
+                        key=lambda x: x["name"],
+                    ),
+                }
+            )
 
     # Drop any group/pair the user has explicitly dismissed as "not a dupe"
     # (reported 2026-08-10). Matched by the exact set of feed URLs shown at
@@ -33072,41 +33795,40 @@ def get_feed_duplicates():
         same_folder = [d for d in same_folder if _dedup_dismiss_key([d["keep"], d["remove"]]) not in dismissed]
         cross_folder = [d for d in cross_folder if _dedup_dismiss_key([d["keep"], d["remove"]]) not in dismissed]
         query_pairs = [d for d in query_pairs if _dedup_dismiss_key([d["keep"], d["remove"]]) not in dismissed]
-        title_groups = [
-            g for g in title_groups
-            if _dedup_dismiss_key([f["feed_url"] for f in g["feeds"]]) not in dismissed
-        ]
+        title_groups = [g for g in title_groups if _dedup_dismiss_key([f["feed_url"] for f in g["feeds"]]) not in dismissed]
         upgradable = [
-            d for d in upgradable
-            if _dedup_dismiss_key(
-                [d["current"]] + ([d["upgrade_to"]] if d.get("upgrade_to") else []) + list(d.get("alternates") or [])
-            ) not in dismissed
+            d
+            for d in upgradable
+            if _dedup_dismiss_key([d["current"]] + ([d["upgrade_to"]] if d.get("upgrade_to") else []) + list(d.get("alternates") or []))
+            not in dismissed
         ]
 
     # Dismissed groups, for the settings panel's "Dismissed as not dupes" list
     # (un-dismiss undo) — dismiss_key IS the group's feed URLs, \x1f-joined
     # (see _dedup_dismiss_key), so no separate storage is needed to display it.
     with get_meta_connection() as conn:
-        dismissed_rows = conn.execute(
-            "SELECT dismiss_key, dismissed_at FROM dedup_dismissed ORDER BY dismissed_at DESC"
-        ).fetchall()
+        dismissed_rows = conn.execute("SELECT dismiss_key, dismissed_at FROM dedup_dismissed ORDER BY dismissed_at DESC").fetchall()
     dismissed_groups = [
         {
             "dismiss_key": key,
             "dismissed_at": dismissed_at,
             "feeds": [
-                {"feed_url": u, "folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(u, [])]}
-                for u in key.split("\x1f")
+                {"feed_url": u, "folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(u, [])]} for u in key.split("\x1f")
             ],
         }
         for key, dismissed_at in dismissed_rows
     ]
 
-    return JSONResponse({
-        "same_folder": same_folder, "cross_folder": cross_folder,
-        "upgradable": upgradable, "title_groups": title_groups,
-        "query_pairs": query_pairs, "dismissed_groups": dismissed_groups,
-    })
+    return JSONResponse(
+        {
+            "same_folder": same_folder,
+            "cross_folder": cross_folder,
+            "upgradable": upgradable,
+            "title_groups": title_groups,
+            "query_pairs": query_pairs,
+            "dismissed_groups": dismissed_groups,
+        }
+    )
 
 
 @app.post("/feeds/duplicates/undismiss")
@@ -33281,12 +34003,14 @@ def get_saved_duplicates():
             return JSONResponse({"confirmed": [], "possible": [], "scanned": 0})
         # Direct storage read: reader.get_entries() would materialize every
         # saved article's full extracted body; only a short prefix is needed.
-        rows = reader._storage.get_db().execute(
-            "SELECT id, link, title, published, read,"
-            " substr(json_extract(content, '$[0].value'), 1, ?)"
-            " FROM entries WHERE feed = ?",
-            (_SAVED_DUP_BODY_SQL_CHARS, saved_url),
-        ).fetchall()
+        rows = (
+            reader._storage.get_db()
+            .execute(
+                "SELECT id, link, title, published, read, substr(json_extract(content, '$[0].value'), 1, ?) FROM entries WHERE feed = ?",
+                (_SAVED_DUP_BODY_SQL_CHARS, saved_url),
+            )
+            .fetchall()
+        )
 
     records: list[dict] = []
     for entry_id, link, title, published, read, body_head in rows:
@@ -33304,25 +34028,26 @@ def get_saved_duplicates():
             body = _html.unescape(body)
             body = " ".join(body.split())[:_SAVED_DUP_BODY_HEAD_CHARS].lower()
         ntitle = normalize_entry_title_for_dedupe(title)
-        records.append({
-            "entry_id": str(entry_id),
-            "link": link,
-            "title": str(title or ""),
-            "published": str(published or ""),
-            "read": bool(read),
-            "has_content": body_head is not None,
-            "_canon": normalize_entry_link_for_dedupe(link, host_aliases),
-            "_slug": _saved_dup_host_slug(link, host_aliases),
-            "_ntitle": ntitle if len(ntitle.split()) >= _SAFE_DEDUP_MIN_TITLE_WORDS else "",
-            "_body": body if len(body) >= _SAFE_DEDUP_MIN_BODY_CHARS else "",
-        })
+        records.append(
+            {
+                "entry_id": str(entry_id),
+                "link": link,
+                "title": str(title or ""),
+                "published": str(published or ""),
+                "read": bool(read),
+                "has_content": body_head is not None,
+                "_canon": normalize_entry_link_for_dedupe(link, host_aliases),
+                "_slug": _saved_dup_host_slug(link, host_aliases),
+                "_ntitle": ntitle if len(ntitle.split()) >= _SAFE_DEDUP_MIN_TITLE_WORDS else "",
+                "_body": body if len(body) >= _SAFE_DEDUP_MIN_BODY_CHARS else "",
+            }
+        )
 
     def _keep_order(r: dict):
         # Keeper first: prefer a copy with extracted content, then https over
         # http, then the oldest dated save (undated copies come from failed
         # extractions — keep last).
-        return (not r["has_content"], not r["link"].startswith("https:"),
-                not r["published"], r["published"])
+        return (not r["has_content"], not r["link"].startswith("https:"), not r["published"], r["published"])
 
     def _emit(groups: list[list[dict]], checks: list[tuple[str, str]]) -> list[dict]:
         for group in groups:
@@ -33332,13 +34057,12 @@ def get_saved_duplicates():
         groups = sorted(groups, key=lambda group: str(group[0]["title"] or "").lower())
         out = []
         for group in groups:
-            out.append({
-                "reasons": _saved_dup_reasons(group, checks),
-                "entries": [
-                    {k: r[k] for k in ("entry_id", "link", "title", "published", "read", "has_content")}
-                    for r in group
-                ],
-            })
+            out.append(
+                {
+                    "reasons": _saved_dup_reasons(group, checks),
+                    "entries": [{k: r[k] for k in ("entry_id", "link", "title", "published", "read", "has_content")} for r in group],
+                }
+            )
         return out
 
     confirmed_groups = _saved_dup_groups(records, ("_canon", "_slug"))
@@ -33356,11 +34080,13 @@ def get_saved_duplicates():
             continue
         possible_groups.append(group)
 
-    return JSONResponse({
-        "confirmed": _emit(confirmed_groups, [("_canon", "same URL"), ("_slug", "same slug")]),
-        "possible": _emit(possible_groups, [("_ntitle", "same title"), ("_body", "same content")]),
-        "scanned": len(records),
-    })
+    return JSONResponse(
+        {
+            "confirmed": _emit(confirmed_groups, [("_canon", "same URL"), ("_slug", "same slug")]),
+            "possible": _emit(possible_groups, [("_ntitle", "same title"), ("_body", "same content")]),
+            "scanned": len(records),
+        }
+    )
 
 
 _SAVED_DUP_PREVIEW_CHARS = 1500
@@ -33385,8 +34111,7 @@ async def preview_saved_duplicates(request: Request):
         db = reader._storage.get_db()
         for entry_id in entry_ids:
             row = db.execute(
-                "SELECT title, link, published, json_extract(content, '$[0].value')"
-                " FROM entries WHERE feed = ? AND id = ?",
+                "SELECT title, link, published, json_extract(content, '$[0].value') FROM entries WHERE feed = ? AND id = ?",
                 (saved_url, entry_id),
             ).fetchone()
             if row is None:
@@ -33396,15 +34121,17 @@ async def preview_saved_duplicates(request: Request):
             if raw:
                 text = _SAFE_DEDUP_TAG_RE.sub(" ", raw)
                 text = " ".join(_html.unescape(text).split())
-            previews.append({
-                "entry_id": entry_id,
-                "title": str(title or ""),
-                "link": str(link or entry_id),
-                "published": str(published or ""),
-                "chars": len(text),
-                "words": len(text.split()),
-                "text": text[:_SAVED_DUP_PREVIEW_CHARS],
-            })
+            previews.append(
+                {
+                    "entry_id": entry_id,
+                    "title": str(title or ""),
+                    "link": str(link or entry_id),
+                    "published": str(published or ""),
+                    "chars": len(text),
+                    "words": len(text.split()),
+                    "text": text[:_SAVED_DUP_PREVIEW_CHARS],
+                }
+            )
     return JSONResponse({"previews": previews})
 
 
@@ -33412,10 +34139,25 @@ _SAVED_DUP_CHECK_TIMEOUT = 8.0
 _SAVED_DUP_CHECK_PAUSE = 0.3  # between requests in one group — usually same host
 
 
-_SOFT_404_PATH_NAMES = frozenset({
-    "", "index", "index.html", "index.php", "index.htm", "home", "default.aspx",
-    "404", "not-found", "notfound", "error", "search", "blog", "news", "articles",
-})
+_SOFT_404_PATH_NAMES = frozenset(
+    {
+        "",
+        "index",
+        "index.html",
+        "index.php",
+        "index.htm",
+        "home",
+        "default.aspx",
+        "404",
+        "not-found",
+        "notfound",
+        "error",
+        "search",
+        "blog",
+        "news",
+        "articles",
+    }
+)
 
 
 def _normalize_probe_path(url: str) -> list[str]:
@@ -33478,7 +34220,7 @@ def _looks_like_soft_404(original: str, final: str) -> bool:
     if len(f_segs) == 1:
         return True
     # Deeper destination that is still a strict ancestor, or index-ish.
-    return o_segs[:len(f_segs)] == f_segs or f_segs[-1] in _SOFT_404_PATH_NAMES
+    return o_segs[: len(f_segs)] == f_segs or f_segs[-1] in _SOFT_404_PATH_NAMES
 
 
 def _check_saved_url(url: str) -> dict:
@@ -33505,11 +34247,9 @@ def _check_saved_url(url: str) -> dict:
                 resp = url_guard.safe_get(client, url)
             status, final_url = resp.status_code, str(resp.url)
     except url_guard.UnsafeURLError:
-        return {"status": None, "alive": False, "dead": False, "soft_dead": False,
-                "final_url": url, "error": "unsafe URL"}
+        return {"status": None, "alive": False, "dead": False, "soft_dead": False, "final_url": url, "error": "unsafe URL"}
     except Exception as exc:  # noqa: BLE001 — DNS failure, timeout, TLS, ...
-        return {"status": None, "alive": False, "dead": False, "soft_dead": False,
-                "final_url": url, "error": type(exc).__name__}
+        return {"status": None, "alive": False, "dead": False, "soft_dead": False, "final_url": url, "error": type(exc).__name__}
     return {
         "status": status,
         "alive": status < 400,
@@ -33563,7 +34303,7 @@ async def purge_old_entries(request: Request):
     body = await request.json()
     try:
         folder_ids = [int(f) for f in body.get("folder_ids", [])]
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return JSONResponse({"ok": False, "error": "Bad folder_ids."}, status_code=400)
     try:
         cutoff = datetime.fromisoformat(str(body.get("before", "")))
@@ -33585,8 +34325,7 @@ async def purge_old_entries(request: Request):
         dry_run=dry_run,
     )
     if not dry_run and count:
-        LOGGER.info("[purge] deleted %d posts older than %s from folders %s (unread=%s)",
-                    count, cutoff.date(), folder_ids, include_unread)
+        LOGGER.info("[purge] deleted %d posts older than %s from folders %s (unread=%s)", count, cutoff.date(), folder_ids, include_unread)
     return JSONResponse({"ok": True, "count": count, "dry_run": dry_run})
 
 
@@ -33642,9 +34381,7 @@ def _autofile_excluded_targets(feed_urls: Iterable[str], conn=None) -> frozenset
     excluded = {saved_articles_service.SAVED_FEED_URL}
     excluded.update(u for u in feed_urls if "youtube.com/feeds/videos.xml" in str(u))
     if conn is not None:
-        excluded.update(
-            r[0] for r in conn.execute("SELECT feed_url FROM non_feed_subscriptions")
-        )
+        excluded.update(r[0] for r in conn.execute("SELECT feed_url FROM non_feed_subscriptions"))
     return frozenset(excluded)
 
 
@@ -33676,25 +34413,15 @@ def _current_autofile_plan(restrict_to: set[str] | None = None) -> tuple[list[di
                 hosts.add(saved_autofile_service.article_host(str(f.link)))
             declared_hosts[url] = {h for h in hosts if h}
         db = reader._storage.get_db()
-        feed_sizes = {
-            str(f): int(n) for f, n in db.execute(
-                "SELECT feed, COUNT(*) FROM entries GROUP BY feed"
-            )
-        }
+        feed_sizes = {str(f): int(n) for f, n in db.execute("SELECT feed, COUNT(*) FROM entries GROUP BY feed")}
         # Only genuinely-kept saves are worth filing; a read, unstarred row is a
         # husk from an older move that predates source cleanup.
         with get_meta_connection() as conn:
-            kept = {
-                r[0] for r in conn.execute(
-                    "SELECT entry_id FROM saved_entries WHERE feed_url = ?", (saved_url,)
-                )
-            }
+            kept = {r[0] for r in conn.execute("SELECT entry_id FROM saved_entries WHERE feed_url = ?", (saved_url,))}
             non_feed = {r[0] for r in conn.execute("SELECT host FROM autofile_non_feed_hosts")}
         saved_rows = [
             (str(i), str(link or i))
-            for i, link in db.execute(
-                "SELECT id, link FROM entries WHERE feed = ?", (saved_url,)
-            )
+            for i, link in db.execute("SELECT id, link FROM entries WHERE feed = ?", (saved_url,))
             if str(i) in kept and (restrict_to is None or str(i) in restrict_to)
         ]
         feed_links = [
@@ -33708,8 +34435,11 @@ def _current_autofile_plan(restrict_to: set[str] | None = None) -> tuple[list[di
     with get_meta_connection() as conn:
         excluded = _autofile_excluded_targets(titles, conn)
     plan = saved_autofile_service.build_autofile_plan(
-        saved_rows, feed_links, feed_titles=titles,
-        feed_hosts=declared_hosts, feed_sizes=feed_sizes,
+        saved_rows,
+        feed_links,
+        feed_titles=titles,
+        feed_hosts=declared_hosts,
+        feed_sizes=feed_sizes,
         exclude_feeds=excluded,
     )
     # Hosts marked "not a feed" are settled business — their saves are genuine
@@ -33739,14 +34469,16 @@ def preview_saved_autofile():
     totals = saved_autofile_service.plan_totals(plan)
     totals["non_feed_hosts"] = len(marked)
     totals["non_feed_articles"] = sum(c["count"] for c in marked)
-    return JSONResponse({
-        "plan": slim,
-        "totals": totals,
-        "non_feed": sorted(
-            ({"host": c["host"], "count": c["count"]} for c in marked),
-            key=lambda c: (-c["count"], c["host"]),
-        ),
-    })
+    return JSONResponse(
+        {
+            "plan": slim,
+            "totals": totals,
+            "non_feed": sorted(
+                ({"host": c["host"], "count": c["count"]} for c in marked),
+                key=lambda c: (-c["count"], c["host"]),
+            ),
+        }
+    )
 
 
 def _current_unstar_tagged_plan(keep_tags: set[str] | None = None) -> dict:
@@ -33762,19 +34494,11 @@ def _current_unstar_tagged_plan(keep_tags: set[str] | None = None) -> dict:
             "SELECT feed, id, key FROM entry_tags WHERE key LIKE ?",
             (f"{MANUAL_TAG_KEY_PREFIX}%",),
         ):
-            tags_by_key.setdefault((str(feed), str(eid)), []).append(
-                str(key)[len(MANUAL_TAG_KEY_PREFIX):]
-            )
+            tags_by_key.setdefault((str(feed), str(eid)), []).append(str(key)[len(MANUAL_TAG_KEY_PREFIX) :])
     with get_meta_connection() as conn:
-        starred = {
-            (str(f), str(e)) for f, e in conn.execute(
-                "SELECT feed_url, entry_id FROM saved_entries"
-            )
-        }
+        starred = {(str(f), str(e)) for f, e in conn.execute("SELECT feed_url, entry_id FROM saved_entries")}
     plan = unstar_tagged_service.build_unstar_plan(starred, tags_by_key, keep_tags=keep_tags)
-    plan["queue_like_tags"] = unstar_tagged_service.queue_like_tags(
-        {row["tag"] for row in plan["per_tag"]}
-    )
+    plan["queue_like_tags"] = unstar_tagged_service.queue_like_tags({row["tag"] for row in plan["per_tag"]})
     return plan
 
 
@@ -33793,11 +34517,13 @@ def preview_unstar_tagged(keep_tags: str = Query("")):
     """
     keep = {t.strip() for t in keep_tags.split(",") if t.strip()}
     plan = _current_unstar_tagged_plan(keep)
-    return JSONResponse({
-        "totals": plan["totals"],
-        "per_tag": plan["per_tag"],
-        "queue_like_tags": plan["queue_like_tags"],
-    })
+    return JSONResponse(
+        {
+            "totals": plan["totals"],
+            "per_tag": plan["per_tag"],
+            "queue_like_tags": plan["queue_like_tags"],
+        }
+    )
 
 
 @app.post("/saved/unstar-tagged")
@@ -33823,7 +34549,7 @@ async def apply_unstar_tagged(request: Request):
     deleted = 0
     with get_meta_connection() as conn:
         for start in range(0, len(to_unstar), 400):
-            chunk = to_unstar[start:start + 400]
+            chunk = to_unstar[start : start + 400]
             placeholders = ",".join("(?,?)" for _ in chunk)
             flat = [v for key in chunk for v in key]
             cur = conn.execute(
@@ -33835,10 +34561,12 @@ async def apply_unstar_tagged(request: Request):
 
     # A behind-the-back delete leaves the generation-guarded counts stale.
     invalidate_unread_counts_cache()
-    return JSONResponse({
-        "ok": True,
-        "unstarred": deleted,
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "unstarred": deleted,
+        }
+    )
 
 
 def _bulk_reader_published_dates(keys: list[tuple[str, str]]) -> dict[tuple[str, str], datetime | None]:
@@ -33852,7 +34580,7 @@ def _bulk_reader_published_dates(keys: list[tuple[str, str]]) -> dict[tuple[str,
     conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
     try:
         for start in range(0, len(keys), 400):
-            chunk = keys[start:start + 400]
+            chunk = keys[start : start + 400]
             placeholders = ",".join("(?,?)" for _ in chunk)
             params = [v for k in chunk for v in k]
             for feed, eid, published in conn.execute(
@@ -33880,13 +34608,13 @@ def _current_archive_old_stars_plan(days: int, basis: str = "published") -> dict
         rows = conn.execute("SELECT feed_url, entry_id, saved_at FROM saved_entries").fetchall()
     keys = [(str(f), str(e)) for f, e, _s in rows]
     if basis == "saved":
-        starred_at: dict[tuple[str, str], datetime | None] = {
-            (str(f), str(e)): _parse_stored_dt(s) for f, e, s in rows
-        }
+        starred_at: dict[tuple[str, str], datetime | None] = {(str(f), str(e)): _parse_stored_dt(s) for f, e, s in rows}
     else:
         starred_at = _bulk_reader_published_dates(keys)
     plan = archive_old_stars_service.build_archive_plan(
-        starred_at, get_archived_saved_keys(), days=days,
+        starred_at,
+        get_archived_saved_keys(),
+        days=days,
     )
     plan["basis"] = basis
     return plan
@@ -33899,15 +34627,17 @@ def preview_archive_old_stars(
 ):
     """Preview which stars would be archived. Changes nothing."""
     plan = _current_archive_old_stars_plan(days, basis)
-    return JSONResponse({
-        "ok": True,
-        "days": plan["days"],
-        "basis": plan["basis"],
-        "cutoff": plan["cutoff"],
-        "totals": plan["totals"],
-        "buckets": plan["buckets"],
-        "day_choices": list(archive_old_stars_service.DAY_CHOICES),
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "days": plan["days"],
+            "basis": plan["basis"],
+            "cutoff": plan["cutoff"],
+            "totals": plan["totals"],
+            "buckets": plan["buckets"],
+            "day_choices": list(archive_old_stars_service.DAY_CHOICES),
+        }
+    )
 
 
 @app.post("/saved/archive-old")
@@ -33936,7 +34666,7 @@ async def apply_archive_old_stars(request: Request):
     body = await request.json()
     try:
         days = int(body.get("days", archive_old_stars_service.DEFAULT_DAYS))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return JSONResponse({"ok": False, "error": "days must be a number"}, status_code=400)
     basis = str(body.get("basis", "published"))
 
@@ -33949,10 +34679,9 @@ async def apply_archive_old_stars(request: Request):
     with get_meta_connection() as conn:
         conn.execute("PRAGMA busy_timeout = 20000")
         for start in range(0, len(keys), 400):
-            chunk = keys[start:start + 400]
+            chunk = keys[start : start + 400]
             conn.executemany(
-                "INSERT OR IGNORE INTO archived_entries (feed_url, entry_id, archived_at) "
-                "VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO archived_entries (feed_url, entry_id, archived_at) VALUES (?, ?, ?)",
                 [(f, e, now_iso) for f, e in chunk],
             )
             # The star comes off: the TODO is discharged.
@@ -33963,8 +34692,7 @@ async def apply_archive_old_stars(request: Request):
             )
             # Read at the override level too, so a refresh can't un-read them.
             conn.executemany(
-                "INSERT OR REPLACE INTO entry_read_state (feed_url, entry_id, read_at) "
-                "VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)",
                 [(f, e, now_iso) for f, e in chunk],
             )
         conn.commit()
@@ -33983,11 +34711,18 @@ async def apply_archive_old_stars(request: Request):
 
     # A behind-the-back write leaves the generation-guarded counts stale.
     invalidate_unread_counts_cache()
-    LOGGER.info("[archive-old-stars] archived %d star(s) older than %dd by %s (marked read: %d)",
-                len(keys), days, plan["basis"], marked_read)
-    return JSONResponse({
-        "ok": True, "archived": len(keys), "days": days, "basis": plan["basis"], "marked_read": marked_read,
-    })
+    LOGGER.info(
+        "[archive-old-stars] archived %d star(s) older than %dd by %s (marked read: %d)", len(keys), days, plan["basis"], marked_read
+    )
+    return JSONResponse(
+        {
+            "ok": True,
+            "archived": len(keys),
+            "days": days,
+            "basis": plan["basis"],
+            "marked_read": marked_read,
+        }
+    )
 
 
 @app.post("/saved/autofile/non-feed-subscription")
@@ -34031,8 +34766,7 @@ async def mark_autofile_non_feed(request: Request):
     kept re-proposing them because it can only see that no feed matches.
     """
     body = await request.json()
-    hosts = [saved_autofile_service.article_host(h) or str(h).strip().lower()
-             for h in body.get("hosts", []) if h]
+    hosts = [saved_autofile_service.article_host(h) or str(h).strip().lower() for h in body.get("hosts", []) if h]
     hosts = [h for h in hosts if h]
     if not hosts:
         return JSONResponse({"ok": False, "error": "No hosts given."}, status_code=400)
@@ -34044,9 +34778,7 @@ async def mark_autofile_non_feed(request: Request):
                 [(h,) for h in hosts],
             )
         else:
-            conn.executemany(
-                "DELETE FROM autofile_non_feed_hosts WHERE host = ?", [(h,) for h in hosts]
-            )
+            conn.executemany("DELETE FROM autofile_non_feed_hosts WHERE host = ?", [(h,) for h in hosts])
         conn.commit()
     return JSONResponse({"ok": True, "hosts": hosts, "marked": marked})
 
@@ -34078,7 +34810,7 @@ async def apply_saved_autofile(request: Request):
 
     try:
         limit = int(body.get("limit") or _AUTOFILE_BATCH)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         limit = _AUTOFILE_BATCH
     limit = max(1, min(limit, _AUTOFILE_BATCH_MAX))
 
@@ -34091,9 +34823,7 @@ async def apply_saved_autofile(request: Request):
         known_feeds = {str(f.url) for f in reader.get_feeds()}
         bad = sorted(set(wanted.values()) - known_feeds)
         if bad:
-            return JSONResponse(
-                {"ok": False, "error": f"Unknown target feed: {bad[0]}"}, status_code=400
-            )
+            return JSONResponse({"ok": False, "error": f"Unknown target feed: {bad[0]}"}, status_code=400)
         # Enforced here too, not just in the preview: the target comes from the
         # request, so a stale plan must not be able to file into a barred feed.
         barred = sorted(set(wanted.values()) & _autofile_excluded_targets(known_feeds, conn))
@@ -34102,14 +34832,8 @@ async def apply_saved_autofile(request: Request):
                 {"ok": False, "error": f"Not a valid target feed: {barred[0]}"},
                 status_code=400,
             )
-        rows = reader._storage.get_db().execute(
-            "SELECT id, link FROM entries WHERE feed = ?", (saved_url,)
-        ).fetchall()
-        kept = {
-            r[0] for r in conn.execute(
-                "SELECT entry_id FROM saved_entries WHERE feed_url = ?", (saved_url,)
-            )
-        }
+        rows = reader._storage.get_db().execute("SELECT id, link FROM entries WHERE feed = ?", (saved_url,)).fetchall()
+        kept = {r[0] for r in conn.execute("SELECT entry_id FROM saved_entries WHERE feed_url = ?", (saved_url,))}
         for entry_id, link in rows:
             entry_id = str(entry_id)
             if entry_id not in kept:
@@ -34119,7 +34843,7 @@ async def apply_saved_autofile(request: Request):
             if not target:
                 continue
             if moved >= limit:
-                remaining += 1      # counted, not moved — the client loops
+                remaining += 1  # counted, not moved — the client loops
                 continue
             res = _move_entry_to_feed(reader, conn, saved_url, entry_id, target)
             if res.get("ok"):
@@ -34127,14 +34851,11 @@ async def apply_saved_autofile(request: Request):
                 per_host[host] = per_host.get(host, 0) + 1
             else:
                 failed += 1
-                LOGGER.warning("[autofile] %s -> %s failed: %s", entry_id, target,
-                               res.get("error"))
+                LOGGER.warning("[autofile] %s -> %s failed: %s", entry_id, target, res.get("error"))
     if moved:
         invalidate_unread_counts_cache()
-    LOGGER.info("[autofile] filed %d saved article(s) across %d host(s), %d failed, %d left",
-                moved, len(per_host), failed, remaining)
-    return JSONResponse({"ok": failed == 0, "moved": moved, "failed": failed,
-                         "remaining": remaining, "per_host": per_host})
+    LOGGER.info("[autofile] filed %d saved article(s) across %d host(s), %d failed, %d left", moved, len(per_host), failed, remaining)
+    return JSONResponse({"ok": failed == 0, "moved": moved, "failed": failed, "remaining": remaining, "per_host": per_host})
 
 
 @app.get("/feeds/multi-folder")
@@ -34352,7 +35073,12 @@ def mark_folder_as_read(
         feed_urls = get_folder_feed_urls(conn, folder_id)
 
     marked_count, undo_token = _mark_entries_as_read_for_view(
-        feed_urls, sort_by=sort_by, sort_dir=sort_dir, read_filter=read_filter, star_only=star_only, tag=tag,
+        feed_urls,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        read_filter=read_filter,
+        star_only=star_only,
+        tag=tag,
     )
     with unread_counts_cache_lock:
         global _unread_counts_generation
@@ -34452,7 +35178,12 @@ def mark_feed_as_read(
 ):
     normalized_tag = normalize_tag_value(tag)
     marked_count, undo_token = _mark_entries_as_read_for_view(
-        {feed_url}, sort_by=sort_by, sort_dir=sort_dir, read_filter=read_filter, star_only=star_only, tag=tag,
+        {feed_url},
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        read_filter=read_filter,
+        star_only=star_only,
+        tag=tag,
     )
     with unread_counts_cache_lock:
         global _unread_counts_generation
@@ -34630,8 +35361,9 @@ def _run_on_star_destinations(feed_url: str, entry_id: str) -> None:
 
         if email_to and is_email_configured() and link:
             try:
-                ok, err = send_article_email(get_resend_api_key(), get_resend_from(), email_to,
-                                             title, feed_title, link, _get_entry_excerpt(entry))
+                ok, err = send_article_email(
+                    get_resend_api_key(), get_resend_from(), email_to, title, feed_title, link, _get_entry_excerpt(entry)
+                )
                 if not ok:
                     LOGGER.warning("[on-star] email failed: %s", err)
             except Exception as exc:  # noqa: BLE001
@@ -34807,28 +35539,34 @@ async def refresh_saved_article_content(
     # purpose, not the polite background traffic the page-fetch ladder's own
     # host cooldown exists to pace.
     result = await run_in_threadpool(
-        _refresh_captured_article_for_current_user, feed_url, entry_id, mode, None, _dc,
+        _refresh_captured_article_for_current_user,
+        feed_url,
+        entry_id,
+        mode,
+        None,
+        _dc,
         ignore_cooldown=True,
     )
     if result.get("ok"):
-        return JSONResponse({
-            "ok": True,
-            "refreshed": bool(result.get("refreshed")),
-            "extracted": bool(result.get("extracted")),
-            "title": result.get("title"),
-            "feed_url": feed_url,
-            "entry_id": entry_id,
-            "url": result.get("source_url") or entry_id,
-            "dated": result.get("dated"),
-            "from_archive": result.get("from_archive"),
-        })
+        return JSONResponse(
+            {
+                "ok": True,
+                "refreshed": bool(result.get("refreshed")),
+                "extracted": bool(result.get("extracted")),
+                "title": result.get("title"),
+                "feed_url": feed_url,
+                "entry_id": entry_id,
+                "url": result.get("source_url") or entry_id,
+                "dated": result.get("dated"),
+                "from_archive": result.get("from_archive"),
+            }
+        )
     # Only the saved feed has a meaningful fallback: re-running the save path
     # can create the entry when it is genuinely absent. Anywhere else, the
     # in-place result is the answer.
     if not saved_articles_service.is_saved_articles_feed(feed_url):
         return JSONResponse(
-            {"ok": False, "error": result.get("error") or "Re-fetch failed.",
-             "dead": bool(result.get("dead"))},
+            {"ok": False, "error": result.get("error") or "Re-fetch failed.", "dead": bool(result.get("dead"))},
             status_code=400,
         )
     url = saved_articles_service.normalize_article_url(entry_id) or entry_id
@@ -34841,20 +35579,20 @@ async def refresh_saved_article_content(
     # error"). Only a real extraction counts as a successful re-fetch.
     if not result.get("ok") or not result.get("extracted"):
         return JSONResponse(
-            {"ok": False,
-             "error": result.get("error") or "Re-fetch got nothing back from the page.",
-             "dead": bool(result.get("dead"))},
+            {"ok": False, "error": result.get("error") or "Re-fetch got nothing back from the page.", "dead": bool(result.get("dead"))},
             status_code=400,
         )
-    return JSONResponse({
-        "ok": True,
-        "refreshed": bool(result.get("refreshed")),
-        "extracted": bool(result.get("extracted")),
-        "title": result.get("title"),
-        "feed_url": feed_url,
-        "entry_id": entry_id,   # stored key
-        "url": url,             # normalized source URL that was re-fetched
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "refreshed": bool(result.get("refreshed")),
+            "extracted": bool(result.get("extracted")),
+            "title": result.get("title"),
+            "feed_url": feed_url,
+            "entry_id": entry_id,  # stored key
+            "url": url,  # normalized source URL that was re-fetched
+        }
+    )
 
 
 def _resolve_redirector_url(url: str) -> str:
@@ -34894,7 +35632,7 @@ def _find_subscribed_entry_for_url(article_url: str) -> tuple[str, str] | None:
     variants = {bare, bare + "/"}
     for scheme_a, scheme_b in (("https://", "http://"), ("http://", "https://")):
         if bare.startswith(scheme_a):
-            swapped = scheme_b + bare[len(scheme_a):]
+            swapped = scheme_b + bare[len(scheme_a) :]
             variants |= {swapped, swapped + "/"}
     for v in list(variants):
         if "://www." in v:
@@ -35054,10 +35792,10 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
             return
         stored = (entry.content[0].value if entry.content else None) or entry.summary or ""
         if _archived_copy_is_plausible(stored):
-            return          # a real article already — leave it alone
+            return  # a real article already — leave it alone
         host = urlparse(entry.link).netloc.lower()
         if _autofetch_host_in_cooldown(host):
-            return          # this host already refused us; don't keep asking
+            return  # this host already refused us; don't keep asking
     except Exception:  # noqa: BLE001 — never let this break the star/tag itself
         LOGGER.debug("auto-refetch precheck failed for %s/%s", feed_url, entry_id, exc_info=True)
         return
@@ -35074,8 +35812,14 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
             # unreachable, or serving something else entirely — so remember the
             # host rather than rediscovering it on the next tag.
             _mark_autofetch_host_failed(host)
-            LOGGER.info("[auto-refetch] %s/%s -> %s (pausing %s for %dh)", feed_url, entry_id,
-                        result.get("error", "no change"), host, _AUTOFETCH_HOST_COOLDOWN_S // 3600)
+            LOGGER.info(
+                "[auto-refetch] %s/%s -> %s (pausing %s for %dh)",
+                feed_url,
+                entry_id,
+                result.get("error", "no change"),
+                host,
+                _AUTOFETCH_HOST_COOLDOWN_S // 3600,
+            )
         except Exception:  # noqa: BLE001
             _mark_autofetch_host_failed(host)
             LOGGER.warning("[auto-refetch] failed for %s/%s", feed_url, entry_id, exc_info=True)
@@ -35086,7 +35830,9 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
 
 
 def _refresh_captured_article_for_current_user(
-    feed_url: str, entry_id: str, mode: str = "readability",
+    feed_url: str,
+    entry_id: str,
+    mode: str = "readability",
     bump_received: bool | None = None,
     date_choice: str | None = None,
     *,
@@ -35126,9 +35872,7 @@ def _refresh_captured_article_for_current_user(
     # into full-page: readability keeps the one image it scores highest and drops
     # the rest, which for a 6-page transcription loses 5 of them. An explicit
     # archive re-fetch still wins — the user asked for the snapshot.
-    if mode != CAPTURE_MODE_ARCHIVE and site_content_plugins.prefers_full_page(
-        _entry_source_url(feed_url, entry_id) or ""
-    ):
+    if mode != CAPTURE_MODE_ARCHIVE and site_content_plugins.prefers_full_page(_entry_source_url(feed_url, entry_id) or ""):
         mode = CAPTURE_MODE_FULL
     _base = fetch_full_page_article if mode == CAPTURE_MODE_FULL else fetch_readability_article
     # Keep the page we already fetched, so a date can be mined from it without a
@@ -35142,7 +35886,7 @@ def _refresh_captured_article_for_current_user(
         try:
             return _base(target, capture=_capture, max_tier="flaresolverr", ignore_cooldown=ignore_cooldown)
         except TypeError:
-            return _base(target)       # a caller-supplied extractor without the kwarg
+            return _base(target)  # a caller-supplied extractor without the kwarg
 
     reader = get_reader()
     with get_meta_connection() as conn:
@@ -35173,7 +35917,10 @@ def _refresh_captured_article_for_current_user(
 
             with get_meta_connection() as conn:
                 archived_result = saved_articles_service.refresh_captured_article(
-                    reader, conn, feed_url, entry_id,
+                    reader,
+                    conn,
+                    feed_url,
+                    entry_id,
                     extract=_from_archive,
                     enqueue_archive=starred_archive_service.enqueue_archive,
                     is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
@@ -35198,8 +35945,7 @@ def _refresh_captured_article_for_current_user(
         except Exception:  # noqa: BLE001 — never fail a good re-fetch over this
             LOGGER.debug("lead-image invalidation failed for %s", entry_id, exc_info=True)
         try:
-            result["dated"] = _apply_mined_publish_date(
-                feed_url, entry_id, _capture.get("raw_html"))
+            result["dated"] = _apply_mined_publish_date(feed_url, entry_id, _capture.get("raw_html"))
         except Exception:  # noqa: BLE001 — a date is a bonus, never a failure
             LOGGER.warning("re-fetch date mining failed for %s", entry_id, exc_info=True)
     return result
@@ -35230,12 +35976,10 @@ def _apply_mined_publish_date(feed_url: str, entry_id: str, raw_html: str | None
             "SELECT 1 FROM entry_date_overrides WHERE feed_url = ? AND entry_id = ?",
             (feed_url, entry_id),
         ).fetchone():
-            return None        # an explicit correction outranks anything inferred
+            return None  # an explicit correction outranks anything inferred
     with get_reader() as reader:
         db = reader._storage.get_db()
-        row = db.execute(
-            "SELECT published FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id)
-        ).fetchone()
+        row = db.execute("SELECT published FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id)).fetchone()
         current_raw = row[0] if row else None
         # "We don't know" means absent OR a sentinel. This used to test only for
         # the 1970 prefix, which silently excluded the 129 entries whose importer
@@ -35249,7 +35993,7 @@ def _apply_mined_publish_date(feed_url: str, entry_id: str, raw_html: str | None
                 except ValueError:
                     parsed = None
             if parsed is not None and real_published_date(parsed) is not None:
-                return None       # a real date already; never overwrite it
+                return None  # a real date already; never overwrite it
         source = "metadata"
         mined = mine_publish_date(raw_html)
         if mined is None:
@@ -35257,8 +36001,7 @@ def _apply_mined_publish_date(feed_url: str, entry_id: str, raw_html: str | None
         if mined is None:
             return None
         stored = mined.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        db.execute("UPDATE entries SET published = ? WHERE feed = ? AND id = ?",
-                   (stored, feed_url, entry_id))
+        db.execute("UPDATE entries SET published = ? WHERE feed = ? AND id = ?", (stored, feed_url, entry_id))
         db.commit()
     invalidate_unread_counts_cache()
     LOGGER.info("[re-fetch] learned publish date %s (%s) for %s", stored, source, entry_id)
@@ -35266,9 +36009,7 @@ def _apply_mined_publish_date(feed_url: str, entry_id: str, raw_html: str | None
 
 
 @app.post("/articles/save")
-def save_article_route(
-    request: Request, url: str = Form(...), mode: str = Form("readability")
-):
+def save_article_route(request: Request, url: str = Form(...), mode: str = Form("readability")):
     """In-app save (Save Article modal). Session-authenticated.
 
     *mode* ``"full"`` captures the whole page body instead of readability-
@@ -35308,10 +36049,7 @@ def save_article_bookmarklet(request: Request, url: str = Query(...)):
     message = "Article already saved." if result["duplicate"] else "Article saved."
     entry_query = _entry_query_suffix(result["feed_url"], result["entry_id"])
     return RedirectResponse(
-        url=(
-            f"/?list_feed_url={quote_plus(result['feed_url'])}{entry_query}"
-            f"&message={quote_plus(message)}"
-        ),
+        url=(f"/?list_feed_url={quote_plus(result['feed_url'])}{entry_query}&message={quote_plus(message)}"),
         status_code=303,
     )
 
@@ -35387,8 +36125,15 @@ def _star_entry_for_current_user(feed_url: str, entry_id: str) -> dict:
     reader = get_reader()
     entry = reader.get_entry((feed_url, entry_id), None)
     if entry is None:
-        return {"ok": False, "error": "Entry not found.", "duplicate": False,
-                "extracted": False, "feed_url": feed_url, "entry_id": entry_id, "title": None}
+        return {
+            "ok": False,
+            "error": "Entry not found.",
+            "duplicate": False,
+            "extracted": False,
+            "feed_url": feed_url,
+            "entry_id": entry_id,
+            "title": None,
+        }
     with get_meta_connection() as conn:
         cur = conn.execute(
             "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
@@ -35400,9 +36145,16 @@ def _star_entry_for_current_user(feed_url: str, entry_id: str) -> dict:
         starred_archive_service.enqueue_archive(feed_url, entry_id)
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("extension-save: archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
-    return {"ok": True, "error": None, "duplicate": not newly, "extracted": False,
-            "feed_url": feed_url, "entry_id": entry_id,
-            "title": entry.title or entry_id, "starred_existing": True}
+    return {
+        "ok": True,
+        "error": None,
+        "duplicate": not newly,
+        "extracted": False,
+        "feed_url": feed_url,
+        "entry_id": entry_id,
+        "title": entry.title or entry_id,
+        "starred_existing": True,
+    }
 
 
 def _apply_canonical_entry_link(feed_url: str, entry_id: str, old_link: str, final_url: str) -> bool:
@@ -35467,8 +36219,7 @@ async def api_bookmarklet_save(request: Request):
         if not isinstance(body, dict):
             raise ValueError
     except Exception:  # noqa: BLE001
-        return JSONResponse({"ok": False, "detail": "Invalid JSON body."},
-                            status_code=400, headers=_BOOKMARKLET_CORS_HEADERS)
+        return JSONResponse({"ok": False, "detail": "Invalid JSON body."}, status_code=400, headers=_BOOKMARKLET_CORS_HEADERS)
     token = str(body.get("token") or "")
     url = str(body.get("url") or "")
     page_html = body.get("html")
@@ -35476,8 +36227,11 @@ async def api_bookmarklet_save(request: Request):
     if user_store is not None:
         uid = user_store.user_for_api_token(token)
         if not uid:
-            return JSONResponse({"ok": False, "detail": "Invalid token — paste your Lectio API token (Settings → Account)."},
-                                status_code=401, headers=_BOOKMARKLET_CORS_HEADERS)
+            return JSONResponse(
+                {"ok": False, "detail": "Invalid token — paste your Lectio API token (Settings → Account)."},
+                status_code=401,
+                headers=_BOOKMARKLET_CORS_HEADERS,
+            )
     else:
         uid = None  # no-auth single-user install: default tenancy
     if not (isinstance(page_html, str) and page_html.strip()):
@@ -35522,8 +36276,7 @@ async def api_bookmarklet_save(request: Request):
     result = await run_in_threadpool(_do_save)
     if not result.get("ok") and result.get("error"):
         result["detail"] = result["error"]  # the extension surfaces `detail`
-    return JSONResponse(result, status_code=200 if result["ok"] else 400,
-                        headers=_BOOKMARKLET_CORS_HEADERS)
+    return JSONResponse(result, status_code=200 if result["ok"] else 400, headers=_BOOKMARKLET_CORS_HEADERS)
 
 
 def parse_manual_tag_edit_tokens(raw_value: str | None) -> tuple[list[str], set[str]]:
@@ -35738,10 +36491,16 @@ def edit_manual_tags_on_entries_batch_route(
     msg = f"Updated tags on {updated} post{'s' if updated != 1 else ''}."
     if failed:
         msg += f" {failed} failed."
-    return JSONResponse({
-        "ok": True, "tagged": updated, "failed": failed, "message": msg,
-        "still_tagged": still_tagged, "now_untagged": now_untagged,
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "tagged": updated,
+            "failed": failed,
+            "message": msg,
+            "still_tagged": still_tagged,
+            "now_untagged": now_untagged,
+        }
+    )
 
 
 @app.post("/entries/read-batch")
@@ -35888,9 +36647,7 @@ def star_entries_batch_route(entries: str = Form(...), saved: int = Form(...)):
     return JSONResponse(resp)
 
 
-def _scope_starred_keys(
-    folder_id: int | None, list_feed_url: str | None, tag: str | None
-) -> list[tuple[str, str]]:
+def _scope_starred_keys(folder_id: int | None, list_feed_url: str | None, tag: str | None) -> list[tuple[str, str]]:
     """The starred entries inside a drilled-down view: feed and/or tag.
 
     Scoped exactly as the user drilled — "a single feed with stars I don't need"
@@ -35907,11 +36664,7 @@ def _scope_starred_keys(
         else:
             feeds = set(get_all_reader_feed_urls())
         # Disabled feeds keep their stars visible, so they keep them removable too.
-        starred = {
-            (str(f), str(e)) for f, e in conn.execute(
-                "SELECT feed_url, entry_id FROM saved_entries"
-            ) if str(f) in feeds
-        }
+        starred = {(str(f), str(e)) for f, e in conn.execute("SELECT feed_url, entry_id FROM saved_entries") if str(f) in feeds}
     if normalized_tag:
         starred &= get_entry_keys_for_manual_tag(feeds, normalized_tag)
     return sorted(starred)
@@ -35937,8 +36690,7 @@ def _refetch_job_state(create: bool = False) -> dict | None:
         return job
 
 
-def _scope_refetchable(folder_id: int | None, list_feed_url: str | None
-                       ) -> list[tuple[str, str, str]]:
+def _scope_refetchable(folder_id: int | None, list_feed_url: str | None) -> list[tuple[str, str, str]]:
     """(feed_url, entry_id, link) for kept entries in scope with a usable link.
 
     Kept only — the same rule the single-article button uses, because an unkept
@@ -35951,10 +36703,7 @@ def _scope_refetchable(folder_id: int | None, list_feed_url: str | None
             feeds = set(get_folder_feed_urls(conn, int(folder_id)))
         else:
             feeds = set(get_all_reader_feed_urls())
-        starred = {
-            (str(f), str(e)) for f, e in conn.execute(
-                "SELECT feed_url, entry_id FROM saved_entries") if str(f) in feeds
-        }
+        starred = {(str(f), str(e)) for f, e in conn.execute("SELECT feed_url, entry_id FROM saved_entries") if str(f) in feeds}
     kept = starred | {k for k in get_tagged_entry_keys(feeds) if k[0] in feeds}
     rows: list[tuple[str, str, str]] = []
     with get_reader() as reader:
@@ -35973,8 +36722,7 @@ def _refetch_scope_label(folder_id: int | None, list_feed_url: str | None) -> st
     if list_feed_url:
         with get_reader() as reader:
             feed = reader.get_feed(list_feed_url, None)
-        return str(getattr(feed, "user_title", None) or getattr(feed, "title", None)
-                   or list_feed_url)
+        return str(getattr(feed, "user_title", None) or getattr(feed, "title", None) or list_feed_url)
     if folder_id is not None:
         with get_meta_connection() as conn:
             row = conn.execute("SELECT name FROM folders WHERE id = ?", (int(folder_id),)).fetchone()
@@ -35990,27 +36738,26 @@ def preview_refetch_scope(
     """How many articles a batch re-fetch would touch, and how long it would take."""
     rows = _scope_refetchable(folder_id, list_feed_url)
     job = _refetch_job_state()
-    return JSONResponse({
-        "ok": True,
-        "count": len(rows),
-        "hosts": len({refetch_batch.host_of(r[2]) for r in rows}),
-        "estimate_seconds": int(refetch_batch.estimate_seconds(rows)),
-        # So the confirm can say "this will be queued behind N" rather than the
-        # caller discovering it only after committing.
-        "busy": bool(job and job.get("running")),
-        "queued": len(job.get("queue") or []) if job else 0,
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "count": len(rows),
+            "hosts": len({refetch_batch.host_of(r[2]) for r in rows}),
+            "estimate_seconds": int(refetch_batch.estimate_seconds(rows)),
+            # So the confirm can say "this will be queued behind N" rather than the
+            # caller discovering it only after committing.
+            "busy": bool(job and job.get("running")),
+            "queued": len(job.get("queue") or []) if job else 0,
+        }
+    )
 
 
 def _refetch_status_payload(job: dict | None) -> dict:
     if job is None:
         return {"ok": True, "running": False, "idle": True, "queue": [], "history": []}
-    out = {k: v for k, v in job.items()
-           if k not in ("cancel", "cancel_all", "queue", "history")}
+    out = {k: v for k, v in job.items() if k not in ("cancel", "cancel_all", "queue", "history")}
     out["ok"] = True
-    out["queue"] = [{"label": q["label"], "count": q["count"],
-                     "estimate_seconds": q["estimate_seconds"]}
-                    for q in (job.get("queue") or [])]
+    out["queue"] = [{"label": q["label"], "count": q["count"], "estimate_seconds": q["estimate_seconds"]} for q in (job.get("queue") or [])]
     out["history"] = list(job.get("history") or [])[-5:]
     return out
 
@@ -36086,8 +36833,7 @@ async def start_refetch_scope(request: Request):
 
     rows = _scope_refetchable(folder_id, list_feed_url)
     if not rows:
-        return JSONResponse({"ok": False, "error": "Nothing kept here to re-fetch."},
-                            status_code=400)
+        return JSONResponse({"ok": False, "error": "Nothing kept here to re-fetch."}, status_code=400)
     label = _refetch_scope_label(folder_id, list_feed_url)
     estimate = int(refetch_batch.estimate_seconds(rows))
 
@@ -36095,16 +36841,21 @@ async def start_refetch_scope(request: Request):
     with _refetch_jobs_lock:
         if job.get("running"):
             queue = job.setdefault("queue", [])
-            if any(q["folder_id"] == folder_id and q["list_feed_url"] == list_feed_url
-                   for q in queue):
-                return JSONResponse({"ok": False, "error": f"{label} is already queued."},
-                                    status_code=409)
-            queue.append({"folder_id": folder_id, "list_feed_url": list_feed_url,
-                          "label": label, "count": len(rows),
-                          "estimate_seconds": estimate, "date_choice": date_choice})
-            return JSONResponse({"ok": True, "queued": True, "position": len(queue),
-                                 "total": len(rows), "estimate_seconds": estimate,
-                                 "label": label})
+            if any(q["folder_id"] == folder_id and q["list_feed_url"] == list_feed_url for q in queue):
+                return JSONResponse({"ok": False, "error": f"{label} is already queued."}, status_code=409)
+            queue.append(
+                {
+                    "folder_id": folder_id,
+                    "list_feed_url": list_feed_url,
+                    "label": label,
+                    "count": len(rows),
+                    "estimate_seconds": estimate,
+                    "date_choice": date_choice,
+                }
+            )
+            return JSONResponse(
+                {"ok": True, "queued": True, "position": len(queue), "total": len(rows), "estimate_seconds": estimate, "label": label}
+            )
         _refetch_begin(job, label, rows, estimate, date_choice=date_choice)
 
     uid = tenancy.current_user_id()
@@ -36112,17 +36863,29 @@ async def start_refetch_scope(request: Request):
         target=lambda: _run_in_user_context(uid, _refetch_worker, rows, job),
         daemon=True,
     ).start()
-    return JSONResponse({"ok": True, "started": True, "total": len(rows),
-                         "estimate_seconds": estimate, "label": label})
+    return JSONResponse({"ok": True, "started": True, "total": len(rows), "estimate_seconds": estimate, "label": label})
 
 
 def _refetch_begin(job: dict, label: str, rows: list, estimate: int, date_choice: str | None = None) -> None:
-    job.update({
-        "running": True, "cancel": False, "done": 0, "total": len(rows),
-        "ok": 0, "archive": 0, "refused": 0, "dead": 0, "failed": 0, "skipped": 0,
-        "scope": label, "started_at": time.time(), "finished_at": None,
-        "estimate_seconds": estimate, "date_choice": date_choice,
-    })
+    job.update(
+        {
+            "running": True,
+            "cancel": False,
+            "done": 0,
+            "total": len(rows),
+            "ok": 0,
+            "archive": 0,
+            "refused": 0,
+            "dead": 0,
+            "failed": 0,
+            "skipped": 0,
+            "scope": label,
+            "started_at": time.time(),
+            "finished_at": None,
+            "estimate_seconds": estimate,
+            "date_choice": date_choice,
+        }
+    )
     job.setdefault("queue", [])
     job.setdefault("history", [])
 
@@ -36131,13 +36894,20 @@ def _refetch_worker(rows: list[tuple[str, str, str]], job: dict) -> None:
     """Run the current batch, then drain the queue one scope at a time."""
     while True:
         _run_refetch_batch(rows, job)
-        job["history"].append({
-            "scope": job.get("scope"), "done": job.get("done"), "total": job.get("total"),
-            "ok": job.get("ok"), "archive": job.get("archive"), "refused": job.get("refused"),
-            "dead": job.get("dead"), "failed": job.get("failed"),
-            "finished_at": job.get("finished_at"),
-            "cancelled": bool(job.get("cancel")),
-        })
+        job["history"].append(
+            {
+                "scope": job.get("scope"),
+                "done": job.get("done"),
+                "total": job.get("total"),
+                "ok": job.get("ok"),
+                "archive": job.get("archive"),
+                "refused": job.get("refused"),
+                "dead": job.get("dead"),
+                "failed": job.get("failed"),
+                "finished_at": job.get("finished_at"),
+                "cancelled": bool(job.get("cancel")),
+            }
+        )
         with _refetch_jobs_lock:
             queue = job.get("queue") or []
             if job.get("cancel_all") or not queue:
@@ -36194,7 +36964,7 @@ def _run_refetch_batch(rows: list[tuple[str, str, str]], job: dict) -> None:
                 job["archive" if result.get("from_archive") else "ok"] += 1
                 host_failures[host] = 0
             elif result.get("mismatch"):
-                job["refused"] += 1          # stored copy deliberately left alone
+                job["refused"] += 1  # stored copy deliberately left alone
                 host_failures[host] = 0
             elif result.get("dead"):
                 job["dead"] += 1
@@ -36208,9 +36978,15 @@ def _run_refetch_batch(rows: list[tuple[str, str, str]], job: dict) -> None:
         # the status stays continuously running across a queued scope. Clearing it
         # here made the pill blink out between batches.
         job["finished_at"] = time.time()
-        LOGGER.info("[refetch-batch] %s: ok=%d archive=%d refused=%d dead=%d failed=%d",
-                    job.get("scope"), job["ok"], job["archive"], job["refused"],
-                    job["dead"], job["failed"])
+        LOGGER.info(
+            "[refetch-batch] %s: ok=%d archive=%d refused=%d dead=%d failed=%d",
+            job.get("scope"),
+            job["ok"],
+            job["archive"],
+            job["refused"],
+            job["dead"],
+            job["failed"],
+        )
 
 
 @app.get("/saved/unstar-scope/preview")
@@ -36226,8 +37002,7 @@ def preview_unstar_scope(
     number the client guessed is a number the action does not honor.
     """
     keys = _scope_starred_keys(folder_id, list_feed_url, tag)
-    return JSONResponse({"ok": True, "count": len(keys),
-                         "tag": normalize_tag_value(tag), "feed_url": list_feed_url})
+    return JSONResponse({"ok": True, "count": len(keys), "tag": normalize_tag_value(tag), "feed_url": list_feed_url})
 
 
 @app.post("/saved/unstar-scope")
@@ -36255,8 +37030,7 @@ def apply_unstar_scope(
         except Exception:  # noqa: BLE001 — one bad entry must not abort the sweep
             LOGGER.warning("unstar-scope failed for %s/%s", feed_u, entry_id, exc_info=True)
     invalidate_unread_counts_cache()
-    LOGGER.info("[unstar-scope] removed %d star(s) (feed=%s tag=%s folder=%s)",
-                len(keys), list_feed_url, tag, folder_id)
+    LOGGER.info("[unstar-scope] removed %d star(s) (feed=%s tag=%s folder=%s)", len(keys), list_feed_url, tag, folder_id)
     if is_async_action_request(request, "lectio-ajax"):
         return JSONResponse({"ok": True, "unstarred": len(keys)})
     return RedirectResponse(url=request.headers.get("referer") or "/read", status_code=303)
@@ -36295,12 +37069,10 @@ def tag_inventory_route(q: str = "", limit: int = 200, mine_only: int = 0):
     try:
         conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
         try:
-            sql = ("SELECT key, COUNT(*) FROM entry_tags WHERE key LIKE ?"
-                   + (" AND LOWER(key) LIKE ?" if needle else "")
-                   + " GROUP BY key")
+            sql = "SELECT key, COUNT(*) FROM entry_tags WHERE key LIKE ?" + (" AND LOWER(key) LIKE ?" if needle else "") + " GROUP BY key"
             args: list = [f"{MANUAL_TAG_KEY_PREFIX}%"] + ([like] if needle else [])
             for key, count in conn.execute(sql, args):
-                short = str(key)[len(MANUAL_TAG_KEY_PREFIX):]
+                short = str(key)[len(MANUAL_TAG_KEY_PREFIX) :]
                 if short:
                     manual_counts[short] = manual_counts.get(short, 0) + int(count)
         finally:
@@ -36332,8 +37104,7 @@ def tag_inventory_route(q: str = "", limit: int = 200, mine_only: int = 0):
                 feed_counts[key] = feed_counts.get(key, 0) + int(r["n"])
 
     aliases = {a["alias"]: a["canonical"] for a in list_tag_aliases()}
-    names = [n for n in set(manual_counts) | set(aliases) | set(feed_counts)
-             if not needle or needle in n]
+    names = [n for n in set(manual_counts) | set(aliases) | set(feed_counts) if not needle or needle in n]
     # Yours first: a publisher tag with a big count is not more interesting than
     # one you actually file with.
     names.sort(key=lambda name: (-manual_counts.get(name, 0), -feed_counts.get(name, 0), name))
@@ -36346,19 +37117,21 @@ def tag_inventory_route(q: str = "", limit: int = 200, mine_only: int = 0):
         }
         for name in names
     ]
-    return JSONResponse({
-        "ok": True,
-        "items": items[:limit],
-        "scope": "mine" if mine_only else "all",
-        "summary": {
-            "manual": len(manual_counts),
-            "feed": feed_total,
-            "feed_seen_once": feed_once,
-            "matched": len(items),
-            "shown": min(len(items), limit),
-            "truncated": len(items) > limit,
-        },
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "items": items[:limit],
+            "scope": "mine" if mine_only else "all",
+            "summary": {
+                "manual": len(manual_counts),
+                "feed": feed_total,
+                "feed_seen_once": feed_once,
+                "matched": len(items),
+                "shown": min(len(items), limit),
+                "truncated": len(items) > limit,
+            },
+        }
+    )
 
 
 @app.post("/tags/aliases/preview")
@@ -36368,8 +37141,7 @@ def preview_tag_alias_route(alias: str = Form(...), canonical: str = Form(...)):
 
 
 @app.post("/tags/aliases/create")
-def create_tag_alias_route(alias: str = Form(...), canonical: str = Form(...),
-                           rewrite: int = Form(1)):
+def create_tag_alias_route(alias: str = Form(...), canonical: str = Form(...), rewrite: int = Form(1)):
     result = create_tag_alias(alias, canonical, rewrite=bool(rewrite))
     if result.get("error"):
         return JSONResponse({"ok": False, **result}, status_code=400)
@@ -36403,10 +37175,15 @@ def dismiss_feed_tag(
     this hides a chip, it does not forget a fact.
     """
     feed_tag_service.set_tag_suppressed(feed_url, tag, bool(dismissed))
-    return JSONResponse({
-        "ok": True, "feed_url": feed_url, "tag": tag, "dismissed": bool(dismissed),
-        "suppressed": feed_tag_service.suppressed_tag_list(feed_url),
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "feed_url": feed_url,
+            "tag": tag,
+            "dismissed": bool(dismissed),
+            "suppressed": feed_tag_service.suppressed_tag_list(feed_url),
+        }
+    )
 
 
 @app.post("/entries/discard")
@@ -36671,8 +37448,13 @@ def mark_entries_older_than_read(
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
     marked_count, undo_token = _mark_entries_as_read_for_view(
-        filtered_feed_urls, sort_by=sort_by, sort_dir=sort_dir, read_filter=read_filter, star_only=star_only,
-        tag=tag, older_than_cutoff=cutoff,
+        filtered_feed_urls,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        read_filter=read_filter,
+        star_only=star_only,
+        tag=tag,
+        older_than_cutoff=cutoff,
     )
     if marked_count:
         global _unread_counts_generation
@@ -36688,10 +37470,15 @@ def mark_entries_older_than_read(
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_mot)
     message = "No unread posts older than that." if marked_count == 0 else f"Marked {marked_count} posts as read."
     if is_async_action_request(request, "lectio-mark-read"):
-        return JSONResponse({
-            "ok": True, "marked": marked_count, "max_age_days": max_age_days,
-            "message": message, "undo_token": undo_token,
-        })
+        return JSONResponse(
+            {
+                "ok": True,
+                "marked": marked_count,
+                "max_age_days": max_age_days,
+                "message": message,
+                "undo_token": undo_token,
+            }
+        )
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,
@@ -36710,9 +37497,10 @@ def undo_mark_unread(unread_at: str = Form(...)):
         return _bad_token
 
     with get_meta_connection() as conn:
-        pairs = [(str(r["feed_url"]), str(r["entry_id"])) for r in conn.execute(
-            "SELECT feed_url, entry_id FROM entry_unread_batch WHERE unread_at = ?", (unread_at,)
-        )]
+        pairs = [
+            (str(r["feed_url"]), str(r["entry_id"]))
+            for r in conn.execute("SELECT feed_url, entry_id FROM entry_unread_batch WHERE unread_at = ?", (unread_at,))
+        ]
     if not pairs:
         return JSONResponse({"ok": False, "error": "Nothing to undo."}, status_code=404)
 
@@ -36756,7 +37544,7 @@ def _undo_token_problem(raw: str) -> JSONResponse | None:
     """
     try:
         stamped = datetime.fromisoformat(raw)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return JSONResponse({"ok": False, "error": "Bad undo token."}, status_code=400)
     now = datetime.now(stamped.tzinfo) if stamped.tzinfo is not None else datetime.now()
     if now - stamped > _UNDO_MARK_READ_WINDOW:
@@ -36778,9 +37566,7 @@ def undo_mark_read(read_at: str = Form(...)):
         return _bad_token
 
     with get_meta_connection() as conn:
-        pairs = conn.execute(
-            "SELECT feed_url, entry_id FROM entry_read_state WHERE read_at = ?", (read_at,)
-        ).fetchall()
+        pairs = conn.execute("SELECT feed_url, entry_id FROM entry_read_state WHERE read_at = ?", (read_at,)).fetchall()
     if not pairs:
         return JSONResponse({"ok": False, "error": "Nothing to undo."}, status_code=404)
 
@@ -36842,8 +37628,7 @@ def undo_unstar(unstarred_at: str = Form(...)):
             if reader.get_entry((feed_url, entry_id), None) is None:
                 gone += 1
                 with get_meta_connection() as conn:
-                    conn.execute("DELETE FROM entry_unstar_batch WHERE feed_url = ? AND entry_id = ?",
-                                 (feed_url, entry_id))
+                    conn.execute("DELETE FROM entry_unstar_batch WHERE feed_url = ? AND entry_id = ?", (feed_url, entry_id))
                     conn.commit()
                 continue
 
@@ -36853,8 +37638,7 @@ def undo_unstar(unstarred_at: str = Form(...)):
                     "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
                     (feed_url, entry_id, saved_at),
                 )
-                conn.execute("DELETE FROM entry_unstar_batch WHERE feed_url = ? AND entry_id = ?",
-                             (feed_url, entry_id))
+                conn.execute("DELETE FROM entry_unstar_batch WHERE feed_url = ? AND entry_id = ?", (feed_url, entry_id))
                 conn.commit()
             try:
                 starred_archive_service.enqueue_archive(feed_url, entry_id)
@@ -36962,8 +37746,9 @@ def mark_entries_newer_than_unread(
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_mnu)
     message = "No read posts newer than that." if unmarked_count == 0 else f"Marked {unmarked_count} posts as unread."
     if is_async_action_request(request, "lectio-mark-read"):
-        return JSONResponse({"ok": True, "unmarked": unmarked_count, "min_age_days": min_age_days,
-                             "message": message, "undo_token": undo_token})
+        return JSONResponse(
+            {"ok": True, "unmarked": unmarked_count, "min_age_days": min_age_days, "message": message, "undo_token": undo_token}
+        )
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,
@@ -37104,15 +37889,17 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
     feed_title_map = get_feed_title_map()
     folder_rows: list[dict] = [dict(row) for row in raw_folder_rows]
     if uncategorized_feed_urls:
-        folder_rows.append({
-            "id": UNCATEGORIZED_FOLDER_ID,
-            "name": UNCATEGORIZED_FOLDER_NAME,
-            "cadence_minutes": None,
-            "depth": 1,
-            "path": UNCATEGORIZED_FOLDER_NAME,
-            "feed_count": len(_uncat_display_urls),
-            "virtual": True,
-        })
+        folder_rows.append(
+            {
+                "id": UNCATEGORIZED_FOLDER_ID,
+                "name": UNCATEGORIZED_FOLDER_NAME,
+                "cadence_minutes": None,
+                "depth": 1,
+                "path": UNCATEGORIZED_FOLDER_NAME,
+                "feed_count": len(_uncat_display_urls),
+                "virtual": True,
+            }
+        )
 
     if panel_name == "stale":
         # Every active feed ranked by how long ago its newest post is, oldest
@@ -37131,23 +37918,27 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
                 continue
             last_dt = last_post_dates.get(url)
             fid = feed_to_folder.get(url)
-            stale_feeds.append({
-                "feed_url": url,
-                "feed_title": feed_title_map.get(url, url),
-                "folder_id": fid,
-                "folder_name": folder_name_by_id.get(fid, UNCATEGORIZED_FOLDER_NAME) if fid is not None else UNCATEGORIZED_FOLDER_NAME,
-                "last_post": format_datetime_for_ui(last_dt) if last_dt else None,
-                "last_post_sort": last_dt.timestamp() if last_dt else 0.0,
-                "days_since": (_now_utc - last_dt).days if last_dt else None,
-            })
+            stale_feeds.append(
+                {
+                    "feed_url": url,
+                    "feed_title": feed_title_map.get(url, url),
+                    "folder_id": fid,
+                    "folder_name": folder_name_by_id.get(fid, UNCATEGORIZED_FOLDER_NAME) if fid is not None else UNCATEGORIZED_FOLDER_NAME,
+                    "last_post": format_datetime_for_ui(last_dt) if last_dt else None,
+                    "last_post_sort": last_dt.timestamp() if last_dt else 0.0,
+                    "days_since": (_now_utc - last_dt).days if last_dt else None,
+                }
+            )
         stale_feeds.sort(key=lambda x: cast(float, x["last_post_sort"]))
-        html = templates.env.get_template("_settings_feeds_stale.html").render({
-            "stale_feeds": stale_feeds,
-            # Unsubscribe fallback target for unfoldered feeds. The inline
-            # panel used the currently-selected folder; a fragment has no
-            # selection, so fall back to the root ("All Feeds") folder.
-            "selected_folder_id": root_id,
-        })
+        html = templates.env.get_template("_settings_feeds_stale.html").render(
+            {
+                "stale_feeds": stale_feeds,
+                # Unsubscribe fallback target for unfoldered feeds. The inline
+                # panel used the currently-selected folder; a fragment has no
+                # selection, so fall back to the root ("All Feeds") folder.
+                "selected_folder_id": root_id,
+            }
+        )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     if panel_name == "fetch-tiers":
@@ -37167,12 +37958,14 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
             out = []
             for row in rows:
                 url = str(row["feed_url"])
-                out.append({
-                    "feed_url": url,
-                    "feed_title": feed_title_map.get(url, url),
-                    "reason": row["reason"],
-                    "flagged_at": row["flagged_at"],
-                })
+                out.append(
+                    {
+                        "feed_url": url,
+                        "feed_title": feed_title_map.get(url, url),
+                        "reason": row["reason"],
+                        "flagged_at": row["flagged_at"],
+                    }
+                )
             return out
 
         with get_meta_connection() as conn:
@@ -37189,13 +37982,15 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
             page_fetcher._state.snapshot(),
             key=lambda row: (not row["blocked"], row["host"]),
         )
-        html = templates.env.get_template("_settings_feeds_fetch_tiers.html").render({
-            "proxy_rows": proxy_rows,
-            "tailscale_rows": tailscale_rows,
-            "flaresolverr_rows": flaresolverr_rows,
-            "page_fetch_rows": page_fetch_rows,
-            "selected_folder_id": root_id,
-        })
+        html = templates.env.get_template("_settings_feeds_fetch_tiers.html").render(
+            {
+                "proxy_rows": proxy_rows,
+                "tailscale_rows": tailscale_rows,
+                "flaresolverr_rows": flaresolverr_rows,
+                "page_fetch_rows": page_fetch_rows,
+                "selected_folder_id": root_id,
+            }
+        )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     if panel_name == "failing":
@@ -37214,19 +38009,17 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
         active_problem_feeds = [pf for pf in problematic_feeds if not pf["needs_replacement"]]
         failing_feeds = [pf for pf in active_problem_feeds if not pf.get("acknowledged_at")]
         acked_feeds = [pf for pf in active_problem_feeds if pf.get("acknowledged_at")]
-        html = templates.env.get_template("_settings_feeds_failing.html").render({
-            "failing_feeds": failing_feeds,
-            "acked_feeds": acked_feeds,
-            "needs_replacement_feeds": needs_replacement_feeds,
-            "selected_folder_id": root_id,
-        })
+        html = templates.env.get_template("_settings_feeds_failing.html").render(
+            {
+                "failing_feeds": failing_feeds,
+                "acked_feeds": acked_feeds,
+                "needs_replacement_feeds": needs_replacement_feeds,
+                "selected_folder_id": root_id,
+            }
+        )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
-    error_feed_urls: set[str] = {
-        cast(str, pf["feed_url"])
-        for pf in problematic_feeds
-        if not pf.get("acknowledged_at")
-    }
+    error_feed_urls: set[str] = {cast(str, pf["feed_url"]) for pf in problematic_feeds if not pf.get("acknowledged_at")}
     # Like the sidebar's feeds_by_folder but including disabled feeds
     # (flagged), so the settings table can show them greyed out.
     settings_feeds_by_folder: dict[int, list[FeedInFolder]] = {}
@@ -37252,18 +38045,19 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
         failing = sum(1 for f in folder_feeds if f.has_error and not f.disabled)
         if failing:
             folder_failing_counts[folder_row_id] = failing
-    html = templates.env.get_template("_settings_feeds_folders.html").render({
-        "folder_rows": folder_rows,
-        "settings_feeds_by_folder": settings_feeds_by_folder,
-        "folder_failing_counts": folder_failing_counts,
-        "push_feed_urls": get_push_active_feed_urls(),
-    })
+    html = templates.env.get_template("_settings_feeds_folders.html").render(
+        {
+            "folder_rows": folder_rows,
+            "settings_feeds_by_folder": settings_feeds_by_folder,
+            "folder_failing_counts": folder_failing_counts,
+            "push_feed_urls": get_push_active_feed_urls(),
+        }
+    )
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/tree/folder-feeds/{folder_id}")
-def tree_folder_feeds_fragment(request: Request, folder_id: int,
-                               star_only: str | None = Query(default=None)) -> Response:
+def tree_folder_feeds_fragment(request: Request, folder_id: int, star_only: str | None = Query(default=None)) -> Response:
     """One folder's sidebar feed rows (<li> fragment).
 
     The sidebar renders folder rows only; each collapsed folder's feed list is
@@ -37294,18 +38088,11 @@ def tree_folder_feeds_fragment(request: Request, folder_id: int,
         sort_dir = normalize_sort_dir(get_setting(conn, _sd_key))
 
     if folder_id == UNCATEGORIZED_FOLDER_ID:
-        urls = sorted(
-            get_all_reader_feed_urls() - all_feed_urls
-            - {saved_articles_service.SAVED_FEED_URL}
-        )
+        urls = sorted(get_all_reader_feed_urls() - all_feed_urls - {saved_articles_service.SAVED_FEED_URL})
     else:
         urls = direct_feed_urls_by_folder.get(folder_id, [])
 
-    error_feed_urls: set[str] = {
-        cast(str, pf["feed_url"])
-        for pf in problematic_feeds
-        if not pf.get("acknowledged_at")
-    }
+    error_feed_urls: set[str] = {cast(str, pf["feed_url"]) for pf in problematic_feeds if not pf.get("acknowledged_at")}
     feed_title_map = get_feed_title_map()
     unread_counts_by_feed = get_unread_counts_by_feed()
     folder_feeds = [
@@ -37325,18 +38112,18 @@ def tree_folder_feeds_fragment(request: Request, folder_id: int,
     # default values, never carry star mode.
     read_filter = normalize_read_filter(request.cookies.get("lectio_read_filter"))
     tree_read_filter = "all" if read_filter == "history" else read_filter
-    _tree_sq = (f"&sort_by={sort_by}" if sort_by != "post" else "") + (
-        f"&sort_dir={sort_dir}" if sort_dir != "asc" else ""
-    )
+    _tree_sq = (f"&sort_by={sort_by}" if sort_by != "post" else "") + (f"&sort_dir={sort_dir}" if sort_dir != "asc" else "")
     _tree_rfq = f"&read_filter={tree_read_filter}" if tree_read_filter != "all" else ""
-    html = templates.env.get_template("_tree_folder_feeds.html").render({
-        "row": {"id": folder_id},
-        "folder_feeds": folder_feeds,
-        "selected_feed_url": None,
-        "push_feed_urls": get_push_active_feed_urls(),
-        "_tree_sq": _tree_sq,
-        "_tree_rfq": _tree_rfq,
-    })
+    html = templates.env.get_template("_tree_folder_feeds.html").render(
+        {
+            "row": {"id": folder_id},
+            "folder_feeds": folder_feeds,
+            "selected_feed_url": None,
+            "push_feed_urls": get_push_active_feed_urls(),
+            "_tree_sq": _tree_sq,
+            "_tree_rfq": _tree_rfq,
+        }
+    )
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
@@ -37486,11 +38273,18 @@ def _instapaper_save_url(username: str, password: str, url: str, title: str) -> 
     try:
         import urllib.parse
         import urllib.request
-        data = urllib.parse.urlencode({
-            "username": username, "password": password, "url": url, "title": title or "",
-        }).encode()
+
+        data = urllib.parse.urlencode(
+            {
+                "username": username,
+                "password": password,
+                "url": url,
+                "title": title or "",
+            }
+        ).encode()
         req = urllib.request.Request(
-            "https://www.instapaper.com/api/add", data=data,
+            "https://www.instapaper.com/api/add",
+            data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -37621,9 +38415,7 @@ def takeout_export():
     try:
         with get_meta_connection() as conn:
             opml_text = export_opml_text(conn)
-            zip_bytes = takeout_service.build_takeout_zip(
-                conn, tenancy.reader_db_path(), opml_text, app_version=STATIC_ASSET_VERSION
-            )
+            zip_bytes = takeout_service.build_takeout_zip(conn, tenancy.reader_db_path(), opml_text, app_version=STATIC_ASSET_VERSION)
         date_str = datetime.now().strftime("%Y%m%d")
         return Response(
             content=zip_bytes,
@@ -37673,10 +38465,7 @@ def _import_instapaper_for_current_user(data: bytes) -> dict:
     created_feed = saved_articles_service.ensure_saved_feed(reader)
     with get_meta_connection() as conn:
         for bm in plan:
-            saved_dt = (
-                datetime.fromtimestamp(bm.saved_at, tz=timezone.utc)
-                if bm.saved_at is not None else datetime.now(timezone.utc)
-            )
+            saved_dt = datetime.fromtimestamp(bm.saved_at, tz=timezone.utc) if bm.saved_at is not None else datetime.now(timezone.utc)
             existing = reader.get_entry((saved_articles_service.SAVED_FEED_URL, bm.url), None)
             if existing is None:
                 entry: dict = {
@@ -37711,8 +38500,7 @@ def _import_instapaper_for_current_user(data: bytes) -> dict:
                 # axis. OR IGNORE, so re-importing never rewrites a date the
                 # user has since set by archiving here.
                 conn.execute(
-                    "INSERT OR IGNORE INTO archived_entries (feed_url, entry_id, archived_at) "
-                    "VALUES (?, ?, ?)",
+                    "INSERT OR IGNORE INTO archived_entries (feed_url, entry_id, archived_at) VALUES (?, ?, ?)",
                     (saved_articles_service.SAVED_FEED_URL, bm.url, saved_dt.isoformat()),
                 )
             if bm.archived:
@@ -37730,9 +38518,7 @@ def _import_instapaper_for_current_user(data: bytes) -> dict:
                 summary["tagged"] += 1
 
             try:
-                starred_archive_service.enqueue_archive(
-                    saved_articles_service.SAVED_FEED_URL, bm.url
-                )
+                starred_archive_service.enqueue_archive(saved_articles_service.SAVED_FEED_URL, bm.url)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning("instapaper import: archive enqueue failed for %s: %s", bm.url, exc)
         conn.commit()
@@ -37816,11 +38602,7 @@ def api_folder_feeds(folder_id: str = Query("")):
                 urls |= get_folder_feed_urls(conn, int(fid))
         else:
             urls = get_all_feed_urls(conn)
-    feeds = [
-        {"url": u, "title": titles.get(u, u)}
-        for u in urls
-        if not saved_articles_service.is_saved_articles_feed(u)
-    ]
+    feeds = [{"url": u, "title": titles.get(u, u)} for u in urls if not saved_articles_service.is_saved_articles_feed(u)]
     feeds.sort(key=lambda f: f["title"].lower())
     return JSONResponse({"feeds": feeds})
 
@@ -37844,21 +38626,18 @@ def api_unread_counts() -> JSONResponse:
         root_id = cast(int, snapshot["root_id"])
         disabled_feed_urls = get_disabled_feed_urls(conn)
     active_counts = {u: c for u, c in counts.items() if u not in disabled_feed_urls}
-    folder_counts = get_unread_counts_by_folder(
-        raw_folder_rows, active_counts, direct_feed_urls_by_folder
-    )
-    _uncat_display_urls = (
-        get_all_reader_feed_urls() - all_feed_urls
-        - {saved_articles_service.SAVED_FEED_URL}
-    )
+    folder_counts = get_unread_counts_by_folder(raw_folder_rows, active_counts, direct_feed_urls_by_folder)
+    _uncat_display_urls = get_all_reader_feed_urls() - all_feed_urls - {saved_articles_service.SAVED_FEED_URL}
     uncategorized_unread = sum(active_counts.get(u, 0) for u in _uncat_display_urls)
     folder_counts[UNCATEGORIZED_FOLDER_ID] = uncategorized_unread
     folder_counts[root_id] = folder_counts.get(root_id, 0) + uncategorized_unread
-    return JSONResponse({
-        "feeds": counts,
-        "folders": folder_counts,
-        "total": folder_counts.get(root_id, 0),
-    })
+    return JSONResponse(
+        {
+            "feeds": counts,
+            "folders": folder_counts,
+            "total": folder_counts.get(root_id, 0),
+        }
+    )
 
 
 # Formats we re-encode when downscaling /api/img cache entries. Anything else
@@ -37877,8 +38656,8 @@ _IMG_CACHE_CONTROL = "public, max-age=86400"
 #    original bytes instead — the browser decodes them, not our worker. This
 #    closes a decompression-bomb / memory-DoS vector that Pillow's default
 #    MAX_IMAGE_PIXELS (only trips at ~2x ~89 Mpx) leaves open.
-_IMG_CACHE_MAX_BYTES = 16 * 1024 * 1024   # 16 MB
-_IMG_MAX_DECODE_PIXELS = 40_000_000       # 40 megapixels
+_IMG_CACHE_MAX_BYTES = 16 * 1024 * 1024  # 16 MB
+_IMG_MAX_DECODE_PIXELS = 40_000_000  # 40 megapixels
 # Ceilings for the lossless-WebP path in _maybe_shrink_oversized_image. 2 MP
 # keeps the lossless encoder inside a few hundred ms; 4096 colours is well below
 # what painted or photographic art carries and comfortably above logos, pixel
@@ -38017,9 +38796,7 @@ def _img_cache_get(cache_key: str) -> tuple[bytes, str] | None:
     last-accessed TTL is what keeps actively-browsed images alive). None on miss."""
     try:
         with get_img_cache_connection() as conn:
-            row = conn.execute(
-                "SELECT body, content_type FROM img_cache WHERE cache_key = ?", (cache_key,)
-            ).fetchone()
+            row = conn.execute("SELECT body, content_type FROM img_cache WHERE cache_key = ?", (cache_key,)).fetchone()
             if row is None:
                 return None
             conn.execute(
@@ -38059,16 +38836,28 @@ def _img_cache_store(cache_key: str, body: bytes, content_type: str) -> None:
 # still valid, and they must have survived last_accessed eviction since. Neither is guaranteed for an image
 # nobody looked at in time. Measured 2026-08-18 against the live library: of 22,903 stored wixmp lead-image
 # URLs, 583 had cached bytes — 2.5%. Durable protection needs pinning at ingest, not caching on demand.
-_IMG_CACHE_VOLATILE_PARAMS = frozenset({
-    # Tapas signs its episode art as `?__token__=exp=…~acl=…` — one param
-    # carrying the whole grant. Stripping it means the bytes cache once and keep
-    # answering after the token expires, which is what makes a re-read of an old
-    # episode free instead of a re-fetch of the page for fresh URLs.
-    "__token__",
-    "jwt", "token", "sig", "signature", "expires", "exp",
-    "x-amz-algorithm", "x-amz-credential", "x-amz-date", "x-amz-expires",
-    "x-amz-security-token", "x-amz-signature", "x-amz-signedheaders",
-})
+_IMG_CACHE_VOLATILE_PARAMS = frozenset(
+    {
+        # Tapas signs its episode art as `?__token__=exp=…~acl=…` — one param
+        # carrying the whole grant. Stripping it means the bytes cache once and keep
+        # answering after the token expires, which is what makes a re-read of an old
+        # episode free instead of a re-fetch of the page for fresh URLs.
+        "__token__",
+        "jwt",
+        "token",
+        "sig",
+        "signature",
+        "expires",
+        "exp",
+        "x-amz-algorithm",
+        "x-amz-credential",
+        "x-amz-date",
+        "x-amz-expires",
+        "x-amz-security-token",
+        "x-amz-signature",
+        "x-amz-signedheaders",
+    }
+)
 
 
 def _img_cache_key_url(u: str) -> str:
@@ -38077,10 +38866,7 @@ def _img_cache_key_url(u: str) -> str:
         parsed = urlparse(u)
     except ValueError:
         return u
-    kept = [
-        (k, v) for (k, v) in parse_qsl(parsed.query, keep_blank_values=True)
-        if k.lower() not in _IMG_CACHE_VOLATILE_PARAMS
-    ]
+    kept = [(k, v) for (k, v) in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() not in _IMG_CACHE_VOLATILE_PARAMS]
     return urlunparse(parsed._replace(query=urlencode(kept)))
 
 
@@ -38151,9 +38937,7 @@ async def api_img_proxy(u: str) -> Response:
             if resp.status_code in _HOTLINK_REFUSAL_CODES:
                 referer = _same_origin_referer(u)
                 if referer:
-                    resp = await url_guard.safe_get_async(
-                        client, u, headers={**headers, "Referer": referer}
-                    )
+                    resp = await url_guard.safe_get_async(client, u, headers={**headers, "Referer": referer})
     except url_guard.UnsafeURLError:
         return Response(status_code=403)
     except Exception:
@@ -38241,30 +39025,26 @@ async def api_favicon(domain: str) -> Response:
     async with url_guard.build_async_client(timeout=8.0) as client:
         # Hop 1: Google faviconV2 (via redirect from s2/favicons).
         try:
-            resp = await url_guard.safe_get_async(
-                client, google_url, headers={"User-Agent": READABILITY_USER_AGENT}
-            )
+            resp = await url_guard.safe_get_async(client, google_url, headers={"User-Agent": READABILITY_USER_AGENT})
             ct = resp.headers.get("content-type", "")
             if resp.status_code == 200 and ct.startswith("image/"):
                 body = resp.content
                 _img_cache_store(cache_key, body, ct)
                 return Response(content=body, media_type=ct, headers={"Cache-Control": _FAVICON_CACHE_CONTROL})
-        except (url_guard.UnsafeURLError, Exception):
+        except url_guard.UnsafeURLError, Exception:
             pass
 
         # Hop 2: site's own /favicon.ico.
         if url_guard.is_safe_outbound_url(favicon_ico_url):
             try:
-                resp = await url_guard.safe_get_async(
-                    client, favicon_ico_url, headers={"User-Agent": READABILITY_USER_AGENT}
-                )
+                resp = await url_guard.safe_get_async(client, favicon_ico_url, headers={"User-Agent": READABILITY_USER_AGENT})
                 ct = resp.headers.get("content-type", "")
                 if resp.status_code == 200 and (ct.startswith("image/") or ct.startswith("application/octet")):
                     body = resp.content
                     ct_store = ct if ct.startswith("image/") else "image/x-icon"
                     _img_cache_store(cache_key, body, ct_store)
                     return Response(content=body, media_type=ct_store, headers={"Cache-Control": _FAVICON_CACHE_CONTROL})
-            except (url_guard.UnsafeURLError, Exception):
+            except url_guard.UnsafeURLError, Exception:
                 pass
 
     # Hop 3: bundled neutral SVG placeholder.
@@ -38384,6 +39164,7 @@ def get_stats():
 # WebSub callback routes
 # ---------------------------------------------------------------------------
 
+
 @app.get("/websub/callback")
 def websub_verify(
     feed: str = Query(default=""),
@@ -38471,7 +39252,7 @@ def _fever_build_result(params: dict) -> dict:
                 fever_service.mark_feed_read(int(item_id_raw), int(before_raw))
             elif mark_type == "group" and action == "read":
                 fever_service.mark_group_read(int(item_id_raw), int(before_raw))
-        except (ValueError, Exception):
+        except ValueError, Exception:
             pass
 
     # Data requests.
@@ -38611,9 +39392,7 @@ def _greader_token(request: Request) -> str:
 
 
 def _resolve_greader_user(request: Request) -> str | None:
-    """Username authorized for this GReader request, or None.
-
-    """
+    """Username authorized for this GReader request, or None."""
     token = _greader_token(request)
     return user_store.resolve_greader_token(token) if user_store else None
 
@@ -38667,11 +39446,10 @@ def _greader_label_name(label: str) -> str | None:
     """Extract the folder name from a GReader label id (user/-/label/<name>)."""
     marker = "/label/"
     i = label.find(marker)
-    return label[i + len(marker):].strip() if i >= 0 else None
+    return label[i + len(marker) :].strip() if i >= 0 else None
 
 
-def _greader_edit_subscriptions(streams: list[str], add_labels: list[str],
-                                remove_labels: list[str], new_title: str | None) -> None:
+def _greader_edit_subscriptions(streams: list[str], add_labels: list[str], remove_labels: list[str], new_title: str | None) -> None:
     """Apply a GReader subscription/edit to Lectio's single-folder model.
 
     ``a=user/-/label/<name>`` moves the feed into folder <name> (created if
@@ -38679,7 +39457,7 @@ def _greader_edit_subscriptions(streams: list[str], add_labels: list[str],
     removes it from that folder (→ Uncategorized). ``t=<title>`` renames the
     feed. Mirrors a web-UI move so synced clients (Capy, etc.) actually stick.
     """
-    feed_urls = [s[len("feed/"):] for s in streams if s.startswith("feed/")]
+    feed_urls = [s[len("feed/") :] for s in streams if s.startswith("feed/")]
     if not feed_urls:
         return
     add_folder = next((n for lab in add_labels if (n := _greader_label_name(lab))), None)
@@ -38777,11 +39555,17 @@ def greader_stream_item_ids(request: Request) -> Response:
     start_time = int(p["ot"]) if "ot" in p else None
     stop_time = int(p["nt"]) if "nt" in p else None
     oldest_first = p.get("r") == "o"
-    return JSONResponse(greader_service.get_stream_item_ids(  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
-        stream_id, count=count, continuation=continuation,
-        exclude_read=exclude_read, start_time=start_time,
-        stop_time=stop_time, oldest_first=oldest_first,
-    ))
+    return JSONResponse(
+        greader_service.get_stream_item_ids(  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
+            stream_id,
+            count=count,
+            continuation=continuation,
+            exclude_read=exclude_read,
+            start_time=start_time,
+            stop_time=stop_time,
+            oldest_first=oldest_first,
+        )
+    )
 
 
 @app.post("/greader/reader/api/0/stream/items/contents")
@@ -38804,13 +39588,15 @@ def greader_stream_contents_path(stream_id: str, request: Request) -> Response:
         count = min(int(p.get("n", "20")), 10_000)
     except ValueError:
         count = 20
-    return JSONResponse(greader_service.get_stream_contents(  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
-        stream_id,
-        count=count,
-        continuation=p.get("c") or None,
-        exclude_read="user/-/state/com.google/read" in p.getlist("xt"),
-        oldest_first=p.get("r") == "o",
-    ))
+    return JSONResponse(
+        greader_service.get_stream_contents(  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
+            stream_id,
+            count=count,
+            continuation=p.get("c") or None,
+            exclude_read="user/-/state/com.google/read" in p.getlist("xt"),
+            oldest_first=p.get("r") == "o",
+        )
+    )
 
 
 @app.get("/greader/reader/api/0/stream/contents")
@@ -38862,6 +39648,7 @@ def _resolve_miniflux_user(request: Request) -> str | None:
     if not token:
         # Basic auth: username:api_token (some clients send token as password)
         import base64
+
         auth = request.headers.get("Authorization", "")
         if auth.lower().startswith("basic "):
             try:
@@ -38905,9 +39692,7 @@ async def miniflux_auth_token(request: Request) -> Response:
         return JSONResponse({"error_message": "Invalid credentials."}, status_code=401)
     # Resolve the api_token directly from the auth DB
     with user_store._connect() as conn:
-        row = conn.execute(
-            "SELECT api_token FROM users WHERE user_id=?", (uid,)
-        ).fetchone()
+        row = conn.execute("SELECT api_token FROM users WHERE user_id=?", (uid,)).fetchone()
     if not row or not row["api_token"]:
         return JSONResponse({"error_message": "API token not set."}, status_code=403)
     return JSONResponse({"token": row["api_token"]})
@@ -38921,33 +39706,33 @@ def miniflux_me(request: Request) -> Response:
     assert user_store is not None  # _miniflux_ok only returns a uid when user_store is set
     with tenancy.user_context(uid):
         with user_store._connect() as conn:
-            row = conn.execute(
-                "SELECT username, is_admin FROM users WHERE user_id=?", (uid,)
-            ).fetchone()
+            row = conn.execute("SELECT username, is_admin FROM users WHERE user_id=?", (uid,)).fetchone()
     if not row:
         return JSONResponse({"error_message": "User not found."}, status_code=404)
-    return JSONResponse({
-        "id": 1,
-        "username": row["username"],
-        "is_admin": bool(row["is_admin"]),
-        "theme": "system_serif",
-        "language": "en_US",
-        "timezone": "UTC",
-        "entry_direction": "asc",
-        "entries_per_page": 100,
-        "keyboard_shortcuts": True,
-        "show_reading_time": True,
-        "entry_swipe": True,
-        "gesture_nav": "tap",
-        "last_login_at": datetime.now(timezone.utc).isoformat(),
-        "display_mode": "standalone",
-        "default_reading_speed": 265,
-        "cjk_reading_speed": 500,
-        "default_home_page": "unread",
-        "categories_sorting_order": "alphabetical",
-        "mark_read_on_view": False,
-        "media_playback_rate": 1,
-    })
+    return JSONResponse(
+        {
+            "id": 1,
+            "username": row["username"],
+            "is_admin": bool(row["is_admin"]),
+            "theme": "system_serif",
+            "language": "en_US",
+            "timezone": "UTC",
+            "entry_direction": "asc",
+            "entries_per_page": 100,
+            "keyboard_shortcuts": True,
+            "show_reading_time": True,
+            "entry_swipe": True,
+            "gesture_nav": "tap",
+            "last_login_at": datetime.now(timezone.utc).isoformat(),
+            "display_mode": "standalone",
+            "default_reading_speed": 265,
+            "cjk_reading_speed": 500,
+            "default_home_page": "unread",
+            "categories_sorting_order": "alphabetical",
+            "mark_read_on_view": False,
+            "media_playback_rate": 1,
+        }
+    )
 
 
 @app.get("/v1/categories")
@@ -38986,7 +39771,7 @@ def _miniflux_entries_response(request: Request, *, feed_id: int | None = None, 
         limit = max(1, min(int(p.get("limit", 100)), 200))
         after_id = int(p["after_entry_id"]) if "after_entry_id" in p else None
         before_id = int(p["before_entry_id"]) if "before_entry_id" in p else None
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return JSONResponse({"error_message": "Invalid parameter."}, status_code=400)
     direction = p.get("direction", "desc")
     with tenancy.user_context(uid):

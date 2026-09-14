@@ -1,4 +1,5 @@
 """Quire service: URL building, project list, task payload, rate-limit handling."""
+
 from __future__ import annotations
 
 import httpx
@@ -19,9 +20,15 @@ def test_exchange_code_sends_form(monkeypatch):
     captured = {}
 
     class _C:
-        def __init__(self, *a, **k): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
         def post(self, url, data=None):
             captured["url"] = url
             captured["data"] = data
@@ -37,9 +44,15 @@ def test_exchange_code_sends_form(monkeypatch):
 
 def test_list_projects_maps_fields(monkeypatch):
     class _C:
-        def __init__(self, *a, **k): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
         def get(self, url, params=None):
             return httpx.Response(200, json=[{"id": "p1", "oid": "o1", "name": "Proj"}])
 
@@ -54,9 +67,15 @@ def test_create_task_bills_and_sends_payload(monkeypatch):
     quire.set_usage_sink(lambda n: billed.append(n))
 
     class _C:
-        def __init__(self, *a, **k): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
         def post(self, url, json=None):
             captured["url"] = url
             captured["json"] = json
@@ -76,9 +95,15 @@ def test_create_task_bills_and_sends_payload(monkeypatch):
 
 def test_get_project_plan_reads_subscription(monkeypatch):
     class _C:
-        def __init__(self, *a, **k): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
         def get(self, url, params=None):
             return httpx.Response(200, json={"oid": "o1", "subscription": {"plan": "Professional"}})
 
@@ -94,9 +119,15 @@ def test_plan_rate_caps_known_plans():
 
 def test_create_task_raises_rate_limited(monkeypatch):
     class _C:
-        def __init__(self, *a, **k): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
         def post(self, url, json=None):
             return httpx.Response(429, headers={"Retry-After": "42"}, json={})
 

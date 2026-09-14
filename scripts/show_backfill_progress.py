@@ -1,4 +1,5 @@
 """Show backfill progress: how many entries have lead images vs. total."""
+
 import sqlite3
 import time
 

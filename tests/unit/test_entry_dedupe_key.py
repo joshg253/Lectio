@@ -6,6 +6,7 @@ _safe_dedup_entry_slug happened to rescue them; index-style and hyphen-free
 URLs fell through to the weaker "possible" tier, where nothing is preselected
 and every pair needs a hand judgment.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -15,32 +16,35 @@ import main
 norm = main.normalize_entry_link_for_dedupe
 
 
-@pytest.mark.parametrize("a,b", [
-    # The pairs that used to land in "possible" — no usable slug to rescue them.
-    ("http://datagenetics.com/blog/july12020/index.html",
-     "https://datagenetics.com/blog/july12020/index.html"),
-    ("https://www.electricspec.com/Volume14/Issue4/ljubuncic.html",
-     "http://electricspec.com/Volume14/Issue4/ljubuncic.html"),
-    ("https://www.dedoimedo.com/greatest_sites.html",
-     "http://www.dedoimedo.com/greatest_sites.html"),
-    # Fragment and trailing slash were already folded; keep them folded.
-    ("https://example.com/a/", "http://www.example.com/a#section"),
-    # Host case is not significant; the path's is.
-    ("https://Example.COM/a", "https://example.com/a"),
-])
+@pytest.mark.parametrize(
+    "a,b",
+    [
+        # The pairs that used to land in "possible" — no usable slug to rescue them.
+        ("http://datagenetics.com/blog/july12020/index.html", "https://datagenetics.com/blog/july12020/index.html"),
+        ("https://www.electricspec.com/Volume14/Issue4/ljubuncic.html", "http://electricspec.com/Volume14/Issue4/ljubuncic.html"),
+        ("https://www.dedoimedo.com/greatest_sites.html", "http://www.dedoimedo.com/greatest_sites.html"),
+        # Fragment and trailing slash were already folded; keep them folded.
+        ("https://example.com/a/", "http://www.example.com/a#section"),
+        # Host case is not significant; the path's is.
+        ("https://Example.COM/a", "https://example.com/a"),
+    ],
+)
 def test_variants_of_one_article_share_a_key(a, b):
     assert norm(a) == norm(b)
 
 
-@pytest.mark.parametrize("a,b", [
-    # Paths are case-sensitive — folding them would merge distinct articles.
-    ("https://example.com/Volume14", "https://example.com/volume14"),
-    ("https://example.com/a", "https://example.com/b"),
-    ("https://example.com/a?p=1", "https://example.com/a?p=2"),
-    # `www.` is only stripped from the host, never mid-host or from the path.
-    ("https://example.com/www.a", "https://example.com/a"),
-    ("https://wwwx.example.com/a", "https://example.com/a"),
-])
+@pytest.mark.parametrize(
+    "a,b",
+    [
+        # Paths are case-sensitive — folding them would merge distinct articles.
+        ("https://example.com/Volume14", "https://example.com/volume14"),
+        ("https://example.com/a", "https://example.com/b"),
+        ("https://example.com/a?p=1", "https://example.com/a?p=2"),
+        # `www.` is only stripped from the host, never mid-host or from the path.
+        ("https://example.com/www.a", "https://example.com/a"),
+        ("https://wwwx.example.com/a", "https://example.com/a"),
+    ],
+)
 def test_distinct_articles_keep_distinct_keys(a, b):
     assert norm(a) != norm(b)
 
@@ -55,16 +59,16 @@ def test_host_aliases_fold_a_declared_domain_migration():
     new = norm("https://tush.ar/post/dunders/", aliases)
     assert old == new == "tush.ar/post/dunders"
     # The slug tier folds through the same map.
-    assert (main._saved_dup_host_slug("https://tushar.lol/post/packaged/", aliases)
-            == main._saved_dup_host_slug("https://tush.ar/post/packaged/", aliases))
+    assert main._saved_dup_host_slug("https://tushar.lol/post/packaged/", aliases) == main._saved_dup_host_slug(
+        "https://tush.ar/post/packaged/", aliases
+    )
 
 
 def test_host_aliases_do_not_merge_unrelated_hosts():
     """Only hosts named in the map fold; everything else stays host-scoped, so
     two publishers on one topic still don't collide."""
     aliases = {"sadh.life": "tush.ar"}
-    assert (norm("https://guitarworld.com/x", aliases)
-            != norm("https://guitarmasterclass.net/x", aliases))
+    assert norm("https://guitarworld.com/x", aliases) != norm("https://guitarmasterclass.net/x", aliases)
     # No map at all == the old strict behavior.
     assert norm("https://sadh.life/post/dunders/") == "sadh.life/post/dunders"
 
@@ -103,11 +107,14 @@ def test_slug_key_still_matches_one_article_moved_on_the_same_site():
     assert a == b is not None
 
 
-@pytest.mark.parametrize("link", [
-    "https://example.com/index.html",   # blocklisted stub
-    "https://example.com/p",            # too short
-    "https://example.com/",             # no slug at all
-])
+@pytest.mark.parametrize(
+    "link",
+    [
+        "https://example.com/index.html",  # blocklisted stub
+        "https://example.com/p",  # too short
+        "https://example.com/",  # no slug at all
+    ],
+)
 def test_generic_slugs_still_produce_no_key(link):
     assert main._saved_dup_host_slug(link) is None
 

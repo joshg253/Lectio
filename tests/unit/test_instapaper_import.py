@@ -1,4 +1,5 @@
 """Instapaper CSV export → Saved Items import plan (pure parser/mapper)."""
+
 from __future__ import annotations
 
 from services import instapaper_import
@@ -26,10 +27,7 @@ HEADER = "URL,Title,Selection,Folder,Timestamp\n"
 
 
 def test_unread_and_archive_split():
-    csv = HEADER + (
-        "https://a.test/1,First,,Unread,1600000000\n"
-        "https://a.test/2,Second,,Archive,1600000001\n"
-    )
+    csv = HEADER + ("https://a.test/1,First,,Unread,1600000000\nhttps://a.test/2,Second,,Archive,1600000001\n")
     plan = {b.url: b for b in _plan(csv)}
     assert plan["https://a.test/1"].archived is False
     assert plan["https://a.test/2"].archived is True
@@ -53,10 +51,7 @@ def test_starred_folder_becomes_starred_tag():
 def test_duplicate_url_merges_archive_and_tags():
     # Same URL in a custom folder AND archived — archived wins, tags union,
     # earliest timestamp kept.
-    csv = HEADER + (
-        "https://a.test/1,Title,,Recipes,1600000500\n"
-        "https://a.test/1,Title,,Archive,1600000100\n"
-    )
+    csv = HEADER + ("https://a.test/1,Title,,Recipes,1600000500\nhttps://a.test/1,Title,,Archive,1600000100\n")
     (bm,) = _plan(csv)
     assert bm.archived is True
     assert bm.tags == ["recipes"]
@@ -65,8 +60,8 @@ def test_duplicate_url_merges_archive_and_tags():
 
 def test_invalid_and_empty_rows_skipped():
     csv = HEADER + (
-        "not-a-url,Bad,,Unread,1600000000\n"       # rejected by normalize_url
-        ",Missing URL,,Unread,1600000000\n"          # no URL
+        "not-a-url,Bad,,Unread,1600000000\n"  # rejected by normalize_url
+        ",Missing URL,,Unread,1600000000\n"  # no URL
         "https://a.test/ok,Good,,Unread,1600000000\n"
     )
     plan = _plan(csv)
@@ -90,9 +85,7 @@ def test_bom_and_reordered_columns():
 
 def test_non_csv_bytes_yield_empty_plan():
     assert _plan("this is not a csv at all") == []
-    assert instapaper_import.plan_import(
-        b"\x00\x01\x02", normalize_url=_norm_url, normalize_tag=_norm_tag
-    ) == []
+    assert instapaper_import.plan_import(b"\x00\x01\x02", normalize_url=_norm_url, normalize_tag=_norm_tag) == []
 
 
 def test_missing_timestamp_is_none():

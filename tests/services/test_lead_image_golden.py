@@ -511,20 +511,26 @@ def test_gunnerkrigg_derives_comic_url_from_p_param():
 
 def test_gunnerkrigg_returns_none_for_other_hosts():
     plugin = GunnerkriggPlugin()
-    assert plugin.fallback_lead_image_url(
-        entry_link="https://example.com/?p=42",
-        content_html=None,
-        summary=None,
-    ) is None
+    assert (
+        plugin.fallback_lead_image_url(
+            entry_link="https://example.com/?p=42",
+            content_html=None,
+            summary=None,
+        )
+        is None
+    )
 
 
 def test_gunnerkrigg_returns_none_when_no_page_param():
     plugin = GunnerkriggPlugin()
-    assert plugin.fallback_lead_image_url(
-        entry_link="https://www.gunnerkrigg.com/some/other/page",
-        content_html=None,
-        summary=None,
-    ) is None
+    assert (
+        plugin.fallback_lead_image_url(
+            entry_link="https://www.gunnerkrigg.com/some/other/page",
+            content_html=None,
+            summary=None,
+        )
+        is None
+    )
 
 
 def test_gunnerkrigg_bypasses_stale_cache():
@@ -548,11 +554,7 @@ def test_smbc_extracts_comic_url_from_content_html():
     """SMBC's source page is JS-rendered, so the comic URL is pulled from the
     feed's content_html instead — no HTTP fetch."""
     plugin = SMBCPlugin()
-    content = (
-        '<p>Some intro</p>'
-        '<img src="https://www.smbc-comics.com/comics/1700000000-comic.png" />'
-        '<p>And after-text.</p>'
-    )
+    content = '<p>Some intro</p><img src="https://www.smbc-comics.com/comics/1700000000-comic.png" /><p>And after-text.</p>'
     fallback = plugin.fallback_lead_image_url(
         entry_link="https://www.smbc-comics.com/comic/example",
         content_html=content,
@@ -575,11 +577,14 @@ def test_smbc_falls_back_to_summary_when_content_lacks_comic():
 def test_smbc_returns_none_for_other_hosts():
     plugin = SMBCPlugin()
     content = '<img src="https://www.smbc-comics.com/comics/abc.jpg" />'
-    assert plugin.fallback_lead_image_url(
-        entry_link="https://example.com/post",
-        content_html=content,
-        summary=None,
-    ) is None
+    assert (
+        plugin.fallback_lead_image_url(
+            entry_link="https://example.com/post",
+            content_html=content,
+            summary=None,
+        )
+        is None
+    )
 
 
 def test_smbc_bypasses_logo_or_chrome_cache():
@@ -742,10 +747,7 @@ def test_lead_image_dedup_handles_html_encoded_ampersand():
     # Decoded form (as parsed/extracted from the feed)
     lead_image_url = "https://i0.wp.com/badmachinery.com/comics/strip.jpg?w=600&ssl=1"
     # Same URL inside content_html with &amp; encoding
-    content_html = (
-        '<p>Hello.</p>'
-        '<img src="https://i0.wp.com/badmachinery.com/comics/strip.jpg?w=600&amp;ssl=1" />'
-    )
+    content_html = '<p>Hello.</p><img src="https://i0.wp.com/badmachinery.com/comics/strip.jpg?w=600&amp;ssl=1" />'
 
     # Verbatim check fails (content has &amp;, URL has &)
     assert lead_image_url not in content_html
@@ -758,7 +760,7 @@ def test_lead_image_dedup_does_not_match_unrelated_url():
     import html as _html
 
     lead_image_url = "https://cdn.example.com/hero.jpg"
-    content_html = '<p>No images here, just text & symbols.</p>'
+    content_html = "<p>No images here, just text & symbols.</p>"
 
     assert lead_image_url not in content_html
     assert lead_image_url not in _html.unescape(content_html)
@@ -1012,10 +1014,7 @@ def test_wabeer_logo_with_nxn_dimensions_accepted(tmp_path: Path):
     """Logo URLs with NxN dimensions encoded in the path must pass — 750x476 is
     a publisher-sized content image, not site chrome."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    content = (
-        f'<p><img src="{_WABEER_LOGO_NXN_URL}" alt="The Growler Guys" /></p>'
-        f'<p>Article text.</p>'
-    )
+    content = f'<p><img src="{_WABEER_LOGO_NXN_URL}" alt="The Growler Guys" /></p><p>Article text.</p>'
     entry = _FakeEntry(
         feed_url=_WABEER_FEED_URL,
         entry_id="wabeer-growler-nxn",
@@ -1030,10 +1029,7 @@ def test_wabeer_logo_with_width_hint_accepted(tmp_path: Path):
     """Logo URLs with a WordPress-style '1000w' width hint must pass — 1000px
     wide is unambiguously a content image, not a site icon."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    content = (
-        f'<p><img src="{_WABEER_LOGO_WIDTH_URL}" alt="The Growler Guys" /></p>'
-        f'<p>Article text.</p>'
-    )
+    content = f'<p><img src="{_WABEER_LOGO_WIDTH_URL}" alt="The Growler Guys" /></p><p>Article text.</p>'
     entry = _FakeEntry(
         feed_url=_WABEER_FEED_URL,
         entry_id="wabeer-growler-1000w",

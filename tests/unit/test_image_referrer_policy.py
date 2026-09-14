@@ -4,6 +4,7 @@ Some hosts (e.g. nanolx.org) serve a hotlink-protection placeholder when the
 Referer points at a foreign origin. Suppressing the referer on inline body
 images makes them load the real asset (regression: nanolx.org git.png).
 """
+
 from __future__ import annotations
 
 from main import (
@@ -75,10 +76,7 @@ def test_proxy_rewrites_hotlink_host_img_to_api_img():
 
 
 def test_proxy_drops_srcset_for_hotlink_host():
-    src = (
-        '<img src="https://nanolx.org/a.png" '
-        'srcset="https://nanolx.org/a-150.png 150w, https://nanolx.org/a-300.png 300w">'
-    )
+    src = '<img src="https://nanolx.org/a.png" srcset="https://nanolx.org/a-150.png 150w, https://nanolx.org/a-300.png 300w">'
     out = proxy_hotlink_images(src)
     assert "srcset" not in out.lower()
     assert "/api/img?u=" in out

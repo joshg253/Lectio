@@ -15,6 +15,7 @@ own per-feed query, and reader reads <updated>.
 The threshold between those two paths is PER_FEED_QUERY_THRESHOLD (32), which is
 why "it's in the folder but not in All" was the shape of the report.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -49,23 +50,27 @@ def seeded(tmp_path):
             url = f"https://filler{f}.test/feed"
             reader.add_feed(url, allow_invalid_url=True, exist_ok=True)
             for n in range(3):
-                reader.add_entry({
-                    "feed_url": url,
-                    "id": f"f{f}-{n}",
-                    "title": f"filler {f}-{n}",
-                    "link": f"https://filler{f}.test/{n}",
-                    "published": BASE + timedelta(days=10 + n),
-                })
+                reader.add_entry(
+                    {
+                        "feed_url": url,
+                        "id": f"f{f}-{n}",
+                        "title": f"filler {f}-{n}",
+                        "link": f"https://filler{f}.test/{n}",
+                        "published": BASE + timedelta(days=10 + n),
+                    }
+                )
         # The target: no published date, an <updated> of day 5 (older than every
         # filler), and therefore a first_updated of "now" (newest of all).
         reader.add_feed(TARGET_FEED, allow_invalid_url=True, exist_ok=True)
-        reader.add_entry({
-            "feed_url": TARGET_FEED,
-            "id": TARGET_ID,
-            "title": "Nocturne by an artist",
-            "link": "https://updated-only.test/black-cat",
-            "updated": BASE + timedelta(days=5),
-        })
+        reader.add_entry(
+            {
+                "feed_url": TARGET_FEED,
+                "id": TARGET_ID,
+                "title": "Nocturne by an artist",
+                "link": "https://updated-only.test/black-cat",
+                "updated": BASE + timedelta(days=5),
+            }
+        )
     try:
         yield tmp_path
     finally:
@@ -113,8 +118,7 @@ def test_newest_first_still_places_it_by_updated(seeded):
 def test_a_small_feed_set_agrees_with_a_large_one(seeded):
     """The two code paths must not disagree — that split is what made this
     'present in the folder, missing from All'."""
-    few = main.list_entries_for_feeds(
-        {TARGET_FEED}, limit=20, sort_by="post", sort_dir="asc", read_filter="all")
+    few = main.list_entries_for_feeds({TARGET_FEED}, limit=20, sort_by="post", sort_dir="asc", read_filter="all")
     assert [str(p.get("title")) for p in few] == ["Nocturne by an artist"]
     many = _titles(limit=200, sort_by="post", sort_dir="asc", read_filter="all")
     assert "Nocturne by an artist" in many

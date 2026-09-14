@@ -7,6 +7,7 @@ cleaning drops (the Blood Meridian case). Those are structural, so re-running
 readability just reproduces them. Full-page capture takes the whole body
 instead. These tests pin the two behaviors that matter: it keeps what
 readability drops, and it still sanitizes."""
+
 from __future__ import annotations
 
 import main
@@ -85,9 +86,11 @@ def test_strips_obvious_non_content_chrome():
 
 
 def test_title_prefers_og_title():
-    page = ('<html><head><title>Tab Title</title>'
-            '<meta property="og:title" content="Social Title"></head>'
-            '<body><p>Body text goes here for the capture.</p></body></html>')
+    page = (
+        "<html><head><title>Tab Title</title>"
+        '<meta property="og:title" content="Social Title"></head>'
+        "<body><p>Body text goes here for the capture.</p></body></html>"
+    )
     title, _html = main.extract_full_page_article(page, URL)
     assert title == "Social Title"
 
@@ -99,15 +102,18 @@ def test_title_falls_back_to_the_url():
 
 
 def test_relative_image_urls_are_absolutized():
-    page = ('<html><head><title>T</title></head><body>'
-            '<p>Words that make this a real body worth keeping around.</p>'
-            '<img src="/media/pic.png"></body></html>')
+    page = (
+        "<html><head><title>T</title></head><body>"
+        "<p>Words that make this a real body worth keeping around.</p>"
+        '<img src="/media/pic.png"></body></html>'
+    )
     _title, html = main.extract_full_page_article(page, "https://example.test/dir/post")
     assert "https://example.test/media/pic.png" in html
 
 
 def test_empty_page_raises():
     import pytest
+
     with pytest.raises(ValueError):
         main.extract_full_page_article("<html><body></body></html>", URL)
 

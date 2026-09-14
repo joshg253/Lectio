@@ -1,4 +1,5 @@
 """Per-feed as-needed-proxy flag storage (proxy_feeds)."""
+
 from __future__ import annotations
 
 import pytest
@@ -54,6 +55,7 @@ def test_blank_url_not_flagged(meta):
 
 # --- last-resort escalation (tailscale_feeds), same shape one rung further out ---
 
+
 def test_tailscale_flag_and_get(meta):
     assert main.get_tailscale_feed_urls(meta) == set()
     newly = main.flag_tailscale_feed(meta, "https://blocked.test/feed", reason="test")
@@ -87,6 +89,7 @@ def test_tailscale_feeds_independent_of_proxy_feeds(meta):
 
 
 # --- FlareSolverr escalation (flaresolverr_feeds), between proxy and tailscale ---
+
 
 def test_flaresolverr_flag_and_get(meta):
     assert main.get_flaresolverr_feed_urls(meta) == set()

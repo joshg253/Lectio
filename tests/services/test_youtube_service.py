@@ -104,8 +104,7 @@ def test_fetch_and_store_durations_for_feed_persists_missing_video(tmp_path: Pat
         user_agent="LectioTest/1.0",
     )
 
-    monkeypatch.setattr(service, "get_video_durations_batch",
-                        lambda ids: {vid: (360, "6:00", None, None) for vid in ids})
+    monkeypatch.setattr(service, "get_video_durations_batch", lambda ids: {vid: (360, "6:00", None, None) for vid in ids})
 
     service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=test")
 
@@ -135,13 +134,18 @@ def test_get_video_durations_batch_parses_multiple(tmp_path: Path, monkeypatch):
 
     class _Resp:
         status_code = 200
-        def raise_for_status(self): pass
+
+        def raise_for_status(self):
+            pass
+
         def json(self):
-            return {"items": [
-                {"id": "AAAAAAAAAAA", "contentDetails": {"duration": "PT1H2M3S"}},
-                {"id": "BBBBBBBBBBB", "contentDetails": {"duration": "PT45S"}},
-                # CCCCCCCCCCC intentionally omitted (private/deleted) → (None, None)
-            ]}
+            return {
+                "items": [
+                    {"id": "AAAAAAAAAAA", "contentDetails": {"duration": "PT1H2M3S"}},
+                    {"id": "BBBBBBBBBBB", "contentDetails": {"duration": "PT45S"}},
+                    # CCCCCCCCCCC intentionally omitted (private/deleted) → (None, None)
+                ]
+            }
 
     def _fake_get(url, params=None, timeout=None):
         assert params is not None
@@ -170,16 +174,21 @@ def test_get_video_durations_batch_parses_upcoming_premiere(tmp_path: Path, monk
 
     class _Resp:
         status_code = 200
-        def raise_for_status(self): pass
+
+        def raise_for_status(self):
+            pass
+
         def json(self):
-            return {"items": [
-                {
-                    "id": "UPCOMINGVID",
-                    "snippet": {"liveBroadcastContent": "upcoming"},
-                    "contentDetails": {},
-                    "liveStreamingDetails": {"scheduledStartTime": "2026-09-20T18:00:00Z"},
-                },
-            ]}
+            return {
+                "items": [
+                    {
+                        "id": "UPCOMINGVID",
+                        "snippet": {"liveBroadcastContent": "upcoming"},
+                        "contentDetails": {},
+                        "liveStreamingDetails": {"scheduledStartTime": "2026-09-20T18:00:00Z"},
+                    },
+                ]
+            }
 
     monkeypatch.setattr(httpx, "get", lambda url, params=None, timeout=None: _Resp())
     out = service.get_video_durations_batch(["UPCOMINGVID"])
@@ -199,7 +208,8 @@ def test_upcoming_premiere_status_is_cached_and_retrievable(tmp_path: Path, monk
         user_agent="LectioTest/1.0",
     )
     monkeypatch.setattr(
-        service, "get_video_durations_batch",
+        service,
+        "get_video_durations_batch",
         lambda ids: {v: (None, None, "upcoming", "2026-09-20T18:00:00Z") for v in ids},
     )
     service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=t")
@@ -266,8 +276,7 @@ def test_fresh_negative_is_not_refetched(tmp_path: Path, monkeypatch):
         user_agent="LectioTest/1.0",
     )
     calls = []
-    monkeypatch.setattr(service, "get_video_durations_batch",
-                        lambda ids: (calls.extend(ids) or {v: (95, "1:35") for v in ids}))
+    monkeypatch.setattr(service, "get_video_durations_batch", lambda ids: calls.extend(ids) or {v: (95, "1:35") for v in ids})
     service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=t")
     assert calls == []  # fresh negative respected
     assert service.cache["ABCDEFGHIJK"] == (None, None)
@@ -334,7 +343,8 @@ def test_refresh_upcoming_videos_updates_only_upcoming_rows(tmp_path: Path, monk
         api_key_provider=lambda: "fake-key",
     )
     monkeypatch.setattr(
-        service, "get_video_durations_batch",
+        service,
+        "get_video_durations_batch",
         lambda ids: {v: (720, "12:00", "live", None) for v in ids},
     )
 
@@ -394,6 +404,7 @@ class _FakeResponse:
     """No failing status is ever exercised via this fake -- fetch failures are
     tested via a raising httpx.get instead (see the fetch-failure test below),
     matching how a real connection error surfaces, not a 4xx/5xx response."""
+
     def __init__(self, text: str):
         self.text = text
 

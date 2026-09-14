@@ -1,4 +1,5 @@
 """Miniflux v1 API: auth, categories, feeds, entries, bookmarks."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -28,6 +29,7 @@ def env(tmp_path, monkeypatch):
 
     auth_db = tmp_path / "lectio_auth.sqlite"
     from services.users import UserStore
+
     us = UserStore(auth_db)
     alice_id = us.create("alice", "password123", is_admin=True)
     with us._connect() as conn:
@@ -143,14 +145,16 @@ def test_entries_with_feed(env):
         _reset_pools()
         reader = main.get_reader()
         reader.add_feed(FEED, allow_invalid_url=True)
-        reader.add_entry({
-            "feed_url": FEED,
-            "id": "e1",
-            "title": "Test Entry",
-            "link": "https://example.test/1",
-            "summary": "body",
-            "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "e1",
+                "title": "Test Entry",
+                "link": "https://example.test/1",
+                "summary": "body",
+                "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+            }
+        )
         _reset_pools()
 
     # Reset the service's synced-user cache so _ensure_synced re-runs for alice

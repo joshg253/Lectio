@@ -37,6 +37,7 @@ Usage (inside the app container):
     uv run scripts/merge_saved_vs_real_duplicates.py --apply
     uv run scripts/merge_saved_vs_real_duplicates.py --apply --user u_x --limit 100
 """
+
 from __future__ import annotations
 
 import argparse
@@ -92,7 +93,11 @@ def run_for_user(uid: str, apply: bool, limit: int) -> dict:
     with main.get_reader() as reader, main.get_meta_connection() as conn:
         for saved_rec, real_rec in safe_pairs:
             outcome = main._move_entry_to_feed(
-                reader, conn, SAVED_URL, saved_rec["entry_id"], real_rec["feed_url"],
+                reader,
+                conn,
+                SAVED_URL,
+                saved_rec["entry_id"],
+                real_rec["feed_url"],
             )
             stats["merged" if outcome["ok"] else "failed"] += 1
             if not outcome["ok"]:

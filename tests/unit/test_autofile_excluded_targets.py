@@ -1,6 +1,7 @@
 """_autofile_excluded_targets decides which feeds a saved article may never be
 filed into. Enforced on both the preview and the apply, so a stale plan can't
 route around it."""
+
 from __future__ import annotations
 
 import main

@@ -1,4 +1,5 @@
 """Tests for the source proxy pipeline: build_source_proxy_response and is_probably_frame_blocked."""
+
 from __future__ import annotations
 
 import httpx
@@ -9,6 +10,7 @@ import main
 # ---------------------------------------------------------------------------
 # Helpers / mock httpx
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def _allow_outbound(monkeypatch):
@@ -37,15 +39,20 @@ class _MockHTTPXResponse:
 
 def _make_mock_client(response: _MockHTTPXResponse):
     """Return a class that mimics httpx.Client as a context manager."""
+
     class _Client:
         def __init__(self, **_kw):
             pass
+
         def __enter__(self):
             return self
+
         def __exit__(self, *_):
             pass
+
         def get(self, url, **_kwargs):
             return response
+
     return _Client
 
 
@@ -53,11 +60,9 @@ def _make_mock_client(response: _MockHTTPXResponse):
 # build_source_proxy_response tests
 # ---------------------------------------------------------------------------
 
+
 def test_cf_challenge_returns_bot_page(monkeypatch):
-    cf_html = (
-        "<html><head><title>Just a moment...</title></head>"
-        "<body><script>window._cf_chl_opt={}</script></body></html>"
-    )
+    cf_html = "<html><head><title>Just a moment...</title></head><body><script>window._cf_chl_opt={}</script></body></html>"
     monkeypatch.setattr(httpx, "Client", _make_mock_client(_MockHTTPXResponse(cf_html)))
     resp = main.build_source_proxy_response("https://example.com/page")
     body = bytes(resp.body).decode()
@@ -68,11 +73,7 @@ def test_cf_challenge_returns_bot_page(monkeypatch):
 
 
 def test_paywall_returns_subscription_page(monkeypatch):
-    paywall_html = (
-        "<html><body>"
-        "<p>Subscribe to read this article.</p>"
-        "</body></html>"
-    )
+    paywall_html = "<html><body><p>Subscribe to read this article.</p></body></html>"
     monkeypatch.setattr(httpx, "Client", _make_mock_client(_MockHTTPXResponse(paywall_html)))
     resp = main.build_source_proxy_response("https://example.com/page")
     body = bytes(resp.body).decode()
@@ -82,7 +83,8 @@ def test_paywall_returns_subscription_page(monkeypatch):
 
 def test_http_error_returns_error_page(monkeypatch):
     monkeypatch.setattr(
-        httpx, "Client",
+        httpx,
+        "Client",
         _make_mock_client(_MockHTTPXResponse("Not found", status_code=404)),
     )
     resp = main.build_source_proxy_response("https://example.com/page")
@@ -94,7 +96,8 @@ def test_http_error_returns_error_page(monkeypatch):
 def test_normal_page_includes_base_tag(monkeypatch):
     page_html = "<html><head></head><body><p>Hello world</p></body></html>"
     monkeypatch.setattr(
-        httpx, "Client",
+        httpx,
+        "Client",
         _make_mock_client(_MockHTTPXResponse(page_html, url="https://example.com/article")),
     )
     resp = main.build_source_proxy_response("https://example.com/article")
@@ -105,7 +108,8 @@ def test_normal_page_includes_base_tag(monkeypatch):
 def test_normal_page_includes_proxy_bar(monkeypatch):
     page_html = "<html><head></head><body><p>Hello world</p></body></html>"
     monkeypatch.setattr(
-        httpx, "Client",
+        httpx,
+        "Client",
         _make_mock_client(_MockHTTPXResponse(page_html, url="https://example.com/article")),
     )
     resp = main.build_source_proxy_response("https://example.com/article")
@@ -122,7 +126,8 @@ def test_unsupported_scheme_returns_400():
 def test_proxy_bar_injected_before_closing_body(monkeypatch):
     page_html = "<html><head></head><body><p>Content</p></body></html>"
     monkeypatch.setattr(
-        httpx, "Client",
+        httpx,
+        "Client",
         _make_mock_client(_MockHTTPXResponse(page_html)),
     )
     resp = main.build_source_proxy_response("https://example.com/page")
@@ -136,6 +141,7 @@ def test_proxy_bar_injected_before_closing_body(monkeypatch):
 # ---------------------------------------------------------------------------
 # is_probably_frame_blocked tests
 # ---------------------------------------------------------------------------
+
 
 def _make_headers(xfo: str = "", csp: str = "") -> httpx.Headers:
     raw: dict[str, str] = {}

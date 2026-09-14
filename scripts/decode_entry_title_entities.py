@@ -9,6 +9,7 @@ Usage (inside the app container):
     /app/.venv/bin/python scripts/decode_entry_title_entities.py            # dry-run
     /app/.venv/bin/python scripts/decode_entry_title_entities.py --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -25,13 +26,13 @@ from services.html_sanitize import decode_title_entities  # noqa: E402
 def run(uid: str, apply: bool, show: int) -> None:
     with main.get_reader() as reader:
         db = reader._storage.get_db()
-        rows = db.execute(
-            "SELECT feed, id, title FROM entries WHERE title LIKE '%&%;%'"
-        ).fetchall()
-    changes = [(feed, eid, title, decoded)
-               for feed, eid, title in rows
-               for decoded in [decode_title_entities(title or "")]
-               if decoded != (title or "")]
+        rows = db.execute("SELECT feed, id, title FROM entries WHERE title LIKE '%&%;%'").fetchall()
+    changes = [
+        (feed, eid, title, decoded)
+        for feed, eid, title in rows
+        for decoded in [decode_title_entities(title or "")]
+        if decoded != (title or "")
+    ]
     print(f"[{uid}] {len(changes)} of {len(rows)} candidate titles would change")
     for _feed, _eid, before, after in changes[:show]:
         print(f"    {before[:70]}\n  → {after[:70]}")
@@ -51,7 +52,7 @@ def main_cli() -> int:
     ap.add_argument("--user", default=None, help="restrict to one user_id")
     ap.add_argument("--show", type=int, default=0, help="print this many before/after samples")
     args = ap.parse_args()
-    for uid in ([args.user] if args.user else main._background_user_ids()):
+    for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
             run(uid, args.apply, args.show)
     if not args.apply:

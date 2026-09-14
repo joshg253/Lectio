@@ -9,6 +9,7 @@ The heuristic is deliberately narrow, and the tests that matter most are the
 negative ones: a redirect that merely *reshapes* a URL at the same depth is a
 site reorganization, where the article is still there. Reporting that as gone
 would be worse than reporting nothing."""
+
 from __future__ import annotations
 
 import pytest
@@ -18,23 +19,29 @@ from main import _looks_like_soft_404
 ART = "https://guitarplayer.com/lessons/how-to-play-the-blues"
 
 
-@pytest.mark.parametrize("final", [
-    "https://guitarplayer.com/lessons",              # ancestor — the observed case
-    "https://guitarplayer.com/lessons/",             # ...with a trailing slash
-    "https://guitarplayer.com/",                     # site root
-    "https://guitarplayer.com",                      # root, no slash
-    "https://guitarplayer.com/index.html",           # root via an index file
-    "https://guitarplayer.com/news",                 # shallower, index-ish name
-])
+@pytest.mark.parametrize(
+    "final",
+    [
+        "https://guitarplayer.com/lessons",  # ancestor — the observed case
+        "https://guitarplayer.com/lessons/",  # ...with a trailing slash
+        "https://guitarplayer.com/",  # site root
+        "https://guitarplayer.com",  # root, no slash
+        "https://guitarplayer.com/index.html",  # root via an index file
+        "https://guitarplayer.com/news",  # shallower, index-ish name
+    ],
+)
 def test_redirect_that_loses_path_depth_is_a_soft_404(final):
     assert _looks_like_soft_404(ART, final) is True
 
 
-@pytest.mark.parametrize("original", [
-    "https://guitarplayer.com/technique/the-dorian-mode-jazz-tones",
-    "https://guitarplayer.com/lessons/reggae-rules-how-to-play-reggae",
-    "https://guitarplayer.com/news/five-jazz-songs-to-start-with",
-])
+@pytest.mark.parametrize(
+    "original",
+    [
+        "https://guitarplayer.com/technique/the-dorian-mode-jazz-tones",
+        "https://guitarplayer.com/lessons/reggae-rules-how-to-play-reggae",
+        "https://guitarplayer.com/news/five-jazz-songs-to-start-with",
+    ],
+)
 def test_cross_section_collapse_is_a_soft_404(original):
     """Measured on live data: 11 of 14 sampled guitarplayer.com articles
     redirect to /lessons regardless of which section they were in. The
@@ -43,26 +50,32 @@ def test_cross_section_collapse_is_a_soft_404(original):
     assert _looks_like_soft_404(original, "https://www.guitarplayer.com/lessons") is True
 
 
-@pytest.mark.parametrize("final", [
-    ART,                                                     # no redirect at all
-    "http://guitarplayer.com/lessons/how-to-play-the-blues",  # scheme only
-    "https://www.guitarplayer.com/lessons/how-to-play-the-blues",  # www only
-    "https://guitarplayer.com/lessons/how-to-play-the-blues/",     # trailing slash
-])
+@pytest.mark.parametrize(
+    "final",
+    [
+        ART,  # no redirect at all
+        "http://guitarplayer.com/lessons/how-to-play-the-blues",  # scheme only
+        "https://www.guitarplayer.com/lessons/how-to-play-the-blues",  # www only
+        "https://guitarplayer.com/lessons/how-to-play-the-blues/",  # trailing slash
+    ],
+)
 def test_same_page_redirects_are_not_soft_404s(final):
     assert _looks_like_soft_404(ART, final) is False
 
 
-@pytest.mark.parametrize("original,final", [
-    # Site reorganization: same depth, different shape. The article is still
-    # there — this is the case the heuristic must never flag.
-    ("https://site.test/2019/my-post", "https://site.test/blog/my-post"),
-    ("https://site.test/a/b/c", "https://site.test/x/y/z"),
-    # Redirected *deeper* — clearly still an article.
-    ("https://site.test/post", "https://site.test/2019/06/post"),
-    # A one-segment original can't lose depth; needs 2+ to be article-shaped.
-    ("https://site.test/post", "https://site.test/blog"),
-])
+@pytest.mark.parametrize(
+    "original,final",
+    [
+        # Site reorganization: same depth, different shape. The article is still
+        # there — this is the case the heuristic must never flag.
+        ("https://site.test/2019/my-post", "https://site.test/blog/my-post"),
+        ("https://site.test/a/b/c", "https://site.test/x/y/z"),
+        # Redirected *deeper* — clearly still an article.
+        ("https://site.test/post", "https://site.test/2019/06/post"),
+        # A one-segment original can't lose depth; needs 2+ to be article-shaped.
+        ("https://site.test/post", "https://site.test/blog"),
+    ],
+)
 def test_same_or_greater_depth_is_never_a_soft_404(original, final):
     assert _looks_like_soft_404(original, final) is False
 

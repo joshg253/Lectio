@@ -13,6 +13,7 @@ def _no_debug(monkeypatch):
 
 def _patch_resolve(monkeypatch, ips: list[str]):
     """Make socket.getaddrinfo return the given IP literals for any host."""
+
     def fake_getaddrinfo(host, _port, *_args, **_kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (ip, 0)) for ip in ips]
 

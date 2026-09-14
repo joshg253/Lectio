@@ -5,6 +5,7 @@ single unwanted attachment (or all of them) without deleting the whole
 archive, and no way to save a file link the feed's attachment-extension
 policy doesn't happen to cover.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -64,25 +65,21 @@ def _service(archive_connect):
 def _seed_entry(archive_connect, *, content_html=b"hello world", other_entry_id=None):
     with archive_connect() as conn:
         conn.execute(
-            "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at, content_html_zlib)"
-            " VALUES (?, ?, 'complete', 1.0, ?)",
+            "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at, content_html_zlib) VALUES (?, ?, 'complete', 1.0, ?)",
             (FEED, ENTRY, zlib.compress(content_html)),
         )
         if other_entry_id:
             conn.execute(
-                "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at, content_html_zlib)"
-                " VALUES (?, ?, 'complete', 1.0, ?)",
+                "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at, content_html_zlib) VALUES (?, ?, 'complete', 1.0, ?)",
                 (FEED, other_entry_id, zlib.compress(b"other")),
             )
         conn.commit()
 
 
-def _seed_asset(archive_connect, source_url, *, asset_hash, byte_size, content_type,
-                 feed_url=FEED, entry_id=ENTRY):
+def _seed_asset(archive_connect, source_url, *, asset_hash, byte_size, content_type, feed_url=FEED, entry_id=ENTRY):
     with archive_connect() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO archived_asset (asset_hash, data, content_type, byte_size, created_at)"
-            " VALUES (?, ?, ?, ?, 1.0)",
+            "INSERT OR IGNORE INTO archived_asset (asset_hash, data, content_type, byte_size, created_at) VALUES (?, ?, ?, ?, 1.0)",
             (asset_hash, b"x" * byte_size, content_type, byte_size),
         )
         conn.execute(
@@ -117,9 +114,7 @@ def test_recompute_content_size_bytes_sums_blob_and_distinct_assets(archive):
     content_blob_len = len(zlib.compress(b"0123456789"))
     assert total == content_blob_len + 1000
     with archive() as conn:
-        stored = conn.execute(
-            "SELECT content_size_bytes FROM archived_entry WHERE feed_url=? AND entry_id=?", (FEED, ENTRY)
-        ).fetchone()[0]
+        stored = conn.execute("SELECT content_size_bytes FROM archived_entry WHERE feed_url=? AND entry_id=?", (FEED, ENTRY)).fetchone()[0]
     assert stored == total
 
 
@@ -138,9 +133,7 @@ def test_delete_one_attachment_removes_link_and_recomputes_size(archive):
     assert ok is True
     assert svc.list_non_image_assets(FEED, ENTRY) == []
     with archive() as conn:
-        size = conn.execute(
-            "SELECT content_size_bytes FROM archived_entry WHERE feed_url=? AND entry_id=?", (FEED, ENTRY)
-        ).fetchone()[0]
+        size = conn.execute("SELECT content_size_bytes FROM archived_entry WHERE feed_url=? AND entry_id=?", (FEED, ENTRY)).fetchone()[0]
     assert size == len(zlib.compress(b""))  # just the empty content blob's own zlib overhead
 
 
@@ -177,8 +170,7 @@ def test_delete_one_attachment_garbage_collects_asset_unused_elsewhere(archive):
 def test_delete_one_attachment_keeps_asset_still_used_by_another_entry(archive):
     _seed_entry(archive, other_entry_id="e2")
     _seed_asset(archive, "https://cdn.test/a.pdf", asset_hash="h1", byte_size=1000, content_type="application/pdf")
-    _seed_asset(archive, "https://cdn.test/a.pdf", asset_hash="h1", byte_size=1000,
-                content_type="application/pdf", entry_id="e2")
+    _seed_asset(archive, "https://cdn.test/a.pdf", asset_hash="h1", byte_size=1000, content_type="application/pdf", entry_id="e2")
     svc = _service(archive)
 
     svc.delete_one_attachment(FEED, ENTRY, "https://cdn.test/a.pdf")
@@ -199,9 +191,7 @@ def test_delete_all_attachments_removes_only_non_images(archive):
 
     assert removed == 2
     with archive() as conn:
-        remaining = conn.execute(
-            "SELECT source_url FROM archived_asset_link WHERE feed_url=? AND entry_id=?", (FEED, ENTRY)
-        ).fetchall()
+        remaining = conn.execute("SELECT source_url FROM archived_asset_link WHERE feed_url=? AND entry_id=?", (FEED, ENTRY)).fetchall()
     assert [r[0] for r in remaining] == ["https://cdn.test/pic.png"]
 
 
@@ -227,8 +217,9 @@ def test_archive_one_attachment_saves_and_recomputes_size(archive):
     svc = _service(archive)
 
     def fake_archive_asset(feed_url, entry_id, source_url, max_bytes=None):
-        _seed_asset(archive, source_url, asset_hash="h1", byte_size=1234, content_type="application/pdf",
-                    feed_url=feed_url, entry_id=entry_id)
+        _seed_asset(
+            archive, source_url, asset_hash="h1", byte_size=1234, content_type="application/pdf", feed_url=feed_url, entry_id=entry_id
+        )
 
     svc._archive_asset = fake_archive_asset
 
@@ -236,9 +227,7 @@ def test_archive_one_attachment_saves_and_recomputes_size(archive):
 
     assert ok is True
     with archive() as conn:
-        size = conn.execute(
-            "SELECT content_size_bytes FROM archived_entry WHERE feed_url=? AND entry_id=?", (FEED, ENTRY)
-        ).fetchone()[0]
+        size = conn.execute("SELECT content_size_bytes FROM archived_entry WHERE feed_url=? AND entry_id=?", (FEED, ENTRY)).fetchone()[0]
     assert size == 1234 + len(zlib.compress(b""))
 
 

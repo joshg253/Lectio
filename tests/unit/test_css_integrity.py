@@ -3,6 +3,7 @@ once (a rule lost its closing `}`, breaking parsing for the rest of the file and
 leaving the app largely unstyled). Conflict-marker scans don't catch it because
 there are no markers — only an unbalanced brace — so check the balance directly.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

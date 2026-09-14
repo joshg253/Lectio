@@ -16,6 +16,7 @@ Usage (inside the app container):
     uv run scripts/apply_feed_url_rewrites.py --apply
     uv run scripts/apply_feed_url_rewrites.py --apply --user u_x
 """
+
 from __future__ import annotations
 
 import argparse

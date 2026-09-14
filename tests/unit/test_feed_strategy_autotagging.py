@@ -1,4 +1,5 @@
 """Tests for feed strategy auto-tagging and thumbnail suppression logic."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -8,6 +9,7 @@ import main
 # ---------------------------------------------------------------------------
 # show_as_thumb is suppressed when feed_thumbnail_url is set
 # ---------------------------------------------------------------------------
+
 
 def _make_prefs(**kwargs) -> dict:
     defaults = {
@@ -49,6 +51,7 @@ def test_show_as_thumb_false_when_thumb_disabled_and_no_url():
 # _auto_tag_artwork_feeds / _auto_tag_webcomic_feeds priority
 # ---------------------------------------------------------------------------
 
+
 def _make_meta_db():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -76,9 +79,7 @@ def test_artwork_strategy_assigned_to_artstation_feeds(monkeypatch):
 
     main._auto_tag_artwork_feeds()
 
-    row = conn.execute(
-        "SELECT strategy FROM feed_lead_image_strategy WHERE feed_url = 'https://www.artstation.com/guweiz.rss'"
-    ).fetchone()
+    row = conn.execute("SELECT strategy FROM feed_lead_image_strategy WHERE feed_url = 'https://www.artstation.com/guweiz.rss'").fetchone()
     assert row is not None
     assert row["strategy"] == "artwork"
 
@@ -87,9 +88,7 @@ def test_webcomic_tagger_skips_artwork_feeds(monkeypatch):
     conn = _make_meta_db()
     conn.execute("INSERT INTO folders VALUES (1, 'Comics & Art', NULL)")
     conn.execute("INSERT INTO folder_feeds VALUES (1, 'https://www.artstation.com/guweiz.rss')")
-    conn.execute(
-        "INSERT INTO feed_lead_image_strategy VALUES ('https://www.artstation.com/guweiz.rss', 'artwork', 0.0, 0)"
-    )
+    conn.execute("INSERT INTO feed_lead_image_strategy VALUES ('https://www.artstation.com/guweiz.rss', 'artwork', 0.0, 0)")
     conn.commit()
 
     monkeypatch.setattr(main, "get_meta_connection", lambda: conn)
@@ -97,9 +96,7 @@ def test_webcomic_tagger_skips_artwork_feeds(monkeypatch):
 
     main._auto_tag_webcomic_feeds()
 
-    row = conn.execute(
-        "SELECT strategy FROM feed_lead_image_strategy WHERE feed_url = 'https://www.artstation.com/guweiz.rss'"
-    ).fetchone()
+    row = conn.execute("SELECT strategy FROM feed_lead_image_strategy WHERE feed_url = 'https://www.artstation.com/guweiz.rss'").fetchone()
     # webcomic tagger must not clobber artwork strategy
     assert row["strategy"] == "artwork"
 
@@ -115,9 +112,7 @@ def test_webcomic_tagger_assigns_webcomic_to_non_artwork_feeds(monkeypatch):
 
     main._auto_tag_webcomic_feeds()
 
-    row = conn.execute(
-        "SELECT strategy FROM feed_lead_image_strategy WHERE feed_url = 'https://xkcd.com/atom.xml'"
-    ).fetchone()
+    row = conn.execute("SELECT strategy FROM feed_lead_image_strategy WHERE feed_url = 'https://xkcd.com/atom.xml'").fetchone()
     assert row is not None
     assert row["strategy"] == "webcomic"
 
@@ -126,9 +121,7 @@ def test_manual_strategy_not_overridden_by_artwork_tagger(monkeypatch):
     conn = _make_meta_db()
     conn.execute("INSERT INTO folders VALUES (1, 'Art', NULL)")
     conn.execute("INSERT INTO folder_feeds VALUES (1, 'https://www.artstation.com/guweiz.rss')")
-    conn.execute(
-        "INSERT INTO feed_lead_image_strategy VALUES ('https://www.artstation.com/guweiz.rss', 'og_scrape', 0.0, 1)"
-    )
+    conn.execute("INSERT INTO feed_lead_image_strategy VALUES ('https://www.artstation.com/guweiz.rss', 'og_scrape', 0.0, 1)")
     conn.commit()
 
     monkeypatch.setattr(main, "get_meta_connection", lambda: conn)

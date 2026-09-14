@@ -17,6 +17,7 @@ Saving a URL:
 Extraction failure is not fatal: the entry is still created (title falls back
 to the URL) and starred, so the archive worker can capture the page later.
 """
+
 from __future__ import annotations
 
 import json
@@ -82,11 +83,41 @@ _MANUAL_TAG_KEY_PREFIX = "lectio.manual_tag."
 
 
 # Words too common to count as evidence that two titles are about the same thing.
-_TITLE_STOPWORDS = frozenset({
-    "a", "an", "and", "the", "of", "for", "to", "in", "on", "at", "by", "with",
-    "from", "is", "are", "be", "your", "you", "how", "what", "why", "it", "its",
-    "this", "that", "or", "as", "vs", "new", "part", "free",
-})
+_TITLE_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "the",
+        "of",
+        "for",
+        "to",
+        "in",
+        "on",
+        "at",
+        "by",
+        "with",
+        "from",
+        "is",
+        "are",
+        "be",
+        "your",
+        "you",
+        "how",
+        "what",
+        "why",
+        "it",
+        "its",
+        "this",
+        "that",
+        "or",
+        "as",
+        "vs",
+        "new",
+        "part",
+        "free",
+    }
+)
 
 
 def _title_words(value: str) -> set[str]:
@@ -100,12 +131,42 @@ def _title_words(value: str) -> set[str]:
 # no subject, and leaving them in is how informit.com defeated this guard —
 # /articles/article.aspx overlapped the site index title "Articles | InformIT",
 # so a wrong page read as the right one.
-_URL_STRUCTURAL_WORDS = frozenset({
-    "article", "articles", "index", "default", "page", "pages", "post", "posts",
-    "item", "items", "view", "show", "story", "stories", "content", "detail",
-    "details", "print", "amp", "html", "htm", "aspx", "php", "asp",
-    "cfm", "jsp", "shtml", "cgi", "www", "web", "site", "blog",
-})
+_URL_STRUCTURAL_WORDS = frozenset(
+    {
+        "article",
+        "articles",
+        "index",
+        "default",
+        "page",
+        "pages",
+        "post",
+        "posts",
+        "item",
+        "items",
+        "view",
+        "show",
+        "story",
+        "stories",
+        "content",
+        "detail",
+        "details",
+        "print",
+        "amp",
+        "html",
+        "htm",
+        "aspx",
+        "php",
+        "asp",
+        "cfm",
+        "jsp",
+        "shtml",
+        "cgi",
+        "www",
+        "web",
+        "site",
+        "blog",
+    }
+)
 
 
 def _url_slug_words(url: str) -> set[str]:
@@ -131,10 +192,7 @@ def _url_slug_words(url: str) -> set[str]:
         for _key, value in parse_qsl(parsed.query, keep_blank_values=False):
             text += " " + unquote_plus(value)
     words = re.findall(r"[a-z0-9]+", text.lower())
-    return {
-        w for w in words
-        if len(w) > 2 and w not in _TITLE_STOPWORDS and w not in _URL_STRUCTURAL_WORDS
-    }
+    return {w for w in words if len(w) > 2 and w not in _TITLE_STOPWORDS and w not in _URL_STRUCTURAL_WORDS}
 
 
 _ANCHOR_RE = re.compile(r"<a\b[^>]*>(.*?)</a>", re.I | re.S)
@@ -167,8 +225,7 @@ def looks_like_a_link_index(html: str) -> bool:
     return (anchor_text / text_len) >= _LINK_INDEX_MIN_RATIO
 
 
-def _page_is_a_different_article(source_url: str, new_title: str, *,
-                                 old_title: str = "", new_html: str = "") -> bool:
+def _page_is_a_different_article(source_url: str, new_title: str, *, old_title: str = "", new_html: str = "") -> bool:
     """True when the page fetched from *source_url* is plainly not what lives there.
 
     the-digital-reader served a parked "Empowering Relationships" page for a 2019
@@ -239,10 +296,14 @@ def _has_manual_tag(reader, feed_url: str, entry_id: str) -> bool:
     """Does this entry carry any manual (user) tag? Read straight from reader's
     entry_tags, the same way this module already writes reader's own columns."""
     try:
-        row = reader._storage.get_db().execute(
-            "SELECT 1 FROM entry_tags WHERE feed = ? AND id = ? AND key LIKE ? LIMIT 1",
-            (feed_url, entry_id, _MANUAL_TAG_KEY_PREFIX + "%"),
-        ).fetchone()
+        row = (
+            reader._storage.get_db()
+            .execute(
+                "SELECT 1 FROM entry_tags WHERE feed = ? AND id = ? AND key LIKE ? LIMIT 1",
+                (feed_url, entry_id, _MANUAL_TAG_KEY_PREFIX + "%"),
+            )
+            .fetchone()
+        )
     except Exception:  # noqa: BLE001 — treat an unreadable tag table as "no tags"
         LOGGER.warning("manual-tag probe failed for %s", entry_id, exc_info=True)
         return False
@@ -302,8 +363,7 @@ def replace_entry_content(
     db = reader._storage.get_db()
     if bump_received:
         db.execute(
-            "UPDATE entries SET content = ?, first_updated = ?, recent_sort = ?"
-            " WHERE feed = ? AND id = ?",
+            "UPDATE entries SET content = ?, first_updated = ?, recent_sort = ? WHERE feed = ? AND id = ?",
             (content_json, stored_received, stored_received, feed_url, entry_id),
         )
     else:
@@ -313,10 +373,13 @@ def replace_entry_content(
         )
     title_pinned = False
     try:
-        title_pinned = conn.execute(
-            "SELECT 1 FROM entry_title_overrides WHERE feed_url = ? AND entry_id = ?",
-            (feed_url, entry_id),
-        ).fetchone() is not None
+        title_pinned = (
+            conn.execute(
+                "SELECT 1 FROM entry_title_overrides WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchone()
+            is not None
+        )
     except sqlite3.OperationalError:
         pass
     if title and not title_pinned:
@@ -328,8 +391,8 @@ def replace_entry_content(
     if pin_content:
         try:
             conn.execute(
-                "INSERT OR REPLACE INTO entry_content_overrides (feed_url, entry_id, content) "
-                "VALUES (?, ?, ?)", (feed_url, entry_id, content_json),
+                "INSERT OR REPLACE INTO entry_content_overrides (feed_url, entry_id, content) VALUES (?, ?, ?)",
+                (feed_url, entry_id, content_json),
             )
             conn.commit()
         except sqlite3.OperationalError as exc:
@@ -372,9 +435,14 @@ def read_entry_content_json(reader, feed_url: str, entry_id: str) -> str | None:
     skipped (no Undo appeared), the bad extraction overwrote content with nothing protecting the
     real original, and every re-fetch after that snapshotted the previous bad result as "original."
     """
-    row = reader._storage.get_db().execute(
-        "SELECT content, summary FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id),
-    ).fetchone()
+    row = (
+        reader._storage.get_db()
+        .execute(
+            "SELECT content, summary FROM entries WHERE feed = ? AND id = ?",
+            (feed_url, entry_id),
+        )
+        .fetchone()
+    )
     if not row:
         return None
     # index access: reader's row_factory is not ours to assume
@@ -480,10 +548,13 @@ def refresh_captured_article(
         result["error"] = "Entry not found."
         return result
     is_capture = str(getattr(entry, "added_by", "") or "") == "user"
-    is_starred = conn.execute(
-        "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ? LIMIT 1",
-        (feed_url, entry_id),
-    ).fetchone() is not None
+    is_starred = (
+        conn.execute(
+            "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ? LIMIT 1",
+            (feed_url, entry_id),
+        ).fetchone()
+        is not None
+    )
     # Kept-ness no longer gates the re-fetch itself — see the docstring. It still
     # decides whether the result is worth ARCHIVING: the offline capture exists to
     # preserve things you are keeping, and enqueuing one for an entry nothing keeps
@@ -539,9 +610,7 @@ def refresh_captured_article(
     # partly to replace a bad capture's title, so comparing old against new would
     # refuse the very case the feature is for. A slug does not change when a site
     # starts serving a parked page over it.
-    if _page_is_a_different_article(source_url, new_title,
-                                    old_title=str(getattr(entry, "title", "") or ""),
-                                    new_html=article_html):
+    if _page_is_a_different_article(source_url, new_title, old_title=str(getattr(entry, "title", "") or ""), new_html=article_html):
         result["error"] = (
             "The page now at that URL looks like a different article "
             f"(\u201c{new_title[:60]}\u201d) — the stored copy was left alone. "
@@ -589,15 +658,11 @@ def refresh_captured_article(
         _original = read_entry_content_json(reader, feed_url, entry_id)
         if _original is not None:
             conn.execute(
-                "INSERT OR IGNORE INTO entry_content_edits"
-                " (feed_url, entry_id, original_content, ops, edited_at)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (feed_url, entry_id, _original, "[]",
-                 datetime.now(timezone.utc).isoformat()),
+                "INSERT OR IGNORE INTO entry_content_edits (feed_url, entry_id, original_content, ops, edited_at) VALUES (?, ?, ?, ?, ?)",
+                (feed_url, entry_id, _original, "[]", datetime.now(timezone.utc).isoformat()),
             )
     except Exception:  # noqa: BLE001 — never block a re-fetch on the snapshot
-        LOGGER.warning("refresh-capture: could not snapshot %s before replacing", entry_id,
-                       exc_info=True)
+        LOGGER.warning("refresh-capture: could not snapshot %s before replacing", entry_id, exc_info=True)
 
     # date_choice, when given, overrides bump_received entirely — see the
     # docstring. "pub" needs the entry's own published date; falls back to
@@ -619,7 +684,12 @@ def refresh_captured_article(
         # next refresh; a capture bumps to the top and needs no pin (its feed
         # never refreshes) — unless the caller overrode the bump decision.
         replace_entry_content(
-            reader, conn, entry_id, new_title, article_html, feed_url=feed_url,
+            reader,
+            conn,
+            entry_id,
+            new_title,
+            article_html,
+            feed_url=feed_url,
             bump_received=effective_bump_received,
             bump_to=bump_to,
             pin_content=not is_capture,
@@ -684,8 +754,14 @@ def _merge_save_into_entry(
         if len(article_html) > len(current):
             try:
                 replace_entry_content(
-                    reader, conn, target_id, "", article_html, feed_url=target_feed,
-                    bump_received=False, pin_content=True,
+                    reader,
+                    conn,
+                    target_id,
+                    "",
+                    article_html,
+                    feed_url=target_feed,
+                    bump_received=False,
+                    pin_content=True,
                 )
                 result["extracted"] = True
                 result["title"] = new_title or result["title"]
@@ -783,8 +859,13 @@ def save_article(
             LOGGER.exception("save-article: existing-entry lookup failed for %s", clean_url)
         if target:
             return _merge_save_into_entry(
-                reader, conn, clean_url, target, extract=extract,
-                enqueue_archive=enqueue_archive, result=result,
+                reader,
+                conn,
+                clean_url,
+                target,
+                extract=extract,
+                enqueue_archive=enqueue_archive,
+                result=result,
             )
 
     existing = reader.get_entry((SAVED_FEED_URL, clean_url), None)

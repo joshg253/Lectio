@@ -3,6 +3,7 @@
 an unrecognized value must not reach refresh_captured_article as anything
 other than None, which is what keeps today's is_capture-conditional default.
 """
+
 from __future__ import annotations
 
 from fastapi import FastAPI

@@ -1,6 +1,7 @@
 """_render_entry_attachments surfaces non-audio enclosures (magazine PDFs,
 EPUBs, etc.) as a footer download list. Audio enclosures are excluded because
 they're already shown as an inline player, and placeholder sizes are dropped."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -17,10 +18,12 @@ def _entry(enclosures=()):
 
 
 def test_pdf_and_epub_enclosures_listed():
-    e = _entry([
-        _enc("https://dl.test/issue229_en.pdf", type="application/pdf"),
-        _enc("https://dl.test/issue229_en.epub", type="application/epub+zip"),
-    ])
+    e = _entry(
+        [
+            _enc("https://dl.test/issue229_en.pdf", type="application/pdf"),
+            _enc("https://dl.test/issue229_en.epub", type="application/epub+zip"),
+        ]
+    )
     html = main._render_entry_attachments(e, None)
     assert "Attachments" in html
     assert "issue229_en.pdf" in html
@@ -55,10 +58,12 @@ def test_image_enclosure_excluded_by_extension():
 
 
 def test_duplicate_urls_collapsed():
-    e = _entry([
-        _enc("https://dl.test/a.pdf", type="application/pdf"),
-        _enc("https://dl.test/a.pdf", type="application/pdf"),
-    ])
+    e = _entry(
+        [
+            _enc("https://dl.test/a.pdf", type="application/pdf"),
+            _enc("https://dl.test/a.pdf", type="application/pdf"),
+        ]
+    )
     assert main._render_entry_attachments(e, None).count("<li ") == 1
 
 

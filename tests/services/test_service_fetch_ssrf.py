@@ -13,6 +13,7 @@ the same url_guard.safe_get guard but isn't independently exercised here.
 httpx.MockTransport + a stubbed is_safe_outbound_url keep this deterministic
 (no real DNS or network I/O).
 """
+
 from __future__ import annotations
 
 import httpx
@@ -28,9 +29,7 @@ def _unsafe_host(url: str) -> bool:
 def _handler(request: httpx.Request) -> httpx.Response:
     routes = {
         "https://pub.test/page": httpx.Response(200, content=b"<title>ok</title>"),
-        "https://pub.test/redir-evil": httpx.Response(
-            302, headers={"location": "http://169.254.169.254/latest/meta-data"}
-        ),
+        "https://pub.test/redir-evil": httpx.Response(302, headers={"location": "http://169.254.169.254/latest/meta-data"}),
         "http://169.254.169.254/latest/meta-data": httpx.Response(200, content=b"SECRET"),
     }
     return routes.get(str(request.url), httpx.Response(404))
@@ -40,9 +39,7 @@ def _handler(request: httpx.Request) -> httpx.Response:
 def mock_net(monkeypatch):
     """Block obviously-internal targets and force every httpx.Client created in
     the services under test onto the in-memory MockTransport."""
-    monkeypatch.setattr(
-        url_guard, "is_safe_outbound_url", lambda u: not _unsafe_host(u)
-    )
+    monkeypatch.setattr(url_guard, "is_safe_outbound_url", lambda u: not _unsafe_host(u))
 
     real_client = httpx.Client
 
@@ -66,9 +63,7 @@ def test_scraper_fetch_allows_public(mock_net):
 
 
 def test_starred_archive_fetch_blocks_internal_redirect(mock_net):
-    svc = starred_archive.StarredArchiveService.__new__(
-        starred_archive.StarredArchiveService
-    )
+    svc = starred_archive.StarredArchiveService.__new__(starred_archive.StarredArchiveService)
     svc._user_agent = "test"
     # safe_get raises UnsafeURLError; _fetch_text swallows it and returns None.
     assert svc._fetch_text("https://pub.test/redir-evil") is None

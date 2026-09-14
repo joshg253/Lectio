@@ -13,6 +13,7 @@ click from the root Feeds/Saved scope persists.
 Source assertions, because this is inline client-side wiring in index.html
 with no JS test harness in this repo.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -22,7 +23,7 @@ INDEX = (Path(__file__).resolve().parent.parent.parent / "templates" / "index.ht
 
 def test_root_scope_helper_checks_feed_and_list_feed_and_tag():
     idx = INDEX.index("function _readFilterPillIsRootScope(url)")
-    block = INDEX[idx:idx + 500]
+    block = INDEX[idx : idx + 500]
     assert "url.searchParams.has('feed_url')" in block
     assert "url.searchParams.has('list_feed_url')" in block
     assert "url.searchParams.has('tag')" in block
@@ -31,7 +32,7 @@ def test_root_scope_helper_checks_feed_and_list_feed_and_tag():
 
 def test_root_scope_helper_compares_against_the_trees_own_root_folder_id():
     idx = INDEX.index("function _readFilterPillIsRootScope(url)")
-    block = INDEX[idx:idx + 700]
+    block = INDEX[idx : idx + 700]
     assert "data-root-folder-id" in block
     assert "folderId === rootFolderId" in block
 

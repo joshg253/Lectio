@@ -1,5 +1,6 @@
 """Global 'hide Shorts' toggle: when on, the after-refresh pass auto-marks Shorts
 read on every YouTube feed (not just feeds with the per-feed pref)."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -31,12 +32,24 @@ def env(tmp_path):
     main.ensure_meta_schema()
     reader = main.get_reader()
     reader.add_feed(FEED, allow_invalid_url=True)
-    reader.add_entry({"feed_url": FEED, "id": "normal", "title": "Normal",
-                      "link": f"https://www.youtube.com/watch?v={VID}",
-                      "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)})
-    reader.add_entry({"feed_url": FEED, "id": "short", "title": "A Short",
-                      "link": f"https://www.youtube.com/shorts/{SHORT}",
-                      "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)})
+    reader.add_entry(
+        {
+            "feed_url": FEED,
+            "id": "normal",
+            "title": "Normal",
+            "link": f"https://www.youtube.com/watch?v={VID}",
+            "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        }
+    )
+    reader.add_entry(
+        {
+            "feed_url": FEED,
+            "id": "short",
+            "title": "A Short",
+            "link": f"https://www.youtube.com/shorts/{SHORT}",
+            "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        }
+    )
     try:
         yield
     finally:
@@ -61,7 +74,7 @@ def test_global_on_marks_shorts_read(env):
     with main.get_meta_connection() as conn:
         main.set_setting(conn, main.SETTING_YT_HIDE_SHORTS_GLOBAL, "1")
     main._run_automation_after_refresh({FEED})
-    assert _read("short") is True       # Short auto-marked read
+    assert _read("short") is True  # Short auto-marked read
     assert _read("normal") in (False, None)  # normal video untouched
 
 

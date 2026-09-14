@@ -1,5 +1,6 @@
 """podcast_audio.extract_media_audio recovers audio that lives only in
 ``<media:content>`` / ``<media:group>`` — which the reader library drops."""
+
 from __future__ import annotations
 
 from services import podcast_audio
@@ -53,8 +54,7 @@ def test_audio_ext_with_query_string():
 
 
 def test_falls_back_to_link_when_no_guid():
-    feed = _feed(_item("", '<media:content url="https://cdn.test/a.mp3" type="audio/mpeg"/>',
-                       link="https://x.test/ep"))
+    feed = _feed(_item("", '<media:content url="https://cdn.test/a.mp3" type="audio/mpeg"/>', link="https://x.test/ep"))
     assert podcast_audio.extract_media_audio(feed) == {"https://x.test/ep": "https://cdn.test/a.mp3"}
 
 

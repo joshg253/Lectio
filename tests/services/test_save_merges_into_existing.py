@@ -7,6 +7,7 @@ across two entries you get an article with tags and no text next to one with
 text and no tags — which is what happened to a Medium post on 2026-07-26, before
 a "move to feed" then dropped the 44KB body entirely.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -69,11 +70,15 @@ def _body(reader, feed, entry_id):
 def test_save_merges_into_the_subscribed_copy(reader, meta_conn):
     """The guid differs from the article URL — Medium's shape — so the match has
     to come from the link, and the capture's longer body has to win."""
-    reader.add_entry({"feed_url": FEED, "id": "guid-123", "link": LINK,
-                      "title": "Feed title", "content": [{"value": "<p>short feed copy</p>"}]})
+    reader.add_entry(
+        {"feed_url": FEED, "id": "guid-123", "link": LINK, "title": "Feed title", "content": [{"value": "<p>short feed copy</p>"}]}
+    )
 
     result = saved_articles.save_article(
-        reader, meta_conn, LINK, extract=_capture,
+        reader,
+        meta_conn,
+        LINK,
+        extract=_capture,
         find_existing_entry=lambda url: (FEED, "guid-123"),
     )
 
@@ -88,11 +93,13 @@ def test_save_merges_into_the_subscribed_copy(reader, meta_conn):
 
 def test_merge_keeps_a_richer_existing_body(reader, meta_conn):
     rich = "<p>" + ("the feed already had the full text " * 200) + "</p>"
-    reader.add_entry({"feed_url": FEED, "id": "guid-123", "link": LINK,
-                      "title": "Feed title", "content": [{"value": rich}]})
+    reader.add_entry({"feed_url": FEED, "id": "guid-123", "link": LINK, "title": "Feed title", "content": [{"value": rich}]})
 
     saved_articles.save_article(
-        reader, meta_conn, LINK, extract=_capture,
+        reader,
+        meta_conn,
+        LINK,
+        extract=_capture,
         find_existing_entry=lambda url: (FEED, "guid-123"),
     )
     assert _body(reader, FEED, "guid-123") == rich
@@ -102,8 +109,7 @@ def test_merge_resurfaces_an_archived_post(reader, meta_conn):
     """A save means "I want to read this" — it comes back to the Inbox."""
     reader.add_entry({"feed_url": FEED, "id": "guid-123", "link": LINK, "title": "t"})
     reader.mark_entry_as_read((FEED, "guid-123"))
-    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
-                      (FEED, "guid-123"))
+    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (FEED, "guid-123"))
     meta_conn.execute(
         "INSERT INTO archived_entries (feed_url, entry_id, archived_at) VALUES (?, ?, '2020-01-01')",
         (FEED, "guid-123"),
@@ -111,7 +117,10 @@ def test_merge_resurfaces_an_archived_post(reader, meta_conn):
     meta_conn.commit()
 
     saved_articles.save_article(
-        reader, meta_conn, LINK, extract=_capture,
+        reader,
+        meta_conn,
+        LINK,
+        extract=_capture,
         find_existing_entry=lambda url: (FEED, "guid-123"),
     )
 
@@ -125,7 +134,11 @@ def test_merge_resurfaces_an_archived_post(reader, meta_conn):
 
 def test_no_match_still_creates_a_saved_entry(reader, meta_conn):
     result = saved_articles.save_article(
-        reader, meta_conn, LINK, extract=_capture, find_existing_entry=lambda url: None,
+        reader,
+        meta_conn,
+        LINK,
+        extract=_capture,
+        find_existing_entry=lambda url: None,
     )
     assert result["ok"] is True and not result.get("merged")
     assert result["feed_url"] == saved_articles.SAVED_FEED_URL

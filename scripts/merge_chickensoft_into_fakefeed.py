@@ -22,6 +22,7 @@ Usage:
 
 Defaults to a dry run; --apply performs the merge.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -57,9 +58,7 @@ def run(keep_url: str, apply: bool) -> None:
         print(f"   {match:12} star={int(starred)} tags={sorted(tags)} {link}")
 
     with main.get_meta_connection() as conn:
-        in_folders = conn.execute(
-            "SELECT COUNT(*) FROM folder_feeds WHERE feed_url = ?", (OLD,)
-        ).fetchone()[0]
+        in_folders = conn.execute("SELECT COUNT(*) FROM folder_feeds WHERE feed_url = ?", (OLD,)).fetchone()[0]
     print(f"old feed folder rows: {in_folders} (must be 0 to be orphaned)")
     if in_folders:
         print("refusing: not orphaned")
@@ -72,7 +71,9 @@ def run(keep_url: str, apply: bool) -> None:
     with main.get_reader() as reader:
         with main.get_meta_connection() as conn:
             main.purge_orphaned_feed(
-                reader, conn, OLD,
+                reader,
+                conn,
+                OLD,
                 archive_pending=True,
                 migrate_curation_to=keep_url,
             )
@@ -83,8 +84,7 @@ def run(keep_url: str, apply: bool) -> None:
         survivors = list(reader.get_entries(feed=keep_url))
     kept_tags = sum(1 for e in survivors if main.get_manual_tags_for_entry(keep_url, str(e.id)))
     kept_stars = sum(1 for e in survivors if main._entry_is_starred(keep_url, str(e.id)))
-    print(f"\nmerged. survivor now has {len(survivors)} entries, "
-          f"{kept_tags} tagged, {kept_stars} starred.")
+    print(f"\nmerged. survivor now has {len(survivors)} entries, {kept_tags} tagged, {kept_stars} starred.")
 
 
 def main_cli() -> None:

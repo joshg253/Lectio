@@ -37,6 +37,7 @@ Usage:
 
 Defaults to a dry run. Take a backup first — this is not reversible.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -56,14 +57,13 @@ from services import tenancy  # noqa: E402
 def run(user_id: str, limit: int, apply: bool) -> int:
     with tenancy.user_context(user_id):
         with main.get_meta_connection() as conn:
-            watch = conn.execute(
-                "SELECT id FROM deviantart_feeds WHERE source='watch'").fetchone()
+            watch = conn.execute("SELECT id FROM deviantart_feeds WHERE source='watch'").fetchone()
             if not watch:
                 print("no Watch feed — add one in Settings → Integrations first")
                 return 1
-            gallery = [(r[0], r[1]) for r in conn.execute(
-                "SELECT id, username FROM deviantart_feeds WHERE source='gallery' "
-                "ORDER BY username")]
+            gallery = [
+                (r[0], r[1]) for r in conn.execute("SELECT id, username FROM deviantart_feeds WHERE source='gallery' ORDER BY username")
+            ]
         survivor = da.feed_file_url(watch[0])
         if limit:
             gallery = gallery[:limit]
@@ -85,9 +85,7 @@ def run(user_id: str, limit: int, apply: bool) -> int:
         for i, (feed_id, user) in enumerate(gallery, 1):
             src = da.feed_file_url(feed_id)
             try:
-                resp = main.combine_feeds_route(
-                    request=cast(Request, None), survivor_url=survivor,
-                    source_url=[src], move_unread="1")
+                resp = main.combine_feeds_route(request=cast(Request, None), survivor_url=survivor, source_url=[src], move_unread="1")
                 body = json.loads(bytes(resp.body).decode())
                 if not body.get("ok"):
                     failed += 1
@@ -100,26 +98,25 @@ def run(user_id: str, limit: int, apply: bool) -> int:
                     conn.commit()
                 done += 1
                 if i % 25 == 0 or i == len(gallery):
-                    print(f"  [{i}/{len(gallery)}] combined {done}, failed {failed}",
-                          flush=True)
+                    print(f"  [{i}/{len(gallery)}] combined {done}, failed {failed}", flush=True)
             except Exception as exc:  # noqa: BLE001 — one bad feed must not stop the rest
                 failed += 1
-                print(f"  [{i}/{len(gallery)}] ERROR {user}: {type(exc).__name__}: {exc}",
-                      flush=True)
+                print(f"  [{i}/{len(gallery)}] ERROR {user}: {type(exc).__name__}: {exc}", flush=True)
 
         with main.get_reader() as reader:
             after = sum(1 for _ in reader.get_entries(feed=survivor))
         print(f"\ncombined: {done}  failed: {failed}")
         print(f"survivor entries: {before} -> {after}  (+{after - before})")
         main.invalidate_meta_structure_cache()
-        print("NOTE: restart the container — this wrote via exec and the running "
-              "server still holds the old structure in its in-process caches.")
+        print(
+            "NOTE: restart the container — this wrote via exec and the running "
+            "server still holds the old structure in its in-process caches."
+        )
     return 0
 
 
 def main_cli(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--user", required=True)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--apply", action="store_true")

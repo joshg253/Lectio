@@ -4,6 +4,7 @@ Two rules shape the whole feature: page extensions are never attachments, and
 there is no wildcard. The extension list IS the safeguard that keeps this a
 capture of named file types rather than a crawl of every link on the page.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -123,20 +124,19 @@ def test_page_extensions_cannot_be_forced_through_the_finder():
 
 def test_duplicate_links_are_returned_once():
     html = '<a href="/a.pdf">1</a><a href="/a.pdf">2</a>'
-    assert main.attachment_links_in_html(html, POST, ["pdf"]) == [
-        "https://blog.guitar-pro.com/a.pdf"]
+    assert main.attachment_links_in_html(html, POST, ["pdf"]) == ["https://blog.guitar-pro.com/a.pdf"]
 
 
 def test_relative_links_resolve_against_the_post():
     """POST ends in a slash, so it is a directory and a bare filename resolves
     inside it."""
     assert main.attachment_links_in_html('<a href="song.gp">x</a>', POST, ["gp"]) == [
-        "https://blog.guitar-pro.com/2018/10/free-tablatures/song.gp"]
+        "https://blog.guitar-pro.com/2018/10/free-tablatures/song.gp"
+    ]
 
 
 def test_root_relative_links_resolve_against_the_host():
-    assert main.attachment_links_in_html('<a href="/files/song.gp">x</a>', POST, ["gp"]) == [
-        "https://blog.guitar-pro.com/files/song.gp"]
+    assert main.attachment_links_in_html('<a href="/files/song.gp">x</a>', POST, ["gp"]) == ["https://blog.guitar-pro.com/files/song.gp"]
 
 
 # --- prefix patterns ---------------------------------------------------------
@@ -148,10 +148,18 @@ def test_a_prefix_pattern_is_kept_as_written():
     assert main.normalize_attachment_exts("gp*") == ["gp*"]
 
 
-@pytest.mark.parametrize("ext,expected", [
-    ("gp", True), ("gp3", True), ("gp5", True), ("gpx", True),
-    ("gtp", False), ("png", False), ("pdf", False),
-])
+@pytest.mark.parametrize(
+    "ext,expected",
+    [
+        ("gp", True),
+        ("gp3", True),
+        ("gp5", True),
+        ("gpx", True),
+        ("gtp", False),
+        ("png", False),
+        ("pdf", False),
+    ],
+)
 def test_prefix_matching(ext, expected):
     assert main._attachment_ext_matches(ext, ["gp*"]) is expected
 
@@ -161,7 +169,7 @@ def test_a_bare_wildcard_is_still_refused():
 
 
 def test_a_one_letter_prefix_is_refused():
-    """"p*" would take pdf, png, ppt, psd… — a wildcard wearing a hat. The list
+    """ "p*" would take pdf, png, ppt, psd… — a wildcard wearing a hat. The list
     is meant to name a FAMILY of file types."""
     assert main.normalize_attachment_exts("p*") == []
     assert main.normalize_attachment_exts("h*") == []
@@ -176,8 +184,7 @@ def test_a_prefix_can_never_reach_a_page_type():
 
 def test_prefix_and_exact_patterns_mix():
     exts = main.normalize_attachment_exts("gp* gtp pdf")
-    html = ('<a href="/a.gp5">1</a><a href="/b.gtp">2</a>'
-            '<a href="/c.pdf">3</a><a href="/d.zip">4</a><a href="/e.php">5</a>')
+    html = '<a href="/a.gp5">1</a><a href="/b.gtp">2</a><a href="/c.pdf">3</a><a href="/d.zip">4</a><a href="/e.php">5</a>'
     got = main.attachment_links_in_html(html, POST, exts)
 
     assert [u.split("/")[-1] for u in got] == ["a.gp5", "b.gtp", "c.pdf"]
@@ -188,10 +195,15 @@ def test_prefix_and_exact_patterns_mix():
 
 def _seed_entry(entry_id: str, html: str) -> None:
     with main.get_reader() as reader:
-        reader.add_entry({
-            "feed_url": FEED, "id": entry_id, "title": entry_id,
-            "link": POST, "content": [{"value": html, "type": "text/html"}],
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": entry_id,
+                "title": entry_id,
+                "link": POST,
+                "content": [{"value": html, "type": "text/html"}],
+            }
+        )
 
 
 def test_scan_reports_what_the_feed_links(configured):
@@ -220,7 +232,7 @@ def test_page_types_are_not_suggested(configured):
 
 
 def test_bare_domain_links_do_not_look_like_extensions(configured):
-    """"https://example.com" leaves "com" looking like a file extension."""
+    """ "https://example.com" leaves "com" looking like a file extension."""
     for i in range(3):
         _seed_entry(f"d{i}", '<a href="https://example.com">x</a>')
 
@@ -272,13 +284,13 @@ def test_only_real_files_are_returned_as_attachments(configured):
     with main.get_starred_archive_connection() as conn:
         for url, h, ctype in rows:
             conn.execute(
-                "INSERT OR REPLACE INTO archived_asset"
-                " (asset_hash, data, content_type, byte_size, created_at)"
-                " VALUES (?, ?, ?, 1, 0)", (h, b"x", ctype))
+                "INSERT OR REPLACE INTO archived_asset (asset_hash, data, content_type, byte_size, created_at) VALUES (?, ?, ?, 1, 0)",
+                (h, b"x", ctype),
+            )
             conn.execute(
-                "INSERT OR REPLACE INTO archived_asset_link"
-                " (feed_url, entry_id, source_url, asset_hash) VALUES (?, ?, ?, ?)",
-                (FEED, "e1", url, h))
+                "INSERT OR REPLACE INTO archived_asset_link (feed_url, entry_id, source_url, asset_hash) VALUES (?, ?, ?, ?)",
+                (FEED, "e1", url, h),
+            )
 
     got = main.starred_archive_service.get_entry_file_assets(FEED, "e1")
 
@@ -288,9 +300,11 @@ def test_only_real_files_are_returned_as_attachments(configured):
 # --- links the page hides in a base64 attribute ------------------------------
 
 
-OBF = ("<span class='obflink' data-o='aHR0cHM6Ly9hc3NldHMtd3AuZ3VpdGFyLXByby5ldS93cC1jb250"
-       "ZW50L3VwbG9hZHMvMjAyNi8wNi9Ccnlhbl9BZGFtcy1TdW1tZXJfb2ZfNjkuZ3A='>"
-       "bryan_adams-summer_of_69.gp</span>")
+OBF = (
+    "<span class='obflink' data-o='aHR0cHM6Ly9hc3NldHMtd3AuZ3VpdGFyLXByby5ldS93cC1jb250"
+    "ZW50L3VwbG9hZHMvMjAyNi8wNi9Ccnlhbl9BZGFtcy1TdW1tZXJfb2ZfNjkuZ3A='>"
+    "bryan_adams-summer_of_69.gp</span>"
+)
 
 
 def test_a_base64_hidden_link_is_found():
@@ -298,8 +312,7 @@ def test_a_base64_hidden_link_is_found():
     downloads, so the file the page offers every visitor is reachable by the
     browser but invisible to an href scan."""
     got = main.attachment_links_in_html(OBF, POST, ["gp*"])
-    assert got == ["https://assets-wp.guitar-pro.eu/wp-content/uploads/2026/06/"
-                   "Bryan_Adams-Summer_of_69.gp"]
+    assert got == ["https://assets-wp.guitar-pro.eu/wp-content/uploads/2026/06/Bryan_Adams-Summer_of_69.gp"]
 
 
 def test_a_hidden_link_still_has_to_match_the_extension_list():

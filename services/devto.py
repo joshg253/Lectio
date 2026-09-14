@@ -16,6 +16,7 @@ Per-feed config lives in the per-user meta DB (``devto_feeds``):
   min_reactions optional floor on positive_reactions_count
   tags_exclude  optional comma list passed straight to the API
 """
+
 from __future__ import annotations
 
 import logging
@@ -81,7 +82,7 @@ def devto_feed_id_from_url(file_url: str) -> str | None:
     """
     if not file_url.startswith("file://"):
         return None
-    p = Path(file_url[len("file://"):])
+    p = Path(file_url[len("file://") :])
     if p.parent != _dir():
         return None
     return p.stem or None
@@ -90,6 +91,7 @@ def devto_feed_id_from_url(file_url: str) -> str | None:
 # ---------------------------------------------------------------------------
 # URL parsing
 # ---------------------------------------------------------------------------
+
 
 def parse_devto_url(url: str) -> dict | None:
     """Recognize dev.to front-page/tag/feed URLs; return {"tag": str|None} or None.
@@ -126,6 +128,7 @@ def parse_devto_url(url: str) -> dict | None:
 # API
 # ---------------------------------------------------------------------------
 
+
 def _request(url: str, *, params: dict, timeout: float = 20.0):
     """GET with short backoff on 429; raises DevToRateLimited if it persists."""
     delay = _RETRY_BASE_DELAY
@@ -161,9 +164,7 @@ def _build_params(config: dict) -> dict:
         params["top"] = int(top_days)
     tags_exclude = (config.get("tags_exclude") or "").strip()
     if tags_exclude:
-        params["tags_exclude"] = ",".join(
-            t.strip().lower() for t in tags_exclude.split(",") if t.strip()
-        )
+        params["tags_exclude"] = ",".join(t.strip().lower() for t in tags_exclude.split(",") if t.strip())
     return params
 
 
@@ -223,7 +224,7 @@ def _article_to_entry(a: dict) -> dict | None:
     if isinstance(tags, list) and tags:
         meta_bits.append(_esc(", ".join(f"#{t}" for t in tags)))
     if meta_bits:
-        parts.append(f'<p>{" · ".join(meta_bits)}</p>')
+        parts.append(f"<p>{' · '.join(meta_bits)}</p>")
     return {
         "id": str(article_id),
         "title": str(title),
@@ -239,6 +240,7 @@ def _article_to_entry(a: dict) -> dict | None:
 # RSS file generation
 # ---------------------------------------------------------------------------
 
+
 def _item_xml(e: dict) -> str:
     try:
         dt = datetime.fromisoformat(str(e["published_at"]))
@@ -249,15 +251,12 @@ def _item_xml(e: dict) -> str:
         "    <item>\n"
         f"      <title><![CDATA[{e['title']}]]></title>\n"
         f"      <link>{_esc(str(e['entry_url']))}</link>\n"
-        f"      <guid isPermaLink=\"false\">{_esc(str(e['id']))}</guid>\n"
+        f'      <guid isPermaLink="false">{_esc(str(e["id"]))}</guid>\n'
         f"      {pub}\n"
         f"      <description><![CDATA[{e.get('content') or ''}]]></description>\n"
         # <category> per tag: ingest captures these into entry_feed_tags
         # (suggestion chips) via the sanitizing parser's tag sink.
-        + "".join(
-            f"      <category>{_esc(str(t))}</category>\n"
-            for t in (e.get("tags") or [])
-        )
+        + "".join(f"      <category>{_esc(str(t))}</category>\n" for t in (e.get("tags") or []))
         + "    </item>"
     )
 
@@ -298,14 +297,18 @@ def _write_feed_file(conn: sqlite3.Connection, feed_id: str) -> None:
     if not row:
         return
     rows = conn.execute(
-        "SELECT * FROM devto_entries WHERE devto_feed_id = ?"
-        " ORDER BY published_at DESC LIMIT ?",
+        "SELECT * FROM devto_entries WHERE devto_feed_id = ? ORDER BY published_at DESC LIMIT ?",
         (feed_id, _MAX_ENTRIES_PER_FEED),
     ).fetchall()
     entries = [
-        {"id": r["article_id"], "title": r["title"], "entry_url": r["entry_url"],
-         "content": r["content"], "published_at": r["published_at"],
-         "tags": [t for t in str(r["tags"] or "").split(",") if t]}
+        {
+            "id": r["article_id"],
+            "title": r["title"],
+            "entry_url": r["entry_url"],
+            "content": r["content"],
+            "published_at": r["published_at"],
+            "tags": [t for t in str(r["tags"] or "").split(",") if t],
+        }
         for r in rows
     ]
     xml = _generate_rss_xml(str(row["feed_title"]), _page_url(row["tag"]), entries)
@@ -353,6 +356,7 @@ def _upsert_entries(conn: sqlite3.Connection, feed_id: str, articles: list[dict]
 # Feed lifecycle
 # ---------------------------------------------------------------------------
 
+
 def _config_from_row(row) -> dict:
     return {
         "tag": row["tag"],
@@ -372,8 +376,7 @@ def get_feed_config(conn: sqlite3.Connection, feed_id: str) -> dict | None:
     return cfg
 
 
-def create_devto_feed(conn: sqlite3.Connection, reader, config: dict,
-                      feed_title: str | None = None) -> tuple[str, str]:
+def create_devto_feed(conn: sqlite3.Connection, reader, config: dict, feed_title: str | None = None) -> tuple[str, str]:
     """Create a dev.to filtered feed and register it with reader.
 
     Caller adds it to a folder. Raises on API errors so a typo'd tag fails
@@ -387,10 +390,17 @@ def create_devto_feed(conn: sqlite3.Connection, reader, config: dict,
         "INSERT INTO devto_feeds (id, feed_title, tag, top_days, english_only,"
         " min_reactions, tags_exclude, created_at, last_synced_at)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (feed_id, title, (config.get("tag") or "").strip().lower() or None,
-         config.get("top_days"), 1 if config.get("english_only") else 0,
-         config.get("min_reactions"), (config.get("tags_exclude") or "").strip() or None,
-         now, now),
+        (
+            feed_id,
+            title,
+            (config.get("tag") or "").strip().lower() or None,
+            config.get("top_days"),
+            1 if config.get("english_only") else 0,
+            config.get("min_reactions"),
+            (config.get("tags_exclude") or "").strip() or None,
+            now,
+            now,
+        ),
     )
     _upsert_entries(conn, feed_id, articles)
     _write_feed_file(conn, feed_id)
@@ -422,11 +432,16 @@ def update_devto_feed_config(conn: sqlite3.Connection, reader, feed_id: str, con
     if feed_title == default_title(_config_from_row(row)):
         feed_title = default_title(config)
     conn.execute(
-        "UPDATE devto_feeds SET feed_title = ?, tag = ?, top_days = ?, english_only = ?,"
-        " min_reactions = ?, tags_exclude = ? WHERE id = ?",
-        (feed_title, (config.get("tag") or "").strip().lower() or None, config.get("top_days"),
-         1 if config.get("english_only") else 0, config.get("min_reactions"),
-         (config.get("tags_exclude") or "").strip() or None, feed_id),
+        "UPDATE devto_feeds SET feed_title = ?, tag = ?, top_days = ?, english_only = ?, min_reactions = ?, tags_exclude = ? WHERE id = ?",
+        (
+            feed_title,
+            (config.get("tag") or "").strip().lower() or None,
+            config.get("top_days"),
+            1 if config.get("english_only") else 0,
+            config.get("min_reactions"),
+            (config.get("tags_exclude") or "").strip() or None,
+            feed_id,
+        ),
     )
     refresh_devto_feed_by_id(conn, feed_id)
     try:

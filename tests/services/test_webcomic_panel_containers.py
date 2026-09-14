@@ -17,6 +17,7 @@ sidebar widgets too. The class alone is not evidence; where it sits is.
 Markup below is reduced from the real pages (fetched 2026-08-07) to the
 structure that decides the outcome.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -128,28 +129,27 @@ def test_claycomix_does_not_take_a_summary_widgets_thumbnail(svc):
 
 def test_a_bare_wp_post_image_in_the_body_still_counts(svc):
     """The claycomix fix must not disable wp-post-image everywhere — only in chrome."""
-    html = ('<article><img class="attachment-full size-full wp-post-image"'
-            ' src="/uploads/strip.png" /></article>')
+    html = '<article><img class="attachment-full size-full wp-post-image" src="/uploads/strip.png" /></article>'
     assert _panel(svc, html, "https://example.com/p/") == "https://example.com/uploads/strip.png"
 
 
 def test_comic_nav_buttons_do_not_look_like_a_comic_container(svc):
     # `comic-nav` and `comic_categories-comic` must not match the container
     # pattern, or the previous/next buttons become the panel.
-    html = ('<div class="comic-nav"><img src="/nav/next.png" /></div>'
-            '<div class="comic_categories-comic"><img src="/cat/icon.png" /></div>')
+    html = '<div class="comic-nav"><img src="/nav/next.png" /></div><div class="comic_categories-comic"><img src="/cat/icon.png" /></div>'
     assert _panel(svc, html, "https://example.com/p/") is None
 
 
 def test_og_description_equal_to_the_site_name_is_not_a_caption(svc):
-    html = ('<meta property="og:site_name" content="The Perry Bible Fellowship"/>'
-            '<meta property="og:description" content="The Perry Bible Fellowship"/>')
+    html = (
+        '<meta property="og:site_name" content="The Perry Bible Fellowship"/>'
+        '<meta property="og:description" content="The Perry Bible Fellowship"/>'
+    )
     assert svc._extract_webcomic_alt_text(html) is None
 
 
 def test_a_real_og_description_is_still_used_as_a_caption(svc):
-    html = ('<meta property="og:site_name" content="Mahou Noir"/>'
-            '<meta property="og:description" content="Kimura Ran finally discovers…"/>')
+    html = '<meta property="og:site_name" content="Mahou Noir"/><meta property="og:description" content="Kimura Ran finally discovers…"/>'
     assert svc._extract_webcomic_alt_text(html) == "Kimura Ran finally discovers…"
 
 
@@ -187,13 +187,11 @@ class _Entry:
 @pytest.fixture
 def webcomic_injection(monkeypatch):
     monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
-    monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image",
-                        lambda _l, is_webcomic=False: PANEL_URL)
+    monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image", lambda _l, is_webcomic=False: PANEL_URL)
 
 
 def _inject(content, lead=CARD_URL):
-    return main._inject_webcomic_panel_into_bodyless_entry(
-        content, _Entry, _Entry.feed_url, lead)
+    return main._inject_webcomic_panel_into_bodyless_entry(content, _Entry, _Entry.feed_url, lead)
 
 
 def test_the_panel_is_put_into_an_image_less_body(webcomic_injection):
@@ -221,8 +219,7 @@ def test_non_webcomic_feeds_are_untouched(monkeypatch):
 
 def test_no_panel_found_leaves_the_entry_as_it_was(monkeypatch):
     monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
-    monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image",
-                        lambda _l, is_webcomic=False: None)
+    monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image", lambda _l, is_webcomic=False: None)
     content, lead = _inject(BODYLESS)
     assert content == BODYLESS and lead == CARD_URL
 
@@ -230,6 +227,7 @@ def test_no_panel_found_leaves_the_entry_as_it_was(monkeypatch):
 def test_a_failing_fetch_never_breaks_the_render(monkeypatch):
     def boom(*_a, **_k):
         raise RuntimeError("network down")
+
     monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
     monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image", boom)
     content, lead = _inject(BODYLESS)
@@ -238,8 +236,9 @@ def test_a_failing_fetch_never_breaks_the_render(monkeypatch):
 
 def test_the_injected_url_is_attribute_escaped(monkeypatch):
     monkeypatch.setattr(main.lead_image_service, "_is_feed_webcomic", lambda _f: True)
-    monkeypatch.setattr(main.lead_image_service, "_fetch_source_lead_image",
-                        lambda _l, is_webcomic=False: 'https://x/a.jpg" onerror="alert(1)')
+    monkeypatch.setattr(
+        main.lead_image_service, "_fetch_source_lead_image", lambda _l, is_webcomic=False: 'https://x/a.jpg" onerror="alert(1)'
+    )
     content, _lead = _inject(BODYLESS)
     assert 'onerror="alert(1)"' not in content
     assert "&quot;" in content

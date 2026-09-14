@@ -6,6 +6,7 @@ in its <guid>/<link>.
 Rewriting on the raw result (not after processing) is load-bearing: reader's id
 derivation and tag/window collection all key off the raw entries, so a
 post-processing rewrite would desync them."""
+
 from __future__ import annotations
 
 import pytest
@@ -37,8 +38,7 @@ def _rewrite(entries, rules):
 
 
 def test_rewrites_guid_and_link_host():
-    e = _RawEntry(id="https://tushar.lol/post/x/", link="https://tushar.lol/post/x/",
-                  links=[{"href": "https://tushar.lol/post/x/"}])
+    e = _RawEntry(id="https://tushar.lol/post/x/", link="https://tushar.lol/post/x/", links=[{"href": "https://tushar.lol/post/x/"}])
     _rewrite([e], [("tushar.lol", "tush.ar")])
     assert e["id"] == "https://tush.ar/post/x/"
     assert e["link"] == "https://tush.ar/post/x/"

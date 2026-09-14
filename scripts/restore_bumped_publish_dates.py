@@ -24,6 +24,7 @@ Usage (inside the app container):
     uv run scripts/restore_bumped_publish_dates.py --apply --user u_x
     uv run scripts/restore_bumped_publish_dates.py --include-uncorroborated
 """
+
 from __future__ import annotations
 
 import argparse
@@ -82,22 +83,21 @@ def find_candidates(include_uncorroborated: bool) -> list[dict]:
         corroborated = False
         if recent_sort:
             try:
-                delta = abs(
-                    datetime.fromisoformat(recent_sort).replace(tzinfo=timezone.utc).timestamp()
-                    - float(row["published_at"])
-                )
+                delta = abs(datetime.fromisoformat(recent_sort).replace(tzinfo=timezone.utc).timestamp() - float(row["published_at"]))
                 corroborated = delta <= CORROBORATION_TOLERANCE_S
             except ValueError:
                 corroborated = False
         if corroborated or include_uncorroborated:
-            candidates.append({
-                "feed": str(row["feed"]),
-                "id": str(row["id"]),
-                "title": str(row["title"] or "")[:60],
-                "current": str(row["published"]),
-                "restored": restored,
-                "corroborated": corroborated,
-            })
+            candidates.append(
+                {
+                    "feed": str(row["feed"]),
+                    "id": str(row["id"]),
+                    "title": str(row["title"] or "")[:60],
+                    "current": str(row["published"]),
+                    "restored": restored,
+                    "corroborated": corroborated,
+                }
+            )
     return candidates
 
 
@@ -143,7 +143,8 @@ def main_cli() -> None:
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--user", default=None)
     ap.add_argument(
-        "--include-uncorroborated", action="store_true",
+        "--include-uncorroborated",
+        action="store_true",
         help="also restore entries where reader's recent_sort disagrees with the archive",
     )
     ap.add_argument("--quiet", action="store_true")
@@ -154,8 +155,10 @@ def main_cli() -> None:
         print(f"[{uid}]")
         with tenancy.user_context(uid):
             s = run_for_user(args.apply, args.include_uncorroborated, not args.quiet)
-        print(f"  candidates={s['candidates']}  corroborated={s['corroborated']}"
-              f"  uncorroborated={s['uncorroborated']}  restored={s['restored']}\n")
+        print(
+            f"  candidates={s['candidates']}  corroborated={s['corroborated']}"
+            f"  uncorroborated={s['uncorroborated']}  restored={s['restored']}\n"
+        )
     if not args.apply:
         print("Dry-run only — re-run with --apply.")
 

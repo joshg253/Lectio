@@ -7,6 +7,7 @@ bucket: an orphan feed is selected at the global cadence, a paused/disabled one
 is not, and the bucket honors its own attempt-clock so it isn't re-selected every
 tick.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -41,9 +42,7 @@ def configured(tmp_path, monkeypatch):
     with main.get_meta_connection() as conn:
         cur = conn.execute("INSERT INTO folders (name) VALUES ('A Folder')")
         fid = cur.lastrowid
-        conn.execute(
-            "INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (fid, FOLDERED)
-        )
+        conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (fid, FOLDERED))
         conn.commit()
 
     monkeypatch.setattr(main, "_effective_auto_refresh_minutes", lambda: 30)
@@ -52,7 +51,8 @@ def configured(tmp_path, monkeypatch):
     # no network, no automation, no integrations.
     captured: list[set[str]] = []
     monkeypatch.setattr(
-        main.feed_refresh_service, "update_feeds",
+        main.feed_refresh_service,
+        "update_feeds",
         lambda feeds, enhance=True: captured.append(set(feeds)),
     )
     monkeypatch.setattr(main, "_run_automation_after_refresh", lambda feeds: None)
@@ -63,9 +63,7 @@ def configured(tmp_path, monkeypatch):
         (main.devto_service, "refresh_all_devto_feeds"),
     ]:
         monkeypatch.setattr(svc, fn, lambda *a, **k: None)
-    monkeypatch.setattr(
-        main.deviantart_service, "refresh_all_deviantart_feeds", lambda *a, **k: None
-    )
+    monkeypatch.setattr(main.deviantart_service, "refresh_all_deviantart_feeds", lambda *a, **k: None)
     monkeypatch.setattr(main, "get_deviantart_credentials", lambda: (None, None))
     monkeypatch.setattr(main, "get_deviantart_user_token", lambda: None)
     monkeypatch.setattr(main, "get_reddit_user_token", lambda: None)
@@ -123,8 +121,7 @@ def test_bucket_is_reselected_after_the_cadence_elapses(configured):
     # Backdate the bucket clock beyond the 30-minute cadence.
     with main.get_meta_connection() as conn:
         import time
-        main.set_setting(
-            conn, main._UNCATEGORIZED_CADENCE_LAST_REFRESH_KEY, str(time.time() - 31 * 60)
-        )
+
+        main.set_setting(conn, main._UNCATEGORIZED_CADENCE_LAST_REFRESH_KEY, str(time.time() - 31 * 60))
     main._scheduled_refresh_tick()
     assert ORPHAN in _selected(configured)

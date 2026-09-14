@@ -22,6 +22,7 @@ this repo has no JS test harness — the same reasoning as
 ``test_tag_link_scope_staleness``. The server half is pinned separately in
 ``tests/integration/test_refresh_routes.py``.
 """
+
 from __future__ import annotations
 
 import re
@@ -34,7 +35,7 @@ APP_JS = (Path(__file__).resolve().parent.parent.parent / "static" / "js" / "app
 
 def _refresh_block() -> str:
     start = APP_JS.index("async function refreshCurrentFeedOrFolder()")
-    return APP_JS[start:APP_JS.index('window.refreshCurrentFeedOrFolder =', start)]
+    return APP_JS[start : APP_JS.index("window.refreshCurrentFeedOrFolder =", start)]
 
 
 def test_the_refresh_helper_does_not_invent_a_sort_direction():

@@ -5,6 +5,7 @@ for the wire-protocol layer this builds on, and
 tests/services/test_feed_fetch_escalation.py for the unrelated feed-refresh
 ladder this deliberately does NOT share code with.
 """
+
 from __future__ import annotations
 
 import httpx
@@ -169,9 +170,12 @@ def test_flaresolverr_cookies_are_captured_and_reused(monkeypatch):
     stored per-host, and the NEXT fetch for that host presents them on its
     honest attempt -- letting a plain request pass a WAF check a real browser
     already cleared, without spending another shared solve."""
+
     def fake_solve(endpoint, target_url, **kw):
         return flaresolverr.Solution(
-            html="<html>solved</html>", status=200, url=target_url,
+            html="<html>solved</html>",
+            status=200,
+            url=target_url,
             cookies=(("cf_clearance", "abc123", None),),
         )
 
@@ -207,9 +211,12 @@ def test_flaresolverr_cookies_are_captured_and_reused(monkeypatch):
 def test_cookies_for_host_exposed_for_external_callers(monkeypatch):
     """PageFetcher.cookies_for_host is how a caller outside the ladder (the
     img proxy) reuses a solve's cookies without going through fetch() itself."""
+
     def fake_solve(endpoint, target_url, **kw):
         return flaresolverr.Solution(
-            html="<html>solved</html>", status=200, url=target_url,
+            html="<html>solved</html>",
+            status=200,
+            url=target_url,
             cookies=(("cf_clearance", "xyz789", None),),
         )
 
@@ -287,7 +294,9 @@ def test_best_response_prefers_deepest_tier_on_a_tie(monkeypatch):
         return httpx.Response(403, text=CLOUDFLARE_BODY, headers={"content-type": "text/html"})
 
     _patch_build_client(monkeypatch, handler)
-    backends = page_fetch.FetchBackends(mode="as_needed", proxy_url="socks5h://gluetun:1080", flaresolverr_url="http://flaresolverr:8191/v1")
+    backends = page_fetch.FetchBackends(
+        mode="as_needed", proxy_url="socks5h://gluetun:1080", flaresolverr_url="http://flaresolverr:8191/v1"
+    )
     with pytest.raises(page_fetch.PageFetchError) as exc_info:
         _fetcher(backends=backends).fetch("https://example.com/page")
     assert exc_info.value.status_code == 403
@@ -356,7 +365,9 @@ def test_max_tier_clamp_prevents_flaresolverr_even_when_challenged(monkeypatch):
         return httpx.Response(403, text=CLOUDFLARE_BODY, headers={"content-type": "text/html"})
 
     _patch_build_client(monkeypatch, handler)
-    backends = page_fetch.FetchBackends(mode="as_needed", proxy_url="socks5h://gluetun:1080", flaresolverr_url="http://flaresolverr:8191/v1")
+    backends = page_fetch.FetchBackends(
+        mode="as_needed", proxy_url="socks5h://gluetun:1080", flaresolverr_url="http://flaresolverr:8191/v1"
+    )
     with pytest.raises(page_fetch.PageFetchError) as exc_info:
         _fetcher(backends=backends).fetch("https://example.com/page", max_tier="proxy")
     assert solve_calls == []

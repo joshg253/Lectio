@@ -8,6 +8,7 @@ saved articles themselves are untouched.
 The table is created in ensure_meta_schema, which the startup per-user migration
 runs for every tenant — a meta table added anywhere else 500s for existing users.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -72,9 +73,7 @@ def test_marked_at_is_recorded(tenant):
     with main.get_meta_connection() as conn:
         conn.execute("INSERT INTO autofile_non_feed_hosts (host) VALUES (?)", ("x.test",))
         conn.commit()
-        row = conn.execute(
-            "SELECT marked_at FROM autofile_non_feed_hosts WHERE host = ?", ("x.test",)
-        ).fetchone()
+        row = conn.execute("SELECT marked_at FROM autofile_non_feed_hosts WHERE host = ?", ("x.test",)).fetchone()
     assert row[0]
 
 
@@ -82,5 +81,6 @@ def test_host_normalization_matches_the_planner(tenant):
     """Marking has to key on the same host form the plan groups by, or a marked
     host would keep coming back under its www./cased spelling."""
     from services.saved_autofile import article_host
+
     for raw in ("https://www.Dummies.COM/article/x", "http://dummies.com:80/y"):
         assert article_host(raw) == "dummies.com"

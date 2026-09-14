@@ -5,6 +5,7 @@ A Wayback snapshot of a WordPress site ships `<img data-lazy-src=… >` with no
 the stored copy held an image element with nothing to load — an empty box, which
 reads as a white rectangle once images have a backdrop.
 """
+
 from __future__ import annotations
 
 import re
@@ -19,8 +20,7 @@ def _src(html: str) -> str | None:
 
 
 def test_a_lazy_image_with_no_src_gets_one():
-    assert _src('<img alt="" data-lazy-src="https://x.test/a.png" width="600">') == \
-        "https://x.test/a.png"
+    assert _src('<img alt="" data-lazy-src="https://x.test/a.png" width="600">') == "https://x.test/a.png"
 
 
 def test_a_data_uri_placeholder_is_replaced():
@@ -36,8 +36,7 @@ def test_a_real_src_is_left_alone():
 def test_the_lazy_attribute_is_not_corrupted():
     """The old boundary matched inside `data-lazy-src` and rewrote it in place,
     which is why no real src ever appeared."""
-    out = main.normalize_proxy_lazy_media(
-        '<img data-lazy-src="https://x.test/a.png">')
+    out = main.normalize_proxy_lazy_media('<img data-lazy-src="https://x.test/a.png">')
     assert 'data-lazy-src="https://x.test/a.png"' in out
 
 

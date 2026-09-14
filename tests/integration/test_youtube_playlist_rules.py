@@ -4,6 +4,7 @@ The rule adds the YouTube video(s) in a freshly-refreshed matching entry to a
 target playlist, optionally marking the post read, and must never add the same
 video twice (playlistItems.insert isn't idempotent).
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -55,19 +56,32 @@ def _add_entry(entry_id="e1", link=f"https://www.youtube.com/watch?v={VID}", tit
         reader.add_feed(FEED, allow_invalid_url=True)
     except Exception:
         pass
-    reader.add_entry({
-        "feed_url": FEED, "id": entry_id, "title": title, "link": link,
-        "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
-    })
+    reader.add_entry(
+        {
+            "feed_url": FEED,
+            "id": entry_id,
+            "title": title,
+            "link": link,
+            "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+        }
+    )
     return entry_id
 
 
 def _add_rule(*, keyword="", playlist="PL1", include_shorts=False, mark_read=True):
     with main.get_meta_connection() as conn:
         main.add_highlight_keyword(
-            conn, "global", "", keyword, "yellow", rule_type="youtube_playlist",
-            enabled=1, yt_playlist_id=playlist, yt_playlist_title="My PL",
-            yt_include_shorts=include_shorts, yt_mark_read=mark_read,
+            conn,
+            "global",
+            "",
+            keyword,
+            "yellow",
+            rule_type="youtube_playlist",
+            enabled=1,
+            yt_playlist_id=playlist,
+            yt_playlist_title="My PL",
+            yt_include_shorts=include_shorts,
+            yt_mark_read=mark_read,
         )
 
 
@@ -104,28 +118,57 @@ def test_add_route_accepts_blank_keyword(tmp_path, monkeypatch):
             client.get("/healthz")
             cookie = client.cookies.get("session")
             assert cookie is not None
-            tok = _json.loads(base64.b64decode(
-                TimestampSigner(main.SESSION_SECRET_KEY).unsign(cookie, max_age=main.SESSION_MAX_AGE_SECONDS)
-            ))["csrf_token"]
-            r = client.post("/highlights/add", data={
-                "_csrf": tok, "scope": "feed", "scope_id": FEED, "keyword": "",
-                "type": "youtube_playlist", "yt_playlist_id": "PL1", "yt_playlist_title": "My PL",
-                "yt_include_shorts": "0", "yt_mark_read": "1", "enabled": "0",
-            })
+            tok = _json.loads(
+                base64.b64decode(TimestampSigner(main.SESSION_SECRET_KEY).unsign(cookie, max_age=main.SESSION_MAX_AGE_SECONDS))
+            )["csrf_token"]
+            r = client.post(
+                "/highlights/add",
+                data={
+                    "_csrf": tok,
+                    "scope": "feed",
+                    "scope_id": FEED,
+                    "keyword": "",
+                    "type": "youtube_playlist",
+                    "yt_playlist_id": "PL1",
+                    "yt_playlist_title": "My PL",
+                    "yt_include_shorts": "0",
+                    "yt_mark_read": "1",
+                    "enabled": "0",
+                },
+            )
             assert r.status_code == 200, r.text
             # A non-YT type with a blank keyword is still rejected — cleanly (400, not 422).
-            r2 = client.post("/highlights/add", data={
-                "_csrf": tok, "scope": "global", "keyword": "", "type": "highlight",
-            })
+            r2 = client.post(
+                "/highlights/add",
+                data={
+                    "_csrf": tok,
+                    "scope": "global",
+                    "keyword": "",
+                    "type": "highlight",
+                },
+            )
             assert r2.status_code == 400
             # Editing a blank-keyword YT rule = remove + add; both must accept "".
-            rem = client.post("/highlights/remove", data={
-                "_csrf": tok, "scope": "feed", "scope_id": FEED, "keyword": "",
-            })
+            rem = client.post(
+                "/highlights/remove",
+                data={
+                    "_csrf": tok,
+                    "scope": "feed",
+                    "scope_id": FEED,
+                    "keyword": "",
+                },
+            )
             assert rem.status_code == 200, rem.text
-            tog = client.post("/highlights/toggle", data={
-                "_csrf": tok, "scope": "feed", "scope_id": FEED, "keyword": "", "enabled": "1",
-            })
+            tog = client.post(
+                "/highlights/toggle",
+                data={
+                    "_csrf": tok,
+                    "scope": "feed",
+                    "scope_id": FEED,
+                    "keyword": "",
+                    "enabled": "1",
+                },
+            )
             assert tog.status_code == 200, tog.text
     finally:
         _reset_pools()
@@ -152,12 +195,10 @@ def test_dry_run_excludes_shorts_when_opted_out(env):
     _add_entry(entry_id="vid", link=f"https://www.youtube.com/watch?v={VID}")
     _add_entry(entry_id="short", link=f"https://www.youtube.com/shorts/{VID}")
     with main.get_meta_connection() as conn:
-        excl = main._dry_run_pattern(conn, "feed", FEED, "", False, "title",
-                                     match_all_if_empty=True, exclude_shorts=True)
-        incl = main._dry_run_pattern(conn, "feed", FEED, "", False, "title",
-                                     match_all_if_empty=True, exclude_shorts=False)
-    assert excl["total_matches"] == 1   # the Short is dropped
-    assert incl["total_matches"] == 2   # both included
+        excl = main._dry_run_pattern(conn, "feed", FEED, "", False, "title", match_all_if_empty=True, exclude_shorts=True)
+        incl = main._dry_run_pattern(conn, "feed", FEED, "", False, "title", match_all_if_empty=True, exclude_shorts=False)
+    assert excl["total_matches"] == 1  # the Short is dropped
+    assert incl["total_matches"] == 2  # both included
 
 
 def test_feeds_scope_resolution_helpers():
@@ -179,46 +220,78 @@ def test_auto_add_feeds_scope_covers_each_selected_feed(env, monkeypatch):
     reader = main.get_reader()
     reader.add_feed(FEED2, allow_invalid_url=True)
     import datetime as _dt
-    reader.add_entry({"feed_url": FEED2, "id": "e2",
-                      "link": f"https://www.youtube.com/watch?v={VID2}", "title": "V2",
-                      "published": _dt.datetime(2024, 1, 1, tzinfo=_dt.timezone.utc)})
+
+    reader.add_entry(
+        {
+            "feed_url": FEED2,
+            "id": "e2",
+            "link": f"https://www.youtube.com/watch?v={VID2}",
+            "title": "V2",
+            "published": _dt.datetime(2024, 1, 1, tzinfo=_dt.timezone.utc),
+        }
+    )
     # A rule scoped to BOTH feeds.
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feeds", f"{FEED}\n{FEED2}", "", "yellow",
-                                   rule_type="youtube_playlist", enabled=1,
-                                   yt_playlist_id="PL1", yt_mark_read=False)
+        main.add_highlight_keyword(
+            conn,
+            "feeds",
+            f"{FEED}\n{FEED2}",
+            "",
+            "yellow",
+            rule_type="youtube_playlist",
+            enabled=1,
+            yt_playlist_id="PL1",
+            yt_mark_read=False,
+        )
     main._run_youtube_playlist_rules_after_refresh({FEED, FEED2})
     assert sorted(calls) == sorted([VID, VID2])
 
 
 def test_duration_filter_min_only_adds_long_videos(env, monkeypatch):
-    SHORTV = "shortVID000"   # exactly 11 chars (YouTube id length)
+    SHORTV = "shortVID000"  # exactly 11 chars (YouTube id length)
     LONGV = "longVID0000"
     # Durations: 10 min vs 90 min (monkeypatched so we don't touch the global cache/DB).
     _durs = {SHORTV: (600, "10:00"), LONGV: (5400, "1:30:00")}
-    monkeypatch.setattr(main.youtube_duration_service, "get_cached_duration",
-                        lambda vid: _durs.get(vid, (None, None)))
+    monkeypatch.setattr(main.youtube_duration_service, "get_cached_duration", lambda vid: _durs.get(vid, (None, None)))
     _add_entry(entry_id="s", link=f"https://www.youtube.com/watch?v={SHORTV}")
     _add_entry(entry_id="l", link=f"https://www.youtube.com/watch?v={LONGV}")
     calls = []
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "global", "", "", "yellow", rule_type="youtube_playlist",
-                                   enabled=1, yt_playlist_id="PL1", yt_mark_read=False,
-                                   yt_min_minutes=60)
+        main.add_highlight_keyword(
+            conn,
+            "global",
+            "",
+            "",
+            "yellow",
+            rule_type="youtube_playlist",
+            enabled=1,
+            yt_playlist_id="PL1",
+            yt_mark_read=False,
+            yt_min_minutes=60,
+        )
     main._run_youtube_playlist_rules_after_refresh({FEED})
-    assert calls == [LONGV]   # only the >=60min video
+    assert calls == [LONGV]  # only the >=60min video
 
 
 def test_duration_unknown_is_skipped_when_filtered(env, monkeypatch):
-    NOID = "unknownVID0"   # 11 chars, no cached duration
+    NOID = "unknownVID0"  # 11 chars, no cached duration
     _add_entry(entry_id="u", link=f"https://www.youtube.com/watch?v={NOID}")
     calls = []
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "global", "", "", "yellow", rule_type="youtube_playlist",
-                                   enabled=1, yt_playlist_id="PL1", yt_mark_read=False,
-                                   yt_min_minutes=60)
+        main.add_highlight_keyword(
+            conn,
+            "global",
+            "",
+            "",
+            "yellow",
+            rule_type="youtube_playlist",
+            enabled=1,
+            yt_playlist_id="PL1",
+            yt_mark_read=False,
+            yt_min_minutes=60,
+        )
     main._run_youtube_playlist_rules_after_refresh({FEED})
     assert calls == []  # unknown duration not added while a duration filter is active
 
@@ -287,6 +360,7 @@ def test_not_connected_is_noop(env, monkeypatch):
 def test_quota_exceeded_releases_claim_for_retry(env, monkeypatch):
     def _boom(tok, pl, vid):
         raise yt.QuotaExceeded("quota")
+
     monkeypatch.setattr(yt, "add_video_to_playlist", _boom)
     _add_entry()
     _add_rule()
@@ -309,6 +383,7 @@ def test_quota_exceeded_releases_claim_for_retry(env, monkeypatch):
 # fixed window for a large batch); confirmed live 2026-08-28 that most of
 # one channel's qualifying videos over a week were never actually added.
 # ---------------------------------------------------------------------------
+
 
 def _backdate_entry(minutes_ago: float, feed=FEED, entry_id="e1") -> None:
     import sqlite3
@@ -352,7 +427,8 @@ def test_persisted_watermark_catches_what_a_fixed_window_would_have_missed(env, 
     _add_rule()
     with main.get_meta_connection() as conn:
         main.set_setting(
-            conn, main.SETTING_YT_PLAYLIST_AUTO_LAST_CHECK,
+            conn,
+            main.SETTING_YT_PLAYLIST_AUTO_LAST_CHECK,
             (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=30)).isoformat(),
         )
 
@@ -371,7 +447,8 @@ def test_entry_older_than_the_watermark_is_not_reprocessed(env, monkeypatch):
     _add_rule()
     with main.get_meta_connection() as conn:
         main.set_setting(
-            conn, main.SETTING_YT_PLAYLIST_AUTO_LAST_CHECK,
+            conn,
+            main.SETTING_YT_PLAYLIST_AUTO_LAST_CHECK,
             (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=5)).isoformat(),
         )
 

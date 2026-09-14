@@ -14,6 +14,7 @@ this area is silent and destructive: archiving is implemented as an unstar, and
 the unstar path releases the offline capture and hard-deletes a Saved Articles
 husk once nothing is keeping the entry.
 """
+
 from __future__ import annotations
 
 from typing import cast
@@ -46,8 +47,7 @@ def configured(tmp_path, monkeypatch):
 
     # Record capture-removal requests instead of running the archive worker.
     removals: list[tuple[str, str]] = []
-    monkeypatch.setattr(main.starred_archive_service, "enqueue_removal",
-                        lambda f, e: removals.append((f, e)))
+    monkeypatch.setattr(main.starred_archive_service, "enqueue_removal", lambda f, e: removals.append((f, e)))
     monkeypatch.setattr(main.starred_archive_service, "enqueue_archive", lambda f, e: None)
 
     with main.get_reader() as reader:
@@ -60,12 +60,10 @@ def configured(tmp_path, monkeypatch):
         reader.add_entry({"feed_url": FEED, "id": "tagged", "link": "https://example.test/tagged"})
         reader.set_tag((FEED, "tagged"), f"{MTAG}python")
         # a URL-saved article: nothing but the star holds it
-        reader.add_entry({"feed_url": SAVED_FEED_URL, "id": "https://ex.test/a",
-                          "link": "https://ex.test/a"})
+        reader.add_entry({"feed_url": SAVED_FEED_URL, "id": "https://ex.test/a", "link": "https://ex.test/a"})
     with main.get_meta_connection() as conn:
         conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (FEED, "star"))
-        conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
-                     (SAVED_FEED_URL, "https://ex.test/a"))
+        conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (SAVED_FEED_URL, "https://ex.test/a"))
         conn.commit()
     try:
         yield removals
@@ -80,9 +78,7 @@ def _archive(feed: str, eid: str, on: bool = True):
 
 def _starred(feed: str, eid: str) -> bool:
     with main.get_meta_connection() as conn:
-        return conn.execute(
-            "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (feed, eid)
-        ).fetchone() is not None
+        return conn.execute("SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (feed, eid)).fetchone() is not None
 
 
 def _read(feed: str, eid: str) -> bool:
@@ -95,7 +91,7 @@ def test_archive_discharges_the_todo_and_marks_read(configured):
     _archive(FEED, "star")
 
     assert (FEED, "star") in main.get_archived_saved_keys()
-    assert not _starred(FEED, "star")   # the TODO is discharged
+    assert not _starred(FEED, "star")  # the TODO is discharged
     assert _read(FEED, "star")
 
 
@@ -105,10 +101,13 @@ def test_archive_marks_read_at_both_levels(configured):
     _archive(FEED, "star")
 
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT 1 FROM entry_read_state WHERE feed_url = ? AND entry_id = ?",
-            (FEED, "star"),
-        ).fetchone() is not None
+        assert (
+            conn.execute(
+                "SELECT 1 FROM entry_read_state WHERE feed_url = ? AND entry_id = ?",
+                (FEED, "star"),
+            ).fetchone()
+            is not None
+        )
 
 
 def test_archive_lands_in_read_history(configured):
@@ -116,13 +115,11 @@ def test_archive_lands_in_read_history(configured):
     _archive(FEED, "star")
 
     with main.get_meta_connection() as conn:
-        assert conn.execute(
-            "SELECT 1 FROM read_history WHERE feed_url = ? AND entry_id = ?", (FEED, "star")
-        ).fetchone() is not None
+        assert conn.execute("SELECT 1 FROM read_history WHERE feed_url = ? AND entry_id = ?", (FEED, "star")).fetchone() is not None
 
 
 def test_archive_keeps_the_offline_capture(configured):
-    """"Keep its contents" is the whole definition of Archive.
+    """ "Keep its contents" is the whole definition of Archive.
 
     Archiving unstars, and the unstar path releases the capture once no keep
     signal remains — so Archive must itself count as one. Without that, the
@@ -158,11 +155,11 @@ def test_unarchive_restores_the_todo(configured):
     _archive(FEED, "star", on=False)
 
     assert (FEED, "star") not in main.get_archived_saved_keys()
-    assert _starred(FEED, "star")   # back on the TODO pile
+    assert _starred(FEED, "star")  # back on the TODO pile
 
 
 def test_unarchive_leaves_read_state_alone(configured):
-    """"Read but not archived" is a real state — you read it and still haven't
+    """ "Read but not archived" is a real state — you read it and still haven't
     decided what to do with it. That combination is the reason the second axis
     exists, so un-archiving must not silently mark things unread."""
     _archive(FEED, "star")
@@ -202,7 +199,7 @@ def test_discard_clears_tags_before_unstarring(configured):
 
 
 def test_discard_does_not_delete_an_ordinary_feed_post(configured):
-    """"Don't necessarily delete it now" — a feed post goes back to being a feed
+    """ "Don't necessarily delete it now" — a feed post goes back to being a feed
     post and takes its chances with per-folder retention."""
     main.discard_entry(_NO_REQUEST, feed_url=FEED, entry_id="star")
 
@@ -231,7 +228,7 @@ def test_discarding_an_archived_item_still_releases_the_capture(configured):
     """
     removals = configured
     _archive(FEED, "star")
-    assert removals == []          # archiving kept it, as it must
+    assert removals == []  # archiving kept it, as it must
 
     main.discard_entry(_NO_REQUEST, feed_url=FEED, entry_id="star")
     assert (FEED, "star") in removals

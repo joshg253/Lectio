@@ -6,6 +6,7 @@ a tagged entry keeps its capture, so nothing is lost by dropping the redundant
 star. Apply recomputes the plan server-side under the given opt-outs rather than
 trusting a client id list.
 """
+
 from __future__ import annotations
 
 from typing import cast
@@ -45,9 +46,7 @@ def configured(tmp_path):
         reader.set_tag((FEED, "d"), f"{MTAG}python")
     with main.get_meta_connection() as conn:
         for eid in ("a", "b", "c"):
-            conn.execute(
-                "INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (FEED, eid)
-            )
+            conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (FEED, eid))
         # a is also Archived (the done axis). It lives in its own table now,
         # so unstarring must leave it completely alone.
         conn.execute(
@@ -175,7 +174,7 @@ def test_preview_under_a_partial_selection_reports_the_real_total(configured):
     # Selecting only `python` must NOT promise b: it still carries books.
     plan = main._current_unstar_tagged_plan({"books"})
     per_tag = {row["tag"]: row["count"] for row in plan["per_tag"]}
-    assert per_tag["python"] == 2          # a and b both carry python
+    assert per_tag["python"] == 2  # a and b both carry python
     assert plan["totals"]["to_unstar"] == 1  # but only a is actually cleared
 
     assert _apply(["books"])["unstarred"] == 1

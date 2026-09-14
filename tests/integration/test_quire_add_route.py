@@ -1,4 +1,5 @@
 """/entries/quire route: project_oid param overrides settings default."""
+
 from __future__ import annotations
 
 from fastapi import FastAPI
@@ -23,10 +24,17 @@ def _build_app(monkeypatch, *, connected=True, token="qtok", settings_oid="defau
         title = "Great Article"
 
     class _Reader:
-        def __enter__(self): return self
-        def __exit__(self, *_): pass
-        def get_entry(self, key, default): return _Entry()
-        def get_feed(self, url): return type("F", (), {"title": "Test Feed"})()
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def get_entry(self, key, default):
+            return _Entry()
+
+        def get_feed(self, url):
+            return type("F", (), {"title": "Test Feed"})()
 
     monkeypatch.setattr(main, "get_reader", lambda: _Reader())
     return app
@@ -34,9 +42,7 @@ def _build_app(monkeypatch, *, connected=True, token="qtok", settings_oid="defau
 
 def test_explicit_project_oid_overrides_settings(monkeypatch):
     calls = {}
-    monkeypatch.setattr(main, "_quire_add_entry",
-                        lambda tok, oid, title, link, feed_title="":
-                        calls.update(oid=oid) or (True, None))
+    monkeypatch.setattr(main, "_quire_add_entry", lambda tok, oid, title, link, feed_title="": calls.update(oid=oid) or (True, None))
     app = _build_app(monkeypatch)
     with TestClient(app) as client:
         r = client.post("/entries/quire", data={"feed_url": "f", "entry_id": "e1", "project_oid": "custom-oid"})
@@ -47,9 +53,7 @@ def test_explicit_project_oid_overrides_settings(monkeypatch):
 
 def test_no_project_oid_falls_back_to_settings(monkeypatch):
     calls = {}
-    monkeypatch.setattr(main, "_quire_add_entry",
-                        lambda tok, oid, title, link, feed_title="":
-                        calls.update(oid=oid) or (True, None))
+    monkeypatch.setattr(main, "_quire_add_entry", lambda tok, oid, title, link, feed_title="": calls.update(oid=oid) or (True, None))
     app = _build_app(monkeypatch, settings_oid="settings-oid")
     with TestClient(app) as client:
         r = client.post("/entries/quire", data={"feed_url": "f", "entry_id": "e1"})
@@ -67,9 +71,7 @@ def test_no_project_oid_and_no_settings_returns_503(monkeypatch):
 
 def test_empty_string_project_oid_falls_back_to_settings(monkeypatch):
     calls = {}
-    monkeypatch.setattr(main, "_quire_add_entry",
-                        lambda tok, oid, title, link, feed_title="":
-                        calls.update(oid=oid) or (True, None))
+    monkeypatch.setattr(main, "_quire_add_entry", lambda tok, oid, title, link, feed_title="": calls.update(oid=oid) or (True, None))
     app = _build_app(monkeypatch, settings_oid="settings-oid")
     with TestClient(app) as client:
         r = client.post("/entries/quire", data={"feed_url": "f", "entry_id": "e1", "project_oid": ""})

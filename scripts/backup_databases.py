@@ -86,11 +86,9 @@ def generations(dest_dir: Path) -> list[tuple[str, list[Path]]]:
     same instant is not a restore point, which is exactly why each run gets its
     own directory instead of same-stamped files scattered across `dest_dir`.
     """
-    gens = [
-        (d.name, sorted(p for p in d.iterdir() if p.is_file()))
-        for d in dest_dir.iterdir() if d.is_dir()
-    ]
+    gens = [(d.name, sorted(p for p in d.iterdir() if p.is_file())) for d in dest_dir.iterdir() if d.is_dir()]
     return sorted(gens, reverse=True)
+
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("LECTIO_DATA_DIR", str(ROOT))).resolve()
@@ -181,15 +179,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Backup Lectio databases via VACUUM INTO.")
     parser.add_argument("--dest", default=str(DEFAULT_DEST), help="Backup directory.")
     parser.add_argument("--keep", type=int, default=3, help="Keep N most recent generations.")
-    parser.add_argument("--max-bytes", type=parse_size, default=parse_size("25G"),
-                        help="Total budget for the backup directory (e.g. 20G). 0 disables.")
-    parser.add_argument("--min-free", type=parse_size, default=parse_size("4G"),
-                        help="Refuse to run unless this much stays free (e.g. 4G). 0 disables.")
-    parser.add_argument("--force", action="store_true",
-                        help="Run even if the free-space check fails.")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Report what would be written/pruned and run the space check, "
-                             "without writing or deleting anything.")
+    parser.add_argument(
+        "--max-bytes", type=parse_size, default=parse_size("25G"), help="Total budget for the backup directory (e.g. 20G). 0 disables."
+    )
+    parser.add_argument(
+        "--min-free", type=parse_size, default=parse_size("4G"), help="Refuse to run unless this much stays free (e.g. 4G). 0 disables."
+    )
+    parser.add_argument("--force", action="store_true", help="Run even if the free-space check fails.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would be written/pruned and run the space check, without writing or deleting anything.",
+    )
     args = parser.parse_args()
 
     dest_dir = Path(args.dest)
@@ -209,8 +210,7 @@ def main() -> int:
         print(f"  sources           : {len(sources)} DB(s), ~{_human(needed)}")
         print(f"  existing backups  : {len(gens)} generation(s), {_human(held)}")
         print(f"  free now / after  : {_human(free)} / {_human(free - needed)}")
-        print(f"  policy            : keep={args.keep} max-bytes={_human(args.max_bytes)} "
-              f"min-free={_human(args.min_free)}")
+        print(f"  policy            : keep={args.keep} max-bytes={_human(args.max_bytes)} min-free={_human(args.min_free)}")
         if args.min_free and free - needed < args.min_free:
             print("  VERDICT           : would REFUSE (not enough free space)")
         else:

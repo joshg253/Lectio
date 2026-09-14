@@ -27,6 +27,7 @@ Usage (inside the app container):
     uv run scripts/repair_orphaned_archives.py --apply
     uv run scripts/repair_orphaned_archives.py --apply --user u_x
 """
+
 from __future__ import annotations
 
 import argparse
@@ -63,9 +64,7 @@ def find_orphans() -> list[dict]:
     conn = sqlite3.connect(str(tenancy.starred_archive_db_path()), timeout=30.0)
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            f"SELECT feed_url, entry_id, link, title, {_SIZE_SQL} AS bytes FROM archived_entry"
-        ).fetchall()
+        rows = conn.execute(f"SELECT feed_url, entry_id, link, title, {_SIZE_SQL} AS bytes FROM archived_entry").fetchall()
         out: list[dict] = []
         for row in rows:
             if str(row["feed_url"]) in reader_feeds:
@@ -78,16 +77,18 @@ def find_orphans() -> list[dict]:
                 f"SELECT {_SIZE_SQL} AS bytes FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
                 (target_feed, row["entry_id"]),
             ).fetchone()
-            out.append({
-                "src_feed": str(row["feed_url"]),
-                "entry_id": str(row["entry_id"]),
-                "dst_feed": target_feed,
-                "title": str(row["title"] or "")[:60],
-                "stale_link": str(row["link"] or ""),
-                "fresh_link": links.get((target_feed, str(row["entry_id"])), ""),
-                "bytes": int(row["bytes"] or 0),
-                "twin_bytes": int(twin["bytes"]) if twin else None,
-            })
+            out.append(
+                {
+                    "src_feed": str(row["feed_url"]),
+                    "entry_id": str(row["entry_id"]),
+                    "dst_feed": target_feed,
+                    "title": str(row["title"] or "")[:60],
+                    "stale_link": str(row["link"] or ""),
+                    "fresh_link": links.get((target_feed, str(row["entry_id"])), ""),
+                    "bytes": int(row["bytes"] or 0),
+                    "twin_bytes": int(twin["bytes"]) if twin else None,
+                }
+            )
         return out
     finally:
         conn.close()
@@ -108,14 +109,19 @@ def _snapshot_deleted_blobs(orphans: list[dict]) -> None:
                 continue
             row = conn.execute(
                 f"SELECT {', '.join(_BLOB_COLS)}, status, starred_at, archived_at, title, link"
-                " FROM archived_entry WHERE feed_url = ? AND entry_id = ?", key,
+                " FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+                key,
             ).fetchone()
             if row is None:
                 continue
             o["deleted_row"] = {
-                "feed_url": key[0], "entry_id": key[1],
-                "status": row["status"], "starred_at": row["starred_at"],
-                "archived_at": row["archived_at"], "title": row["title"], "link": row["link"],
+                "feed_url": key[0],
+                "entry_id": key[1],
+                "status": row["status"],
+                "starred_at": row["starred_at"],
+                "archived_at": row["archived_at"],
+                "title": row["title"],
+                "link": row["link"],
                 **{c: (base64.b64encode(row[c]).decode() if row[c] else None) for c in _BLOB_COLS},
             }
     finally:
@@ -135,8 +141,7 @@ def run_for_user(apply: bool, verbose: bool) -> dict:
             o["action"] = "drop-redundant"
         stats[o["action"]] += 1
         if verbose:
-            print(f"    {o['action']:<20} {o['bytes']:>6}b"
-                  f" (twin {twin if twin is not None else '-'})  {o['title']}")
+            print(f"    {o['action']:<20} {o['bytes']:>6}b (twin {twin if twin is not None else '-'})  {o['title']}")
 
     if apply and orphans:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")

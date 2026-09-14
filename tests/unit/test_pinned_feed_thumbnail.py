@@ -13,7 +13,7 @@ MAIN = (Path(__file__).resolve().parents[2] / "main.py").read_text()
 
 
 def _slice(start: str, end: str = "\ndef ") -> str:
-    body = MAIN[MAIN.index(start):]
+    body = MAIN[MAIN.index(start) :]
     return body[: body.index(end, len(start))]
 
 

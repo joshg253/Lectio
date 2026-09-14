@@ -25,6 +25,7 @@ husk feed. Deleting first would take the source entry with it.
     uv run python scripts/rehome_article_feeds.py            # dry run
     uv run python scripts/rehome_article_feeds.py --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -42,8 +43,7 @@ from services import saved_articles as saved_articles_service  # noqa: E402
 from services import tenancy  # noqa: E402
 
 # A URL with any of these reads as a feed address, whatever it returns.
-_FEEDISH_RE = re.compile(
-    r"(feed|rss|atom|\.xml|/index\.xml|newsfeed|headlines|\.rdf)", re.I)
+_FEEDISH_RE = re.compile(r"(feed|rss|atom|\.xml|/index\.xml|newsfeed|headlines|\.rdf)", re.I)
 # Never candidates: the synthetic saved feed, and social URLs that are a
 # different (deliberate) kind of non-feed subscription.
 _NEVER = ("lectio:saved",)
@@ -51,9 +51,16 @@ _NEVER_HOSTS = ("twitter.com", "x.com", "nitter.")
 
 # Meta tables keyed on (feed_url, entry_id) that must follow the entry.
 _META_KEYED_TABLES = (
-    "entry_lead_images", "entry_date_overrides", "entry_title_overrides",
-    "entry_link_overrides", "entry_content_overrides", "entry_content_edits",
-    "entry_read_state", "read_history", "entry_feed_tags", "saved_entries",
+    "entry_lead_images",
+    "entry_date_overrides",
+    "entry_title_overrides",
+    "entry_link_overrides",
+    "entry_content_overrides",
+    "entry_content_edits",
+    "entry_read_state",
+    "read_history",
+    "entry_feed_tags",
+    "saved_entries",
     "archived_entries",
 )
 
@@ -69,18 +76,14 @@ def find_article_feeds() -> list[tuple[str, list[str]]]:
     out: list[tuple[str, list[str]]] = []
     with main.get_reader() as reader:
         db = reader._storage.get_db()
-        rows = db.execute(
-            "SELECT url FROM feeds WHERE last_exception IS NOT NULL"
-        ).fetchall()
+        rows = db.execute("SELECT url FROM feeds WHERE last_exception IS NOT NULL").fetchall()
         for row in rows:
             url = str(row[0])
             if url in _NEVER or _FEEDISH_RE.search(url):
                 continue
             if any(host in url for host in _NEVER_HOSTS):
                 continue
-            entries = db.execute(
-                "SELECT id, added_by FROM entries WHERE feed = ?", (url,)
-            ).fetchall()
+            entries = db.execute("SELECT id, added_by FROM entries WHERE feed = ?", (url,)).fetchall()
             if not entries or any(str(e[1]) != "user" for e in entries):
                 continue
             out.append((url, [str(e[0]) for e in entries]))
@@ -93,8 +96,7 @@ def rehome_for_user(user_id: str, apply: bool, limit: int = 0) -> int:
     if limit:
         feeds = feeds[:limit]
     total = sum(len(ids) for _u, ids in feeds)
-    print(f"[{user_id}] {len(feeds)} article-URL feed(s) holding {total} capture(s)",
-          flush=True)
+    print(f"[{user_id}] {len(feeds)} article-URL feed(s) holding {total} capture(s)", flush=True)
     for url, ids in feeds[:5]:
         print(f"    {len(ids)} × {url[:76]}", flush=True)
     if not feeds:
@@ -129,16 +131,22 @@ def rehome_for_user(user_id: str, apply: bool, limit: int = 0) -> int:
                 for table in _META_KEYED_TABLES:
                     try:
                         conn.execute(
-                            f"UPDATE OR IGNORE {table} SET feed_url = ? "
-                            "WHERE feed_url = ? AND entry_id = ?",
+                            f"UPDATE OR IGNORE {table} SET feed_url = ? WHERE feed_url = ? AND entry_id = ?",
                             (target, url, entry_id),
                         )
                     except sqlite3.OperationalError:
-                        pass      # table absent on this tenant
+                        pass  # table absent on this tenant
 
-            moved.append({"from_feed": url, "entry_id": entry_id, "to_feed": target,
-                          "synthesized": bool(result.get("synth")),
-                          "star": bool(result.get("star")), "tags": result.get("tags", 0)})
+            moved.append(
+                {
+                    "from_feed": url,
+                    "entry_id": entry_id,
+                    "to_feed": target,
+                    "synthesized": bool(result.get("synth")),
+                    "star": bool(result.get("star")),
+                    "tags": result.get("tags", 0),
+                }
+            )
             print(f"    moved {entry_id[:64]}", flush=True)
 
         # Husk removed only after its entries are re-homed.
@@ -158,14 +166,13 @@ def rehome_for_user(user_id: str, apply: bool, limit: int = 0) -> int:
 
 
 def main_cli() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="move them (default: dry run)")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
     ap.add_argument("--limit", type=int, default=0, help="only the first N feeds")
     args = ap.parse_args()
 
-    for uid in ([args.user] if args.user else main._background_user_ids()):
+    for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
             rehome_for_user(uid, args.apply, args.limit)
     if args.apply:

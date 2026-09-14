@@ -5,6 +5,7 @@ is_safe_outbound_url, so these tests are deterministic and do no real DNS or
 network I/O. The DNS/IP-classification logic of is_safe_outbound_url itself is
 covered separately in test_url_guard.py.
 """
+
 from __future__ import annotations
 
 import asyncio

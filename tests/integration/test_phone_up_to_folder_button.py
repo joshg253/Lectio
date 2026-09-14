@@ -6,6 +6,7 @@ the drawer, which slides over the list rather than replacing it, so it is a
 hamburger. Pinning both here because the label comes from server-rendered
 context (`selected_folder_name`) that nothing else reads.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -46,15 +47,13 @@ def tenant(tmp_path):
     with main.get_reader() as reader:
         reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
         reader.disable_feed_updates(FEED)
-        reader.add_entry({"feed_url": FEED, "id": "e1", "title": "Post",
-                          "link": "https://guitarplayer.example.com/p/1"})
+        reader.add_entry({"feed_url": FEED, "id": "e1", "title": "Post", "link": "https://guitarplayer.example.com/p/1"})
     with main.get_meta_connection() as conn:
         root = main.get_root_folder_id(conn)
         cur = conn.execute("INSERT INTO folders (name, parent_id) VALUES ('Music', ?)", (root,))
         assert cur.lastrowid is not None
         folder_id = cur.lastrowid
-        conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
-                     (folder_id, FEED))
+        conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (folder_id, FEED))
         conn.commit()
     try:
         yield folder_id

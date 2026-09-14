@@ -20,6 +20,7 @@ Usage (inside the app container):
     uv run scripts/backfill_archived_entry_sizes.py --apply
     uv run scripts/backfill_archived_entry_sizes.py --apply --user u_x --limit 500
 """
+
 from __future__ import annotations
 
 import argparse
@@ -32,8 +33,8 @@ import main  # noqa: E402
 from services import tenancy  # noqa: E402
 
 _CHUNK_SIZE = 500  # one transaction per chunk, not one giant transaction for
-                    # the whole backlog -- the live archive service may need to
-                    # write concurrently while this runs.
+# the whole backlog -- the live archive service may need to
+# write concurrently while this runs.
 
 
 def _candidates(limit: int) -> list[tuple[str, str, bytes | None, bytes | None, bytes | None]]:
@@ -48,10 +49,7 @@ def _candidates(limit: int) -> list[tuple[str, str, bytes | None, bytes | None, 
         if limit:
             query += f" LIMIT {int(limit)}"
         rows = conn.execute(query).fetchall()
-    return [
-        (r["feed_url"], r["entry_id"], r["source_html_zlib"], r["readability_html_zlib"], r["content_html_zlib"])
-        for r in rows
-    ]
+    return [(r["feed_url"], r["entry_id"], r["source_html_zlib"], r["readability_html_zlib"], r["content_html_zlib"]) for r in rows]
 
 
 def _asset_totals(conn, pairs: list[tuple[str, str]]) -> dict[tuple[str, str], int]:
@@ -86,14 +84,16 @@ def backfill_for_user(uid: str, apply: bool, limit: int) -> dict:
 
     updated = 0
     for i in range(0, len(candidates), _CHUNK_SIZE):
-        chunk = candidates[i:i + _CHUNK_SIZE]
+        chunk = candidates[i : i + _CHUNK_SIZE]
         pairs = [(fu, eid) for fu, eid, *_ in chunk]
         with main.archive_conn() as conn:
             asset_totals = _asset_totals(conn, pairs)
             rows_to_update = []
             for feed_url, entry_id, source_blob, readability_blob, content_blob in chunk:
                 size = (
-                    len(source_blob or b"") + len(readability_blob or b"") + len(content_blob or b"")
+                    len(source_blob or b"")
+                    + len(readability_blob or b"")
+                    + len(content_blob or b"")
                     + asset_totals.get((feed_url, entry_id), 0)
                 )
                 rows_to_update.append((size, feed_url, entry_id))

@@ -12,6 +12,7 @@ every sort and filter already treats as "no date".
     uv run python scripts/clear_placeholder_publish_dates.py
     uv run python scripts/clear_placeholder_publish_dates.py --apply
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,8 +35,7 @@ def run(uid: str, apply: bool) -> None:
     with main.get_reader() as reader:
         db = reader._storage.get_db()
         rows = db.execute(
-            "SELECT feed, id, title, published, read, important FROM entries "
-            "WHERE published IS NOT NULL AND published < ?",
+            "SELECT feed, id, title, published, read, important FROM entries WHERE published IS NOT NULL AND published < ?",
             (CUTOFF,),
         ).fetchall()
 
@@ -48,8 +48,10 @@ def run(uid: str, apply: bool) -> None:
     feeds: dict[str, int] = {}
     for r in rows:
         feeds[r[0]] = feeds.get(r[0], 0) + 1
-    print(f"[{uid}] {len(rows):,} entries with a published date before {CUTOFF} "
-          f"({unread:,} unread, {starred:,} starred) across {len(feeds)} feed(s)")
+    print(
+        f"[{uid}] {len(rows):,} entries with a published date before {CUTOFF} "
+        f"({unread:,} unread, {starred:,} starred) across {len(feeds)} feed(s)"
+    )
     for feed, n in sorted(feeds.items(), key=lambda kv: -kv[1])[:10]:
         print(f"   {n:5}  {feed[:78]}")
 
@@ -60,16 +62,14 @@ def run(uid: str, apply: bool) -> None:
     # Snapshotted before the write: the value is junk, but "which rows did this
     # touch" is not, and there is no other record of it afterwards.
     log = [{"feed": r[0], "entry_id": r[1], "title": r[2], "was": r[3]} for r in rows]
-    out = tenancy.meta_db_path().parent / (
-        f"cleared_placeholder_dates_{datetime.now():%Y%m%d-%H%M%S}.json")
+    out = tenancy.meta_db_path().parent / (f"cleared_placeholder_dates_{datetime.now():%Y%m%d-%H%M%S}.json")
     out.write_text(json.dumps(log, indent=2))
 
     with main.get_reader() as reader:
         db = reader._storage.get_db()
         with db:
             db.execute(
-                "UPDATE entries SET published = NULL "
-                "WHERE published IS NOT NULL AND published < ?",
+                "UPDATE entries SET published = NULL WHERE published IS NOT NULL AND published < ?",
                 (CUTOFF,),
             )
     print(f"[{uid}] cleared {len(rows):,}")
@@ -77,12 +77,11 @@ def run(uid: str, apply: bool) -> None:
 
 
 def main_cli() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="write (default: dry run)")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
     args = ap.parse_args()
-    for uid in ([args.user] if args.user else main._background_user_ids()):
+    for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
             run(uid, args.apply)
     return 0

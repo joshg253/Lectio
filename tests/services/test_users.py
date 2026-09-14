@@ -1,4 +1,5 @@
 """Unit tests for services/users.py (UserStore) — stable user_id identity."""
+
 from __future__ import annotations
 
 import hashlib
@@ -161,9 +162,9 @@ def test_rename_keeps_identity_token_and_login(store):
     assert store.get_by_id(uid)["username"] == "alice2"  # same id, new name
     assert store.get("alice") is None
     assert store.get("alice2")["user_id"] == uid
-    assert store.get_api_token(uid) == token            # API token unchanged
-    assert store.resolve_greader_token(gtoken) == uid   # GReader session unchanged
-    assert store.verify_login("alice2", "pw") == uid    # login by new name
+    assert store.get_api_token(uid) == token  # API token unchanged
+    assert store.resolve_greader_token(gtoken) == uid  # GReader session unchanged
+    assert store.verify_login("alice2", "pw") == uid  # login by new name
 
 
 def test_rename_to_taken_name_rejected(store):

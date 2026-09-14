@@ -6,6 +6,7 @@ of the feed's own entries (trustworthy), while guitarplayer.com's only candidate
 was a scraped one-article URL with a single supporting entry — filing 303
 articles into that would have been wrong.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -18,15 +19,18 @@ from services.saved_autofile import (
 )
 
 
-@pytest.mark.parametrize("url,expected", [
-    ("https://www.Example.COM/a", "example.com"),
-    ("http://example.com:8080/a", "example.com"),
-    ("https://user@example.com/a", "example.com"),
-    ("https://sub.example.com/a", "sub.example.com"),  # subdomains are distinct
-    ("", ""),
-    (None, ""),
-    ("not a url", ""),
-])
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://www.Example.COM/a", "example.com"),
+        ("http://example.com:8080/a", "example.com"),
+        ("https://user@example.com/a", "example.com"),
+        ("https://sub.example.com/a", "sub.example.com"),  # subdomains are distinct
+        ("", ""),
+        (None, ""),
+        ("not a url", ""),
+    ],
+)
 def test_article_host(url, expected):
     assert article_host(url) == expected
 
@@ -57,7 +61,7 @@ def test_low_support_target_is_proposed_but_not_confident():
     )
     c = plan[0]
     assert c["count"] == 303
-    assert c["target_feed_url"] is not None      # still shown, so it can be picked
+    assert c["target_feed_url"] is not None  # still shown, so it can be picked
     assert c["support"] == 1
     assert c["confident"] is False
 
@@ -73,8 +77,7 @@ def test_enough_support_makes_it_confident():
 def test_two_candidate_feeds_are_ambiguous():
     plan = build_autofile_plan(
         [("s1", "https://example.com/a")],
-        _links("https://example.com/feed-a", "example.com", 20)
-        + _links("https://example.com/feed-b", "example.com", 15),
+        _links("https://example.com/feed-a", "example.com", 20) + _links("https://example.com/feed-b", "example.com", 15),
     )
     c = plan[0]
     assert c["ambiguous"] is True
@@ -92,8 +95,7 @@ def test_host_with_no_subscribed_feed_has_no_target():
 
 
 def test_clusters_are_largest_first():
-    saved = ([(f"a{i}", "https://big.com/x") for i in range(5)]
-             + [(f"b{i}", "https://small.com/x") for i in range(2)])
+    saved = [(f"a{i}", "https://big.com/x") for i in range(5)] + [(f"b{i}", "https://small.com/x") for i in range(2)]
     plan = build_autofile_plan(saved, [])
     assert [c["host"] for c in plan] == ["big.com", "small.com"]
 
@@ -115,10 +117,13 @@ def test_entries_without_a_usable_host_are_dropped():
 
 def test_plan_totals_split_the_backlog_by_disposition():
     plan = build_autofile_plan(
-        [("c1", "https://good.com/a"), ("c2", "https://good.com/b"),
-         ("l1", "https://weak.com/a"),
-         ("m1", "https://both.com/a"),
-         ("u1", "https://nowhere.com/a")],
+        [
+            ("c1", "https://good.com/a"),
+            ("c2", "https://good.com/b"),
+            ("l1", "https://weak.com/a"),
+            ("m1", "https://both.com/a"),
+            ("u1", "https://nowhere.com/a"),
+        ],
         _links("https://good.com/feed", "good.com", 10)
         + _links("https://weak.com/one-article", "weak.com", 1)
         + _links("https://both.com/feed-a", "both.com", 5)
@@ -142,7 +147,9 @@ def test_youtube_feeds_can_be_barred_as_targets():
     links = _links(yt, "example.com", 40)
     assert build_autofile_plan([("s1", "https://example.com/a")], links)[0]["target_feed_url"] == yt
     barred = build_autofile_plan(
-        [("s1", "https://example.com/a")], links, exclude_feeds=frozenset({yt}),
+        [("s1", "https://example.com/a")],
+        links,
+        exclude_feeds=frozenset({yt}),
     )
     assert barred[0]["target_feed_url"] is None
     assert barred[0]["confident"] is False
@@ -180,8 +187,7 @@ def test_off_host_candidates_do_not_make_a_host_ambiguous():
 def test_two_on_host_feeds_are_still_ambiguous():
     plan = build_autofile_plan(
         [("s1", "https://example.com/a")],
-        _links("https://example.com/feed", "example.com", 10)
-        + _links("https://example.com/feed/atom", "example.com", 8),
+        _links("https://example.com/feed", "example.com", 10) + _links("https://example.com/feed/atom", "example.com", 8),
     )
     assert plan[0]["ambiguous"] is True
 
@@ -191,8 +197,7 @@ def test_only_aggregators_still_counts_as_ambiguous():
     guess again — nothing distinguishes them."""
     plan = build_autofile_plan(
         [("s1", "https://example.com/a")],
-        _links("https://hnrss.org/newest", "example.com", 5)
-        + _links("https://other.test/links", "example.com", 4),
+        _links("https://hnrss.org/newest", "example.com", 5) + _links("https://other.test/links", "example.com", 4),
     )
     assert plan[0]["ambiguous"] is True
 
@@ -204,7 +209,7 @@ def test_a_feed_with_no_entries_yet_is_still_offered():
     fresh = "https://guitarchalk.com/blog/feed"
     plan = build_autofile_plan(
         [("s1", "https://www.guitarchalk.com/some-article")],
-        [],                                   # never fetched: no entries at all
+        [],  # never fetched: no entries at all
         feed_hosts={fresh: {"guitarchalk.com"}},
         feed_sizes={fresh: 0},
     )
@@ -222,7 +227,7 @@ def test_a_link_proxying_feed_is_matched_by_the_site_it_advertises():
     fb = "https://feeds.feedburner.com/GuitarMasterClassnet"
     plan = build_autofile_plan(
         [("s1", "https://www.guitarmasterclass.net/lesson")],
-        _links(fb, "feeds.feedburner.com", 27),   # links all proxied
+        _links(fb, "feeds.feedburner.com", 27),  # links all proxied
         feed_hosts={fb: {"feeds.feedburner.com", "guitarmasterclass.net"}},
         feed_sizes={fb: 27},
     )
@@ -244,7 +249,7 @@ def test_a_one_article_stub_on_the_right_host_is_not_confident():
         feed_sizes={stub: 1},
     )
     c = plan[0]
-    assert c["target_feed_url"] == stub      # still offered, so it can be barred
+    assert c["target_feed_url"] == stub  # still offered, so it can be barred
     assert c["confident"] is False
 
 

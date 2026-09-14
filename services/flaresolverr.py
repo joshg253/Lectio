@@ -158,5 +158,5 @@ def normalize_proxy_scheme(proxy_url: str) -> str:
     Chrome's proxy config and it fell through to a bare connection error
     page instead of the real site."""
     if proxy_url.startswith("socks5h://"):
-        return "socks5://" + proxy_url[len("socks5h://"):]
+        return "socks5://" + proxy_url[len("socks5h://") :]
     return proxy_url

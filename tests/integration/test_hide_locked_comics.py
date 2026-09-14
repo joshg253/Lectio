@@ -3,6 +3,7 @@
 once hide_locked_comics is on, exactly like hide_unpremiered's "don't show
 yet" render-time filter -- and must reappear on its own once the stored
 unlock date passes, no periodic recheck job required."""
+
 from __future__ import annotations
 
 import time
@@ -41,10 +42,15 @@ def configured(tmp_path):
 
 
 def _seed_entry(reader, *, feed_url: str, entry_id: str, published) -> None:
-    reader.add_entry({
-        "feed_url": feed_url, "id": entry_id, "link": f"{feed_url}#{entry_id}",
-        "title": f"Post {entry_id}", "published": published,
-    })
+    reader.add_entry(
+        {
+            "feed_url": feed_url,
+            "id": entry_id,
+            "link": f"{feed_url}#{entry_id}",
+            "title": f"Post {entry_id}",
+            "published": published,
+        }
+    )
 
 
 def _seed_locked_until(feed_url: str, entry_id: str, locked_until: float | None) -> None:
@@ -225,8 +231,7 @@ def test_unread_count_excludes_many_locked_comics_past_sqlite_bind_limit(configu
         _seed_entry(reader, feed_url=FEED, entry_id="normal", published=OLD)
     with main.get_meta_connection() as conn:
         conn.executemany(
-            "INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at, locked_until)"
-            " VALUES (?, ?, NULL, ?, ?)",
+            "INSERT INTO entry_lead_images (feed_url, entry_id, image_url, fetched_at, locked_until) VALUES (?, ?, NULL, ?, ?)",
             [(FEED, f"locked-{i}", time.time(), time.time() + 86400 * 30) for i in range(n)],
         )
         conn.commit()

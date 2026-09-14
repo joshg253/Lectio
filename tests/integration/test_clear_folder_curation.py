@@ -5,6 +5,7 @@ correct at any size. Non-destructive to Feeds: it clears curation only (the
 items leave the Saved/Kept view), never unsubscribing feeds — unlike deleting
 the folder, which does. These pin: stars-only, tags-only, both, folder scoping,
 and that feed subscriptions/entries survive."""
+
 from __future__ import annotations
 
 import pytest
@@ -12,8 +13,8 @@ import pytest
 import main
 from services import tenancy
 
-FEED_A = "https://a.test/feed"   # in the target folder
-FEED_B = "https://b.test/feed"   # in a different folder
+FEED_A = "https://a.test/feed"  # in the target folder
+FEED_B = "https://b.test/feed"  # in a different folder
 MTAG = main.MANUAL_TAG_KEY_PREFIX
 
 
@@ -71,8 +72,8 @@ def test_remove_tags_only_clears_the_folders_tags(configured):
     target, _other = configured
     res = main.clear_folder_curation(target, remove_stars=False, remove_tags=True)
     assert res["tags_removed"] == 2
-    assert _manual_tag_count(FEED_A) == 0     # target folder cleared
-    assert _manual_tag_count(FEED_B) == 2     # other folder untouched
+    assert _manual_tag_count(FEED_A) == 0  # target folder cleared
+    assert _manual_tag_count(FEED_B) == 2  # other folder untouched
     assert (FEED_A, f"{FEED_A}#2") in _stars()  # stars untouched
 
 
@@ -80,9 +81,9 @@ def test_remove_stars_only_clears_the_folders_stars(configured):
     target, _other = configured
     res = main.clear_folder_curation(target, remove_stars=True, remove_tags=False)
     assert res["stars_removed"] == 1
-    assert (FEED_A, f"{FEED_A}#2") not in _stars()   # target star gone
-    assert (FEED_B, f"{FEED_B}#2") in _stars()       # other folder's star kept
-    assert _manual_tag_count(FEED_A) == 2            # tags untouched
+    assert (FEED_A, f"{FEED_A}#2") not in _stars()  # target star gone
+    assert (FEED_B, f"{FEED_B}#2") in _stars()  # other folder's star kept
+    assert _manual_tag_count(FEED_A) == 2  # tags untouched
 
 
 def test_remove_both(configured):
@@ -116,14 +117,10 @@ def test_only_tag_strips_just_that_tag(configured):
     assert res["tags_removed"] == 2  # the two c++ tags in the target folder
     with main.get_reader() as reader:
         db = reader._storage.get_db()
-        remaining = {
-            r[0] for r in db.execute(
-                "SELECT key FROM entry_tags WHERE feed = ? AND key LIKE ?", (FEED_A, f"{MTAG}%")
-            )
-        }
-    assert f"{MTAG}c++" not in remaining      # c++ gone
-    assert f"{MTAG}python" in remaining       # the other tag survives
-    assert _manual_tag_count(FEED_B) == 2     # other folder's c++ untouched
+        remaining = {r[0] for r in db.execute("SELECT key FROM entry_tags WHERE feed = ? AND key LIKE ?", (FEED_A, f"{MTAG}%"))}
+    assert f"{MTAG}c++" not in remaining  # c++ gone
+    assert f"{MTAG}python" in remaining  # the other tag survives
+    assert _manual_tag_count(FEED_B) == 2  # other folder's c++ untouched
 
 
 def test_nothing_selected_is_a_noop(configured):

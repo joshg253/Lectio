@@ -6,6 +6,7 @@ images and the dropped ones were the tablature figures that *are* the lesson, on
 a DOM no content selector matches. These tests pin that a page shaped like that
 recovers its images, while a page readability handles reasonably is left alone
 (so its chrome images don't get dragged in)."""
+
 from __future__ import annotations
 
 import main
@@ -16,24 +17,16 @@ URL = "https://example.test/lesson"
 def _imgs(n_content: int, n_chrome: int = 0, matchable: bool = False) -> str:
     """A page with n_content images buried where readability won't score them,
     plus n_chrome decorative images, and lots of prose so it extracts."""
-    content = "".join(
-        f'<div class="figrow"><img src="https://cdn.test/tab{i}.jpg" width="500"></div>'
-        for i in range(n_content)
-    )
-    chrome = "".join(
-        f'<img src="https://cdn.test/logo{i}.png" width="40">' for i in range(n_chrome)
-    )
+    content = "".join(f'<div class="figrow"><img src="https://cdn.test/tab{i}.jpg" width="500"></div>' for i in range(n_content))
+    chrome = "".join(f'<img src="https://cdn.test/logo{i}.png" width="40">' for i in range(n_chrome))
     prose = "".join(
-        f"<p>Paragraph {i} of the lesson with enough words to read as an article "
-        f"body rather than a caption or a stub sentence.</p>" for i in range(6)
+        f"<p>Paragraph {i} of the lesson with enough words to read as an article body rather than a caption or a stub sentence.</p>"
+        for i in range(6)
     )
     # `matchable` puts the content in an entry-content div the selector fallback
     # finds; otherwise it's in bare divs no selector matches (the GP shape).
     wrap_open = '<div class="entry-content">' if matchable else "<div>"
-    return (
-        f"<html><head><title>Lesson</title></head><body>{chrome}"
-        f"{wrap_open}{prose}{content}</div></body></html>"
-    )
+    return f"<html><head><title>Lesson</title></head><body>{chrome}{wrap_open}{prose}{content}</div></body></html>"
 
 
 def test_rescues_images_when_readability_keeps_almost_none():
@@ -51,8 +44,8 @@ def test_leaves_a_reasonable_extraction_alone():
     # every chrome logo.
     _title, html = main.extract_readability_article(_imgs(8, n_chrome=6, matchable=True), URL)
     count = html.lower().count("<img")
-    assert count >= 8          # kept the content
-    assert count < 8 + 6       # did NOT drag in all the chrome
+    assert count >= 8  # kept the content
+    assert count < 8 + 6  # did NOT drag in all the chrome
 
 
 def test_text_article_on_a_chrome_heavy_page_is_not_widened():
@@ -62,10 +55,7 @@ def test_text_article_on_a_chrome_heavy_page_is_not_widened():
     article with the entire nav-laden page — the Google Developers Blog case. The
     text-length guard keeps it out."""
     chrome = "".join(f'<img src="https://cdn.test/navicon{i}.png" width="16">' for i in range(20))
-    prose = "".join(
-        f"<p>Paragraph {i}: {'the future of java 8 language features on android ' * 6}</p>"
-        for i in range(8)
-    )
+    prose = "".join(f"<p>Paragraph {i}: {'the future of java 8 language features on android ' * 6}</p>" for i in range(8))
     page = (
         "<html><head><title>Java 8</title></head><body>"
         f"<header><nav>{chrome}</nav></header>"
@@ -74,9 +64,9 @@ def test_text_article_on_a_chrome_heavy_page_is_not_widened():
         "</body></html>"
     )
     _title, html = main.extract_readability_article(page, URL)
-    assert "future of java" in html.lower()          # the real article survived
-    assert "navicon0.png" not in html                # chrome not dragged in
-    assert html.lower().count("<img") <= 2           # not the 40 nav/footer icons
+    assert "future of java" in html.lower()  # the real article survived
+    assert "navicon0.png" not in html  # chrome not dragged in
+    assert html.lower().count("<img") <= 2  # not the 40 nav/footer icons
 
 
 def test_last_resort_needs_an_image_heavy_page():
@@ -104,7 +94,7 @@ def test_rebelmouse_body_description_selector_beats_header_wrapper():
         "<html><head><title>Two-Hand Tapping</title></head><body>"
         '<article class="clearfix image-article">'
         "<h1>Two-Hand Tapping</h1><h2>subtitle</h2>"
-        "<picture><img src=\"https://cdn.test/hero.jpg\"></picture>"
+        '<picture><img src="https://cdn.test/hero.jpg"></picture>'
         "</article>"
         '<div class="body-description">'
         "<p>Get exotic with these spicy two-handed patterns over several "
@@ -132,10 +122,10 @@ def test_rebelmouse_soundslice_tab_player_embeds_survive():
         '<div class="body-description">'
         "<p>Get exotic with these spicy two-handed patterns over several "
         "exercises, each with its own tab player to work through.</p>"
-        '<p><strong>Ex. 1</strong></p>'
+        "<p><strong>Ex. 1</strong></p>"
         '<iframe src="https://www.soundslice.com/slices/1yTTc/embed/" '
         'width="100%" height="500" frameborder="0"></iframe>'
-        '<p><strong>Ex. 2</strong></p>'
+        "<p><strong>Ex. 2</strong></p>"
         '<iframe src="https://www.soundslice.com/slices/4pY8c/embed/" '
         'width="100%" height="293" frameborder="0"></iframe>'
         "</div></body></html>"
@@ -170,7 +160,7 @@ def test_dedupe_keeps_distinct_images_sharing_a_generic_cdn_filename():
         '<img src="https://x/a.jpg?w=2">'
     )
     out = main._dedupe_readability_images(html)
-    assert out.count("<img") == 3        # id=1, id=2, and ONE copy of a.jpg
+    assert out.count("<img") == 3  # id=1, id=2, and ONE copy of a.jpg
     assert "id=1" in out and "id=2" in out
     assert out.count("a.jpg") == 1
 
@@ -184,7 +174,7 @@ def test_future_plc_article_body_id_beats_whole_body():
     chrome_imgs = "".join(f'<img src="https://cdn.test/related{i}.jpg">' for i in range(20))
     page = (
         "<html><head><title>Arpeggios</title></head><body>"
-        f'<header><nav>{chrome_imgs}</nav></header>'
+        f"<header><nav>{chrome_imgs}</nav></header>"
         '<div id="article-body">'
         "<p>Learn arpeggios with these tab exercises over the next hour of practice.</p>"
         f"{tabs}</div>"
@@ -192,8 +182,8 @@ def test_future_plc_article_body_id_beats_whole_body():
         "</body></html>"
     )
     _title, html = main.extract_readability_article(page, URL)
-    assert 12 <= html.lower().count("<img") <= 16      # the tabs, not the chrome
-    assert "related0.jpg" not in html                   # no related-article junk
+    assert 12 <= html.lower().count("<img") <= 16  # the tabs, not the chrome
+    assert "related0.jpg" not in html  # no related-article junk
     assert "tab0.jpg" in html
 
 
@@ -211,9 +201,7 @@ def test_iframe_only_content_beats_whole_body_rescue():
     to either chrome extraction."""
     chrome_imgs = "".join(f'<img src="https://cdn.test/related{i}.jpg">' for i in range(20))
     players = "".join(
-        f'<iframe src="https://www.soundslice.com/slices/{i}/embed/" '
-        f'width="100%" height="500" frameborder="0"></iframe>'
-        for i in range(3)
+        f'<iframe src="https://www.soundslice.com/slices/{i}/embed/" width="100%" height="500" frameborder="0"></iframe>' for i in range(3)
     )
     page = (
         "<html><head><title>Two-Hand Tapping</title></head><body>"
@@ -229,7 +217,7 @@ def test_iframe_only_content_beats_whole_body_rescue():
     _title, html = main.extract_readability_article(page, URL)
     assert html.lower().count("<iframe") == 3
     assert "spicy two-handed" in html
-    assert "related0.jpg" not in html   # whole-body-rescue did NOT fire
+    assert "related0.jpg" not in html  # whole-body-rescue did NOT fire
 
 
 def test_fallback_acceptance_weighs_the_articles_real_media_count_not_image_only(monkeypatch):
@@ -250,9 +238,7 @@ def test_fallback_acceptance_weighs_the_articles_real_media_count_not_image_only
     test exercises the real downstream comparison logic rather than fighting
     Document's heuristics for an artificial fixture."""
     players = "".join(
-        f'<iframe src="https://www.soundslice.com/slices/{i}/embed/" '
-        f'width="100%" height="500" frameborder="0"></iframe>'
-        for i in range(3)
+        f'<iframe src="https://www.soundslice.com/slices/{i}/embed/" width="100%" height="500" frameborder="0"></iframe>' for i in range(3)
     )
     raw_html = (
         "<html><head><title>Two-Hand Tapping</title></head><body>"
@@ -304,11 +290,11 @@ def test_future_plc_in_body_chrome_is_stripped():
         "</div></body></html>"
     )
     _title, html = main.extract_readability_article(page, URL)
-    assert "great guitarist" in html                    # the article stayed
-    assert "tab0.jpg" in html                            # the tab figures stayed
-    assert "Pinterest" not in html                       # share bar gone
-    assert "Subscribe to our newsletter" not in html     # newsletter gone
-    assert "You may like" not in html                    # related aside gone
+    assert "great guitarist" in html  # the article stayed
+    assert "tab0.jpg" in html  # the tab figures stayed
+    assert "Pinterest" not in html  # share bar gone
+    assert "Subscribe to our newsletter" not in html  # newsletter gone
+    assert "You may like" not in html  # related aside gone
     assert "Follow us" not in html
 
 
@@ -332,8 +318,8 @@ def test_future_plc_video_carousel_card_is_stripped():
     _title, html = main.extract_readability_article(page, URL)
     assert "Latest Videos From" not in html
     assert "Watch full video here" not in html
-    assert "vidthumb.jpg" not in html      # the video's own thumbnail went with it
-    assert "tab0.jpg" in html              # the lesson's tab figures stayed
+    assert "vidthumb.jpg" not in html  # the video's own thumbnail went with it
+    assert "tab0.jpg" in html  # the lesson's tab figures stayed
 
 
 def test_lead_image_prepended_from_og_when_absent():
@@ -346,11 +332,7 @@ def test_lead_image_prepended_from_og_when_absent():
         '<img src="https://cdn.test/inline.jpg" width="500">'
         "</div>"
     )
-    page = (
-        '<html><head><meta property="og:image" '
-        'content="https://cdn.test/hero-700-80.png"></head>'
-        f"<body>{body}</body></html>"
-    )
+    page = f'<html><head><meta property="og:image" content="https://cdn.test/hero-700-80.png"></head><body>{body}</body></html>'
     _title, html = main.extract_readability_article(page, URL)
     assert "hero-700-80.png" in html
     assert html.find("hero-700-80.png") < html.find("inline.jpg")  # hero leads
@@ -374,7 +356,7 @@ def test_lead_image_not_re_prepended_when_the_body_has_the_same_photo_under_a_di
         "<div id='article-body'>"
         "<h1>The Power of Signals</h1>"
         '<img src="https://substackcdn.com/image/fetch/w_1456/'
-        'https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F'
+        "https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F"
         'd06b02fd-e88a-4fa6-89a1-1a6be220f70d_2884x1622.jpeg" width="1456">'
         "<p>The article body has plenty of prose to extract cleanly here, well "
         "past readability's minimum length threshold for a real article.</p>"
@@ -383,14 +365,14 @@ def test_lead_image_not_re_prepended_when_the_body_has_the_same_photo_under_a_di
     page = (
         '<html><head><meta property="og:image" '
         'content="https://substackcdn.com/image/fetch/w_1200/'
-        'https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F'
+        "https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F"
         'da4ee994-5039-48d1-a918-ab4f10b8d22a_2884x1622.jpeg"></head>'
         f"<body>{body}</body></html>"
     )
     _title, html = main.extract_readability_article(page, URL)
     assert html.count("<img") == 1  # not duplicated
-    assert "da4ee994" not in html   # the og:image asset id was never used
-    assert "d06b02fd" in html       # the body's own image survived untouched
+    assert "da4ee994" not in html  # the og:image asset id was never used
+    assert "d06b02fd" in html  # the body's own image survived untouched
 
 
 def test_lead_image_prepend_not_fooled_by_a_shared_generic_filename():
@@ -407,13 +389,9 @@ def test_lead_image_prepend_not_fooled_by_a_shared_generic_filename():
         '<img src="https://cdn.test/image.jpg?id=102" width="500">'
         "</div>"
     )
-    page = (
-        '<html><head><meta property="og:image" '
-        'content="https://cdn.test/image.jpg?id=999"></head>'
-        f"<body>{body}</body></html>"
-    )
+    page = f'<html><head><meta property="og:image" content="https://cdn.test/image.jpg?id=999"></head><body>{body}</body></html>'
     _title, html = main.extract_readability_article(page, URL)
-    assert "id=999" in html                          # the real hero got prepended
+    assert "id=999" in html  # the real hero got prepended
     assert html.find("id=999") < html.find("id=101")  # leads the body
 
 
@@ -435,7 +413,7 @@ def test_lead_image_still_prepended_when_dimensions_match_by_coincidence_on_a_di
     page = (
         '<html><head><meta property="og:image" '
         'content="https://substackcdn.com/image/fetch/w_1200/'
-        'https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F'
+        "https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F"
         'da4ee994-5039-48d1-a918-ab4f10b8d22a_2884x1622.jpeg"></head>'
         f"<body>{body}</body></html>"
     )
@@ -454,11 +432,7 @@ def test_lead_image_still_prepended_when_dimensions_genuinely_differ():
         '<img src="https://cdn.test/thumb_400x300.jpg" width="400">'
         "</div>"
     )
-    page = (
-        '<html><head><meta property="og:image" '
-        'content="https://cdn.test/hero_1600x900.png"></head>'
-        f"<body>{body}</body></html>"
-    )
+    page = f'<html><head><meta property="og:image" content="https://cdn.test/hero_1600x900.png"></head><body>{body}</body></html>'
     _title, html = main.extract_readability_article(page, URL)
     assert "hero_1600x900.png" in html
     assert html.find("hero_1600x900.png") < html.find("thumb_400x300.jpg")

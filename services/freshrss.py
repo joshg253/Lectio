@@ -7,6 +7,7 @@ OAuth, and accepts a user-supplied instance base URL.
 API base: ``{base_url}/api/greader.php``
 Auth:     POST ClientLogin → ``GoogleLogin auth=<token>`` header
 """
+
 from __future__ import annotations
 
 from urllib.parse import quote
@@ -29,6 +30,7 @@ class AuthError(RuntimeError):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _api_base(instance_url: str) -> str:
     # SSRF guard: every request below builds its URL from this base, so
     # validating the user-supplied host here covers all of them. Clients don't
@@ -43,6 +45,7 @@ def _auth_header(token: str) -> dict:
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
+
 
 def login(instance_url: str, username: str, password: str) -> str:
     """ClientLogin: return the auth token string or raise AuthError / RuntimeError."""
@@ -85,6 +88,7 @@ def test_connection(instance_url: str, username: str, password: str) -> dict:
 # Data fetchers (return raw API dicts — normalisation happens in main.py)
 # ---------------------------------------------------------------------------
 
+
 def get_subscriptions(instance_url: str, token: str) -> list[dict]:
     """Return subscription list. Each has ``feed_url``, ``title``, ``categories``."""
     base = _api_base(instance_url)
@@ -101,7 +105,7 @@ def get_subscriptions(instance_url: str, token: str) -> list[dict]:
     # Normalise the feed URL from the "id" field (format: "feed/<url>")
     for sub in subs:
         raw_id = sub.get("id", "")
-        sub["feed_url"] = raw_id[len("feed/"):] if raw_id.startswith("feed/") else raw_id
+        sub["feed_url"] = raw_id[len("feed/") :] if raw_id.startswith("feed/") else raw_id
     return subs
 
 
@@ -146,6 +150,7 @@ def get_stream_contents(
 # Label helpers (same scheme as Inoreader)
 # ---------------------------------------------------------------------------
 
+
 def label_name_from_tag_id(tag_id: str) -> str | None:
     """Return label name from ``user/.../label/NAME``, or None."""
     parts = tag_id.split("/label/")
@@ -165,21 +170,18 @@ def label_stream_id(label_name: str) -> str:
 # Item normaliser (Google Reader item dict → import-item dict)
 # ---------------------------------------------------------------------------
 
+
 def normalize_item(item: dict, folder: str = "") -> dict:
     """Convert a Google Reader stream item to a normalized import-item dict."""
     canonical = item.get("canonical") or []
     entry_url = canonical[0].get("href", "") if canonical else ""
     origin = item.get("origin") or {}
     raw_stream = origin.get("streamId", "")
-    feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
+    feed_url = raw_stream[len("feed/") :] if raw_stream.startswith("feed/") else raw_stream
     summary = item.get("summary") or {}
     content = summary.get("content", "") or (item.get("content") or {}).get("content", "")
     cats = item.get("categories") or []
-    labels = [
-        name
-        for c in cats
-        if (name := label_name_from_tag_id(c)) and label_is_tag(name)
-    ]
+    labels = [name for c in cats if (name := label_name_from_tag_id(c)) and label_is_tag(name)]
     return {
         "url": entry_url,
         "title": item.get("title", ""),

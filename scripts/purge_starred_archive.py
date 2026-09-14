@@ -50,18 +50,14 @@ def main() -> int:
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     try:
-        pending_rows = conn.execute(
-            "SELECT feed_url, entry_id FROM archived_entry WHERE status = 'pending_removal'"
-        ).fetchall()
+        pending_rows = conn.execute("SELECT feed_url, entry_id FROM archived_entry WHERE status = 'pending_removal'").fetchall()
         target_keys: list[tuple[str, str]] = [(str(r["feed_url"]), str(r["entry_id"])) for r in pending_rows]
 
         if args.all:
             reader_path = ROOT / "lectio_reader.sqlite"
             if reader_path.exists():
                 live_keys = _read_reader_keys(reader_path)
-                all_archived = conn.execute(
-                    "SELECT feed_url, entry_id FROM archived_entry WHERE status = 'complete'"
-                ).fetchall()
+                all_archived = conn.execute("SELECT feed_url, entry_id FROM archived_entry WHERE status = 'complete'").fetchall()
                 for r in all_archived:
                     key = (str(r["feed_url"]), str(r["entry_id"]))
                     if key not in live_keys:
@@ -98,10 +94,7 @@ def main() -> int:
         )
         conn.commit()
 
-        print(
-            f"deleted {len(target_keys):,} entry rows, "
-            f"{orphan_result.rowcount:,} orphaned asset rows."
-        )
+        print(f"deleted {len(target_keys):,} entry rows, {orphan_result.rowcount:,} orphaned asset rows.")
 
         if not args.no_vacuum:
             print("running VACUUM to reclaim disk space...")

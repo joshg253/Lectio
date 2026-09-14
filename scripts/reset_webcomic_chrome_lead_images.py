@@ -21,6 +21,7 @@ Usage (inside the app container):
     uv run scripts/reset_webcomic_chrome_lead_images.py --apply
     uv run scripts/reset_webcomic_chrome_lead_images.py --apply --min-repeats 5
 """
+
 from __future__ import annotations
 
 import argparse
@@ -56,8 +57,7 @@ def find_chrome_rows(min_repeats: int) -> list[dict]:
             """,
             (min_repeats,),
         ).fetchall()
-        return [{"feed_url": str(r["feed_url"]), "image_url": str(r["image_url"]), "entries": int(r["n"])}
-                for r in rows]
+        return [{"feed_url": str(r["feed_url"]), "image_url": str(r["image_url"]), "entries": int(r["n"])} for r in rows]
     finally:
         conn.close()
 
@@ -108,8 +108,7 @@ def main_cli() -> None:
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
     users = [args.user] if args.user else main._background_user_ids()
-    print(f"reset webcomic chrome lead images — {'APPLY' if args.apply else 'DRY-RUN'}"
-          f" — min repeats {args.min_repeats} — users: {users}\n")
+    print(f"reset webcomic chrome lead images — {'APPLY' if args.apply else 'DRY-RUN'} — min repeats {args.min_repeats} — users: {users}\n")
     for uid in users:
         print(f"[{uid}]")
         with tenancy.user_context(uid):

@@ -8,6 +8,7 @@ Pacing is the design, not a setting: a global gap between requests, a much longe
 one per host, hosts dropped after repeated failures, hosts interleaved so no site
 sees a run of back-to-back hits, and nothing parallel.
 """
+
 from __future__ import annotations
 
 import logging
@@ -19,9 +20,9 @@ from urllib.parse import urlparse
 
 LOGGER = logging.getLogger(__name__)
 
-GLOBAL_DELAY = 2.0        # seconds between requests, whatever the host
-PER_HOST_DELAY = 10.0     # and at least this long between two hits on one host
-HOST_FAILURE_LIMIT = 4    # drop a host after this many consecutive failures
+GLOBAL_DELAY = 2.0  # seconds between requests, whatever the host
+PER_HOST_DELAY = 10.0  # and at least this long between two hits on one host
+HOST_FAILURE_LIMIT = 4  # drop a host after this many consecutive failures
 
 
 def host_of(url: str) -> str:
@@ -128,10 +129,17 @@ def run_paced(
         else:
             stats["failed"] += 1
             host_failures[host] += 1
-        log.append({"feed_url": feed_url, "entry_id": entry_id, "link": link,
-                    "ok": bool(result.get("ok")), "error": result.get("error"),
-                    "from_archive": result.get("from_archive"),
-                    "dated": result.get("dated")})
+        log.append(
+            {
+                "feed_url": feed_url,
+                "entry_id": entry_id,
+                "link": link,
+                "ok": bool(result.get("ok")),
+                "error": result.get("error"),
+                "from_archive": result.get("from_archive"),
+                "dated": result.get("dated"),
+            }
+        )
         if on_progress and i % 10 == 0:
             on_progress(i, len(rows), dict(stats))
 

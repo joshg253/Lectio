@@ -39,62 +39,241 @@ from pathlib import Path
 # title. Kept conservative on purpose: better to leave a feed blank for review
 # than to file it wrong. Folder names must match rows in the meta `folders` table.
 RULES: list[tuple[str, list[str]]] = [
-    ("Command Shells", ["powershell", "commandlinefu", "command line", "bash script",
-                         "shell script", "learn bash", "wildcards in bash", " bash ",
-                         "zsh", "cmd.exe", "sysadmin", "tmux", "terminal emulator",
-                         "console fonts", "shell history"]),
-    ("Linux", ["linux", "ubuntu", "debian", "arch linux", "fedora", "systemd",
-               "gnome", " kde ", "kernel", "raspberry pi", "tilix", "lxterminal",
-               "archbang", "puppy linux", "jwm menu", "open as root"]),
-    ("Guitar, Bass, Drums, Piano", ["guitar", "bass guitar", "bass tab", "double bass",
-                                    "drums", "drumeo", "drum groove", "piano",
-                                    "music theory", "fretboard", "relative keys for bass"]),
-    ("Music", ["beatmaking", "propellerheads", "ableton", "reason 7", "synthesizer",
-               "music production"]),
-    ("Photo", ["photography", "photographer", "lightroom", "mirrorless", "dslr",
-               "camera review", "photoshop", "gimp", "digital painting",
-               "illustrator brushes", "duotone", "depth of field effect"]),
-    ("Tabletop", ["tabletop", "board game", "boardgame", "dungeons", "d&d", "paizo",
-                  "warhammer", "miniatures", " rpg "]),
-    ("Video Games", ["video game", "gaming", "playstation", "xbox", "nintendo",
-                     "steam deck", "speedrun", "godot", "unity3d", "unity ",
-                     "game jam", "indie game", "gamedev", "game dev", "minecraft",
-                     "morrowind", "pc gamer", "pcgamer", "rock paper shotgun",
-                     "abandonware", "dos games", "keeperrl", "gameskinny",
-                     "game environment", "baldursgate", "larian"]),
-    ("Comics & Art", ["webcomic", "comic", "manga", "illustration", "art tip",
-                      "coloring page", "how you draw"]),
+    (
+        "Command Shells",
+        [
+            "powershell",
+            "commandlinefu",
+            "command line",
+            "bash script",
+            "shell script",
+            "learn bash",
+            "wildcards in bash",
+            " bash ",
+            "zsh",
+            "cmd.exe",
+            "sysadmin",
+            "tmux",
+            "terminal emulator",
+            "console fonts",
+            "shell history",
+        ],
+    ),
+    (
+        "Linux",
+        [
+            "linux",
+            "ubuntu",
+            "debian",
+            "arch linux",
+            "fedora",
+            "systemd",
+            "gnome",
+            " kde ",
+            "kernel",
+            "raspberry pi",
+            "tilix",
+            "lxterminal",
+            "archbang",
+            "puppy linux",
+            "jwm menu",
+            "open as root",
+        ],
+    ),
+    (
+        "Guitar, Bass, Drums, Piano",
+        [
+            "guitar",
+            "bass guitar",
+            "bass tab",
+            "double bass",
+            "drums",
+            "drumeo",
+            "drum groove",
+            "piano",
+            "music theory",
+            "fretboard",
+            "relative keys for bass",
+        ],
+    ),
+    ("Music", ["beatmaking", "propellerheads", "ableton", "reason 7", "synthesizer", "music production"]),
+    (
+        "Photo",
+        [
+            "photography",
+            "photographer",
+            "lightroom",
+            "mirrorless",
+            "dslr",
+            "camera review",
+            "photoshop",
+            "gimp",
+            "digital painting",
+            "illustrator brushes",
+            "duotone",
+            "depth of field effect",
+        ],
+    ),
+    ("Tabletop", ["tabletop", "board game", "boardgame", "dungeons", "d&d", "paizo", "warhammer", "miniatures", " rpg "]),
+    (
+        "Video Games",
+        [
+            "video game",
+            "gaming",
+            "playstation",
+            "xbox",
+            "nintendo",
+            "steam deck",
+            "speedrun",
+            "godot",
+            "unity3d",
+            "unity ",
+            "game jam",
+            "indie game",
+            "gamedev",
+            "game dev",
+            "minecraft",
+            "morrowind",
+            "pc gamer",
+            "pcgamer",
+            "rock paper shotgun",
+            "abandonware",
+            "dos games",
+            "keeperrl",
+            "gameskinny",
+            "game environment",
+            "baldursgate",
+            "larian",
+        ],
+    ),
+    ("Comics & Art", ["webcomic", "comic", "manga", "illustration", "art tip", "coloring page", "how you draw"]),
     ("Web Browsers", ["firefox", "chromium", "web browser", "vivaldi", "safari browser"]),
     ("Android", ["android", "google pixel"]),
     ("VPS", ["homelab", "proxmox", "self-host", "self host", "virtual private server", "vps"]),
-    ("Booze", ["whisky", "whiskey", "cocktail", "craft beer", "brewing", "sour beer",
-               "fermentation", "brewery", "drinkers guide", "wine tasting"]),
-    ("Health + Fitness", ["workout", "nutrition", "marathon", "strength training",
-                          "fitbit", "healthy habits", "good posture"]),
+    (
+        "Booze",
+        [
+            "whisky",
+            "whiskey",
+            "cocktail",
+            "craft beer",
+            "brewing",
+            "sour beer",
+            "fermentation",
+            "brewery",
+            "drinkers guide",
+            "wine tasting",
+        ],
+    ),
+    ("Health + Fitness", ["workout", "nutrition", "marathon", "strength training", "fitbit", "healthy habits", "good posture"]),
     ("Supernote", ["supernote"]),
     ("Fediverse", ["mastodon", "fediverse", "activitypub"]),
-    ("Tech News", ["arstechnica", "betanews", "makeuseof", "lifehacker", "ghacks",
-                   "howtogeek", "how-to geek", "techdirt", "engadget", "gizmodo",
-                   "the verge", "tecmint"]),
+    (
+        "Tech News",
+        [
+            "arstechnica",
+            "betanews",
+            "makeuseof",
+            "lifehacker",
+            "ghacks",
+            "howtogeek",
+            "how-to geek",
+            "techdirt",
+            "engadget",
+            "gizmodo",
+            "the verge",
+            "tecmint",
+        ],
+    ),
     ("Deals", ["coupon", "discount code", "deal of the day", "slickdeals"]),
-    ("Books & Education", ["betterexplained", "datagenetics", "mindyourdecisions",
-                           "learn trig", "trigonometry", "learn math",
-                           "grammar cheat sheet", "coursera", "edx", "freecodecamp",
-                           "khan academy", "learn anything", "unit circle",
-                           "regression method"]),
-    ("Dev", ["python", "javascript", "typescript", "c++", "c#", " c programming",
-             "learn to program", "golang", "rust lang", "programming", "leetcode",
-             "algorithm", "devops", "docker", "kubernetes", "git ", "github",
-             "gitignore", "commits", "compiler", "framework", "webdev",
-             "azure", "msdn", "technet", "django", "matplotlib", "pandas",
-             "postgresql", "mysql", "hibernate", "spring boot", "regular expression",
-             "regex", "cmake", "visual studio", "clean code", "design pattern",
-             "concurrency", "unit test", "pvs-studio", "webgl", "hackerrank",
-             "stack overflow", "data structure", "encapsulation", "inheritance"]),
+    (
+        "Books & Education",
+        [
+            "betterexplained",
+            "datagenetics",
+            "mindyourdecisions",
+            "learn trig",
+            "trigonometry",
+            "learn math",
+            "grammar cheat sheet",
+            "coursera",
+            "edx",
+            "freecodecamp",
+            "khan academy",
+            "learn anything",
+            "unit circle",
+            "regression method",
+        ],
+    ),
+    (
+        "Dev",
+        [
+            "python",
+            "javascript",
+            "typescript",
+            "c++",
+            "c#",
+            " c programming",
+            "learn to program",
+            "golang",
+            "rust lang",
+            "programming",
+            "leetcode",
+            "algorithm",
+            "devops",
+            "docker",
+            "kubernetes",
+            "git ",
+            "github",
+            "gitignore",
+            "commits",
+            "compiler",
+            "framework",
+            "webdev",
+            "azure",
+            "msdn",
+            "technet",
+            "django",
+            "matplotlib",
+            "pandas",
+            "postgresql",
+            "mysql",
+            "hibernate",
+            "spring boot",
+            "regular expression",
+            "regex",
+            "cmake",
+            "visual studio",
+            "clean code",
+            "design pattern",
+            "concurrency",
+            "unit test",
+            "pvs-studio",
+            "webgl",
+            "hackerrank",
+            "stack overflow",
+            "data structure",
+            "encapsulation",
+            "inheritance",
+        ],
+    ),
     ("Deals", ["coupon", "discount code", "deal of the day"]),
-    ("Productivity", ["obsidian", "note-taking", "getting things done", "gtd",
-                      "trello", "to do vo do", "1:1 meeting", "focus at work",
-                      "morning routine", "increase focus", "productivity"]),
+    (
+        "Productivity",
+        [
+            "obsidian",
+            "note-taking",
+            "getting things done",
+            "gtd",
+            "trello",
+            "to do vo do",
+            "1:1 meeting",
+            "focus at work",
+            "morning routine",
+            "increase focus",
+            "productivity",
+        ],
+    ),
 ]
 
 
@@ -122,7 +301,8 @@ def _load_uncategorized(reader: Path, meta: Path) -> list[dict]:
         if r["url"] in foldered:
             continue
         samples = [
-            x[0] for x in rc.execute(
+            x[0]
+            for x in rc.execute(
                 "SELECT title FROM entries WHERE feed=? AND title IS NOT NULL AND title!=''"
                 " ORDER BY COALESCE(published,updated) DESC LIMIT 5",
                 (r["url"],),
@@ -147,8 +327,7 @@ def cmd_propose(args) -> None:
             if folder:
                 matched += 1
                 per_folder[folder] = per_folder.get(folder, 0) + 1
-            w.writerow([f["url"], f["title"], folder, "heuristic" if folder else "",
-                        kw, " | ".join(f["samples"])])
+            w.writerow([f["url"], f["title"], folder, "heuristic" if folder else "", kw, " | ".join(f["samples"])])
     print(f"uncategorized feeds: {len(feeds)}")
     print(f"heuristic matches:  {matched}  (blank / needs review: {len(feeds) - matched})")
     for folder in sorted(per_folder, key=lambda k: -per_folder[k]):
@@ -160,11 +339,7 @@ def _valid_folder_names(meta: Path) -> list[str]:
     """Real, assignable folder names — excludes the virtual root and _Lectio."""
     mc = sqlite3.connect(meta)
     excluded = {"All Feeds", "_Lectio"}
-    names = sorted(
-        r[0]
-        for r in mc.execute("SELECT name FROM folders WHERE name IS NOT NULL")
-        if r[0] not in excluded
-    )
+    names = sorted(r[0] for r in mc.execute("SELECT name FROM folders WHERE name IS NOT NULL") if r[0] not in excluded)
     mc.close()
     return names
 
@@ -177,16 +352,13 @@ _REVIEW_MODEL = "claude-opus-4-8"
 
 def _review_chunk(client, folders: list[str], feeds: list[dict]) -> dict[str, str]:
     """Ask Claude to file each feed into one of `folders` (or "" if unsure)."""
-    listing = "\n".join(
-        f"{i}. url={f['url']}\n   title={f['title']}\n   recent: {' | '.join(f['samples'])}"
-        for i, f in enumerate(feeds)
-    )
+    listing = "\n".join(f"{i}. url={f['url']}\n   title={f['title']}\n   recent: {' | '.join(f['samples'])}" for i, f in enumerate(feeds))
     prompt = (
         "You are sorting RSS/Atom feeds into an existing set of folders for a "
         "feed reader. For each feed, choose the single best-fitting folder from "
         "the allowed list below, based on its title and recent entry titles. If "
         "none clearly fits, or the feed looks dead/spammy/uncategorizable, leave "
-        "the folder empty (\"\") — do not force a bad match.\n\n"
+        'the folder empty ("") — do not force a bad match.\n\n'
         "Allowed folders:\n- " + "\n- ".join(folders) + "\n\n"
         f"Feeds:\n{listing}"
     )
@@ -319,8 +491,7 @@ def main() -> None:
     p.add_argument("--data-dir", default="data")
     p.add_argument("--user", default=None, help="user id (multi-user); omit for single-user")
     p.add_argument("--propose", action="store_true")
-    p.add_argument("--review", dest="review_csv", default=None,
-                   help="fill blank rows in this proposal CSV via Claude")
+    p.add_argument("--review", dest="review_csv", default=None, help="fill blank rows in this proposal CSV via Claude")
     p.add_argument("--apply", dest="apply_csv", default=None)
     p.add_argument("--out", default="proposal.csv")
     args = p.parse_args()

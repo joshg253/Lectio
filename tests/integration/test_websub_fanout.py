@@ -3,6 +3,7 @@
 One subscription per feed (one secret, one hub HTTP request). Multiple users
 subscribing to the same feed are tracked in websub_subscribers and each receive
 the push-triggered reader update."""
+
 from __future__ import annotations
 
 import hashlib
@@ -71,7 +72,8 @@ def fanout(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "websub_service", svc)
     refreshed: list[tuple[str, tuple]] = []
     monkeypatch.setattr(
-        main.feed_refresh_service, "update_feeds",
+        main.feed_refresh_service,
+        "update_feeds",
         lambda urls: refreshed.append((tenancy.current_user_id(), tuple(urls))),
     )
     wconn = main.get_websub_connection()
@@ -136,7 +138,8 @@ def test_push_runs_automation_per_subscriber(fanout, monkeypatch):
 
     automated: list[tuple[str, frozenset]] = []
     monkeypatch.setattr(
-        main, "_run_automation_after_refresh",
+        main,
+        "_run_automation_after_refresh",
         lambda feeds: automated.append((tenancy.current_user_id(), frozenset(feeds))),
     )
 
@@ -155,9 +158,7 @@ def test_verification_confirms_pending_subscription(fanout):
     challenge = main._websub_verify_fanout(FEED, FEED, "chal-xyz", 86400)
 
     assert challenge == "chal-xyz"
-    row = wconn.execute(
-        "SELECT verified FROM websub_subscriptions WHERE feed_url=?", (FEED,)
-    ).fetchone()
+    row = wconn.execute("SELECT verified FROM websub_subscriptions WHERE feed_url=?", (FEED,)).fetchone()
     assert row["verified"] == 1
 
 
@@ -178,14 +179,10 @@ def test_unsubscribe_removes_subscriber_only(fanout):
     svc: WebSubService = main.websub_service  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
     svc.unsubscribe(FEED, "alice")
 
-    subs = wconn.execute(
-        "SELECT user_id FROM websub_subscribers WHERE feed_url=?", (FEED,)
-    ).fetchall()
+    subs = wconn.execute("SELECT user_id FROM websub_subscribers WHERE feed_url=?", (FEED,)).fetchall()
     assert [r["user_id"] for r in subs] == ["bob"]
     # Subscription row still present (bob still subscribed)
-    sub_row = wconn.execute(
-        "SELECT feed_url FROM websub_subscriptions WHERE feed_url=?", (FEED,)
-    ).fetchone()
+    sub_row = wconn.execute("SELECT feed_url FROM websub_subscriptions WHERE feed_url=?", (FEED,)).fetchone()
     assert sub_row is not None
 
 
@@ -198,11 +195,7 @@ def test_unsubscribe_last_subscriber_clears_subscription(fanout):
     svc: WebSubService = main.websub_service  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
     svc.unsubscribe(FEED, "alice")
 
-    subs = wconn.execute(
-        "SELECT user_id FROM websub_subscribers WHERE feed_url=?", (FEED,)
-    ).fetchall()
+    subs = wconn.execute("SELECT user_id FROM websub_subscribers WHERE feed_url=?", (FEED,)).fetchall()
     assert subs == []
-    sub_row = wconn.execute(
-        "SELECT feed_url FROM websub_subscriptions WHERE feed_url=?", (FEED,)
-    ).fetchone()
+    sub_row = wconn.execute("SELECT feed_url FROM websub_subscriptions WHERE feed_url=?", (FEED,)).fetchone()
     assert sub_row is None

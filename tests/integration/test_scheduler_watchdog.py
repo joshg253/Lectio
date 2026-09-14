@@ -4,6 +4,7 @@ The failure these guard against cost 34 hours of missed feeds: the scheduler
 thread stayed alive but blocked on a socket read, /healthz answered 200 the whole
 time, and nothing said a word. See Plan.md §0a.
 """
+
 from __future__ import annotations
 
 import threading
@@ -35,6 +36,7 @@ def _set_state(**kwargs):
 def test_websub_renewal_failure_does_not_escape_the_pass(monkeypatch):
     """Renewal runs after the guarded per-user loop and used to be unguarded, so
     an exception there escaped into scheduled_refresh_loop and killed the thread."""
+
     class _Boom:
         def renew_expiring_subscriptions(self):
             raise RuntimeError("hub unreachable")
@@ -66,6 +68,7 @@ def test_loop_survives_a_pass_that_raises(monkeypatch):
 
 def test_pass_clears_its_in_flight_marker_even_when_it_raises(monkeypatch):
     """Otherwise a crashed pass looks permanently stalled and trips the watchdog."""
+
     def _boom():
         raise RuntimeError("nope")
 
@@ -98,8 +101,7 @@ def test_stall_measured_from_last_progress_not_pass_start():
 
 
 def test_progress_hook_updates_stage_and_clears_the_stall():
-    _set_state(pass_started_at=time.monotonic() - 900,
-               last_progress_at=time.monotonic() - 900)
+    _set_state(pass_started_at=time.monotonic() - 900, last_progress_at=time.monotonic() - 900)
     stalled = main._scheduler_stall_seconds()
     assert stalled is not None and stalled >= 900
 
@@ -130,8 +132,7 @@ def test_watchdog_logs_a_stall_without_exiting(monkeypatch, caplog):
 
     assert exits == [], "restart is disabled at 0 but the watchdog exited anyway"
     assert any("STALLED" in r.message for r in caplog.records)
-    assert any("feed 7/900" in str(r.args) for r in caplog.records), \
-        "the log must name what the pass was stuck on"
+    assert any("feed 7/900" in str(r.args) for r in caplog.records), "the log must name what the pass was stuck on"
 
 
 def test_watchdog_exits_past_the_restart_threshold(monkeypatch):
@@ -184,6 +185,7 @@ def test_healthz_reports_a_stall_but_still_returns_200(monkeypatch):
 
     assert response.status_code == 200
     import json
+
     body = json.loads(bytes(response.body))
     assert body["status"] == "ok"
     assert body["scheduler"]["stalled"] is True

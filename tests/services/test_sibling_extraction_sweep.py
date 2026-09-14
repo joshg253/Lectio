@@ -7,6 +7,7 @@ repair script starts disagreeing with the thing that prevents the damage, so
 these tests pin them to the same answers — including the short-extraction
 exemption, which is the only reason a legitimately identical stub survives.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -60,8 +61,7 @@ def _store(archive, rows):
     conn = archive()
     for feed_url, entry_id, html in rows:
         conn.execute(
-            "INSERT OR REPLACE INTO archived_entry (feed_url, entry_id, readability_html_zlib)"
-            " VALUES (?, ?, ?)",
+            "INSERT OR REPLACE INTO archived_entry (feed_url, entry_id, readability_html_zlib) VALUES (?, ?, ?)",
             (feed_url, entry_id, zlib.compress(html.encode()) if html is not None else None),
         )
     conn.commit()
@@ -69,12 +69,15 @@ def _store(archive, rows):
 
 
 def test_finds_every_member_of_a_shared_group(service, archive):
-    _store(archive, [
-        (FEED, "e1", BOILERPLATE),
-        (FEED, "e2", BOILERPLATE),
-        (FEED, "e3", BOILERPLATE),
-        (FEED, "e4", ARTICLE_A),
-    ])
+    _store(
+        archive,
+        [
+            (FEED, "e1", BOILERPLATE),
+            (FEED, "e2", BOILERPLATE),
+            (FEED, "e3", BOILERPLATE),
+            (FEED, "e4", ARTICLE_A),
+        ],
+    )
     found = service.sibling_extraction_entries()
     assert sorted(found) == [(FEED, "e1"), (FEED, "e2"), (FEED, "e3")]
 
@@ -101,31 +104,43 @@ def test_short_extractions_are_exempt(service, archive):
 def test_markup_differences_do_not_hide_a_match(service, archive):
     # The fingerprint is over visible text: attribute order and whitespace vary
     # between extraction runs while the words do not.
-    _store(archive, [
-        (FEED, "e1", BOILERPLATE),
-        (FEED, "e2", BOILERPLATE.replace("<p>", '<p class="x">  ').replace("</p>", "\n</p>")),
-    ])
+    _store(
+        archive,
+        [
+            (FEED, "e1", BOILERPLATE),
+            (FEED, "e2", BOILERPLATE.replace("<p>", '<p class="x">  ').replace("</p>", "\n</p>")),
+        ],
+    )
     assert sorted(service.sibling_extraction_entries()) == [(FEED, "e1"), (FEED, "e2")]
 
 
 def test_only_feed_narrows_the_sweep(service, archive):
-    _store(archive, [
-        (FEED, "e1", BOILERPLATE), (FEED, "e2", BOILERPLATE),
-        (OTHER_FEED, "x1", ARTICLE_A), (OTHER_FEED, "x2", ARTICLE_A),
-    ])
-    assert sorted(service.sibling_extraction_entries(OTHER_FEED)) == [
-        (OTHER_FEED, "x1"), (OTHER_FEED, "x2")]
+    _store(
+        archive,
+        [
+            (FEED, "e1", BOILERPLATE),
+            (FEED, "e2", BOILERPLATE),
+            (OTHER_FEED, "x1", ARTICLE_A),
+            (OTHER_FEED, "x2", ARTICLE_A),
+        ],
+    )
+    assert sorted(service.sibling_extraction_entries(OTHER_FEED)) == [(OTHER_FEED, "x1"), (OTHER_FEED, "x2")]
 
 
 def test_the_sweep_and_the_guard_give_the_same_verdict(service, archive):
     """The invariant that matters: anything the sweep flags, the guard refuses."""
-    _store(archive, [
-        (FEED, "e1", BOILERPLATE), (FEED, "e2", BOILERPLATE),
-        (FEED, "e3", ARTICLE_A), (FEED, "e4", STUB), (FEED, "e5", STUB),
-    ])
+    _store(
+        archive,
+        [
+            (FEED, "e1", BOILERPLATE),
+            (FEED, "e2", BOILERPLATE),
+            (FEED, "e3", ARTICLE_A),
+            (FEED, "e4", STUB),
+            (FEED, "e5", STUB),
+        ],
+    )
     flagged = set(service.sibling_extraction_entries())
-    for entry_id, html in [("e1", BOILERPLATE), ("e2", BOILERPLATE),
-                           ("e3", ARTICLE_A), ("e4", STUB)]:
+    for entry_id, html in [("e1", BOILERPLATE), ("e2", BOILERPLATE), ("e3", ARTICLE_A), ("e4", STUB)]:
         assert service.extraction_matches_sibling(FEED, entry_id, html) is ((FEED, entry_id) in flagged)
 
 
@@ -164,6 +179,7 @@ def test_a_missing_table_returns_nothing_rather_than_raising(tmp_path):
 # 2026-08-07 wrote identical text to five supernote entries this way, and every
 # one of its 131 "successes" ended up sharing text with a sibling.
 # ---------------------------------------------------------------------------
+
 
 def test_the_same_extraction_twice_in_one_run_is_refused(service, archive):
     """The exact race. Nothing is in the archive; both writes are in-run."""

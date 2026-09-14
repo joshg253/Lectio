@@ -4,6 +4,7 @@ delete-everywhere action that strips a tag from every entry that carries it.
 Manual tagging used to be add-only; these cover the remove paths so a tag can
 leave a single post or disappear from the library entirely.
 """
+
 from __future__ import annotations
 
 import datetime as dt

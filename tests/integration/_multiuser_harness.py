@@ -7,6 +7,7 @@ import. Prints 'HARNESS PASS' and exits 0 on success; raises (nonzero) on failur
 
 Invoked by tests/integration/test_multiuser_mode.py.
 """
+
 from __future__ import annotations
 
 import os
@@ -44,9 +45,7 @@ def _scenario_multi() -> None:
             c.commit()
         with tenancy.user_context(second_id):
             c = main.get_meta_connection()
-            rows = c.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='probe'"
-            ).fetchall()
+            rows = c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='probe'").fetchall()
             assert rows == [], "probe table leaked into seconduser DB"
 
         # --- auth flow ---
@@ -62,7 +61,6 @@ def _scenario_multi() -> None:
 
         r = client.get("/", follow_redirects=False)
         assert r.status_code == 200, r.status_code  # authed home
-
 
 
 def _add_folder(user_id: str, folder_name: str) -> None:
@@ -164,8 +162,7 @@ def _scenario_account_ui() -> None:
         # Unauthenticated → redirected to login by the auth gate.
         assert client.get("/administration", follow_redirects=False).status_code == 303
 
-        assert client.post("/login", data={"username": admin, "password": admin_pw},
-                           follow_redirects=False).status_code == 303
+        assert client.post("/login", data={"username": admin, "password": admin_pw}, follow_redirects=False).status_code == 303
         admin_id = main.user_store.get(admin)["user_id"]  # ty: ignore[not-subscriptable]
 
         # The main UI exposes an Account link in multi mode.
@@ -180,9 +177,7 @@ def _scenario_account_ui() -> None:
 
         # Admin creates a user → provisioned storage (dir keyed by user_id).
         tok = _csrf_token(r.text)
-        r = client.post("/admin/users/create",
-                        data={"_csrf": tok, "username": "carol", "password": "carol-pw"},
-                        follow_redirects=False)
+        r = client.post("/admin/users/create", data={"_csrf": tok, "username": "carol", "password": "carol-pw"}, follow_redirects=False)
         assert r.status_code == 303
         carol = main.user_store.get("carol")
         assert carol is not None
@@ -191,29 +186,28 @@ def _scenario_account_ui() -> None:
 
         # Admin renames carol → data dir (keyed by user_id) is unchanged.
         tok = _csrf_token(client.get("/administration").text)
-        r = client.post("/admin/users/rename",
-                        data={"_csrf": tok, "user_id": carol_id, "new_username": "caroline"},
-                        follow_redirects=False)
+        r = client.post("/admin/users/rename", data={"_csrf": tok, "user_id": carol_id, "new_username": "caroline"}, follow_redirects=False)
         assert r.status_code == 303
         assert main.user_store.get_by_id(carol_id)["username"] == "caroline"  # ty: ignore[not-subscriptable]
         assert (tenancy.user_data_dir(carol_id) / "lectio_meta.sqlite3").exists()
 
         # Change own password.
         tok = _csrf_token(client.get("/administration").text)
-        r = client.post("/account/password",
-                        data={"_csrf": tok, "current_password": admin_pw,
-                              "new_password": "newadminpw", "confirm_password": "newadminpw"},
-                        follow_redirects=False)
+        r = client.post(
+            "/account/password",
+            data={"_csrf": tok, "current_password": admin_pw, "new_password": "newadminpw", "confirm_password": "newadminpw"},
+            follow_redirects=False,
+        )
         assert r.status_code == 303
-        assert main.user_store.verify_login(admin, "newadminpw",
-                                            default_scheme=main.PASSWORD_HASH_SCHEME) == admin_id
+        assert main.user_store.verify_login(admin, "newadminpw", default_scheme=main.PASSWORD_HASH_SCHEME) == admin_id
 
         # Wrong current password is rejected (redirect carries an error).
         tok = _csrf_token(client.get("/administration").text)
-        r = client.post("/account/password",
-                        data={"_csrf": tok, "current_password": "nope",
-                              "new_password": "x", "confirm_password": "x"},
-                        follow_redirects=False)
+        r = client.post(
+            "/account/password",
+            data={"_csrf": tok, "current_password": "nope", "new_password": "x", "confirm_password": "x"},
+            follow_redirects=False,
+        )
         assert r.status_code == 303 and "message" in r.headers["location"]
 
         # Regenerate own API token.
@@ -225,38 +219,31 @@ def _scenario_account_ui() -> None:
 
         # Admin deletes a user → account row gone + isolated data dir removed.
         tok = _csrf_token(client.get("/administration").text)
-        r = client.post("/admin/users/create",
-                        data={"_csrf": tok, "username": "tempuser", "password": "temp-pw"},
-                        follow_redirects=False)
+        r = client.post("/admin/users/create", data={"_csrf": tok, "username": "tempuser", "password": "temp-pw"}, follow_redirects=False)
         assert r.status_code == 303
         temp_id = main.user_store.get("tempuser")["user_id"]  # ty: ignore[not-subscriptable]
         temp_dir = tenancy.user_data_dir(temp_id)
         assert temp_dir.exists()
         tok = _csrf_token(client.get("/administration").text)
-        r = client.post("/admin/users/delete",
-                        data={"_csrf": tok, "user_id": temp_id}, follow_redirects=False)
+        r = client.post("/admin/users/delete", data={"_csrf": tok, "user_id": temp_id}, follow_redirects=False)
         assert r.status_code == 303
         assert main.user_store.get_by_id(temp_id) is None
         assert not temp_dir.exists()
 
         # Admin cannot delete their own account, nor the last admin.
         tok = _csrf_token(client.get("/administration").text)
-        r = client.post("/admin/users/delete",
-                        data={"_csrf": tok, "user_id": admin_id}, follow_redirects=False)
+        r = client.post("/admin/users/delete", data={"_csrf": tok, "user_id": admin_id}, follow_redirects=False)
         assert r.status_code == 303 and "error" in r.headers["location"]
         assert main.user_store.get_by_id(admin_id) is not None
 
         # --- non-admin cannot reach admin actions ---
         # carol was renamed to caroline above; the password is unchanged.
-        assert client.post("/login", data={"username": "caroline", "password": "carol-pw"},
-                           follow_redirects=False).status_code == 303
+        assert client.post("/login", data={"username": "caroline", "password": "carol-pw"}, follow_redirects=False).status_code == 303
         r = client.get("/administration")
         assert r.status_code == 200
         assert "Create user" not in r.text  # admin section hidden
         tok = _csrf_token(r.text)
-        r = client.post("/admin/users/create",
-                        data={"_csrf": tok, "username": "dave", "password": "x"},
-                        follow_redirects=False)
+        r = client.post("/admin/users/create", data={"_csrf": tok, "username": "dave", "password": "x"}, follow_redirects=False)
         assert r.status_code == 403
         assert main.user_store.get("dave") is None
 

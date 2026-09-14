@@ -6,6 +6,7 @@ Lectio's inline-SVG thumbnail support), so the screenshots never depend on the n
 leak a private feed. Everything is seeded from fixed values, so re-running the
 tool produces the same library.
 """
+
 from __future__ import annotations
 
 import html
@@ -19,9 +20,14 @@ _BASE = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
 
 # Background wash for the generated SVG tiles (light, dark accent).
 _PALETTE = [
-    ("#e8eaf6", "#3949ab"), ("#e0f2f1", "#00897b"), ("#fff3e0", "#fb8c00"),
-    ("#fce4ec", "#d81b60"), ("#ede7f6", "#5e35b1"), ("#e8f5e9", "#43a047"),
-    ("#e3f2fd", "#1e88e5"), ("#fbe9e7", "#f4511e"),
+    ("#e8eaf6", "#3949ab"),
+    ("#e0f2f1", "#00897b"),
+    ("#fff3e0", "#fb8c00"),
+    ("#fce4ec", "#d81b60"),
+    ("#ede7f6", "#5e35b1"),
+    ("#e8f5e9", "#43a047"),
+    ("#e3f2fd", "#1e88e5"),
+    ("#fbe9e7", "#f4511e"),
 ]
 
 # Post art is a little doodle rather than a coloured block: the lead image is the
@@ -61,10 +67,7 @@ def _dino() -> str:
 def _cat_on_keyboard() -> str:
     return (
         '<rect x="20" y="66" width="120" height="26" rx="5" fill="#cfd8dc"/>'
-        + "".join(
-            f'<rect x="{26 + i * 14}" y="72" width="10" height="7" rx="2" fill="#90a4ae"/>'
-            for i in range(8)
-        )
+        + "".join(f'<rect x="{26 + i * 14}" y="72" width="10" height="7" rx="2" fill="#90a4ae"/>' for i in range(8))
         + '<path d="M54 66 q0 -26 26 -26 q26 0 26 26z" fill="#455a64"/>'
         '<path d="M58 44 l-3 -14 14 8z" fill="#455a64"/>'
         '<path d="M102 44 l3 -14 -14 8z" fill="#455a64"/>'
@@ -96,8 +99,7 @@ def _octopus() -> str:
         for i in range(5)
     )
     return (
-        tentacles
-        + '<path d="M44 66 q0 -34 36 -34 q36 0 36 34z" fill="#ba68c8"/>'
+        tentacles + '<path d="M44 66 q0 -34 36 -34 q36 0 36 34z" fill="#ba68c8"/>'
         '<circle cx="68" cy="50" r="8" fill="#fff"/><circle cx="70" cy="51" r="3.6" fill="' + _INK + '"/>'
         '<circle cx="92" cy="50" r="8" fill="#fff"/><circle cx="94" cy="51" r="3.6" fill="' + _INK + '"/>'
         '<path d="M74 62 q6 6 12 0" stroke="' + _INK + '" stroke-width="2.6" fill="none"/>'
@@ -111,7 +113,9 @@ def _satellite() -> str:
         '<path d="M{x1} 38 v24 M{x2} 38 v24" stroke="' + _INK + '" stroke-width="1.6"/>'
     )
     return (
-        '<path d="M56 50 h12 M92 50 h12" stroke="' + _INK + '" stroke-width="3"/>'
+        '<path d="M56 50 h12 M92 50 h12" stroke="'
+        + _INK
+        + '" stroke-width="3"/>'
         + panel.format(x=22, x1=33, x2=45)
         + panel.format(x=104, x1=115, x2=127)
         + '<rect x="68" y="34" width="24" height="34" rx="4" fill="#eceff1"'
@@ -215,8 +219,18 @@ def _crt() -> str:
 # Ordered so the two most on-the-nose pairings land on the posts that earn them
 # (the octopus piece, the telescope piece); the rest just cycle.
 _DOODLES = [
-    _duck, _crt, _dino, _satellite, _cat_on_keyboard, _coffee, _octopus,
-    _telescope, _robot, _floppy, _rocket, _ghost,
+    _duck,
+    _crt,
+    _dino,
+    _satellite,
+    _cat_on_keyboard,
+    _coffee,
+    _octopus,
+    _telescope,
+    _robot,
+    _floppy,
+    _rocket,
+    _ghost,
 ]
 
 
@@ -252,48 +266,77 @@ def _svg_tile(label: str, idx: int) -> str:
 
 # Folder -> list of (feed title, [entry title, ...]). Entry bodies are generated.
 _LIBRARY: list[tuple[str, list[tuple[str, list[str]]]]] = [
-    ("Technology", [
-        ("The Quiet Terminal", [
-            "Why local-first software keeps winning",
-            "A field guide to SQLite write contention",
-            "Notes on building calm, single-user tools",
-            "The case against the infinite feed",
-        ]),
-        ("Protocol Digest", [
-            "WebSub in practice: push without the polling",
-            "Designing an RSS reader that respects your attention",
-            "Atom, RSS, and the long tail of the open web",
-        ]),
-    ]),
-    ("Science", [
-        ("Orbital Notes", [
-            "How small telescopes still find new comets",
-            "The unreasonable usefulness of tide tables",
-            "A weekend with a backyard radio antenna",
-        ]),
-        ("The Tidepool", [
-            "Why octopuses taste with their arms",
-            "Mapping the slow rivers beneath the seafloor",
-        ]),
-    ]),
-    ("Design", [
-        ("Margins & Gutters", [
-            "Typography for screens that are read, not scanned",
-            "The forgotten craft of the table of contents",
-            "Dark mode is a reading decision, not a trend",
-        ]),
-    ]),
-    ("Podcasts", [
-        ("Longform Audio", [
-            "Episode 142 — Building software for one user",
-            "Episode 141 — The archivists of the open web",
-        ]),
-    ]),
+    (
+        "Technology",
+        [
+            (
+                "The Quiet Terminal",
+                [
+                    "Why local-first software keeps winning",
+                    "A field guide to SQLite write contention",
+                    "Notes on building calm, single-user tools",
+                    "The case against the infinite feed",
+                ],
+            ),
+            (
+                "Protocol Digest",
+                [
+                    "WebSub in practice: push without the polling",
+                    "Designing an RSS reader that respects your attention",
+                    "Atom, RSS, and the long tail of the open web",
+                ],
+            ),
+        ],
+    ),
+    (
+        "Science",
+        [
+            (
+                "Orbital Notes",
+                [
+                    "How small telescopes still find new comets",
+                    "The unreasonable usefulness of tide tables",
+                    "A weekend with a backyard radio antenna",
+                ],
+            ),
+            (
+                "The Tidepool",
+                [
+                    "Why octopuses taste with their arms",
+                    "Mapping the slow rivers beneath the seafloor",
+                ],
+            ),
+        ],
+    ),
+    (
+        "Design",
+        [
+            (
+                "Margins & Gutters",
+                [
+                    "Typography for screens that are read, not scanned",
+                    "The forgotten craft of the table of contents",
+                    "Dark mode is a reading decision, not a trend",
+                ],
+            ),
+        ],
+    ),
+    (
+        "Podcasts",
+        [
+            (
+                "Longform Audio",
+                [
+                    "Episode 142 — Building software for one user",
+                    "Episode 141 — The archivists of the open web",
+                ],
+            ),
+        ],
+    ),
 ]
 
 _PARAS = [
-    "Lectio keeps everything local and single-user, so the reader stays fast and "
-    "your reading history never leaves the machine.",
+    "Lectio keeps everything local and single-user, so the reader stays fast and your reading history never leaves the machine.",
     "This is sample content generated for the documentation screenshots. It is "
     "deliberately synthetic — no real feed is fetched while the shots are taken.",
     "The article pane derives a lead image, threads tags through the sidebar, and "
@@ -327,7 +370,7 @@ def feeds():
                     "<item>"
                     f"<title>{escape(title)}</title>"
                     f"<link>http://demo.local/{slug}/{i}</link>"
-                    f"<guid isPermaLink=\"false\">{escape(guid)}</guid>"
+                    f'<guid isPermaLink="false">{escape(guid)}</guid>'
                     f"<pubDate>{pub.strftime('%a, %d %b %Y %H:%M:%S +0000')}</pubDate>"
                     f"<description>{escape(content)}</description>"
                     "</item>"
@@ -337,8 +380,6 @@ def feeds():
                 '<rss version="2.0"><channel>'
                 f"<title>{escape(feed_title)}</title>"
                 "<link>http://demo.local/</link>"
-                f"<description>{escape(feed_title)} — Lectio demo feed</description>"
-                + "".join(items)
-                + "</channel></rss>"
+                f"<description>{escape(feed_title)} — Lectio demo feed</description>" + "".join(items) + "</channel></rss>"
             )
             yield folder, feed_title, slug, rss

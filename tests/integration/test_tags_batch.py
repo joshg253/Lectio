@@ -3,6 +3,7 @@
 Renamed from "Add tag" 2026-08-31: the old route only ever appended, with no
 way to remove a tag across a multi-selection -- now uses the same +/-tag
 convention as the rule editor's tag_filter spec."""
+
 from __future__ import annotations
 
 import json
@@ -43,8 +44,7 @@ def _setup_entries() -> None:
     with main.get_reader() as reader:
         reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
         for i in (1, 2):
-            reader.add_entry({"feed_url": FEED, "id": f"e{i}", "title": f"P{i}",
-                              "link": f"https://example.test/{i}"})
+            reader.add_entry({"feed_url": FEED, "id": f"e{i}", "title": f"P{i}", "link": f"https://example.test/{i}"})
 
 
 def _tags(entry_id: str) -> list[str]:

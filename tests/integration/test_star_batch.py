@@ -2,6 +2,7 @@
 (/entries/star-batch) and its interaction with the existing single-entry
 undo-unstar mechanism, which this action reuses for a real multi-row batch
 for the first time (entry_unstar_batch's schema always supported it)."""
+
 from __future__ import annotations
 
 import json
@@ -51,19 +52,17 @@ def _add_entry(feed_url: str, entry_id: str, disable_updates: bool = True) -> No
 def _star(feed_url: str, entry_id: str, saved_at: str | None = None) -> None:
     with main.get_meta_connection() as conn:
         if saved_at:
-            conn.execute("INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
-                         (feed_url, entry_id, saved_at))
+            conn.execute(
+                "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)", (feed_url, entry_id, saved_at)
+            )
         else:
-            conn.execute("INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
-                         (feed_url, entry_id))
+            conn.execute("INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (feed_url, entry_id))
         conn.commit()
 
 
 def _is_starred(feed_url: str, entry_id: str) -> bool:
     with main.get_meta_connection() as conn:
-        return bool(conn.execute(
-            "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (feed_url, entry_id)
-        ).fetchone())
+        return bool(conn.execute("SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (feed_url, entry_id)).fetchone())
 
 
 def _batch(pairs, saved: int) -> dict:
@@ -111,9 +110,7 @@ def test_batch_remove_star_unstars_and_returns_an_undo_token(env):
     assert undo_data == {"ok": True, "restored": 2, "gone": 0}
     assert _is_starred(FEED, "e1") and _is_starred(FEED, "e2")
     with main.get_meta_connection() as conn:
-        row = conn.execute(
-            "SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (FEED, "e1")
-        ).fetchone()
+        row = conn.execute("SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (FEED, "e1")).fetchone()
     assert row["saved_at"] == "2021-06-01 12:00:00"  # original position preserved
 
 

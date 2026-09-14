@@ -27,6 +27,7 @@ Usage:
 
 Defaults to a dry run; --apply performs the unsubscribes.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -75,16 +76,17 @@ def run(user_id: str, apply: bool) -> int:
 
 
 def main_cli(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--user", required=True)
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args(argv)
     n = run(args.user, args.apply)
     print(f"\n{'unsubscribed' if args.apply else 'would unsubscribe'}: {n}")
     if args.apply:
-        print("NOTE: restart the container — this wrote via exec and the running "
-              "server still holds the old structure in its in-process caches.")
+        print(
+            "NOTE: restart the container — this wrote via exec and the running "
+            "server still holds the old structure in its in-process caches."
+        )
     return 0
 
 

@@ -2,6 +2,7 @@
 embeds (iframes from trusted hosts, sanitized SVG/MathML, audio/video) while
 removing scripts, event handlers, and unsafe URLs — Lectio owns sanitization now
 that feeds are parsed with feedparser sanitization disabled."""
+
 from __future__ import annotations
 
 import pytest
@@ -9,16 +10,19 @@ import pytest
 from services import html_sanitize as H
 
 
-@pytest.mark.parametrize("payload", [
-    '<script>alert(1)</script>',
-    '<img src=x onerror=alert(1)>',
-    '<a href="javascript:alert(1)">x</a>',
-    '<a href="vbscript:msgbox(1)">x</a>',
-    '<iframe src="data:text/html,<script>alert(1)</script>"></iframe>',
-    '<form action="https://evil"><input name=x></form>',
-    '<object data="https://evil/x.swf"></object>',
-    '<svg><script>alert(1)</script></svg>',
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "<script>alert(1)</script>",
+        "<img src=x onerror=alert(1)>",
+        '<a href="javascript:alert(1)">x</a>',
+        '<a href="vbscript:msgbox(1)">x</a>',
+        '<iframe src="data:text/html,<script>alert(1)</script>"></iframe>',
+        '<form action="https://evil"><input name=x></form>',
+        '<object data="https://evil/x.swf"></object>',
+        "<svg><script>alert(1)</script></svg>",
+    ],
+)
 def test_dangerous_content_removed(payload):
     out = H.sanitize_html(payload).lower()
     assert "alert" not in out
@@ -59,16 +63,19 @@ def test_class_kept_id_dropped():
     assert "id=" not in out
 
 
-@pytest.mark.parametrize("host", [
-    "https://www.youtube.com/embed/abc",
-    "https://www.youtube-nocookie.com/embed/abc",
-    "https://player.vimeo.com/video/123",
-    "https://w.soundcloud.com/player/?url=x",
-    "https://bandcamp.com/EmbeddedPlayer/album=1",
-    "https://open.spotify.com/embed/track/1",
-    "https://codepen.io/x/embed/y",
-    "https://www.soundslice.com/slices/1yTTc/embed/",
-])
+@pytest.mark.parametrize(
+    "host",
+    [
+        "https://www.youtube.com/embed/abc",
+        "https://www.youtube-nocookie.com/embed/abc",
+        "https://player.vimeo.com/video/123",
+        "https://w.soundcloud.com/player/?url=x",
+        "https://bandcamp.com/EmbeddedPlayer/album=1",
+        "https://open.spotify.com/embed/track/1",
+        "https://codepen.io/x/embed/y",
+        "https://www.soundslice.com/slices/1yTTc/embed/",
+    ],
+)
 def test_trusted_embeds_kept_and_sandboxed(host):
     out = H.sanitize_html(f'<iframe src="{host}"></iframe>')
     assert host in out
@@ -76,12 +83,15 @@ def test_trusted_embeds_kept_and_sandboxed(host):
     assert "referrerpolicy=" in out
 
 
-@pytest.mark.parametrize("host", [
-    "https://evil.com/x",
-    "https://notyoutube.com/embed/x",     # suffix-confusion guard
-    "https://youtube.com.evil.com/embed/x",
-    "http://www.youtube.com/embed/x",      # must be https
-])
+@pytest.mark.parametrize(
+    "host",
+    [
+        "https://evil.com/x",
+        "https://notyoutube.com/embed/x",  # suffix-confusion guard
+        "https://youtube.com.evil.com/embed/x",
+        "http://www.youtube.com/embed/x",  # must be https
+    ],
+)
 def test_untrusted_or_insecure_embeds_dropped(host):
     out = H.sanitize_html(f'<iframe src="{host}"></iframe>')
     assert "<iframe" not in out.lower()
@@ -89,8 +99,7 @@ def test_untrusted_or_insecure_embeds_dropped(host):
 
 def test_iframe_event_handlers_and_extra_attrs_stripped():
     out = H.sanitize_html(
-        '<iframe src="https://www.youtube.com/embed/abc" onload="alert(1)" '
-        'srcdoc="<script>x</script>" style="x"></iframe>'
+        '<iframe src="https://www.youtube.com/embed/abc" onload="alert(1)" srcdoc="<script>x</script>" style="x"></iframe>'
     )
     assert "onload" not in out.lower()
     assert "srcdoc" not in out.lower()
@@ -98,16 +107,15 @@ def test_iframe_event_handlers_and_extra_attrs_stripped():
 
 
 def test_inline_svg_kept_but_cleaned():
-    out = H.sanitize_html('<svg viewBox="0 0 10 10"><rect width="10" height="10"/>'
-                          '<script>alert(1)</script></svg>')
+    out = H.sanitize_html('<svg viewBox="0 0 10 10"><rect width="10" height="10"/><script>alert(1)</script></svg>')
     assert "<svg" in out.lower()
     assert "alert" not in out.lower()
 
 
 def test_mathml_kept_attributes_stripped():
     out = H.sanitize_html('<math><mrow><mi onclick="x">a</mi><mo>+</mo><mn>2</mn></mrow></math>')
-    assert "<math>" in out.lower().replace(' ', '') or "<math" in out.lower()
-    assert "<mi>a</mi>" in out.lower().replace(' ', '') or "<mi" in out.lower()
+    assert "<math>" in out.lower().replace(" ", "") or "<math" in out.lower()
+    assert "<mi>a</mi>" in out.lower().replace(" ", "") or "<mi" in out.lower()
     assert "onclick" not in out.lower()
 
 
@@ -116,8 +124,7 @@ def test_math_svg_object_height_promoted():
     # is lifted off the (stripped) inline style onto a real height attr, and the
     # valign baseline class is preserved.
     out = H.sanitize_html(
-        '<object type="image/svg+xml" data="https://x.test/a_n.svg" '
-        'class="valign-m3" style="height: 11px;">a_n</object>'
+        '<object type="image/svg+xml" data="https://x.test/a_n.svg" class="valign-m3" style="height: 11px;">a_n</object>'
     ).lower()
     assert "<img" in out and "<object" not in out
     assert 'height="11"' in out
@@ -129,9 +136,7 @@ def test_math_svg_object_height_promoted():
 def test_math_png_img_height_promoted():
     # Pre-existing PNG inline math <img> keeps its valign class and gains a height
     # attr from the inline style (which is then stripped).
-    out = H.sanitize_html(
-        '<img class="valign-m4" src="https://x.test/f.png" style="height: 18px;">'
-    ).lower()
+    out = H.sanitize_html('<img class="valign-m4" src="https://x.test/f.png" style="height: 18px;">').lower()
     assert 'height="18"' in out
     assert "valign-m4" in out
     assert "style=" not in out
@@ -139,8 +144,7 @@ def test_math_png_img_height_promoted():
 
 def test_math_block_equation_height_promoted():
     out = H.sanitize_html(
-        '<object type="image/svg+xml" data="https://x.test/eq.svg" '
-        'class="align-center" style="height: 49px;">\\[f(x)\\]</object>'
+        '<object type="image/svg+xml" data="https://x.test/eq.svg" class="align-center" style="height: 49px;">\\[f(x)\\]</object>'
     ).lower()
     assert "<img" in out
     assert 'height="49"' in out
@@ -177,8 +181,7 @@ def test_pseudo_html_no_document_wrapper():
 
 
 def test_audio_video_kept():
-    out = H.sanitize_html('<video src="https://x.test/v.mp4" controls></video>'
-                          '<audio src="https://x.test/a.mp3" controls></audio>')
+    out = H.sanitize_html('<video src="https://x.test/v.mp4" controls></video><audio src="https://x.test/a.mp3" controls></audio>')
     assert "<video" in out and "<audio" in out
 
 
@@ -188,6 +191,7 @@ def test_empty_and_none_safe():
 
 
 # --- inline style: enumerated allowlist ------------------------------------
+
 
 def test_presentational_styles_survive():
     """Author formatting the app can't otherwise recover: feed CSS is never
@@ -208,8 +212,7 @@ def test_style_values_are_normalized_for_the_stylesheet():
 def test_unlisted_style_properties_are_dropped():
     """Layout/positioning would let feed content escape the pane or overlay the
     app's own UI, which matters even with no scripting involved."""
-    for css in ("position:fixed;top:0;left:0", "z-index:99999", "width:5000px",
-                "display:none", "opacity:0", "content:attr(data-x)"):
+    for css in ("position:fixed;top:0;left:0", "z-index:99999", "width:5000px", "display:none", "opacity:0", "content:attr(data-x)"):
         assert "style=" not in H.sanitize_html(f'<p style="{css}">x</p>')
 
 
@@ -252,6 +255,7 @@ def test_center_tag_survives():
 # choke point every rendered body passes through — Read Mode loads none of
 # app.js, and offline captures are rendered from stored HTML.
 
+
 def test_external_link_opens_in_a_new_tab_with_noopener():
     out = H.sanitize_html('<a href="https://example.com/post">x</a>')
     assert 'target="_blank"' in out
@@ -278,9 +282,7 @@ def test_handler_schemes_stay_in_the_tab(href):
 def test_a_feed_cannot_choose_its_own_target_or_drop_noopener():
     """target/rel are in the allowlist only so the second sanitizing pass keeps
     what the first pass set — the values are always ours."""
-    out = H.sanitize_html(
-        '<a href="https://example.com/x" target="_self" rel="opener">x</a>'
-    )
+    out = H.sanitize_html('<a href="https://example.com/x" target="_self" rel="opener">x</a>')
     assert 'target="_blank"' in out
     assert 'rel="noopener noreferrer"' in out
     assert 'target="_self"' not in out
@@ -299,11 +301,9 @@ def test_excerpt_decodes_entities_because_the_caller_escapes_again():
     """Email showed "&lt;chrono&gt;, his date &amp; time library": the body's
     entities survived tag-stripping as literal text, and html.escape then escaped
     the ampersands a second time."""
-    body = ("<p>Rob and Jason talk about &lt;chrono&gt;, his date &amp; time "
-            "library and his work on move semantics.</p>")
+    body = "<p>Rob and Jason talk about &lt;chrono&gt;, his date &amp; time library and his work on move semantics.</p>"
     out = H.plain_text_excerpt(body)
-    assert out == ("Rob and Jason talk about <chrono>, his date & time library "
-                   "and his work on move semantics.")
+    assert out == ("Rob and Jason talk about <chrono>, his date & time library and his work on move semantics.")
 
 
 def test_tags_are_stripped_before_entities_are_decoded():

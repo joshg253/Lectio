@@ -6,6 +6,7 @@ tag-selectable opt-out. The opt-out semantics are the load-bearing part: an
 entry is protected if it carries *any* kept tag, so a blanket-unstar can't gut a
 reading queue the user asked to keep.
 """
+
 from __future__ import annotations
 
 import pytest

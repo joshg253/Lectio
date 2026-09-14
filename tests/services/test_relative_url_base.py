@@ -5,6 +5,7 @@ the feed URL (`http.py` fills in `content-location`). A generator that copies a
 page's markup into the item writes paths relative to that page, so
 `<img src="images/x.jpg">` in an item at /news/202608/post.html became
 /news/images/x.jpg — a 404 on every image the feed carried."""
+
 from __future__ import annotations
 
 import io
@@ -55,8 +56,7 @@ class _E:
 
 
 def test_base_is_the_entry_link_on_the_feeds_own_host():
-    assert _entry_html_base(_E("https://example.test/news/202608/a.html"), FEED_URL) \
-        == "https://example.test/news/202608/a.html"
+    assert _entry_html_base(_E("https://example.test/news/202608/a.html"), FEED_URL) == "https://example.test/news/202608/a.html"
 
 
 def test_offsite_entry_link_falls_back_to_the_feed():
@@ -72,14 +72,17 @@ def test_linkless_entry_falls_back_to_the_feed():
 # --- the resolver itself ----------------------------------------------------
 
 
-@pytest.mark.parametrize("html,expected", [
-    ('<img src="images/x.jpg">', 'https://example.test/news/202608/images/x.jpg'),
-    ('<img src="../images0/x.png">', 'https://example.test/news/images0/x.png'),
-    ('<img src="/root.jpg">', 'https://example.test/root.jpg'),
-    ('<img src="//cdn.test/x.jpg">', '//cdn.test/x.jpg'),
-    ('<img src="https://cdn.test/x.jpg">', 'https://cdn.test/x.jpg'),
-    ('<img src="data:image/gif;base64,R0lGOD">', 'data:image/gif;base64,R0lGOD'),
-])
+@pytest.mark.parametrize(
+    "html,expected",
+    [
+        ('<img src="images/x.jpg">', "https://example.test/news/202608/images/x.jpg"),
+        ('<img src="../images0/x.png">', "https://example.test/news/images0/x.png"),
+        ('<img src="/root.jpg">', "https://example.test/root.jpg"),
+        ('<img src="//cdn.test/x.jpg">', "//cdn.test/x.jpg"),
+        ('<img src="https://cdn.test/x.jpg">', "https://cdn.test/x.jpg"),
+        ('<img src="data:image/gif;base64,R0lGOD">', "data:image/gif;base64,R0lGOD"),
+    ],
+)
 def test_resolve_relative_urls(html, expected):
     out = html_sanitize.resolve_relative_urls(html, "https://example.test/news/202608/a-post.html")
     assert expected in out
@@ -87,35 +90,41 @@ def test_resolve_relative_urls(html, expected):
 
 def test_srcset_candidates_are_resolved():
     out = html_sanitize.resolve_relative_urls(
-        '<img srcset="small.jpg 480w, big.jpg 1024w" src="small.jpg">',
-        "https://example.test/news/202608/a-post.html")
+        '<img srcset="small.jpg 480w, big.jpg 1024w" src="small.jpg">', "https://example.test/news/202608/a-post.html"
+    )
     assert "https://example.test/news/202608/small.jpg 480w" in out
     assert "https://example.test/news/202608/big.jpg 1024w" in out
 
 
 def test_untouched_html_is_returned_unchanged():
-    html = '<p>No links here.</p>'
+    html = "<p>No links here.</p>"
     assert html_sanitize.resolve_relative_urls(html, FEED_URL) is html
 
 
 # --- entities left in a plain-text title -------------------------------------
 
 
-@pytest.mark.parametrize("raw,expected", [
-    ("AT&amp;T buys a rival", "AT&T buys a rival"),
-    ("Apple&rsquo;s new laptop", "Apple’s new laptop"),
-    ("Long &ndash; dash &hellip; ellipsis", "Long – dash … ellipsis"),
-    ("Nothing to decode", "Nothing to decode"),
-    ("Double &amp;amp; encoded", "Double &amp; encoded"),
-])
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("AT&amp;T buys a rival", "AT&T buys a rival"),
+        ("Apple&rsquo;s new laptop", "Apple’s new laptop"),
+        ("Long &ndash; dash &hellip; ellipsis", "Long – dash … ellipsis"),
+        ("Nothing to decode", "Nothing to decode"),
+        ("Double &amp;amp; encoded", "Double &amp; encoded"),
+    ],
+)
 def test_decode_title_entities(raw, expected):
     assert html_sanitize.decode_title_entities(raw) == expected
 
 
-@pytest.mark.parametrize("raw,decoded", [
-    ("Using &lt;details&gt; in HTML", "Using <details> in HTML"),
-    ("A &#60;tag&#62; in the title", "A <tag> in the title"),
-])
+@pytest.mark.parametrize(
+    "raw,decoded",
+    [
+        ("Using &lt;details&gt; in HTML", "Using <details> in HTML"),
+        ("A &#60;tag&#62; in the title", "A <tag> in the title"),
+    ],
+)
 def test_markup_entities_decode_too_because_rendering_re_escapes(raw, decoded):
     """Keeping these encoded was the worse outcome: the ampersand gets escaped in
     turn, so the reader saw a literal "&lt;details&gt;" on screen. Safe because a
@@ -128,10 +137,13 @@ def test_markup_entities_decode_too_because_rendering_re_escapes(raw, decoded):
     assert "&lt;" in rendered
 
 
-@pytest.mark.parametrize("payload", [
-    'Payload <img src=x onerror="window.__XSS=1"> here',
-    "Payload <script>window.__XSS=1</script> here",
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        'Payload <img src=x onerror="window.__XSS=1"> here',
+        "Payload <script>window.__XSS=1</script> here",
+    ],
+)
 def test_a_title_carrying_markup_renders_as_text(payload):
     """41 stored titles already hold a literal `<` from their publisher; the
     escaping is what makes decoding safe, so it is asserted here."""
@@ -141,9 +153,7 @@ def test_a_title_carrying_markup_renders_as_text(payload):
 
 
 def test_ingest_decodes_the_entry_title():
-    xml = FIXTURE.read_text().replace(
-        "<title>Post in a dated subdirectory</title>",
-        "<title>AT&amp;amp;T &amp;rsquo;90s Special</title>")
+    xml = FIXTURE.read_text().replace("<title>Post in a dated subdirectory</title>", "<title>AT&amp;amp;T &amp;rsquo;90s Special</title>")
     parser = SanitizingFeedparserParser()
     _feed, entries = parser(FEED_URL, io.BytesIO(xml.encode()), {"content-location": FEED_URL})
     titles = [e.title for e in entries]

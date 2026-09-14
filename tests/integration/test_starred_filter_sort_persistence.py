@@ -5,6 +5,7 @@ saved_sort_by/saved_sort_dir) purely by testing star_only — so the new filter
 has to work without ever setting star_only, or an explicit resort while
 "Starred" is active would silently corrupt the Saved view's remembered order
 instead of the Feeds view's."""
+
 from __future__ import annotations
 
 import pytest
@@ -30,10 +31,14 @@ def configured(tmp_path, monkeypatch):
     main.ensure_meta_schema()
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
-        reader.add_entry({
-            "feed_url": FEED, "id": "e1", "title": "post e1",
-            "link": "https://example.test/e1",
-        })
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "e1",
+                "title": "post e1",
+                "link": "https://example.test/e1",
+            }
+        )
     with main.get_meta_connection() as conn:
         conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (FEED, "e1"))
         conn.commit()
@@ -53,9 +58,7 @@ def _client() -> TestClient:
 
 def test_resorting_while_starred_writes_feeds_sort_not_saved_sort(configured):
     folder_id = configured
-    resp = _client().get(
-        f"/?folder_id={folder_id}&read_filter=starred&sort_by=received&sort_dir=asc"
-    )
+    resp = _client().get(f"/?folder_id={folder_id}&read_filter=starred&sort_by=received&sort_dir=asc")
     assert resp.status_code == 200
 
     with main.get_meta_connection() as conn:

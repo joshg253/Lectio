@@ -3,6 +3,7 @@ archive lives in its own DB. These tests pin the tenancy contract: the worker
 scans every background user under that user's context, so a pending row enqueued
 for one user is never claimed against the default tenant's DB (the bug that left
 real users' starred entries unarchived in multi-user mode)."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -76,8 +77,7 @@ def test_worker_processes_each_users_own_db(configured):
         _make_archive_db(tenancy.starred_archive_db_path(uid))
         conn = sqlite3.connect(str(tenancy.starred_archive_db_path(uid)))
         conn.execute(
-            "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at)"
-            " VALUES (?, 'e1', 'pending', 0)",
+            "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at) VALUES (?, 'e1', 'pending', 0)",
             (f"https://{uid}.example/feed",),
         )
         conn.commit()
@@ -102,8 +102,7 @@ def test_pending_row_is_invisible_to_the_default_tenant(configured):
     _make_archive_db(tenancy.starred_archive_db_path("alice"))
     conn = sqlite3.connect(str(tenancy.starred_archive_db_path("alice")))
     conn.execute(
-        "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at)"
-        " VALUES ('https://alice.example/feed', 'e1', 'pending', 0)"
+        "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at) VALUES ('https://alice.example/feed', 'e1', 'pending', 0)"
     )
     conn.commit()
     conn.close()
@@ -134,8 +133,7 @@ def test_reclaim_resets_stale_in_progress_rows(configured):
     _make_archive_db(tenancy.starred_archive_db_path("alice"))
     conn = sqlite3.connect(str(tenancy.starred_archive_db_path("alice")))
     conn.execute(
-        "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at)"
-        " VALUES ('https://alice.example/feed', 'e1', 'in_progress', 0)"
+        "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at) VALUES ('https://alice.example/feed', 'e1', 'in_progress', 0)"
     )
     conn.commit()
     conn.close()

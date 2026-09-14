@@ -24,9 +24,7 @@ class _Feed:
 
 
 def test_a_rename_wins_over_the_feeds_own_title():
-    assert main.feed_display_title(_Feed(title="News", user_title="Visual Studio Magazine - News")) == (
-        "Visual Studio Magazine - News"
-    )
+    assert main.feed_display_title(_Feed(title="News", user_title="Visual Studio Magazine - News")) == ("Visual Studio Magazine - News")
 
 
 def test_the_feeds_own_title_is_used_when_there_is_no_rename():

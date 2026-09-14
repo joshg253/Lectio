@@ -1,6 +1,7 @@
 """Smoke tests for _LectioReaderStorage — the reader Storage subclass that sets
 WAL auto-checkpoint. These guard against reader upgrades that change the private
 Storage API we subclass."""
+
 from __future__ import annotations
 
 import sqlite3

@@ -17,6 +17,7 @@ Usage (inside the container, per user):
     PYTHONPATH=/app /app/.venv/bin/python scripts/cleanup_duplicate_saved_entries.py [--apply] [--user USER_ID]
 Dry-run by default.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,22 +32,14 @@ def cleanup(user_id: str, apply: bool) -> tuple[int, int]:
     removed = 0
     with tenancy.user_context(user_id):
         with main.get_meta_connection() as conn:
-            rows = conn.execute(
-                "SELECT entry_id FROM saved_entries GROUP BY entry_id "
-                "HAVING COUNT(DISTINCT feed_url) > 1"
-            ).fetchall()
+            rows = conn.execute("SELECT entry_id FROM saved_entries GROUP BY entry_id HAVING COUNT(DISTINCT feed_url) > 1").fetchall()
             dup_ids = [str(r["entry_id"]) for r in rows]
         print(f"[{user_id}] entry ids saved under multiple feeds: {len(dup_ids)}")
 
         with main.get_reader() as reader:
             for eid in dup_ids:
                 with main.get_meta_connection() as conn:
-                    feeds = [
-                        str(r["feed_url"])
-                        for r in conn.execute(
-                            "SELECT feed_url FROM saved_entries WHERE entry_id = ?", (eid,)
-                        )
-                    ]
+                    feeds = [str(r["feed_url"]) for r in conn.execute("SELECT feed_url FROM saved_entries WHERE entry_id = ?", (eid,))]
                 live = [f for f in feeds if reader.get_entry((f, eid), None) is not None]
                 dead = [f for f in feeds if f not in live]
                 checked += 1
