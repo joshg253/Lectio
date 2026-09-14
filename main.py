@@ -3907,10 +3907,20 @@ def ensure_meta_schema() -> None:
                 feed_url TEXT NOT NULL,
                 entry_id TEXT NOT NULL,
                 published TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'manual',
                 PRIMARY KEY(feed_url, entry_id)
             )
             """
         )
+        try:
+            # Existing rows predate this column and cannot be told apart after
+            # the fact, so they default to 'manual' — the safe direction, since
+            # scripts/backfill_url_inferred_dates.py's --refresh only recomputes
+            # rows marked 'inferred' (its own writes) and must never touch a
+            # real correction made through /entries/set-date.
+            conn.execute("ALTER TABLE entry_date_overrides ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
+        except Exception:
+            pass  # column already exists
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS entry_title_overrides (
@@ -12586,6 +12596,37 @@ _URL_PUBDATE_RE = re.compile(r"/(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:/|$|\?|\.)")
 # month beats a precise-looking lie.
 _URL_PUBMONTH_RE = re.compile(r"/(\d{4})/(\d{1,2})/(?:$|[^0-9])")
 
+_MONTHNAMES = (
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+)
+
+# datagenetics.com's permalink shape: /blog/march112020/, /blog/august42012/ —
+# month name + a number + year, run together with no separator. That number is
+# NOT the day: the blog's own archive index (blog.html) lists posts within a
+# "March 2020" section in descending-number order, and march112020 sits well
+# after the feed's own <pubDate> for march102020 (2020-03-27) — it's a per-month
+# post sequence, not a day-of-month. datagenetics ships no <pubDate> at all for
+# ~35 older posts and no date anywhere on the article page either.
+#
+# The number is still used as the returned day (clamped to <=28, so it is
+# always a valid date) rather than always the 1st: real same-month pubDates
+# climb monotonically with it (march1..march10 above run March 4 -> March 27),
+# so a higher number reliably sorts later within the month even though it is
+# not the true day. A distinct, wrong-but-ordered day beats every post in a
+# month colliding on the 1st.
+_URL_MONTHNAME_YEAR_RE = re.compile(r"/(" + "|".join(_MONTHNAMES) + r")(\d{1,2})((?:19|20)\d{2})/", re.I)
+
 
 def url_inferred_pubdate(link: str | None) -> datetime | None:
     if not link:
@@ -12606,20 +12647,32 @@ def url_inferred_pubdate(link: str | None) -> datetime | None:
 
 
 def url_inferred_pubmonth(link: str | None) -> datetime | None:
-    """The /YYYY/MM/ permalink shape, resolved to the first of that month.
+    """The /YYYY/MM/ or month-name+year permalink shape, resolved to that month.
 
-    Month precision, and the day is a placeholder rather than a claim — see
-    ``_URL_PUBMONTH_RE`` for why this is still the best signal those posts have.
+    Month precision — the day is not a claim, only an ordering hint where one is
+    available. See ``_URL_PUBMONTH_RE`` and ``_URL_MONTHNAME_YEAR_RE`` for why
+    this is still the best signal those posts have, and for why the month-name
+    shape's day comes from its counter rather than always being the 1st.
     """
     if not link:
         return None
+    day = 1
     match = _URL_PUBMONTH_RE.search(link)
-    if not match:
-        return None
-    year, month = int(match.group(1)), int(match.group(2))
+    if match:
+        year, month = int(match.group(1)), int(match.group(2))
+    else:
+        match = _URL_MONTHNAME_YEAR_RE.search(link)
+        if not match:
+            return None
+        month = _MONTHNAMES.index(match.group(1).lower()) + 1
+        # Clamped to 1..28: the regex's \d{1,2} accepts 0 (e.g. "march02020"
+        # backtracks to sequence "0"), and datetime() raises on day=0 rather
+        # than being a plausibility check this function can catch below.
+        day = max(1, min(int(match.group(2)), 28))
+        year = int(match.group(3))
     if not (2000 <= year <= 2099 and 1 <= month <= 12):
         return None
-    return datetime(year, month, 1, tzinfo=timezone.utc)
+    return datetime(year, month, day, tzinfo=timezone.utc)
 
 
 # Some feeds prefix entry titles with the date ("2024-01-15: …", "2024/01/15
@@ -32304,7 +32357,7 @@ def _set_orphan_entry_date(feed_url: str, entry_id: str, published: str) -> JSON
             # date already returned 400 before this block), and published hasn't
             # changed since, so re-parsing it here would just repeat that work.
             conn.execute(
-                "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published) VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published, source) VALUES (?, ?, ?, 'manual')",
                 (feed_url, entry_id, dt.strftime("%Y-%m-%d %H:%M:%S")),
             )
     invalidate_unread_counts_cache()
@@ -32355,7 +32408,7 @@ def set_entry_date_route(feed_url: str = Form(...), entry_id: str = Form(...), p
         stored = dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         with get_meta_connection() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published) VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published, source) VALUES (?, ?, ?, 'manual')",
                 (feed_url, entry_id, stored),
             )
         db = reader._storage.get_db()
