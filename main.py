@@ -33387,8 +33387,16 @@ def _resolve_view_posts(
     search-forces-``all`` rule) so a whole-set action lands on the same entries
     the user is looking at.
 
-    Orphan archive entries are NOT merged in the way the home route merges them:
-    those are saves whose feed is gone, so they have no reader row to act on.
+    Orphan archive entries ARE merged in, same condition and same
+    ``merge_orphan_saved_entries`` call the home route's whole-backlog star view
+    uses — they used to be skipped here ("no reader row to act on"), but
+    ``_move_entry_to_feed`` now has an orphan-archive fallback (see its
+    docstring), so leaving them out just meant Select All and "Move visible to
+    feed…" silently dropped exactly the rows a user was trying to consolidate.
+    Reported live 2026-09-14: searching Saved for a stuck feed's own domain
+    displayed its orphaned stars fine (the home route already merges them) but
+    Select All picked only the *other*, reader-backed search hits — every
+    genuine match was silently missing from the selection.
     """
     normalized_tag = normalize_tag_value(tag)
     normalized_query = normalize_search_query(search_query)
@@ -33414,7 +33422,7 @@ def _resolve_view_posts(
         if folder_id == root_id and not list_feed_url:
             entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
 
-    return list_entries_for_feeds(
+    posts = list_entries_for_feeds(
         entry_feed_urls,
         limit=_MOVE_VISIBLE_LIMIT,
         sort_by=normalize_sort_by(sort_by, allow_starred=True),
@@ -33425,6 +33433,24 @@ def _resolve_view_posts(
         search_query=normalized_query,
         kept_scope=("starred" if inbox_view else "kept"),
     )
+
+    # Same gate the home route uses for its own whole-backlog star view: root,
+    # no single feed or tag narrowing it — a scope orphans (which have no
+    # folder of their own) can meaningfully belong to.
+    if normalized_star_only and not list_feed_url and not normalized_tag and folder_id == root_id:
+        try:
+            posts = merge_orphan_saved_entries(
+                posts,
+                live_feed_urls=get_all_reader_feed_urls(),
+                sort_by=normalize_sort_by(sort_by, allow_starred=True),
+                sort_dir=normalize_sort_dir(sort_dir),
+                limit=_MOVE_VISIBLE_LIMIT,
+                search_terms=search_terms_from_query(normalized_query),
+                kept_scope=("starred" if inbox_view else "kept"),
+            )
+        except Exception:  # noqa: BLE001 — the live-entry resolution above still stands
+            LOGGER.exception("[resolve-view] orphan merge failed")
+    return posts
 
 
 @app.post("/entries/select-all-visible")
