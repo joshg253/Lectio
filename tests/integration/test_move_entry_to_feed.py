@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import zlib
+
 import pytest
 
 import main
@@ -306,3 +308,73 @@ def test_move_does_not_overwrite_a_richer_target(env):
     assert result["ok"] is True
     assert result["content_moved"] is False
     assert _body_len(DST, "e1") == len(rich)
+
+
+# ── moving an orphan-archive source ───────────────────────────────────────────
+# A starred entry whose (feed_url, entry_id) no longer resolves in reader at
+# all -- feed unsubscribed, or (reported live 2026-09-14, 142 MakeUseOf stars)
+# its subscribed URL drifted a trailing slash out from under it after a
+# resubscribe. Sourced from the starred archive instead, same as
+# _build_orphan_entry_detail.
+
+ORPHAN_SRC = "https://gone.example/feed"
+
+
+def _seed_orphan_archive(
+    entry_id: str, *, title: str = "Orphan post", link: str = "https://gone.example/a", content: str = "<p>orphan body</p>"
+) -> None:
+    main.ensure_starred_archive_schema()
+    with main.get_starred_archive_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO archived_entry (feed_url, entry_id, status, starred_at, title, link, content_html_zlib)
+            VALUES (?, ?, 'complete', 0, ?, ?, ?)
+            """,
+            (ORPHAN_SRC, entry_id, title, link, zlib.compress(content.encode())),
+        )
+        conn.commit()
+
+
+def test_move_orphan_archive_source_synthesizes_into_target(env):
+    with main.get_reader() as reader:
+        reader.add_feed(DST, allow_invalid_url=True, exist_ok=True)
+    _seed_orphan_archive("e1")
+    _star(ORPHAN_SRC, "e1")
+
+    result = _move_from(ORPHAN_SRC, "e1")
+
+    assert result["ok"] and result["synth"] and result["star"]
+    with main.get_reader() as reader:
+        moved = reader.get_entry((DST, "e1"))
+        assert moved.title == "Orphan post"
+        assert moved.read  # orphan entries carry no unread state -- always read
+    with main.get_meta_connection() as conn:
+        assert conn.execute("SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id='e1'", (DST,)).fetchone()
+        assert not conn.execute("SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id='e1'", (ORPHAN_SRC,)).fetchone()
+    with main.get_starred_archive_connection() as conn:
+        assert conn.execute("SELECT 1 FROM archived_entry WHERE feed_url=? AND entry_id='e1'", (DST,)).fetchone()
+        assert not conn.execute("SELECT 1 FROM archived_entry WHERE feed_url=? AND entry_id='e1'", (ORPHAN_SRC,)).fetchone()
+
+
+def test_move_orphan_archive_source_carries_tags_and_clears_orphan_entry_tags(env):
+    with main.get_reader() as reader:
+        reader.add_feed(DST, allow_invalid_url=True, exist_ok=True)
+    _seed_orphan_archive("e1")
+    with main.get_meta_connection() as conn:
+        conn.execute("INSERT INTO orphan_entry_tags (feed_url, entry_id, tag) VALUES (?, ?, ?)", (ORPHAN_SRC, "e1", "keeper"))
+        conn.commit()
+
+    result = _move_from(ORPHAN_SRC, "e1")
+
+    assert result["ok"] and result["tags"] == 1
+    with main.get_reader() as reader:
+        keys = [main._extract_tag_key(t) for t in reader.get_tags((DST, "e1"))]
+        assert f"{main.MANUAL_TAG_KEY_PREFIX}keeper" in keys
+    with main.get_meta_connection() as conn:
+        assert not conn.execute("SELECT 1 FROM orphan_entry_tags WHERE feed_url=? AND entry_id='e1'", (ORPHAN_SRC,)).fetchone()
+
+
+def test_move_orphan_with_no_archive_row_fails_as_entry_not_found(env):
+    with main.get_reader() as reader:
+        reader.add_feed(DST, allow_invalid_url=True, exist_ok=True)
+    assert _move_from(ORPHAN_SRC, "never-archived")["error"] == "Entry not found."

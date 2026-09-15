@@ -44,8 +44,16 @@ does not apply. `dry_run=1` returns the count so the dialog can state the real
 number rather than the rows in the DOM, naming both when they differ.
 
 "Shown" means everything matching the active filters regardless of scroll —
-chunking is a rendering optimization, not user intent. Orphan archive rows are
-excluded on both sides: there is no reader entry to move.
+chunking is a rendering optimization, not user intent. Orphan archive rows
+**used to be** excluded on both sides ("no reader entry to move") but now merge
+in under the same root/whole-backlog-star-view condition the home route itself
+uses — `_move_entry_to_feed` grew an orphan-archive fallback (see
+`docs/architecture/saved.md`), and until `_resolve_view_posts` merged them too,
+Select All and this route silently dropped exactly the rows a user was trying
+to bulk-move: reported live 2026-09-14 (the same MakeUseOf stars — see
+`saved.md`) as "Select All only selects the non-MakeUseOf posts" after
+searching Saved for the feed's own domain, since the home route already
+displays its orphaned stars but this predicate-resolve never saw them.
 `/entries/mark-range-read` solved the same page-vs-view problem earlier with
 `_RANGE_READ_LIMIT`; this generalizes it from an anchor lookup to a whole-set
 action.

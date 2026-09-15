@@ -10,6 +10,7 @@ browser-side filter box matches (title, link, feed name).
 
 from __future__ import annotations
 
+import zlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -23,6 +24,7 @@ FEED = "https://blog.example.com/feed/"
 OTHER = "https://aggregator.example.org/rss"
 DST = "https://filed.example.net/feed"
 UNCAT = main.UNCATEGORIZED_FOLDER_ID
+ORPHAN_FEED = "https://gone.example/feed"
 
 
 @pytest.fixture
@@ -227,6 +229,36 @@ def test_move_requires_a_target(tenant):
 
     assert resp.status_code == 400
     assert resp.json()["ok"] is False
+
+
+def test_move_all_shown_includes_orphan_archive_stars_in_the_root_star_view(tenant):
+    """Companion to test_select_all_visible.py's orphan-merge test: the same
+    _resolve_view_posts gap meant "Move all shown to feed…" silently skipped
+    orphaned stars too, not just Select All -- moving now works end to end
+    since _move_entry_to_feed grew an orphan-archive fallback."""
+    _add_feed(DST)
+    main.ensure_starred_archive_schema()
+    with main.get_starred_archive_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO archived_entry (feed_url, entry_id, status, starred_at, title, link, content_html_zlib)
+            VALUES (?, ?, 'complete', 0, ?, ?, ?)
+            """,
+            (ORPHAN_FEED, "orphan-1", "Orphan post", "https://gone.example/a", zlib.compress(b"<p>x</p>")),
+        )
+        conn.commit()
+    with main.get_meta_connection() as conn:
+        root_id = main.get_root_folder_id(conn)
+        conn.execute(
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, '2026-01-01')",
+            (ORPHAN_FEED, "orphan-1"),
+        )
+
+    with TestClient(_app()) as client:
+        data = _post(client, folder_id=root_id, star_only="1")
+
+    assert data["ok"] and data["moved"] == 1 and data["failed"] == 0
+    assert _entry_ids_in(DST) == {"orphan-1"}
 
 
 def test_star_filter_scopes_the_move_to_kept_posts(tenant):

@@ -6,6 +6,7 @@ returns the entries themselves rather than moving or counting them."""
 
 from __future__ import annotations
 
+import zlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -18,6 +19,7 @@ from services import tenancy
 FEED = "https://blog.example.com/feed/"
 OTHER = "https://aggregator.example.org/rss"
 UNCAT = main.UNCATEGORIZED_FOLDER_ID
+ORPHAN_FEED = "https://gone.example/feed"
 
 
 @pytest.fixture
@@ -250,6 +252,71 @@ def test_duration_syntax_is_a_literal_text_search_outside_the_yt_folder(tenant):
         data = _post(client, filter_term="<2:00")
 
     assert data["count"] == 0
+
+
+def _seed_orphan(entry_id: str, *, title: str = "Orphan post", link: str = "https://gone.example/a") -> None:
+    main.ensure_starred_archive_schema()
+    with main.get_starred_archive_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO archived_entry (feed_url, entry_id, status, starred_at, title, link, content_html_zlib)
+            VALUES (?, ?, 'complete', 0, ?, ?, ?)
+            """,
+            (ORPHAN_FEED, entry_id, title, link, zlib.compress(b"<p>x</p>")),
+        )
+        conn.commit()
+
+
+def test_select_all_includes_orphan_archive_matches_in_the_root_star_view(tenant):
+    """Reported live 2026-09-14: an orphan's stars showed up fine in the Saved
+    list (the home route already merges them in via merge_orphan_saved_entries)
+    but Select All silently dropped them -- _resolve_view_posts never merged
+    orphans at all, so a bulk "select the ones this search found" picked only
+    the other, reader-backed matches and missed the orphan ones entirely."""
+    _add_feed(FEED)
+    _add_entries(FEED, [("live-1", "A live starred post", "https://a.example/1")])
+    with main.get_meta_connection() as conn:
+        root_id = main.get_root_folder_id(conn)
+        conn.execute(
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, '2026-01-01')",
+            (FEED, "live-1"),
+        )
+    _seed_orphan("orphan-1")
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, '2026-01-01')",
+            (ORPHAN_FEED, "orphan-1"),
+        )
+
+    with TestClient(_app()) as client:
+        data = _post(client, folder_id=root_id, star_only="1")
+
+    assert data["ok"]
+    assert {(e["feedUrl"], e["entryId"]) for e in data["entries"]} == {(FEED, "live-1"), (ORPHAN_FEED, "orphan-1")}
+
+
+def test_select_all_orphan_merge_is_scoped_to_the_root_whole_backlog_view(tenant):
+    """The merge only applies where the home route's own does: root, no single
+    feed/tag narrowing it. Scoped to one (live) feed, an orphan from a
+    different, gone feed has no business appearing."""
+    _add_feed(FEED)
+    _add_entries(FEED, [("live-1", "A live starred post", "https://a.example/1")])
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, '2026-01-01')",
+            (FEED, "live-1"),
+        )
+    _seed_orphan("orphan-1")
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, '2026-01-01')",
+            (ORPHAN_FEED, "orphan-1"),
+        )
+
+    with TestClient(_app()) as client:
+        data = _post(client, list_feed_url=FEED, star_only="1")
+
+    assert {e["entryId"] for e in data["entries"]} == {"live-1"}
 
 
 def test_empty_view_returns_no_entries(tenant):
