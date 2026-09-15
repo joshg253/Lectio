@@ -658,6 +658,23 @@ resolves it to the first of the month. The day is a placeholder, the month is no
 `dateModified` and nothing else, so mining the page would have dated a 2021 post
 to October 2024. A real month beats a precise-looking lie.
 
+**datagenetics.com fuses its date into one segment, with no day at all.**
+`/blog/march112020/` is month name + a number + year run together —
+`_URL_MONTHNAME_YEAR_RE` in `url_inferred_pubmonth`. The number is not a day (the
+site's own archive index sequences posts within a month by it, descending — it's
+a per-month counter), but real same-month `pubDate`s climb monotonically with it,
+so it's kept as the returned day (clamped to ≤28) purely to keep posts in a month
+from colliding on the 1st — an ordering hint, not a claim. `entry_date_overrides`
+gained a `source` column (`manual` vs `inferred`) so `scripts/
+backfill_url_inferred_dates.py` — a one-time backfill for entries with no date at
+all, feed or inferred — can safely `--refresh` only the rows it wrote itself
+after an inference improvement, never a real `/entries/set-date` correction. The
+same fused segment slipped past `services/feed_tags.py`'s purely-numeric-segment
+guard and got captured as a feed tag (`"march112020"`); `_MONTHNAME_YEAR_SEGMENT_RE`
+closes it at capture, and `scripts/clear_url_slug_feed_tags.py` removes the
+already-stored bad rows (verified per-row against that entry's own URL, not
+shape alone, before deleting).
+
 ## Refresh pacing
 
 - **Refresh backoff & high-fanout pacing** (`FeedRefreshService.update_feeds`) —

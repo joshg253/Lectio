@@ -59,8 +59,7 @@
         >{% if selected_entry.feed_url in unsubscribed_feed_urls %}<span class="feed-unsubscribed-tag" title="No longer subscribed — this is a kept copy">(unsubscribed)</span>{% endif %}
         {% if selected_entry.author %}
         <span class="entry-meta-separator" aria-hidden="true">·</span>
-        <span class="entry-author-inline">by {{ selected_entry.author }}</span>
-        {% if selected_entry.author_filter_token %}
+        <span class="entry-author-inline">by {{ selected_entry.author }}{% if selected_entry.author_filter_token %}
         {% set author_sign = selected_entry.feed_tag_filter_signs.get(selected_entry.author_filter_token) %}
         <span class="author-filter-signs">
           <button
@@ -82,9 +81,8 @@
             aria-pressed="{{ 'true' if author_sign == '-' else 'false' }}"
           >▼</button>
         </span>
+        {% endif %}</span>
         {% endif %}
-        {% endif %}
-        </span>
         {% if selected_entry.post_timestamp %}
         <time
           class="js-local-time-absolute entry-meta-time"

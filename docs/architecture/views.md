@@ -280,6 +280,21 @@ into `history.state` on every real scope load, for no reason but symmetry with
 display-only peek at the folder list can no longer desync the check, since
 nothing about `history.state` changes until something actually navigates.
 
+**A fourth bug, same intervention as the drawer spare: `await fetch` between the
+tap and the push/replaceState call was consuming the activation window.**
+`loadScopePanesWithoutFullRefresh` and `loadEntryPaneWithoutFullRefresh` both used
+to push/replace history only after their pane-swap fetch resolved. Chromium's
+history-manipulation intervention marks an entry pushed without live user
+activation as skippable, and activation doesn't survive an `await` — so on a real
+device (confirmed on a Galaxy S21+/Vivaldi, the same device the drawer-spare
+section above already flags for this intervention) phone Back from an opened
+article skipped straight past the list's own history entry, landing further back
+and forcing a full list re-fetch: looked like "Back pops to the top and the
+loaded chunks are gone." Fixed by moving both push/replaceState calls to fire
+synchronously inside the tap handler, before the `await fetch` — nothing they
+decide (`onScopeList`/`pushHistory`/`url`) depends on the fetch response, only
+`document.title` and `armDrawerBack()` still run after it, on the same entry.
+
 ### Off-site links never open in the reading tab
 
 Following a link in place loses your position, and on a phone Back no longer

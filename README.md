@@ -49,47 +49,21 @@ The full tour — every feature, organized by area — is on the
 short version:
 
 - **Triage first.** Three-pane reader, keyboard nav everywhere, context menus,
-  bulk mark-as-read that updates in place, per-view remembered sort, date
-  dividers in the post list when sorted by published/received date, and a
+  bulk mark-as-read that updates in place, per-view remembered sort, and a
   layout that collapses to two panes on a tablet and one on a phone. Checkbox
-  multi-select on the post list — opening a post checks its own box too, and
-  Select All grabs the whole current view (filters and all, not just what's
-  scrolled into view) — for bulk actions: edit tags on several posts at once
-  (add and remove in the same pass, with a clickable chip for every tag on
-  the selection so removing one never depends on retyping its exact stored
-  spelling), star or unstar several at once (with the same short undo window
-  as a single unstar), add several YouTube videos to a playlist in one go, or
-  move several to a different feed — including out of Saved Articles onto a
-  real subscription once you've found its feed. Each row also carries its
-  own tag icon beside the star, filled when the post is tagged, opening the
-  same Edit Tags dialog for a one-off add or remove.
+  multi-select on the post list drives bulk tag/star/playlist/move actions —
+  see the [Features wiki page](https://github.com/joshg253/Lectio/wiki/Features)
+  for the detail.
 - **Picks up where you left off.** Close the tab, press Back once too often, or
   swipe the app away — reopening Lectio returns you to the same article, scrolled
-  to the same place. It also installs to your home screen as a standalone app via
-  the bundled web app manifest.
+  to the same place. It also installs to your home screen as a standalone app.
 - **Built for a phone, not just shrunk onto one.** One pane at a time, with Back
   walking the view stack — article → feed → folder — and then toggling the folder
-  drawer instead of closing the tab out from under you. Pull down from the top of
-  an article to toggle Reader view, and pull again to come back. Links out to the
-  web open in a new tab, so following one never costs you your place in the list.
-- **Filter, then act on the whole result.** *Filter this view* narrows the post
-  list as you type — by title, link or feed name — separately from search, which
-  is a server query that changes what is fetched. **Move all shown to feed…**
-  then files everything the filter matched, resolved server-side, so it covers
-  the whole view rather than the page your browser happens to have scrolled in.
+  drawer instead of closing the tab out from under you.
 - **Tagging a post keeps it forever.** A tag triggers a full offline capture —
   page, readability text, every image, and any files the post links to — so a
-  kept article survives the site going down. A few sites need special handling to
-  capture properly (a page that is images rather than prose, or a player the page
-  loads with JavaScript); those have per-site adapters and need no setup. Stars are the to-do pile; tags are
-  the keep pile. Dropping a feed offers to bring its kept posts back to the top
-  of the Inbox, so what you saved from it is the first thing you see rather than
-  something filed months deep — or, when the feed itself was the mistake, to drop
-  the lot: untag, unstar and delete the offline copies in one go. The
-  Attachments panel under a kept article's body lists every file the archive
-  captured, individually or all-deletable, and lets you save one that the
-  feed's own attachment-extension policy doesn't cover without widening that
-  policy for every other post.
+  kept article survives the site going down. Stars are the to-do pile; tags are
+  the keep pile.
 - **Read-it-later built in.** Save any page (menu, bookmarklet, `/api/save`, or
   the browser extension) with no feed needed, then read it in **Read Mode**, an
   e-ink-friendly reading app at `/read` that works offline — including
@@ -97,45 +71,17 @@ short version:
 - **Content that actually renders.** Feed sanitization is Lectio's own, so
   embeds survive: sandboxed players from a curated host allowlist, inline SVG
   and MathML, recovered YouTube embeds, podcast audio (even when it lives in a
-  separate host feed), and images kept at the author's layout and a sane size.
-  Inline LaTeX math (`\(...\)`/`\[...\]`, as math-heavy blogs ship for their own
-  MathJax/KaTeX) is typeset in the article pane via a bundled KaTeX, not left
-  showing as raw source. Bluesky's RSS is text/image-only, so images (and video
-  posts, with real inline HLS playback) are recovered from the AT Protocol API.
+  separate host feed), inline LaTeX math, and images kept at the author's
+  layout and a sane size.
 - **Automation.** Highlight, mark-as-read, tag-filter, deduplicate, and
   send-to-destination rules (Instapaper, Pinterest, Reddit, Quire, email,
   YouTube playlists, webhooks) at any scope, with dry-run and run history.
-  A rule's keyword can be a comma-separated list of terms — no regex needed
-  until you want one.
-  Dedup dry-runs compare all four match modes side by side, leading with the
-  pairs only one mode caught, and the fuzzy title match carries its own
-  similarity threshold — preview it on a slider, save it on the rule, and it
-  applies to new entries on refresh and to the backlog on Run Now — tune it on
-  the slider, then Apply it to the rule without leaving the comparison. Title
-  matching ignores case and punctuation (without ever merging `C++` into `C`)
-  and skips titles shorter than a per-rule word floor, since "Weekly roundup"
-  repeats across unrelated posts.
 - **Feed management that expects the real web.** Resilient auto-discovery,
-  Page Feeds for feedless sites — which read each post's own publish date rather
-  than stamping the whole backlog with the scrape time — dev.to and DeviantArt
-  adapters (DA posts show the artist in the header, same as any other feed's
-  author), conditional GET, per-feed and per-domain backoff, GUID-churn
-  suppression, feed compare, duplicate scanning, and unsubscribe that keeps your
-  curation. A feed *blocked* by an anti-bot challenge is reported as blocked
-  rather than misfiled as malformed, one character that XML forbids no
-  longer costs you the whole feed, and a feed that's merely malformed
-  elsewhere is still ingested from whatever a lenient parser can recover
-  rather than discarded outright. An optional outbound SOCKS5/HTTP proxy
-  (e.g. a VPN container on the same Docker network) can route feed fetches
-  around geoblocks or per-IP rate limits — off by default, set instance-wide
-  or per user in Settings. A feed still failing through the proxy can escalate
-  further, only in "As needed" mode and only off configured URLs: FlareSolverr
-  (real headless Chrome, purpose-built for Cloudflare/DDoS-Guard challenges)
-  for a feed still showing an actual challenge page, then a last-resort
-  backend (e.g. a Tailscale exit node reaching a real home IP) as the final
-  fallback. Settings → Feeds → Fetch Tiers lists which feeds are currently
-  routing through each tier, so it's visible how much the proxy and the
-  last-resort backend are actually being used.
+  Page Feeds for feedless sites, dev.to and DeviantArt adapters, conditional
+  GET, per-feed and per-domain backoff, GUID-churn suppression, feed compare,
+  duplicate scanning, unsubscribe that keeps your curation, and an optional
+  outbound proxy with FlareSolverr/last-resort-backend escalation for feeds
+  behind an anti-bot challenge.
 - **Fix a post in place.** Edit its date, title or URL; clean up its body with
   an Aardvark-style element remover; re-fetch its content — undoably, with an
   Internet Archive fallback — one post, or a whole feed or folder at a time.
