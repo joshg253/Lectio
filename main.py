@@ -21121,13 +21121,34 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
     entries) but is marked read and stripped of its star/tags so it stops
     surfacing as curated content.
 
+    Also handles an **orphan-archive source** — a starred entry whose (feed_url,
+    entry_id) no longer resolves in reader at all, e.g. the feed was
+    unsubscribed, or (reported live 2026-09-14, 142 MakeUseOf stars) its URL
+    drifted a trailing slash out from under it after a resubscribe. Sourced from
+    the starred archive instead of reader, same as ``_build_orphan_entry_detail``.
+
     Returns {"ok": bool, "synth": bool, "tags": n, "star": bool, "error": str|None}.
     """
     result = {"ok": False, "synth": False, "tags": 0, "star": False, "content_moved": False, "error": None}
     src = reader.get_entry((feed_url, entry_id), None)
+    src_is_orphan = False
+    orphan_archived = None
     if src is None:
-        result["error"] = "Entry not found."
-        return result
+        orphan_archived = starred_archive_service.get_archived_entry_detail(feed_url, entry_id)
+        if orphan_archived is None:
+            result["error"] = "Entry not found."
+            return result
+        src_is_orphan = True
+    if orphan_archived is not None:
+        src_title = orphan_archived.get("title") or ""
+        src_link = html_sanitize.safe_link_url(orphan_archived.get("link")) or entry_id
+        src_content_html = orphan_archived.get("content_html") or ""
+        src_read = True  # orphan entries carry no reader unread state — always read
+    else:
+        src_title = src.title or ""
+        src_link = src.link or entry_id
+        src_content_html = (src.content[0].value if getattr(src, "content", None) else "") or src.summary or ""
+        src_read = bool(src.read)
     if reader.get_feed(target_url, None) is None:
         result["error"] = "Target feed not found."
         return result
@@ -21141,7 +21162,7 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
     if reader.get_entry((target_url, entry_id), None) is not None:
         target_id = entry_id
     else:
-        src_link_norm = normalize_entry_link_for_dedupe(src.link)
+        src_link_norm = normalize_entry_link_for_dedupe(src_link)
         if src_link_norm:
             for e in reader.get_entries(feed=target_url):
                 if normalize_entry_link_for_dedupe(e.link) == src_link_norm:
@@ -21151,8 +21172,8 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
         ed: dict = {
             "feed_url": target_url,
             "id": entry_id,
-            "title": src.title or "",
-            "link": src.link or entry_id,
+            "title": src_title,
+            "link": src_link,
         }
         # entry_effective_date, not raw src.published: a source with no real
         # publication date (published/updated both absent or garbage) left the
@@ -21168,13 +21189,19 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
         # render and mark-older/newer actions already agree on, so the
         # synthesized copy gets a real date under the identical rule instead
         # of silently falling through reader's own default.
-        _src_effective_date = entry_effective_date(src)
-        if _src_effective_date:
-            ed["published"] = _src_effective_date
-        if getattr(src, "content", None):
-            ed["content"] = [{"value": src.content[0].value}]
-        elif src.summary:
-            ed["summary"] = src.summary
+        if orphan_archived is not None:
+            _published_at = orphan_archived.get("published_at")
+            if _published_at:
+                try:
+                    ed["published"] = datetime.fromtimestamp(float(_published_at), tz=timezone.utc)
+                except OverflowError, OSError, ValueError:
+                    pass
+        else:
+            _src_effective_date = entry_effective_date(src)
+            if _src_effective_date:
+                ed["published"] = _src_effective_date
+        if src_content_html:
+            ed["content"] = [{"value": src_content_html}]
         try:
             reader.add_entry(ed)
         except Exception:  # noqa: BLE001
@@ -21192,7 +21219,7 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
     # (reported 2026-07-26). The move must never leave the reader on less than
     # they had; pinned so the target feed's own refresh can't undo it.
     try:
-        _src_body = (src.content[0].value if getattr(src, "content", None) else "") or src.summary or ""
+        _src_body = src_content_html
         _tgt = reader.get_entry((target_url, target_id), None)
         _tgt_body = ""
         if _tgt is not None:
@@ -21213,12 +21240,24 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
         LOGGER.exception("[move-entry] could not carry content onto %s/%s", target_url, target_id)
 
     # Manual tags: re-key onto the target resource, then clear from the source.
-    keys = [_extract_tag_key(t) for t in reader.get_tags(src.resource_id)]
-    keys = [k for k in keys if k and k.startswith(MANUAL_TAG_KEY_PREFIX)]
+    # An orphan source has no reader resource_id — its tags live in
+    # orphan_entry_tags instead (see _get_orphan_manual_tags) — but the target
+    # is always a real, still-subscribed feed, so the write side is unchanged.
+    if src_is_orphan:
+        keys = [MANUAL_TAG_KEY_PREFIX + t for t in _get_orphan_manual_tags(feed_url, entry_id)]
+    else:
+        keys = [_extract_tag_key(t) for t in reader.get_tags(src.resource_id)]
+        keys = [k for k in keys if k and k.startswith(MANUAL_TAG_KEY_PREFIX)]
     for key in keys:
         try:
             reader.set_tag((target_url, target_id), key)
-            reader.delete_tag(src.resource_id, key, missing_ok=True)
+            if src_is_orphan:
+                conn.execute(
+                    "DELETE FROM orphan_entry_tags WHERE feed_url = ? AND entry_id = ? AND tag = ?",
+                    (feed_url, entry_id, key[len(MANUAL_TAG_KEY_PREFIX) :]),
+                )
+            else:
+                reader.delete_tag(src.resource_id, key, missing_ok=True)
             result["tags"] += 1
         except Exception:  # noqa: BLE001
             LOGGER.exception("[move-entry] tag move failed %s on %s", key, entry_id)
@@ -21247,14 +21286,14 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
     when = datetime.now().isoformat()
     read_rows = []
     try:
-        if src.read:
+        if src_read:
             reader.mark_entry_as_read((target_url, target_id))
             read_rows.append((target_url, target_id))
         else:
             reader.mark_entry_as_unread((target_url, target_id))
     except Exception:  # noqa: BLE001
         LOGGER.exception("[move-entry] target read-state sync failed %s", target_id)
-    if not src.read:
+    if not src_read:
         try:
             reader.mark_entry_as_read((feed_url, entry_id))
             read_rows.append((feed_url, entry_id))
@@ -21271,11 +21310,22 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
         )
     conn.commit()
 
+    # An orphan source has no reader resource to hard-delete — it was never
+    # there — so only the archive capture needs re-homing; the source's
+    # saved_entries/orphan_entry_tags rows are already cleared above.
+    if src_is_orphan:
+        try:
+            if starred_archive_service.has_complete_archive(target_url, target_id):
+                starred_archive_service.delete_archive(feed_url, entry_id)
+            else:
+                starred_archive_service.rekey_archive(feed_url, entry_id, target_url, target_id)
+        except Exception:  # noqa: BLE001 — never fail the move over archive housekeeping
+            LOGGER.exception("[move-entry] archive re-key failed for %s", entry_id)
     # A saved article is user-added, so unlike a feed-provided entry it *can* be
     # removed properly — leaving it behind would keep a read, unstarred husk in
     # Saved Articles forever, so the backlog never shrinks as you file it and
     # every later dupe scan re-reads rows that are no longer real saves.
-    if saved_articles_service.is_saved_articles_feed(feed_url):
+    elif saved_articles_service.is_saved_articles_feed(feed_url):
         # The source archive capture must follow the entry, or it is orphaned:
         # the Read/Saved view renders starred entries from archive rows, so a
         # leftover lectio:saved capture shows as a phantom duplicate of the moved

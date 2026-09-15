@@ -348,6 +348,25 @@ the *source's* effective date, under the identical chain every other
 date-based view already agrees on, rather than leaving the synthesized copy
 to fall through reader's own default.
 
+**`_move_entry_to_feed` now also accepts an orphan-archive source.** Its very
+first step, `reader.get_entry((feed_url, entry_id))`, used to return `None` —
+"Entry not found." — for a starred entry whose feed is gone from reader
+entirely, or whose subscribed URL merely drifted (a trailing slash added or
+dropped on resubscribe) out from under an old star. Reported live 2026-09-14:
+142 MakeUseOf stars stuck exactly this way after the feed's URL lost its
+trailing slash — reader had zero entries under the old `.../feed/`, only
+`saved_entries` and the starred archive still pointed at it. The move helper
+now falls back to `starred_archive_service.get_archived_entry_detail`, same
+source `_build_orphan_entry_detail` already uses, whenever `reader.get_entry`
+misses — title/link/date/body come from the archive, manual tags come from
+`orphan_entry_tags` instead of `reader.get_tags`, and the source is always
+treated as read (an orphan carries no reader unread state to inherit). There
+is no reader entry to hard-delete on this path, unlike the Saved-Articles
+case above, so only the archive capture is re-homed (`rekey_archive`, or
+`delete_archive` if the target already has a complete one) — the source's
+`saved_entries`/`orphan_entry_tags` rows are already cleared by the normal
+star/tag-move steps that run either way.
+
 **Barred targets** (`_autofile_excluded_targets`, on preview *and* apply): Saved
 Articles itself, and every YouTube feed — a saved page is never a channel post,
 and channels routinely share a name with the blog they accompany. For the same
