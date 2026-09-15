@@ -771,19 +771,25 @@ class StarredArchiveService:
         than deleting the only copy. If the target *already* has a complete
         archive the source is redundant — the caller should delete_archive it
         instead; this refuses to clobber, so a redundant re-key is a no-op-delete
-        of the source to avoid a duplicate-key collision."""
+        of the source to avoid a duplicate-key collision.
+
+        A target with only an incomplete (pending/failed) stub is not a
+        capture worth keeping over the source's — that stub is cleared first
+        so the re-key below can't collide with it and the source's capture
+        (which may be the only complete one) isn't silently dropped in favor
+        of a target that has nothing usable yet."""
         if (src_feed, src_id) == (dst_feed, dst_id):
             return True
         try:
             with self._archive_conn() as conn:
-                exists = (
+                complete = (
                     conn.execute(
-                        "SELECT 1 FROM archived_entry WHERE feed_url = ? AND entry_id = ? LIMIT 1",
+                        "SELECT 1 FROM archived_entry WHERE feed_url = ? AND entry_id = ? AND status = 'complete' LIMIT 1",
                         (dst_feed, dst_id),
                     ).fetchone()
                     is not None
                 )
-                if exists:
+                if complete:
                     # Target already captured — drop the source rows to dedupe.
                     conn.execute(
                         "DELETE FROM archived_asset_link WHERE feed_url = ? AND entry_id = ?",
@@ -794,6 +800,16 @@ class StarredArchiveService:
                         (src_feed, src_id),
                     )
                 else:
+                    # No target row, or only an incomplete stub — clear any stub
+                    # so it can't collide with (or masquerade as) the re-keyed row.
+                    conn.execute(
+                        "DELETE FROM archived_asset_link WHERE feed_url = ? AND entry_id = ?",
+                        (dst_feed, dst_id),
+                    )
+                    conn.execute(
+                        "DELETE FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+                        (dst_feed, dst_id),
+                    )
                     conn.execute(
                         "UPDATE archived_entry SET feed_url = ?, entry_id = ? WHERE feed_url = ? AND entry_id = ?",
                         (dst_feed, dst_id, src_feed, src_id),

@@ -149,6 +149,21 @@ def test_rekey_dedupes_when_target_already_captured(archive):
     assert archive.execute("SELECT COUNT(*) FROM archived_entry WHERE feed_url=?", (REAL,)).fetchone()[0] == 1
 
 
+def test_rekey_replaces_an_incomplete_target_stub(archive):
+    """A pending/failed stub at the target is not a capture worth keeping —
+    the source's complete capture must win, not get dropped as if the target
+    already had one (the bug: `exists` ignored status, so a stub caused the
+    source's asset link to be silently deleted along with the source row)."""
+    _add(archive, SAVED, EID, asset="s")
+    _add(archive, REAL, EID, status="pending")
+    assert _svc(archive).rekey_archive(SAVED, EID, REAL, EID) is True
+    assert _entries(archive) == {(REAL, EID)}
+    assert archive.execute("SELECT status FROM archived_entry WHERE feed_url=?", (REAL,)).fetchone()["status"] == "complete"
+    # the source's asset link followed it to the target, not deleted with the stub
+    link = archive.execute("SELECT feed_url FROM archived_asset_link WHERE asset_hash='s'").fetchone()
+    assert link["feed_url"] == REAL
+
+
 def test_rekey_same_key_is_a_noop(archive):
     _add(archive, SAVED, EID)
     assert _svc(archive).rekey_archive(SAVED, EID, SAVED, EID) is True
