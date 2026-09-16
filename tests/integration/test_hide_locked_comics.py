@@ -7,7 +7,7 @@ unlock date passes, no periodic recheck job required."""
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -159,6 +159,76 @@ def test_locked_until_lookup_is_chunked_past_sqlite_bind_limit(configured):
     ids = {e["id"] for e in main.list_entries_for_feeds({FEED} | padding, limit=100)}
 
     assert ids == {"normal"}, "the query must not raise, and must still catch the locked entry"
+
+
+def test_locked_entries_filling_the_fetch_window_no_longer_underfill_the_page(configured):
+    """The bug this file's docstring alludes to but didn't yet cover: when
+    enough locked entries occupy the top of the sorted, limit-bound fetch
+    window, the old single-pass fetch-then-filter returned fewer entries
+    than `limit` even though real, unlocked entries exist further back --
+    down to a page of literally nothing when every one of the newest
+    `limit` entries happens to be locked. list_entries_for_feeds now retries
+    with a larger fetch window until the request is satisfied or the
+    library genuinely runs out."""
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        # 3 older, unlocked entries...
+        for i in range(3):
+            _seed_entry(reader, feed_url=FEED, entry_id=f"unlocked-{i}", published=OLD + timedelta(days=i))
+        # ...then 4 newer, locked ones -- these sort ahead of the unlocked
+        # entries and, at limit=3, fill the entire naive fetch window.
+        for i in range(4):
+            _seed_entry(reader, feed_url=FEED, entry_id=f"locked-{i}", published=OLD + timedelta(days=10 + i))
+    for i in range(4):
+        _seed_locked_until(FEED, f"locked-{i}", time.time() + 86400 * 30)
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, FEED, "hide_locked_comics", 1)
+
+    ids = [e["id"] for e in main.list_entries_for_feeds({FEED}, limit=3, sort_dir="desc")]
+
+    assert len(ids) == 3, f"expected a full page of 3, got {ids}"
+    assert set(ids) == {"unlocked-0", "unlocked-1", "unlocked-2"}
+
+
+def test_underfill_retry_gives_up_once_the_library_is_actually_exhausted(configured):
+    """All 5 entries on this feed are locked and nothing else exists -- the
+    retry must not loop forever or return anything, just settle on empty
+    once a bigger fetch window stops finding more data."""
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        for i in range(5):
+            _seed_entry(reader, feed_url=FEED, entry_id=f"locked-{i}", published=OLD + timedelta(days=i))
+    for i in range(5):
+        _seed_locked_until(FEED, f"locked-{i}", time.time() + 86400 * 30)
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, FEED, "hide_locked_comics", 1)
+
+    ids = [e["id"] for e in main.list_entries_for_feeds({FEED}, limit=3, sort_dir="desc")]
+
+    assert ids == []
+
+
+def test_underfill_retry_is_not_attempted_when_no_feed_in_scope_hides_anything(configured, monkeypatch):
+    """The retry gate must not fire (no extra fetch at all) for the ordinary
+    case -- a view short of `limit` because the feed just doesn't have that
+    many entries, with hide_locked_comics off everywhere in scope."""
+    with main.get_reader() as reader:
+        reader.add_feed(OTHER_FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=OTHER_FEED, entry_id="e1", published=OLD)
+
+    calls: list[int] = []
+    real_fetch = main._list_entries_for_feeds_fetch
+
+    def _counting_fetch(*args, **kwargs):
+        calls.append(kwargs.get("limit", args[1] if len(args) > 1 else None))
+        return real_fetch(*args, **kwargs)
+
+    monkeypatch.setattr(main, "_list_entries_for_feeds_fetch", _counting_fetch)
+
+    ids = [e["id"] for e in main.list_entries_for_feeds({OTHER_FEED}, limit=100)]
+
+    assert ids == ["e1"]
+    assert len(calls) == 1, "no retry fetch should have been attempted"
 
 
 def test_unrelated_feed_never_queries_locked_until(configured):

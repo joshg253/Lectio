@@ -25,20 +25,6 @@ is scheduled, they're just what to check if a related symptom recurs.
 
 ## Tier 1 — actively impeding unread-clearing
 
-### hide_locked_comics/hide_unpremiered can under-fill a page — pre-existing gap, not this PR's scope
-
-Flagged by Sourcery review on the `hide_locked_comics` PR, but the same shape already existed for
-`hide_unpremiered` since it shipped, unrelated to this feature. `list_entries_for_feeds`'s fast
-path fetches only `limit` rows from reader (`_light_entries_from_sql`) BEFORE the per-entry
-hide-filter loop runs; a locked/unpremiered entry occupying part of that fetched window is then
-dropped by the filter with nothing behind it to backfill the slot, so a page can render shorter
-than `limit` even when older, unlocked/aired entries exist beyond the initial SQL window. Narrow in
-practice — needs enough currently-gated entries clustered inside one fetch window to be visible at
-all — which is likely why it went unnoticed for `hide_unpremiered`. A real fix means either pushing
-the predicate into the SQL query itself (a join against `entry_lead_images`/duration-cache state)
-or over-fetching and iterating until enough entries pass the filter; both are query-layer surgery
-bigger than a review-response fixup, so not attempted here.
-
 ### Refresh-contention latency (home route) — RESOLVED
 
 Reported 2026-08-11 as "serious delay browsing" (home requests: median 700ms, 9% over 3s, peaking

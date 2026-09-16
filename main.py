@@ -15831,7 +15831,110 @@ def _split_site_terms(terms: list[str]) -> tuple[list[str], list[str]]:
     return regular, sites
 
 
+# Escalating fetch-window multiples list_entries_for_feeds retries at when
+# hide_locked_comics/hide_unpremiered leave a page short -- see that
+# function's own docstring for why these two specific multiples.
+_HIDE_FILTER_UNDERFILL_RETRY_LIMIT_MULTIPLIERS = (2, 4, 8)
+
+
 def list_entries_for_feeds(
+    feed_urls: set[str],
+    limit: int = 250,
+    sort_by: str = "post",
+    sort_dir: str = "asc",
+    read_filter: str = "all",
+    star_only: bool = False,
+    selected_tag: str | None = None,
+    selected_feed_tag: str | None = None,
+    search_query: str | None = None,
+    kept_scope: str = "kept",
+    archived: bool | None = None,
+    enrich: bool = True,
+) -> list[dict]:
+    """Thin retry wrapper around `_list_entries_for_feeds_fetch`.
+
+    That function fetches only `limit` rows from reader before its per-entry
+    hide_locked_comics/hide_unpremiered filter runs (see its own comments) --
+    a locked/unpremiered entry occupying part of that window is dropped with
+    nothing behind it to backfill the slot, so a page can render shorter than
+    `limit` even though older, unhidden entries exist further back
+    (Plan.md, "hide_locked_comics/hide_unpremiered can under-fill a page").
+
+    Retrying with a larger fetch window fixes it without having to push the
+    predicate into every one of that function's several SQL/reader fetch
+    strategies -- `hide_unpremiered` in particular depends on a live-status
+    cache keyed off a video id parsed from the entry's own link, not a plain
+    meta-DB column a query could join against.
+
+    Only attempted when one of those filters could actually be active for
+    this scope (the common case pays one extra `len(result) >= limit` check
+    and nothing else) and bounded by
+    `_HIDE_FILTER_UNDERFILL_RETRY_LIMIT_MULTIPLIERS` -- there is no reliable
+    way to tell "upstream is exhausted" from "the filter is dropping rows"
+    using only this function's own return value, so a fully locked/unpremiered
+    feed costs a handful of bounded retry fetches rather than one, not an
+    early exit.
+    """
+    result = _list_entries_for_feeds_fetch(
+        feed_urls,
+        limit=limit,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        read_filter=read_filter,
+        star_only=star_only,
+        selected_tag=selected_tag,
+        selected_feed_tag=selected_feed_tag,
+        search_query=search_query,
+        kept_scope=kept_scope,
+        archived=archived,
+        enrich=enrich,
+    )
+    if len(result) >= limit or not feed_urls:
+        return result
+
+    with get_meta_connection() as _prefs_conn:
+        _prefs_for_gate = get_all_feed_display_prefs(_prefs_conn)
+    _hide_filter_could_apply = (
+        hide_locked_comics_global()
+        or youtube_hide_unpremiered_global()
+        or any(
+            _prefs_for_gate.get(fu, _DISPLAY_PREF_DEFAULTS).get("hide_locked_comics")
+            or _prefs_for_gate.get(fu, _DISPLAY_PREF_DEFAULTS).get("hide_unpremiered")
+            for fu in feed_urls
+        )
+    )
+    if not _hide_filter_could_apply:
+        return result
+
+    for _multiplier in _HIDE_FILTER_UNDERFILL_RETRY_LIMIT_MULTIPLIERS:
+        _attempt_limit = limit * _multiplier
+        bigger = _list_entries_for_feeds_fetch(
+            feed_urls,
+            limit=_attempt_limit,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            read_filter=read_filter,
+            star_only=star_only,
+            selected_tag=selected_tag,
+            selected_feed_tag=selected_feed_tag,
+            search_query=search_query,
+            kept_scope=kept_scope,
+            archived=archived,
+            enrich=enrich,
+        )
+        if len(bigger) > len(result):
+            result = bigger
+        if len(result) >= limit:
+            break
+        # No early exit otherwise: `bigger` being short of `_attempt_limit` does
+        # NOT mean the raw fetch upstream is exhausted -- it means the filter
+        # dropped rows, which is exactly the case being retried for. Only the
+        # fixed multiplier list above bounds the worst case (an entirely
+        # locked/unpremiered feed), not an "upstream is empty" inference.
+    return result[:limit]
+
+
+def _list_entries_for_feeds_fetch(
     feed_urls: set[str],
     limit: int = 250,
     sort_by: str = "post",

@@ -846,6 +846,50 @@ signature of those two paths disagreeing.**
 The URL/title inference tiers are not reproducible in SQL and only apply to
 entries this expression already treats as undated.
 
+## `list_entries_for_feeds` retries a larger fetch window when hide filters under-fill a page
+
+Same family of bug as the SQL-ordering one above — a fetch capped at `limit` rows, filtered
+*after* the fact. `hide_locked_comics`/`hide_unpremiered` drop a matching entry in the per-entry
+filter loop that runs on whatever `_list_entries_for_feeds_fetch` already fetched; when enough of
+those `limit` rows are locked/unpremiered, the page renders shorter than requested — down to
+completely empty if every one of the newest `limit` entries happens to be locked, even with plenty
+of real, unlocked entries further back. Reported live 2026-09-06 alongside the `hide_locked_comics`
+feature itself (Sourcery review), and pre-existing for `hide_unpremiered` since it shipped —
+narrow enough in practice (needs enough gated entries clustered in one fetch window) that it went
+unnoticed there.
+
+**Why the fix is a retry wrapper, not a SQL predicate.** `_list_entries_for_feeds_fetch` picks from
+several different fetch strategies depending on the view shape (a direct SQL scan for many feeds,
+`reader.get_entries()` per feed for few, point-lookups for Saved/history) — some go through raw SQL
+this codebase controls, others through reader's own query builder, which doesn't expose a hook for
+an arbitrary WHERE clause. Pushing the predicate down would mean a different implementation per
+fetch strategy. Worse, `hide_unpremiered` isn't even a plain column: `_is_youtube_unpremiered`
+parses a video id out of the entry's own link and looks it up in a separate live-status cache — not
+something a meta-DB join could express at all without hydrating every entry first, which defeats
+the point of filtering before hydration.
+
+`list_entries_for_feeds` is now a thin wrapper: call `_list_entries_for_feeds_fetch` once at the
+requested `limit`; if the result already fills it, return immediately (the overwhelmingly common
+case, one extra comparison and nothing else). If it's short, check whether hide_locked_comics or
+hide_unpremiered could even apply to this scope — either global toggle on, or any feed in
+`feed_urls` with the per-feed pref set (`get_all_feed_display_prefs`, the same table the fetch
+itself already reads unconditionally on every call, so this second read is the same cost class
+already accepted there). If neither could apply, the shortfall is just "this view doesn't have
+`limit` entries" — the ordinary case for most small folders — and nothing further happens. Only
+when a hide filter is actually in play does it retry at progressively larger fetch windows
+(`_HIDE_FILTER_UNDERFILL_RETRY_LIMIT_MULTIPLIERS`, ×2/×4/×8 of the original `limit`) until the
+request is satisfied.
+
+**No early exit on a short *retry* result, on purpose.** The natural-looking shortcut — stop
+retrying once a bigger fetch returns fewer rows than it was given — is wrong here: a short
+*filtered* result says nothing about whether the *raw* fetch underneath was exhausted, since the
+filter is exactly what's removing rows. (Tried it; a feed with 4 locked entries ahead of 3 real
+ones plateaued at 2 real entries on the first retry and never found the third, because the
+filtered-length check looked exhausted when the raw fetch wasn't.) Externally there's no way to
+tell "upstream ran out" from "the filter is still eating rows" using only this function's own
+return value, so the fixed multiplier list is the actual bound — a feed that's *entirely*
+locked/unpremiered costs a handful of retried fetches before giving up empty, not one.
+
 ## `list_entries_for_feeds(..., enrich=False)`: Read Above/Below don't need phase 2
 
 `list_entries_for_feeds` is two phases: phase 1 builds cheap "light" records
