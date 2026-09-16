@@ -14694,6 +14694,63 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       }
     });
 
+    // A tag value ignored on every feed, not just one -- see the hint text in
+    // the panel itself for how this differs from the per-feed × dismissal.
+    async function renderGlobalSuppressedTags() {
+      const list = document.getElementById('global-tag-suppress-list');
+      const empty = document.getElementById('global-tag-suppress-empty');
+      if (!list) return;
+      let tags = [];
+      try {
+        const resp = await fetch('/tags/global-suppressed', { credentials: 'same-origin' });
+        tags = (await resp.json()).tags || [];
+      } catch (_e) { /* leave whatever is on screen rather than blanking it */ }
+      list.textContent = '';
+      if (empty) empty.hidden = tags.length > 0;
+      for (const tag of tags) {
+        const li = document.createElement('li');
+        li.className = 'feed-prop-alias-item';
+        const name = document.createElement('code');
+        name.textContent = `#${tag}`;
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'feed-prop-inline-btn';
+        del.textContent = 'Remove';
+        del.addEventListener('click', async () => {
+          del.disabled = true;
+          try {
+            await tagPost('/tags/global-suppressed/remove', { tag });
+            await renderGlobalSuppressedTags();
+          } catch (err) { del.disabled = false; alert('Could not remove: ' + err.message); }
+        });
+        li.append(name, del);
+        list.appendChild(li);
+      }
+    }
+
+    document.getElementById('global-tag-suppress-add-btn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('global-tag-suppress-add-btn');
+      const input = document.getElementById('global-tag-suppress-input');
+      const tag = input?.value.trim() || '';
+      if (!tag) { input?.focus(); return; }
+      btn.disabled = true;
+      try {
+        await tagPost('/tags/global-suppressed/add', { tag });
+        if (input) input.value = '';
+        await renderGlobalSuppressedTags();
+      } catch (err) {
+        alert('Could not add: ' + err.message);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById('global-tag-suppress-input')?.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      document.getElementById('global-tag-suppress-add-btn')?.click();
+    });
+
     let tagInventoryTimer = null;
     async function renderTagInventory() {
       const body = document.getElementById('tag-inventory-body');
@@ -14768,7 +14825,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           if (tab === 'feeds') void markProblematicFeedsViewed();
           // Loaded on open, not at startup: the inventory scans every tag and most
           // sessions never look at it.
-          if (tab === 'tags') { void renderTagAliases(); void renderTagInventory(); }
+          if (tab === 'tags') { void renderTagAliases(); void renderTagInventory(); void renderGlobalSuppressedTags(); }
         });
       });
       // Force hidden panels to display:none regardless of stylesheet specificity

@@ -370,6 +370,28 @@ Per feed, not global (`Forum` is noise on Slickdeals, a topic elsewhere). It hid
 a chip, never a fact: the rows stay and keep feeding the adapters. Undo lives in
 Feed Properties → **Hidden tags**, because a mis-clicked × needs a way back.
 
+### A global ignore list, for a tag that is never worth filing under anywhere
+
+Per-feed dismissal above is deliberately narrow — "noise on this feed, maybe a
+topic on another" — but some tag values (`comments`, a discussion-thread count
+dressed up as a category) are never worth a chip on *any* feed, and dismissing
+them feed by feed as each new one turns it up is exactly the whack-a-mole the
+per-feed design accepts as the cost of not auto-filtering. Settings → Tags adds
+a **global** list for these: `suppressed_feed_tags_global` (`tag TEXT PRIMARY
+KEY`), edited via `GET/POST /tags/global-suppressed[/add|/remove]`.
+
+Same choke point, same normalization: `get_feed_tag_suggestions` unions the
+per-feed and global dismissed sets (both run through `normalize_tag_value`)
+before filtering `tags`, so every caller — the entry pane, the feed-tags route,
+the source-page harvest fallback — gets the global list for free with no
+second filter to keep in sync. Deliberately **not** a rule: it only removes the
+suggestion chip, the same restraint the per-feed dismissal already applies (the
+stored `entry_feed_tags` rows are untouched, so a `tag_filter` rule can still
+match the tag even after its chip is globally suppressed — filing and filtering
+are different questions, and this only answers the filing one). Pinned tags
+(`get_feed_pinned_tags`) are a separate, stronger signal — a deliberate per-feed
+choice — and are not filtered by this list.
+
 ### The chip row, and the tag-filter rule
 
 Chips render as **[ + tag ▲ ▼ ]**. **+** applies the tag manually. **▲/▼** edit

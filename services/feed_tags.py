@@ -815,6 +815,43 @@ class FeedTagService:
             return []
         return [str(r[0]) for r in rows]
 
+    def global_suppressed_tags(self) -> set[str]:
+        """Tag values that never render as a suggestion chip on any feed,
+        normalized lowercase for the same case-insensitive comparison
+        suppressed_tags() uses."""
+        try:
+            with self._get_meta_connection() as conn:
+                rows = conn.execute("SELECT tag FROM suppressed_feed_tags_global").fetchall()
+        except Exception:
+            LOGGER.warning("global suppressed tag lookup failed", exc_info=True)
+            return set()
+        return {str(r[0]).strip().lower() for r in rows}
+
+    def global_suppressed_tag_list(self) -> list[str]:
+        """As stored (original casing), for the Settings -> Tags list."""
+        try:
+            with self._get_meta_connection() as conn:
+                rows = conn.execute("SELECT tag FROM suppressed_feed_tags_global ORDER BY tag").fetchall()
+        except Exception:
+            return []
+        return [str(r[0]) for r in rows]
+
+    def set_tag_globally_suppressed(self, tag: str, suppressed: bool) -> None:
+        clean = (tag or "").strip()
+        if not clean:
+            return
+        with self._get_meta_connection() as conn:
+            if suppressed:
+                conn.execute(
+                    "INSERT OR REPLACE INTO suppressed_feed_tags_global (tag, suppressed_at) VALUES (?, ?)",
+                    (clean, time.time()),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM suppressed_feed_tags_global WHERE LOWER(tag) = LOWER(?)",
+                    (clean,),
+                )
+
     def delete_for_feed(self, feed_url: str) -> int:
         with self._get_meta_connection() as conn:
             return conn.execute("DELETE FROM entry_feed_tags WHERE feed_url = ?", (feed_url,)).rowcount

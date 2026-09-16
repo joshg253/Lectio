@@ -3768,13 +3768,10 @@ def ensure_meta_schema() -> None:
             )
             """
         )
-        # Feed-tag suggestion chips the user has dismissed, per (feed, tag).
-        #
-        # Manual rather than heuristic on purpose: two automatic rules were tried
-        # and both hid tags that were wanted. "VinylDeals" (a place) is noise while
-        # "Lessons" (a kind of content) is exactly the right filing tag, and nothing
-        # in the feed metadata distinguishes them — see get_feed_tag_suggestions.
-        # Scoped per feed because a tag useless on one feed can matter on another.
+        # Mirrors entry_read_state in the other direction: a bulk mark-as-UNREAD
+        # stamps its whole batch with one timestamp so the toast can put exactly
+        # that batch back. entry_read_state cannot serve — its rows mean "read
+        # at", and this batch has just stopped being read (they are deleted).
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS entry_unread_batch (
@@ -3785,10 +3782,13 @@ def ensure_meta_schema() -> None:
             )
             """
         )
-        # Mirrors entry_read_state in the other direction: a bulk mark-as-UNREAD
-        # stamps its whole batch with one timestamp so the toast can put exactly
-        # that batch back. entry_read_state cannot serve — its rows mean "read
-        # at", and this batch has just stopped being read (they are deleted).
+        # Feed-tag suggestion chips the user has dismissed, per (feed, tag).
+        #
+        # Manual rather than heuristic on purpose: two automatic rules were tried
+        # and both hid tags that were wanted. "VinylDeals" (a place) is noise while
+        # "Lessons" (a kind of content) is exactly the right filing tag, and nothing
+        # in the feed metadata distinguishes them — see get_feed_tag_suggestions.
+        # Scoped per feed because a tag useless on one feed can matter on another.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS suppressed_feed_tags (
@@ -3796,6 +3796,20 @@ def ensure_meta_schema() -> None:
                 tag TEXT NOT NULL,
                 suppressed_at REAL NOT NULL,
                 PRIMARY KEY (feed_url, tag)
+            )
+            """
+        )
+        # The opposite scope from suppressed_feed_tags above: a tag value that
+        # should never render as a suggestion chip on ANY feed (e.g. "comments"),
+        # not one dismissal per feed it happens to show up on. Filters the chip
+        # out of the suggestion UI itself -- explicitly not a rule that acts on
+        # entries carrying the tag, which is what tag_filter rules are for.
+        # Editable from Settings -> Tags.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS suppressed_feed_tags_global (
+                tag TEXT PRIMARY KEY,
+                suppressed_at REAL NOT NULL
             )
             """
         )
@@ -11683,10 +11697,18 @@ def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     chip records that decision in `suppressed_feed_tags`, undoable from Feed
     Properties. Resist a third heuristic — the first two each looked convincing
     against the data that motivated them.
+
+    A tag value can also be dismissed globally (`suppressed_feed_tags_global`,
+    editable from Settings -> Tags) — this is a *different* axis, not a stronger
+    version of the per-feed one: it is for a tag value that is never worth
+    filing under on any feed (e.g. "comments"), decided once instead of
+    per-feed whack-a-mole, and still just filters the suggestion chip, not a
+    rule that acts on entries carrying the tag.
     """
     try:
         tags = feed_tag_service.get_tags_for_entry(feed_url, entry_id)
         dismissed = feed_tag_service.suppressed_tags(feed_url)
+        global_dismissed = feed_tag_service.global_suppressed_tags()
     except Exception:
         LOGGER.warning("feed tag suggestion lookup failed for %s", feed_url, exc_info=True)
         return []
@@ -11702,7 +11724,7 @@ def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     # undoes from the same place (Feed Properties -> Hidden tags).
     if any((d or "").strip() == FEED_TAGS_SUPPRESS_ALL for d in dismissed):
         return []
-    dismissed_norm = {normalize_tag_value(d) for d in dismissed}
+    dismissed_norm = {normalize_tag_value(d) for d in dismissed} | {normalize_tag_value(d) for d in global_dismissed}
     return [t for t in tags if normalize_tag_value(t) not in dismissed_norm][:MAX_FEED_TAG_SUGGESTIONS]
 
 
@@ -37514,6 +37536,28 @@ def dismiss_feed_tag(
             "suppressed": feed_tag_service.suppressed_tag_list(feed_url),
         }
     )
+
+
+@app.get("/tags/global-suppressed")
+def list_globally_suppressed_tags_route():
+    """Tag values that never render as a suggestion chip on any feed, behind
+    Settings -> Tags."""
+    return JSONResponse({"ok": True, "tags": feed_tag_service.global_suppressed_tag_list()})
+
+
+@app.post("/tags/global-suppressed/add")
+def add_globally_suppressed_tag_route(tag: str = Form(...)):
+    clean = (tag or "").strip()
+    if not clean:
+        return JSONResponse({"ok": False, "error": "Enter a tag."}, status_code=400)
+    feed_tag_service.set_tag_globally_suppressed(clean, True)
+    return JSONResponse({"ok": True, "tags": feed_tag_service.global_suppressed_tag_list()})
+
+
+@app.post("/tags/global-suppressed/remove")
+def remove_globally_suppressed_tag_route(tag: str = Form(...)):
+    feed_tag_service.set_tag_globally_suppressed(tag, False)
+    return JSONResponse({"ok": True, "tags": feed_tag_service.global_suppressed_tag_list()})
 
 
 @app.post("/entries/discard")

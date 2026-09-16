@@ -69,16 +69,6 @@ for: auto-disambiguate duplicate display titles (e.g. suffix from the feed
 URL path) — the tree tooltip already shows the URL, but identical titles
 still invite unsubscribing the wrong feed.
 
-### Global ignored suggested-tags list, editable in Settings
-
-Distinct from the existing per-(feed, tag) dismissal (`suppressed_feed_tags`, × on a chip, undo at
-Feed Properties → *Hidden tags* — see the Watch-lists entry on this heuristic's history). Josh
-wants a **global** list of tag values (e.g. `comments`) that should never render as a
-suggested-tag chip on *any* feed — filtering the chip from the suggestion UI itself, explicitly
-**not** a rule that acts on entries carrying that tag. Wants it editable somewhere in Settings (a
-new list, add/remove). Not scoped: needs a new setting (JSON list or a small table), a check at
-chip-render time (`feed_tag_suggestions` filtering), and a Settings UI panel.
-
 ### "Filter this view" — two follow-ups left
 
 - **`list_entries_for_feeds` enriches every record it returns**, so both
