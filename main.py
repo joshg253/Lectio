@@ -19022,6 +19022,13 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
                 content_html = _bs4_stripped or None
             else:
                 lead_image_url = None
+        elif bluesky.is_bsky_feed(feed_url):
+            # Bluesky RSS carries no <img> in its real body — the only way this URL
+            # can already be in content_html is get_entry_detail's own bsky-recovery
+            # append (fetch_post_images), not the author placing it in the flow. That
+            # append IS the post's real content, so leave it in the body and keep the
+            # separate lead too, rather than treating it as author-placed duplication.
+            pass
         else:
             # Lead URL is buried mid-article (author placed it there) — show it in
             # its natural position, not as a separate top lead.

@@ -167,31 +167,6 @@ entry's actual stored `content` from the reader DB and run it directly through
 is. Not fixed yet; still worth checking whether it's systemic across ArtStation entries (stale
 negatives would predict yes) or a one-off.
 
-### A Bluesky entry has a thumb but no lead image
-
-Flagged 2026-09-02:
-[entry](https://lectio.catfork.win/?folder_id=6&read_filter=unread&feed_url=https%3A%2F%2Fbsky.app%2Fprofile%2Fdid%3Aplc%3Ae2ehcohu3lrobwew5gzqd7vp%2Frss&entry_id=at%3A%2F%2Fdid%3Aplc%3Ae2ehcohu3lrobwew5gzqd7vp%2Fapp.bsky.feed.post%2F3muab5zxz4k2a)
-— a thumbnail resolved and shows in the list, but the entry pane shows no lead image. Opposite
-shape from the usual "no thumb" reports.
-
-**Root-caused 2026-09-11, not fixed.** Both the thumb and the lead image are computed from the
-same source (`extract_entry_thumbnail_url`'s bsky branch, `services/lead_images.py:1606-1609`,
-`bsky_imgs[0]` via `services/bluesky.py:fetch_post_images`) — they don't disagree. What kills the
-pane's copy is `_strip_lead_image_opener` (`main.py:18298`). `get_entry_detail` (main.py:18886)
-builds `content_html`, then for bsky feeds appends the recovered image as a plain `<p><img
-src="..."></p>` (main.py:18901-18913) — Lectio's own injection, since Bluesky posts carry no `<img>`
-in their real body. `_strip_lead_image_opener` then sees that same URL already sitting in
-`content_html` (because Lectio itself just put it there) and, since bsky's feed strategy isn't
-`"artwork"`, takes the generic "the author already placed this image in the flow, don't duplicate
-it as a hero" branch (main.py:18412-18425) and nulls `lead_image_url` — treating Lectio's own
-recovery injection as if it were authored placement.
-
-Fix shape: exclude self-injected bsky `<img>`s from that dedup check (e.g. skip the strip when the
-image came from the bsky-recovery append rather than the entry's real stored content), so the same
-URL can be both the hero and (harmlessly) present in the body. Not attempted — needs to confirm
-`lead_image_url` is non-None right before main.py:18412 for this entry first, then decide whether to
-key the exclusion on strategy or on tracking which images came from the bsky append itself.
-
 ### Shared proxy/FlareSolverr escalation for page fetches — SHIPPED 2026-08-31
 
 Closed both re-fetch and tag/lead-image gaps raised 2026-08-31 (tamriel-rebuilt.org 403s on
@@ -255,24 +230,6 @@ Administration, not `.env` — `gluetun`/`flaresolverr`/`tailscale` containers a
   gap this item exists to close (no escalation offered at all) is closed regardless of whether
   FlareSolverr wins every individual challenge.
 
-### play.nobleknight.com images still 403 despite FlareSolverr cookie reuse
-
-Cookie reuse shipped 2026-09-06 (see docs/architecture/feeds.md) specifically to fix this host's
-images (article pages needed FlareSolverr; images 403'd even with a full realistic browser header
-set). Verified live it does NOT fully solve it: FlareSolverr's solve of the article page returns
-only a `__cf_bm` cookie, never `cf_clearance` — confirmed by tracing `flaresolverr.solve`'s raw
-response — and presenting `__cf_bm` to the `/app/uploads/...` image path still gets Cloudflare's
-"Just a moment..." 403 page. `__cf_bm` is a bot-scoring cookie set on every request regardless;
-`cf_clearance` (the actual challenge-passed credential) apparently isn't required for THIS host's
-article pages at all, so the solve never produces one — meaning there is no cookie available that
-would unlock the images either. This host's image path most likely checks something a cookie can't
-carry (TLS/JA3 fingerprint), which only a real browser connection satisfies — FlareSolverr can't
-help further since it renders pages, not arbitrary binary responses, so it has no way to hand back
-image bytes at all. The cookie-reuse mechanism itself is real and confirmed working in principle
-(unit-tested); it simply doesn't reach far enough for a host whose protection is stronger than a
-cookie check. No further fix attempted here — would need routing individual images through a real
-browser instance per-request, a much bigger undertaking than this feature.
-
 ### hide_locked_comics/hide_unpremiered can under-fill a page — pre-existing gap, not this PR's scope
 
 Flagged by Sourcery review on the `hide_locked_comics` PR, but the same shape already existed for
@@ -286,18 +243,6 @@ all — which is likely why it went unnoticed for `hide_unpremiered`. A real fix
 the predicate into the SQL query itself (a join against `entry_lead_images`/duration-cache state)
 or over-fetching and iterating until enough entries pass the filter; both are query-layer surgery
 bigger than a review-response fixup, so not attempted here.
-
-### Locked-webcomic placeholder UX — idea only, not attempted
-
-cad-comic.com's "img not loading" report (2026-09-06) turned out not to be a Lectio bug: the
-specific strip is genuinely paywalled behind a $3+ supporter lock for another ~134 days from that
-date, confirmed by fetching the live page directly and finding its own "This Comic is Locked"
-markup — there is no fresher URL to resolve to. `hide_locked_comics` (shipped the same day) covers
-this for anyone willing to hide the post outright, but for a reader who wants to keep seeing it in
-the list without opting into that, the thumb/lead-image slot is currently just broken/blank. A
-placeholder graphic or "locked" badge instead of a broken image would read better, but needs a
-detection signal to key off (the same lock-page markup the report above used to confirm it) and
-hasn't been sized.
 
 ## Tier 2 — small, fast, independent wins
 
@@ -1052,6 +997,18 @@ auto-detected `og_scrape` feeds, **162 entries' source pages carry no `og:image`
 that bucket is where any future "odd body image was picked" report will come
 from, so it is worth knowing it exists before re-diagnosing from scratch.
 
+### Locked-webcomic placeholder UX — idea only, not attempted
+
+cad-comic.com's "img not loading" report (2026-09-06) turned out not to be a Lectio bug: the
+specific strip is genuinely paywalled behind a $3+ supporter lock for another ~134 days from that
+date, confirmed by fetching the live page directly and finding its own "This Comic is Locked"
+markup — there is no fresher URL to resolve to. `hide_locked_comics` (shipped the same day) covers
+this for anyone willing to hide the post outright, but for a reader who wants to keep seeing it in
+the list without opting into that, the thumb/lead-image slot is currently just broken/blank. A
+placeholder graphic or "locked" badge instead of a broken image would read better, but needs a
+detection signal to key off (the same lock-page markup the report above used to confirm it) and
+hasn't been sized.
+
 ### Full-content fetch at ingest for body-less feeds
 
 meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
@@ -1242,6 +1199,13 @@ not scheduled, just watched.
 - **makeuseof re-fetch returns white images.** Seen once during testing
   2026-08-06 and never investigated. Waiting on a second sighting rather than
   hunting it cold — Josh will flag it if it recurs.
+- **play.nobleknight.com images still 403 despite FlareSolverr cookie reuse.** Cookie reuse
+  (shipped 2026-09-06) fixed article pages but not images: FlareSolverr's solve only ever returns a
+  `__cf_bm` cookie for this host, never the actual challenge-passed `cf_clearance`, so there is no
+  cookie that unlocks the image path at all. Most likely a TLS/JA3 fingerprint check only a real
+  browser connection satisfies — FlareSolverr renders pages, not arbitrary binary responses, so it
+  can't hand back image bytes either way. Would need routing individual images through a real
+  browser instance per-request; parked until that's worth building for one host.
 - **guitarworld.com lessons: an interactive practice widget (MatchMySound,
   `app.matchmysound.com/embed.html?ass_id=...`) totally missing from Lectio's
   capture.** Found 2026-09-02 on one entry. Not the same shape as the

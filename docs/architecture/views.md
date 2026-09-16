@@ -406,6 +406,26 @@ prices. Read Mode (`read_mode.html`) does not include this — it's a separate
 template that doesn't load `app.js` — so a math-heavy saved article still shows
 raw LaTeX there; unaddressed, tracked in Plan.md.
 
+### Bluesky's own recovered image must not be treated as author-placed content
+
+Bluesky RSS is text-only, so `get_entry_detail` (main.py) appends the post's
+images — recovered via `fetch_post_images` (services/bluesky.py) — as plain
+`<p><img></p>` tags onto `content_html` itself. That append then flows into
+`_strip_lead_image_opener`, the general dedup pass that decides whether a lead
+image already sitting in the body should stay separate at the top or be
+folded into its in-body occurrence (see images.md "Choosing a lead image").
+For every other feed, an image already present mid-body means the *author*
+put it there, so the separate lead gets dropped rather than shown twice. For
+Bluesky that inference is backwards: the image is mid-body only because
+Lectio itself just put it there a few lines earlier in the same function — the
+real feed body never had an `<img>` at all. Treating it as author-placed
+nulled `lead_image_url`, so the pane showed no hero even though the list
+thumbnail (computed from the same `fetch_post_images` call) resolved fine —
+reported live 2026-09-02, root-caused 2026-09-11, fixed by special-casing
+`bluesky.is_bsky_feed(feed_url)` in `_strip_lead_image_opener`'s mid-body
+branch to leave both the hero and the body copy in place instead of dropping
+the hero.
+
 ### Bluesky video playback (hls.js) — lazy-loaded, not always-on like KaTeX
 
 Extends the Bluesky image recovery above (see "Content sources"): a video post

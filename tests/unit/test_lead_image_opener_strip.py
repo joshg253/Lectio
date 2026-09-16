@@ -73,6 +73,21 @@ def test_lead_buried_midarticle_drops_separate_lead(monkeypatch):
     assert LEAD in content  # left in its natural position
 
 
+def test_bsky_recovered_image_keeps_both_hero_and_body_copy(monkeypatch):
+    # Bluesky RSS ships no <img> in its real body — get_entry_detail's own
+    # recovery append is the only way this URL can be mid-content. Unlike an
+    # author placing an image in the flow, that's Lectio's own injection of
+    # the post's real content, so it must not null out the separate lead the
+    # way test_lead_buried_midarticle_drops_separate_lead does for a real feed.
+    monkeypatch.setattr(main.lead_image_service, "get_feed_strategy", lambda u: ("auto", 0.0, False))
+    content, lead = _strip(
+        f'<p>post text</p><p><img src="{LEAD}"></p>',
+        feed="https://bsky.app/profile/did:plc:abc/rss",
+    )
+    assert lead == LEAD
+    assert LEAD in content
+
+
 def test_artwork_hoists_image_to_top(monkeypatch):
     # Artwork feeds: strip the in-body image so it shows once at the top.
     monkeypatch.setattr(main.lead_image_service, "get_feed_strategy", lambda u: ("artwork", 0.0, True))
