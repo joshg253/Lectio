@@ -692,16 +692,35 @@ shape alone, before deleting).
   spurious 404s (YouTube 404s a ~700-request burst though each feed is fine
   singly) — a polite-client measure, feeds to other hosts interleave at full speed.
 - **`bypass_backoff`** (`FeedRefreshService.update_feeds`) — skips the feed- and
-  domain-level backoff checks above, but not reader's own `update_after`
-  (Retry-After/Cache-Control, a real instruction from the site). Wired only into
-  the single-feed manual `/refresh/feed` route: a deliberate click on one feed is
-  a single polite request, the same reasoning already used for a never-updated
-  feed's first fetch. The scheduler and the bulk `/refresh/folder` route stay on
-  the default (respect backoff) — bypassing a whole folder's backoff in one click
-  would hit every backed-off feed on it at once, a different blast radius.
-  Without this, a feed that recovered *after* its last failed attempt stayed
-  reported as failing — and Refresh silently did nothing — for up to the 24h
-  backoff cap.
+  domain-level backoff checks above. Wired only into the single-feed manual
+  `/refresh/feed` route: a deliberate click on one feed is a single polite
+  request, the same reasoning already used for a never-updated feed's first
+  fetch. The scheduler and the bulk `/refresh/folder` route stay on the default
+  (respect backoff) — bypassing a whole folder's backoff in one click would hit
+  every backed-off feed on it at once, a different blast radius. Without this, a
+  feed that recovered *after* its last failed attempt stayed reported as
+  failing — and Refresh silently did nothing — for up to the 24h backoff cap.
+- **`bypass_backoff` and reader's own `update_after`.** reader sets
+  `update_after` to its own default ~60-minute polling cadence on *every*
+  successful update, unconditionally (`reader._update.next_update_after`,
+  `DEFAULT_CONFIG.interval=60`) — only extending it further when the server's
+  own Retry-After/Cache-Control genuinely asks for more. Originally
+  `bypass_backoff` respected `update_after` unconditionally too, on the theory
+  that it always reflects a real instruction from the site — it doesn't: for
+  any feed with no caching headers restrictive enough to push it past that
+  default, a deliberate "Refresh" click did nothing for up to an hour, with no
+  error (found 2026-09-04; measured live across the whole library 2026-09-16 —
+  ~30% of feeds sat in exactly this state at any given moment). Fixed by
+  ignoring `update_after` under `bypass_backoff` when it's within
+  `_MANUAL_REFRESH_IGNORE_UPDATE_AFTER_WITHIN_SECONDS` (90 minutes) of now: a
+  pure-default value can never be more than 60 minutes from whenever reader
+  computed it, so at any later moment the remaining wait it implies can only be
+  smaller — meaning anything still that close *can only* be the default, never
+  a real signal, without needing to reconstruct exactly when it was computed
+  (reader exposes no public API for that; 90 minutes is a comfortable margin
+  above the 60-minute ceiling). Anything genuinely further out — a 429's
+  Retry-After, an unusually long `max-age` — stays respected even on a manual
+  click, up to reader's own 31-day cap (`MAX_UPDATE_AFTER`).
 
 ## Outbound proxy escalation
 

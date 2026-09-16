@@ -183,23 +183,6 @@ bigger than a review-response fixup, so not attempted here.
 
 ## Tier 2 — small, fast, independent wins
 
-### Manual single-feed "Refresh" can silently no-op for up to an hour
-
-Found 2026-09-04 while iterating on a dev feed. `services/feed_refresh.py`'s `update_feeds(...,
-bypass_backoff=True)` (used by the `/refresh/feed` route, i.e. the sidebar's per-feed "Refresh")
-deliberately does not override `reader`'s own `update_after` field, on the documented theory that
-it "reflects the server's own Retry-After/Cache-Control — a real instruction from the site" (not
-just Lectio's own pacing). Traced into `reader`'s source (`_update/__init__.py:next_update_after`)
-and that's not quite right: `reader` sets a baseline `update_after` of "next round interval
-boundary" (looked like 60 minutes here) on *every* successful update, unconditionally — only
-extends it further if the server explicitly asks for longer. So for any feed with no real
-caching headers, a deliberate "Refresh" click does nothing for up to an hour after the last
-fetch, with no error or explanation. Likely affects real feeds too, not just dev ones — worth
-sizing: probably means `bypass_backoff=True` should also ignore reader's own default-interval
-`update_after` specifically (distinguishing it from a genuine HTTP-derived one), but that has
-politeness implications for real feed servers ([[good-web-citizen]] memory), so didn't change it
-unilaterally. Confirm the actual default interval reader uses before touching this.
-
 **Navigation/UX papercuts** — no design work needed, just haven't been built.
 
 ### Bluesky video posts show a plain thumbnail with no "this is a video" indicator — playback DONE 2026-09-11
