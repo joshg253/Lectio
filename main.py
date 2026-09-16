@@ -35593,14 +35593,33 @@ def toggle_entry_saved(
                 conn.commit()
 
     apply_star_state(feed_url, entry_id, bool(saved))
+    autofetch_pending = False
     if saved:
-        _maybe_autofetch_on_keep(feed_url, entry_id)
+        autofetch_pending = _maybe_autofetch_on_keep(feed_url, entry_id)
 
     if is_async_action_request(request, "lectio-post-save-toggle"):
-        return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved), "undo_token": undo_token})
+        return JSONResponse(
+            {
+                "ok": True,
+                "feed_url": feed_url,
+                "entry_id": entry_id,
+                "saved": bool(saved),
+                "undo_token": undo_token,
+                "autofetch_pending": autofetch_pending,
+            }
+        )
 
     if is_async_action_request(request, "lectio-entry-save-toggle"):
-        return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved), "undo_token": undo_token})
+        return JSONResponse(
+            {
+                "ok": True,
+                "feed_url": feed_url,
+                "entry_id": entry_id,
+                "saved": bool(saved),
+                "undo_token": undo_token,
+                "autofetch_pending": autofetch_pending,
+            }
+        )
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
@@ -35915,7 +35934,37 @@ def _mark_autofetch_host_failed(host: str) -> None:
                 del _autofetch_failed_hosts[stale]
 
 
-def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
+# Per-(feed_url, entry_id) autofetch job tracking. Unlike _refetch_jobs' single
+# running slot (one bulk run at a time), many of these can be in flight at once
+# -- one per recently-kept stub -- and each open pane only cares about its own
+# entry's status. The pane polls /entries/autofetch-status to notice once the
+# background re-fetch below lands, since the pane already rendered (showing the
+# stub) before that thread even started.
+_autofetch_jobs = _PerUserDict()
+_autofetch_jobs_lock = threading.Lock()
+_AUTOFETCH_JOB_STALE_S = 600  # finished job records this old are dropped lazily
+
+
+def _autofetch_prune_stale_jobs() -> None:
+    now = time.monotonic()
+    for key in list(_autofetch_jobs.keys()):
+        job = _autofetch_jobs.get(key)
+        if job and not job.get("running") and (now - (job.get("finished_at") or now)) > _AUTOFETCH_JOB_STALE_S:
+            _autofetch_jobs.pop(key, None)
+
+
+@app.get("/entries/autofetch-status")
+def entry_autofetch_status(feed_url: str = Query(...), entry_id: str = Query(...)):
+    """Poll target for a pane whose star/tag response flagged autofetch_pending —
+    reports whether _maybe_autofetch_on_keep's background re-fetch for THIS entry
+    is still running, and if not, whether it actually found a fuller copy."""
+    job = _autofetch_jobs.get((feed_url, entry_id))
+    if job is None:
+        return JSONResponse({"ok": True, "pending": False, "done": False, "success": None})
+    return JSONResponse({"ok": True, "pending": bool(job.get("running")), "done": not job.get("running"), "success": job.get("ok")})
+
+
+def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> bool:
     """Re-fetch a *stub* article in the background when it is starred or tagged.
 
     Keeping something is the moment you find out its feed only ever shipped a
@@ -35940,29 +35989,43 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
     The offline archive capture (``enqueue_archive``) already fires on both star
     and tag and is what Read Mode reads. This is the other half: it replaces the
     stub in the *entry pane*, which shows stored feed content.
+
+    Returns True when a background re-fetch is (now or already) in flight for
+    this entry, so the calling star/tag route can tell the client an open pane
+    on this entry is worth polling — see /entries/autofetch-status above.
     """
     try:
         if saved_articles_service.is_saved_articles_feed(feed_url):
-            return
+            return False
         with get_reader() as reader:
             entry = reader.get_entry((feed_url, entry_id), None)
         if entry is None or not (entry.link or "").startswith(("http://", "https://")):
-            return
+            return False
         stored = (entry.content[0].value if entry.content else None) or entry.summary or ""
         if _archived_copy_is_plausible(stored):
-            return  # a real article already — leave it alone
+            return False  # a real article already — leave it alone
         host = urlparse(entry.link).netloc.lower()
         if _autofetch_host_in_cooldown(host):
-            return  # this host already refused us; don't keep asking
+            return False  # this host already refused us; don't keep asking
     except Exception:  # noqa: BLE001 — never let this break the star/tag itself
         LOGGER.debug("auto-refetch precheck failed for %s/%s", feed_url, entry_id, exc_info=True)
-        return
+        return False
+
+    _job_key = (feed_url, entry_id)
+    with _autofetch_jobs_lock:
+        _existing_job = _autofetch_jobs.get(_job_key)
+        if _existing_job and _existing_job.get("running"):
+            return True  # already in flight for this entry — the pane can still poll it
+        _autofetch_prune_stale_jobs()
+        job = {"running": True, "ok": None, "started_at": time.monotonic(), "finished_at": None}
+        _autofetch_jobs[_job_key] = job
 
     _uid = tenancy.current_user_id()
 
     def _work() -> None:
         try:
             result = _refresh_captured_article_for_current_user(feed_url, entry_id)
+            job["ok"] = bool(result.get("ok"))
             if result.get("ok"):
                 LOGGER.info("[auto-refetch] %s/%s -> refreshed", feed_url, entry_id)
                 return
@@ -35979,12 +36042,17 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
                 _AUTOFETCH_HOST_COOLDOWN_S // 3600,
             )
         except Exception:  # noqa: BLE001
+            job["ok"] = False
             _mark_autofetch_host_failed(host)
             LOGGER.warning("[auto-refetch] failed for %s/%s", feed_url, entry_id, exc_info=True)
+        finally:
+            job["running"] = False
+            job["finished_at"] = time.monotonic()
 
     # Off-request so the star stays instant, and through the tenancy helper
     # because a bare thread would run the fetch as the default user.
     threading.Thread(target=lambda: _run_in_user_context(_uid, _work), daemon=True).start()
+    return True
 
 
 def _refresh_captured_article_for_current_user(
@@ -36564,8 +36632,9 @@ def set_entry_manual_tags(
     # Only when tags remain: clearing the last tag is the opposite of keeping.
     # Deliberately here and not in set_manual_tags_for_entry, which the feed
     # auto-taggers also drive across a whole refresh — see _maybe_autofetch_on_keep.
+    autofetch_pending = False
     if tags:
-        _maybe_autofetch_on_keep(feed_url, entry_id)
+        autofetch_pending = _maybe_autofetch_on_keep(feed_url, entry_id)
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
@@ -36579,7 +36648,7 @@ def set_entry_manual_tags(
     message = "Tags updated." if tags else "Tags cleared."
 
     if request.headers.get("X-Requested-With") == "lectio-ajax":
-        return JSONResponse({"ok": True, "tags": tags})
+        return JSONResponse({"ok": True, "tags": tags, "autofetch_pending": autofetch_pending})
 
     return RedirectResponse(
         url=(

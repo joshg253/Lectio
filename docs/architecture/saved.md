@@ -494,6 +494,42 @@ tag handlers now sync the row from the server's reply (`data.tags`, the normaliz
 and capped set), OR-ing the star back in so clearing the last tag off a starred
 post does not un-keep it.
 
+### The open pane didn't notice its own auto-refetch landing
+
+`_maybe_autofetch_on_keep` runs off-request specifically so the star/tag click
+stays instant — but that means the pane has already rendered the stale stub by
+the time the background thread's re-fetch actually lands. Reported live
+2026-08-30 as what looked like a bad extraction (an entry rendering with only
+its embedded video, no body text); root-caused via a second repro the same
+day: the DB already held the full article seconds after tagging, but the open
+pane kept showing the stub until closed and reopened. "A manual re-fetch fixed
+it" in the original report was most likely just forcing a re-render onto
+content the background fetch had already filled in, not a better extraction.
+
+Fixed by giving this call site the same job-record shape `_refetch_jobs`/
+`_yt_playlist_batch_jobs` use for the bulk re-fetch and YouTube-playlist status
+pills — but keyed per `(feed_url, entry_id)` in a `_PerUserDict`, not a single
+running slot, since many stubs can be mid-refetch across different panes/tabs
+at once and each poller only cares about its own entry:
+
+- `_maybe_autofetch_on_keep` now returns `True` when it kicked off (or found
+  already running) a background job for this entry, and stores a small job dict
+  — mutated in place from inside the background thread, the same by-reference
+  pattern `_refetch_worker` uses, so the update needs no tenancy re-binding.
+- The star (`/entries/saved`) and tag (`/entries/tags`) routes' JSON responses
+  gained an `autofetch_pending` flag built from that return value.
+- `GET /entries/autofetch-status?feed_url=&entry_id=` is the poll target — a
+  three-state reply (`pending` / `done` with `success`), no job history or
+  cancel, unlike the bulk endpoints' fuller status payload; this one job only
+  ever needs "is it done yet."
+- `pollAutofetchAndRefreshPane` (app.js) starts polling when a star/tag
+  response carries `autofetch_pending`, checking the pane is still open on the
+  *same* entry on every tick before it fetches again (the user may have
+  navigated on) and re-rendering via `loadEntryPaneWithoutFullRefresh` once the
+  job resolves successfully. ~30s across 15 ticks, generous for one
+  readability fetch; a still-running job past that just stops polling quietly
+  rather than nagging.
+
 ### The re-fetch date picker: Now / Original / Pub date
 
 Raised 2026-08-23, decided 2026-08-24. `replace_entry_content`'s

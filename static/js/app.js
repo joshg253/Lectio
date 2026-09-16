@@ -8653,6 +8653,38 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       });
     }
 
+    const _AUTOFETCH_POLL_MS = 2000;
+    const _AUTOFETCH_POLL_MAX_TICKS = 15;  // ~30s -- generous for one readability fetch
+
+    // Starring/tagging a stub entry can kick off a background re-fetch
+    // (_maybe_autofetch_on_keep) that lands well after this request already
+    // returned and the pane rendered the old stub. Poll /entries/autofetch-status
+    // for THIS entry and, once it lands, re-render the pane -- but only if it's
+    // still open on the same entry, since the user may have navigated on.
+    async function pollAutofetchAndRefreshPane(feedUrl, entryId) {
+      for (let tick = 0; tick < _AUTOFETCH_POLL_MAX_TICKS; tick++) {
+        await new Promise((resolve) => setTimeout(resolve, _AUTOFETCH_POLL_MS));
+        const title = document.querySelector('.entry-pane-title');
+        if (!title || title.getAttribute('data-post-feed-url') !== feedUrl || title.getAttribute('data-post-entry-id') !== entryId) {
+          return;
+        }
+        let status;
+        try {
+          const qs = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId });
+          const r = await fetch(`/entries/autofetch-status?${qs.toString()}`, { credentials: 'same-origin' });
+          status = await r.json();
+        } catch (_e) {
+          continue;  // a missed poll tick just tries again next interval
+        }
+        if (!status || !status.ok || status.pending) continue;
+        if (status.success) {
+          await loadEntryPaneWithoutFullRefresh(window.location.href, false);
+          showToastMessage('Full article text found — updated.');
+        }
+        return;
+      }
+    }
+
     function bindEntryPaneInteractions() {
       const entrySaveForm = document.querySelector('.entry-save-toggle-form');
       if (entrySaveForm && !entrySaveForm.dataset.boundAsyncSubmit) {
@@ -8710,12 +8742,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               throw new Error(`HTTP ${response.status}`);
             }
             if (dropFromInbox) linkedPostItem.remove();
-            if (!nextIsSaved) {
-              try {
-                const data = await response.json();
+            try {
+              const data = await response.json();
+              if (!nextIsSaved) {
                 if (data && data.undo_token) showUndoUnstarToast(data.undo_token);
-              } catch (_jsonErr) { /* no undo token available — not fatal */ }
-            }
+              } else if (data && data.autofetch_pending) {
+                pollAutofetchAndRefreshPane(feedUrlInput.value, entryIdInput.value);
+              }
+            } catch (_jsonErr) { /* response body not needed for the star to have taken */ }
           } catch (_error) {
             if (dropFromInbox) linkedPostItem.hidden = false;
             applyEntryPaneSavedState(!nextIsSaved);
@@ -18491,6 +18525,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             if (data.ok) {
               entryTagsInput.value = '';
               syncKeptFromTagResponse(entryTagsForm, data);
+              // Kicked off before the reload below, not after: that reload can
+              // throw on a transient blip (it deliberately rethrows so the caller
+              // falls back to a full navigation -- see its own comment), which
+              // would otherwise skip this and silently drop the one poll that
+              // notices the background auto-refetch landing.
+              if (data.autofetch_pending) {
+                pollAutofetchAndRefreshPane(body.get('feed_url'), body.get('entry_id'));
+              }
               const wasExpanded = captureSuggestedTagsExpanded();
               await loadEntryPaneWithoutFullRefresh(window.location.href, false);
               restoreSuggestedTagsExpanded(wasExpanded);
@@ -18667,6 +18709,11 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
             const data = await resp.json();
             if (data.ok) {
               syncKeptFromTagResponse(entryTagsForm, data);
+              // Kicked off before the reload -- see the matching comment in the
+              // Apply handler above.
+              if (data.autofetch_pending) {
+                pollAutofetchAndRefreshPane(body.get('feed_url'), body.get('entry_id'));
+              }
               const wasExpanded = captureSuggestedTagsExpanded();
               await loadEntryPaneWithoutFullRefresh(window.location.href, false);
               restoreSuggestedTagsExpanded(wasExpanded);
