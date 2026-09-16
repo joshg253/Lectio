@@ -467,20 +467,24 @@ class LeadImageService:
         re.IGNORECASE,
     )
 
-    # A basename that is just a UUID (optionally with a suffix) carries **no
-    # naming signal**, so every name-based heuristic can only misfire on it:
-    # `…-ad27-…` inside a UUID is not an ad slot, and `[-_]ad[0-9]` above cannot
-    # tell it from `Cert-ad1.png`. Two Tapas panels were rejected this way, and
-    # the wixmp host-trust in _is_image_url_acceptable was added for exactly the
-    # same class ("ad87 in a UUID") one host at a time. This generalizes it.
-    # Anything *starting* with a UUID, not just a bare one: Webtoons appends a
+    # A basename containing a UUID carries **no naming signal** in that span, so
+    # every name-based heuristic can only misfire on it: `…-ad27-…` inside a
+    # UUID is not an ad slot, and `[-_]ad[0-9]` above cannot tell it from
+    # `Cert-ad1.png`. Two Tapas panels were rejected this way, and the wixmp
+    # host-trust in _is_image_url_acceptable was added for exactly the same
+    # class ("ad87 in a UUID") one host at a time. This generalizes it.
+    # Anywhere in the basename, not just at the very start: Webtoons appends a
     # numeric id straight onto the last group with no separator
-    # (`53e3fa05-ad49-…-782469d45a92` + `12398245534840153981.jpg`), and a
-    # trailing-separator-only rule missed it — so `-ad49-` was read as an ad
-    # slot and a real panel was rejected. A name that opens with a UUID is
-    # machine-generated whatever follows it.
+    # (`53e3fa05-ad49-…-782469d45a92` + `12398245534840153981.jpg`, UUID at the
+    # start), but ArtStation prefixes the UUID with the artist's own slug
+    # (`sean-raiko-tay-ddad9lc-2702fb07-6b57-4646-ad1e-200b5c886b11.jpg`, UUID
+    # in the middle) — found live 2026-09-16, same "machine-generated segment"
+    # reasoning as the start-anchored case, just not anchored to a position. A
+    # name-based heuristic still applies to the human-written part around it;
+    # only the ad-slot check reads the whole basename today, so that is the
+    # only consumer this widens.
     _UUID_BASENAME_RE = re.compile(
-        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[^/]*$",
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
         re.IGNORECASE,
     )
     # Advertisement images flagged by their alt/title text (e.g. SE Radio's
@@ -490,13 +494,19 @@ class LeadImageService:
         r"(?:\bbanner ad\b|\bad banner\b|\badvertisement\b)",
         re.IGNORECASE,
     )
-    # "profile" only counts as an avatar hint at a real segment boundary
-    # (/profile/, profile.jpg, profile_pic, -profile-), NOT embedded mid-slug in a
-    # multi-word title — DeviantArt art filenames like
-    # "collared_peccary_profile__enclosure__by_…-fullview.jpg" carry "profile" as a
-    # title word (preceded by "_") and must not be mistaken for a headshot.
+    # "profile" and "user" only count as an avatar hint at a real segment
+    # boundary (/profile/, profile.jpg, profile_pic, -profile-, user123.png),
+    # NOT embedded mid-word inside an unrelated slug — DeviantArt art filenames
+    # like "collared_peccary_profile__enclosure__by_…-fullview.jpg" carry
+    # "profile" as a title word (preceded by "_") and must not be mistaken for
+    # a headshot. "user" needs the identical guard: an ArtStation piece titled
+    # "greenhouserez" (the artist's own "Greenhouse" + "rez") lost its lead
+    # image because "user" sits mid-word inside "…hous-erez" with no separator
+    # at all — found live 2026-09-16, same false-positive class as "profile"
+    # but the "user" alternative was never given the same boundary when it was
+    # added.
     _AVATAR_HINT_PATTERNS = re.compile(
-        r"(?:avatar|author(?:-image)?\b|byline|(?<![a-zA-Z0-9_])profile|headshot|user(?:-image|pic)?|gravatar)",
+        r"(?:avatar|author(?:-image)?\b|byline|(?<![a-zA-Z0-9_])profile|headshot|(?<![a-zA-Z0-9_])user(?:-image|pic)?|gravatar)",
         re.IGNORECASE,
     )
     # "round" is a *shape* hint for a cropped avatar (avatar-round.png,
@@ -3479,7 +3489,7 @@ class LeadImageService:
         # Name-based heuristics are meaningless against a machine-generated
         # filename and can only produce false positives there — see
         # _UUID_BASENAME_RE. Path- and dimension-based checks still apply.
-        opaque_name = bool(self._UUID_BASENAME_RE.match(parsed.path.rsplit("/", 1)[-1]))
+        opaque_name = bool(self._UUID_BASENAME_RE.search(parsed.path.rsplit("/", 1)[-1]))
         if (
             self._TRACKER_URL_PATTERNS.search(parsed.netloc)
             or self._TRACKER_URL_PATTERNS.search(parsed.path)

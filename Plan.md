@@ -104,38 +104,6 @@ Two dead ends from the original 2026-08-11 investigation, both measured, so nobo
 
 **Re-fetch/extraction quality & staleness** — the article being read is broken or stale; directly in the way of triage.
 
-### An ArtStation entry with a body image still resolved to no lead image
-
-Noticed 2026-08-30: a list-view thumbnail missing on an ArtStation feed entry. Checked
-`entry_lead_images` for it — the row exists with `fetched_at` set (a resolution attempt did
-complete) but `image_url`/`image_alt`/`image_title`/`thumb_crop` are all NULL, even though the
-entry's stored body has exactly one `<img>`, a normal (non-signed-looking) `cdnb.artstation.com`
-CDN URL. So resolution ran and came back empty despite an obvious single candidate sitting right
-in the content.
-
-**Scoped 2026-09-11.** Reproduced real ArtStation RSS markup (`<a href="...cdnb.artstation.com/
-.../large/....jpg?ts"><img src="same-url" alt=""/></a>`) directly against `LeadImageService`
-(`services/lead_images.py`): it resolves fine — `_is_image_url_acceptable` (line 3358) accepts it
-and both `extract_entry_thumbnail_url` and `resolve_entry_lead_image_url` return the image. So
-there is no blanket cdnb.artstation.com denylist, no dimension-floor rejection of that URL shape,
-and no ArtStation-specific special case in the generic path today — the `strategy='artwork'` tag
-(`main.py:26781 _auto_tag_artwork_feeds`) only gates the source-page scrape
-(`_fetch_source_lead_image`), not the inline `<img>` scan (`_extract_first_image_url_from_html`,
-lead_images.py:2503), which always runs.
-
-Most likely explanation: a **stale cached negative that never revalidates**. The backfill only
-retries entries that are unread/saved/tagged (lead_images.py:2204) and gates negative-result
-retries behind a 4h window (`_NEGATIVE_RETRY_SECONDS`, line 670) — so a since-read entry's one-time
-transient failure (network hiccup, ArtStation CDN not fully synced yet on first crawl) can persist
-as a NULL row indefinitely even though the body clearly has a good candidate now. Less likely: a
-silently-swallowed exception in one of the broad `except Exception: pass` blocks in
-`_extract_entry_thumbnail_url_inner` (lines 1633-1707), or a markup variant this entry has that the
-repro didn't (alt/title text tripping `_has_avatar_hint`/`_AD_ALT_PATTERNS`). To confirm: pull this
-entry's actual stored `content` from the reader DB and run it directly through
-`resolve_entry_lead_image_url`/`extract_entry_thumbnail_url` — that will show which of the three it
-is. Not fixed yet; still worth checking whether it's systemic across ArtStation entries (stale
-negatives would predict yes) or a one-off.
-
 ### Shared proxy/FlareSolverr escalation for page fetches — SHIPPED 2026-08-31
 
 Closed both re-fetch and tag/lead-image gaps raised 2026-08-31 (tamriel-rebuilt.org 403s on
