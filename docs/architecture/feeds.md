@@ -63,6 +63,46 @@ behavior change a reader would ever see.
 
 These run server-side and affect the underlying DB state, so third-party clients (Capy, etc.) see the clean state after the next sync.
 
+## A rule's identity survives a scope-changing edit (`rule_uid`)
+
+Every `highlight_keywords` rule type — dedup, tag_filter, email_article, youtube_playlist,
+webhook, highlight — identifies itself as `(scope, scope_id, keyword)` for same-request lookups,
+which is fine there but breaks the moment any *other* table needs to recognize "the same rule"
+**across time**: editing a rule's feed list or keyword is remove-old + insert-new
+(`edit_highlight_route`), so anything keyed on the old text is silently orphaned by the edit.
+`rule_uid` (`highlight_keywords.rule_uid`, a `secrets.token_hex(16)` minted once and carried
+forward by every subsequent edit rather than reminted) is the stable id that survives it. Existing
+rows get one backfilled at migration time; a row with `rule_uid = ''` after that means it predates
+the column and never got backfilled, not "no id assigned yet."
+
+Three tables have needed this so far, each hitting the identity break in a different shape:
+
+- **`youtube_playlist_added`** (dedup guard: `playlistItems.insert` is not idempotent) — a scope
+  edit could re-add a video already added under the old identity. New rows carry `rule_uid`; a
+  partial unique index (`WHERE rule_uid != ''`) dedupes by it. Old rows keep `rule_uid = ''` and
+  fall back to the original `(scope, scope_id, keyword, entry_id, video_id)` key — there's no
+  reliable way to map them to a *current* rule once their scope text may no longer match anything.
+- **`email_batch_queue`** (found 2026-08-29 alongside the fix above, fixed 2026-09-16) — a queue,
+  not a dedup guard, so the failure shape was different: the rule's own scheduled flush
+  (`_check_and_flush_batch_times`, fires every minute against each *live* rule's current identity)
+  left pre-edit rows behind entirely, reachable only by the daily catch-all
+  (`_flush_all_email_batches`) — and even that used to `GROUP BY` the raw text tuple, so a
+  scope-edited rule's backlog sent as **two** separate digests instead of one, or merged into an
+  unrelated rule's digest if the old text was later reused by a new rule. Both flush paths, and the
+  batch-count threshold check, now prefer `rule_uid` when present; `_flush_all_email_batches` groups
+  legacy (`rule_uid = ''`) rows by the old text tuple as before.
+- **`highlight_keywords` itself**, for `dedup_fuzzy_pct`/`dedup_min_title_words` and friends: these
+  are columns on the rule row, so they migrate with the row automatically and never needed a
+  separate identity fix — included here as the reason `rule_uid` exists on that table at all, not
+  as a third bug.
+
+The shape repeats: does the dependent table need to recognize *the same rule* after an edit that
+changes its own identity columns? If yes, it needs `rule_uid` threaded through (mint-on-create,
+carry-on-edit, backfill-once, fall back to the text tuple for pre-existing `rule_uid = ''` rows).
+`email_batch_queue`'s fix is the template to copy — check both the immediate flush path and any
+daily/periodic sweep, since they can drift independently (only the queue's *scheduled* flush was
+broken here; the daily sweep still worked, just wrong).
+
 ## Duplicate feeds: the scheme (and www) is folded in the comparison, not the URL
 
 `get_feed_duplicates` groups subscriptions by `normalize_feed_url` **with the

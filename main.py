@@ -4694,6 +4694,19 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Same scope-text-identity fragility rule_uid was added for above
+        # (highlight_keywords / youtube_playlist_added): editing a batch email
+        # rule's scope/keyword while entries are queued splits its backlog
+        # across two text identities instead of following the same rule. New
+        # rows also carry rule_uid; old rows keep '' for the same reason
+        # youtube_playlist_added's do -- there is no reliable way to map them
+        # back to a *current* rule once their scope text may no longer match
+        # anything. Flush paths prefer rule_uid when present and fall back to
+        # the text tuple otherwise, same shape as the dedup index below it.
+        try:
+            conn.execute("ALTER TABLE email_batch_queue ADD COLUMN rule_uid TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS scraped_feeds (
@@ -9119,6 +9132,7 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 scope = str(rule.get("scope", ""))
                 scope_id = str(rule.get("scope_id") or "")
                 keyword = str(rule.get("keyword", ""))
+                rule_uid = str(rule.get("rule_uid") or "")
                 is_regex = bool(rule.get("is_regex"))
                 search_in = str(rule.get("search_in") or "title")
                 delivery = str(rule.get("delivery") or "immediately")
@@ -9197,14 +9211,15 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                 with get_meta_connection() as conn:
                                     conn.execute(
                                         "INSERT OR IGNORE INTO email_batch_queue"
-                                        " (rule_scope, rule_scope_id, rule_keyword, queued_at,"
+                                        " (rule_scope, rule_scope_id, rule_keyword, rule_uid, queued_at,"
                                         "  feed_url, entry_id, title, link, feed_title, excerpt,"
                                         "  email_to, cc_me)"
-                                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                         (
                                             scope,
                                             scope_id,
                                             keyword,
+                                            rule_uid,
                                             now_str,
                                             fu,
                                             article["entry_id"],
@@ -9216,14 +9231,24 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                             1 if cc_me else 0,
                                         ),
                                     )
-                                    # Flush immediately if batch_count threshold is reached
+                                    # Flush immediately if batch_count threshold is reached.
+                                    # Counted by rule_uid when this rule has one (always, in
+                                    # practice) so a scope/keyword edit mid-backlog still counts
+                                    # entries queued under the old text as part of the same rule,
+                                    # rather than splitting the count across two identities.
                                     if batch_count > 0:
-                                        pending = conn.execute(
-                                            "SELECT COUNT(*) FROM email_batch_queue"
-                                            " WHERE rule_scope=? AND rule_scope_id=? AND rule_keyword=?"
-                                            " AND email_to=?",
-                                            (scope, scope_id, keyword, email_to),
-                                        ).fetchone()[0]
+                                        if rule_uid:
+                                            pending = conn.execute(
+                                                "SELECT COUNT(*) FROM email_batch_queue WHERE rule_uid=? AND email_to=?",
+                                                (rule_uid, email_to),
+                                            ).fetchone()[0]
+                                        else:
+                                            pending = conn.execute(
+                                                "SELECT COUNT(*) FROM email_batch_queue"
+                                                " WHERE rule_scope=? AND rule_scope_id=? AND rule_keyword=?"
+                                                " AND email_to=?",
+                                                (scope, scope_id, keyword, email_to),
+                                            ).fetchone()[0]
                                         if pending >= batch_count:
                                             _flush_email_batch_for_rule(
                                                 conn,
@@ -9233,6 +9258,7 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                                 email_to,
                                                 cc_addr,
                                                 now_str,
+                                                rule_uid=rule_uid,
                                             )
             except Exception:
                 LOGGER.exception("[email-auto] error processing email rule %s/%s", scope, keyword)
@@ -9933,13 +9959,28 @@ def _flush_email_batch_for_rule(
     email_to: str,
     cc_addr: str | None,
     now_str: str,
+    *,
+    rule_uid: str = "",
 ) -> None:
-    """Send a digest email for one rule's queued entries and clear the queue."""
-    rows = conn.execute(
-        "SELECT id, title, link, feed_title, excerpt, cc_me FROM email_batch_queue"
-        " WHERE rule_scope=? AND rule_scope_id=? AND rule_keyword=? AND email_to=?",
-        (scope, scope_id, keyword, email_to),
-    ).fetchall()
+    """Send a digest email for one rule's queued entries and clear the queue.
+
+    Selected by rule_uid when given (non-empty) rather than the scope/keyword
+    text tuple, so a rule edited mid-backlog still flushes as one digest —
+    entries queued before and after the edit carry the same stable rule_uid
+    even though their stored rule_scope/rule_keyword text differs. scope/
+    scope_id/keyword are still used for the run-log entry either way.
+    """
+    if rule_uid:
+        rows = conn.execute(
+            "SELECT id, title, link, feed_title, excerpt, cc_me FROM email_batch_queue WHERE rule_uid=? AND email_to=?",
+            (rule_uid, email_to),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, title, link, feed_title, excerpt, cc_me FROM email_batch_queue"
+            " WHERE rule_scope=? AND rule_scope_id=? AND rule_keyword=? AND email_to=?",
+            (scope, scope_id, keyword, email_to),
+        ).fetchall()
     if not rows:
         return
     articles = [{"title": r["title"], "link": r["link"], "feed_title": r["feed_title"], "excerpt": r["excerpt"]} for r in rows]
@@ -9975,15 +10016,26 @@ def _flush_email_batch_for_rule(
 
 
 def _flush_all_email_batches() -> None:
-    """Flush all pending batch queues — called by daily maintenance as a safety net."""
+    """Flush all pending batch queues — called by daily maintenance as a safety net.
+
+    Grouped by rule_uid when rows carry one, so a rule edited mid-backlog
+    flushes as a single digest instead of splitting into one email per text
+    identity its scope/keyword happened to have while rows were queued (the
+    old GROUP BY rule_scope/rule_scope_id/rule_keyword did exactly that split).
+    Rows queued before rule_uid existed keep '' and fall back to the text
+    tuple, same as youtube_playlist_added's equivalent rows.
+    """
     if not is_email_configured():
         return
     try:
         with get_meta_connection() as conn:
             profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
             groups = conn.execute(
-                "SELECT DISTINCT rule_scope, rule_scope_id, rule_keyword, email_to, MAX(cc_me) as cc_me"
-                " FROM email_batch_queue GROUP BY rule_scope, rule_scope_id, rule_keyword, email_to",
+                "SELECT rule_uid, MIN(rule_scope) as rule_scope, MIN(rule_scope_id) as rule_scope_id,"
+                " MIN(rule_keyword) as rule_keyword, email_to, MAX(cc_me) as cc_me"
+                " FROM email_batch_queue"
+                " GROUP BY (CASE WHEN rule_uid != '' THEN rule_uid"
+                " ELSE 'legacy:' || rule_scope || ':' || rule_scope_id || ':' || rule_keyword END), email_to",
             ).fetchall()
         for g in groups:
             cc_addr = profile_email if g["cc_me"] and profile_email else None
@@ -9996,6 +10048,7 @@ def _flush_all_email_batches() -> None:
                     str(g["email_to"]),
                     cc_addr,
                     datetime.now().isoformat(),
+                    rule_uid=str(g["rule_uid"] or ""),
                 )
     except Exception:
         LOGGER.exception("[email-auto] error flushing all email batches")
@@ -10027,6 +10080,7 @@ def _check_and_flush_batch_times() -> None:
             scope = str(rule.get("scope", ""))
             scope_id = str(rule.get("scope_id") or "")
             keyword = str(rule.get("keyword", ""))
+            rule_uid = str(rule.get("rule_uid") or "")
             cc_me = bool(rule.get("cc_me"))
             cc_addr = profile_email if cc_me and profile_email and profile_email.lower() != email_to.lower() else None
             with get_meta_connection() as conn:
@@ -10038,6 +10092,7 @@ def _check_and_flush_batch_times() -> None:
                     email_to,
                     cc_addr,
                     datetime.now().isoformat(),
+                    rule_uid=rule_uid,
                 )
             LOGGER.info("[email-batch] flushed batch for %s/%s at %s", scope, keyword, now_hhmm)
     except Exception:

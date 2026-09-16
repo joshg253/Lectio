@@ -86,18 +86,6 @@ still invite unsubscribing the wrong feed.
   unsearched list. Noticed while modeling the move route on it; not fixed here
   because it is a separate behavior change with its own test surface.
 
-### email_batch_queue has the same scope-text-identity fragility rule_uid just fixed elsewhere
-
-Found 2026-08-29 alongside the `youtube_playlist_added` fix (see git history —
-`highlight_keywords.rule_uid` now survives a scope-changing edit).
-`email_batch_queue` is `UNIQUE(rule_scope, rule_scope_id, rule_keyword,
-entry_id)`, same pattern: editing a batch email rule's scope/keyword while
-entries are queued orphans them (they never flush). Lower stakes than the
-YouTube case — the queue drains on its own schedule rather than accumulating
-history, and the failure mode is a dropped/duplicate email, not a
-non-idempotent external write. Not fixed — no report of it actually biting
-anyone yet; wire it to `rule_uid` if one comes in.
-
 ## Tier 3 — maintenance backlog, ready to run
 
 ### Redirecting feeds — 128 candidates ready, awaiting Josh's own `--apply` run
