@@ -175,9 +175,35 @@ storing the wrong page (`content_html`/`summary_html` were never at risk —
 both come from reader's stored entry, not the live fetch). See
 `docs/architecture/saved.md` "The guards protected re-fetch, not recapture".
 
-**1MB+ sweep (2,358 entries) run 2026-09-16 with the guard in place.** [Fill
-in outcome once the run finishes: recaptured/shrunk count, guard-rejected
-count, failures, total size reclaimed.]
+**1MB+ sweep (2,358 entries) run 2026-09-16/17 with the guard in place.**
+Running as a strictly-serial driver (delete + enqueue one entry, poll until
+the worker finishes it, only then touch the next — at most one entry is ever
+without a readability copy at a time). In progress; final tally to follow.
+
+**The guard caught a real, non-hypothetical case mid-sweep**: `blog.rpgmakerweb.com`
+has been retired — every old post URL now 301-redirects to a generic
+`rpgmakerweb.com/all-posts` hub page titled "The Official RPG Maker Blog",
+zero word overlap with any article. ~35 entries hit this. Without today's
+guard, the sweep would have silently overwritten ~35 real articles'
+readability copies with that hub page's boilerplate — exactly the failure
+shape that prompted the guard. Confirmed live (fetched the redirect target,
+ran the guard against it directly) rather than assumed.
+
+**Found by that catch: a real, narrower follow-on gap.** The guard stops the
+wrong page from being *stored*, but the recapture script deletes the old
+(correct) archive row before the fetch even runs — so for these ~35 entries,
+`readability_html_zlib` is now empty rather than wrong, and `entry_readability`
+(Reader View) / the e-ink `/read` view fall straight through to a **live**
+re-fetch of the dead redirect when someone opens Reader View on one of them,
+rather than falling back to reader's own stored `content_html` (which still
+has the real article — it's what the normal entry pane already shows, just
+not consulted by this route). Not a regression in what's *stored* (that's the
+whole point of today's fix), but a real view-time gap for a small, likely-
+growing subset (any feed whose old posts now redirect to a generic hub).
+Fix: have `_resolve_archived_readability_html`'s caller fall back to reader's
+`content_html` before attempting a live re-fetch. Not built today — this was
+discovered mid-sweep, not the day's scoped task, and doesn't block letting
+the sweep finish (nothing is being destroyed, only left correctly blank).
 
 Related, smaller: no audit has been done for feeds that relied on the *old*
 unconditional-enclosure-capture default (no `attachment_exts` ever configured)
