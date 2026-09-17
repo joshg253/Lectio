@@ -111,7 +111,7 @@ the redirect (which they do once a migration finishes). The stored URL also
 feeds the Change-URL field, the dupe scan and discovery, so a forwarder makes
 all three describe somewhere the posts do not come from.
 
-### Backfill already-expired signed lead-image thumbnails — script built, not yet run
+### Backfill already-expired signed lead-image thumbnails — dry-run done, `--apply` not yet run
 
 **Built 2026-08-28**: `scripts/backfill_expired_deviantart_thumbnails.py`
 (dry-run by default, `--apply` to write, `--limit`/`--delay`/`--user`).
@@ -119,10 +119,13 @@ Walks every un-pinned wixmp `entry_lead_images` row, calls the same
 `_resign_expired_deviantart_url` the article-view path already uses (cheap
 checks first, so most rows cost no DeviantArt API call at all), and feeds
 the result through `store_entry_lead_image` — which pins it as a side
-effect via the existing 2026-08-24 sink. Not run against the live ~22,300-row
-backlog yet — needs a dry-run count first to gauge how much of the batch is
-actually still resignable (a dead deviation with no fresh URL to fetch just
-stays unpinned).
+effect via the existing 2026-08-24 sink.
+
+**Dry-run count 2026-09-16: 314 candidates** (down from the feared ~22,300 at
+scoping time — the pin-on-write sink has been organically shrinking the
+backlog for three weeks as entries got naturally re-visited). Small enough
+now for `--apply` to be a quick, low-risk run (~2.5 min at the default 0.5s
+delay). Not applied yet — Josh's call on when.
 
 ### Recapture the rest of the archive under the 2026-09-12 image-scope/enclosure fixes
 
@@ -131,14 +134,19 @@ image scan; enclosures gated by the per-feed attachment policy) stop *new*
 captures from over-archiving, but neither shrinks what was already captured
 under the old rules. `scripts/recapture_archived_entries.py` (delete the
 archive row + its now-orphaned assets, re-enqueue, the live worker refetches
-under current rules) exists and was run entry-at-a-time against the top ~25
-biggest saved articles the same night — 22 of 25 shrunk (several dramatically:
-a Windows blog post went from 54.2MB to 107KB), 3 failed because their reader
-entries no longer exist. The rest of the library (anything archived before
-that date, sorted by size, isn't checked past the top 25) is unaudited —
-worth a size-sorted sweep before assuming the backlog is clean, same shape as
-the size/date backfills below: dry-run a count first, since recapturing means
-a real re-fetch per entry, not just a local recomputation.
+under current rules) takes explicit `FEED_URL ENTRY_ID` pairs — no bulk sweep
+mode — and was run entry-at-a-time against the top ~25 biggest saved articles
+the same night: 22 of 25 shrunk (several dramatically: a Windows blog post
+went from 54.2MB to 107KB), 3 failed because their reader entries no longer
+exist.
+
+**Size-sorted sweep run 2026-09-16** (a direct query, since the script itself
+has no bulk-report mode): 14,554 complete archived entries, ~9.2GB total.
+134 over 5MB, 974 over 3MB, 1,970 over 2MB, 2,358 over 1MB. The worst entry
+today is ~33MB — the 54MB outlier above is already fixed and out of the list.
+Not recaptured — picking a threshold and actually re-fetching that many
+entries (up to ~2,000 depending where the line is drawn) is a real,
+non-trivial network operation and Josh's call, not run unilaterally.
 
 Related, smaller: no audit has been done for feeds that relied on the *old*
 unconditional-enclosure-capture default (no `attachment_exts` ever configured)
