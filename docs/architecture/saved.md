@@ -185,6 +185,32 @@ but this piece came back empty."
 entirely and went straight to the live fetch same as `entry_readability` did.
 Broadened the same condition rather than add a second branch.
 
+**The stored-content fallback has its own hole when there is no stored content
+either.** Clearing the 994 sibling-boilerplate rows below (`content_html`
+falls back to nothing for 581 of them — the feed only ever shipped a stub, so
+these entries' *only* real copy was the now-blanked archive) sent
+`resolve_reader_article_html`/`entry_readability` straight to a plain,
+unguarded `fetch_readability_article`/`build_readability_response` call — the
+same live fetch that has no idea the URL redirects to a dead hub, because
+nothing about it changed. Confirmed live on the entries that started this
+whole investigation: clearing their corrupted archive made Reader View show
+raw, unstyled widget markup (a `Lessons` page's `wdn-listv2` grid, 138K chars)
+instead of the earlier boilerplate — worse, not better, for exactly the
+population with nothing to fall back to.
+
+Fixed with `looks_like_a_link_index` (guard 2's structural anchor-ratio check,
+already built for the opaque-URL branch of `_page_is_a_different_article`) at
+both live-fetch call sites: `build_readability_response` refuses to build the
+article template around a link-index extraction and shows the honest "could
+not extract" message instead, and `resolve_reader_article_html`'s live-fetch
+branch treats one the same as a failed fetch and falls through. Applied to
+*every* live fetch, not scoped to kept entries — a page that reads as a link
+index is never a real article, whether or not the entry has an archive to fall
+back to, and the check is self-contained (structural, no stored-sibling
+dependency), unlike `extraction_matches_sibling` which needs a persisted
+sibling to compare against and would have found nothing here — clearing all
+994 rows in the same pass left no reference to match against.
+
 ### Whole-page capture (`mode="full"`)
 
 Swaps `fetch_readability_article` for `fetch_full_page_article`: same sanitizer

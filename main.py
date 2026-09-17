@@ -15432,6 +15432,28 @@ def build_readability_response(source_url: str) -> HTMLResponse:
             status_code=200,
         )
 
+    if saved_articles_service.looks_like_a_link_index(article_html):
+        # A 200 does not mean the article is still there -- a URL folded into a
+        # generic category/landing page (a retired blog's old post URLs all
+        # redirecting to one hub) extracts as a list of unrelated links, not an
+        # article. Found live 2026-09-17: guitarworld.com's retired
+        # /lessons/<slug> URLs all now 301 to "Lessons Coverage | Guitar World",
+        # and readability happily extracts that whole listing. Showing it is
+        # strictly worse than an honest failure message.
+        escaped_url = html.escape(source_url)
+        return HTMLResponse(
+            (
+                "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Readability unavailable</title>"
+                "<style>body{font-family:Segoe UI,Arial,sans-serif;margin:0;padding:1rem;line-height:1.45;}"
+                "h1{font-size:1.05rem;margin:0 0 .5rem;}p{margin:.35rem 0;color:#555;}a{color:#0a5ca4;}</style></head>"
+                "<body><h1>Could not extract a readable article.</h1>"
+                "<p>The page now at this URL looks like a list of links to other articles, not the article itself"
+                " — it may have moved or the site may have reorganized.</p>"
+                f"<p><a href='{escaped_url}' target='_blank' rel='noopener noreferrer'>Open original page</a></p></body></html>"
+            ),
+            status_code=200,
+        )
+
     escaped_title = html.escape(title)
     escaped_source = html.escape(source_url)
     return HTMLResponse(
@@ -23542,7 +23564,12 @@ def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link
     if link:
         try:
             _title, article_html = fetch_readability_article(link)
-            if article_html:
+            # A 200 does not mean the article is still there -- a URL folded
+            # into a generic category/landing page extracts as a list of
+            # unrelated links, not an article (guitarworld.com's retired
+            # /lessons/<slug> URLs all now 301 to one "Lessons Coverage" hub).
+            # Fall through to stored content below rather than show it.
+            if article_html and not saved_articles_service.looks_like_a_link_index(article_html):
                 return _prepend_reader_lead_image(feed_url, entry_id, article_html)
         except Exception:
             LOGGER.info("reader-view live extraction failed for %s", link, exc_info=True)

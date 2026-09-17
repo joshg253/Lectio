@@ -216,13 +216,35 @@ already stored against a *different* entry of the same feed is furniture, not
 the article) — wrongly assumed unavailable when guard 1 was ported (see
 docs/architecture/saved.md's correction). It was already a
 `StarredArchiveService` method, DB-backed, sitting right there. Ported the same
-way as guard 1. **A full scan found 1,524 entries across 230 feeds already
-carrying a sibling's text** — premierguitar.com (345), guitarplayer.com (255
-combined), devblogs.microsoft.com (149 combined), texasbluesalley.com (62),
-informit.com (39) among the largest groups; commandlinefu.com and informit.com
-are the exact two sites guard 3 was originally built for, recurring here in
-the second path it hadn't reached yet. New test, full suite green (4,144).
-Cleanup of the 1,524 already-affected rows: [see below].
+way as guard 1. New test, full suite green (4,144).
+
+**Cleanup, same day**: `scripts/clear_sibling_boilerplate_readability.py`
+(new, mirrors `revert_boilerplate_refetches.py`'s detection but blanks rather
+than restores — there is nothing to restore, `readability_html_zlib` is
+derived fresh at capture time, not edited in place). Reuses
+`sibling_extraction_entries`, the same authoritative test the live guard now
+uses — this superseded an earlier raw-hash estimate of 1,524/230 (no
+`min_chars` floor, cruder proxy). Real count: **994 entries across 41 feeds**,
+including commandlinefu.com and informit.com — the exact two sites guard 3
+was originally built for, recurring here in the second path it hadn't reached
+yet. Applied 2026-09-17 (`--apply`); log at
+`cleared_sibling_boilerplate_readability_20260917-133018.json`.
+
+**The cleanup itself exposed a third gap, found and fixed the same pass**: of
+the 994 cleared, 581 (58%) have no stored `content_html` to fall back to
+either (the feed only ever shipped a stub — the archive was their only real
+copy). For those, clearing the corrupted `readability_html_zlib` sent Reader
+View straight to a plain, unguarded live fetch — confirmed live on the
+entries that started this investigation, showing raw unstyled widget markup
+(138K chars of `wdn-listv2` grid HTML) in place of the earlier boilerplate,
+worse than before. Fixed with `looks_like_a_link_index` (guard 2's structural
+anchor-ratio check) at both live-fetch call sites
+(`build_readability_response`, `resolve_reader_article_html`) — applied to
+*every* live fetch, not just kept entries, since a link-index page is never a
+real article either way, and the check is self-contained (no stored-sibling
+dependency, so it still works even though the 994-row cleanup left nothing to
+compare against). New tests, full suite green (4,146). See
+`docs/architecture/saved.md`, same section.
 
 Related, smaller: no audit has been done for feeds that relied on the *old*
 unconditional-enclosure-capture default (no `attachment_exts` ever configured)
