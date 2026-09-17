@@ -169,6 +169,60 @@ def test_a_genuine_matching_article_is_still_stored(tmp_path, monkeypatch):
     assert _stored_readability(tmp_path, svc) == "<p>Real content.</p>"
 
 
+def test_a_sibling_boilerplate_match_is_not_stored_even_when_the_title_guard_passes(tmp_path, monkeypatch):
+    """guitarworld.com's retired /lessons/<slug> URLs now all 301 to a generic
+    'Lessons Coverage | Guitar World' category page -- "guitar" clears the
+    slug/title overlap guard every time (real incident, found live 2026-09-17:
+    1,524 entries across 230 feeds already carried a sibling's text this way).
+    The sibling-extraction fingerprint is what should catch this, the same
+    guard the interactive re-fetch path already has."""
+    category_page_html = (
+        "<html><head><title>Lessons Coverage | Guitar World</title></head><body>"
+        "<p>" + "Browse our full library of guitar lessons and tutorials from top players. " * 3 + "</p>"
+        "</body></html>"
+    )
+    category_page_extraction = "<p>" + "Browse our full library of guitar lessons and tutorials from top players. " * 3 + "</p>"
+
+    svc = _service(tmp_path)
+
+    def _document_factory(html):
+        return SimpleNamespace(
+            short_title=lambda: "Lessons Coverage | Guitar World", summary=lambda html_partial=True: category_page_extraction
+        )
+
+    monkeypatch.setattr(starred_archive, "Document", _document_factory)
+
+    # First entry: nothing to compare against yet, so it is accepted (matching
+    # real behavior -- the guard cannot know it is boilerplate until a sibling
+    # exists, same as the interactive path).
+    entry1 = _entry(
+        "How to Simulate Other Instruments on Guitar", link="https://example.test/lessons/how-simulate-other-instruments-guitar"
+    )
+    svc._get_reader = lambda: _FakeReader(entry1)
+    svc._fetch_text_with_url = _fetch_stub(category_page_html)
+    svc.enqueue_archive(FEED, "e1")
+    svc._archive_entry(FEED, "e1")
+    assert _stored_readability(tmp_path, svc) == category_page_extraction
+
+    # Second, different entry, same feed, same redirect target: the sibling
+    # guard must now catch it even though guard 1 (title/slug overlap) passes
+    # -- "guitar" is shared between this slug and the fetched page's title too.
+    entry2 = _entry(
+        "How to Tune Your Guitar Using the Fifth Fret Method", link="https://example.test/lessons/how-tune-your-guitar-fifth-fret"
+    )
+    entry2.id = "e2"
+    svc._get_reader = lambda: _FakeReader(entry2)
+    svc.enqueue_archive(FEED, "e2")
+    svc._archive_entry(FEED, "e2")
+
+    with svc._archive_conn() as conn:
+        row = conn.execute(
+            "SELECT readability_html_zlib FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+            (FEED, "e2"),
+        ).fetchone()
+    assert row["readability_html_zlib"] is None
+
+
 def test_a_document_fake_with_no_short_title_still_archives(tmp_path, monkeypatch):
     """A Document stand-in that doesn't implement short_title (as several
     existing image-scope tests use) must not be broken by the new guard --

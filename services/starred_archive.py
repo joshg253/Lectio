@@ -1557,6 +1557,21 @@ class StarredArchiveService:
                             title,
                             fetched_title,
                         )
+                    elif self.extraction_matches_sibling(feed_url, entry_id, candidate_html):
+                        # A redirect target whose title happens to share a word with the
+                        # original slug (guitarworld.com's retired /lessons/<slug> URLs
+                        # all now 301 to a "Lessons Coverage | Guitar World" category page
+                        # — "guitar" clears the title guard above) sails through it every
+                        # time. This is the same boilerplate shape guard above cannot see:
+                        # the same text already stored against a DIFFERENT entry of this
+                        # feed is furniture, not this article. 1,524 entries were found
+                        # already carrying shared text this way when this was added.
+                        LOGGER.warning(
+                            "starred archive: fetched page for %s matches a sibling entry's extraction "
+                            "on %s — keeping no readability copy rather than boilerplate",
+                            entry_link,
+                            feed_url,
+                        )
                     else:
                         readability_html = candidate_html
 

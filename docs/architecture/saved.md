@@ -128,12 +128,29 @@ inside `_archive_entry` itself, comparing the freshly-fetched page's title again
 the URL slug and against reader's own stored `entry.title` (untouched by the
 archive deletion). On a mismatch, `readability_html` stays empty rather than
 storing the wrong page — `content_html`/`summary_html` are unaffected either way,
-since both come from reader's stored entry, never from the live fetch. Guards 2
-and 3 (opaque-URL link-index fallback, sibling-extraction fingerprint) were not
-ported: guard 2 needs the *old stored title* as a positive reference, which
-`_archive_entry` overwrites unconditionally from reader on every run regardless of
-outcome, and guard 3 is a `refresh_captured_article`-scoped in-memory dedupe with
-no equivalent notion in the archive worker's queue.
+since both come from reader's stored entry, never from the live fetch. Guard 2
+(opaque-URL link-index fallback) was not ported — it needs the *old stored
+title* as a positive reference, which `_archive_entry` overwrites unconditionally
+from reader on every run regardless of outcome.
+
+**Guard 3 was wrongly believed unavailable, and its absence caused real damage
+the same day.** `extraction_matches_sibling` was first assumed to be scoped to
+`refresh_captured_article`'s in-memory batch dedupe with "no equivalent notion
+in the archive worker's queue" — wrong: it is a `StarredArchiveService` method,
+the same class `_archive_entry` belongs to, already DB-backed (checks every
+other `complete` row of the feed) *and* has its own in-run memory for a batch
+that hasn't landed in the DB yet. The 1MB+ recapture sweep run the same day hit
+exactly the shape it exists for: guitarworld.com's retired `/lessons/<slug>`
+URLs now all 301 to a generic "Lessons Coverage | Guitar World" category page —
+whose title shares the word "guitar" with essentially every slug on the feed,
+clearing guard 1 every time. Found live from a user report ("Reader View on
+this one looks like just nav stuff"); a scan afterward found **1,524 entries
+across 230 feeds** already carrying a sibling's extracted text this way —
+including commandlinefu.com and informit.com, the two sites guard 3 was
+originally built for, now recurring in this second path. Fixed the same way as
+guard 1: `self.extraction_matches_sibling(feed_url, entry_id, candidate_html)`
+checked before committing, `readability_html` stays empty on a match rather
+than storing the boilerplate.
 
 ### A guard-refused entry still needs somewhere safe to fall
 

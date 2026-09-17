@@ -205,6 +205,25 @@ case Reader View exists for). New tests, full suite green (4,143). See
 `docs/architecture/saved.md` "A guard-refused entry still needs somewhere
 safe to fall".
 
+**Found by real browser testing 2026-09-17, and FIXED same day: guard 1 alone
+wasn't enough.** Three guitarworld.com lesson entries reported as showing "just
+a bs img in the body" — checked live: their retired `/lessons/<slug>` URLs now
+301 to a generic "Lessons Coverage | Guitar World" category page (a list of
+unrelated article teasers), and it sailed through guard 1 because the category
+page's title shares the word "guitar" with essentially every slug on the feed.
+This is exactly guard 3's job (sibling-extraction fingerprint: the same text
+already stored against a *different* entry of the same feed is furniture, not
+the article) — wrongly assumed unavailable when guard 1 was ported (see
+docs/architecture/saved.md's correction). It was already a
+`StarredArchiveService` method, DB-backed, sitting right there. Ported the same
+way as guard 1. **A full scan found 1,524 entries across 230 feeds already
+carrying a sibling's text** — premierguitar.com (345), guitarplayer.com (255
+combined), devblogs.microsoft.com (149 combined), texasbluesalley.com (62),
+informit.com (39) among the largest groups; commandlinefu.com and informit.com
+are the exact two sites guard 3 was originally built for, recurring here in
+the second path it hadn't reached yet. New test, full suite green (4,144).
+Cleanup of the 1,524 already-affected rows: [see below].
+
 Related, smaller: no audit has been done for feeds that relied on the *old*
 unconditional-enclosure-capture default (no `attachment_exts` ever configured)
 and may now silently stop keeping files they used to — this needs an explicit
@@ -237,6 +256,20 @@ the way a feed URL does.
 article, cochaser.com (no entries), WebServicesDir, whiskypaint/nolanfa
 tumblrs, norfolkwinters, crispian-jago, owenyoung myfeed) — sort or
 unsubscribe manually.
+
+### Readability grabs a devsite nav sidebar on androidstudio.googleblog.com
+
+Found via browser testing 2026-09-17, unrelated to that day's recapture work
+(this entry was never archived — `has_complete_archive` is False, so it goes
+through the ordinary live-fetch path, not anything touched today). Reader
+View on a Blogger post showed nav-list junk instead of the article. Confirmed
+live: `fetch_readability_article` logs "ruthless removal did not work" and
+extracts a `devsite-nav-list` sidebar (55K chars of nav links) instead of the
+post body — the post links out to a `developer.android.com` preview page whose
+markup readability is latching onto instead of the actual Blogger content.
+Not measured at scale (one report, one entry) — worth a `_strip_site_chrome`
+or `_strip_article_chrome`-style targeted fix if it recurs, same pattern as
+past site-specific extraction fixes.
 
 ## Tier 4 — real features, not blocking anything today
 
