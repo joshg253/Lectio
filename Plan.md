@@ -61,14 +61,6 @@ Remaining follow-ups moved to Tier 4, "Page-fetch escalation ladder — follow-u
 
 ## Tier 2 — small, fast, independent wins
 
-### New subscription missing from feed tree — UX idea remaining
-
-Root-cause code bug already fixed (2026-07-08: re-adding a feed that existed
-in reader as disabled now calls `enable_feed()`). Remaining idea, not asked
-for: auto-disambiguate duplicate display titles (e.g. suffix from the feed
-URL path) — the tree tooltip already shows the URL, but identical titles
-still invite unsubscribing the wrong feed.
-
 ### `_resolve_view_posts` pays full enrichment for a whole-view resolve — measured, not worth building
 
 The `mark-range-read` search gap this item used to also list was already fixed 2026-08-28 (`q` is

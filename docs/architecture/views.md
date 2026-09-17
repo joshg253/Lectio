@@ -683,6 +683,32 @@ rather than writing a root membership row. This keeps the invariant that a
 the root consistently surfaces under Uncategorized. `delete_folder`'s move path
 already applies the same rule.
 
+## Two feeds with the same display title get a host suffix in the tree
+
+Two subscriptions can legitimately share a title — a scraped/renamed feed, or two
+publishers who both called their feed "Latest News" — and the sidebar's own row
+had nothing to tell them apart except the URL in the hover tooltip, useless on
+touch and easy to miss even with a mouse. `_disambiguate_feed_titles` (called
+after each of the tree's three per-folder feed-list builders sorts its list:
+the eager selected-folder render, the lazy `/tree/folder-feeds/{folder_id}`
+fragment, and the Settings → Feeds → Folders table) groups a folder's
+`FeedInFolder` rows by title and appends `" — host"` to every member of a group
+with more than one entry, using `_feed_url_display_host` (bare host, leading
+`www.` folded, same shape as `_entry_link_site_host` for entry links but over a
+feed URL string rather than an entry object). A group that still collides on
+host too (two feed variants on the same site) falls back to the full URL rather
+than inventing a second disambiguator — rare enough that a longer suffix beats
+new machinery for it.
+
+Deliberately scoped to *one folder's own feed list*, not the whole library: the
+actual risk ("invite unsubscribing the wrong feed") only exists between feeds
+sitting in front of you in the same list, and per-folder scoping is also what
+the tree's lazy-per-folder loading model already assumes — a global title index
+would mean holding every feed's title in memory at once, the exact cost the
+lazy fragment route exists to avoid at thousands of feeds. Applied after
+sorting (not before), so the disambiguation only changes what's shown, not the
+alphabetical order.
+
 ## Folder Properties counts in SQL, not by hydrating entries
 
 `get_folder_properties` looped `reader.get_entries(feed=url)` over every feed in

@@ -12053,6 +12053,39 @@ def feed_display_title(feed, fallback: str = "") -> str:
     return str(getattr(feed, "resolved_title", None) or getattr(feed, "title", None) or fallback)
 
 
+def _feed_url_display_host(url: str) -> str:
+    """Bare host of a feed URL for disambiguation text — no userinfo/port, leading www. folded."""
+    try:
+        net = urlparse(url).netloc.split("@")[-1].split(":")[0].lower()
+    except Exception:
+        return ""
+    return net[4:] if net.startswith("www.") else net
+
+
+def _disambiguate_feed_titles(feeds: "list[FeedInFolder]") -> None:
+    """Two feeds sharing one folder can display the identical title — a
+    scraped/renamed feed, or two publishers who both called their feed
+    "Latest News" — and the only thing that tells them apart today is the
+    URL in the row's hover tooltip, easy to miss and no help at all on
+    touch. Appends " — host" to every feed in a same-title group so the
+    sidebar row itself shows the difference. Falls back to the full URL for
+    a group that also shares a host (two feed variants on the same site) --
+    a duplicate-everything collision is rare enough that a plain longer
+    suffix beats inventing a second disambiguator. Mutates titles in place,
+    intended to run once per folder's already-sorted feed list.
+    """
+    by_title: dict[str, list[FeedInFolder]] = {}
+    for f in feeds:
+        by_title.setdefault(f.title, []).append(f)
+    for group in by_title.values():
+        if len(group) < 2:
+            continue
+        hosts = [_feed_url_display_host(f.url) for f in group]
+        host_disambiguates = len(hosts) == len(set(hosts)) and all(hosts)
+        for f, host in zip(group, hosts, strict=True):
+            f.title = f"{f.title} — {host}" if host_disambiguates else f"{f.title} — {f.url}"
+
+
 def get_feed_title_map() -> dict[str, str]:
     now = time.time()
     with feed_title_map_cache_lock:
@@ -25895,7 +25928,9 @@ def _home_inner(
         ]
         # Active feeds first (alphabetical), disabled greyed at the bottom.
         all_folder_feeds.sort(key=lambda f: (f.disabled, f.title.casefold()))
-        feeds_by_folder[folder_row_id] = [f for f in all_folder_feeds if not f.disabled]
+        active_folder_feeds = [f for f in all_folder_feeds if not f.disabled]
+        _disambiguate_feed_titles(active_folder_feeds)
+        feeds_by_folder[folder_row_id] = active_folder_feeds
 
     root_folder_row = next((row for row in folder_rows if cast(int, row["depth"]) == 0), None)
     child_folder_rows = [row for row in folder_rows if cast(int, row["depth"]) == 1]
@@ -38489,6 +38524,7 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
         ]
         # Active feeds first (alphabetical), disabled greyed at the bottom.
         folder_feeds.sort(key=lambda f: (f.disabled, f.title.casefold()))
+        _disambiguate_feed_titles(folder_feeds)
         settings_feeds_by_folder[folder_row_id] = folder_feeds
         # Failing counts consider active feeds only, matching the sidebar.
         failing = sum(1 for f in folder_feeds if f.has_error and not f.disabled)
@@ -38556,6 +38592,7 @@ def tree_folder_feeds_fragment(request: Request, folder_id: int, star_only: str 
         if url not in disabled_feed_urls  # sidebar shows active feeds only
     ]
     folder_feeds.sort(key=lambda f: f.title.casefold())
+    _disambiguate_feed_titles(folder_feeds)
 
     # Same compact query fragments as the tree links in index.html: omit
     # default values, never carry star mode.
