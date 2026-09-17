@@ -69,22 +69,36 @@ for: auto-disambiguate duplicate display titles (e.g. suffix from the feed
 URL path) — the tree tooltip already shows the URL, but identical titles
 still invite unsubscribing the wrong feed.
 
-### "Filter this view" — two follow-ups left
+### `_resolve_view_posts` pays full enrichment for a whole-view resolve — measured, not worth building
 
-- **`list_entries_for_feeds` enriches every record it returns**, so both
-  whole-view routes (`/entries/move-visible-to-feed` and the older
-  `/entries/mark-range-read`) pay full display work — thumbnails, favicons,
-  formatted dates — for entries nobody will render. A `light_only=True` that
-  returns the pre-enrichment records would serve both; the move endpoint needs
-  only `feed_url`/`id`/`title`/`link`/`feed_title`, and mark-range-read needs
-  only `feed_url`/`id`. Not done because it touches a hot, heavily-shared
-  function and the existing unbounded caller has been fine in production;
-  measure before building.
-- **`/entries/mark-range-read` ignores the active search.** It passes scope,
-  tag, sort and read/star filters to `list_entries_for_feeds` but never `q`, so
-  "mark everything above this" inside a search resolves the anchor against the
-  unsearched list. Noticed while modeling the move route on it; not fixed here
-  because it is a separate behavior change with its own test surface.
+The `mark-range-read` search gap this item used to also list was already fixed 2026-08-28 (`q` is
+threaded through and forces `read_filter=all`, same as `_resolve_view_posts` — that route already
+also passes `enrich=False`, so its own enrichment cost is gone too). What's left is
+`_resolve_view_posts` (shared by `/entries/move-visible-to-feed` and `/entries/select-all-visible`,
+both real "whole view" resolutions, not just the anchor lookup mark-range-read does): it still calls
+`list_entries_for_feeds` at full `enrich=True`, paying for thumbnails/tags/display-prefs on every
+entry in scope.
+
+**Measured live 2026-09-16** on the real library's "All Feeds" unread view (2,184 feeds, 3,832
+entries) while investigating this item: `enrich_ms=1641` of a `6.85s` total — enrichment is real
+(~24%) but **not the dominant cost**. `fetch_ms=4436` (reading the raw entries from reader across
+2,184 feeds) is more than 2.5× larger and `enrich=False` would not touch it at all. A `light_only`
+mode also isn't a clean drop-in the way `mark-range-read`'s `enrich=False` was: `select-all-visible`
+(added after this item was originally scoped) needs `feed_title` for its text filter and
+`video_id`/`duration_seconds` for its YouTube-folder duration filter — all three are enrichment-phase
+fields, not present in the light-record shape, so serving both of `_resolve_view_posts`'s callers
+would mean a new intermediate shape, not just flipping `enrich=False`.
+
+Given the payoff is ~24% of a call that isn't the hot path (home route rendering, not whole-view
+bulk actions) and the correct implementation is real added complexity on the app's most
+heavily-shared function — not worth building for what it would save. If `fetch_ms` itself is ever
+worth investigating instead, that is a different, separate question (raw reader-DB read cost across
+~2,200 feeds), not this item.
+
+Also found and fixed while measuring this: the `hide_locked_comics`/`hide_unpremiered` underfill
+retry (shipped earlier the same day) quadrupled this exact call's cost whenever any feed anywhere
+had `hide_locked_comics` on, since its `limit=1_000_000` "everything" sentinel could never satisfy
+the retry's exit condition — see git history and `docs/architecture/views.md`.
 
 ## Tier 3 — maintenance backlog, ready to run
 
