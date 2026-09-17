@@ -135,6 +135,39 @@ ported: guard 2 needs the *old stored title* as a positive reference, which
 outcome, and guard 3 is a `refresh_captured_article`-scoped in-memory dedupe with
 no equivalent notion in the archive worker's queue.
 
+### A guard-refused entry still needs somewhere safe to fall
+
+Refusing to store a mismatched page (above) closes the write-time hole, but the
+1MB+ recapture sweep run the same week surfaced the read-time half of the same
+problem: `entry_readability` (`GET /entries/readability`, the desktop Reader
+View button) and `resolve_reader_article_html` (the e-ink `/read` view) both
+called `_resolve_archived_readability_html`, and on empty — a guard refusal, or
+a live fetch that failed outright — fell straight through to *another* live
+fetch of the same page (`build_readability_response` / `fetch_readability_article`).
+For an entry whose source has moved or been squatted, that second fetch is just
+as likely to succeed and show the wrong thing as the first one that the guard
+already refused — it does not know the guard fired, only that the archive had
+nothing.
+
+Fixed by checking `StarredArchiveService.has_complete_archive` before that
+second live fetch: a *kept* entry (starred or tagged — a complete archive row
+exists) with no usable readability copy now shows its own stored
+`content_html` (reader's copy, from `get_entry_detail`, never touched by any of
+this) instead of re-fetching. Scoped specifically to kept entries with an
+archive — an ordinary entry that was never starred has no archive at all, and
+must still reach the live fetch below it; that is the whole reason Reader View
+exists, to recover a full article from a thin RSS stub. Gating on
+`has_complete_archive` rather than "archived_html is falsy" is what keeps that
+distinction: both are falsy for "never archived," only one of them means "archived,
+but this piece came back empty."
+
+`resolve_reader_article_html` already had a similar-looking fallback
+(`_reader_copy_is_richer`, for the illogicalcontraption case — an implausibly
+*short* archived copy losing to richer stored content) but its guard required
+`archived_html` to be truthy, so a fully empty archived copy skipped it
+entirely and went straight to the live fetch same as `entry_readability` did.
+Broadened the same condition rather than add a second branch.
+
 ### Whole-page capture (`mode="full"`)
 
 Swaps `fetch_readability_article` for `fetch_full_page_article`: same sanitizer

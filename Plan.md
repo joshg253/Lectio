@@ -111,37 +111,28 @@ the redirect (which they do once a migration finishes). The stored URL also
 feeds the Change-URL field, the dupe scan and discovery, so a forwarder makes
 all three describe somewhere the posts do not come from.
 
-### Pin sink never fires for wixmp URLs whose token is already gone — `--apply` ran, 0/314 pinned
+### DeviantArt thumbnail backfill — CLOSED, not a bug
 
 **Built 2026-08-28**: `scripts/backfill_expired_deviantart_thumbnails.py`
-(dry-run by default, `--apply` to write, `--limit`/`--delay`/`--user`).
-Walks every un-pinned wixmp `entry_lead_images` row, calls the same
-`_resign_expired_deviantart_url` the article-view path already uses (cheap
-checks first, so most rows cost no DeviantArt API call at all), and feeds
-the result through `store_entry_lead_image` — which pins it as a side
-effect via the existing 2026-08-24 sink.
+(dry-run by default, `--apply` to write). `--apply` run 2026-09-16 reported
+0/314 pinned, which read as a bug — investigated further 2026-09-17 and it
+isn't one.
 
-**Dry-run count 2026-09-16: 314 candidates** (down from the feared ~22,300 at
-scoping time — the pin-on-write sink has been organically shrinking the
-backlog for three weeks as entries got naturally re-visited).
+296 of the 314 "candidates" store a DeviantArt `/i/<uuid>/<file>` CDN URL
+(no `?token=`), not the signed `/f/<uuid>/<file>/v1/fill/...` form the pin
+sink is built for. Confirmed live: an `/i/` URL fetched with no token at all
+returns 200 with a real image (400KB JPEG) — this path is genuinely public
+and durable, not a signed URL that can expire. `_url_is_signed()` correctly
+declines to pin it; there is nothing to fix, since pinning exists only to
+protect against a volatile signed URL dying unread.
 
-**`--apply` run 2026-09-16: 0/314 pinned, all `could_not_pin`.** Not a fetch
-failure — every image HEAD-checked live (200 OK). The stored `image_url` rows
-already carry no signing token in the query string (stripped or expired long
-enough ago that nothing's left), so `_resign_expired_deviantart_url` hits its
-`exp is None and _wixmp_url_is_live(url)` branch — "no exp claim, and it just
-proved itself live" — and returns the URL **unchanged**, without ever calling
-DeviantArt to re-sign it. `_pin_entry_thumbnail_if_signed`'s gate,
-`_url_is_signed()`, only checks for a token query param, so the unchanged,
-tokenless URL never reaches the actual pin fetch. The live-HEAD check and the
-signed-URL gate are answering two different questions and neither one alone
-is sufficient: liveness doesn't imply the URL is durable, and "has a token"
-misses a URL that's already lost its token but happens to still resolve.
-Needs either `_resign_expired_deviantart_url` to force a re-sign when there's
-no token at all (not just when `exp` says expired), or the pin sink to fire
-on "reachable wixmp URL" rather than "has a token" — not investigated further
-today, this was a side effect of running the backlog down, not the day's
-actual task.
+The other 18 do carry a `/f/` signed URL and are genuinely broken (confirmed
+live: 404 from the CDN) despite their JWT's own `exp` claim still reading as
+future-dated — `_resign_expired_deviantart_url` trusts that claim without a
+live check by design (the live-HEAD probe is the *next*, more expensive
+step, reserved for tokens with no `exp` claim at all). 18 of 23,352 rows
+(0.08%) whose claimed expiry doesn't match reality is too small a rate to
+chase — not worth adding a live check to every "exp says valid" row for.
 
 ### Recapture the rest of the archive under the 2026-09-12 image-scope/enclosure fixes
 
@@ -201,21 +192,18 @@ at least ~40 real articles' readability copies with unrelated hub/squat-page
 text — precisely the failure shape that prompted the guard in the first
 place, now demonstrated at the scale it was built to prevent.
 
-**Found by that catch: a real, narrower follow-on gap.** The guard stops the
-wrong page from being *stored*, but the recapture script deletes the old
-(correct) archive row before the fetch even runs — so for these ~35 entries,
-`readability_html_zlib` is now empty rather than wrong, and `entry_readability`
-(Reader View) / the e-ink `/read` view fall straight through to a **live**
-re-fetch of the dead redirect when someone opens Reader View on one of them,
-rather than falling back to reader's own stored `content_html` (which still
-has the real article — it's what the normal entry pane already shows, just
-not consulted by this route). Not a regression in what's *stored* (that's the
-whole point of today's fix), but a real view-time gap for a small, likely-
-growing subset (any feed whose old posts now redirect to a generic hub).
-Fix: have `_resolve_archived_readability_html`'s caller fall back to reader's
-`content_html` before attempting a live re-fetch. Not built today — this was
-discovered mid-sweep, not the day's scoped task, and doesn't block letting
-the sweep finish (nothing is being destroyed, only left correctly blank).
+**Found by that catch, and FIXED 2026-09-17**: the guard stops the wrong page
+from being *stored*, but `entry_readability` (Reader View) and
+`resolve_reader_article_html` (e-ink `/read`) both fell straight through to a
+**live** re-fetch of the same untrustworthy/dead page whenever the archive had
+no readability copy — never consulting reader's own stored `content_html`,
+which still has the real article for any kept entry. Both routes now check
+`StarredArchiveService.has_complete_archive` and prefer stored content over a
+second live fetch, scoped to kept entries specifically so an ordinary
+never-archived entry still reaches the live fetch (the thin-RSS-stub recovery
+case Reader View exists for). New tests, full suite green (4,143). See
+`docs/architecture/saved.md` "A guard-refused entry still needs somewhere
+safe to fall".
 
 Related, smaller: no audit has been done for feeds that relied on the *old*
 unconditional-enclosure-capture default (no `attachment_exts` ever configured)
