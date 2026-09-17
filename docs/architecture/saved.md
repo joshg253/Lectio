@@ -361,6 +361,24 @@ title/link/feed_title/author — same AND rule, same tokenization. Metadata only
 decompressing every archived body per search costs more than the orphan set
 justifies.
 
+**A kept feed's union was missing the same folder-scoping gate the synthetic
+`lectio:saved` feed already has.** `get_kept_feed_urls()` belongs to no folder
+(folder rows were dropped on unsubscribe, per "Kept-but-unsubscribed feeds"
+above), so like `SAVED_FEED_URL` it should only widen the root/Uncategorized
+Saved view — but it was unioned into `entry_feed_urls` unconditionally
+whenever `star_only` was set, in both `_home_inner` and `_resolve_view_posts`
+(the Select-All-visible scope resolver). Reported live 2026-09-17: a feed
+that had been unsubscribed and later resubscribed left a stale `kept_feeds`
+row (a separate, smaller issue — "Re-subscribing clears the row" above is the
+intended behavior and normally holds, per `test_readd_clears_kept_state`;
+this one row didn't for reasons not tracked down), and every folder's Saved
+view showed that feed's starred posts at the top, not just the root view.
+Fixed by folding `get_kept_feed_urls()` into the exact same
+`selected_folder_id in (root_id, UNCATEGORIZED_FOLDER_ID) and not
+selected_feed_url` gate `SAVED_FEED_URL` already used — the stale row itself
+is harmless now regardless of whether it ever gets cleaned up, since the
+union it feeds is correctly scoped either way.
+
 **Why the 190 were deleted.** Once kept meant star-OR-tag they appeared nowhere
 — not the Kept view, not search — with no path back except a bookmarked URL. An
 item you cannot find is one you cannot curate.

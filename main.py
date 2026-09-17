@@ -26040,10 +26040,16 @@ def _home_inner(
     # list; only gating on root left it unreachable from Saved's own
     # Uncategorized grouping once Uncategorized's shared feed-set (used by
     # both modes) stopped including it by default (2026-08-27).
-    if selected_star_only:
+    if selected_star_only and selected_folder_id in (root_id, UNCATEGORIZED_FOLDER_ID) and not selected_feed_url:
+        # kept_feeds belongs here for the same reason SAVED_FEED_URL does: a
+        # kept-but-unsubscribed feed has no folder_feeds row any more, so it
+        # belongs to the whole-library view, not every folder. Missing this
+        # gate put a kept feed's posts in every folder's Saved list — reported
+        # live 2026-09-17 for a feed that had been unsubscribed and later
+        # resubscribed, leaving a stale kept_feeds row (harmless on its own;
+        # the leak was in never scoping the union at all).
         entry_feed_urls = entry_feed_urls | get_kept_feed_urls()
-        if selected_folder_id in (root_id, UNCATEGORIZED_FOLDER_ID) and not selected_feed_url:
-            entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
+        entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
     posts = list_entries_for_feeds(
         entry_feed_urls,
         limit=limit,
@@ -33706,10 +33712,13 @@ def _resolve_view_posts(
     # star view must not subtract them here either.
     if not (list_feed_url or normalized_star_only):
         entry_feed_urls = entry_feed_urls - disabled_feed_urls
-    if normalized_star_only:
+    if normalized_star_only and folder_id == root_id and not list_feed_url:
+        # Same folder-scoping gate as the home route (main.py's _home_inner) --
+        # a kept-but-unsubscribed feed has no folder_feeds row, so it belongs
+        # to the whole-library view, not every folder. See that gate's comment
+        # for the live incident this was missing here too.
         entry_feed_urls = entry_feed_urls | get_kept_feed_urls()
-        if folder_id == root_id and not list_feed_url:
-            entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
+        entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
 
     posts = list_entries_for_feeds(
         entry_feed_urls,

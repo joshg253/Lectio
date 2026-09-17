@@ -252,6 +252,20 @@ and may now silently stop keeping files they used to — this needs an explicit
 per-feed extension list going forward, and nothing currently surfaces which
 feeds are in that position.
 
+### 617 `complete` archives have no content at all (not just a missing size)
+
+Found 2026-09-17 investigating a "shows 0B" report (Josh, live, not a
+generated example) that turned out to be a red herring for
+`scripts/backfill_archived_entry_sizes.py` — that script only targets
+`content_size_bytes IS NULL` (dry-run: 0 candidates), but these 617 rows have
+it explicitly `0`, correctly, because `source_html_zlib`, `readability_html_zlib`,
+`content_html_zlib`, and (unchecked so far) their linked assets are ALL empty
+too, despite `status = 'complete'`. Not investigated further today — worth
+knowing whether these are genuinely link-less/content-less posts (nothing
+ever existed to capture) or a silent capture failure that still marked itself
+complete. Sampled 5 across different feeds (davidamos.dev, socks-studio,
+markjames.dev, sourcery.ai) — no obvious shared pattern yet.
+
 ### Second pass on the ~1,651 entries fetch_missing_publish_dates.py couldn't date
 
 Ran live 2026-09-12 (library-wide, not just GuitarWorld): 1,904 of 3,555
