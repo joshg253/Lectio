@@ -38,6 +38,7 @@ from PIL import Image as _PILImage
 from readability import Document
 
 from services import tenancy, url_guard
+from services.saved_articles import _page_is_a_different_article
 
 LOGGER = logging.getLogger(__name__)
 
@@ -1530,10 +1531,34 @@ class StarredArchiveService:
                         LOGGER.warning("starred archive: canonical-link hook failed for %s: %s", entry_id, exc)
             if source_html:
                 try:
-                    summary_doc = Document(source_html).summary(html_partial=True)
-                    readability_html = self._sanitize_readability_html(summary_doc).strip()
+                    doc = Document(source_html)
+                    summary_doc = doc.summary(html_partial=True)
+                    candidate_html = self._sanitize_readability_html(summary_doc).strip()
                 except Exception as exc:  # noqa: BLE001
                     LOGGER.debug("readability extract failed for %s: %s", entry_link, exc)
+                else:
+                    try:
+                        fetched_title = doc.short_title() or ""
+                    except Exception:  # noqa: BLE001 — a missing title only weakens the guard below, doesn't block it
+                        fetched_title = ""
+                    # A recapture (delete + re-enqueue, scripts/recapture_archived_entries.py)
+                    # replaces a COMPLETE archive's readability copy — unlike a first
+                    # capture, there is working, user-facing content on the other side of
+                    # this fetch (see _resolve_archived_readability_html: Reader View and
+                    # the e-ink /read view prefer the archived copy over a live re-fetch
+                    # for ANY starred entry, not just orphans). Reuse the same parked-page
+                    # guard the interactive "Refetch content" button uses — same failure
+                    # shape (a 200 for a page that no longer holds the article), same fix.
+                    if _page_is_a_different_article(entry_link, fetched_title, old_title=title, new_html=candidate_html):
+                        LOGGER.warning(
+                            "starred archive: fetched page for %s looks like a different article "
+                            "(stored title %r, fetched title %r) — keeping no readability copy rather than a wrong one",
+                            entry_link,
+                            title,
+                            fetched_title,
+                        )
+                    else:
+                        readability_html = candidate_html
 
         # 3. Collect every distinct image URL referenced anywhere we know about.
         #

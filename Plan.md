@@ -111,7 +111,7 @@ the redirect (which they do once a migration finishes). The stored URL also
 feeds the Change-URL field, the dupe scan and discovery, so a forwarder makes
 all three describe somewhere the posts do not come from.
 
-### Backfill already-expired signed lead-image thumbnails — dry-run done, `--apply` not yet run
+### Pin sink never fires for wixmp URLs whose token is already gone — `--apply` ran, 0/314 pinned
 
 **Built 2026-08-28**: `scripts/backfill_expired_deviantart_thumbnails.py`
 (dry-run by default, `--apply` to write, `--limit`/`--delay`/`--user`).
@@ -123,9 +123,25 @@ effect via the existing 2026-08-24 sink.
 
 **Dry-run count 2026-09-16: 314 candidates** (down from the feared ~22,300 at
 scoping time — the pin-on-write sink has been organically shrinking the
-backlog for three weeks as entries got naturally re-visited). Small enough
-now for `--apply` to be a quick, low-risk run (~2.5 min at the default 0.5s
-delay). Not applied yet — Josh's call on when.
+backlog for three weeks as entries got naturally re-visited).
+
+**`--apply` run 2026-09-16: 0/314 pinned, all `could_not_pin`.** Not a fetch
+failure — every image HEAD-checked live (200 OK). The stored `image_url` rows
+already carry no signing token in the query string (stripped or expired long
+enough ago that nothing's left), so `_resign_expired_deviantart_url` hits its
+`exp is None and _wixmp_url_is_live(url)` branch — "no exp claim, and it just
+proved itself live" — and returns the URL **unchanged**, without ever calling
+DeviantArt to re-sign it. `_pin_entry_thumbnail_if_signed`'s gate,
+`_url_is_signed()`, only checks for a token query param, so the unchanged,
+tokenless URL never reaches the actual pin fetch. The live-HEAD check and the
+signed-URL gate are answering two different questions and neither one alone
+is sufficient: liveness doesn't imply the URL is durable, and "has a token"
+misses a URL that's already lost its token but happens to still resolve.
+Needs either `_resign_expired_deviantart_url` to force a re-sign when there's
+no token at all (not just when `exp` says expired), or the pin sink to fire
+on "reachable wixmp URL" rather than "has a token" — not investigated further
+today, this was a side effect of running the backlog down, not the day's
+actual task.
 
 ### Recapture the rest of the archive under the 2026-09-12 image-scope/enclosure fixes
 
@@ -144,9 +160,24 @@ exist.
 has no bulk-report mode): 14,554 complete archived entries, ~9.2GB total.
 134 over 5MB, 974 over 3MB, 1,970 over 2MB, 2,358 over 1MB. The worst entry
 today is ~33MB — the 54MB outlier above is already fixed and out of the list.
-Not recaptured — picking a threshold and actually re-fetching that many
-entries (up to ~2,000 depending where the line is drawn) is a real,
-non-trivial network operation and Josh's call, not run unilaterally.
+
+**Found the same day, before applying anything wider: recapture had no
+parked-page guard.** Asked directly ("a refetch replaces the post with
+something else — how does recapture handle that?") turned up a real gap:
+`_archive_entry`'s readability re-extraction ran with none of the three
+`refresh_captured_article` guards, and its output isn't orphan-only — Reader
+View and the e-ink `/read` view prefer the archived copy for *any* starred
+entry with a complete archive. A bulk recapture over a dead/replaced URL would
+have silently done exactly the thing that prompted the question, at whatever
+scale the sweep ran. Fixed same day: guard 1 (slug/title mismatch) ported into
+`_archive_entry`, `readability_html` left empty on a mismatch rather than
+storing the wrong page (`content_html`/`summary_html` were never at risk —
+both come from reader's stored entry, not the live fetch). See
+`docs/architecture/saved.md` "The guards protected re-fetch, not recapture".
+
+**1MB+ sweep (2,358 entries) run 2026-09-16 with the guard in place.** [Fill
+in outcome once the run finishes: recaptured/shrunk count, guard-rejected
+count, failures, total size reclaimed.]
 
 Related, smaller: no audit has been done for feeds that relied on the *old*
 unconditional-enclosure-capture default (no `attachment_exts` ever configured)

@@ -103,6 +103,38 @@ outside the normal path. `scripts/restore_bumped_publish_dates.py` repairs the
 damage from `archived_entry.published_at`, cross-checked against `recent_sort`,
 forward drift only — all 101 agreed.
 
+### The guards protected re-fetch, not recapture
+
+The three guards above sit in `refresh_captured_article` (`services/saved_articles.py`),
+reached from the "Re-fetch content" button and `_maybe_autofetch_on_keep`. A second
+path rebuilds the same `readability_html_zlib` column without going through any of
+them: `StarredArchiveService._archive_entry`, run by every normal `enqueue_archive`
+call and, at scale, by `scripts/recapture_archived_entries.py` (delete a `complete`
+archive row's assets, then re-enqueue — the only way to force a rebuild, since
+`enqueue_archive` is a no-op against a `complete` row). Found investigating a report
+that a refetch had replaced a post with unrelated content: `_archive_entry` fetched
+the source page fresh and ran `Document(source_html).summary()` straight into
+`readability_html_zlib` with no mismatch check at all — and that column is not a
+fallback for orphaned entries only. `_resolve_archived_readability_html` (main.py)
+feeds both Reader View (`/entries/readability`) and the e-ink `/read` view, and it
+prefers the archived copy over a live fetch for **any** starred entry with a
+complete archive. A recapture landing on a parked/replaced page would silently
+become what Reader View shows from then on, with no snapshot to revert — the
+recapture script deletes the old row before the new fetch even runs, so there was
+nothing left to fall back to.
+
+Fixed by reusing guard 1 (slug/title mismatch, `_page_is_a_different_article`)
+inside `_archive_entry` itself, comparing the freshly-fetched page's title against
+the URL slug and against reader's own stored `entry.title` (untouched by the
+archive deletion). On a mismatch, `readability_html` stays empty rather than
+storing the wrong page — `content_html`/`summary_html` are unaffected either way,
+since both come from reader's stored entry, never from the live fetch. Guards 2
+and 3 (opaque-URL link-index fallback, sibling-extraction fingerprint) were not
+ported: guard 2 needs the *old stored title* as a positive reference, which
+`_archive_entry` overwrites unconditionally from reader on every run regardless of
+outcome, and guard 3 is a `refresh_captured_article`-scoped in-memory dedupe with
+no equivalent notion in the archive worker's queue.
+
 ### Whole-page capture (`mode="full"`)
 
 Swaps `fetch_readability_article` for `fetch_full_page_article`: same sanitizer
