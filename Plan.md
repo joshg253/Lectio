@@ -175,19 +175,31 @@ storing the wrong page (`content_html`/`summary_html` were never at risk —
 both come from reader's stored entry, not the live fetch). See
 `docs/architecture/saved.md` "The guards protected re-fetch, not recapture".
 
-**1MB+ sweep (2,358 entries) run 2026-09-16/17 with the guard in place.**
-Running as a strictly-serial driver (delete + enqueue one entry, poll until
-the worker finishes it, only then touch the next — at most one entry is ever
-without a readability copy at a time). In progress; final tally to follow.
+**1MB+ sweep (2,358 entries) run 2026-09-16/17 with the guard in place —
+complete.** Strictly-serial driver (delete + enqueue one entry, poll until the
+worker finishes it, only then touch the next — at most one entry ever without
+a readability copy at a time), ~5h20m end to end. Result: 2,195 shrunk, 91
+grew (mostly re-fetches that legitimately found more images than the stale
+copy had), 12 unchanged, 60 failed (stale reader entries — "entry not found",
+same benign shape as the original 25-entry test), 81 completed with no
+readability copy (41 the guard correctly refusing a mismatched page, 40 a
+live fetch that failed outright — both leave `content_html`/`summary_html`
+untouched). Total: 6.98GB → 1.84GB across the touched entries, **5.14GB
+reclaimed**, zero timeouts, zero entries lost.
 
-**The guard caught a real, non-hypothetical case mid-sweep**: `blog.rpgmakerweb.com`
-has been retired — every old post URL now 301-redirects to a generic
-`rpgmakerweb.com/all-posts` hub page titled "The Official RPG Maker Blog",
-zero word overlap with any article. ~35 entries hit this. Without today's
-guard, the sweep would have silently overwritten ~35 real articles'
-readability copies with that hub page's boilerplate — exactly the failure
-shape that prompted the guard. Confirmed live (fetched the redirect target,
-ran the guard against it directly) rather than assumed.
+**The guard caught real, non-hypothetical cases across at least three
+retired/repurposed domains**, not just one: `blog.rpgmakerweb.com` (34
+entries — every old post URL now 301s to a generic `rpgmakerweb.com/all-posts`
+hub titled "The Official RPG Maker Blog"), `blog.guitar-pro.com` (4 entries,
+same shape — redirects to `guitar-pro.com/blog`'s generic hub), and
+`donjones.com` (the domain itself was resold/squatted — now serves "Magical
+Worlds. Incredible Adventures.", unrelated to the original tech blog). Every
+one confirmed live (fetched the actual redirect/squat target, ran the guard
+against it directly) rather than assumed — zero false positives found across
+spot checks. Without today's fix, this sweep would have silently overwritten
+at least ~40 real articles' readability copies with unrelated hub/squat-page
+text — precisely the failure shape that prompted the guard in the first
+place, now demonstrated at the scale it was built to prevent.
 
 **Found by that catch: a real, narrower follow-on gap.** The guard stops the
 wrong page from being *stored*, but the recapture script deletes the old
