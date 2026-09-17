@@ -890,6 +890,19 @@ tell "upstream ran out" from "the filter is still eating rows" using only this f
 return value, so the fixed multiplier list is the actual bound — a feed that's *entirely*
 locked/unpremiered costs a handful of retried fetches before giving up empty, not one.
 
+**A "give me everything" caller must never enter the retry at all — found the same day.**
+`_resolve_view_posts` and `mark_entries_range_read` pass `limit=1_000_000` as a "no real limit"
+sentinel (see below): `len(result) >= limit` can never be true for either, so without a separate
+guard the retry gate's *only* remaining condition was "does a hide filter apply anywhere in
+scope" — true for any "All Feeds"-scale view once a single feed anywhere had `hide_locked_comics`
+on — and it fired on **every** such call, each attempt repeating the identical full-cost fetch for
+nothing (the fetch was never actually window-bound; a million-row cap could not have been what
+truncated it). Measured live: a 3,832-entry "All Feeds" unread resolve went from ~5s to ~20s, one
+real fetch plus three wasted retries that each re-fetched and re-filtered the same 3,832 rows.
+`_HIDE_FILTER_UNDERFILL_RETRY_MAX_LIMIT` (10,000 — comfortably above any real paginated `limit`,
+comfortably below the "unbounded" sentinels) skips the whole retry above that ceiling, restoring
+the ~5s cost for those callers while leaving genuine small-page underfill handling untouched.
+
 ## `list_entries_for_feeds(..., enrich=False)`: Read Above/Below don't need phase 2
 
 `list_entries_for_feeds` is two phases: phase 1 builds cheap "light" records

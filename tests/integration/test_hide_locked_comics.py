@@ -231,6 +231,34 @@ def test_underfill_retry_is_not_attempted_when_no_feed_in_scope_hides_anything(c
     assert len(calls) == 1, "no retry fetch should have been attempted"
 
 
+def test_underfill_retry_is_skipped_for_an_unbounded_limit_even_with_hide_locked_comics_on(configured, monkeypatch):
+    """_resolve_view_posts / mark_entries_range_read pass limit=1_000_000 as a
+    "give me everything" sentinel -- len(result) can never reach that, so
+    without the ceiling guard the retry fired on every such call (at full
+    fetch cost each attempt) whenever ANY feed anywhere had hide_locked_comics
+    on, even though the fetch was never actually window-bound. Measured live:
+    4x the cost of the original call on an "All Feeds" whole-view resolution."""
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=FEED, entry_id="normal", published=OLD)
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, FEED, "hide_locked_comics", 1)
+
+    calls: list[int] = []
+    real_fetch = main._list_entries_for_feeds_fetch
+
+    def _counting_fetch(*args, **kwargs):
+        calls.append(kwargs.get("limit", args[1] if len(args) > 1 else None))
+        return real_fetch(*args, **kwargs)
+
+    monkeypatch.setattr(main, "_list_entries_for_feeds_fetch", _counting_fetch)
+
+    ids = [e["id"] for e in main.list_entries_for_feeds({FEED}, limit=1_000_000)]
+
+    assert ids == ["normal"]
+    assert len(calls) == 1, "an unbounded-limit caller must never trigger the underfill retry"
+
+
 def test_unrelated_feed_never_queries_locked_until(configured):
     """No webcomic feed with the pref on anywhere in scope -- the batch query
     must not even run (and definitely must not hide anything)."""

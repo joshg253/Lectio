@@ -15912,6 +15912,18 @@ def _split_site_terms(terms: list[str]) -> tuple[list[str], list[str]]:
 # hide_locked_comics/hide_unpremiered leave a page short -- see that
 # function's own docstring for why these two specific multiples.
 _HIDE_FILTER_UNDERFILL_RETRY_LIMIT_MULTIPLIERS = (2, 4, 8)
+# Callers asking for a real page (default 250, rarely more than a few
+# thousand) are exactly what the retry helps -- but _resolve_view_posts /
+# mark_entries_range_read pass 1,000,000 as a "no real limit" sentinel, and
+# for those the retry's whole premise (a fetch capped at `limit` dropped rows
+# a bigger `limit` might recover) is backwards: the fetch was never bound by
+# that number in the first place (no Lectio library has anywhere near a
+# million entries in one scope), so `len(result) < limit` is guaranteed True
+# and every retry attempt repeats the SAME full-cost fetch for nothing --
+# measured live, 4x the cost of the original call, on every "All Feeds"-scale
+# whole-view resolution once any feed anywhere had hide_locked_comics on.
+# Anything above this ceiling skips the retry entirely.
+_HIDE_FILTER_UNDERFILL_RETRY_MAX_LIMIT = 10_000
 
 
 def list_entries_for_feeds(
@@ -15951,6 +15963,14 @@ def list_entries_for_feeds(
     using only this function's own return value, so a fully locked/unpremiered
     feed costs a handful of bounded retry fetches rather than one, not an
     early exit.
+
+    Also skipped outright above `_HIDE_FILTER_UNDERFILL_RETRY_MAX_LIMIT`: a
+    caller passing `limit=1_000_000` as a "give me everything" sentinel
+    (`_resolve_view_posts`, `mark_entries_range_read`) can never satisfy
+    `len(result) >= limit`, so without this guard the retry fired on every
+    such call whenever a hide filter was active anywhere in scope, at full
+    fetch cost each attempt, for a fetch that was never actually window-bound
+    to begin with -- see that constant's own comment.
     """
     result = _list_entries_for_feeds_fetch(
         feed_urls,
@@ -15966,7 +15986,7 @@ def list_entries_for_feeds(
         archived=archived,
         enrich=enrich,
     )
-    if len(result) >= limit or not feed_urls:
+    if len(result) >= limit or not feed_urls or limit > _HIDE_FILTER_UNDERFILL_RETRY_MAX_LIMIT:
         return result
 
     with get_meta_connection() as _prefs_conn:
