@@ -5,19 +5,29 @@ explains why the code looks the way it does, in ARCHITECTURE.md.
 
 ## Now
 
-Grouped and re-prioritized 2026-09-16 (previous pass was 2026-08-30). Same five-tier shape —
-things actively impeding unread-clearing right now, small independent wins, ready-to-run
-maintenance, real features that aren't blocking anything today, and deliberately-deferred big
-investments — re-populated after a batch of Tier 1 fixes (Bluesky lead-image dedup, entry-pane
-auto-refetch staleness, ArtStation lead-image false rejections, manual Refresh silently
-respecting reader's default pacing) closed most of what was actively impeding anything. This pass
-also: trimmed two now-fully-resolved Tier 1 investigations down to pointers (their live threads
-moved out, the rest is git-log/architecture-doc territory per this file's own "open work only"
-rule); folded Tier 5's "Grab bag" — mostly small independent items that never belonged next to
-architecture-scale investments — into the tiers matching their actual size; removed a few items
-that were fully done with nothing left open; and moved several stalled-pending-a-lead items into
-Parked, and a couple of pure decision-records into Watch-lists, where their own text already said
-that's what they are.
+Grouped and re-prioritized 2026-09-16 (previous pass was 2026-08-30), then re-checked and trimmed
+again the same day after a full Tier 1 + Tier 2 clearing. Same five-tier shape — things actively
+impeding unread-clearing right now, small independent wins, ready-to-run maintenance, real
+features that aren't blocking anything today, and deliberately-deferred big investments.
+
+**What shipped today:** Bluesky lead-image dedup, entry-pane auto-refetch staleness, ArtStation
+lead-image false rejections, manual Refresh silently respecting reader's default pacing,
+`hide_locked_comics`/`hide_unpremiered` page underfill (plus a same-day 4x-cost regression that
+fix itself introduced and got caught while measuring the next item), a global ignored
+suggested-tags list, and sidebar tree title disambiguation — see git log for the full detail on
+each. **Tier 1 and Tier 2 are both empty as a result** — not an oversight, just genuinely nothing
+queued right now; both stay as tiers rather than being removed, since new reports land there
+first.
+
+The first reorg pass also: trimmed two now-resolved Tier 1 investigations down to pointers, moved
+their still-open follow-ups into Tier 4, folded Tier 5's "Grab bag" (mostly small independent
+items that never belonged next to architecture-scale investments) into the tiers matching their
+actual size, removed a few items that were fully done with nothing left open, and moved several
+stalled-pending-a-lead items into Parked and a couple of pure decision-records into Watch-lists.
+Cross-checked git log since against every remaining item's claim before this second pass — found
+no other drift (the one miss caught later the same day, `mark-range-read`'s search gap having
+already been fixed 2026-08-28, predated this file's own last reorg and wasn't this pass's error,
+but is exactly the kind of thing to keep checking for rather than trusting old text).
 
 Within a tier, related items are clustered under a bold sub-heading; unrelated items stand alone.
 Two standing watch-lists (CodeQL, Parked) sit in their own section at the end — nothing in them
@@ -25,39 +35,10 @@ is scheduled, they're just what to check if a related symptom recurs.
 
 ## Tier 1 — actively impeding unread-clearing
 
-### Refresh-contention latency (home route) — RESOLVED
-
-Reported 2026-08-11 as "serious delay browsing" (home requests: median 700ms, 9% over 3s, peaking
-at 7.2s, always mid-refresh). Root-caused via three live `py-spy` passes to five real bugs, the
-dominant one a manual-tag key prefix (`tag:lectio:`) that never matched the real one
-(`lectio.manual_tag.`) — silently skipping the backfill's own eligibility check and forcing an
-uncached `reader.get_tags()` round trip per read/unsaved entry every refresh cycle. GIL-holding
-samples during refresh dropped from 26% to 11% of samples, longest single-thread GIL hold from
-~8.5s to ~2s. Full investigation, the other four bugs, two SQLite pragma experiments, and the
-`html_sanitize.py` lxml switch are in git log around 2026-09-03 and
-`docs/architecture/images.md` "Batched meta-DB writes during the per-feed backfill" if the detail
-is ever needed again.
-
-**Methodology, worth remembering for the next contention hunt:** elapsed-time SQL timing alone
-cannot tell SQLite lock-wait apart from GIL starvation — live `py-spy` sampling during a real
-stall is what actually settled it, after query-timing inference alone had gone in circles.
-
-Free-threaded Python is still blocked by lxml (see Watch-lists) — nothing else remaining.
-
-### Shared proxy/FlareSolverr escalation for page fetches — SHIPPED 2026-08-31
-
-Closed both re-fetch and tag/lead-image gaps raised 2026-08-31 (tamriel-rebuilt.org 403s on
-"Refetch content"; gottadeal.com's Cloudflare-walled article pages blocking tag capture). New
-`services/page_fetch.py` (`PageFetcher`) runs a single-URL honest → browser → proxy → FlareSolverr
-ladder, sharing one instance across the re-fetch and tag/lead-image paths so a host solved once is
-known to both. Settings → Feeds → Fetch Tiers shows its state. Full rationale in
-`docs/architecture/feeds.md` "Page fetches". Spot-checked live against the real backends:
-gottadeal.com fixed via the proxy tier alone; tamriel-rebuilt.org correctly escalated all the way
-to FlareSolverr, which then genuinely timed out on Cloudflare's challenge (a FlareSolverr
-solve-reliability limit, not a bug in the ladder — the gap this item exists to close, "no
-escalation offered at all," is closed either way).
-
-Remaining follow-ups moved to Tier 4, "Page-fetch escalation ladder — follow-ups".
+Nothing here as of 2026-09-16 — the last of what was flagged (refresh-contention latency, the
+FlareSolverr escalation gaps, and the `hide_locked_comics`/`hide_unpremiered` page underfill) all
+shipped this week; their live threads relocated to Tier 4's follow-ups and Watch-lists, the rest
+is git history. First stop for whatever gets reported next.
 
 ## Tier 2 — small, fast, independent wins
 
@@ -868,6 +849,16 @@ there is nothing to upgrade to. `PYTHON_GIL=0` would force it, but lxml arrives 
 `readability-lxml` and runs in the **refresh thread** — forcing unprotected C code
 in the one concurrent path is the worst possible place to take that risk. Recheck
 when lxml declares free-threading support; nothing else blocks it.
+
+### Methodology note: diagnosing refresh-contention/latency stalls
+
+From the 2026-08-11 refresh-contention investigation (fully resolved, folded into git history
+2026-09-16 — see `docs/architecture/images.md` "Batched meta-DB writes during the per-feed
+backfill" for the actual bugs found). Elapsed-time SQL timing alone cannot tell SQLite lock-wait
+apart from GIL starvation — live `py-spy` sampling (`uv tool install py-spy`, `sudo`-ptraced into
+the container, sampling every 0.5s during a real refresh) during a real stall is what actually
+settled it, after a day of query-timing inference had gone in circles on a wrong theory. Worth
+reaching for first, not last, the next time something in this shape recurs.
 
 ### Parked, deliberately
 
