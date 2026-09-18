@@ -10,6 +10,9 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from starlette.middleware.sessions import SessionMiddleware
 
 import main
 from services import tenancy
@@ -351,3 +354,134 @@ def test_unread_count_unaffected_once_unlock_date_passes(configured):
 
     counts = main._compute_unread_counts_by_feed()
     assert counts.get(FEED) == 1
+
+
+# --- Locked-placeholder badge (hide_locked_comics OFF, entry still shows) ---
+#
+# A reader who does not enable hide_locked_comics still sees the locked entry
+# in their list/pane -- but its lead image genuinely does not resolve while
+# locked, so it must render a placeholder badge with the unlock date instead
+# of a broken image. See LeadImageService.check_and_cache_webcomic_lock and
+# docs/architecture/images.md.
+
+
+def _app():
+    app = FastAPI()
+    app.add_middleware(SessionMiddleware, secret_key="test-only")
+    app.get("/")(main.home)
+    app.get("/entries/pane")(main.entry_pane)
+    return app
+
+
+def test_list_entries_exposes_is_locked_regardless_of_pref(configured):
+    """is_locked/locked_until_* must be populated on every enriched row, not
+    just when hide_locked_comics is on somewhere -- that preference only
+    controls whether the row is hidden, not whether it needs the badge."""
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=FEED, entry_id="locked", published=OLD)
+        _seed_entry(reader, feed_url=FEED, entry_id="normal", published=OLD)
+    unlock_at = time.time() + 86400 * 30
+    _seed_locked_until(FEED, "locked", unlock_at)
+
+    by_id = {e["id"]: e for e in main.list_entries_for_feeds({FEED}, limit=100)}
+
+    assert by_id["locked"]["is_locked"] is True
+    assert by_id["locked"]["locked_until_ts"] == unlock_at
+    assert by_id["locked"]["locked_until_display"]
+    assert by_id["normal"]["is_locked"] is False
+    assert by_id["normal"]["locked_until_ts"] is None
+    assert by_id["normal"]["locked_until_display"] is None
+
+
+def test_list_entries_expired_lock_is_not_flagged_locked(configured):
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=FEED, entry_id="now-unlocked", published=OLD)
+    _seed_locked_until(FEED, "now-unlocked", time.time() - 3600)
+
+    by_id = {e["id"]: e for e in main.list_entries_for_feeds({FEED}, limit=100)}
+
+    assert by_id["now-unlocked"]["is_locked"] is False
+    assert by_id["now-unlocked"]["locked_until_display"] is None
+
+
+def test_postlist_renders_locked_placeholder_instead_of_broken_image(configured):
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=FEED, entry_id="locked", published=OLD)
+    unlock_at = time.time() + 86400 * 30
+    _seed_locked_until(FEED, "locked", unlock_at)
+    with main.get_meta_connection() as conn:
+        root = main.get_root_folder_id(conn)
+        cur = conn.execute("INSERT INTO folders (name, parent_id) VALUES ('Comics', ?)", (root,))
+        folder_id = cur.lastrowid
+        conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (folder_id, FEED))
+        main.upsert_feed_thumbnail_url(conn, FEED, "https://cad-comic.com/thumb.jpg")
+        conn.commit()
+    main.invalidate_meta_structure_cache()
+
+    with TestClient(_app()) as client:
+        html = client.get("/", params={"folder_id": folder_id}).text
+
+    expected_display = main.format_datetime_for_ui(datetime.fromtimestamp(unlock_at, tz=timezone.utc))
+    assert expected_display
+    assert "post-thumbnail--locked" in html
+    assert expected_display in html
+    # The stale/unresolvable image must not be rendered for the locked row.
+    assert "cad-comic.com/thumb.jpg" not in html
+
+
+def test_postlist_normal_entry_still_renders_its_image(configured):
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=FEED, entry_id="normal", published=OLD)
+    with main.get_meta_connection() as conn:
+        root = main.get_root_folder_id(conn)
+        cur = conn.execute("INSERT INTO folders (name, parent_id) VALUES ('Comics', ?)", (root,))
+        folder_id = cur.lastrowid
+        conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (folder_id, FEED))
+        main.upsert_feed_thumbnail_url(conn, FEED, "https://cad-comic.com/thumb.jpg")
+        conn.commit()
+    main.invalidate_meta_structure_cache()
+
+    with TestClient(_app()) as client:
+        html = client.get("/", params={"folder_id": folder_id}).text
+
+    assert "post-thumbnail--locked" not in html
+    assert "cad-comic.com/thumb.jpg" in html
+
+
+def test_entry_pane_renders_locked_placeholder_with_unlock_date(configured):
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=FEED, entry_id="locked", published=OLD)
+    unlock_at = time.time() + 86400 * 30
+    _seed_locked_until(FEED, "locked", unlock_at)
+    with main.get_meta_connection() as conn:
+        root = main.get_root_folder_id(conn)
+        conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (root, FEED))
+        conn.commit()
+
+    with TestClient(_app()) as client:
+        html = client.get("/entries/pane", params={"folder_id": root, "feed_url": FEED, "entry_id": "locked"}).text
+
+    expected_display = main.format_datetime_for_ui(datetime.fromtimestamp(unlock_at, tz=timezone.utc))
+    assert expected_display
+    assert "entry-lead-image-locked" in html
+    assert expected_display in html
+
+
+def test_entry_pane_normal_entry_unaffected(configured):
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=FEED, entry_id="normal", published=OLD)
+    with main.get_meta_connection() as conn:
+        root = main.get_root_folder_id(conn)
+        conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (root, FEED))
+        conn.commit()
+
+    with TestClient(_app()) as client:
+        html = client.get("/entries/pane", params={"folder_id": root, "feed_url": FEED, "entry_id": "normal"}).text
+
+    assert "entry-lead-image-locked" not in html

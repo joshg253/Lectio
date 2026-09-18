@@ -3019,6 +3019,21 @@ class LeadImageService:
             # (or a fresh fetch) and tries the write again.
             LOGGER.exception("[hide-locked-comics] failed to persist locked_until feed=%s entry=%s", feed_url, entry_id)
 
+    def get_locked_until(self, feed_url: str, entry_id: str) -> float | None:
+        """Epoch seconds this entry's webcomic strip unlocks at, or None if it
+        was never detected as locked. Single-row counterpart to the batch map
+        list_entries_for_feeds loads for a whole view — fine here since the
+        entry pane only ever looks up one entry at a time."""
+        try:
+            with self._get_meta_connection() as conn:
+                row = conn.execute(
+                    "SELECT locked_until FROM entry_lead_images WHERE feed_url = ? AND entry_id = ? AND locked_until IS NOT NULL",
+                    (feed_url, entry_id),
+                ).fetchone()
+        except Exception:
+            return None
+        return float(row[0]) if row else None
+
     def _extract_webcomic_panel_image(self, html_text: str, base_url: str, source_url: str) -> str | None:
         """Return the main comic-panel image for a webcomic source page, or None.
 

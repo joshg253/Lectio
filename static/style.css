@@ -2876,6 +2876,31 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   display: none;
 }
 
+/* A webcomic strip currently locked behind a supporter tier (hide_locked_comics
+   off, so the row still shows) -- there is no fresh image to display, so this
+   replaces the <img> with a lock icon + the stored unlock date instead of a
+   broken thumbnail. */
+.post-thumbnail--locked {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  padding: 0.25rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.post-thumbnail-locked-icon.material-symbols-rounded {
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.post-thumbnail-locked-date {
+  font-size: 0.6rem;
+  line-height: 1.15;
+}
+
 /* crop-left: legacy alias kept for any cached pages */
 .post-thumbnail.crop-left .post-thumbnail-image { object-position: left center; }
 /* cover position variants */
@@ -4183,6 +4208,31 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
 
 .entry-lead-image-popped {
   animation: lead-image-pop-in 0.3s ease-out;
+}
+
+/* Article-pane counterpart to .post-thumbnail--locked: a supporter-locked
+   webcomic strip has no fresh image to show, so this replaces it with a lock
+   icon + the stored unlock date. */
+.entry-lead-image-locked {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  margin: 0 auto 0.85rem;
+  padding: 2.5rem 1rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 80%, var(--bg-top));
+  color: var(--muted);
+}
+
+.entry-lead-image-locked-icon.material-symbols-rounded {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.entry-lead-image-locked-text {
+  font-size: 0.9rem;
 }
 
 @keyframes lead-image-pop-in {

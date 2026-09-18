@@ -283,6 +283,14 @@ re-derives that same per-entry check, rather than a single join — candidate
 feeds are normally few (a handful of YouTube feeds with the toggle on), so
 this costs one small reader-DB query per such feed, not a scan of everything.
 
+**Locked-comic placeholder (readers with `hide_locked_comics` off) — added
+2026-09-18.** An entry that isn't hidden still has no fresh lead image while
+locked, so `list_entries_for_feeds` and `get_entry_detail` both expose
+`is_locked`/`locked_until_ts`/`locked_until_display` on every enriched row
+(reusing the same `_locked_until_map`/`entry_lead_images.locked_until` lookup,
+not a second query), and the post-list and entry-pane templates render a lock
+badge with the unlock date in place of the `<img>` when `is_locked` is true.
+
 ### Galleries rank nothing, so they need their own filters
 
 `extract_source_gallery_urls` collects *every* acceptable image in document order

@@ -898,6 +898,15 @@
         >
           <input type="checkbox" class="post-select-check" aria-label="Select post" tabindex="-1" />
           {% set _is_data_thumb = post.thumbnail_url and post.thumbnail_url.startswith('data:') %}
+          {% if post.is_locked %}
+          {# A supporter-locked webcomic strip (hide_locked_comics off, so the row
+             still shows): the resolved thumbnail is stale/unresolvable while
+             locked, so show the unlock date instead of a broken image. #}
+          <div class="post-thumbnail post-thumbnail--locked crop-{{ post.thumb_crop or 'cover' }}" title="Locked until {{ post.locked_until_display }}">
+            <span class="material-symbols-rounded post-thumbnail-locked-icon" aria-hidden="true">lock</span>
+            <span class="post-thumbnail-locked-date">{{ post.locked_until_display }}</span>
+          </div>
+          {% else %}
           <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %} crop-{{ post.thumb_crop or 'cover' }}"
             {% if post.thumb_crop == 'smart' and post.thumbnail_url and not _is_data_thumb %}style="background-image:url('/thumb?url={{ post.thumbnail_url | urlencode }}&crop=cover')"{% endif %}>
             {% if _is_data_thumb %}
@@ -912,6 +921,7 @@
               data-direct="{{ post.thumbnail_url }}" onerror="thumbImgFallback(this)" />
             {% endif %}
           </div>
+          {% endif %}
           <div class="post-item-card">
             <div class="post-content">
               <div class="post-title-row">
