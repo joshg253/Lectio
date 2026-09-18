@@ -4381,17 +4381,22 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // just text), so without this the article pane shows literal LaTeX source.
     // Bare `$...$` is deliberately not a delimiter here: none of the feeds this
     // was checked against use it, and it collides with plain-text prices.
+    // `$$...$$` (double-dollar display math -- vitaut.net and similar) doesn't
+    // share that risk: nobody writes a price as `$$50$$`, so it's safe to add.
     // Quick substring test before calling into KaTeX's own tree walk -- most
     // entries have no math at all, and this skips the walk entirely for them.
     function renderMathInEntryPane(root) {
       if (!root || typeof window.renderMathInElement !== 'function') return;
       const content = root.querySelector('.entry-content, .entry-readability-content');
-      if (!content || (!content.textContent.includes('\\(') && !content.textContent.includes('\\['))) return;
+      if (!content) return;
+      const text = content.textContent;
+      if (!text.includes('\\(') && !text.includes('\\[') && !text.includes('$$')) return;
       try {
         window.renderMathInElement(content, {
           delimiters: [
             { left: '\\[', right: '\\]', display: true },
             { left: '\\(', right: '\\)', display: false },
+            { left: '$$', right: '$$', display: true },
           ],
           throwOnError: false,
         });

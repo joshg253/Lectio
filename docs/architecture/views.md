@@ -400,11 +400,15 @@ article a user opens) — and version-pinned by directory name instead of the
 uses, since a vendored release never changes in place; bumping KaTeX means a new
 directory and a template path update, not touching the hash.
 
-Delimiters are `\(\)`/`\[\]` only, deliberately not bare `$...$`: none of the
-feeds this was checked against use it, and a lone `$` collides with plain-text
-prices. Read Mode (`read_mode.html`) does not include this — it's a separate
-template that doesn't load `app.js` — so a math-heavy saved article still shows
-raw LaTeX there; unaddressed, tracked in Plan.md.
+Delimiters are `\(\)`/`\[\]`, plus `$$...$$` (added 2026-09-18: vitaut.net
+writes display math this way — 16 occurrences on one post showed as raw
+`$$...$$` source). Deliberately not bare `$...$`: none of the feeds this was
+checked against use it, and a lone `$` collides with plain-text prices.
+`$$...$$` doesn't share that risk — nobody writes a price doubled like
+`$$50$$` — so it was safe to add without reopening that concern. Read Mode
+(`read_mode.html`) does not include this — it's a separate template that
+doesn't load `app.js` — so a math-heavy saved article still shows raw LaTeX
+there; unaddressed, tracked in Plan.md.
 
 ### Bluesky's own recovered image must not be treated as author-placed content
 
@@ -425,6 +429,15 @@ reported live 2026-09-02, root-caused 2026-09-11, fixed by special-casing
 `bluesky.is_bsky_feed(feed_url)` in `_strip_lead_image_opener`'s mid-body
 branch to leave both the hero and the body copy in place instead of dropping
 the hero.
+
+**A second, distinct Bluesky embed shape returned no images at all.**
+`_images_from_embed` (services/bluesky.py) recognized `app.bsky.embed.images`
+(images under `"images"`, each carrying `fullsize`/`thumb`) but not
+`app.bsky.embed.gallery` — a newer, differently-shaped embed (images under
+`"items"`, each carrying `fullsize`/`thumbnail`, no nested sub-object).
+Reported live 2026-09-18: a real post using this shape showed no images
+anywhere despite having seven. Added as a sibling branch to the `images`
+check, same fallback-to-thumbnail behavior.
 
 ### Bluesky video playback (hls.js) — lazy-loaded, not always-on like KaTeX
 

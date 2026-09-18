@@ -26,6 +26,27 @@ def test_images_from_images_embed():
     assert bluesky._images_from_post(post) == ["https://cdn.bsky.app/a", "https://cdn.bsky.app/b_t"]
 
 
+def test_images_from_gallery_embed():
+    """A newer, distinct embed shape from the classic "images" one -- items
+    carry fullsize/thumbnail directly (not nested "thumb"), under "items"
+    (not "images"). Found live 2026-09-18: a real post using this shape
+    returned zero images through the images-only branch."""
+    post = {
+        "embed": {
+            "$type": "app.bsky.embed.gallery#view",
+            "items": [
+                {
+                    "$type": "app.bsky.embed.gallery#viewImage",
+                    "fullsize": "https://cdn.bsky.app/a",
+                    "thumbnail": "https://cdn.bsky.app/a_t",
+                },
+                {"$type": "app.bsky.embed.gallery#viewImage", "thumbnail": "https://cdn.bsky.app/b_t"},  # falls back to thumbnail
+            ],
+        }
+    }
+    assert bluesky._images_from_post(post) == ["https://cdn.bsky.app/a", "https://cdn.bsky.app/b_t"]
+
+
 def test_images_from_record_with_media():
     post = {
         "embed": {

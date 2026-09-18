@@ -35,10 +35,92 @@ is scheduled, they're just what to check if a related symptom recurs.
 
 ## Tier 1 — actively impeding unread-clearing
 
-Nothing here as of 2026-09-16 — the last of what was flagged (refresh-contention latency, the
-FlareSolverr escalation gaps, and the `hide_locked_comics`/`hide_unpremiered` page underfill) all
-shipped this week; their live threads relocated to Tier 4's follow-ups and Watch-lists, the rest
-is git history. First stop for whatever gets reported next.
+### Sort reverts to the default (pubnew) after the tab is backgrounded, then self-corrects
+
+Reported live 2026-09-18 (Surface/Edge, PWA-installed): sorted a folder to
+"Pub Old" (`sort_by=post&sort_dir=asc`), the tab sat backgrounded for a few
+minutes, and on return the sort briefly showed the default (`sort_dir=desc`,
+no `sort_by`) before self-correcting. Traced through the actual access log
+for the incident: a bare `GET /?folder_id=6&sort_dir=desc&read_filter=unread`
+(no `sort_by`) landed at 08:51:44, then a burst of catch-up requests
+(`/api/youtube/.../status`, three `/integrations/*/import/status`, `/sw.js`,
+`/saved/refetch-scope/status`) fired together at 08:53:16-17 — the signature
+of a full page reload re-initializing every polling call from scratch, not a
+soft nav — followed immediately by a correct `sort_by=post&sort_dir=asc`
+request. So something (most likely Edge's background-tab-discard-and-restore
+reloading from a stale history entry that predates the sort change) issues a
+real top-level navigation without the current sort_by, and the SPA's own
+"restore last known state" logic corrects it within seconds — genuinely
+looks self-healing, not a permanent corruption, but still a visible flash of
+wrong content. `_home_inner`'s sort-write logic (`if sort_by: set_setting(...)`)
+is exactly as designed — a request with no `sort_by` correctly doesn't
+overwrite the stored preference — so the stored value was never actually
+corrupted; what's unconfirmed is which client-side mechanism re-asserts
+`sort_by=post` on catch-up, and why it takes ~90s rather than firing
+immediately on `visibilitychange` (today's sidebar-count poll handler only
+refreshes badge counts on visibility regain, not the post list/sort). Not
+reproducible on demand without the same background-tab-discard trigger — next
+step if it recurs is capturing the exact address-bar URL Edge restores from.
+
+### penny-arcade.com: list thumbnail and article lead image are the same but appear to belong to nobody
+
+Reported live 2026-09-18, three entries: a "news" post's thumb/lead don't
+match its own content and don't obviously match anything else recognizable
+either ("thumb/img/post: none match", "where is the thumb coming from??");
+a "comic" post — same feed, same `webcomic` strategy — resolves correctly
+("this one is good though"); a third entry (`wloveine`) also flagged as a
+mismatch. The feed's RSS ships text-only content (zero inline `<img>` even
+for the entry that resolves correctly), so `webcomic` strategy's source-page
+scrape is the only source for all of them — confirmed live the CURRENT
+og:image for the "none match" news post is `logo_opengraph.jpg` (a generic
+site logo, not this stored value either), meaning the stored image came from
+some other part of the scraper (the per-site plugin path,
+`_plugin_or_source_lead_image`), not plain og:image. Not root-caused today —
+worth checking whether the webcomic scraper is grabbing the day's comic
+banner off the page for "news" post types that were never meant to have a
+comic-shaped image at all, the same general shape as the sonarsource.com
+og_scrape/inline-shortcut conflict already documented in saved.md, but for a
+different strategy.
+
+### kriscox.substack.com: still-broken lead image, three verification methods came up clean
+
+The same entry reported broken twice, hours apart ("thumb shows, lead img is
+a broken img" / "still broken (not just missing)"). Ruled out, all
+confirmed live: the archived asset exists and decodes correctly (`get_asset`
+direct call); the `/starred-asset/<hash>` route serves it correctly via a
+real authenticated HTTP request (200, image/webp, correct byte count);
+Cloudflare shows `cf-cache-status: DYNAMIC` for that path (not caching it);
+the service worker only caches `/starred-asset/` via the explicit Read-Mode
+offline-precache flow, which checks `resp.ok` before caching and doesn't
+apply to the regular 3-pane view this was viewed in anyway.
+`selected_entry.lead_image_url` is `None` for this entry (the same image
+already sits inline in `content_html`, so the separate-hero dedup correctly
+nulls it — the template's `{% if lead_image_url %}` gate means no hero
+element renders at all), so whatever the user sees broken should be
+`content_html`'s own `<img src="/starred-asset/...">`, which every
+server-side check says is fine. Next step needs the user's own browser
+devtools: the exact failing request URL and status code when it's visibly
+broken, since nothing server-side reproduces it.
+
+### neowin.net: 20 entries resolved to the same lead image, repaired — likely a transient upstream glitch
+
+Reported live 2026-09-18 ("shiity same leads for many posts"). Confirmed: 20
+different neowin.net entries, all `fetched_at` within the current server
+process's lifetime, held the identical lead image URL — genuinely belonging
+to only one of them (a "Control Resonant review"). A **fresh** resolve
+(`_derive_article_lead_image`, bypasses the cache for the `inline` strategy)
+correctly returns each entry's own distinct image right now, and the live
+RSS feed itself currently serves correct, varied per-article images too — so
+the extraction code is not at fault today. Best working theory, not
+confirmed: neowin.net's feed briefly served a glitched response (one shared
+image across many items, around 2026-09-18 13:00-14:40 UTC) during whatever
+CMS/caching event produced that "Control Resonant review" post, and it has
+since self-corrected upstream. Repaired live by force-resolving the 19 wrong
+entries fresh; the system's own `_POSITIVE_REVALIDATE_SECONDS` periodic
+recheck should prevent this specific case from recurring on its own, but the
+mechanism has no code-level fix here since no code-level cause was found —
+watch for recurrence on this or another feed before assuming it's just this
+one glitch.
 
 ## Tier 2 — small, fast, independent wins
 
