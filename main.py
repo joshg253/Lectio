@@ -15432,6 +15432,28 @@ def build_readability_response(source_url: str) -> HTMLResponse:
             status_code=200,
         )
 
+    if saved_articles_service.looks_like_a_link_index(article_html):
+        # A 200 does not mean the article is still there -- a URL folded into a
+        # generic category/landing page (a retired blog's old post URLs all
+        # redirecting to one hub) extracts as a list of unrelated links, not an
+        # article. Found live 2026-09-17: guitarworld.com's retired
+        # /lessons/<slug> URLs all now 301 to "Lessons Coverage | Guitar World",
+        # and readability happily extracts that whole listing. Showing it is
+        # strictly worse than an honest failure message.
+        escaped_url = html.escape(source_url)
+        return HTMLResponse(
+            (
+                "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Readability unavailable</title>"
+                "<style>body{font-family:Segoe UI,Arial,sans-serif;margin:0;padding:1rem;line-height:1.45;}"
+                "h1{font-size:1.05rem;margin:0 0 .5rem;}p{margin:.35rem 0;color:#555;}a{color:#0a5ca4;}</style></head>"
+                "<body><h1>Could not extract a readable article.</h1>"
+                "<p>The page now at this URL looks like a list of links to other articles, not the article itself"
+                " — it may have moved or the site may have reorganized.</p>"
+                f"<p><a href='{escaped_url}' target='_blank' rel='noopener noreferrer'>Open original page</a></p></body></html>"
+            ),
+            status_code=200,
+        )
+
     escaped_title = html.escape(title)
     escaped_source = html.escape(source_url)
     return HTMLResponse(
@@ -23267,6 +23289,19 @@ def entry_readability(
     archived_html = _resolve_archived_readability_html(feed_url, entry_id)
     if archived_html:
         return _wrap_readability_html(archived_html, url)
+    # A complete archive with no readability copy (the recapture mismatch
+    # guard refused a parked/replaced page, or the live fetch failed outright)
+    # means capture already tried once -- the entry's own stored content is a
+    # safer bet than a second live fetch of a page that has already shown
+    # itself untrustworthy or unreachable. Scoped to kept entries specifically:
+    # an ordinary entry with no archive at all must still reach the live
+    # fetch below, which is what recovers a full article from a thin RSS
+    # stub in the common case.
+    if feed_url and entry_id and starred_archive_service.has_complete_archive(feed_url, entry_id):
+        detail = get_entry_detail(feed_url, entry_id)
+        stored = str((detail or {}).get("content_html") or "")
+        if stored:
+            return _wrap_readability_html(stored, url)
     return build_readability_response(url)
 
 
@@ -23508,21 +23543,33 @@ def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link
     archived_html = _strip_ad_images(_resolve_archived_readability_html(feed_url, entry_id))
     if archived_html and _archived_copy_is_plausible(archived_html):
         return _prepend_reader_lead_image(feed_url, entry_id, _strip_bandcamp_track_signature(archived_html))
-    # An implausibly short archived copy is a FAILED extraction, not a short
-    # article: readability sometimes locks onto a sidebar widget instead of the
-    # body. illogicalcontraption's 2011 post archived as a 168-byte "Contact:"
-    # block while the feed held 9,208 bytes of the actual post — and because the
-    # archive won unconditionally, the article read as empty online and offline
-    # alike. Prefer the stored feed content when it is genuinely richer.
-    if archived_html and feed_url and entry_id:
+    # An implausibly short (or entirely empty) archived copy is a FAILED
+    # extraction, not a short article: readability sometimes locks onto a
+    # sidebar widget instead of the body, and the recapture mismatch guard
+    # leaves readability_html empty outright rather than store a
+    # parked/replaced page. illogicalcontraption's 2011 post archived as a
+    # 168-byte "Contact:" block while the feed held 9,208 bytes of the actual
+    # post — and because the archive won unconditionally, the article read as
+    # empty online and offline alike. Prefer the stored feed content when it
+    # is genuinely richer, or whenever the archive came back with nothing at
+    # all. Scoped to entries with a complete archive (kept, capture already
+    # tried) rather than just "archived_html is falsy" — an ordinary entry
+    # with no archive at all must still reach the live fetch below, which is
+    # what recovers a full article from a thin RSS stub in the common case.
+    if feed_url and entry_id and starred_archive_service.has_complete_archive(feed_url, entry_id):
         detail = get_entry_detail(feed_url, entry_id)
         stored = str((detail or {}).get("content_html") or "")
-        if stored and _reader_copy_is_richer(stored, archived_html):
+        if stored and (not archived_html or _reader_copy_is_richer(stored, archived_html)):
             return _prepend_reader_lead_image(feed_url, entry_id, stored)
     if link:
         try:
             _title, article_html = fetch_readability_article(link)
-            if article_html:
+            # A 200 does not mean the article is still there -- a URL folded
+            # into a generic category/landing page extracts as a list of
+            # unrelated links, not an article (guitarworld.com's retired
+            # /lessons/<slug> URLs all now 301 to one "Lessons Coverage" hub).
+            # Fall through to stored content below rather than show it.
+            if article_html and not saved_articles_service.looks_like_a_link_index(article_html):
                 return _prepend_reader_lead_image(feed_url, entry_id, article_html)
         except Exception:
             LOGGER.info("reader-view live extraction failed for %s", link, exc_info=True)
@@ -25993,10 +26040,16 @@ def _home_inner(
     # list; only gating on root left it unreachable from Saved's own
     # Uncategorized grouping once Uncategorized's shared feed-set (used by
     # both modes) stopped including it by default (2026-08-27).
-    if selected_star_only:
+    if selected_star_only and selected_folder_id in (root_id, UNCATEGORIZED_FOLDER_ID) and not selected_feed_url:
+        # kept_feeds belongs here for the same reason SAVED_FEED_URL does: a
+        # kept-but-unsubscribed feed has no folder_feeds row any more, so it
+        # belongs to the whole-library view, not every folder. Missing this
+        # gate put a kept feed's posts in every folder's Saved list — reported
+        # live 2026-09-17 for a feed that had been unsubscribed and later
+        # resubscribed, leaving a stale kept_feeds row (harmless on its own;
+        # the leak was in never scoping the union at all).
         entry_feed_urls = entry_feed_urls | get_kept_feed_urls()
-        if selected_folder_id in (root_id, UNCATEGORIZED_FOLDER_ID) and not selected_feed_url:
-            entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
+        entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
     posts = list_entries_for_feeds(
         entry_feed_urls,
         limit=limit,
@@ -33659,10 +33712,13 @@ def _resolve_view_posts(
     # star view must not subtract them here either.
     if not (list_feed_url or normalized_star_only):
         entry_feed_urls = entry_feed_urls - disabled_feed_urls
-    if normalized_star_only:
+    if normalized_star_only and folder_id == root_id and not list_feed_url:
+        # Same folder-scoping gate as the home route (main.py's _home_inner) --
+        # a kept-but-unsubscribed feed has no folder_feeds row, so it belongs
+        # to the whole-library view, not every folder. See that gate's comment
+        # for the live incident this was missing here too.
         entry_feed_urls = entry_feed_urls | get_kept_feed_urls()
-        if folder_id == root_id and not list_feed_url:
-            entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
+        entry_feed_urls = entry_feed_urls | {saved_articles_service.SAVED_FEED_URL}
 
     posts = list_entries_for_feeds(
         entry_feed_urls,

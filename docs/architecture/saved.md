@@ -103,6 +103,114 @@ outside the normal path. `scripts/restore_bumped_publish_dates.py` repairs the
 damage from `archived_entry.published_at`, cross-checked against `recent_sort`,
 forward drift only — all 101 agreed.
 
+### The guards protected re-fetch, not recapture
+
+The three guards above sit in `refresh_captured_article` (`services/saved_articles.py`),
+reached from the "Re-fetch content" button and `_maybe_autofetch_on_keep`. A second
+path rebuilds the same `readability_html_zlib` column without going through any of
+them: `StarredArchiveService._archive_entry`, run by every normal `enqueue_archive`
+call and, at scale, by `scripts/recapture_archived_entries.py` (delete a `complete`
+archive row's assets, then re-enqueue — the only way to force a rebuild, since
+`enqueue_archive` is a no-op against a `complete` row). Found investigating a report
+that a refetch had replaced a post with unrelated content: `_archive_entry` fetched
+the source page fresh and ran `Document(source_html).summary()` straight into
+`readability_html_zlib` with no mismatch check at all — and that column is not a
+fallback for orphaned entries only. `_resolve_archived_readability_html` (main.py)
+feeds both Reader View (`/entries/readability`) and the e-ink `/read` view, and it
+prefers the archived copy over a live fetch for **any** starred entry with a
+complete archive. A recapture landing on a parked/replaced page would silently
+become what Reader View shows from then on, with no snapshot to revert — the
+recapture script deletes the old row before the new fetch even runs, so there was
+nothing left to fall back to.
+
+Fixed by reusing guard 1 (slug/title mismatch, `_page_is_a_different_article`)
+inside `_archive_entry` itself, comparing the freshly-fetched page's title against
+the URL slug and against reader's own stored `entry.title` (untouched by the
+archive deletion). On a mismatch, `readability_html` stays empty rather than
+storing the wrong page — `content_html`/`summary_html` are unaffected either way,
+since both come from reader's stored entry, never from the live fetch. Guard 2
+(opaque-URL link-index fallback) was not ported — it needs the *old stored
+title* as a positive reference, which `_archive_entry` overwrites unconditionally
+from reader on every run regardless of outcome.
+
+**Guard 3 was wrongly believed unavailable, and its absence caused real damage
+the same day.** `extraction_matches_sibling` was first assumed to be scoped to
+`refresh_captured_article`'s in-memory batch dedupe with "no equivalent notion
+in the archive worker's queue" — wrong: it is a `StarredArchiveService` method,
+the same class `_archive_entry` belongs to, already DB-backed (checks every
+other `complete` row of the feed) *and* has its own in-run memory for a batch
+that hasn't landed in the DB yet. The 1MB+ recapture sweep run the same day hit
+exactly the shape it exists for: guitarworld.com's retired `/lessons/<slug>`
+URLs now all 301 to a generic "Lessons Coverage | Guitar World" category page —
+whose title shares the word "guitar" with essentially every slug on the feed,
+clearing guard 1 every time. Found live from a user report ("Reader View on
+this one looks like just nav stuff"); a scan afterward found **1,524 entries
+across 230 feeds** already carrying a sibling's extracted text this way —
+including commandlinefu.com and informit.com, the two sites guard 3 was
+originally built for, now recurring in this second path. Fixed the same way as
+guard 1: `self.extraction_matches_sibling(feed_url, entry_id, candidate_html)`
+checked before committing, `readability_html` stays empty on a match rather
+than storing the boilerplate.
+
+### A guard-refused entry still needs somewhere safe to fall
+
+Refusing to store a mismatched page (above) closes the write-time hole, but the
+1MB+ recapture sweep run the same week surfaced the read-time half of the same
+problem: `entry_readability` (`GET /entries/readability`, the desktop Reader
+View button) and `resolve_reader_article_html` (the e-ink `/read` view) both
+called `_resolve_archived_readability_html`, and on empty — a guard refusal, or
+a live fetch that failed outright — fell straight through to *another* live
+fetch of the same page (`build_readability_response` / `fetch_readability_article`).
+For an entry whose source has moved or been squatted, that second fetch is just
+as likely to succeed and show the wrong thing as the first one that the guard
+already refused — it does not know the guard fired, only that the archive had
+nothing.
+
+Fixed by checking `StarredArchiveService.has_complete_archive` before that
+second live fetch: a *kept* entry (starred or tagged — a complete archive row
+exists) with no usable readability copy now shows its own stored
+`content_html` (reader's copy, from `get_entry_detail`, never touched by any of
+this) instead of re-fetching. Scoped specifically to kept entries with an
+archive — an ordinary entry that was never starred has no archive at all, and
+must still reach the live fetch below it; that is the whole reason Reader View
+exists, to recover a full article from a thin RSS stub. Gating on
+`has_complete_archive` rather than "archived_html is falsy" is what keeps that
+distinction: both are falsy for "never archived," only one of them means "archived,
+but this piece came back empty."
+
+`resolve_reader_article_html` already had a similar-looking fallback
+(`_reader_copy_is_richer`, for the illogicalcontraption case — an implausibly
+*short* archived copy losing to richer stored content) but its guard required
+`archived_html` to be truthy, so a fully empty archived copy skipped it
+entirely and went straight to the live fetch same as `entry_readability` did.
+Broadened the same condition rather than add a second branch.
+
+**The stored-content fallback has its own hole when there is no stored content
+either.** Clearing the 994 sibling-boilerplate rows below (`content_html`
+falls back to nothing for 581 of them — the feed only ever shipped a stub, so
+these entries' *only* real copy was the now-blanked archive) sent
+`resolve_reader_article_html`/`entry_readability` straight to a plain,
+unguarded `fetch_readability_article`/`build_readability_response` call — the
+same live fetch that has no idea the URL redirects to a dead hub, because
+nothing about it changed. Confirmed live on the entries that started this
+whole investigation: clearing their corrupted archive made Reader View show
+raw, unstyled widget markup (a `Lessons` page's `wdn-listv2` grid, 138K chars)
+instead of the earlier boilerplate — worse, not better, for exactly the
+population with nothing to fall back to.
+
+Fixed with `looks_like_a_link_index` (guard 2's structural anchor-ratio check,
+already built for the opaque-URL branch of `_page_is_a_different_article`) at
+both live-fetch call sites: `build_readability_response` refuses to build the
+article template around a link-index extraction and shows the honest "could
+not extract" message instead, and `resolve_reader_article_html`'s live-fetch
+branch treats one the same as a failed fetch and falls through. Applied to
+*every* live fetch, not scoped to kept entries — a page that reads as a link
+index is never a real article, whether or not the entry has an archive to fall
+back to, and the check is self-contained (structural, no stored-sibling
+dependency), unlike `extraction_matches_sibling` which needs a persisted
+sibling to compare against and would have found nothing here — clearing all
+994 rows in the same pass left no reference to match against.
+
 ### Whole-page capture (`mode="full"`)
 
 Swaps `fetch_readability_article` for `fetch_full_page_article`: same sanitizer
@@ -252,6 +360,24 @@ reach them; they used to be dropped from search entirely.
 title/link/feed_title/author — same AND rule, same tokenization. Metadata only:
 decompressing every archived body per search costs more than the orphan set
 justifies.
+
+**A kept feed's union was missing the same folder-scoping gate the synthetic
+`lectio:saved` feed already has.** `get_kept_feed_urls()` belongs to no folder
+(folder rows were dropped on unsubscribe, per "Kept-but-unsubscribed feeds"
+above), so like `SAVED_FEED_URL` it should only widen the root/Uncategorized
+Saved view — but it was unioned into `entry_feed_urls` unconditionally
+whenever `star_only` was set, in both `_home_inner` and `_resolve_view_posts`
+(the Select-All-visible scope resolver). Reported live 2026-09-17: a feed
+that had been unsubscribed and later resubscribed left a stale `kept_feeds`
+row (a separate, smaller issue — "Re-subscribing clears the row" above is the
+intended behavior and normally holds, per `test_readd_clears_kept_state`;
+this one row didn't for reasons not tracked down), and every folder's Saved
+view showed that feed's starred posts at the top, not just the root view.
+Fixed by folding `get_kept_feed_urls()` into the exact same
+`selected_folder_id in (root_id, UNCATEGORIZED_FOLDER_ID) and not
+selected_feed_url` gate `SAVED_FEED_URL` already used — the stale row itself
+is harmless now regardless of whether it ever gets cleaned up, since the
+union it feeds is correctly scoped either way.
 
 **Why the 190 were deleted.** Once kept meant star-OR-tag they appeared nowhere
 — not the Kept view, not search — with no path back except a bookmarked URL. An

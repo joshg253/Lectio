@@ -111,21 +111,28 @@ the redirect (which they do once a migration finishes). The stored URL also
 feeds the Change-URL field, the dupe scan and discovery, so a forwarder makes
 all three describe somewhere the posts do not come from.
 
-### Backfill already-expired signed lead-image thumbnails — dry-run done, `--apply` not yet run
+### DeviantArt thumbnail backfill — CLOSED, not a bug
 
 **Built 2026-08-28**: `scripts/backfill_expired_deviantart_thumbnails.py`
-(dry-run by default, `--apply` to write, `--limit`/`--delay`/`--user`).
-Walks every un-pinned wixmp `entry_lead_images` row, calls the same
-`_resign_expired_deviantart_url` the article-view path already uses (cheap
-checks first, so most rows cost no DeviantArt API call at all), and feeds
-the result through `store_entry_lead_image` — which pins it as a side
-effect via the existing 2026-08-24 sink.
+(dry-run by default, `--apply` to write). `--apply` run 2026-09-16 reported
+0/314 pinned, which read as a bug — investigated further 2026-09-17 and it
+isn't one.
 
-**Dry-run count 2026-09-16: 314 candidates** (down from the feared ~22,300 at
-scoping time — the pin-on-write sink has been organically shrinking the
-backlog for three weeks as entries got naturally re-visited). Small enough
-now for `--apply` to be a quick, low-risk run (~2.5 min at the default 0.5s
-delay). Not applied yet — Josh's call on when.
+296 of the 314 "candidates" store a DeviantArt `/i/<uuid>/<file>` CDN URL
+(no `?token=`), not the signed `/f/<uuid>/<file>/v1/fill/...` form the pin
+sink is built for. Confirmed live: an `/i/` URL fetched with no token at all
+returns 200 with a real image (400KB JPEG) — this path is genuinely public
+and durable, not a signed URL that can expire. `_url_is_signed()` correctly
+declines to pin it; there is nothing to fix, since pinning exists only to
+protect against a volatile signed URL dying unread.
+
+The other 18 do carry a `/f/` signed URL and are genuinely broken (confirmed
+live: 404 from the CDN) despite their JWT's own `exp` claim still reading as
+future-dated — `_resign_expired_deviantart_url` trusts that claim without a
+live check by design (the live-HEAD probe is the *next*, more expensive
+step, reserved for tokens with no `exp` claim at all). 18 of 23,352 rows
+(0.08%) whose claimed expiry doesn't match reality is too small a rate to
+chase — not worth adding a live check to every "exp says valid" row for.
 
 ### Recapture the rest of the archive under the 2026-09-12 image-scope/enclosure fixes
 
@@ -144,15 +151,120 @@ exist.
 has no bulk-report mode): 14,554 complete archived entries, ~9.2GB total.
 134 over 5MB, 974 over 3MB, 1,970 over 2MB, 2,358 over 1MB. The worst entry
 today is ~33MB — the 54MB outlier above is already fixed and out of the list.
-Not recaptured — picking a threshold and actually re-fetching that many
-entries (up to ~2,000 depending where the line is drawn) is a real,
-non-trivial network operation and Josh's call, not run unilaterally.
+
+**Found the same day, before applying anything wider: recapture had no
+parked-page guard.** Asked directly ("a refetch replaces the post with
+something else — how does recapture handle that?") turned up a real gap:
+`_archive_entry`'s readability re-extraction ran with none of the three
+`refresh_captured_article` guards, and its output isn't orphan-only — Reader
+View and the e-ink `/read` view prefer the archived copy for *any* starred
+entry with a complete archive. A bulk recapture over a dead/replaced URL would
+have silently done exactly the thing that prompted the question, at whatever
+scale the sweep ran. Fixed same day: guard 1 (slug/title mismatch) ported into
+`_archive_entry`, `readability_html` left empty on a mismatch rather than
+storing the wrong page (`content_html`/`summary_html` were never at risk —
+both come from reader's stored entry, not the live fetch). See
+`docs/architecture/saved.md` "The guards protected re-fetch, not recapture".
+
+**1MB+ sweep (2,358 entries) run 2026-09-16/17 with the guard in place —
+complete.** Strictly-serial driver (delete + enqueue one entry, poll until the
+worker finishes it, only then touch the next — at most one entry ever without
+a readability copy at a time), ~5h20m end to end. Result: 2,195 shrunk, 91
+grew (mostly re-fetches that legitimately found more images than the stale
+copy had), 12 unchanged, 60 failed (stale reader entries — "entry not found",
+same benign shape as the original 25-entry test), 81 completed with no
+readability copy (41 the guard correctly refusing a mismatched page, 40 a
+live fetch that failed outright — both leave `content_html`/`summary_html`
+untouched). Total: 6.98GB → 1.84GB across the touched entries, **5.14GB
+reclaimed**, zero timeouts, zero entries lost.
+
+**The guard caught real, non-hypothetical cases across at least three
+retired/repurposed domains**, not just one: `blog.rpgmakerweb.com` (34
+entries — every old post URL now 301s to a generic `rpgmakerweb.com/all-posts`
+hub titled "The Official RPG Maker Blog"), `blog.guitar-pro.com` (4 entries,
+same shape — redirects to `guitar-pro.com/blog`'s generic hub), and
+`donjones.com` (the domain itself was resold/squatted — now serves "Magical
+Worlds. Incredible Adventures.", unrelated to the original tech blog). Every
+one confirmed live (fetched the actual redirect/squat target, ran the guard
+against it directly) rather than assumed — zero false positives found across
+spot checks. Without today's fix, this sweep would have silently overwritten
+at least ~40 real articles' readability copies with unrelated hub/squat-page
+text — precisely the failure shape that prompted the guard in the first
+place, now demonstrated at the scale it was built to prevent.
+
+**Found by that catch, and FIXED 2026-09-17**: the guard stops the wrong page
+from being *stored*, but `entry_readability` (Reader View) and
+`resolve_reader_article_html` (e-ink `/read`) both fell straight through to a
+**live** re-fetch of the same untrustworthy/dead page whenever the archive had
+no readability copy — never consulting reader's own stored `content_html`,
+which still has the real article for any kept entry. Both routes now check
+`StarredArchiveService.has_complete_archive` and prefer stored content over a
+second live fetch, scoped to kept entries specifically so an ordinary
+never-archived entry still reaches the live fetch (the thin-RSS-stub recovery
+case Reader View exists for). New tests, full suite green (4,143). See
+`docs/architecture/saved.md` "A guard-refused entry still needs somewhere
+safe to fall".
+
+**Found by real browser testing 2026-09-17, and FIXED same day: guard 1 alone
+wasn't enough.** Three guitarworld.com lesson entries reported as showing "just
+a bs img in the body" — checked live: their retired `/lessons/<slug>` URLs now
+301 to a generic "Lessons Coverage | Guitar World" category page (a list of
+unrelated article teasers), and it sailed through guard 1 because the category
+page's title shares the word "guitar" with essentially every slug on the feed.
+This is exactly guard 3's job (sibling-extraction fingerprint: the same text
+already stored against a *different* entry of the same feed is furniture, not
+the article) — wrongly assumed unavailable when guard 1 was ported (see
+docs/architecture/saved.md's correction). It was already a
+`StarredArchiveService` method, DB-backed, sitting right there. Ported the same
+way as guard 1. New test, full suite green (4,144).
+
+**Cleanup, same day**: `scripts/clear_sibling_boilerplate_readability.py`
+(new, mirrors `revert_boilerplate_refetches.py`'s detection but blanks rather
+than restores — there is nothing to restore, `readability_html_zlib` is
+derived fresh at capture time, not edited in place). Reuses
+`sibling_extraction_entries`, the same authoritative test the live guard now
+uses — this superseded an earlier raw-hash estimate of 1,524/230 (no
+`min_chars` floor, cruder proxy). Real count: **994 entries across 41 feeds**,
+including commandlinefu.com and informit.com — the exact two sites guard 3
+was originally built for, recurring here in the second path it hadn't reached
+yet. Applied 2026-09-17 (`--apply`); log at
+`cleared_sibling_boilerplate_readability_20260917-133018.json`.
+
+**The cleanup itself exposed a third gap, found and fixed the same pass**: of
+the 994 cleared, 581 (58%) have no stored `content_html` to fall back to
+either (the feed only ever shipped a stub — the archive was their only real
+copy). For those, clearing the corrupted `readability_html_zlib` sent Reader
+View straight to a plain, unguarded live fetch — confirmed live on the
+entries that started this investigation, showing raw unstyled widget markup
+(138K chars of `wdn-listv2` grid HTML) in place of the earlier boilerplate,
+worse than before. Fixed with `looks_like_a_link_index` (guard 2's structural
+anchor-ratio check) at both live-fetch call sites
+(`build_readability_response`, `resolve_reader_article_html`) — applied to
+*every* live fetch, not just kept entries, since a link-index page is never a
+real article either way, and the check is self-contained (no stored-sibling
+dependency, so it still works even though the 994-row cleanup left nothing to
+compare against). New tests, full suite green (4,146). See
+`docs/architecture/saved.md`, same section.
 
 Related, smaller: no audit has been done for feeds that relied on the *old*
 unconditional-enclosure-capture default (no `attachment_exts` ever configured)
 and may now silently stop keeping files they used to — this needs an explicit
 per-feed extension list going forward, and nothing currently surfaces which
 feeds are in that position.
+
+### 617 `complete` archives have no content at all (not just a missing size)
+
+Found 2026-09-17 investigating a "shows 0B" report (Josh, live, not a
+generated example) that turned out to be a red herring for
+`scripts/backfill_archived_entry_sizes.py` — that script only targets
+`content_size_bytes IS NULL` (dry-run: 0 candidates), but these 617 rows have
+it explicitly `0`, correctly, because `source_html_zlib`, `readability_html_zlib`,
+`content_html_zlib`, and (unchecked so far) their linked assets are ALL empty
+too, despite `status = 'complete'`. Not investigated further today — worth
+knowing whether these are genuinely link-less/content-less posts (nothing
+ever existed to capture) or a silent capture failure that still marked itself
+complete. Sampled 5 across different feeds (davidamos.dev, socks-studio,
+markjames.dev, sourcery.ai) — no obvious shared pattern yet.
 
 ### Second pass on the ~1,651 entries fetch_missing_publish_dates.py couldn't date
 
@@ -180,6 +292,20 @@ the way a feed URL does.
 article, cochaser.com (no entries), WebServicesDir, whiskypaint/nolanfa
 tumblrs, norfolkwinters, crispian-jago, owenyoung myfeed) — sort or
 unsubscribe manually.
+
+### Readability grabs a devsite nav sidebar on androidstudio.googleblog.com
+
+Found via browser testing 2026-09-17, unrelated to that day's recapture work
+(this entry was never archived — `has_complete_archive` is False, so it goes
+through the ordinary live-fetch path, not anything touched today). Reader
+View on a Blogger post showed nav-list junk instead of the article. Confirmed
+live: `fetch_readability_article` logs "ruthless removal did not work" and
+extracts a `devsite-nav-list` sidebar (55K chars of nav links) instead of the
+post body — the post links out to a `developer.android.com` preview page whose
+markup readability is latching onto instead of the actual Blogger content.
+Not measured at scale (one report, one entry) — worth a `_strip_site_chrome`
+or `_strip_article_chrome`-style targeted fix if it recurs, same pattern as
+past site-specific extraction fixes.
 
 ## Tier 4 — real features, not blocking anything today
 
