@@ -1575,6 +1575,28 @@ def test_source_image_ignores_related_posts_section(tmp_path: Path):
     assert url is None
 
 
+def test_source_image_ignores_penny_arcade_nostalgia_widget(tmp_path: Path):
+    """penny-arcade.com's "Feeling Nostalgic?" widget shows a random OLD strip
+    on every page, comic and non-comic post alike. Reported live 2026-09-18:
+    a text-only news post with no image of its own borrowed the widget's
+    random comic as its lead image ("thumb/img/post: none match" -- the
+    image was real, just not this article's)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    html = (
+        "<main></main>"
+        '<div class="nostalgia"><header class="title"><h3>Feeling Nostalgic?</h3></header>'
+        '<a class="related-comic" href="/comic/2009/09/18/some-old-strip">'
+        '<div class="img"><img src="https://assets.penny-arcade.com/comics/random-old-strip.jpg" width="800" height="450"></div>'
+        "</a></div>"
+    )
+
+    url = service._extract_preferred_source_image_url(
+        html, "https://www.penny-arcade.com/news/post/x/", "https://www.penny-arcade.com/news/post/x/"
+    )
+
+    assert url is None
+
+
 def test_source_image_ignores_recommended_videos_widget(tmp_path: Path):
     # c-sharpcorner posts with no image of their own render a "Recommended Videos"
     # widget whose thumbnails belong to OTHER articles — never borrow one.

@@ -400,11 +400,28 @@ article a user opens) — and version-pinned by directory name instead of the
 uses, since a vendored release never changes in place; bumping KaTeX means a new
 directory and a template path update, not touching the hash.
 
-Delimiters are `\(\)`/`\[\]` only, deliberately not bare `$...$`: none of the
-feeds this was checked against use it, and a lone `$` collides with plain-text
-prices. Read Mode (`read_mode.html`) does not include this — it's a separate
-template that doesn't load `app.js` — so a math-heavy saved article still shows
-raw LaTeX there; unaddressed, tracked in Plan.md.
+Delimiters are `\(\)`/`\[\]`, plus `$$...$$` (added 2026-09-18: vitaut.net
+writes display math this way — 16 occurrences on one post showed as raw
+`$$...$$` source). `$$...$$` is always on — nobody writes a price doubled
+like `$$50$$`, so there's no collision risk.
+
+Bare `$...$` is different: "between $50 and $100" would render as broken math
+on any feed that isn't actually LaTeX-flavored, so it's a **per-feed opt-in**
+(`katex_dollar_math` in `feed_display_prefs`, Feed Properties → Content),
+default off, not a global delimiter. Added the same day the `$$` fix
+shipped: the same vitaut.net post that motivated `$$` also had 89 single-`$`
+inline math spans (variables, `\cdot`, `\log`, `\lfloor` — confirmed live,
+none price-shaped) that stayed raw text even with `$$` working. `get_entry_detail`
+exposes the resolved pref as `katex_dollar_math` in its returned dict;
+`_entry_pane.html` renders it onto the pane header as
+`data-post-katex-dollar-math`; `renderMathInEntryPane` (app.js) reads that
+attribute and only pushes a `{left: '$', right: '$'}` delimiter onto the list
+when it's `1` — the `$$` delimiter itself is unconditional, listed before `$`
+so KaTeX's own delimiter matching (which checks candidates in list order at
+each position) finds the double-dollar case first. Read Mode
+(`read_mode.html`) does not include any of this — it's a separate template
+that doesn't load `app.js` — so a math-heavy saved article still shows raw
+LaTeX there; unaddressed, tracked in Plan.md.
 
 ### Bluesky's own recovered image must not be treated as author-placed content
 
@@ -425,6 +442,15 @@ reported live 2026-09-02, root-caused 2026-09-11, fixed by special-casing
 `bluesky.is_bsky_feed(feed_url)` in `_strip_lead_image_opener`'s mid-body
 branch to leave both the hero and the body copy in place instead of dropping
 the hero.
+
+**A second, distinct Bluesky embed shape returned no images at all.**
+`_images_from_embed` (services/bluesky.py) recognized `app.bsky.embed.images`
+(images under `"images"`, each carrying `fullsize`/`thumb`) but not
+`app.bsky.embed.gallery` — a newer, differently-shaped embed (images under
+`"items"`, each carrying `fullsize`/`thumbnail`, no nested sub-object).
+Reported live 2026-09-18: a real post using this shape showed no images
+anywhere despite having seven. Added as a sibling branch to the `images`
+check, same fallback-to-thumbnail behavior.
 
 ### Bluesky video playback (hls.js) — lazy-loaded, not always-on like KaTeX
 

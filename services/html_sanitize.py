@@ -821,11 +821,7 @@ def resolve_relative_urls(html: str, base_url: str) -> str:
         if not raw:
             continue
         parts = []
-        for candidate in raw.split(","):
-            candidate = candidate.strip()
-            if not candidate:
-                continue
-            url, _, descriptor = candidate.partition(" ")
+        for url, descriptor in _split_srcset_candidates(raw):
             if url and "://" not in url and not url.startswith(("//", "data:")):
                 url = urljoin(base_url, url)
                 changed = True
@@ -833,6 +829,66 @@ def resolve_relative_urls(html: str, base_url: str) -> str:
         if parts:
             tag.attrs["srcset"] = ", ".join(parts)
     return str(soup) if changed else html
+
+
+def _split_srcset_candidates(srcset: str) -> list[tuple[str, str]]:
+    """Split a srcset attribute into (url, descriptor) pairs.
+
+    Splitting the whole attribute on every comma (the naive approach) breaks
+    on a CDN URL that embeds its own comma-separated transform params before
+    the real path -- Cloudinary/Substack "image fetch" URLs look like
+    ``.../fetch/f_auto,q_auto,fl_progressive:steep/https%3A%2F%2F...png 2x``.
+    Found 2026-08-12 (joanwestenberg) for a different srcset consumer
+    (LeadImageService._parse_srcset_urls_descending) but never ported here --
+    found again live 2026-09-18 (kriscox.substack.com): this function's naive
+    split cut a Substack URL off mid-path, and `urljoin` then resolved each
+    fragment as relative to the entry's own page, producing garbage candidates
+    like ``https://kriscox.substack.com/p/w_424`` that a browser prefers over
+    the correctly-rewritten `src` fallback, showing a broken image despite the
+    real asset serving fine.
+
+    A srcset URL never contains whitespace (unescaped spaces would end it, per
+    the format), so each candidate can be scanned as one whitespace-delimited
+    token -- commas and all -- with only the *following* descriptor being
+    comma-terminated. This mirrors the HTML standard's "parse a srcset
+    attribute" algorithm (descriptor scanning respects parens, since a width
+    descriptor can theoretically carry one)."""
+    out: list[tuple[str, str]] = []
+    pos, n = 0, len(srcset)
+    while pos < n:
+        while pos < n and (srcset[pos].isspace() or srcset[pos] == ","):
+            pos += 1
+        if pos >= n:
+            break
+        start = pos
+        while pos < n and not srcset[pos].isspace():
+            pos += 1
+        url = srcset[start:pos]
+        stripped = url.rstrip(",")
+        if stripped != url:
+            # Trailing comma(s) right after the URL: no descriptor.
+            url = stripped
+            descriptor = ""
+        else:
+            while pos < n and srcset[pos].isspace():
+                pos += 1
+            desc_start = pos
+            depth = 0
+            while pos < n:
+                c = srcset[pos]
+                if c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth = max(0, depth - 1)
+                elif c == "," and depth == 0:
+                    break
+                pos += 1
+            descriptor = srcset[desc_start:pos].strip()
+            if pos < n and srcset[pos] == ",":
+                pos += 1
+        if url:
+            out.append((url, descriptor))
+    return out
 
 
 def collect_img_sizes(html: str, base_url: str | None = None) -> dict[str, tuple[str | None, str | None]]:

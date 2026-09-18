@@ -109,6 +109,16 @@ Four refinements worth knowing:
   happened to feature at scrape time. `article` is now in the tag set, and an
   `id` containing `shopify-section` plus a blog-listing token is now a second,
   independent way in — reported live 2026-09-06.
+- **A widget doesn't have to recommend OTHER *posts* to need the same
+  treatment as one that does.** penny-arcade.com's "Feeling Nostalgic?" box
+  (`class="nostalgia"`) recommends a random OLD *comic strip*, not a post, on
+  every page — comic and text-only news post alike. It isn't a related-posts
+  widget by any of the existing token names, so on a news post with no
+  image of its own it survived the strip and won the body scan every time —
+  a different random strip on every fetch, since the widget itself picks one
+  at random. Reported live 2026-09-18 as "thumb/img/post: none match": the
+  image was real, just never this article's. `nostalgia` added as its own
+  class token in `_RELATED_BLOCK_OPEN_RE`.
 - **A filename dimension marker is only trustworthy paired with a check for a
   LARGER one nearby.** `_URL_DIMENSION_RE`/`_TINY_DIM_RE` read any `WxH` token
   in a path as pixels, but Shopify names crop *presets* the same way — `_4x3_`,

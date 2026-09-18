@@ -75,6 +75,17 @@ def _images_from_embed(embed: object, out: list[str]) -> None:
                 url = img.get("fullsize") or img.get("thumb")
                 if url:
                     out.append(str(url))
+    elif etype.startswith("app.bsky.embed.gallery"):
+        # A newer, distinct embed shape from the classic "images" one --
+        # items carry fullsize/thumbnail directly (not "thumb"), under
+        # "items" (not "images"). Found live 2026-09-18: a post using this
+        # shape returned zero images through the images-only branch above,
+        # despite genuinely having several.
+        for img in embed.get("items", []) or []:
+            if isinstance(img, dict):
+                url = img.get("fullsize") or img.get("thumbnail")
+                if url:
+                    out.append(str(url))
     elif etype.startswith("app.bsky.embed.recordWithMedia"):
         _images_from_embed(embed.get("media"), out)
     elif etype.startswith("app.bsky.embed.video"):
