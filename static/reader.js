@@ -36,6 +36,34 @@
   var pageInfo = document.getElementById("reader-pageinfo");
   if (!cols || !viewport) return;
 
+  // Same KaTeX rendering as the main app's entry pane (app.js
+  // renderMathInEntryPane), ported here because Read Mode has its own,
+  // minimal JS and never loads app.js -- see docs/architecture/views.md
+  // "Inline LaTeX math (KaTeX)". Delimiter list/order must match: `$$` before
+  // bare `$` so KaTeX's own matching finds the double-dollar case first. Run
+  // synchronously here, before the first pagination measurement below, so a
+  // math-heavy article is paginated at its post-render size, not its raw-text
+  // size.
+  (function renderReaderMath() {
+    var article = document.getElementById("reader-article");
+    if (!article || typeof window.renderMathInElement !== "function") return;
+    var text = article.textContent;
+    var dollarMathEnabled = cols.getAttribute("data-katex-dollar-math") === "1";
+    var hasDollar = dollarMathEnabled && text.indexOf("$") !== -1;
+    if (text.indexOf("\\(") === -1 && text.indexOf("\\[") === -1 && text.indexOf("$$") === -1 && !hasDollar) return;
+    var delimiters = [
+      { left: "\\[", right: "\\]", display: true },
+      { left: "\\(", right: "\\)", display: false },
+      { left: "$$", right: "$$", display: true },
+    ];
+    if (dollarMathEnabled) delimiters.push({ left: "$", right: "$", display: false });
+    try {
+      window.renderMathInElement(article, { delimiters: delimiters, throwOnError: false });
+    } catch (e) {
+      console.error("[lectio] KaTeX render failed (leaving raw text):", e);
+    }
+  })();
+
   // Prev/next/back targets come from a server-rendered inline object, not DOM
   // attributes, so no navigation URL is ever read from the DOM.
   var NAV = window.__READER_NAV__ || {};

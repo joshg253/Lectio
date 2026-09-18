@@ -418,10 +418,12 @@ exposes the resolved pref as `katex_dollar_math` in its returned dict;
 attribute and only pushes a `{left: '$', right: '$'}` delimiter onto the list
 when it's `1` — the `$$` delimiter itself is unconditional, listed before `$`
 so KaTeX's own delimiter matching (which checks candidates in list order at
-each position) finds the double-dollar case first. Read Mode
-(`read_mode.html`) does not include any of this — it's a separate template
-that doesn't load `app.js` — so a math-heavy saved article still shows raw
-LaTeX there; unaddressed, tracked in Plan.md.
+each position) finds the double-dollar case first. Read Mode's own paginated
+reader (`build_reader_page` in main.py, driven by `static/reader.js` — it has
+no `app.js`) now ports the same delimiter list and per-feed toggle, resolved
+via `get_feed_display_prefs` and carried on `#reader-columns`'
+`data-katex-dollar-math`, and runs it before the first pagination measurement
+so page counts reflect the typeset size.
 
 ### Bluesky's own recovered image must not be treated as author-placed content
 
