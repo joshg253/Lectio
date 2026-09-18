@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -223,18 +224,41 @@ def _anchor_to_item(anchor, source_url: str) -> dict | None:
     return {"title": title, "url": abs_url}
 
 
+_HAS_LETTER_RE = re.compile(r"[A-Za-z]")
+
+
+def _title_quality(title: str) -> tuple[int, int]:
+    """Rank a candidate title: real (letter-bearing) text beats decoration-only
+    content, then longer wins. A video-listing card commonly wraps the SAME
+    href in two anchors sharing one class/selector -- a thumbnail-image link
+    (whose only "text" is a hidden duration badge like "16:36", still read by
+    BeautifulSoup's get_text() despite display:none) and a separate caption
+    link carrying the real title. Keeping whichever anchor is first in
+    document order picked the thumbnail one on texasbluesalley.com, since it
+    precedes the caption in the markup -- confirmed live 2026-09-19."""
+    return (1 if _HAS_LETTER_RE.search(title) else 0, len(title))
+
+
 def extract_link_items(html: str, source_url: str, selector: str) -> list[dict]:
-    """Items a link-list selector would produce: [{title, url}], de-duped by url."""
+    """Items a link-list selector would produce: [{title, url}], de-duped by url.
+
+    When more than one anchor shares a URL, keeps the best-quality title seen
+    (see _title_quality) rather than just the first one encountered.
+    """
     soup = BeautifulSoup(html, "html.parser")
-    items: list[dict] = []
-    seen_urls: set[str] = set()
+    order: list[str] = []
+    best_by_url: dict[str, dict] = {}
     for anchor in _resolve_link_anchors(soup, str(selector or "").strip()):
         item = _anchor_to_item(anchor, source_url)
-        if not item or item["url"] in seen_urls:
+        if not item:
             continue
-        seen_urls.add(item["url"])
-        items.append(item)
-    return items
+        url = item["url"]
+        if url not in best_by_url:
+            best_by_url[url] = item
+            order.append(url)
+        elif _title_quality(item["title"]) > _title_quality(best_by_url[url]["title"]):
+            best_by_url[url] = item
+    return [best_by_url[u] for u in order]
 
 
 def _css_ident(value: str) -> str:

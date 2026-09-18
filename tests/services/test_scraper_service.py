@@ -88,6 +88,30 @@ def test_extract_link_items_dedups_and_resolves_absolute():
     assert items[0]["title"] == "Diana Ross - Give up"
 
 
+# texasbluesalley.com's video cards wrap the SAME href in two anchors sharing one
+# class: a thumbnail-image link (only a hidden duration badge for text, still read
+# by get_text() despite display:none) preceding a caption link with the real title.
+_DUAL_ANCHOR_PAGE = """
+<html><body><div class="thumbnail-item-wrapper">
+  <a class="thumbnail-item-link" href="/lessons/open-strings">
+    <div class="thumbnail-item-image"><img alt="thumb"/></div>
+    <div class="thumbnail-item-duration" style="display: none">16:36</div>
+  </a>
+  <div class="thumbnail-item-caption">
+    <div class="thumbnail-item-title">
+      <a class="thumbnail-item-link" href="/lessons/open-strings">Open Strings Unlock Little Wing's Potential</a>
+    </div>
+  </div>
+</div></body></html>
+"""
+
+
+def test_extract_link_items_prefers_real_title_over_duplicate_decoration_anchor():
+    items = scraper_service.extract_link_items(_DUAL_ANCHOR_PAGE, "https://texasbluesalley.com/", "a.thumbnail-item-link")
+    assert len(items) == 1
+    assert items[0]["title"] == "Open Strings Unlock Little Wing's Potential"
+
+
 _RANK_PAGE = """
 <html><body>
   <nav><div><div><a href='/login'>Login</a></div><div><a href='/a'>A</a></div>

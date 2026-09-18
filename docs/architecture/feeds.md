@@ -524,6 +524,16 @@ comment timestamps, related-post rails and copyright footers. `Updated April 26,
 2026 by Chris` does not qualify. It runs only after the labelled pass, so a
 publisher that marks its date up properly still wins.
 
+**A `link_list` selector can match the same href twice with different title
+quality** — a video-card theme (texasbluesalley.com, confirmed live 2026-09-19)
+wraps one href in a thumbnail-image anchor (whose only text is a hidden
+duration badge like `16:36`, still read by `get_text()` despite
+`display:none`) and again in a separate caption anchor carrying the real
+title, both matching the same class-based selector. `extract_link_items` keeps
+the best-quality title seen per URL (letter-bearing text beats decoration,
+then longer wins — `_title_quality`) rather than just the first anchor in
+document order.
+
 ## YouTube videos that haven't premiered yet
 
 `services/youtube.py`'s duration lookup (`videos.list`) also requests `part=snippet,liveStreamingDetails` — free on the same 1-quota-unit call as `contentDetails` — and caches `snippet.liveBroadcastContent` (`upcoming`/`live`/`none`) and `liveStreamingDetails.scheduledStartTime` alongside duration in `youtube_video_duration`. A video stays `upcoming` until it actually airs; since its duration is also `NULL` until then, the existing "retry a stale negative" logic (`_NEGATIVE_RETRY_SECONDS`, 6h) already re-polls it whenever its feed gets refreshed.
