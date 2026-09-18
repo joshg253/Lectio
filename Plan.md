@@ -82,38 +82,6 @@ comic-shaped image at all, the same general shape as the sonarsource.com
 og_scrape/inline-shortcut conflict already documented in saved.md, but for a
 different strategy.
 
-### kriscox.substack.com broken lead image — FOUND AND FIXED, was a shredded `srcset`
-
-Reported three times across two entries ("thumb shows, lead img is a broken
-img" / "still broken (not just missing)" / a second, different entry same
-symptom). Every server-side check on `src` came up clean (asset exists,
-decodes as valid webp, `/starred-asset/<hash>` serves correctly via a real
-authenticated request) — the miss was checking `src` at all. The actual
-`<img>` tag also carries a `srcset`, and **a browser prefers a matching
-`srcset` candidate over `src`** per the HTML spec. `html_sanitize.resolve_relative_urls`'s
-srcset handling did `raw.split(",")` to find each `"url descriptor"`
-candidate — naive, and wrong for a CDN URL that embeds its own
-comma-separated transform params ahead of the real path (Substack:
-`.../fetch/$s_!x!,w_424,c_limit,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2F...jpeg`).
-The split cut the URL at its first internal comma; the leftover fragment
-(`w_424`) got resolved as if it were a real relative path on the entry's own
-host, producing a 404. Every candidate in the shredded srcset was garbage,
-so the browser had nothing good to fall back to even though `src` was fine.
-
-This is the exact same bug class already found and fixed once before
-(`LeadImageService._parse_srcset_urls_descending`, 2026-08-12, same
-Substack/Cloudinary CDN-URL shape) — that fix just never reached this
-second, independent srcset handler. Fixed by porting the same WHATWG-correct
-scanning algorithm into `html_sanitize.py` as `_split_srcset_candidates`. New
-test (confirmed it fails against the pre-fix code with the exact real-world
-URL). See `docs/architecture/feeds.md`. The two reported entries were
-repaired live via a real "Refetch content" call (`refresh_captured_article`,
-already-guarded); a broader scan found **321 entries across 55 feeds**
-carrying the same shredded-srcset pattern (Substack and Cloudinary-backed
-sites both — techdirt.com, perfectionkills.com, cppcast.com among them), not
-touched — a real backfill candidate, same shape as the sibling-boilerplate
-cleanup, Josh's call on scope/timing.
-
 ### neowin.net: 20 entries resolved to the same lead image, repaired — likely a transient upstream glitch
 
 Reported live 2026-09-18 ("shiity same leads for many posts"). Confirmed: 20
