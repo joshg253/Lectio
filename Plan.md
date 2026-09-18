@@ -62,26 +62,6 @@ refreshes badge counts on visibility regain, not the post list/sort). Not
 reproducible on demand without the same background-tab-discard trigger — next
 step if it recurs is capturing the exact address-bar URL Edge restores from.
 
-### penny-arcade.com: list thumbnail and article lead image are the same but appear to belong to nobody
-
-Reported live 2026-09-18, three entries: a "news" post's thumb/lead don't
-match its own content and don't obviously match anything else recognizable
-either ("thumb/img/post: none match", "where is the thumb coming from??");
-a "comic" post — same feed, same `webcomic` strategy — resolves correctly
-("this one is good though"); a third entry (`wloveine`) also flagged as a
-mismatch. The feed's RSS ships text-only content (zero inline `<img>` even
-for the entry that resolves correctly), so `webcomic` strategy's source-page
-scrape is the only source for all of them — confirmed live the CURRENT
-og:image for the "none match" news post is `logo_opengraph.jpg` (a generic
-site logo, not this stored value either), meaning the stored image came from
-some other part of the scraper (the per-site plugin path,
-`_plugin_or_source_lead_image`), not plain og:image. Not root-caused today —
-worth checking whether the webcomic scraper is grabbing the day's comic
-banner off the page for "news" post types that were never meant to have a
-comic-shaped image at all, the same general shape as the sonarsource.com
-og_scrape/inline-shortcut conflict already documented in saved.md, but for a
-different strategy.
-
 ### neowin.net: 20 entries resolved to the same lead image, repaired — likely a transient upstream glitch
 
 Reported live 2026-09-18 ("shiity same leads for many posts"). Confirmed: 20

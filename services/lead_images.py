@@ -609,6 +609,16 @@ class LeadImageService:
         # in the same run — they'd all picked up whichever post this row
         # happened to feature at scrape time, not their own image.
         r'|\bid=["\'][^"\']*shopify-section[^"\']*(?:blogs?[-_]?row|related[-_]?blogs?|recent[-_]?blogs?|blog[-_]?(?:list|grid|posts))[^"\']*["\']'
+        # penny-arcade.com's "Feeling Nostalgic?" widget (`class="nostalgia"`,
+        # wrapping `<a class="related-comic">`) shows a random OLD strip on
+        # every page, comic and non-comic post alike. On a news/editorial post
+        # with no comic panel of its own, `_extract_webcomic_panel_image`
+        # correctly finds nothing and falls through to this generic scan --
+        # which, with nothing else to look at, picked up whichever random
+        # strip the widget happened to be showing. Reported live 2026-09-18 as
+        # "thumb/img/post: none match" -- the image was real, just not this
+        # article's.
+        r'|\bclass=["\'][^"\']*nostalgia[^"\']*["\']'
         r")[^>]*>",
         re.IGNORECASE,
     )
