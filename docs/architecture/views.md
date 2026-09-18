@@ -402,13 +402,26 @@ directory and a template path update, not touching the hash.
 
 Delimiters are `\(\)`/`\[\]`, plus `$$...$$` (added 2026-09-18: vitaut.net
 writes display math this way — 16 occurrences on one post showed as raw
-`$$...$$` source). Deliberately not bare `$...$`: none of the feeds this was
-checked against use it, and a lone `$` collides with plain-text prices.
-`$$...$$` doesn't share that risk — nobody writes a price doubled like
-`$$50$$` — so it was safe to add without reopening that concern. Read Mode
-(`read_mode.html`) does not include this — it's a separate template that
-doesn't load `app.js` — so a math-heavy saved article still shows raw LaTeX
-there; unaddressed, tracked in Plan.md.
+`$$...$$` source). `$$...$$` is always on — nobody writes a price doubled
+like `$$50$$`, so there's no collision risk.
+
+Bare `$...$` is different: "between $50 and $100" would render as broken math
+on any feed that isn't actually LaTeX-flavored, so it's a **per-feed opt-in**
+(`katex_dollar_math` in `feed_display_prefs`, Feed Properties → Content),
+default off, not a global delimiter. Added the same day the `$$` fix
+shipped: the same vitaut.net post that motivated `$$` also had 89 single-`$`
+inline math spans (variables, `\cdot`, `\log`, `\lfloor` — confirmed live,
+none price-shaped) that stayed raw text even with `$$` working. `get_entry_detail`
+exposes the resolved pref as `katex_dollar_math` in its returned dict;
+`_entry_pane.html` renders it onto the pane header as
+`data-post-katex-dollar-math`; `renderMathInEntryPane` (app.js) reads that
+attribute and only pushes a `{left: '$', right: '$'}` delimiter onto the list
+when it's `1` — the `$$` delimiter itself is unconditional, listed before `$`
+so KaTeX's own delimiter matching (which checks candidates in list order at
+each position) finds the double-dollar case first. Read Mode
+(`read_mode.html`) does not include any of this — it's a separate template
+that doesn't load `app.js` — so a math-heavy saved article still shows raw
+LaTeX there; unaddressed, tracked in Plan.md.
 
 ### Bluesky's own recovered image must not be treated as author-placed content
 

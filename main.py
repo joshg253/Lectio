@@ -4916,6 +4916,13 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN fill_zoom REAL")
         except Exception:
             pass
+        try:
+            # Off by default: a bare $...$ pair is common in ordinary text
+            # ("between $50 and $100") and would render as broken math on any
+            # feed that isn't actually LaTeX-flavored -- see renderMathInEntryPane.
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN katex_dollar_math INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS websub_subscriptions (
@@ -5099,6 +5106,7 @@ _DISPLAY_PREF_KEYS = frozenset(
         "hide_paywalled",
         "hide_locked_comics",
         "inject_source_images",
+        "katex_dollar_math",
     }
 )
 # Pre-built UPDATE statements (one per column) so conn.execute() never receives an f-string.
@@ -5114,6 +5122,7 @@ _DISPLAY_PREF_DEFAULTS: dict = {
     "hide_paywalled": 0,
     "hide_locked_comics": 0,
     "inject_source_images": 0,
+    "katex_dollar_math": 0,
     "feed_thumbnail_url": None,
     "thumb_crop": "cover",
     "thumb_strategy": None,
@@ -12401,6 +12410,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "hide_locked_comics": bool(_disp.get("hide_locked_comics", 0)),
             "hide_paywalled": bool(_disp.get("hide_paywalled", 0)),
             "inject_source_images": bool(_disp.get("inject_source_images", 0)),
+            "katex_dollar_math": bool(_disp.get("katex_dollar_math", 0)),
             "feed_thumbnail_url": _disp.get("feed_thumbnail_url") or None,
             "thumb_crop": str(_disp.get("thumb_crop") or "cover"),
             "thumb_strategy": _disp.get("thumb_strategy") or None,
@@ -17524,6 +17534,7 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "summary": "",
         "content_html": content_html,
         "lead_image_url": None,
+        "katex_dollar_math": False,
         "image_title_text": None,
         "duration_seconds": None,
         "duration_display": None,
@@ -20367,6 +20378,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "content_html": content_html,
             "lead_image_url": _lead_image_display_url(lead_image_url, _disp.get("image_size_rule")),
             "show_lead_in_article": _show_lead_in_article,
+            "katex_dollar_math": bool(_disp.get("katex_dollar_math", 0)),
             "show_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)) and not _disp.get("feed_thumbnail_url"),
             # Webcomic feeds show the FULL strip in the article but keep the
             # single-pane scraped preview as the list thumbnail — so don't let the

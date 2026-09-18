@@ -204,6 +204,13 @@
               <input type="checkbox" id="feed-prop-hide-locked-comics" class="feed-prop-checkbox" />
               <span>Hide strips locked behind a supporter tier until their unlock date</span>
             </label>
+            {# Off by default: a bare $...$ pair is common in ordinary text
+               ("between $50 and $100") and would render as broken math on any
+               feed that isn't actually LaTeX-flavored -- opt in per feed. #}
+            <label class="feed-prop-toggle-row">
+              <input type="checkbox" id="feed-prop-katex-dollar-math" class="feed-prop-checkbox" />
+              <span>Render $...$ as inline math, not just $$...$$ / \(...\) (only enable for a feed that actually writes LaTeX this way)</span>
+            </label>
           </div>
       </div>
       <div id="feed-prop-tab-tuning" class="feed-prop-tab-panel" hidden>

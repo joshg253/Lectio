@@ -17,6 +17,7 @@
            tree at all — "Open in Feeds" would land on an empty page. #}
         data-post-orphan="{{ 1 if selected_entry.is_orphan_archive else 0 }}"
         data-post-lead-image-url="{{ (selected_entry.lead_image_url or '') if (selected_entry.show_as_thumb and selected_entry.sync_list_thumb) else '' }}"
+        data-post-katex-dollar-math="{{ 1 if selected_entry.katex_dollar_math else 0 }}"
       >
         {% set _dur = selected_entry.duration_display %}
         {% set _title_text = selected_entry.title_plain or selected_entry.title or "(untitled)" %}

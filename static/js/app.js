@@ -3265,6 +3265,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     const feedPropShowThumb = document.getElementById('feed-prop-show-thumb');
     const feedPropShowInArticle = document.getElementById('feed-prop-show-in-article');
     const feedPropInjectSourceImages = document.getElementById('feed-prop-inject-source-images');
+    const feedPropKatexDollarMath = document.getElementById('feed-prop-katex-dollar-math');
     const feedPropPresetBtns = document.querySelectorAll('.feed-prop-preset-btn');
     const feedPropCaptionTitle = document.getElementById('feed-prop-caption-title');
     const feedPropCaptionAlt = document.getElementById('feed-prop-caption-alt');
@@ -4379,10 +4380,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // for the source site's own client-side MathJax/KaTeX -- Lectio stores the
     // raw `\(...\)`/`\[...\]` delimiters as-is (nothing to sanitize, they are
     // just text), so without this the article pane shows literal LaTeX source.
-    // Bare `$...$` is deliberately not a delimiter here: none of the feeds this
-    // was checked against use it, and it collides with plain-text prices.
-    // `$$...$$` (double-dollar display math -- vitaut.net and similar) doesn't
-    // share that risk: nobody writes a price as `$$50$$`, so it's safe to add.
+    // `$$...$$` (double-dollar display math -- vitaut.net and similar) is
+    // always on: nobody writes a price as `$$50$$`, so there's no collision
+    // risk. Bare `$...$` is NOT always on -- "between $50 and $100" would
+    // render as broken math on any feed that isn't actually LaTeX-flavored --
+    // it's a per-feed opt-in (Feed Properties -> Content), read here from the
+    // entry-pane header's data-post-katex-dollar-math attribute (vitaut.net
+    // reported live 2026-09-18: $$ blocks rendered, but the same post's 89
+    // single-$ inline spans, all genuine math, stayed raw until opted in).
     // Quick substring test before calling into KaTeX's own tree walk -- most
     // entries have no math at all, and this skips the walk entirely for them.
     function renderMathInEntryPane(root) {
@@ -4390,16 +4395,18 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       const content = root.querySelector('.entry-content, .entry-readability-content');
       if (!content) return;
       const text = content.textContent;
-      if (!text.includes('\\(') && !text.includes('\\[') && !text.includes('$$')) return;
+      const titleEl = root.querySelector('.entry-pane-title');
+      const dollarMathEnabled = titleEl?.dataset.postKatexDollarMath === '1';
+      const hasDollar = dollarMathEnabled && text.includes('$');
+      if (!text.includes('\\(') && !text.includes('\\[') && !text.includes('$$') && !hasDollar) return;
+      const delimiters = [
+        { left: '\\[', right: '\\]', display: true },
+        { left: '\\(', right: '\\)', display: false },
+        { left: '$$', right: '$$', display: true },
+      ];
+      if (dollarMathEnabled) delimiters.push({ left: '$', right: '$', display: false });
       try {
-        window.renderMathInElement(content, {
-          delimiters: [
-            { left: '\\[', right: '\\]', display: true },
-            { left: '\\(', right: '\\)', display: false },
-            { left: '$$', right: '$$', display: true },
-          ],
-          throwOnError: false,
-        });
+        window.renderMathInElement(content, { delimiters, throwOnError: false });
       } catch (e) {
         console.error('[lectio] KaTeX render failed (leaving raw text):', e);
       }
@@ -5998,6 +6005,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           if (feedPropInjectSourceImages) {
             feedPropInjectSourceImages.checked = !!data.inject_source_images;
             feedPropInjectSourceImages.dataset.feedUrl = feedUrl;
+          }
+          if (feedPropKatexDollarMath) {
+            feedPropKatexDollarMath.checked = !!data.katex_dollar_math;
+            feedPropKatexDollarMath.dataset.feedUrl = feedUrl;
           }
           if (feedPropCaptionTitle && feedPropCaptionAlt && feedPropCaptionAutoBtn) {
             const src = data.caption_source || 'auto';
@@ -7861,6 +7872,13 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       if (!feedUrl) return;
       try { await saveDisplayPref(feedUrl, 'inject_source_images', feedPropInjectSourceImages.checked ? 1 : 0); }
       catch (e) { feedPropInjectSourceImages.checked = !feedPropInjectSourceImages.checked; }
+    });
+
+    feedPropKatexDollarMath?.addEventListener('change', async () => {
+      const feedUrl = feedPropKatexDollarMath.dataset.feedUrl;
+      if (!feedUrl) return;
+      try { await saveDisplayPref(feedUrl, 'katex_dollar_math', feedPropKatexDollarMath.checked ? 1 : 0); }
+      catch (e) { feedPropKatexDollarMath.checked = !feedPropKatexDollarMath.checked; }
     });
 
     feedPropFlushBatchBtn?.addEventListener('click', async () => {

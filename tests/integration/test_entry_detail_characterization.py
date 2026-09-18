@@ -269,6 +269,21 @@ def test_sync_list_thumb_false_for_webcomic(env):
     assert _detail()["sync_list_thumb"] is False
 
 
+# --- katex_dollar_math ------------------------------------------------------
+
+
+def test_katex_dollar_math_defaults_off(env):
+    _add(content="<p>$50 to $100</p>")
+    assert _detail()["katex_dollar_math"] is False
+
+
+def test_katex_dollar_math_reflects_the_per_feed_pref(env):
+    _add(content="<p>$x^2$</p>")
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, FEED, "katex_dollar_math", 1)
+    assert _detail()["katex_dollar_math"] is True
+
+
 # --- inject source gallery -------------------------------------------------
 
 
