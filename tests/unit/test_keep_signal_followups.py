@@ -194,9 +194,9 @@ def test_auto_refetch_skips_lectio_captures():
 
 def test_auto_refetch_does_not_fire_on_unstar_or_on_clearing_tags():
     star = inspect.getsource(main.toggle_entry_saved)
-    assert re.search(r"if saved:\s*\n\s*_maybe_autofetch_on_keep", star)
+    assert re.search(r"if saved:\s*\n\s*\w+\s*=\s*_maybe_autofetch_on_keep", star)
     tags = inspect.getsource(main.set_entry_manual_tags)
-    assert re.search(r"if tags:\s*\n\s*_maybe_autofetch_on_keep", tags)
+    assert re.search(r"if tags:\s*\n\s*\w+\s*=\s*_maybe_autofetch_on_keep", tags)
 
 
 def test_auto_refetch_runs_under_the_tenancy_helper():

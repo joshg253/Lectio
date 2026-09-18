@@ -445,6 +445,43 @@ they compounded (a mangled URL AND an unfiltered avatar). Fixing #1 without
 #2 would still store a 404ing URL, just now correctly rejected before it got
 that far — so both were needed to actually resolve the case.
 
+**A fourth shape, found 2026-09-16: a hint word matching *inside* another word,
+with no boundary at all.** An ArtStation piece by markus_just — filename
+`markus-just-greenhouserez.jpg`, the artist's own "Greenhouse" + "rez" — lost
+its lead image because `_AVATAR_HINT_PATTERNS`'s `user` alternative had no
+boundary guard, so it matched the "user" hiding inside "…hous**er**ez" (`house`
++ `rez` concatenated). `profile` in the same pattern already carries a negative
+lookbehind for exactly this class (the DeviantArt `_peccary_profile_` case
+above) — `user` was added later and never got the same guard. Fixed by giving
+it the identical `(?<![a-zA-Z0-9_])` lookbehind.
+
+A second, unrelated entry (raikoart) hit the same *class* of bug one layer
+over: its image filename embeds a real UUID *after* a human-readable artist-
+name prefix (`sean-raiko-tay-ddad9lc-2702fb07-6b57-4646-ad1e-200b5c886b11.jpg`),
+and `-ad1e-` inside that UUID matched the ad-slot filename rule. The existing
+`_UUID_BASENAME_RE` opaque-name exception (see "A basename containing a UUID"
+above) only recognized a UUID *at the start* of the basename — Webtoons' shape,
+not ArtStation's. Broadened from an anchored `^UUID...` match to an unanchored
+search for a UUID *anywhere* in the basename, since the reasoning ("this span
+is machine-generated, name heuristics can't read it") holds regardless of what
+precedes it.
+
+**Quantified, not assumed systemic.** Swept all 3,460 stored ArtStation
+`/artwork/` entries directly against the live resolver: 3,450 already resolved
+correctly, 6 have no `<img>` in their stored body at all (nothing to find), and
+exactly these 2 were rejected by a boundary bug — both fixed, both re-resolve
+correctly post-fix, confirmed via a full re-sweep (3,452/3,460 now). Two more
+entries remain unresolved for a *different*, deliberately unfixed reason: one
+artist titles a character-design piece "avatar-sho-sheet" (the bare word
+`avatar` is a real, common avatar-image signal everywhere else — narrowing it
+would reopen the false-negative side of this same tradeoff) and one embeds
+"-logo" in their own artwork's filename (a legitimate watermark, not site
+chrome, but indistinguishable from one by name alone off-domain, since the CDN
+asset lives on a different subdomain than the article page). Left as rare,
+understood edge cases rather than a third heuristic — same call already made
+for feed-tag suggestion suppression (Plan.md: "do not attempt a third
+heuristic").
+
 ## Several images in one container are a row — unless they are a comic page
 
 `.entry-content p:has(> img + img)` lays a container's images out as a wrapping

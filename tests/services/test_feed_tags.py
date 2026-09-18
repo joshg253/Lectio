@@ -40,6 +40,14 @@ def conn():
         )
         """
     )
+    c.execute(
+        """
+        CREATE TABLE suppressed_feed_tags_global (
+            tag TEXT PRIMARY KEY,
+            suppressed_at REAL NOT NULL
+        )
+        """
+    )
     yield c
     c.close()
 
@@ -611,6 +619,87 @@ def test_suggestions_drop_dismissed_tags(monkeypatch, service):
 
     service.set_tag_suppressed(feed, "Popular Deals", False)
     assert main.get_feed_tag_suggestions(feed, "e1") == ["Popular Deals", "Nintendo Switch"]
+
+
+def test_global_suppression_applies_to_every_feed(service):
+    """The opposite scope from the per-feed dismissal above: "comments" is never
+    worth filing under, on any feed, decided once instead of per-feed
+    whack-a-mole. Unlike suppressed_tags(feed_url), global_suppressed_tags()
+    takes no feed_url argument at all -- there is only one list."""
+    service.set_tag_globally_suppressed("comments", True)
+
+    assert service.global_suppressed_tags() == {"comments"}
+
+
+def test_global_dismissal_is_case_insensitive(service):
+    service.set_tag_globally_suppressed("COMMENTS", True)
+    assert "comments" in service.global_suppressed_tags()
+
+
+def test_global_restore_removes_it_whatever_the_casing(service):
+    service.set_tag_globally_suppressed("Comments", True)
+    service.set_tag_globally_suppressed("comments", False)
+    assert service.global_suppressed_tags() == set()
+
+
+def test_global_suppressed_tag_list_keeps_original_casing(service):
+    service.set_tag_globally_suppressed("Comments", True)
+    assert service.global_suppressed_tag_list() == ["Comments"]
+
+
+def test_global_blank_tag_is_ignored(service):
+    service.set_tag_globally_suppressed("   ", True)
+    assert service.global_suppressed_tags() == set()
+
+
+def test_global_suppression_does_not_delete_the_stored_tag(service):
+    feed = "https://example.test/f"
+    service.record_entry_tags(feed, [("e1", ["Comments", "keepme"])])
+    service.set_tag_globally_suppressed("Comments", True)
+
+    assert service.get_tags_for_entry(feed, "e1") == ["Comments", "keepme"]
+
+
+def test_suggestions_drop_globally_suppressed_tags_on_any_feed(monkeypatch, service):
+    """End to end: a tag dismissed once in Settings disappears from every
+    feed's suggestions, not just the one it was dismissed on."""
+    import main
+
+    feed_a = "https://slickdeals.net/rss"
+    feed_b = "https://example.test/other"
+    service.record_entry_tags(feed_a, [("e1", ["Comments", "Nintendo Switch"])])
+    service.record_entry_tags(feed_b, [("e2", ["Comments", "Popular Deals"])])
+    monkeypatch.setattr(main, "feed_tag_service", service)
+
+    assert main.get_feed_tag_suggestions(feed_a, "e1") == ["Comments", "Nintendo Switch"]
+    assert main.get_feed_tag_suggestions(feed_b, "e2") == ["Comments", "Popular Deals"]
+
+    service.set_tag_globally_suppressed("Comments", True)
+    assert main.get_feed_tag_suggestions(feed_a, "e1") == ["Nintendo Switch"]
+    assert main.get_feed_tag_suggestions(feed_b, "e2") == ["Popular Deals"]
+
+    service.set_tag_globally_suppressed("Comments", False)
+    assert main.get_feed_tag_suggestions(feed_a, "e1") == ["Comments", "Nintendo Switch"]
+
+
+def test_global_and_per_feed_dismissal_combine(monkeypatch, service):
+    """Both axes filter the same chip list -- a tag can be gone because it's
+    globally ignored, per-feed dismissed, or both; removing one dismissal
+    while the other still applies must not resurrect the chip."""
+    import main
+
+    feed = "https://slickdeals.net/rss"
+    service.record_entry_tags(feed, [("e1", ["Comments", "Popular Deals", "keepme"])])
+    monkeypatch.setattr(main, "feed_tag_service", service)
+
+    service.set_tag_globally_suppressed("Comments", True)
+    service.set_tag_suppressed(feed, "Popular Deals", True)
+    assert main.get_feed_tag_suggestions(feed, "e1") == ["keepme"]
+
+    # Restoring the per-feed dismissal alone must not bring back the globally
+    # suppressed tag.
+    service.set_tag_suppressed(feed, "Popular Deals", False)
+    assert main.get_feed_tag_suggestions(feed, "e1") == ["Popular Deals", "keepme"]
 
 
 def test_numbers_only_tags_are_dropped_from_both_sources():

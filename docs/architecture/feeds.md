@@ -63,6 +63,46 @@ behavior change a reader would ever see.
 
 These run server-side and affect the underlying DB state, so third-party clients (Capy, etc.) see the clean state after the next sync.
 
+## A rule's identity survives a scope-changing edit (`rule_uid`)
+
+Every `highlight_keywords` rule type — dedup, tag_filter, email_article, youtube_playlist,
+webhook, highlight — identifies itself as `(scope, scope_id, keyword)` for same-request lookups,
+which is fine there but breaks the moment any *other* table needs to recognize "the same rule"
+**across time**: editing a rule's feed list or keyword is remove-old + insert-new
+(`edit_highlight_route`), so anything keyed on the old text is silently orphaned by the edit.
+`rule_uid` (`highlight_keywords.rule_uid`, a `secrets.token_hex(16)` minted once and carried
+forward by every subsequent edit rather than reminted) is the stable id that survives it. Existing
+rows get one backfilled at migration time; a row with `rule_uid = ''` after that means it predates
+the column and never got backfilled, not "no id assigned yet."
+
+Three tables have needed this so far, each hitting the identity break in a different shape:
+
+- **`youtube_playlist_added`** (dedup guard: `playlistItems.insert` is not idempotent) — a scope
+  edit could re-add a video already added under the old identity. New rows carry `rule_uid`; a
+  partial unique index (`WHERE rule_uid != ''`) dedupes by it. Old rows keep `rule_uid = ''` and
+  fall back to the original `(scope, scope_id, keyword, entry_id, video_id)` key — there's no
+  reliable way to map them to a *current* rule once their scope text may no longer match anything.
+- **`email_batch_queue`** (found 2026-08-29 alongside the fix above, fixed 2026-09-16) — a queue,
+  not a dedup guard, so the failure shape was different: the rule's own scheduled flush
+  (`_check_and_flush_batch_times`, fires every minute against each *live* rule's current identity)
+  left pre-edit rows behind entirely, reachable only by the daily catch-all
+  (`_flush_all_email_batches`) — and even that used to `GROUP BY` the raw text tuple, so a
+  scope-edited rule's backlog sent as **two** separate digests instead of one, or merged into an
+  unrelated rule's digest if the old text was later reused by a new rule. Both flush paths, and the
+  batch-count threshold check, now prefer `rule_uid` when present; `_flush_all_email_batches` groups
+  legacy (`rule_uid = ''`) rows by the old text tuple as before.
+- **`highlight_keywords` itself**, for `dedup_fuzzy_pct`/`dedup_min_title_words` and friends: these
+  are columns on the rule row, so they migrate with the row automatically and never needed a
+  separate identity fix — included here as the reason `rule_uid` exists on that table at all, not
+  as a third bug.
+
+The shape repeats: does the dependent table need to recognize *the same rule* after an edit that
+changes its own identity columns? If yes, it needs `rule_uid` threaded through (mint-on-create,
+carry-on-edit, backfill-once, fall back to the text tuple for pre-existing `rule_uid = ''` rows).
+`email_batch_queue`'s fix is the template to copy — check both the immediate flush path and any
+daily/periodic sweep, since they can drift independently (only the queue's *scheduled* flush was
+broken here; the daily sweep still worked, just wrong).
+
 ## Duplicate feeds: the scheme (and www) is folded in the comparison, not the URL
 
 `get_feed_duplicates` groups subscriptions by `normalize_feed_url` **with the
@@ -369,6 +409,28 @@ dismissal while single-word ones stuck, because those normalize to themselves.
 Per feed, not global (`Forum` is noise on Slickdeals, a topic elsewhere). It hides
 a chip, never a fact: the rows stay and keep feeding the adapters. Undo lives in
 Feed Properties → **Hidden tags**, because a mis-clicked × needs a way back.
+
+### A global ignore list, for a tag that is never worth filing under anywhere
+
+Per-feed dismissal above is deliberately narrow — "noise on this feed, maybe a
+topic on another" — but some tag values (`comments`, a discussion-thread count
+dressed up as a category) are never worth a chip on *any* feed, and dismissing
+them feed by feed as each new one turns it up is exactly the whack-a-mole the
+per-feed design accepts as the cost of not auto-filtering. Settings → Tags adds
+a **global** list for these: `suppressed_feed_tags_global` (`tag TEXT PRIMARY
+KEY`), edited via `GET/POST /tags/global-suppressed[/add|/remove]`.
+
+Same choke point, same normalization: `get_feed_tag_suggestions` unions the
+per-feed and global dismissed sets (both run through `normalize_tag_value`)
+before filtering `tags`, so every caller — the entry pane, the feed-tags route,
+the source-page harvest fallback — gets the global list for free with no
+second filter to keep in sync. Deliberately **not** a rule: it only removes the
+suggestion chip, the same restraint the per-feed dismissal already applies (the
+stored `entry_feed_tags` rows are untouched, so a `tag_filter` rule can still
+match the tag even after its chip is globally suppressed — filing and filtering
+are different questions, and this only answers the filing one). Pinned tags
+(`get_feed_pinned_tags`) are a separate, stronger signal — a deliberate per-feed
+choice — and are not filtered by this list.
 
 ### The chip row, and the tag-filter rule
 
@@ -692,16 +754,35 @@ shape alone, before deleting).
   spurious 404s (YouTube 404s a ~700-request burst though each feed is fine
   singly) — a polite-client measure, feeds to other hosts interleave at full speed.
 - **`bypass_backoff`** (`FeedRefreshService.update_feeds`) — skips the feed- and
-  domain-level backoff checks above, but not reader's own `update_after`
-  (Retry-After/Cache-Control, a real instruction from the site). Wired only into
-  the single-feed manual `/refresh/feed` route: a deliberate click on one feed is
-  a single polite request, the same reasoning already used for a never-updated
-  feed's first fetch. The scheduler and the bulk `/refresh/folder` route stay on
-  the default (respect backoff) — bypassing a whole folder's backoff in one click
-  would hit every backed-off feed on it at once, a different blast radius.
-  Without this, a feed that recovered *after* its last failed attempt stayed
-  reported as failing — and Refresh silently did nothing — for up to the 24h
-  backoff cap.
+  domain-level backoff checks above. Wired only into the single-feed manual
+  `/refresh/feed` route: a deliberate click on one feed is a single polite
+  request, the same reasoning already used for a never-updated feed's first
+  fetch. The scheduler and the bulk `/refresh/folder` route stay on the default
+  (respect backoff) — bypassing a whole folder's backoff in one click would hit
+  every backed-off feed on it at once, a different blast radius. Without this, a
+  feed that recovered *after* its last failed attempt stayed reported as
+  failing — and Refresh silently did nothing — for up to the 24h backoff cap.
+- **`bypass_backoff` and reader's own `update_after`.** reader sets
+  `update_after` to its own default ~60-minute polling cadence on *every*
+  successful update, unconditionally (`reader._update.next_update_after`,
+  `DEFAULT_CONFIG.interval=60`) — only extending it further when the server's
+  own Retry-After/Cache-Control genuinely asks for more. Originally
+  `bypass_backoff` respected `update_after` unconditionally too, on the theory
+  that it always reflects a real instruction from the site — it doesn't: for
+  any feed with no caching headers restrictive enough to push it past that
+  default, a deliberate "Refresh" click did nothing for up to an hour, with no
+  error (found 2026-09-04; measured live across the whole library 2026-09-16 —
+  ~30% of feeds sat in exactly this state at any given moment). Fixed by
+  ignoring `update_after` under `bypass_backoff` when it's within
+  `_MANUAL_REFRESH_IGNORE_UPDATE_AFTER_WITHIN_SECONDS` (90 minutes) of now: a
+  pure-default value can never be more than 60 minutes from whenever reader
+  computed it, so at any later moment the remaining wait it implies can only be
+  smaller — meaning anything still that close *can only* be the default, never
+  a real signal, without needing to reconstruct exactly when it was computed
+  (reader exposes no public API for that; 90 minutes is a comfortable margin
+  above the 60-minute ceiling). Anything genuinely further out — a 429's
+  Retry-After, an unusually long `max-age` — stays respected even on a manual
+  click, up to reader's own 31-day cap (`MAX_UPDATE_AFTER`).
 
 ## Outbound proxy escalation
 

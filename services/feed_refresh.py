@@ -41,6 +41,22 @@ _HIGH_FANOUT_DOMAIN_FEEDS = 8
 # one-at-a-time). Pace requests to a high-fanout host so we stay a polite client
 # and don't trip its rate limit; feeds to other hosts run at full speed between.
 _HIGH_FANOUT_PACE_SECONDS = 0.7
+# reader sets update_after to its own default 60-minute polling cadence on
+# EVERY successful update, unconditionally -- only extending it further when the
+# server's own Retry-After/Cache-Control genuinely asks for more (see
+# reader._update.next_update_after / DEFAULT_CONFIG). That default-only value is
+# therefore *always* within 60 minutes of whenever it was computed, so at any
+# later moment the remaining wait it implies can only be smaller, never larger --
+# a plain default can never be more than 60 minutes away from click time either.
+# A manual refresh bypassing feed/domain backoff used to also wait out this
+# baseline with no error or explanation (Plan.md, found 2026-09-04), which is
+# nothing to be polite about -- it is Lectio's own pacing, not an instruction
+# from the site. Anything asking for meaningfully longer than that IS a real
+# signal (a 429's Retry-After, an unusually long max-age) and stays respected
+# even on a manual click. 90 minutes gives the 60-minute ceiling a safety
+# margin over clock/measurement slop without reaching into reader's internals
+# to reconstruct exactly when the baseline was computed.
+_MANUAL_REFRESH_IGNORE_UPDATE_AFTER_WITHIN_SECONDS = 90 * 60
 
 
 class FeedRefreshService:
@@ -449,13 +465,18 @@ class FeedRefreshService:
                         domain_next_retry = min(domain_next_retry, _dom_set_at + _DOMAIN_BACKOFF_MAX_SECONDS)
 
                 # Also respect reader's built-in update_after, which captures
-                # Retry-After from 429/503 responses and Cache-Control max-age.
+                # Retry-After from 429/503 responses and Cache-Control max-age --
+                # except, under bypass_backoff, when it's close enough to now that
+                # it can only be reader's own default pacing baseline rather than
+                # a real instruction from the site (see the constant's comment).
                 reader_update_after: float | None = None
                 never_updated = False
                 try:
                     _feed_obj = reader.get_feed(feed_url, None)
                     if _feed_obj and _feed_obj.update_after:
                         reader_update_after = _feed_obj.update_after.timestamp()
+                        if bypass_backoff and reader_update_after <= now_ts + _MANUAL_REFRESH_IGNORE_UPDATE_AFTER_WITHIN_SECONDS:
+                            reader_update_after = None
                     never_updated = bool(_feed_obj) and _feed_obj.last_updated is None
                 except Exception:
                     pass

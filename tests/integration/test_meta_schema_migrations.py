@@ -45,6 +45,7 @@ def _tables(conn: sqlite3.Connection) -> set[str]:
     [
         ("feed_strategy_cache", {"image_alt", "image_title"}),
         ("feed_display_prefs", {"caption_source", "thumb_crop", "fill_zoom"}),
+        ("email_batch_queue", {"rule_uid"}),
     ],
 )
 def test_fresh_schema_has_migrated_columns(fresh_meta, table, required):

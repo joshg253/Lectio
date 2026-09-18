@@ -827,28 +827,66 @@ def test_update_feeds_bypass_backoff_fetches_anyway(tmp_path: Path):
     assert reader.updated == ["https://example.com/skip.xml"]
 
 
-def test_update_feeds_bypass_backoff_still_honors_reader_update_after(tmp_path: Path):
-    """bypass_backoff skips our own feed/domain backoff, but not reader's own
-    update_after (Retry-After/Cache-Control) — that's the server's own
-    instruction, not just Lectio's pacing."""
-    db_path = tmp_path / "meta.sqlite"
+def _reader_with_update_after(seconds_from_now: float):
+    """A _FakeReader whose single feed reports update_after *seconds_from_now*
+    seconds out, for testing bypass_backoff's treatment of reader's own
+    scheduled update_after (Retry-After/Cache-Control vs. reader's own default
+    60-minute pacing, which it sets on every successful update regardless)."""
 
-    class _UpdateAfterReader(_FakeReader):
+    class _Ts:
+        def timestamp(self) -> float:
+            return time.time() + seconds_from_now
+
+    class _F:
+        update_after = _Ts()
+        last_updated = 1.0
+
+    class _Reader(_FakeReader):
         def get_feed(self, feed_url: str, _default=None):
-            class _F:
-                update_after = _UpdateAfterTs()
-                last_updated = 1.0
-
             return _F()
 
-    class _UpdateAfterTs:
-        def timestamp(self) -> float:
-            return time.time() + 3600
+    return _Reader()
 
-    reader = _UpdateAfterReader()
+
+def test_update_feeds_bypass_backoff_still_honors_a_genuine_long_update_after(tmp_path: Path):
+    """A real server instruction (a long Retry-After/Cache-Control, well beyond
+    what reader's own 60-minute default pacing could ever produce on its own)
+    is still respected even on a manual bypass_backoff refresh — that is the
+    server's own instruction, not just Lectio's pacing."""
+    db_path = tmp_path / "meta.sqlite"
+    reader = _reader_with_update_after(6 * 3600)  # 6h: far beyond the 60-min default
     service = _build_service(db_path, reader, [], [])
 
     service.update_feeds(["https://example.com/retry-after.xml"], bypass_backoff=True)
+
+    assert reader.updated == []
+
+
+def test_update_feeds_bypass_backoff_ignores_readers_own_default_pacing(tmp_path: Path):
+    """reader sets update_after to its own default ~60-minute cadence on EVERY
+    successful update, unconditionally -- not just when the server actually asked
+    for it. A manual refresh used to silently wait this out with no error
+    (Plan.md, found 2026-09-04); bypass_backoff must actually fetch when the
+    remaining wait is small enough that it can only be that default, not a real
+    per-site instruction."""
+    db_path = tmp_path / "meta.sqlite"
+    reader = _reader_with_update_after(45 * 60)  # well inside the 60-min default's reach
+    service = _build_service(db_path, reader, [], [])
+
+    service.update_feeds(["https://example.com/default-pacing.xml"], bypass_backoff=True)
+
+    assert reader.updated == ["https://example.com/default-pacing.xml"]
+
+
+def test_update_feeds_without_bypass_still_honors_readers_default_pacing(tmp_path: Path):
+    """The scheduler's own (non-manual) calls must keep respecting reader's
+    update_after unconditionally -- the new leniency is scoped to bypass_backoff
+    only, matching the "deliberate single-feed refresh" the docstring promises."""
+    db_path = tmp_path / "meta.sqlite"
+    reader = _reader_with_update_after(45 * 60)
+    service = _build_service(db_path, reader, [], [])
+
+    service.update_feeds(["https://example.com/default-pacing.xml"])
 
     assert reader.updated == []
 

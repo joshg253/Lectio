@@ -3768,13 +3768,10 @@ def ensure_meta_schema() -> None:
             )
             """
         )
-        # Feed-tag suggestion chips the user has dismissed, per (feed, tag).
-        #
-        # Manual rather than heuristic on purpose: two automatic rules were tried
-        # and both hid tags that were wanted. "VinylDeals" (a place) is noise while
-        # "Lessons" (a kind of content) is exactly the right filing tag, and nothing
-        # in the feed metadata distinguishes them — see get_feed_tag_suggestions.
-        # Scoped per feed because a tag useless on one feed can matter on another.
+        # Mirrors entry_read_state in the other direction: a bulk mark-as-UNREAD
+        # stamps its whole batch with one timestamp so the toast can put exactly
+        # that batch back. entry_read_state cannot serve — its rows mean "read
+        # at", and this batch has just stopped being read (they are deleted).
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS entry_unread_batch (
@@ -3785,10 +3782,13 @@ def ensure_meta_schema() -> None:
             )
             """
         )
-        # Mirrors entry_read_state in the other direction: a bulk mark-as-UNREAD
-        # stamps its whole batch with one timestamp so the toast can put exactly
-        # that batch back. entry_read_state cannot serve — its rows mean "read
-        # at", and this batch has just stopped being read (they are deleted).
+        # Feed-tag suggestion chips the user has dismissed, per (feed, tag).
+        #
+        # Manual rather than heuristic on purpose: two automatic rules were tried
+        # and both hid tags that were wanted. "VinylDeals" (a place) is noise while
+        # "Lessons" (a kind of content) is exactly the right filing tag, and nothing
+        # in the feed metadata distinguishes them — see get_feed_tag_suggestions.
+        # Scoped per feed because a tag useless on one feed can matter on another.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS suppressed_feed_tags (
@@ -3796,6 +3796,20 @@ def ensure_meta_schema() -> None:
                 tag TEXT NOT NULL,
                 suppressed_at REAL NOT NULL,
                 PRIMARY KEY (feed_url, tag)
+            )
+            """
+        )
+        # The opposite scope from suppressed_feed_tags above: a tag value that
+        # should never render as a suggestion chip on ANY feed (e.g. "comments"),
+        # not one dismissal per feed it happens to show up on. Filters the chip
+        # out of the suggestion UI itself -- explicitly not a rule that acts on
+        # entries carrying the tag, which is what tag_filter rules are for.
+        # Editable from Settings -> Tags.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS suppressed_feed_tags_global (
+                tag TEXT PRIMARY KEY,
+                suppressed_at REAL NOT NULL
             )
             """
         )
@@ -4680,6 +4694,19 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Same scope-text-identity fragility rule_uid was added for above
+        # (highlight_keywords / youtube_playlist_added): editing a batch email
+        # rule's scope/keyword while entries are queued splits its backlog
+        # across two text identities instead of following the same rule. New
+        # rows also carry rule_uid; old rows keep '' for the same reason
+        # youtube_playlist_added's do -- there is no reliable way to map them
+        # back to a *current* rule once their scope text may no longer match
+        # anything. Flush paths prefer rule_uid when present and fall back to
+        # the text tuple otherwise, same shape as the dedup index below it.
+        try:
+            conn.execute("ALTER TABLE email_batch_queue ADD COLUMN rule_uid TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS scraped_feeds (
@@ -9105,6 +9132,7 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 scope = str(rule.get("scope", ""))
                 scope_id = str(rule.get("scope_id") or "")
                 keyword = str(rule.get("keyword", ""))
+                rule_uid = str(rule.get("rule_uid") or "")
                 is_regex = bool(rule.get("is_regex"))
                 search_in = str(rule.get("search_in") or "title")
                 delivery = str(rule.get("delivery") or "immediately")
@@ -9183,14 +9211,15 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                 with get_meta_connection() as conn:
                                     conn.execute(
                                         "INSERT OR IGNORE INTO email_batch_queue"
-                                        " (rule_scope, rule_scope_id, rule_keyword, queued_at,"
+                                        " (rule_scope, rule_scope_id, rule_keyword, rule_uid, queued_at,"
                                         "  feed_url, entry_id, title, link, feed_title, excerpt,"
                                         "  email_to, cc_me)"
-                                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                         (
                                             scope,
                                             scope_id,
                                             keyword,
+                                            rule_uid,
                                             now_str,
                                             fu,
                                             article["entry_id"],
@@ -9202,14 +9231,24 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                             1 if cc_me else 0,
                                         ),
                                     )
-                                    # Flush immediately if batch_count threshold is reached
+                                    # Flush immediately if batch_count threshold is reached.
+                                    # Counted by rule_uid when this rule has one (always, in
+                                    # practice) so a scope/keyword edit mid-backlog still counts
+                                    # entries queued under the old text as part of the same rule,
+                                    # rather than splitting the count across two identities.
                                     if batch_count > 0:
-                                        pending = conn.execute(
-                                            "SELECT COUNT(*) FROM email_batch_queue"
-                                            " WHERE rule_scope=? AND rule_scope_id=? AND rule_keyword=?"
-                                            " AND email_to=?",
-                                            (scope, scope_id, keyword, email_to),
-                                        ).fetchone()[0]
+                                        if rule_uid:
+                                            pending = conn.execute(
+                                                "SELECT COUNT(*) FROM email_batch_queue WHERE rule_uid=? AND email_to=?",
+                                                (rule_uid, email_to),
+                                            ).fetchone()[0]
+                                        else:
+                                            pending = conn.execute(
+                                                "SELECT COUNT(*) FROM email_batch_queue"
+                                                " WHERE rule_scope=? AND rule_scope_id=? AND rule_keyword=?"
+                                                " AND email_to=?",
+                                                (scope, scope_id, keyword, email_to),
+                                            ).fetchone()[0]
                                         if pending >= batch_count:
                                             _flush_email_batch_for_rule(
                                                 conn,
@@ -9219,6 +9258,7 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                                 email_to,
                                                 cc_addr,
                                                 now_str,
+                                                rule_uid=rule_uid,
                                             )
             except Exception:
                 LOGGER.exception("[email-auto] error processing email rule %s/%s", scope, keyword)
@@ -9919,13 +9959,28 @@ def _flush_email_batch_for_rule(
     email_to: str,
     cc_addr: str | None,
     now_str: str,
+    *,
+    rule_uid: str = "",
 ) -> None:
-    """Send a digest email for one rule's queued entries and clear the queue."""
-    rows = conn.execute(
-        "SELECT id, title, link, feed_title, excerpt, cc_me FROM email_batch_queue"
-        " WHERE rule_scope=? AND rule_scope_id=? AND rule_keyword=? AND email_to=?",
-        (scope, scope_id, keyword, email_to),
-    ).fetchall()
+    """Send a digest email for one rule's queued entries and clear the queue.
+
+    Selected by rule_uid when given (non-empty) rather than the scope/keyword
+    text tuple, so a rule edited mid-backlog still flushes as one digest —
+    entries queued before and after the edit carry the same stable rule_uid
+    even though their stored rule_scope/rule_keyword text differs. scope/
+    scope_id/keyword are still used for the run-log entry either way.
+    """
+    if rule_uid:
+        rows = conn.execute(
+            "SELECT id, title, link, feed_title, excerpt, cc_me FROM email_batch_queue WHERE rule_uid=? AND email_to=?",
+            (rule_uid, email_to),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, title, link, feed_title, excerpt, cc_me FROM email_batch_queue"
+            " WHERE rule_scope=? AND rule_scope_id=? AND rule_keyword=? AND email_to=?",
+            (scope, scope_id, keyword, email_to),
+        ).fetchall()
     if not rows:
         return
     articles = [{"title": r["title"], "link": r["link"], "feed_title": r["feed_title"], "excerpt": r["excerpt"]} for r in rows]
@@ -9961,15 +10016,26 @@ def _flush_email_batch_for_rule(
 
 
 def _flush_all_email_batches() -> None:
-    """Flush all pending batch queues — called by daily maintenance as a safety net."""
+    """Flush all pending batch queues — called by daily maintenance as a safety net.
+
+    Grouped by rule_uid when rows carry one, so a rule edited mid-backlog
+    flushes as a single digest instead of splitting into one email per text
+    identity its scope/keyword happened to have while rows were queued (the
+    old GROUP BY rule_scope/rule_scope_id/rule_keyword did exactly that split).
+    Rows queued before rule_uid existed keep '' and fall back to the text
+    tuple, same as youtube_playlist_added's equivalent rows.
+    """
     if not is_email_configured():
         return
     try:
         with get_meta_connection() as conn:
             profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
             groups = conn.execute(
-                "SELECT DISTINCT rule_scope, rule_scope_id, rule_keyword, email_to, MAX(cc_me) as cc_me"
-                " FROM email_batch_queue GROUP BY rule_scope, rule_scope_id, rule_keyword, email_to",
+                "SELECT rule_uid, MIN(rule_scope) as rule_scope, MIN(rule_scope_id) as rule_scope_id,"
+                " MIN(rule_keyword) as rule_keyword, email_to, MAX(cc_me) as cc_me"
+                " FROM email_batch_queue"
+                " GROUP BY (CASE WHEN rule_uid != '' THEN rule_uid"
+                " ELSE 'legacy:' || rule_scope || ':' || rule_scope_id || ':' || rule_keyword END), email_to",
             ).fetchall()
         for g in groups:
             cc_addr = profile_email if g["cc_me"] and profile_email else None
@@ -9982,6 +10048,7 @@ def _flush_all_email_batches() -> None:
                     str(g["email_to"]),
                     cc_addr,
                     datetime.now().isoformat(),
+                    rule_uid=str(g["rule_uid"] or ""),
                 )
     except Exception:
         LOGGER.exception("[email-auto] error flushing all email batches")
@@ -10013,6 +10080,7 @@ def _check_and_flush_batch_times() -> None:
             scope = str(rule.get("scope", ""))
             scope_id = str(rule.get("scope_id") or "")
             keyword = str(rule.get("keyword", ""))
+            rule_uid = str(rule.get("rule_uid") or "")
             cc_me = bool(rule.get("cc_me"))
             cc_addr = profile_email if cc_me and profile_email and profile_email.lower() != email_to.lower() else None
             with get_meta_connection() as conn:
@@ -10024,6 +10092,7 @@ def _check_and_flush_batch_times() -> None:
                     email_to,
                     cc_addr,
                     datetime.now().isoformat(),
+                    rule_uid=rule_uid,
                 )
             LOGGER.info("[email-batch] flushed batch for %s/%s at %s", scope, keyword, now_hhmm)
     except Exception:
@@ -11683,10 +11752,18 @@ def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     chip records that decision in `suppressed_feed_tags`, undoable from Feed
     Properties. Resist a third heuristic — the first two each looked convincing
     against the data that motivated them.
+
+    A tag value can also be dismissed globally (`suppressed_feed_tags_global`,
+    editable from Settings -> Tags) — this is a *different* axis, not a stronger
+    version of the per-feed one: it is for a tag value that is never worth
+    filing under on any feed (e.g. "comments"), decided once instead of
+    per-feed whack-a-mole, and still just filters the suggestion chip, not a
+    rule that acts on entries carrying the tag.
     """
     try:
         tags = feed_tag_service.get_tags_for_entry(feed_url, entry_id)
         dismissed = feed_tag_service.suppressed_tags(feed_url)
+        global_dismissed = feed_tag_service.global_suppressed_tags()
     except Exception:
         LOGGER.warning("feed tag suggestion lookup failed for %s", feed_url, exc_info=True)
         return []
@@ -11702,7 +11779,7 @@ def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     # undoes from the same place (Feed Properties -> Hidden tags).
     if any((d or "").strip() == FEED_TAGS_SUPPRESS_ALL for d in dismissed):
         return []
-    dismissed_norm = {normalize_tag_value(d) for d in dismissed}
+    dismissed_norm = {normalize_tag_value(d) for d in dismissed} | {normalize_tag_value(d) for d in global_dismissed}
     return [t for t in tags if normalize_tag_value(t) not in dismissed_norm][:MAX_FEED_TAG_SUGGESTIONS]
 
 
@@ -11974,6 +12051,39 @@ def feed_display_title(feed, fallback: str = "") -> str:
     display paths cannot drift apart again.
     """
     return str(getattr(feed, "resolved_title", None) or getattr(feed, "title", None) or fallback)
+
+
+def _feed_url_display_host(url: str) -> str:
+    """Bare host of a feed URL for disambiguation text — no userinfo/port, leading www. folded."""
+    try:
+        net = urlparse(url).netloc.split("@")[-1].split(":")[0].lower()
+    except Exception:
+        return ""
+    return net[4:] if net.startswith("www.") else net
+
+
+def _disambiguate_feed_titles(feeds: "list[FeedInFolder]") -> None:
+    """Two feeds sharing one folder can display the identical title — a
+    scraped/renamed feed, or two publishers who both called their feed
+    "Latest News" — and the only thing that tells them apart today is the
+    URL in the row's hover tooltip, easy to miss and no help at all on
+    touch. Appends " — host" to every feed in a same-title group so the
+    sidebar row itself shows the difference. Falls back to the full URL for
+    a group that also shares a host (two feed variants on the same site) --
+    a duplicate-everything collision is rare enough that a plain longer
+    suffix beats inventing a second disambiguator. Mutates titles in place,
+    intended to run once per folder's already-sorted feed list.
+    """
+    by_title: dict[str, list[FeedInFolder]] = {}
+    for f in feeds:
+        by_title.setdefault(f.title, []).append(f)
+    for group in by_title.values():
+        if len(group) < 2:
+            continue
+        hosts = [_feed_url_display_host(f.url) for f in group]
+        host_disambiguates = len(hosts) == len(set(hosts)) and all(hosts)
+        for f, host in zip(group, hosts, strict=True):
+            f.title = f"{f.title} — {host}" if host_disambiguates else f"{f.title} — {f.url}"
 
 
 def get_feed_title_map() -> dict[str, str]:
@@ -15831,7 +15941,130 @@ def _split_site_terms(terms: list[str]) -> tuple[list[str], list[str]]:
     return regular, sites
 
 
+# Escalating fetch-window multiples list_entries_for_feeds retries at when
+# hide_locked_comics/hide_unpremiered leave a page short -- see that
+# function's own docstring for why these two specific multiples.
+_HIDE_FILTER_UNDERFILL_RETRY_LIMIT_MULTIPLIERS = (2, 4, 8)
+# Callers asking for a real page (default 250, rarely more than a few
+# thousand) are exactly what the retry helps -- but _resolve_view_posts /
+# mark_entries_range_read pass 1,000,000 as a "no real limit" sentinel, and
+# for those the retry's whole premise (a fetch capped at `limit` dropped rows
+# a bigger `limit` might recover) is backwards: the fetch was never bound by
+# that number in the first place (no Lectio library has anywhere near a
+# million entries in one scope), so `len(result) < limit` is guaranteed True
+# and every retry attempt repeats the SAME full-cost fetch for nothing --
+# measured live, 4x the cost of the original call, on every "All Feeds"-scale
+# whole-view resolution once any feed anywhere had hide_locked_comics on.
+# Anything above this ceiling skips the retry entirely.
+_HIDE_FILTER_UNDERFILL_RETRY_MAX_LIMIT = 10_000
+
+
 def list_entries_for_feeds(
+    feed_urls: set[str],
+    limit: int = 250,
+    sort_by: str = "post",
+    sort_dir: str = "asc",
+    read_filter: str = "all",
+    star_only: bool = False,
+    selected_tag: str | None = None,
+    selected_feed_tag: str | None = None,
+    search_query: str | None = None,
+    kept_scope: str = "kept",
+    archived: bool | None = None,
+    enrich: bool = True,
+) -> list[dict]:
+    """Thin retry wrapper around `_list_entries_for_feeds_fetch`.
+
+    That function fetches only `limit` rows from reader before its per-entry
+    hide_locked_comics/hide_unpremiered filter runs (see its own comments) --
+    a locked/unpremiered entry occupying part of that window is dropped with
+    nothing behind it to backfill the slot, so a page can render shorter than
+    `limit` even though older, unhidden entries exist further back
+    (Plan.md, "hide_locked_comics/hide_unpremiered can under-fill a page").
+
+    Retrying with a larger fetch window fixes it without having to push the
+    predicate into every one of that function's several SQL/reader fetch
+    strategies -- `hide_unpremiered` in particular depends on a live-status
+    cache keyed off a video id parsed from the entry's own link, not a plain
+    meta-DB column a query could join against.
+
+    Only attempted when one of those filters could actually be active for
+    this scope (the common case pays one extra `len(result) >= limit` check
+    and nothing else) and bounded by
+    `_HIDE_FILTER_UNDERFILL_RETRY_LIMIT_MULTIPLIERS` -- there is no reliable
+    way to tell "upstream is exhausted" from "the filter is dropping rows"
+    using only this function's own return value, so a fully locked/unpremiered
+    feed costs a handful of bounded retry fetches rather than one, not an
+    early exit.
+
+    Also skipped outright above `_HIDE_FILTER_UNDERFILL_RETRY_MAX_LIMIT`: a
+    caller passing `limit=1_000_000` as a "give me everything" sentinel
+    (`_resolve_view_posts`, `mark_entries_range_read`) can never satisfy
+    `len(result) >= limit`, so without this guard the retry fired on every
+    such call whenever a hide filter was active anywhere in scope, at full
+    fetch cost each attempt, for a fetch that was never actually window-bound
+    to begin with -- see that constant's own comment.
+    """
+    result = _list_entries_for_feeds_fetch(
+        feed_urls,
+        limit=limit,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        read_filter=read_filter,
+        star_only=star_only,
+        selected_tag=selected_tag,
+        selected_feed_tag=selected_feed_tag,
+        search_query=search_query,
+        kept_scope=kept_scope,
+        archived=archived,
+        enrich=enrich,
+    )
+    if len(result) >= limit or not feed_urls or limit > _HIDE_FILTER_UNDERFILL_RETRY_MAX_LIMIT:
+        return result
+
+    with get_meta_connection() as _prefs_conn:
+        _prefs_for_gate = get_all_feed_display_prefs(_prefs_conn)
+    _hide_filter_could_apply = (
+        hide_locked_comics_global()
+        or youtube_hide_unpremiered_global()
+        or any(
+            _prefs_for_gate.get(fu, _DISPLAY_PREF_DEFAULTS).get("hide_locked_comics")
+            or _prefs_for_gate.get(fu, _DISPLAY_PREF_DEFAULTS).get("hide_unpremiered")
+            for fu in feed_urls
+        )
+    )
+    if not _hide_filter_could_apply:
+        return result
+
+    for _multiplier in _HIDE_FILTER_UNDERFILL_RETRY_LIMIT_MULTIPLIERS:
+        _attempt_limit = limit * _multiplier
+        bigger = _list_entries_for_feeds_fetch(
+            feed_urls,
+            limit=_attempt_limit,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            read_filter=read_filter,
+            star_only=star_only,
+            selected_tag=selected_tag,
+            selected_feed_tag=selected_feed_tag,
+            search_query=search_query,
+            kept_scope=kept_scope,
+            archived=archived,
+            enrich=enrich,
+        )
+        if len(bigger) > len(result):
+            result = bigger
+        if len(result) >= limit:
+            break
+        # No early exit otherwise: `bigger` being short of `_attempt_limit` does
+        # NOT mean the raw fetch upstream is exhausted -- it means the filter
+        # dropped rows, which is exactly the case being retried for. Only the
+        # fixed multiplier list above bounds the worst case (an entirely
+        # locked/unpremiered feed), not an "upstream is empty" inference.
+    return result[:limit]
+
+
+def _list_entries_for_feeds_fetch(
     feed_urls: set[str],
     limit: int = 250,
     sort_by: str = "post",
@@ -19022,6 +19255,13 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
                 content_html = _bs4_stripped or None
             else:
                 lead_image_url = None
+        elif bluesky.is_bsky_feed(feed_url):
+            # Bluesky RSS carries no <img> in its real body — the only way this URL
+            # can already be in content_html is get_entry_detail's own bsky-recovery
+            # append (fetch_post_images), not the author placing it in the flow. That
+            # append IS the post's real content, so leave it in the body and keep the
+            # separate lead too, rather than treating it as author-placed duplication.
+            pass
         else:
             # Lead URL is buried mid-article (author placed it there) — show it in
             # its natural position, not as a separate top lead.
@@ -25688,7 +25928,9 @@ def _home_inner(
         ]
         # Active feeds first (alphabetical), disabled greyed at the bottom.
         all_folder_feeds.sort(key=lambda f: (f.disabled, f.title.casefold()))
-        feeds_by_folder[folder_row_id] = [f for f in all_folder_feeds if not f.disabled]
+        active_folder_feeds = [f for f in all_folder_feeds if not f.disabled]
+        _disambiguate_feed_titles(active_folder_feeds)
+        feeds_by_folder[folder_row_id] = active_folder_feeds
 
     root_folder_row = next((row for row in folder_rows if cast(int, row["depth"]) == 0), None)
     child_folder_rows = [row for row in folder_rows if cast(int, row["depth"]) == 1]
@@ -35586,14 +35828,33 @@ def toggle_entry_saved(
                 conn.commit()
 
     apply_star_state(feed_url, entry_id, bool(saved))
+    autofetch_pending = False
     if saved:
-        _maybe_autofetch_on_keep(feed_url, entry_id)
+        autofetch_pending = _maybe_autofetch_on_keep(feed_url, entry_id)
 
     if is_async_action_request(request, "lectio-post-save-toggle"):
-        return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved), "undo_token": undo_token})
+        return JSONResponse(
+            {
+                "ok": True,
+                "feed_url": feed_url,
+                "entry_id": entry_id,
+                "saved": bool(saved),
+                "undo_token": undo_token,
+                "autofetch_pending": autofetch_pending,
+            }
+        )
 
     if is_async_action_request(request, "lectio-entry-save-toggle"):
-        return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved), "undo_token": undo_token})
+        return JSONResponse(
+            {
+                "ok": True,
+                "feed_url": feed_url,
+                "entry_id": entry_id,
+                "saved": bool(saved),
+                "undo_token": undo_token,
+                "autofetch_pending": autofetch_pending,
+            }
+        )
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
@@ -35908,7 +36169,37 @@ def _mark_autofetch_host_failed(host: str) -> None:
                 del _autofetch_failed_hosts[stale]
 
 
-def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
+# Per-(feed_url, entry_id) autofetch job tracking. Unlike _refetch_jobs' single
+# running slot (one bulk run at a time), many of these can be in flight at once
+# -- one per recently-kept stub -- and each open pane only cares about its own
+# entry's status. The pane polls /entries/autofetch-status to notice once the
+# background re-fetch below lands, since the pane already rendered (showing the
+# stub) before that thread even started.
+_autofetch_jobs = _PerUserDict()
+_autofetch_jobs_lock = threading.Lock()
+_AUTOFETCH_JOB_STALE_S = 600  # finished job records this old are dropped lazily
+
+
+def _autofetch_prune_stale_jobs() -> None:
+    now = time.monotonic()
+    for key in list(_autofetch_jobs.keys()):
+        job = _autofetch_jobs.get(key)
+        if job and not job.get("running") and (now - (job.get("finished_at") or now)) > _AUTOFETCH_JOB_STALE_S:
+            _autofetch_jobs.pop(key, None)
+
+
+@app.get("/entries/autofetch-status")
+def entry_autofetch_status(feed_url: str = Query(...), entry_id: str = Query(...)):
+    """Poll target for a pane whose star/tag response flagged autofetch_pending —
+    reports whether _maybe_autofetch_on_keep's background re-fetch for THIS entry
+    is still running, and if not, whether it actually found a fuller copy."""
+    job = _autofetch_jobs.get((feed_url, entry_id))
+    if job is None:
+        return JSONResponse({"ok": True, "pending": False, "done": False, "success": None})
+    return JSONResponse({"ok": True, "pending": bool(job.get("running")), "done": not job.get("running"), "success": job.get("ok")})
+
+
+def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> bool:
     """Re-fetch a *stub* article in the background when it is starred or tagged.
 
     Keeping something is the moment you find out its feed only ever shipped a
@@ -35933,29 +36224,43 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
     The offline archive capture (``enqueue_archive``) already fires on both star
     and tag and is what Read Mode reads. This is the other half: it replaces the
     stub in the *entry pane*, which shows stored feed content.
+
+    Returns True when a background re-fetch is (now or already) in flight for
+    this entry, so the calling star/tag route can tell the client an open pane
+    on this entry is worth polling — see /entries/autofetch-status above.
     """
     try:
         if saved_articles_service.is_saved_articles_feed(feed_url):
-            return
+            return False
         with get_reader() as reader:
             entry = reader.get_entry((feed_url, entry_id), None)
         if entry is None or not (entry.link or "").startswith(("http://", "https://")):
-            return
+            return False
         stored = (entry.content[0].value if entry.content else None) or entry.summary or ""
         if _archived_copy_is_plausible(stored):
-            return  # a real article already — leave it alone
+            return False  # a real article already — leave it alone
         host = urlparse(entry.link).netloc.lower()
         if _autofetch_host_in_cooldown(host):
-            return  # this host already refused us; don't keep asking
+            return False  # this host already refused us; don't keep asking
     except Exception:  # noqa: BLE001 — never let this break the star/tag itself
         LOGGER.debug("auto-refetch precheck failed for %s/%s", feed_url, entry_id, exc_info=True)
-        return
+        return False
+
+    _job_key = (feed_url, entry_id)
+    with _autofetch_jobs_lock:
+        _existing_job = _autofetch_jobs.get(_job_key)
+        if _existing_job and _existing_job.get("running"):
+            return True  # already in flight for this entry — the pane can still poll it
+        _autofetch_prune_stale_jobs()
+        job = {"running": True, "ok": None, "started_at": time.monotonic(), "finished_at": None}
+        _autofetch_jobs[_job_key] = job
 
     _uid = tenancy.current_user_id()
 
     def _work() -> None:
         try:
             result = _refresh_captured_article_for_current_user(feed_url, entry_id)
+            job["ok"] = bool(result.get("ok"))
             if result.get("ok"):
                 LOGGER.info("[auto-refetch] %s/%s -> refreshed", feed_url, entry_id)
                 return
@@ -35972,12 +36277,17 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> None:
                 _AUTOFETCH_HOST_COOLDOWN_S // 3600,
             )
         except Exception:  # noqa: BLE001
+            job["ok"] = False
             _mark_autofetch_host_failed(host)
             LOGGER.warning("[auto-refetch] failed for %s/%s", feed_url, entry_id, exc_info=True)
+        finally:
+            job["running"] = False
+            job["finished_at"] = time.monotonic()
 
     # Off-request so the star stays instant, and through the tenancy helper
     # because a bare thread would run the fetch as the default user.
     threading.Thread(target=lambda: _run_in_user_context(_uid, _work), daemon=True).start()
+    return True
 
 
 def _refresh_captured_article_for_current_user(
@@ -36557,8 +36867,9 @@ def set_entry_manual_tags(
     # Only when tags remain: clearing the last tag is the opposite of keeping.
     # Deliberately here and not in set_manual_tags_for_entry, which the feed
     # auto-taggers also drive across a whole refresh — see _maybe_autofetch_on_keep.
+    autofetch_pending = False
     if tags:
-        _maybe_autofetch_on_keep(feed_url, entry_id)
+        autofetch_pending = _maybe_autofetch_on_keep(feed_url, entry_id)
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
@@ -36572,7 +36883,7 @@ def set_entry_manual_tags(
     message = "Tags updated." if tags else "Tags cleared."
 
     if request.headers.get("X-Requested-With") == "lectio-ajax":
-        return JSONResponse({"ok": True, "tags": tags})
+        return JSONResponse({"ok": True, "tags": tags, "autofetch_pending": autofetch_pending})
 
     return RedirectResponse(
         url=(
@@ -37335,6 +37646,28 @@ def dismiss_feed_tag(
             "suppressed": feed_tag_service.suppressed_tag_list(feed_url),
         }
     )
+
+
+@app.get("/tags/global-suppressed")
+def list_globally_suppressed_tags_route():
+    """Tag values that never render as a suggestion chip on any feed, behind
+    Settings -> Tags."""
+    return JSONResponse({"ok": True, "tags": feed_tag_service.global_suppressed_tag_list()})
+
+
+@app.post("/tags/global-suppressed/add")
+def add_globally_suppressed_tag_route(tag: str = Form(...)):
+    clean = (tag or "").strip()
+    if not clean:
+        return JSONResponse({"ok": False, "error": "Enter a tag."}, status_code=400)
+    feed_tag_service.set_tag_globally_suppressed(clean, True)
+    return JSONResponse({"ok": True, "tags": feed_tag_service.global_suppressed_tag_list()})
+
+
+@app.post("/tags/global-suppressed/remove")
+def remove_globally_suppressed_tag_route(tag: str = Form(...)):
+    feed_tag_service.set_tag_globally_suppressed(tag, False)
+    return JSONResponse({"ok": True, "tags": feed_tag_service.global_suppressed_tag_list()})
 
 
 @app.post("/entries/discard")
@@ -38191,6 +38524,7 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
         ]
         # Active feeds first (alphabetical), disabled greyed at the bottom.
         folder_feeds.sort(key=lambda f: (f.disabled, f.title.casefold()))
+        _disambiguate_feed_titles(folder_feeds)
         settings_feeds_by_folder[folder_row_id] = folder_feeds
         # Failing counts consider active feeds only, matching the sidebar.
         failing = sum(1 for f in folder_feeds if f.has_error and not f.disabled)
@@ -38258,6 +38592,7 @@ def tree_folder_feeds_fragment(request: Request, folder_id: int, star_only: str 
         if url not in disabled_feed_urls  # sidebar shows active feeds only
     ]
     folder_feeds.sort(key=lambda f: f.title.casefold())
+    _disambiguate_feed_titles(folder_feeds)
 
     # Same compact query fragments as the tree links in index.html: omit
     # default values, never carry star mode.

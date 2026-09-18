@@ -762,6 +762,17 @@
         </div>
 
         <div class="settings-section">
+          <div class="settings-label">Ignored suggested tags</div>
+          <p class="settings-hint">A tag value that's never worth filing under, on any feed — filters it out of the suggestion chips themselves, not a rule that acts on entries carrying it. Distinct from the × on a single feed's chip (Feed Properties → Hidden tags), which only dismisses it there.</p>
+          <div class="settings-row-controls">
+            <input type="text" id="global-tag-suppress-input" class="settings-input" placeholder="comments" aria-label="Tag value to never suggest" autocomplete="off" />
+            <button type="button" id="global-tag-suppress-add-btn" class="settings-save-btn">Ignore</button>
+          </div>
+          <ul id="global-tag-suppress-list" class="feed-prop-alias-list"></ul>
+          <p id="global-tag-suppress-empty" class="settings-hint">Nothing ignored globally yet.</p>
+        </div>
+
+        <div class="settings-section">
           <div class="settings-label">Your tags</div>
           <p class="settings-hint">Counts are kept apart on purpose: <strong>manual</strong> is what you applied by hand, <strong>feed</strong> is what publishers sent. An alias rewrites both, and one combined number would hide which half is which.</p>
           <div class="settings-row-controls">

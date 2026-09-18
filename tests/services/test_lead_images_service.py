@@ -871,6 +871,23 @@ def test_avatar_hint_does_not_match_authoritative():
     assert not service._AVATAR_HINT_PATTERNS.search("authorization required")
 
 
+def test_avatar_hint_does_not_match_user_mid_word():
+    """'user' in _AVATAR_HINT_PATTERNS must not match substrings like the ArtStation
+    piece "greenhouserez" (the artist's own "Greenhouse" + "rez") — found live
+    2026-09-16, the same false-positive class 'author'/'profile' already guard
+    against, but 'user' was never given the matching boundary."""
+    service = _build_service(Path("/tmp"), [])
+    assert not service._AVATAR_HINT_PATTERNS.search("markus-just-greenhouserez.jpg")
+    assert not service._AVATAR_HINT_PATTERNS.search("poweruser-build-notes.png")
+
+
+def test_avatar_hint_matches_user_standalone():
+    service = _build_service(Path("/tmp"), [])
+    assert service._AVATAR_HINT_PATTERNS.search("user123.png")
+    assert service._AVATAR_HINT_PATTERNS.search("user-image.jpg")
+    assert service._AVATAR_HINT_PATTERNS.search("userpic.jpg")
+
+
 # --- css_bg before preferred → promote to full-res img ---
 
 
@@ -2252,6 +2269,10 @@ def test_a_uuid_filename_is_not_read_as_an_ad_slot(tmp_path: Path):
         # Webtoons appends a numeric id straight onto the UUID's last group
         # with no separator, which a trailing-separator-only rule missed.
         "https://swebtoon-phinf.pstatic.net/20251231_227/x_JPEG/53e3fa05-ad49-4593-b2ac-782469d45a9212398245534840153981.jpg",
+        # ArtStation prefixes the UUID with the artist's own name/slug instead
+        # of leading with it — found live 2026-09-16, same class but the UUID
+        # sits in the middle of the basename, not at the start.
+        "https://cdna.artstation.com/p/assets/images/images/019/391/485/large/sean-raiko-tay-ddad9lc-2702fb07-6b57-4646-ad1e-200b5c886b11.jpg",
     ):
         assert svc._is_image_url_acceptable(url, None, None) is True, url
 
