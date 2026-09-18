@@ -96,6 +96,28 @@ def test_srcset_candidates_are_resolved():
     assert "https://example.test/news/202608/big.jpg 1024w" in out
 
 
+def test_srcset_url_with_embedded_commas_is_not_shredded():
+    """Splitting the whole attribute on every comma (the naive approach)
+    breaks on a CDN URL that embeds its own comma-separated transform params
+    -- Substack's image-fetch URLs look like
+    `.../fetch/$s_!x!,w_424,c_limit,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2F...jpeg 424w`.
+    Found live 2026-09-18 (kriscox.substack.com): the naive split cut the URL
+    off at the first comma, and each garbage fragment (`w_424`, `c_limit`, …)
+    got resolved as relative to the entry's own page -- a browser prefers a
+    matching srcset candidate over the `src` fallback, so this silently broke
+    the image even though `src` itself pointed at a perfectly good asset."""
+    url = (
+        "https://substackcdn.com/image/fetch/$s_!w7vC!,w_424,c_limit,f_auto,q_auto:good,fl_progressive:steep/"
+        "https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fabc_1428x734.jpeg"
+    )
+    out = html_sanitize.resolve_relative_urls(
+        f'<img srcset="{url} 424w, {url} 1456w" src="x.jpg">', "https://kriscox.substack.com/p/spend-more-produce-less"
+    )
+    assert f"{url} 424w" in out
+    assert f"{url} 1456w" in out
+    assert "kriscox.substack.com/p/w_424" not in out
+
+
 def test_untouched_html_is_returned_unchanged():
     html = "<p>No links here.</p>"
     assert html_sanitize.resolve_relative_urls(html, FEED_URL) is html
