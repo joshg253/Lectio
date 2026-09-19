@@ -39,16 +39,6 @@ interactive path in the app — verify against real browser interaction, not jus
 
 ## Tier 3 — maintenance backlog, ready to run
 
-### Redirecting feeds — 128 candidates ready, awaiting Josh's own `--apply` run
-
-`scripts/find_redirecting_feeds.py` found 128 feeds (of 2,264 swept) that 301-redirect their whole
-way to a verified-same feed. `--apply` reuses `change_feed_url_route` (re-verifies + migrates per
-feed) rather than writing directly, so it's a real batch worth Josh running himself:
-
-`docker compose exec lectio uv run scripts/find_redirecting_feeds.py --user u_40208f374ac18038598b39 --apply`
-(re-probes fresh, ~40 min). A stale redirect costs two requests per poll forever and dies silently
-the day the publisher retires it.
-
 ### DeviantArt thumbnail backfill — closed, not a bug
 
 296/314 flagged rows are unsigned `/i/` CDN URLs that don't expire; the pin sink correctly declines
