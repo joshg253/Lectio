@@ -405,6 +405,18 @@ def test_page_tags_tag_classed_anchors_title_or_slug():
     assert extract_page_tags(html) == ["Windows", "windows tips", "Nav"]
 
 
+def test_page_tags_tag_classed_slug_unquotes_plus_encoded_spaces():
+    """texasbluesalley.com's /tag/ path slugs use "+" for spaces the way a query
+    string would ("/tag/B.B.+King", "/tag/Little+Wing"), confirmed live
+    2026-09-19 -- left raw this produced "B.B.+King" instead of "B.B. King".
+    A no-op for the more common hyphenated slug, which still becomes spaces."""
+    html = (
+        '<a class="mini-tag" href="/woodshed/free-lessons/tag/B.B.+King"><img src="x"></a>'
+        '<a class="mini-tag" href="/tag/windows-tips"><img src="x"></a>'
+    )
+    assert extract_page_tags(html) == ["B.B. King", "windows tips"]
+
+
 def test_junk_tags_dropped_at_capture():
     raw = _Obj(tags=[{"term": "Uncategorized"}, {"term": "Wildfire"}], category=None)
     assert extract_feed_entry_tags(raw) == ["Wildfire"]
