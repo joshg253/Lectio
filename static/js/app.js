@@ -3169,6 +3169,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     const unsubscribeFeedUrlInput = document.getElementById('context-unsubscribe-feed-url');
     const postMarkReadButton = document.getElementById('ctx-post-mark-read');
     const postMarkReadBulkButton = document.getElementById('ctx-post-mark-read-bulk');
+    const postMarkUnreadBulkButton = document.getElementById('ctx-post-mark-unread-bulk');
     const postStarBulkButton = document.getElementById('ctx-post-star-bulk');
     const postUnstarBulkButton = document.getElementById('ctx-post-unstar-bulk');
     const postMarkFeedReadButton = document.getElementById('ctx-post-mark-feed-read');
@@ -9308,6 +9309,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
                 postMarkReadBulkButton.textContent = `Mark ${contextSelectedPosts.length} posts as read`;
               }
               setMenuItemVisible(postMarkReadBulkButton, true);
+              if (postMarkUnreadBulkButton) {
+                postMarkUnreadBulkButton.textContent = `Mark ${contextSelectedPosts.length} posts as unread`;
+              }
+              setMenuItemVisible(postMarkUnreadBulkButton, true);
               setMenuItemVisible(postCopyUrlButton, false);
               setMenuItemVisible(postAddLinkToNoteButton, false);
               setMenuItemVisible(postMarkFeedReadButton, false);
@@ -9367,6 +9372,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               }
               setMenuItemVisible(postMarkReadButton, true);
               setMenuItemVisible(postMarkReadBulkButton, false);
+              setMenuItemVisible(postMarkUnreadBulkButton, false);
               setMenuItemVisible(postStarBulkButton, false);
               setMenuItemVisible(postUnstarBulkButton, false);
               setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
@@ -10088,8 +10094,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // Same tail as applyBulkReadState (badge/favicon sync) but driven by a
     // specific set of {feedUrl, entryId} — the multi-select bulk action, which
     // can span several feeds and specific entries rather than one feed swept
-    // by age.
-    function applyReadStateToSelection(entries) {
+    // by age. isRead defaults to true (mark read) for existing callers;
+    // pass false for the mark-unread bulk action, which flips the badge math
+    // (unread counts go UP, not down).
+    function applyReadStateToSelection(entries, isRead = true) {
       const deltaByFeed = {};
       let totalChanged = 0;
       for (const e of entries) {
@@ -10097,18 +10105,19 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           `.post-item[data-post-feed-url="${CSS.escape(e.feedUrl)}"][data-post-entry-id="${CSS.escape(e.entryId)}"]`
         );
         if (!el) continue;
-        if (applyPostItemReadState(el, true)) {
+        if (applyPostItemReadState(el, isRead)) {
           deltaByFeed[e.feedUrl] = (deltaByFeed[e.feedUrl] || 0) + 1;
           totalChanged++;
         }
       }
+      const sign = isRead ? -1 : 1;
       for (const [fu, delta] of Object.entries(deltaByFeed)) {
-        adjustSidebarUnreadCount(fu, -delta);
+        adjustSidebarUnreadCount(fu, sign * delta);
       }
       if (totalChanged > 0) {
         const fallbackBase = getUnreadCountFallback();
         const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
-        appUnreadCount = Math.max(0, current - totalChanged);
+        appUnreadCount = Math.max(0, current + sign * totalChanged);
         updateDynamicFavicon();
       }
     }
@@ -11019,6 +11028,34 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         }
       } catch (_) {
         showToastMessage('Mark as read failed — network error.');
+      }
+    });
+
+    postMarkUnreadBulkButton?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const entries = contextSelectedPosts;
+      hideAllContextMenus();
+      if (!entries.length) return;
+      try {
+        // Chunked: a Select-All-driven selection can exceed the server's
+        // per-request cap (main.py's _MOVE_BATCH_CAP).
+        const results = await postEntriesBatched('/entries/read-batch', entries, { read: '0' });
+        const marked = results.reduce((n, r) => n + (r.marked || 0), 0);
+        const failed = results.reduce((n, r) => n + (r.failed || 0), 0);
+        const ok = results.length > 0 && results.every((r) => r.ok);
+        let message = `Marked ${marked} post${marked === 1 ? '' : 's'} as unread.`;
+        if (failed) message += ` ${failed} failed.`;
+        const data = { ok, marked, failed, message, error: results.find((r) => !r.ok)?.error };
+        if (data.ok) {
+          showToastMessage(data.message || 'Marked as unread.');
+          applyReadStateToSelection(entries, false);
+          // Selection is left as-is — bulk actions chain, same as Mark as read.
+        } else {
+          showToastMessage(data.error || 'Mark as unread failed.');
+        }
+      } catch (_) {
+        showToastMessage('Mark as unread failed — network error.');
       }
     });
 

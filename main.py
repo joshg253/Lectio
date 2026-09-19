@@ -37047,13 +37047,17 @@ def edit_manual_tags_on_entries_batch_route(
 
 
 @app.post("/entries/read-batch")
-def mark_entries_read_batch_route(entries: str = Form(...)):
-    """Mark a batch of entries read — the post list's multi-selection bulk action.
+def mark_entries_read_batch_route(entries: str = Form(...), read: int = Form(default=1)):
+    """Mark a batch of entries read or unread — the post list's multi-selection
+    bulk action.
 
     ``entries`` is a JSON array of ``[feed_url, entry_id]`` pairs, same shape as
-    ``/entries/move-to-feed-batch`` and ``/entries/tags-batch``. Always marks
-    read (never toggles to unread) — same one-directional intent as the
-    per-post "Mark as read" item this sits beside in the bulk menu.
+    ``/entries/move-to-feed-batch`` and ``/entries/tags-batch``. ``read``
+    defaults to 1 (mark read, the original one-directional behavior) — pass 0
+    for the "Mark as unread" bulk sibling. Both directions are explicit,
+    always-visible buttons in the bulk menu (like the star/unstar pair),
+    not a mixed-selection toggle: there is no single "obvious direction" to
+    collapse to when the selection spans both states.
     """
     try:
         pairs = json.loads(entries)
@@ -37065,6 +37069,7 @@ def mark_entries_read_batch_route(entries: str = Form(...)):
             {"ok": False, "error": f"Too many entries (max {_MOVE_BATCH_CAP} per action)."},
             status_code=400,
         )
+    mark_read = bool(read)
 
     marked = failed = 0
     to_sync: list[tuple[str, str]] = []
@@ -37076,33 +37081,45 @@ def mark_entries_read_batch_route(entries: str = Form(...)):
             feed_url, entry_id = str(pair[0]).strip(), str(pair[1])
             try:
                 entry = reader.get_entry((feed_url, entry_id), None)
-                if entry is not None and entry.read:
-                    continue  # already read — leave read_history/read_state alone
-                # A premiere that hasn't aired yet shouldn't be swallowed by a
-                # blanket bulk mark-read, same guard as "Read above/below".
-                if _youtube_unpremiered_video_id(feed_url, getattr(entry, "link", None)) is not None:
-                    continue
-                reader.mark_entry_as_read((feed_url, entry_id))
+                if entry is not None and bool(entry.read) == mark_read:
+                    continue  # already in the requested state — leave read_history/read_state alone
+                if mark_read:
+                    # A premiere that hasn't aired yet shouldn't be swallowed by a
+                    # blanket bulk mark-read, same guard as "Read above/below".
+                    # Marking unread carries no equivalent risk, so this only
+                    # gates the read direction.
+                    if _youtube_unpremiered_video_id(feed_url, getattr(entry, "link", None)) is not None:
+                        continue
+                    reader.mark_entry_as_read((feed_url, entry_id))
+                else:
+                    reader.mark_entry_as_unread((feed_url, entry_id))
                 to_sync.append((feed_url, entry_id))
                 marked += 1
             except Exception as exc:  # noqa: BLE001 — one bad entry must not sink the batch
                 failed += 1
-                LOGGER.warning("[read-batch] failed to mark read %s in %s: %s", entry_id, feed_url, exc)
+                LOGGER.warning("[read-batch] failed to mark %s %s in %s: %s", "read" if mark_read else "unread", entry_id, feed_url, exc)
 
     if to_sync:
-        when = datetime.now().isoformat()
         with get_meta_connection() as conn:
-            conn.executemany(
-                """
-                INSERT INTO entry_read_state (feed_url, entry_id, read_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at
-                """,
-                [(fu, eid, when) for fu, eid in to_sync],
-            )
+            if mark_read:
+                when = datetime.now().isoformat()
+                conn.executemany(
+                    """
+                    INSERT INTO entry_read_state (feed_url, entry_id, read_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at
+                    """,
+                    [(fu, eid, when) for fu, eid in to_sync],
+                )
+            else:
+                conn.executemany(
+                    "DELETE FROM entry_read_state WHERE feed_url = ? AND entry_id = ?",
+                    to_sync,
+                )
         invalidate_unread_counts_cache()
 
-    msg = f"Marked {marked} post{'s' if marked != 1 else ''} as read."
+    verb = "read" if mark_read else "unread"
+    msg = f"Marked {marked} post{'s' if marked != 1 else ''} as {verb}."
     if failed:
         msg += f" {failed} failed."
     return JSONResponse({"ok": True, "marked": marked, "failed": failed, "message": msg})
