@@ -498,7 +498,7 @@ from the lead-image service's source-HTML cache — zero extra requests when pri
 and on a miss the tags appear next open, the same deferral as image captions. Only
 runs when the entry has no rows, so feed tags stay authoritative.
 
-## FakeFeedz entries get the article's own date
+## FakeFeedz entries get the article's own date, and optionally their own body
 
 A listing page is a wall of links: titles and hrefs are there, dates usually are
 not (chickensoft.games shows none at all on `/blog`, only on each post). Stamping
@@ -506,13 +506,26 @@ every scraped entry with the scrape time made a fresh feed look like its whole
 backlog was published the second it was added, and made sorting by date
 meaningless — ten entries all reading `2026-08-12 23:18:17`.
 
-`_article_published_at` fetches each **new** entry's page and asks it for a date,
-trying the publisher's own metadata first (`mine_publish_date`: JSON-LD,
-`article:published_time`, `<time datetime=…>`) and the date the page merely
-*prints* second — the same order the re-fetch path uses. Cost is one fetch per
-new entry: an entry already in `scraped_entries` is never re-fetched, so a steady
-feed pays nothing per refresh and only the first scrape pays for its backlog. Any
-failure falls back to "now", because a missing date must never cost the entry.
+`_new_entry_extras` fetches each **new** entry's page once and mines both its date
+and (see below) its body from that one fetch. The date tries the publisher's own
+metadata first (`mine_publish_date`: JSON-LD, `article:published_time`,
+`<time datetime=…>`) and the date the page merely *prints* second — the same
+order the re-fetch path uses. Cost is one fetch per new entry: an entry already in
+`scraped_entries` is never re-fetched, so a steady feed pays nothing per refresh
+and only the first scrape pays for its backlog. Any failure falls back to "now"
+for the date and an empty body, because neither must ever cost the entry.
+
+**A per-feed `content_selector` (link_list mode only) fills that body directly**,
+sidestepping readability/full-page guessing entirely. Both guesses fail the same
+way on a chrome-heavy listing site: confirmed live 2026-09-19 on
+texasbluesalley.com, readability returned the *entire* page (33KB, nav/header and
+all) for a lesson whose real content — one description paragraph plus a small tag
+table — lives in a single `<div class="accordion-content">`, because the site's
+own chrome is large enough to win readability's size-based content scoring
+outright, and full-page mode does no filtering at all. `content_selector` is a
+different concept from `selector` (which scopes *link discovery* on the *listing*
+page) — it scopes *body extraction* on each *entry's own* page, and is applied
+once, at scrape time, not live on every open.
 
 `publish_date.from_visible_text` needed a second tier for this. Its matcher wants
 an element whose `class`/`id` says `date`/`posted`/`byline`, which utility-CSS

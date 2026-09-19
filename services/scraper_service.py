@@ -153,42 +153,63 @@ def _write_empty_feed_file(feed_id: str, feed_title: str, source_url: str) -> No
 # ---------------------------------------------------------------------------
 
 
-def _article_published_at(entry_url: str) -> str | None:
-    """The article's own date, from its page, as an ISO string — or None.
+def _new_entry_extras(entry_url: str, content_selector: str) -> tuple[str | None, str]:
+    """Mine a newly-discovered entry's own page for its published date and
+    (when content_selector is set) its body content, from ONE fetch.
 
     A listing page is a wall of links: the titles are there, the dates usually
     are not (chickensoft.games shows none at all on /blog, only on each post).
     Stamping every scraped entry with the scrape time makes a fresh feed look
     like everything was published the second it was added, and makes sorting by
-    date meaningless.
+    date meaningless. And the body readability/full-page guessing produces for
+    a chrome-heavy listing site is often no better than raw noise — confirmed
+    live 2026-09-19 on texasbluesalley.com, where the real content is a small,
+    easily-selected region but the site's own nav/header markup is large
+    enough to win readability's size-based scoring outright. A per-feed
+    content_selector (link_list mode only; the listing page's own `selector`
+    is a different concept) sidesteps guessing entirely when the publisher's
+    markup is stable enough to target directly.
 
     Cost is one fetch per NEW entry only — an entry already in scraped_entries is
     never re-fetched, so a steady feed costs nothing per refresh and only the
-    first scrape pays for its backlog. Any failure returns None and the caller
-    falls back to "now", because a missing date must never cost the entry.
+    first scrape pays for its backlog. Any failure returns (None, ""): a missing
+    date or body must never cost the entry, the feed still gets a title and link.
 
-    Tries the publisher's own metadata first (mine_publish_date: JSON-LD,
-    article:published_time, <time datetime=…>), then the date the page merely
-    prints for a human — the order matters, and is the same order the re-fetch
-    path uses.
+    The date tries the publisher's own metadata first (mine_publish_date:
+    JSON-LD, article:published_time, <time datetime=…>), then the date the page
+    merely prints for a human — the order matters, and is the same order the
+    re-fetch path uses.
     """
     try:
         html = _fetch_html(entry_url)
-    except Exception:  # noqa: BLE001 — a date is a bonus, never a failure
-        LOGGER.debug("scrape: could not fetch %s for its date", entry_url, exc_info=True)
-        return None
+    except Exception:  # noqa: BLE001 — a date/body is a bonus, never a failure
+        LOGGER.debug("scrape: could not fetch %s for its date/content", entry_url, exc_info=True)
+        return None, ""
+
+    dt = None
     try:
         from main import mine_publish_date  # local import: main imports this module
 
         dt = mine_publish_date(html)
     except Exception:  # noqa: BLE001
-        dt = None
+        pass
     if dt is None:
         try:
             dt = publish_date.from_visible_text(html)
         except Exception:  # noqa: BLE001
-            dt = None
-    return dt.isoformat() if dt else None
+            pass
+
+    content = ""
+    if content_selector:
+        try:
+            region = BeautifulSoup(html, "html.parser").select_one(content_selector)
+        except Exception:  # noqa: BLE001 — a bad/stale selector must not break the scrape
+            region = None
+            LOGGER.debug("scrape: content_selector %r failed for %s", content_selector, entry_url, exc_info=True)
+        if region is not None:
+            content = str(region)[:_MAX_CONTENT_BYTES]
+
+    return (dt.isoformat() if dt else None), content
 
 
 def _resolve_link_anchors(soup: BeautifulSoup, selector: str) -> list:
@@ -463,6 +484,7 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
 
     now = datetime.now(timezone.utc).isoformat()
     new_visible = 0
+    content_selector = str(feed.get("content_selector") or "").strip()
 
     for a in link_elements:
         item = _anchor_to_item(a, str(feed["source_url"]))
@@ -475,12 +497,12 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
         title = item["title"]
         entry_id = str(uuid.uuid4())
         hidden = 1 if initial else 0
-        published = _article_published_at(abs_url) or now
+        published, content = _new_entry_extras(abs_url, content_selector)
         conn.execute(
             "INSERT OR IGNORE INTO scraped_entries"
             " (id, scraped_feed_id, entry_url, title, content, published_at, hidden)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (entry_id, feed["id"], abs_url, title, "", published, hidden),
+            (entry_id, feed["id"], abs_url, title, content, published or now, hidden),
         )
         if not initial:
             new_visible += 1
@@ -529,11 +551,17 @@ def create_scraped_feed(
     selector: str | None,
     feed_title: str | None,
     backfill: bool = False,
+    content_selector: str | None = None,
 ) -> tuple[str, str]:
     """Create a scraped feed, do initial scrape, register with reader. Returns (feed_id, file_url).
 
     When ``backfill`` is set (link_list only), pre-existing links are surfaced as
     visible entries rather than seeded hidden.
+
+    ``content_selector`` (link_list only) is applied to each NEW entry's own
+    page to fill its body — see ``_new_entry_extras``. ``None``/blank keeps
+    today's behavior (an empty body, filled in on open via readability/full
+    page or left to Refetch).
 
     The caller is responsible for adding the feed to a folder in folder_feeds.
     """
@@ -550,8 +578,8 @@ def create_scraped_feed(
             feed_title = source_url
 
     conn.execute(
-        "INSERT INTO scraped_feeds (id, source_url, mode, selector, feed_title, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (feed_id, source_url, mode, selector or None, feed_title, now),
+        "INSERT INTO scraped_feeds (id, source_url, mode, selector, feed_title, created_at, content_selector) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (feed_id, source_url, mode, selector or None, feed_title, now, (content_selector or "").strip() or None),
     )
 
     # Write empty XML first so reader can open the file immediately.

@@ -19134,12 +19134,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         pfSection.removeAttribute('open');
         document.getElementById('afd-pf-title').value = '';
         document.getElementById('afd-pf-selector').value = '';
+        document.getElementById('afd-pf-content-selector').value = '';
         document.getElementById('afd-pf-backfill').checked = false;
         const _sug = document.getElementById('afd-pf-suggestions');
         const _prev = document.getElementById('afd-pf-preview');
         if (_sug) { _sug.hidden = true; document.getElementById('afd-pf-suggestions-chips').innerHTML = ''; }
         if (_prev) { _prev.hidden = true; _prev.innerHTML = ''; }
         modal.querySelector('input[name="afd-mode"][value="link_list"]').checked = true;
+        if (typeof pfSyncPickBtn === 'function') pfSyncPickBtn();
         devtoSection.hidden = true;
         document.getElementById('afd-devto-tag').value = '';
         document.getElementById('afd-devto-top').value = '';
@@ -19312,6 +19314,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           document.getElementById('afd-pff-mode').value   = modal.querySelector('input[name="afd-mode"]:checked')?.value || 'link_list';
           document.getElementById('afd-pff-title').value  = document.getElementById('afd-pf-title').value;
           document.getElementById('afd-pff-selector').value = document.getElementById('afd-pf-selector').value;
+          document.getElementById('afd-pff-content-selector').value = document.getElementById('afd-pf-content-selector').value.trim();
           document.getElementById('afd-pff-backfill').value = document.getElementById('afd-pf-backfill').checked ? '1' : '';
           pfForm.submit();
         } else {
@@ -19421,10 +19424,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
 
       function pfClosePicker() { if (pfPicker) pfPicker.hidden = true; if (pfPickerFrame) pfPickerFrame.src = 'about:blank'; }
 
-      // The picker only makes sense for link_list mode (it derives a link selector).
+      // The picker, and the content selector, only make sense for link_list mode
+      // (a link selector to derive; a body-fill target on each entry's OWN page —
+      // change_detect has no "entries", just the one watched page).
+      const pfContentSelectorRow = document.getElementById('afd-pf-content-selector-row');
       function pfSyncPickBtn() {
         const mode = modal.querySelector('input[name="afd-mode"]:checked')?.value || 'link_list';
         if (pfPickBtn) pfPickBtn.hidden = (mode !== 'link_list');
+        if (pfContentSelectorRow) pfContentSelectorRow.hidden = (mode !== 'link_list');
         if (mode !== 'link_list') pfClosePicker();
       }
       modal.querySelectorAll('input[name="afd-mode"]').forEach(r => r.addEventListener('change', pfSyncPickBtn));

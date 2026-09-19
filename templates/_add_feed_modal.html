@@ -51,6 +51,11 @@
           <iframe id="afd-pf-picker-frame" class="afd-pf-picker-frame" title="Page picker" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
         </div>
         <div id="afd-pf-preview" class="afd-pf-preview" hidden></div>
+        <div id="afd-pf-content-selector-row">
+          <label class="action-modal-label">Content selector <span class="action-modal-label-hint">(optional, link list only)</span></label>
+          <input id="afd-pf-content-selector" placeholder="e.g. .entry-content, article" />
+          <p class="action-modal-hint">Applied to each new entry's own page when it's first discovered, to fill its body directly — use this when readability/full-page re-fetch produces garbage on this site's articles. Leave blank to keep today's behavior (body filled in on open, or via Refetch).</p>
+        </div>
         <label class="fakefeedz-mode-label afd-pf-backfill"><input type="checkbox" id="afd-pf-backfill" /> Include items already on the page (backfill), not just new ones</label>
       </details>
 
@@ -91,6 +96,7 @@
         <input type="hidden" name="mode" id="afd-pff-mode" />
         <input type="hidden" name="feed_title" id="afd-pff-title" />
         <input type="hidden" name="selector" id="afd-pff-selector" />
+        <input type="hidden" name="content_selector" id="afd-pff-content-selector" />
         <input type="hidden" name="backfill" id="afd-pff-backfill" />
       </form>
     </div>

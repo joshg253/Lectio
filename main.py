@@ -4721,6 +4721,17 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # link_list only: a CSS selector applied to each NEW entry's own page
+        # (not the listing page `selector` already scopes) to fill its body.
+        # Readability/full-page guessing both fail on a chrome-heavy listing
+        # site the same way -- confirmed live 2026-09-19 on texasbluesalley.com,
+        # where the real content is a small, easily-selected region but the
+        # site's own nav/header markup is large enough to win readability's
+        # size-based scoring. See docs/architecture/feeds.md.
+        try:
+            conn.execute("ALTER TABLE scraped_feeds ADD COLUMN content_selector TEXT")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS scraped_entries (
@@ -27524,6 +27535,7 @@ def create_scraped_feed_route(
     feed_title: str = Form(default=""),
     folder_id: int | None = Form(default=None),
     backfill: str = Form(default=""),
+    content_selector: str = Form(default=""),
 ):
     source_url = source_url.strip()
     if not source_url:
@@ -27545,6 +27557,7 @@ def create_scraped_feed_route(
                     selector.strip() or None,
                     feed_title.strip() or None,
                     backfill=backfill in ("1", "true", "on", "yes"),
+                    content_selector=content_selector.strip() or None,
                 )
             conn.execute(
                 "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",

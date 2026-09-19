@@ -15,7 +15,7 @@ def _make_conn() -> sqlite3.Connection:
     conn.execute(
         "CREATE TABLE scraped_feeds (id TEXT PRIMARY KEY, source_url TEXT, mode TEXT,"
         " selector TEXT, feed_title TEXT, created_at TEXT, last_scraped_at TEXT,"
-        " last_content_hash TEXT)"
+        " last_content_hash TEXT, content_selector TEXT)"
     )
     conn.execute(
         "CREATE TABLE scraped_entries (id TEXT PRIMARY KEY, scraped_feed_id TEXT,"
@@ -77,6 +77,58 @@ def test_link_list_direct_anchor_selector_still_works(monkeypatch):
     scraper_service._scrape_link_list(conn, feed, initial=False)
     count = conn.execute("SELECT COUNT(*) FROM scraped_entries").fetchone()[0]
     assert count == 2
+
+
+_ENTRY_PAGE = (
+    '<html><body><nav>site nav junk, ads, related-posts widget</nav><article class="post-body"><p>Real content.</p></article></body></html>'
+)
+
+
+def test_link_list_content_selector_fills_new_entry_body(monkeypatch):
+    """A per-feed content_selector (link_list only) is applied to each NEW
+    entry's OWN page -- not the listing page -- to fill its body directly,
+    bypassing readability/full-page guessing on sites where that grabs the
+    whole chromed page instead of the article (texasbluesalley.com, confirmed
+    live 2026-09-19)."""
+
+    def fake_fetch(url):
+        return _PAGE if url == "https://basslessons.be/" else _ENTRY_PAGE
+
+    monkeypatch.setattr(scraper_service, "_fetch_html", fake_fetch)
+    conn = _make_conn()
+    feed = {
+        "id": "f4",
+        "source_url": "https://basslessons.be/",
+        "selector": "ul li a",
+        "content_selector": "article.post-body",
+    }
+    scraper_service._scrape_link_list(conn, feed, initial=False)
+    rows = conn.execute("SELECT content FROM scraped_entries").fetchall()
+    assert len(rows) == 2
+    for row in rows:
+        assert row["content"] == '<article class="post-body"><p>Real content.</p></article>'
+
+
+def test_link_list_no_content_selector_leaves_body_empty(monkeypatch):
+    monkeypatch.setattr(scraper_service, "_fetch_html", lambda url: _PAGE if url == "https://basslessons.be/" else _ENTRY_PAGE)
+    conn = _make_conn()
+    feed = {"id": "f5", "source_url": "https://basslessons.be/", "selector": "ul li a"}
+    scraper_service._scrape_link_list(conn, feed, initial=False)
+    rows = conn.execute("SELECT content FROM scraped_entries").fetchall()
+    assert all(row["content"] == "" for row in rows)
+
+
+def test_new_entry_extras_handles_fetch_failure_and_bad_selector(monkeypatch):
+    def raise_fetch(url):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(scraper_service, "_fetch_html", raise_fetch)
+    assert scraper_service._new_entry_extras("https://x.test/", "article") == (None, "")
+
+    monkeypatch.setattr(scraper_service, "_fetch_html", lambda url: _ENTRY_PAGE)
+    # An invalid selector must not blow up the whole scrape -- just no body.
+    published, content = scraper_service._new_entry_extras("https://x.test/", ":::not-a-selector")
+    assert content == ""
 
 
 def test_extract_link_items_dedups_and_resolves_absolute():
