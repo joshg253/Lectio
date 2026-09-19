@@ -45,14 +45,16 @@ interactive path in the app — verify against real browser interaction, not jus
 to pin them. The other 18 (0.08% of all wixmp rows) have a stale `exp` claim that doesn't match a
 live 404 — too rare to justify a live check on every "looks valid" row. Nothing to build.
 
-### Recapture — one open thread left
+### Recapture — closed, audit done
 
 The 2026-09-12 image-scope/enclosure fixes and the parked-page guards (slug/title mismatch +
 sibling-extraction fingerprint, both ported into `_archive_entry`) are shipped; the 1MB+ backlog
-sweep is complete (5.14GB reclaimed, zero entries lost). What's still open: no audit exists for
-feeds that relied on the *old* unconditional-enclosure-capture default (no `attachment_exts`
-configured) — they may now silently stop keeping files they used to, and nothing today surfaces
-which feeds are in that position.
+sweep is complete (5.14GB reclaimed, zero entries lost). The remaining open question — do any
+feeds silently rely on the old unconditional-enclosure-capture default enough to lose real files
+now that it's gated behind `attachment_exts` — is answered: audited live 2026-09-19, the only
+non-guitar-pro.com attachment content across every policy-less feed was ~100 links all pointing at
+one shared zero-byte asset (Facebook tracking pixels, CAPTCHA endpoints, dead fetches), since
+removed. Nothing real is or was at risk.
 
 ### 617 `complete` archives have no content at all
 
