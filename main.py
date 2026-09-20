@@ -23821,6 +23821,7 @@ def build_reader_page(
     date_display: str = "",
     manual_tags: tuple[str, ...] = (),
     all_tag_names: tuple[str, ...] = (),
+    katex_dollar_math: bool = False,
 ) -> HTMLResponse:
     # Same allowlist as the list rows: the feed's <em> renders, and a literal
     # <T> or <chrono> in a C++ title stays visible text.
@@ -23936,6 +23937,10 @@ def build_reader_page(
         "<meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'>"
         "<meta name='robots' content='noindex'>"
         f"<meta name='csrf-token' content='{esc_csrf}'>"
+        # Same vendored KaTeX as the main app's entry pane (see
+        # docs/architecture/views.md "Inline LaTeX math (KaTeX)") -- Read Mode
+        # has no app.js, so it needs its own copy of the CSS/font link.
+        "<link rel='stylesheet' href='/static/vendor/katex-0.18.6/katex.min.css'>"
         f"<link rel='stylesheet' href='/static/reader.css?v={STATIC_ASSET_VERSION}'>"
         "</head><body>"
         "<header class='reader-bar'>"
@@ -23953,15 +23958,19 @@ def build_reader_page(
         f"{open_original}"
         "</header>"
         "<main id='reader-viewport'>"
-        f"<div id='reader-columns' data-feed='{esc_feed}' data-entry='{esc_eid}'>"
+        f"<div id='reader-columns' data-feed='{esc_feed}' data-entry='{esc_eid}'"
+        f" data-katex-dollar-math='{1 if katex_dollar_math else 0}'>"
         f"<article id='reader-article'><h1 class='reader-headline'>{esc_title}</h1>"
         f"{reader_dateline}"
-        f"{article_html}</article>"
+        f"<div class='reader-body'>{article_html}</div></article>"
         "</div></main>"
         f"{tag_panel}"
         f"<script>window.__READER_TAGS__={tags_json};</script>"
         f"<script>window.__READER_NAV__={nav_json};</script>"
-        # Before reader.js, which calls into it.
+        # Before reader.js, which calls renderMathInElement synchronously before
+        # its first pagination measurement (see reader.js).
+        "<script src='/static/vendor/katex-0.18.6/katex.min.js'></script>"
+        "<script src='/static/vendor/katex-0.18.6/auto-render.min.js'></script>"
         f"<script src='/static/outbox.js?v={STATIC_ASSET_VERSION}'></script>"
         f"<script src='/static/reader.js?v={STATIC_ASSET_VERSION}'></script>"
         "</body></html>"
@@ -24862,6 +24871,8 @@ def reader_view(
 
     article_html = resolve_reader_article_html(cur_feed, cur_id, cur_link)
     is_archived = (not is_feeds) and (cur_feed, cur_id) in get_archived_saved_keys()
+    with get_meta_connection() as _disp_conn:
+        _katex_dollar_math = bool(get_feed_display_prefs(_disp_conn, cur_feed).get("katex_dollar_math", 0))
 
     return build_reader_page(
         title=cur_title,
@@ -24877,6 +24888,7 @@ def reader_view(
         show_saved_actions=not is_feeds,
         date_display=_read_mode_date(current),
         manual_tags=tuple(get_manual_tags_for_entry(cur_feed, cur_id)),
+        katex_dollar_math=_katex_dollar_math,
         all_tag_names=tuple(get_all_manual_tag_names()),
     )
 

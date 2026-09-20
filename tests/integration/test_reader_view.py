@@ -2,14 +2,40 @@
 paginated reader state, prev/next, Archive/Delete controls, and the article
 content-resolution chain. Follows the save-article test pattern: mount the route
 on a bare app and monkeypatch the service layer so orchestration is exercised
-without a DB."""
+without a DB for most of it -- the route still does a couple of real, unmocked
+meta-DB reads (root folder id, per-feed display prefs), so a real schema has to
+exist regardless."""
 
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+from services import tenancy
+
+
+@pytest.fixture(autouse=True)
+def _schema(tmp_path):
+    """Real, empty meta schema for the couple of unmocked DB reads in
+    reader_view (get_root_folder_id, get_feed_display_prefs) -- same
+    tenancy.configure/ensure_meta_schema pattern as test_read_mode_inbox.py's
+    `configured` fixture."""
+    saved = tenancy._layout
+    main.close_thread_db_pools()
+    tenancy.configure(
+        data_dir=tmp_path,
+        legacy_reader=tmp_path / "reader.sqlite",
+        legacy_meta=tmp_path / "meta.sqlite3",
+        legacy_starred=tmp_path / "starred.sqlite",
+    )
+    main.ensure_meta_schema()
+    try:
+        yield
+    finally:
+        main.close_thread_db_pools()
+        tenancy._layout = saved
 
 
 def _rec(n: int, *, read: bool = False) -> dict:
@@ -59,6 +85,39 @@ def test_read_state_prev_next_and_controls(monkeypatch):
     assert "name='csrf-token' content='tok'" in body
     assert "id='reader-archive-btn'" in body and "id='reader-delete-btn'" in body
     assert marks == []  # rendering alone never marks read
+
+
+# --- KaTeX (see docs/architecture/views.md "Inline LaTeX math (KaTeX)") -----
+
+
+def test_reader_page_always_loads_katex_assets(monkeypatch):
+    """The article-page assets (CSS/JS) load unconditionally -- same as the
+    main app's entry pane -- because `\\(...\\)`/`\\[...\\]`/`$$...$$` are
+    always-on delimiters; only bare `$...$` is the per-feed opt-in."""
+    _patch_read(monkeypatch, backlog=[_rec(1)], article="<p>\\(x^2\\)</p>")
+    with TestClient(_app()) as client:
+        body = client.get("/read", params={"feed_url": "feed1", "entry_id": "e1"}).text
+    assert "vendor/katex-0.18.6/katex.min.css" in body
+    assert "vendor/katex-0.18.6/katex.min.js" in body
+    assert "vendor/katex-0.18.6/auto-render.min.js" in body
+    # Comes before reader.js, which calls renderMathInElement synchronously.
+    assert body.index("katex.min.js") < body.index("reader.js")
+
+
+def test_reader_page_katex_dollar_math_defaults_off(monkeypatch):
+    _patch_read(monkeypatch, backlog=[_rec(1)])
+    with TestClient(_app()) as client:
+        body = client.get("/read", params={"feed_url": "feed1", "entry_id": "e1"}).text
+    assert "data-katex-dollar-math='0'" in body
+
+
+def test_reader_page_katex_dollar_math_reflects_the_per_feed_pref(monkeypatch):
+    _patch_read(monkeypatch, backlog=[_rec(1)])
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, "feed1", "katex_dollar_math", 1)
+    with TestClient(_app()) as client:
+        body = client.get("/read", params={"feed_url": "feed1", "entry_id": "e1"}).text
+    assert "data-katex-dollar-math='1'" in body
 
 
 def test_archive_button_shown_for_a_tag_kept_item(monkeypatch):
