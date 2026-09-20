@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 import main
+from services import migration_common
 
 
 @pytest.mark.parametrize(
@@ -48,7 +49,7 @@ def test_canonicalize_item_feed_urls_in_place():
         {"feed_url": "", "url": "c"},  # empty left untouched
         {"url": "d"},  # missing key tolerated
     ]
-    main._canonicalize_item_feed_urls(items)
+    migration_common._canonicalize_item_feed_urls(items)
     assert items[0]["feed_url"] == "https://www.reddit.com/r/x/.rss"
     assert items[1]["feed_url"] == "https://example.com/feed"
     assert items[2]["feed_url"] == ""

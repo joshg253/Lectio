@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 import pytest
 
 import main
-from services import tenancy
+from services import migration_common, tenancy
 
 FEED_CANONICAL = "https://example.test/feed"
 FEED_STORED_NONCANONICAL = "https://example.test/feed/"  # trailing slash
@@ -64,10 +64,10 @@ def test_canonical_feed_url_lookup_resolves_noncanonical_stored_urls(configured)
     with main.get_reader() as reader:
         reader.add_feed(FEED_STORED_NONCANONICAL, exist_ok=True)
     with main.get_reader() as reader:
-        lookup = main._canonical_feed_url_lookup(reader)
+        lookup = migration_common._canonical_feed_url_lookup(reader)
     assert lookup[FEED_CANONICAL] == FEED_STORED_NONCANONICAL
-    assert main._resolve_feed_url(FEED_CANONICAL, lookup) == FEED_STORED_NONCANONICAL
-    assert main._resolve_feed_url("https://new.test/feed", lookup) == "https://new.test/feed"
+    assert migration_common._resolve_feed_url(FEED_CANONICAL, lookup) == FEED_STORED_NONCANONICAL
+    assert migration_common._resolve_feed_url("https://new.test/feed", lookup) == "https://new.test/feed"
 
 
 def test_migration_subscribe_does_not_duplicate_noncanonical_feed(configured):
@@ -75,7 +75,7 @@ def test_migration_subscribe_does_not_duplicate_noncanonical_feed(configured):
         reader.add_feed(FEED_STORED_NONCANONICAL, exist_ok=True)
 
     state: dict = {}
-    main._apply_migration_items([_item()], state, lambda: None)
+    migration_common._apply_migration_items([_item()], state, lambda: None)
 
     assert state.get("subs_added", 0) == 0
     with main.get_reader() as reader:
@@ -85,7 +85,7 @@ def test_migration_subscribe_does_not_duplicate_noncanonical_feed(configured):
 
 def test_migration_subscribes_a_genuinely_new_feed(configured):
     state: dict = {}
-    main._apply_migration_items([_item(feed_url="https://new.test/feed")], state, lambda: None)
+    migration_common._apply_migration_items([_item(feed_url="https://new.test/feed")], state, lambda: None)
 
     assert state.get("subs_added") == 1
     with main.get_reader() as reader:
@@ -108,7 +108,7 @@ def test_migration_tags_land_on_existing_entry_not_a_synthesized_duplicate(confi
         )
 
     state: dict = {}
-    main._apply_migration_items(
+    migration_common._apply_migration_items(
         [_item(url="https://example.test/a", starred=True, tags=["keep"])],
         state,
         lambda: None,

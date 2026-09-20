@@ -86,9 +86,19 @@ compat APIs; treat as its own carefully-tested project, not part of a mechanical
      and the still-in-main functions that call them (`_load_da_sync_detail`, `bulk_feed_action`,
      `sync_deviantart_watchlist`) resolve them from main's own namespace regardless of which module
      calls in.
-   - D — Miniflux/FreshRSS/TT-RSS import (test/status/start/reset + worker each). Shared helpers
+   - **D — done (2026-09-20).** Miniflux/FreshRSS/TT-RSS import (test/status/start/reset + worker
+     each) → `routes/integrations_{miniflux,freshrss,ttrss}.py`. The shared helpers
      (`_apply_migration_items`, `_canonicalize_item_feed_urls`, `_resolve_feed_url`,
-     `_canonical_feed_url_lookup`) move to a new `services/migration_common.py` first.
+     `_canonical_feed_url_lookup`) moved first into a new `services/migration_common.py` — a real
+     services module (routes import it directly, not via main), but it still does `from main import
+     canonical_feed_url, get_reader, ...` at module level since those primitives have no other home
+     yet, so it's imported late from main.py's own bottom section too (Inoreader's still-resident
+     import code, Stage E, needs 3 of the 4 helpers). This taught the same lesson Stage B did, one
+     level deeper: the "import main first" rule extends to `services.migration_common` too — a test
+     touching it before `main` hits the identical circular-import failure, because loading it
+     triggers main's execution, which reaches its own late import of the same not-yet-finished
+     module. `test_migration_import_dedup.py` and `test_canonical_feed_url.py` called the moved
+     helpers directly off `main` and were retargeted the same way as prior stages.
    - E — Inoreader OAuth + import (biggest, ~950 lines, its own drip-step state machine) →
      `routes/integrations_inoreader.py` + `services/inoreader_import.py`.
 2. Post-refresh automation pipeline (`_run_automation_after_refresh` + the six
