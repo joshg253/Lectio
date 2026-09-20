@@ -249,7 +249,7 @@ class DeveloperAndroidPlugin:
             host = (urlparse(source_url).netloc or "").lower()
         except ValueError:
             return False
-        host = host.split(":", 1)[0]
+        host = host.split(":", 1)[0].rstrip(".")
         return host == self._HOST or host.endswith("." + self._HOST)
 
     def handles(self, *, source_url: str) -> bool:

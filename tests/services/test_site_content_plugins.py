@@ -233,6 +233,8 @@ DEVSITE_PAGE = (
         (DEVSITE_URL, True),
         ("https://developer.android.com/studio/releases", True),
         ("https://sub.developer.android.com/studio", True),
+        ("https://developer.android.com./studio", True),  # DNS root dot, same host
+        ("https://sub.developer.android.com./studio", True),
         ("https://developer.android.com.evil.test/studio", False),
         ("https://example.com/studio/preview", False),
     ],
