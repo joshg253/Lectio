@@ -13,9 +13,10 @@ Parked) sit at the end — nothing there is scheduled, just what to check if a s
 Tier 1 is empty. Next up: the main.py/index.html breakup (top of Tier 4) — Josh is leaning toward
 it, and Step 1 is scoped and ready to start.
 
-Two small Tier 2 fixes are built and tested but not yet merged into main — Read Mode LaTeX
-(`worktree-agent-adaade9c1e0179135`, commit `5795810`) and the locked-webcomic placeholder
-(`worktree-agent-a454d4abe33a867f3`, commit `2132623`). Merge when ready.
+Three small Tier 2 fixes are built and tested but not yet merged into main — Read Mode LaTeX
+(`worktree-agent-adaade9c1e0179135`, commit `5795810`), the locked-webcomic placeholder
+(`worktree-agent-a454d4abe33a867f3`, commit `2132623`), and the context-menu handler
+unification (`worktree-agent-a526c534a0c36d22f`, commit `4434d56`). Merge when ready.
 
 ## Tier 1 — actively impeding unread-clearing
 
@@ -23,19 +24,7 @@ Empty.
 
 ## Tier 2 — small, fast, independent wins
 
-### Context-menu open handler duplication (Sourcery, PR #193)
-
-The entry-pane and post-list each have their own `contextmenu` listener in `static/js/app.js`
-(~40 lines each) populating the same `contextPost*` vars, kept in sync by hand. The two have
-drifted beyond simple duplication (e.g. a stale "Clear image cache" item can leak into the
-entry-pane menu after a prior list right-click), so a naive merge would silently change behavior.
-Previously deferred for lack of a browser to verify a JS change against — no longer true, this
-environment runs real Playwright verification routinely now.
-
-Moderate: write characterization tests for both handlers' current behavior first, then extract a
-shared `_openPostContextMenu(sourceEl, event)` reading every `data-post-*` attribute; fold in the
-`'-1'` Uncategorized-folder-fallback constant (4+ literal spots) in the same pass. Highest-traffic
-interactive path in the app — verify against real browser interaction, not just the new tests.
+Empty — see the "Now" preamble for the three fixes built here and awaiting merge.
 
 ## Tier 3 — maintenance backlog, ready to run
 
