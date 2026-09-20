@@ -209,3 +209,54 @@ def test_unmatched_selectors_fall_back_to_whole_page():
     import main
 
     assert main._slice_to_content("<html><body><p>no wrappers</p></body></html>", ("div.blog__article--component_wrapper",)) is None
+
+
+# --- developer.android.com: strip Devsite's own self-marked chrome ---------
+
+DEVSITE_URL = "https://developer.android.com/studio/preview"
+
+DEVSITE_PAGE = (
+    "<html><body>"
+    '<div class="devsite-banner devsite-banner-announcement nocontent">Sign up to participate in user research studies.</div>'
+    '<nav class="devsite-book-nav devsite-nav nocontent"><ul><li>Get started</li><li>User guide</li></ul></nav>'
+    '<div class="devsite-article-body">'
+    "<p>Preview release. Get early access to the latest features and improvements in Android Studio.</p>"
+    "</div>"
+    '<div class="devsite-footer-linkboxes nocontent">More Android Developers sites</div>'
+    "</body></html>"
+)
+
+
+@pytest.mark.parametrize(
+    "url, handled",
+    [
+        (DEVSITE_URL, True),
+        ("https://developer.android.com/studio/releases", True),
+        ("https://sub.developer.android.com/studio", True),
+        ("https://developer.android.com./studio", True),  # DNS root dot, same host
+        ("https://sub.developer.android.com./studio", True),
+        ("https://developer.android.com.evil.test/studio", False),
+        ("https://example.com/studio/preview", False),
+    ],
+)
+def test_devsite_handles(url, handled):
+    from services.site_content_plugins import DeveloperAndroidPlugin
+
+    assert DeveloperAndroidPlugin().handles(source_url=url) is handled
+
+
+def test_devsite_strips_nocontent_chrome():
+    import main
+
+    cleaned = main._strip_site_chrome(DEVSITE_PAGE, DEVSITE_URL)
+    assert "Preview release" in cleaned
+    for gone in ("Sign up to participate", "Get started", "User guide", "More Android Developers sites"):
+        assert gone not in cleaned, gone
+
+
+def test_devsite_readability_keeps_the_article_not_the_banner():
+    import main
+
+    _title, article_html = main.extract_readability_article(DEVSITE_PAGE, DEVSITE_URL)
+    assert "Preview release" in article_html
+    assert "Sign up to participate" not in article_html

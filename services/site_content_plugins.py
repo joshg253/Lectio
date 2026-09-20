@@ -224,9 +224,57 @@ class PaizoBlogPlugin:
         return None
 
 
+@dataclass(frozen=True)
+class DeveloperAndroidPlugin:
+    """developer.android.com: a Google Devsite doc page, not a blog post.
+
+    Readability has no way to tell the left-hand book-nav tree, the top
+    breadcrumb, the "sign up for research" banner, and the footer promo grid
+    from the actual doc — on a page like ``/studio/preview``, that banner's
+    call-to-action text was readability's own top pick, ahead of the real
+    "Preview release" intro paragraph that starts ``.devsite-article-body``.
+
+    Devsite marks every one of those chrome blocks with its own ``nocontent``
+    class already — ``devsite-banner nocontent``, ``devsite-book-nav …
+    nocontent``, ``devsite-footer-linkboxes nocontent``, and so on — site-wide,
+    on every page this plugin was checked against (features/preview/releases/
+    intro). One selector removes all of it, so there is nothing here to keep
+    in sync with Devsite's own markup by hand.
+    """
+
+    _HOST = "developer.android.com"
+
+    def _host_matches(self, source_url: str) -> bool:
+        try:
+            host = (urlparse(source_url).netloc or "").lower()
+        except ValueError:
+            return False
+        host = host.split(":", 1)[0].rstrip(".")
+        return host == self._HOST or host.endswith("." + self._HOST)
+
+    def handles(self, *, source_url: str) -> bool:
+        return self._host_matches(source_url)
+
+    def prefers_full_page(self, *, source_url: str) -> bool:
+        return False  # readability picks .devsite-article-body fine once the chrome is gone
+
+    def strip_selectors(self, *, source_url: str) -> tuple[str, ...]:
+        return (".nocontent",)
+
+    def content_selectors(self, *, source_url: str) -> tuple[str, ...]:
+        return ()
+
+    def embed_at_top(self, *, source_url: str) -> bool:
+        return False
+
+    def extra_embed_html(self, *, source_url: str, raw_html: str) -> str | None:
+        return None
+
+
 DEFAULT_SITE_CONTENT_PLUGINS: tuple[SiteContentPlugin, ...] = (
     BasslessonsPlugin(),
     PaizoBlogPlugin(),
+    DeveloperAndroidPlugin(),
 )
 
 

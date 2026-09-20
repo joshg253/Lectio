@@ -42,11 +42,18 @@ Dead/one-shot/ambiguous: an Instagram post URL, a single Vice article, cochaser.
 whiskypaint/nolanfa tumblrs, norfolkwinters, crispian-jago, owenyoung myfeed. Sort or unsubscribe
 by hand.
 
-### Readability grabs a devsite nav sidebar on androidstudio.googleblog.com
+### Readability grabs a devsite nav sidebar on androidstudio.googleblog.com — fixed 2026-09-19
 
-One reported entry: the post links to a developer.android.com preview page, and readability
-latches onto that page's nav markup instead of the Blogger post body. Not measured at scale — worth
-a targeted `_strip_site_chrome` fix if it recurs.
+Reproduced against the live pages: it wasn't the Blogger post itself, it was a
+`developer.android.com` doc page linked from one (e.g. `/studio/preview`) — readability's own top
+pick there was a "sign up for user research" banner, ahead of the real intro paragraph inside
+`.devsite-article-body`. Fixed with a `DeveloperAndroidPlugin` in `services/site_content_plugins.py`:
+Devsite already self-marks every chrome block (banner, book-nav sidebar, breadcrumb row, footer
+promos) with its own `nocontent` class, site-wide, so one `strip_selectors` rule
+(`.nocontent`) clears all of it with nothing to keep in sync with Devsite's markup by hand. Verified
+against `/studio/preview`, `/studio/releases`, and `/studio/intro/update.html` (all were polluted)
+plus `/studio/preview/features` (was already clean, confirmed unaffected). 7 new tests in
+`tests/services/test_site_content_plugins.py`.
 
 ## Tier 4 — real features, not blocking anything today
 
