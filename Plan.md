@@ -78,7 +78,14 @@ compat APIs; treat as its own carefully-tested project, not part of a mechanical
      before its `from routes import integrations_x` line; see `routes/__init__.py`'s docstring.
      Stages C-E should check any new/updated test the same way before assuming a moved route "just
      works" with its old test.
-   - C — DeviantArt watchlist sync/unsubscribe/push/add-watch-feed → extends A's deviantart file.
+   - **C — done (2026-09-20).** DeviantArt watchlist sync/unsubscribe/push/add-watch-feed → extends
+     A's deviantart file. `test_deviantart_watchlist_autoresume.py` called two of the moved routes
+     directly off `main` (`deviantart_mark_unwatched_viewed_route`, `deviantart_unsubscribe_unwatched_
+     route`) and needed the same routes-module retarget as Stage B; its other monkeypatches
+     (`get_runtime_setting`, `disable_feed`, etc.) were untouched since those helpers stay in main.py
+     and the still-in-main functions that call them (`_load_da_sync_detail`, `bulk_feed_action`,
+     `sync_deviantart_watchlist`) resolve them from main's own namespace regardless of which module
+     calls in.
    - D — Miniflux/FreshRSS/TT-RSS import (test/status/start/reset + worker each). Shared helpers
      (`_apply_migration_items`, `_canonicalize_item_feed_urls`, `_resolve_feed_url`,
      `_canonical_feed_url_lookup`) move to a new `services/migration_common.py` first.

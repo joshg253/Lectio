@@ -16,6 +16,7 @@ import pytest
 from fastapi import Request
 
 import main
+from routes import integrations_deviantart as deviantart_routes
 from services import deviantart as deviantart_service
 from services import tenancy
 
@@ -220,7 +221,7 @@ def test_unwatched_viewed_route_clears_the_dirty_flag(configured):
     with main.get_meta_connection() as conn:
         main.set_setting(conn, main.SETTING_DEVIANTART_UNWATCHED_DIRTY, "1")
 
-    result = main.deviantart_mark_unwatched_viewed_route(MagicMock(headers={}))
+    result = deviantart_routes.deviantart_mark_unwatched_viewed_route(MagicMock(headers={}))
 
     assert result.status_code == 303
     with main.get_meta_connection() as conn:
@@ -388,7 +389,7 @@ def test_unsubscribe_unwatched_removes_the_feed_and_the_report_entry(configured,
     feed_url = _add_da_artist_feed("zoe")
     _set_unwatched(["zoe"])
 
-    result = main.deviantart_unsubscribe_unwatched_route(_NO_REQUEST)
+    result = deviantart_routes.deviantart_unsubscribe_unwatched_route(_NO_REQUEST)
 
     assert json.loads(result.body) == {"ok": True, "count": 1}
     with main.get_meta_connection() as conn:
@@ -407,7 +408,7 @@ def test_unsubscribe_unwatched_leaves_other_artists_alone(configured, monkeypatc
     kept_url = _add_da_artist_feed("alice")  # still watched -- not in the report
     _set_unwatched(["zoe"])
 
-    main.deviantart_unsubscribe_unwatched_route(_NO_REQUEST)
+    deviantart_routes.deviantart_unsubscribe_unwatched_route(_NO_REQUEST)
 
     with main.get_meta_connection() as conn:
         row = conn.execute("SELECT 1 FROM folder_feeds WHERE feed_url = ?", (kept_url,)).fetchone()
@@ -437,7 +438,7 @@ def test_unsubscribe_unwatched_never_touches_the_watch_feed(configured, monkeypa
         reader.add_feed(watch_url, exist_ok=True)
     _set_unwatched(["deviantsyouwatch"])
 
-    result = main.deviantart_unsubscribe_unwatched_route(_NO_REQUEST)
+    result = deviantart_routes.deviantart_unsubscribe_unwatched_route(_NO_REQUEST)
 
     assert json.loads(result.body) == {"ok": True, "count": 0}
     with main.get_meta_connection() as conn:
@@ -447,5 +448,5 @@ def test_unsubscribe_unwatched_never_touches_the_watch_feed(configured, monkeypa
 
 def test_unsubscribe_unwatched_no_op_when_nothing_reported(configured):
     configured.setattr(main, "get_runtime_setting", _real_get_runtime_setting)
-    result = main.deviantart_unsubscribe_unwatched_route(_NO_REQUEST)
+    result = deviantart_routes.deviantart_unsubscribe_unwatched_route(_NO_REQUEST)
     assert json.loads(result.body) == {"ok": True, "count": 0}
