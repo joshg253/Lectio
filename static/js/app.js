@@ -3169,6 +3169,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     const unsubscribeFeedUrlInput = document.getElementById('context-unsubscribe-feed-url');
     const postMarkReadButton = document.getElementById('ctx-post-mark-read');
     const postMarkReadBulkButton = document.getElementById('ctx-post-mark-read-bulk');
+    const postMarkUnreadBulkButton = document.getElementById('ctx-post-mark-unread-bulk');
     const postStarBulkButton = document.getElementById('ctx-post-star-bulk');
     const postUnstarBulkButton = document.getElementById('ctx-post-unstar-bulk');
     const postMarkFeedReadButton = document.getElementById('ctx-post-mark-feed-read');
@@ -9308,6 +9309,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
                 postMarkReadBulkButton.textContent = `Mark ${contextSelectedPosts.length} posts as read`;
               }
               setMenuItemVisible(postMarkReadBulkButton, true);
+              if (postMarkUnreadBulkButton) {
+                postMarkUnreadBulkButton.textContent = `Mark ${contextSelectedPosts.length} posts as unread`;
+              }
+              setMenuItemVisible(postMarkUnreadBulkButton, true);
               setMenuItemVisible(postCopyUrlButton, false);
               setMenuItemVisible(postAddLinkToNoteButton, false);
               setMenuItemVisible(postMarkFeedReadButton, false);
@@ -9367,6 +9372,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               }
               setMenuItemVisible(postMarkReadButton, true);
               setMenuItemVisible(postMarkReadBulkButton, false);
+              setMenuItemVisible(postMarkUnreadBulkButton, false);
               setMenuItemVisible(postStarBulkButton, false);
               setMenuItemVisible(postUnstarBulkButton, false);
               setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
@@ -10088,8 +10094,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // Same tail as applyBulkReadState (badge/favicon sync) but driven by a
     // specific set of {feedUrl, entryId} — the multi-select bulk action, which
     // can span several feeds and specific entries rather than one feed swept
-    // by age.
-    function applyReadStateToSelection(entries) {
+    // by age. isRead defaults to true (mark read) for existing callers;
+    // pass false for the mark-unread bulk action, which flips the badge math
+    // (unread counts go UP, not down).
+    function applyReadStateToSelection(entries, isRead = true) {
       const deltaByFeed = {};
       let totalChanged = 0;
       for (const e of entries) {
@@ -10097,18 +10105,19 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           `.post-item[data-post-feed-url="${CSS.escape(e.feedUrl)}"][data-post-entry-id="${CSS.escape(e.entryId)}"]`
         );
         if (!el) continue;
-        if (applyPostItemReadState(el, true)) {
+        if (applyPostItemReadState(el, isRead)) {
           deltaByFeed[e.feedUrl] = (deltaByFeed[e.feedUrl] || 0) + 1;
           totalChanged++;
         }
       }
+      const sign = isRead ? -1 : 1;
       for (const [fu, delta] of Object.entries(deltaByFeed)) {
-        adjustSidebarUnreadCount(fu, -delta);
+        adjustSidebarUnreadCount(fu, sign * delta);
       }
       if (totalChanged > 0) {
         const fallbackBase = getUnreadCountFallback();
         const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
-        appUnreadCount = Math.max(0, current - totalChanged);
+        appUnreadCount = Math.max(0, current + sign * totalChanged);
         updateDynamicFavicon();
       }
     }
@@ -11019,6 +11028,34 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         }
       } catch (_) {
         showToastMessage('Mark as read failed — network error.');
+      }
+    });
+
+    postMarkUnreadBulkButton?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const entries = contextSelectedPosts;
+      hideAllContextMenus();
+      if (!entries.length) return;
+      try {
+        // Chunked: a Select-All-driven selection can exceed the server's
+        // per-request cap (main.py's _MOVE_BATCH_CAP).
+        const results = await postEntriesBatched('/entries/read-batch', entries, { read: '0' });
+        const marked = results.reduce((n, r) => n + (r.marked || 0), 0);
+        const failed = results.reduce((n, r) => n + (r.failed || 0), 0);
+        const ok = results.length > 0 && results.every((r) => r.ok);
+        let message = `Marked ${marked} post${marked === 1 ? '' : 's'} as unread.`;
+        if (failed) message += ` ${failed} failed.`;
+        const data = { ok, marked, failed, message, error: results.find((r) => !r.ok)?.error };
+        if (data.ok) {
+          showToastMessage(data.message || 'Marked as unread.');
+          applyReadStateToSelection(entries, false);
+          // Selection is left as-is — bulk actions chain, same as Mark as read.
+        } else {
+          showToastMessage(data.error || 'Mark as unread failed.');
+        }
+      } catch (_) {
+        showToastMessage('Mark as unread failed — network error.');
       }
     });
 
@@ -17768,6 +17805,18 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // cached length) participate — a post with no duration at all is
     // excluded outright, not treated as "unknown, so let it through", so
     // e.g. "<2:00" reliably narrows a mixed folder down to short videos only.
+    // ">0" therefore already means "has a real duration" for free — every
+    // real duration is positive, and no-duration posts are excluded by every
+    // operator regardless.
+    //
+    // "=0" is the one deliberate exception: it inverts that exclusion to
+    // select ONLY posts with no cached duration at all (a live/upcoming video
+    // that hasn't aired, mainly). Safe as a sentinel because a real YouTube
+    // duration is never actually 0 seconds — such a video would never have a
+    // cached length to compare against in the first place.
+    //
+    // "=X-Y" is an inclusive range, each side accepting the same duration
+    // shapes as everywhere else ("=1-2", "=90s-3m", "=1:30-2:00").
     //
     // Gated to the configured YouTube folder (Settings → YouTube) so a title
     // that happens to contain something shaped like "<2:00" (a timestamp
@@ -17796,11 +17845,24 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     }
 
     function _parseDurationFilter(term) {
-      const m = term.match(/^(<=|>=|<|>)(.+)$/);
+      const m = term.match(/^(<=|>=|<|>|=)(.+)$/);
       if (!m) return null;
-      const seconds = _parseDurationToSeconds(m[2].trim());
+      const [, op, rest] = m;
+      const value = rest.trim();
+      if (op === '=') {
+        if (value === '0') return { op: 'none' };
+        // First hyphen only: none of the duration shapes below use "-"
+        // internally, so this is unambiguous ("1:30-2:00" -> "1:30", "2:00").
+        const range = value.match(/^(.+?)-(.+)$/);
+        if (!range) return null; // bare "=N" (exact-match) isn't a supported shape
+        const min = _parseDurationToSeconds(range[1].trim());
+        const max = _parseDurationToSeconds(range[2].trim());
+        if (min === null || max === null) return null;
+        return { op: 'range', min, max };
+      }
+      const seconds = _parseDurationToSeconds(value);
       if (seconds === null) return null;
-      return { op: m[1], seconds };
+      return { op, seconds };
     }
 
     function postsFilterMatches(item, term, isYtFolder) {
@@ -17808,6 +17870,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       const durationFilter = isYtFolder ? _parseDurationFilter(term) : null;
       if (durationFilter) {
         const raw = item.getAttribute('data-post-duration-seconds');
+        if (durationFilter.op === 'none') return !raw;
         if (!raw) return false; // no duration at all -- excluded, not "unknown"
         const secs = Number(raw);
         switch (durationFilter.op) {
@@ -17815,6 +17878,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           case '<=': return secs <= durationFilter.seconds;
           case '>': return secs > durationFilter.seconds;
           case '>=': return secs >= durationFilter.seconds;
+          case 'range': return secs >= durationFilter.min && secs <= durationFilter.max;
           default: return false;
         }
       }
@@ -19134,12 +19198,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         pfSection.removeAttribute('open');
         document.getElementById('afd-pf-title').value = '';
         document.getElementById('afd-pf-selector').value = '';
+        document.getElementById('afd-pf-content-selector').value = '';
         document.getElementById('afd-pf-backfill').checked = false;
         const _sug = document.getElementById('afd-pf-suggestions');
         const _prev = document.getElementById('afd-pf-preview');
         if (_sug) { _sug.hidden = true; document.getElementById('afd-pf-suggestions-chips').innerHTML = ''; }
         if (_prev) { _prev.hidden = true; _prev.innerHTML = ''; }
         modal.querySelector('input[name="afd-mode"][value="link_list"]').checked = true;
+        if (typeof pfSyncPickBtn === 'function') pfSyncPickBtn();
         devtoSection.hidden = true;
         document.getElementById('afd-devto-tag').value = '';
         document.getElementById('afd-devto-top').value = '';
@@ -19312,6 +19378,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           document.getElementById('afd-pff-mode').value   = modal.querySelector('input[name="afd-mode"]:checked')?.value || 'link_list';
           document.getElementById('afd-pff-title').value  = document.getElementById('afd-pf-title').value;
           document.getElementById('afd-pff-selector').value = document.getElementById('afd-pf-selector').value;
+          document.getElementById('afd-pff-content-selector').value = document.getElementById('afd-pf-content-selector').value.trim();
           document.getElementById('afd-pff-backfill').value = document.getElementById('afd-pf-backfill').checked ? '1' : '';
           pfForm.submit();
         } else {
@@ -19421,10 +19488,14 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
 
       function pfClosePicker() { if (pfPicker) pfPicker.hidden = true; if (pfPickerFrame) pfPickerFrame.src = 'about:blank'; }
 
-      // The picker only makes sense for link_list mode (it derives a link selector).
+      // The picker, and the content selector, only make sense for link_list mode
+      // (a link selector to derive; a body-fill target on each entry's OWN page —
+      // change_detect has no "entries", just the one watched page).
+      const pfContentSelectorRow = document.getElementById('afd-pf-content-selector-row');
       function pfSyncPickBtn() {
         const mode = modal.querySelector('input[name="afd-mode"]:checked')?.value || 'link_list';
         if (pfPickBtn) pfPickBtn.hidden = (mode !== 'link_list');
+        if (pfContentSelectorRow) pfContentSelectorRow.hidden = (mode !== 'link_list');
         if (mode !== 'link_list') pfClosePicker();
       }
       modal.querySelectorAll('input[name="afd-mode"]').forEach(r => r.addEventListener('change', pfSyncPickBtn));

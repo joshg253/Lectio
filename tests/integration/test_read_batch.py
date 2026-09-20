@@ -49,8 +49,8 @@ def _is_read(feed_url: str, entry_id: str) -> bool:
         return bool(reader.get_entry((feed_url, entry_id)).read)
 
 
-def _batch(pairs) -> dict:
-    resp = main.mark_entries_read_batch_route(entries=json.dumps(pairs))
+def _batch(pairs, read: int = 1) -> dict:
+    resp = main.mark_entries_read_batch_route(entries=json.dumps(pairs), read=read)
     return json.loads(bytes(resp.body))
 
 
@@ -102,3 +102,66 @@ def test_batch_read_counts_malformed_pairs_as_failed(env):
     _setup_entries()
     data = _batch([[FEED, "e1"], ["only-one-element"]])
     assert data["ok"] and data["marked"] == 1 and data["failed"] == 1
+
+
+def _read_state_row_exists(feed_url: str, entry_id: str) -> bool:
+    with main.get_meta_connection() as conn:
+        return (
+            conn.execute(
+                "SELECT 1 FROM entry_read_state WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchone()
+            is not None
+        )
+
+
+def test_batch_unread_marks_only_the_targeted_entries(env):
+    _setup_entries()
+    with main.get_reader() as reader:
+        reader.mark_entry_as_read((FEED, "e1"))
+        reader.mark_entry_as_read((FEED, "e2"))
+    main.upsert_entry_read_state(FEED, "e1")
+    main.upsert_entry_read_state(FEED, "e2")
+    data = _batch([[FEED, "e1"]], read=0)
+    assert data["ok"] and data["marked"] == 1 and data["failed"] == 0
+    assert not _is_read(FEED, "e1")
+    assert _is_read(FEED, "e2")
+    # entry_read_state row must be removed, not just left stale, same as the
+    # single-post unread toggle (delete_entry_read_state).
+    assert not _read_state_row_exists(FEED, "e1")
+    assert _read_state_row_exists(FEED, "e2")
+
+
+def test_batch_unread_skips_already_unread(env):
+    _setup_entries()
+    with main.get_reader() as reader:
+        reader.mark_entry_as_read((FEED, "e1"))
+    data = _batch([[FEED, "e1"], [FEED, "e2"]], read=0)
+    assert data["ok"] and data["marked"] == 1  # e2 already unread, not recounted
+    assert not _is_read(FEED, "e1") and not _is_read(FEED, "e2")
+
+
+def test_batch_unread_does_not_apply_unpremiered_youtube_guard(env):
+    """The guard exists to stop a blanket bulk mark-READ from swallowing a
+    premiere that hasn't aired yet — marking unread carries no such risk and
+    must not be blocked by it."""
+    with main.get_reader() as reader:
+        reader.add_feed(YT_FEED, allow_invalid_url=True, exist_ok=True)
+        reader.add_entry({"feed_url": YT_FEED, "id": "v1", "title": "Premiere", "link": "https://www.youtube.com/watch?v=abcdefghijk"})
+        reader.mark_entry_as_read((YT_FEED, "v1"))
+    main.youtube_duration_service._live_cache["abcdefghijk"] = ("upcoming", None)
+    data = _batch([[YT_FEED, "v1"]], read=0)
+    assert data["ok"] and data["marked"] == 1
+    assert not _is_read(YT_FEED, "v1")
+
+
+def test_batch_unread_invalidates_unread_count_cache(env):
+    _setup_entries()
+    with main.get_reader() as reader:
+        reader.mark_entry_as_read((FEED, "e1"))
+    main.unread_counts_cache["unread_counts"] = {"stale": True}
+    gen_before = main._unread_counts_generation
+    data = _batch([[FEED, "e1"]], read=0)
+    assert data["ok"] and data["marked"] == 1
+    assert main._unread_counts_generation != gen_before
+    assert "unread_counts" not in main.unread_counts_cache

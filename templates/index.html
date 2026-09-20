@@ -831,7 +831,7 @@
             type="search"
             placeholder="Filter this view…"
             aria-label="Filter the posts in this view by title, link, or feed"
-            title="Also matches video duration, e.g. &lt;2:00, &gt;=1h, &lt;90s (posts with no duration are excluded)"
+            title="Also matches video duration, e.g. &lt;2:00, &gt;=1h, &lt;90s, =1-2 (range), =0 (no duration) -- posts with no duration are excluded otherwise"
             autocomplete="off"
           />
           <span id="posts-filter-count" class="posts-filter-count" hidden></span>
@@ -2142,13 +2142,16 @@
 
   <div id="post-context-menu" class="context-menu" hidden>
     <button type="button" id="ctx-post-mark-read" class="context-menu-item">Mark as read</button>
-    {# Bulk-only sibling of ctx-post-mark-read: always marks read (no unread
-       toggle — a mixed-selection toggle has no single obvious direction). #}
+    {# Bulk-only siblings of ctx-post-mark-read: both directions always shown
+       (like the star/unstar pair below) rather than one mixed-selection
+       toggle — there is no single "obvious direction" to collapse to when
+       the selection spans both read states. #}
     <button type="button" id="ctx-post-mark-read-bulk" class="context-menu-item" hidden>Mark as read</button>
+    <button type="button" id="ctx-post-mark-unread-bulk" class="context-menu-item" hidden>Mark as unread</button>
     {# Bulk-only, both directions shown regardless of the selection's mixed
-       star state — unlike mark-as-read, add and remove are equally common
-       triage actions here (the Saved view especially), so there's no one
-       "obvious direction" to collapse to. #}
+       star state — add and remove are equally common triage actions here
+       (the Saved view especially), so there's no one "obvious direction"
+       to collapse to. Same reasoning as the read/unread pair above. #}
     <button type="button" id="ctx-post-star-bulk" class="context-menu-item" hidden>Add star</button>
     <button type="button" id="ctx-post-unstar-bulk" class="context-menu-item" hidden>Remove star</button>
     <button type="button" id="ctx-post-mark-feed-read" class="context-menu-item" hidden>Mark Feed as Read</button>

@@ -286,7 +286,12 @@ def _taxonomy_slug_from_href(href: str) -> str | None:
     if not href:
         return None
     if path_m := _TAXONOMY_HREF_RE.search(href):
-        return path_m.group(1).replace("-", " ")
+        # unquote_plus first: most sites hyphenate a path slug, but some
+        # (texasbluesalley.com: "/tag/B.B.+King", "/tag/Little+Wing",
+        # confirmed live 2026-09-19) use "+" for spaces the way a query string
+        # would, even in a path segment. A no-op for the common hyphenated
+        # case, which the trailing dash-replace still handles.
+        return unquote_plus(path_m.group(1)).replace("-", " ")
     if query_m := _TAXONOMY_QUERY_RE.search(href):
         # "How-To+Guides" -> "How-To Guides". Hyphens are NOT expanded here the
         # way a path slug's are: a query value is the publisher's display term
@@ -570,8 +575,8 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
 
     # Tag-classed anchors (open tag only — the anchor body may wrap an image):
     # tag name from the title attribute (any linked path — How-To-Geek's tag
-    # block links bare section slugs like /gpu/), else the /tag//category/
-    # URL slug when there's no title.
+    # block links bare section slugs like /gpu/), else the /tag//tags//
+    # category//categories/ URL slug when there's no title.
     for open_tag in re.findall(r"<a\b[^>]*>", html, re.IGNORECASE):
         attrs = {}
         for am in _ANCHOR_ATTR_RE.finditer(open_tag):
@@ -581,8 +586,11 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
         if "tag" not in classes or not href:
             continue
         value = (attrs.get("title") or "").strip()
-        if not value and (slug_m := re.search(r"/(?:tag|category)/([^/?#]+)", href)):
-            value = slug_m.group(1).replace("-", " ")
+        if not value:
+            # Reuses the same slug decoder the taxonomy-URL tier below relies
+            # on (handles both "/tag/" and "/tags/", and unquotes a "+"-encoded
+            # path segment) rather than a second, narrower regex of its own.
+            value = _taxonomy_slug_from_href(href) or ""
         if value:
             values.append(value)
 

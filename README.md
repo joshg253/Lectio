@@ -49,8 +49,8 @@ The full tour — every feature, organized by area — is on the
 short version:
 
 - **Triage first.** Three-pane reader, keyboard nav everywhere, context menus,
-  bulk mark-as-read that updates in place, per-view remembered sort, and a
-  layout that collapses to two panes on a tablet and one on a phone. Checkbox
+  bulk mark-as-read/unread that updates in place, per-view remembered sort, and
+  a layout that collapses to two panes on a tablet and one on a phone. Checkbox
   multi-select on the post list drives bulk tag/star/playlist/move actions —
   see the [Features wiki page](https://github.com/joshg253/Lectio/wiki/Features)
   for the detail.
