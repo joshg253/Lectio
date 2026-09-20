@@ -68,13 +68,18 @@ def test_context_menu_visibility_gates_on_feed_and_entry_id_not_the_source_link(
     """Unlike Copy URL (which genuinely needs contextPostLink), the note
     quick-capture needs feed_url+entry_id to build a Lectio URL -- a post
     with no source link (still possible for some synthetic entries) can still
-    offer this action."""
+    offer this action.
+
+    The post-list and entry-pane context menus share one _openPostContextMenu
+    setup function, so the visible-state pattern now appears once there plus
+    once more in the bulk-selection branch that sets it to `false` -- not
+    twice, one per handler, the way it did before the two were unified."""
     for pattern in (
         "setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));",
         "setMenuItemVisible(postAddLinkToNoteButton, false);",
     ):
         assert APP_JS.count(pattern) >= 1, pattern
-    assert APP_JS.count("setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));") == 2
+    assert APP_JS.count("setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));") == 1
     assert "setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostLink));" not in APP_JS
 
 
