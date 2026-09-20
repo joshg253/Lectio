@@ -22,8 +22,10 @@ Guards, in the order they matter:
 
 **Politeness** is the reason this is a script and not a button. Requests are paced
 globally and per host, hosts are dropped after repeated failures (these are largely
-2019-era saves, so dead domains are common), and the honest Lectio user-agent is
-used throughout — no browser impersonation, no retry storm.
+2019-era saves, so dead domains are common), and each host starts with the honest
+Lectio user-agent before escalating, only when refused, to a browser identity and
+then a configured proxy (see the escalation note just below) — never straight to
+browser impersonation, and never a retry storm.
 
 **2026-09-19: now escalates through `page_fetch.PageFetcher`** (honest -> browser ->
 proxy, same ladder the saved-article re-fetch and lead-image paths use), so a host
@@ -214,9 +216,12 @@ def main_cli() -> int:
     ap.add_argument(
         "--flaresolverr",
         action="store_true",
-        help="escalate all the way to FlareSolverr, not just proxy — ties up the shared solver, use with --limit",
+        help="escalate all the way to FlareSolverr, not just proxy — requires --limit (an unbounded pass would tie up the shared solver)",
     )
     args = ap.parse_args()
+
+    if args.flaresolverr and not args.limit:
+        ap.error("--flaresolverr requires --limit — an unbounded pass would tie up the one shared FlareSolverr container")
 
     max_tier: page_fetch.FetchTier = "flaresolverr" if args.flaresolverr else "proxy"
     for uid in [args.user] if args.user else main._background_user_ids():
