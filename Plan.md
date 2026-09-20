@@ -28,13 +28,6 @@ Empty — see the "Now" preamble for the three fixes built here and awaiting mer
 
 ## Tier 3 — maintenance backlog, ready to run
 
-### 617 `complete` archives have no content at all
-
-617 rows are `status='complete'` with every content column empty — not just a missing size, so
-`backfill_archived_entry_sizes.py` doesn't catch them (it only targets NULL). Unknown whether these
-are genuinely link-less posts or a silent capture failure that still marked itself complete. Needs
-investigation.
-
 ### ~1,651 entries `fetch_missing_publish_dates.py` couldn't date
 
 Remaining after the last run (1,904/3,555 recovered): 1,240 `lectio:saved` captures + 392
