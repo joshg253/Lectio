@@ -11,8 +11,9 @@ Within a tier, related items are clustered under a bold sub-heading. Two watch-l
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
 Tiers 1 through 3 are empty. The main.py/index.html breakup's Step 1 (top of Tier 4, the
-Integration routes cluster) is done — Stages A-E all shipped 2026-09-19/20. Steps 2-7 of that
-breakup are unscoped follow-on work, not started.
+Integration routes cluster) is done — Stages A-E all shipped 2026-09-19/20. Step 2 (post-refresh
+automation pipeline) is now scoped into its own A-E sub-stages and Stage A shipped 2026-09-20.
+Steps 3-7 of the breakup are unscoped follow-on work, not started.
 
 ## Tier 1 — actively impeding unread-clearing
 
@@ -117,9 +118,42 @@ compat APIs; treat as its own carefully-tested project, not part of a mechanical
      defaults moved out of main.py lost its `B008` exemption in the process (`pyproject.toml`
      scoped that to `main.py` only) — extended to `routes/*.py` too, since more stages will hit it.
 2. Post-refresh automation pipeline (`_run_automation_after_refresh` + the six
-   `_run_*_rules_after_refresh` functions, main.py:8921–9962) → `services/automation_rules.py`. The
-   manual "run now" triggers (`_run_now_dedup`/`_run_now_pattern`/`_run_tag_filter`, ~7811–9109)
-   are natural siblings, worth folding in.
+   `_run_*_rules_after_refresh` functions, plus the sibling "run now" triggers `_run_now_dedup`/
+   `_run_now_pattern`/`_run_tag_filter`) → `services/automation_rules.py`, ~1,510 lines total.
+   Scoped into its own A-E sub-stages, same reasoning as Step 1:
+   - **A — done (2026-09-20).** Zero moves. Added `_bump_unread_counts_generation()` (main.py, next
+     to `invalidate_unread_counts_cache`) and rewrote every in-scope bare
+     `global _unread_counts_generation; … += 1` site to call it instead — the landmine here is
+     landmine-shaped but silent: a moved function that keeps `global _unread_counts_generation`
+     creates a *second* counter in the new module with no ImportError, just unread badges that
+     stop invalidating after dedup/mark-read automation. Also added characterization tests for
+     `_run_email_rules_after_refresh` and `_run_webhook_rules_after_refresh`
+     (`tests/integration/test_email_rule_automation.py`, `test_webhook_rule_automation.py`) — neither
+     had any fire-path coverage before this, despite doing real external I/O with no idempotency
+     guard beyond the 15-minute `added` cutoff.
+   - **B — not started.** Move 3 leaf helpers (`_log_auto_run`, `_get_entry_excerpt`,
+     `_entry_matches_rule`) into the new `services/automation_rules.py`; leave `_is_local_dev_feed`
+     behind. Wire the bottom-of-file import-back (`from services.automation_rules import …`, same
+     pattern as `services/migration_common.py`) so `toggle_feed_tag_filter`,
+     `_flush_email_batch_for_rule`, and `_run_on_star_destinations` (all staying in main) keep
+     resolving them. Retarget `test_keyword_matcher.py`'s `main.build_keyword_matcher` patch.
+   - **C — not started.** Move the 3 "run now" primitives (~470 lines) — no external side effects
+     (local mark-read only), so a botched transition here is cheaply recoverable, done before D's
+     external-I/O block. Retarget `test_dedup_entries.py`.
+   - **D — not started.** Move the six `_after_refresh` dispatchers + `_apply_youtube_playlist_rules`
+     (~854 lines, the bulk) as one atomic delete+import — `email_article` (immediate) and `webhook`
+     have no idempotency guard at all (only the 15-min cutoff), so a half-moved stub left "temporarily"
+     risks duplicate sends/POSTs; `quire` likewise (rate-limited but not deduped); `instapaper`/
+     `save_article`/`youtube_playlist` are all safe (URL/duplicate/INSERT-OR-IGNORE guarded).
+     Retarget instapaper/quire/youtube credential-getter patches and `save_article`'s
+     `monkeypatch.setattr(main, "datetime", …)` time-travel patch.
+   - **E — not started.** Move `_run_automation_after_refresh` itself last (most main-resident call
+     sites: scheduler tick, WebSub fan-out, bg-refresh thread, 3 routes) — do it after everything
+     else is proven so only one function's wiring is unverified at a time. Retarget
+     `test_dedup_fuzzy_threshold.py`'s `main._run_now_dedup` patch to target the module.
+   Every stage's new/updated test must sort `import main` before `from services import
+   automation_rules` (same circular-import rule as `routes/__init__.py`'s docstring documents for
+   `migration_common`).
 3. The 4 remaining context menus → templates.
 4. Dedup engine → `services/dedup.py` — gate on "Consolidate the dedup routes" (Code health)
    getting characterization tests first.
@@ -127,6 +161,11 @@ compat APIs; treat as its own carefully-tested project, not part of a mechanical
    as shared singletons (worth a `state.py` module first).
 6. `ensure_meta_schema` (main.py:3708, ~1,328 lines) — low priority, do last.
 7. Shared rendering core — its own project, not part of the mechanical split.
+8. Refresh-hygiene cluster (`_is_youtube_short`, `_apply_hide_shorts`, `_apply_hide_paywalled`,
+   `_apply_hide_members_only`, `_suppress_guid_churn`, `_cleanup_intra_feed_slug_dupes`, etc.,
+   main.py ~8427–8924) → a future `services/feed_hygiene.py`. Deferred out of Step 2 because it has
+   render-path and route callers unrelated to automation, and two of its functions overlap Step 4's
+   planned dedup service.
 
 ### Page-fetch escalation ladder — follow-ups
 

@@ -2159,6 +2159,21 @@ def invalidate_unread_counts_cache() -> None:
         unread_counts_cache.clear()
 
 
+def _bump_unread_counts_generation() -> None:
+    """Bump the generation without clearing the cache (stale-while-revalidate reads still work).
+
+    Callers that mark entries read as a side effect of automation (dedup, mark_as_read
+    rules, hide-shorts, etc.) use this instead of ``invalidate_unread_counts_cache`` --
+    deliberately not clearing, so a badge still renders from cache while it recomputes.
+    A plain ``global _unread_counts_generation; _unread_counts_generation += 1`` in a
+    function that later moves out of main.py would rebind a *second* copy of the
+    counter in the new module -- silently, with no import error -- so every automation
+    call site goes through this function instead of touching the global directly.
+    """
+    global _unread_counts_generation
+    _unread_counts_generation += 1
+
+
 # Cache for problematic-feeds list. Only changes when a refresh succeeds/fails,
 # so a TTL is fine — we don't need exact freshness on the home page.
 PROBLEMATIC_FEEDS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_PROBLEMATIC_FEEDS_CACHE_TTL", "60"))
@@ -7826,7 +7841,6 @@ def _run_now_dedup(
     min_title_words: int = _DEDUP_MIN_TITLE_WORDS,
 ) -> dict:
     """Execute dedup rule on unread entries. Mark newer duplicates as read."""
-    global _unread_counts_generation
     feed_urls = _resolve_dedup_feed_urls(conn, scope, scope_id, exclude_scope_ids)
     if isinstance(feed_urls, dict):
         return feed_urls  # {"error": ...}
@@ -7863,7 +7877,7 @@ def _run_now_dedup(
                 " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
                 [(fu, eid, when) for fu, eid in to_mark],
             )
-            _unread_counts_generation += 1
+            _bump_unread_counts_generation()
         rec_map = {(r["feed_url"], r["entry_id"]): r for r in records}
 
         def _rec_info(fu: str, eid: str, matched_link: str | None = None) -> dict:
@@ -7994,7 +8008,7 @@ def _run_now_dedup(
             " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
             [(fu, eid, when) for fu, eid in to_mark],
         )
-        _unread_counts_generation += 1
+        _bump_unread_counts_generation()
 
     all_info = (
         list(slug_index.get(k, []) for k in slug_index)
@@ -8030,8 +8044,6 @@ def _run_now_pattern(
     search_in: str,
 ) -> dict:
     """Execute mark_as_read rule: find matching unread entries and mark them read."""
-    global _unread_counts_generation
-
     if not keyword:
         return {"count": 0}
 
@@ -8108,7 +8120,7 @@ def _run_now_pattern(
             " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
             [(fu, eid, when) for fu, eid in to_mark],
         )
-        _unread_counts_generation += 1
+        _bump_unread_counts_generation()
 
     return {"count": len(to_mark), "entries": matched_entries}
 
@@ -8175,7 +8187,6 @@ def _run_tag_filter(
     ``apply=False`` previews like _dry_run_pattern — read + unread entries,
     newest first — and returns the dry-run shape the Test panel renders
     (matches / total_scanned / total_matches / truncated)."""
-    global _unread_counts_generation
     _DRY_MAX_ENTRIES = 1000
     _DRY_RESULT_LIMIT = 20
 
@@ -8306,7 +8317,7 @@ def _run_tag_filter(
             " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
             [(fu, eid, when) for fu, eid in to_mark],
         )
-        _unread_counts_generation += 1
+        _bump_unread_counts_generation()
 
     if not apply:
         return {
@@ -8513,7 +8524,6 @@ def _mark_existing_shorts_read(feed_urls: Iterable[str]) -> int:
     feed_urls = set(feed_urls)
     if not feed_urls:
         return 0
-    global _unread_counts_generation
     now_str = datetime.now().isoformat()
     to_mark: list[tuple[str, str]] = []
     with get_reader() as reader:
@@ -8530,7 +8540,7 @@ def _mark_existing_shorts_read(feed_urls: Iterable[str]) -> int:
                 " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at=excluded.read_at",
                 [(fu, eid, now_str) for fu, eid in to_mark],
             )
-        _unread_counts_generation += 1
+        _bump_unread_counts_generation()
     return len(to_mark)
 
 
@@ -8929,8 +8939,6 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
     if not refreshed_feed_urls:
         return
 
-    global _unread_counts_generation
-
     # GUID-churn suppression: auto-mark re-issued entries (same slug, new GUID) as read.
     try:
         suppressed_total = 0
@@ -8939,7 +8947,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 for feed_url in refreshed_feed_urls:
                     suppressed_total += _suppress_guid_churn(reader, conn, feed_url)
         if suppressed_total:
-            _unread_counts_generation += 1
+            _bump_unread_counts_generation()
             LOGGER.info("[guid-churn] suppressed %d re-issued entries", suppressed_total)
     except Exception:
         LOGGER.exception("[guid-churn] error during suppression")
@@ -8951,7 +8959,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
             with get_meta_connection() as conn:
                 cross_suppressed = _cleanup_intra_feed_slug_dupes(reader, conn)
         if cross_suppressed:
-            _unread_counts_generation += 1
+            _bump_unread_counts_generation()
             LOGGER.info("[guid-churn] suppressed %d cross-feed duplicate entries", cross_suppressed)
     except Exception:
         LOGGER.exception("[guid-churn] error during cross-feed dedup")
@@ -9730,7 +9738,6 @@ def _apply_youtube_playlist_rules(
     ``refreshed_feed_urls`` = a rule's whole scope) — the matching, dedup-guard,
     and quota handling are identical either way. Returns videos added.
     """
-    global _unread_counts_generation
     added_total = 0
     now_str = datetime.now().isoformat()
 
@@ -9867,7 +9874,7 @@ def _apply_youtube_playlist_rules(
                     " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
                     [(fu, eid, when) for fu, eid in marked],
                 )
-            _unread_counts_generation += 1
+            _bump_unread_counts_generation()
         if run_entries:
             with get_meta_connection() as conn:
                 _log_auto_run(
