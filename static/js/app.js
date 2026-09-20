@@ -17805,6 +17805,18 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // cached length) participate — a post with no duration at all is
     // excluded outright, not treated as "unknown, so let it through", so
     // e.g. "<2:00" reliably narrows a mixed folder down to short videos only.
+    // ">0" therefore already means "has a real duration" for free — every
+    // real duration is positive, and no-duration posts are excluded by every
+    // operator regardless.
+    //
+    // "=0" is the one deliberate exception: it inverts that exclusion to
+    // select ONLY posts with no cached duration at all (a live/upcoming video
+    // that hasn't aired, mainly). Safe as a sentinel because a real YouTube
+    // duration is never actually 0 seconds — such a video would never have a
+    // cached length to compare against in the first place.
+    //
+    // "=X-Y" is an inclusive range, each side accepting the same duration
+    // shapes as everywhere else ("=1-2", "=90s-3m", "=1:30-2:00").
     //
     // Gated to the configured YouTube folder (Settings → YouTube) so a title
     // that happens to contain something shaped like "<2:00" (a timestamp
@@ -17833,11 +17845,24 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     }
 
     function _parseDurationFilter(term) {
-      const m = term.match(/^(<=|>=|<|>)(.+)$/);
+      const m = term.match(/^(<=|>=|<|>|=)(.+)$/);
       if (!m) return null;
-      const seconds = _parseDurationToSeconds(m[2].trim());
+      const [, op, rest] = m;
+      const value = rest.trim();
+      if (op === '=') {
+        if (value === '0') return { op: 'none' };
+        // First hyphen only: none of the duration shapes below use "-"
+        // internally, so this is unambiguous ("1:30-2:00" -> "1:30", "2:00").
+        const range = value.match(/^(.+?)-(.+)$/);
+        if (!range) return null; // bare "=N" (exact-match) isn't a supported shape
+        const min = _parseDurationToSeconds(range[1].trim());
+        const max = _parseDurationToSeconds(range[2].trim());
+        if (min === null || max === null) return null;
+        return { op: 'range', min, max };
+      }
+      const seconds = _parseDurationToSeconds(value);
       if (seconds === null) return null;
-      return { op: m[1], seconds };
+      return { op, seconds };
     }
 
     function postsFilterMatches(item, term, isYtFolder) {
@@ -17845,6 +17870,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       const durationFilter = isYtFolder ? _parseDurationFilter(term) : null;
       if (durationFilter) {
         const raw = item.getAttribute('data-post-duration-seconds');
+        if (durationFilter.op === 'none') return !raw;
         if (!raw) return false; // no duration at all -- excluded, not "unknown"
         const secs = Number(raw);
         switch (durationFilter.op) {
@@ -17852,6 +17878,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
           case '<=': return secs <= durationFilter.seconds;
           case '>': return secs > durationFilter.seconds;
           case '>=': return secs >= durationFilter.seconds;
+          case 'range': return secs >= durationFilter.min && secs <= durationFilter.max;
           default: return false;
         }
       }
