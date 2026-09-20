@@ -16,7 +16,7 @@
         {# Orphan archives (feed fully unsubscribed) have no home in the Feeds
            tree at all — "Open in Feeds" would land on an empty page. #}
         data-post-orphan="{{ 1 if selected_entry.is_orphan_archive else 0 }}"
-        data-post-lead-image-url="{{ (selected_entry.lead_image_url or '') if (selected_entry.show_as_thumb and selected_entry.sync_list_thumb) else '' }}"
+        data-post-lead-image-url="{{ (selected_entry.lead_image_url or '') if (selected_entry.show_as_thumb and selected_entry.sync_list_thumb and not selected_entry.is_locked) else '' }}"
         data-post-katex-dollar-math="{{ 1 if selected_entry.katex_dollar_math else 0 }}"
       >
         {% set _dur = selected_entry.duration_display %}
@@ -536,7 +536,19 @@
         data-lead-image-entry-id="{{ selected_entry.id }}"
       {% endif %}
     >
-      {% if selected_entry.lead_image_url and selected_entry.show_lead_in_article %}
+      {% set _lead_image_shown = selected_entry.lead_image_url and selected_entry.show_lead_in_article and not selected_entry.is_locked %}
+      {% if selected_entry.is_locked %}
+      {# A supporter-locked webcomic strip: the resolved lead image is
+         stale/unresolvable while locked, so show the unlock date instead of a
+         broken image, same fallback the post-list thumbnail uses. Shown
+         regardless of show_lead_in_article -- otherwise a locked entry with
+         that preference off and no text content renders a blank pane instead
+         of any explanation (Sourcery finding on PR #325). #}
+      <div class="entry-lead-image-locked" role="img" aria-label="Locked until {{ selected_entry.locked_until_display }}">
+        <span class="material-symbols-rounded entry-lead-image-locked-icon" aria-hidden="true">lock</span>
+        <span class="entry-lead-image-locked-text">Locked until {{ selected_entry.locked_until_display }}</span>
+      </div>
+      {% elif _lead_image_shown %}
       <img
         class="entry-lead-image{% if selected_entry.lead_image_url.startswith('data:image/svg') %} entry-lead-image--vector{% endif %}"
         src="{{ selected_entry.lead_image_url }}"
@@ -566,10 +578,10 @@
       <div class="entry-content">{{ selected_entry.content_html | safe }}</div>
       {% elif selected_entry.summary %}
       <pre class="entry-text">{{ selected_entry.summary }}</pre>
-      {% elif not selected_entry.lead_image_url %}
+      {% elif not _lead_image_shown and not selected_entry.is_locked %}
       <div class="muted">No content available.</div>
       {% endif %}
-      {% if not selected_entry.lead_image_url and selected_entry.image_title_text %}
+      {% if not _lead_image_shown and not selected_entry.is_locked and selected_entry.image_title_text %}
       <p class="entry-image-title-text">{{ selected_entry.image_title_text }}</p>
       {% endif %}
     </div>

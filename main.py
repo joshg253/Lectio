@@ -16534,12 +16534,16 @@ def _list_entries_for_feeds_fetch(
 
         # Batch-loaded once, same rationale as _all_display_prefs above — a
         # per-entry query here would be an N+1 over every webcomic entry in
-        # the view. Only worth the query at all when at least one feed in
-        # scope could actually be gated: the global toggle, or a webcomic feed
-        # with the per-feed pref on.
+        # the view. Needed whenever the row will be enriched for display (the
+        # locked-placeholder badge is shown regardless of hide_locked_comics —
+        # that preference only controls whether the entry appears at ALL), or
+        # when at least one feed in scope could actually be gated: the global
+        # toggle, or a webcomic feed with the per-feed pref on.
         _locked_until_map: dict[tuple[str, str], float] = {}
-        if _hide_locked_comics_global or any(
-            _all_display_prefs.get(fu, _DISPLAY_PREF_DEFAULTS).get("hide_locked_comics") for fu in feed_urls
+        if (
+            enrich
+            or _hide_locked_comics_global
+            or any(_all_display_prefs.get(fu, _DISPLAY_PREF_DEFAULTS).get("hide_locked_comics") for fu in feed_urls)
         ):
             try:
                 with get_meta_connection() as _lock_conn:
@@ -16859,11 +16863,21 @@ def _list_entries_for_feeds_fetch(
         _thumb_crop = _entry_crop_override if _entry_crop_override else _feed_thumb_crop
         _smart_ms = _feed_prefs.get("smart_min_scale")
         _fill_zm = _feed_prefs.get("fill_zoom")
+        # Surfaced on every entry (not just when hide_locked_comics is on) so a
+        # reader who leaves that preference off still sees a locked-until badge
+        # instead of a broken thumbnail for a currently-locked webcomic strip.
+        _locked_until = _locked_until_map.get((feed_url_str, _entry_id))
+        _is_locked = _locked_until is not None and _locked_until > time.time()
         rec.update(
             {
                 "thumbnail_url": _thumb,
                 "show_thumbnail": _show_thumb,
                 "thumb_crop": _thumb_crop,
+                "is_locked": _is_locked,
+                "locked_until_ts": _locked_until if _is_locked else None,
+                "locked_until_display": (
+                    format_datetime_for_ui(datetime.fromtimestamp(_locked_until, tz=timezone.utc)) if _is_locked else None
+                ),
                 "smart_min_scale": float(_smart_ms) if _smart_ms is not None else None,
                 "fill_zoom": float(_fill_zm) if _fill_zm is not None else None,
                 "thumb_strategy": _thumb_strategy or "",
@@ -20370,6 +20384,14 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             if not _summary_text_only:
                 _summary = None
 
+        # Same table/column list_entries_for_feeds batches into _locked_until_map
+        # for a whole view; a single-row lookup here is fine since the pane only
+        # ever resolves one entry. Surfaced regardless of hide_locked_comics —
+        # that preference only controls whether the entry appears in the list at
+        # all, not whether a reader who left it off sees a real image here.
+        _locked_until = lead_image_service.get_locked_until(feed_url, entry_id)
+        _is_locked = _locked_until is not None and _locked_until > time.time()
+
         _total_ms = int((time.monotonic() - _t0) * 1000)
         if _total_ms > 500:
             LOGGER.info("[perf] entry_detail: total=%dms %s", _total_ms, entry_id)
@@ -20389,6 +20411,11 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "content_html": content_html,
             "lead_image_url": _lead_image_display_url(lead_image_url, _disp.get("image_size_rule")),
             "show_lead_in_article": _show_lead_in_article,
+            "is_locked": _is_locked,
+            "locked_until_ts": _locked_until if _is_locked else None,
+            "locked_until_display": (
+                format_datetime_for_ui(datetime.fromtimestamp(_locked_until, tz=timezone.utc)) if _is_locked else None
+            ),
             "katex_dollar_math": bool(_disp.get("katex_dollar_math", 0)),
             "show_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)) and not _disp.get("feed_thumbnail_url"),
             # Webcomic feeds show the FULL strip in the article but keep the
