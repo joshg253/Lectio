@@ -10,13 +10,8 @@ to run, real features not blocking anything today, and deliberately-deferred big
 Within a tier, related items are clustered under a bold sub-heading. Two watch-lists (CodeQL,
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
-Tier 1 is empty. Next up: the main.py/index.html breakup (top of Tier 4) — Josh is leaning toward
-it, and Step 1 is scoped and ready to start.
-
-Three small Tier 2 fixes are built and tested but not yet merged into main — Read Mode LaTeX
-(`worktree-agent-adaade9c1e0179135`, commit `5795810`), the locked-webcomic placeholder
-(`worktree-agent-a454d4abe33a867f3`, commit `2132623`), and the context-menu handler
-unification (`worktree-agent-a526c534a0c36d22f`, commit `4434d56`). Merge when ready.
+Tier 1 and Tier 2 are empty. Next up: the main.py/index.html breakup (top of Tier 4) — Josh is
+leaning toward it, and Step 1 is scoped and ready to start. Otherwise, work Tier 3.
 
 ## Tier 1 — actively impeding unread-clearing
 
@@ -24,23 +19,25 @@ Empty.
 
 ## Tier 2 — small, fast, independent wins
 
-Empty — see the "Now" preamble for the three fixes built here and awaiting merge.
+Empty.
 
 ## Tier 3 — maintenance backlog, ready to run
 
-### ~1,651 entries `fetch_missing_publish_dates.py` couldn't date
+### `fetch_missing_publish_dates.py` — escalation shipped and measured 2026-09-19, still not worth `--apply`
 
-Remaining after the last run (1,904/3,555 recovered): 1,240 `lectio:saved` captures + 392
-GuitarWorld entries, mostly dead/parked links. The script does a plain fetch with no proxy/
-FlareSolverr escalation; routing it through the same escalation feed-refresh uses would claw back
-some of the "failed"/"wrong page" bucket, but has no natural per-article hook into feed-scoped
-state. Not worth building unless it keeps bothering Josh.
-
-### Uncategorized orphan-feed cleanup — 9 stragglers (manual)
-
-Dead/one-shot/ambiguous: an Instagram post URL, a single Vice article, cochaser.com, WebServicesDir,
-whiskypaint/nolanfa tumblrs, norfolkwinters, crispian-jago, owenyoung myfeed. Sort or unsubscribe
-by hand.
+Now escalates through `page_fetch.PageFetcher` (honest -> browser -> proxy, capped below FlareSolverr
+so a bulk pass can't monopolize the one shared solver container; `--flaresolverr` opts in for a
+`--limit`-bounded run). The ladder works as intended — confirmed live against a real 404, honest tier
+tried, then browser tier retried the same URL before giving up — but a full dry-run pass over the
+current backlog (464 epoch-dated entries, down hugely from ~1,651: other work has been re-ingesting
+real dates in the background) still came back **0 dated**. 390 of the 464 are one GuitarWorld
+redirect cluster the script's own 5-failure circuit breaker correctly short-circuits after one real
+escalated fetch confirms it 404s post-redirect on both honest and browser identity — genuinely dead,
+not blocked, so no tier would have helped. The remaining ~74 non-GuitarWorld entries split into
+"no date in the page" and slug-mismatch; still zero yield. Conclusion unchanged from 2026-07-30:
+this was a metadata-availability problem, not an access problem, so escalation doesn't move it.
+Kept for the reason already documented — cheap to re-run if a new batch of epoch-dated entries
+arrives from a site that does publish dates behind a block.
 
 ### Readability grabs a devsite nav sidebar on androidstudio.googleblog.com — fixed 2026-09-19
 
