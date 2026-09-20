@@ -14,6 +14,11 @@ const CAPTURE_MODE_ARCHIVE = 'archive';
 // Mirrors the server's TAG_VALUE_PATTERN (main.py): letters, digits, and - _ + . #.
 // Shared by the entry-pane tag form and the bulk "Add tag" modal.
 const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
+// The server's sentinel for "no folder" (main.py treats -1 as folderless).
+// Used as a fallback everywhere a folder id might be absent, so a single
+// literal isn't hand-copied across the feed-properties modal, the context
+// menu's "Move to feed" and the delete-folder modal.
+const UNCATEGORIZED_FOLDER_ID = '-1';
     // Only web-ish schemes may reach an href/src. Entry and feed URLs are
     // feed-controlled: a `javascript:` URL assigned to an anchor's href would
     // run in our origin the moment the user clicks it. The server already
@@ -5768,7 +5773,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
         feedPropViewPosts.hidden = false;
       };
       const _sidebarFolderId = document.querySelector(`.feed-link[data-feed-url="${CSS.escape(feedUrl)}"]`)?.dataset.folderId;
-      setViewPostsHref(_sidebarFolderId ?? '-1');
+      setViewPostsHref(_sidebarFolderId ?? UNCATEGORIZED_FOLDER_ID);
       setFeedPropText(feedPropHealth, '-');
       setFeedPropText(feedPropHealthDetail, '-');
       setFeedPropText(feedPropTotal, '-');
@@ -5777,7 +5782,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       setFeedPropText(feedPropUpdated, '-');
       setFeedPropText(feedPropReceived, '-');
       setFeedPropText(feedPropLastPost, '-');
-      if (feedPropFolderSelect) { feedPropFolderSelect.value = '-1'; feedPropFolderSelect.dataset.currentFolderId = '-1'; feedPropFolderSelect.dataset.feedUrl = feedUrl; }
+      if (feedPropFolderSelect) { feedPropFolderSelect.value = UNCATEGORIZED_FOLDER_ID; feedPropFolderSelect.dataset.currentFolderId = UNCATEGORIZED_FOLDER_ID; feedPropFolderSelect.dataset.feedUrl = feedUrl; }
       if (feedPropFolderStatus) feedPropFolderStatus.textContent = '';
       if (feedPropStrategy) feedPropStrategy.value = 'auto';
       if (feedPropStrategyHint) feedPropStrategyHint.textContent = '';
@@ -6762,7 +6767,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
     // of -1 (Uncategorized) is handled server-side as folderless.
     feedPropFolderSelect?.addEventListener('change', async () => {
       const feedUrl = feedPropFolderSelect.dataset.feedUrl;
-      const fromId = parseInt(feedPropFolderSelect.dataset.currentFolderId ?? '-1', 10);
+      const fromId = parseInt(feedPropFolderSelect.dataset.currentFolderId ?? UNCATEGORIZED_FOLDER_ID, 10);
       const toId = parseInt(feedPropFolderSelect.value, 10);
       if (!feedUrl || fromId === toId) return;
       const toName = feedPropFolderSelect.options[feedPropFolderSelect.selectedIndex]?.textContent?.trim() || 'folder';
@@ -8709,6 +8714,83 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       }
     }
 
+    // Shared by the post-list's single-post right-click (bindPostListInteractions)
+    // and the entry-pane title's right-click (bindEntryPaneInteractions, which
+    // never has a bulk case). Reads the same-shaped data-post-* attributes off
+    // whichever element the menu was opened on, and sets every menu item that a
+    // single post's context menu can show. `isListItem` gates the handful of
+    // items that only make sense for a row inside the currently-rendered list
+    // (its position, and the list's own view/filter scope) -- meaningless for
+    // the entry pane's one open entry, so always false there.
+    function _openPostContextMenu(sourceEl, event, { isListItem }) {
+      contextPostFeedUrl = sourceEl.getAttribute('data-post-feed-url');
+      contextPostEntryId = sourceEl.getAttribute('data-post-entry-id');
+      contextPostRead = sourceEl.getAttribute('data-post-read') === '1';
+      contextPostCaptured = sourceEl.getAttribute('data-post-captured') === '1';
+      contextPostSaved = sourceEl.getAttribute('data-post-saved') === '1';
+      contextPostKept = sourceEl.getAttribute('data-post-kept') === '1';
+      contextPostLink = sourceEl.getAttribute('data-post-link') || '';
+      contextPostTitle = sourceEl.getAttribute('data-post-title') || '';
+      contextPostFolderId = sourceEl.getAttribute('data-post-folder-id') || null;
+      contextPostOrphan = sourceEl.getAttribute('data-post-orphan') === '1';
+      // Absent on the entry-pane title (no data-post-video-id there) -- that's
+      // fine, it just means videoId is '' and the playlist item hides.
+      const videoId = sourceEl.getAttribute('data-post-video-id') || '';
+      contextSelectedPosts = contextPostFeedUrl && contextPostEntryId
+        ? [{ feedUrl: contextPostFeedUrl, entryId: contextPostEntryId, videoId }]
+        : [];
+
+      if (postMarkReadButton) {
+        postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
+      }
+      setMenuItemVisible(postMarkReadButton, true);
+      setMenuItemVisible(postMarkReadBulkButton, false);
+      setMenuItemVisible(postMarkUnreadBulkButton, false);
+      setMenuItemVisible(postStarBulkButton, false);
+      setMenuItemVisible(postUnstarBulkButton, false);
+      setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
+      setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+      setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
+      setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
+      setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
+      if (postMoveToFeedButton) postMoveToFeedButton.textContent = 'Move to feed…';
+      setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+      setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+      setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+      setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+      setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+      setMenuItemVisible(postRefetchButton, postCanRefetch());
+      setMenuItemVisible(postRefetchFullButton, postCanRefetch());
+      setMenuItemVisible(postRefetchArchiveButton, postCanRefetch());
+      updateRefetchGroupVisibility();
+      const editGroup = document.getElementById('ctx-post-edit-group');
+      if (editGroup) editGroup.hidden = false;
+      setMenuItemVisible(postMoveVisibleButton, isListItem);
+      if (isListItem) {
+        // "Remove this tag from all shown": only in the Saved view filtered
+        // by a tag. Scoped server-side to the folder+tag, so it clears the
+        // whole filtered set, not just the paginated window on screen.
+        const _p = new URLSearchParams(window.location.search);
+        const _tag = (_p.get('tag') || '').trim();
+        const _show = _p.get('star_only') === '1' && !!_tag && !!(_p.get('folder_id'));
+        if (postRemoveTagShownButton && _show) {
+          postRemoveTagShownButton.textContent = `Remove tag “${_tag}” from all shown`;
+        }
+        setMenuItemVisible(postRemoveTagShownButton, _show);
+      } else {
+        setMenuItemVisible(postRemoveTagShownButton, false);
+      }
+      setMenuItemVisible(postMarkAboveReadButton, isListItem);
+      setMenuItemVisible(postMarkBelowReadButton, isListItem);
+      setMenuItemVisible(postClearImgCacheButton, true);
+      if (postAddToPlaylistButton) postAddToPlaylistButton.textContent = 'Add to YouTube Playlist…';
+      setMenuItemVisible(postAddToPlaylistButton, Boolean(videoId));
+      if (postAddTagButton) postAddTagButton.textContent = 'Edit tags…';
+      setMenuItemVisible(postAddTagButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+
+      showPostContextMenu(event);
+    }
+
     function bindEntryPaneInteractions() {
       const entrySaveForm = document.querySelector('.entry-save-toggle-form');
       if (entrySaveForm && !entrySaveForm.dataset.boundAsyncSubmit) {
@@ -8796,38 +8878,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
 
           event.preventDefault();
           event.stopPropagation();
-          contextPostFeedUrl = entryPaneTitle.getAttribute('data-post-feed-url');
-          contextPostEntryId = entryPaneTitle.getAttribute('data-post-entry-id');
-          contextPostRead = entryPaneTitle.getAttribute('data-post-read') === '1';
-          contextPostCaptured = entryPaneTitle.getAttribute('data-post-captured') === '1';
-          contextPostSaved = entryPaneTitle.getAttribute('data-post-saved') === '1';
-          contextPostKept = entryPaneTitle.getAttribute('data-post-kept') === '1';
-          contextPostLink = entryPaneTitle.getAttribute('data-post-link') || '';
-          contextPostTitle = entryPaneTitle.getAttribute('data-post-title') || '';
-          contextPostFolderId = entryPaneTitle.getAttribute('data-post-folder-id') || null;
-          contextPostOrphan = entryPaneTitle.getAttribute('data-post-orphan') === '1';
-          if (postMarkReadButton) {
-            postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
-          }
-          setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
-          setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-          setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
-          setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
-          setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
-          setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-          setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-          setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-          setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-          setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-          setMenuItemVisible(postRefetchButton, postCanRefetch());
-          setMenuItemVisible(postRefetchFullButton, postCanRefetch());
-          setMenuItemVisible(postRefetchArchiveButton, postCanRefetch());
-          updateRefetchGroupVisibility();
-          setMenuItemVisible(postMoveVisibleButton, false);
-          setMenuItemVisible(postRemoveTagShownButton, false);
-          setMenuItemVisible(postMarkAboveReadButton, false);
-          setMenuItemVisible(postMarkBelowReadButton, false);
-          showPostContextMenu(event);
+          _openPostContextMenu(entryPaneTitle, event, { isListItem: false });
         });
       }
 
@@ -9352,68 +9403,10 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
               setMenuItemVisible(postStarBulkButton, true);
               if (postUnstarBulkButton) postUnstarBulkButton.textContent = `Remove star from ${contextSelectedPosts.length} posts`;
               setMenuItemVisible(postUnstarBulkButton, true);
+              showPostContextMenu(event);
             } else {
-              contextPostFeedUrl = rowFeedUrl;
-              contextPostEntryId = rowEntryId;
-              contextPostRead = postItem.getAttribute('data-post-read') === '1';
-              contextPostCaptured = postItem.getAttribute('data-post-captured') === '1';
-              contextPostSaved = postItem.getAttribute('data-post-saved') === '1';
-              contextPostKept = postItem.getAttribute('data-post-kept') === '1';
-              contextPostLink = postItem.getAttribute('data-post-link') || '';
-              contextPostTitle = postItem.getAttribute('data-post-title') || '';
-              contextPostFolderId = postItem.getAttribute('data-post-folder-id') || null;
-              contextPostOrphan = postItem.getAttribute('data-post-orphan') === '1';
-              const videoId = postItem.getAttribute('data-post-video-id') || '';
-              contextSelectedPosts = contextPostFeedUrl && contextPostEntryId
-                ? [{ feedUrl: contextPostFeedUrl, entryId: contextPostEntryId, videoId }]
-                : [];
-              if (postMarkReadButton) {
-                postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
-              }
-              setMenuItemVisible(postMarkReadButton, true);
-              setMenuItemVisible(postMarkReadBulkButton, false);
-              setMenuItemVisible(postMarkUnreadBulkButton, false);
-              setMenuItemVisible(postStarBulkButton, false);
-              setMenuItemVisible(postUnstarBulkButton, false);
-              setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
-              setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-              setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
-              setMenuItemVisible(postOpenInFeedsButton, Boolean(contextPostFeedUrl) && !contextPostOrphan);
-              setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
-              if (postMoveToFeedButton) postMoveToFeedButton.textContent = 'Move to feed…';
-              setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-              setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-              setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-              setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-              setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-              setMenuItemVisible(postRefetchButton, postCanRefetch());
-              setMenuItemVisible(postRefetchFullButton, postCanRefetch());
-              setMenuItemVisible(postRefetchArchiveButton, postCanRefetch());
-              updateRefetchGroupVisibility();
-              const editGroup = document.getElementById('ctx-post-edit-group');
-              if (editGroup) editGroup.hidden = false;
-              setMenuItemVisible(postMoveVisibleButton, true);
-              // "Remove this tag from all shown": only in the Saved view filtered
-              // by a tag. Scoped server-side to the folder+tag, so it clears the
-              // whole filtered set, not just the paginated window on screen.
-              {
-                const _p = new URLSearchParams(window.location.search);
-                const _tag = (_p.get('tag') || '').trim();
-                const _show = _p.get('star_only') === '1' && !!_tag && !!(_p.get('folder_id'));
-                if (postRemoveTagShownButton && _show) {
-                  postRemoveTagShownButton.textContent = `Remove tag “${_tag}” from all shown`;
-                }
-                setMenuItemVisible(postRemoveTagShownButton, _show);
-              }
-              setMenuItemVisible(postMarkAboveReadButton, true);
-              setMenuItemVisible(postMarkBelowReadButton, true);
-              setMenuItemVisible(postClearImgCacheButton, true);
-              if (postAddToPlaylistButton) postAddToPlaylistButton.textContent = 'Add to YouTube Playlist…';
-              setMenuItemVisible(postAddToPlaylistButton, Boolean(videoId));
-              if (postAddTagButton) postAddTagButton.textContent = 'Edit tags…';
-              setMenuItemVisible(postAddTagButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+              _openPostContextMenu(postItem, event, { isListItem: true });
             }
-            showPostContextMenu(event);
           });
         }
         // attach swipe for post items (desktop and touch)
@@ -9911,7 +9904,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
       // feed's REAL containing folder, unlike a sidebar-DOM lookup, which
       // only works if the Feeds tree happens to be rendered (it isn't in
       // Saved view, which is the case this button exists for).
-      const folderId = contextPostFolderId ?? '-1';
+      const folderId = contextPostFolderId ?? UNCATEGORIZED_FOLDER_ID;
       // feed_url/entry_id (not list_feed_url's own id) is the pair
       // _entry_query_suffix expects to re-select a specific entry, same as
       // every redirect-and-reselect route already does.
@@ -17456,7 +17449,7 @@ const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
 
     deleteFolderConfirm?.addEventListener('click', () => {
       const action = deleteFolderModal?.querySelector('input[name="delete-folder-action"]:checked')?.value || 'unsub';
-      const moveTo = deleteFolderTargetSelect?.value || '-1';
+      const moveTo = deleteFolderTargetSelect?.value || UNCATEGORIZED_FOLDER_ID;
       deleteFolderModal?.setAttribute('hidden', '');
       submitFolderDeletion(action, moveTo);
     });
