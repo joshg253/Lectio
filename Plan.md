@@ -413,7 +413,15 @@ Nothing here is scheduled — just what to check if a related symptom recurs.
 
 ### CodeQL board
 
-Zero open alerts. Notes for next time:
+9 open alerts from PR #329 (the main.py/index.html breakup, Step 1): "information exposure through
+an exception" on `return JSONResponse({"error": str(exc)}, ...)` in the moved
+`routes/integrations_*.py` files. Not new — the same pattern (`"error": str(exc)` in an exception
+handler) already exists 15+ times in main.py; CodeQL flags them because the lines are new *files*,
+not new *code*. Left open rather than dismissed or fixed inline (decided when triaging the PR); a
+real fix means picking a message for each call site that's still useful in the UI (several surface
+the caught exception directly, e.g. "Sync failed: {result['error']}"), so it's its own pass across
+every instance — including the ones still in main.py, not just the 9 CodeQL happened to flag — not
+scope for this refactor. Notes for next time on other alert classes:
 
 - A negative lookahead will not clear a ReDoS alert — CodeQL's regex model ignores lookaheads.
   Write the loop lookahead-free or move the scan into Python.
