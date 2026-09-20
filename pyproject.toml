@@ -74,6 +74,11 @@ select = ["E", "F", "W", "I", "B"]
 # a mutable-default bug, so the rule is a false positive here specifically.
 "main.py" = ["E402", "B008"]
 
+# Extracted route modules (Plan.md's main.py/index.html breakup) hit the same
+# FastAPI-default false positive as main.py above, for routes that took a
+# File(...)/Form(...)/Query(...) default with them when they moved out.
+"routes/*.py" = ["B008"]
+
 # Ruff is the canonical linter/formatter for this project. The `select` list
 # enables pycodestyle (`E`), pyflakes (`F`), warnings (`W`), isort-style
 # import ordering (`I`) and bugbear (`B`). Add or remove checks here if
