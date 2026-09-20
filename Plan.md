@@ -183,6 +183,16 @@ something else). Sizing if ever wanted: small — one new column (needs the per-
 migration) + a skip check in the Refetch-All loop. Not requested yet — not scheduled ahead of
 demand.
 
+### Archive capture failures are indistinguishable from real empty content
+
+`_archive_entry`'s source fetch (`_fetch_text_with_url`) swallows every exception identically —
+a 404, a 403, a TLS error, anything — and stores an empty "complete" archive with no error
+recorded. Found 2026-09-19 auditing 633 such rows live: mostly dead links, a handful recoverable,
+but nothing short of a manual per-entry fetch could tell which was which beforehand. Not sized —
+worth recording which kind of failure happened (or at least logging above DEBUG) so a future case
+doesn't need the same manual audit, but the actual design (a status column? just better logging?)
+isn't decided yet.
+
 ### Read Mode: no Back guard
 
 `/read` has no equivalent of the main app's Back-button guard. Not cheap: `/read` has no drawer
