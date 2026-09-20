@@ -537,10 +537,13 @@
       {% endif %}
     >
       {% set _lead_image_shown = selected_entry.lead_image_url and selected_entry.show_lead_in_article and not selected_entry.is_locked %}
-      {% if selected_entry.is_locked and selected_entry.show_lead_in_article %}
+      {% if selected_entry.is_locked %}
       {# A supporter-locked webcomic strip: the resolved lead image is
          stale/unresolvable while locked, so show the unlock date instead of a
-         broken image, same fallback the post-list thumbnail uses. #}
+         broken image, same fallback the post-list thumbnail uses. Shown
+         regardless of show_lead_in_article -- otherwise a locked entry with
+         that preference off and no text content renders a blank pane instead
+         of any explanation (Sourcery finding on PR #325). #}
       <div class="entry-lead-image-locked" role="img" aria-label="Locked until {{ selected_entry.locked_until_display }}">
         <span class="material-symbols-rounded entry-lead-image-locked-icon" aria-hidden="true">lock</span>
         <span class="entry-lead-image-locked-text">Locked until {{ selected_entry.locked_until_display }}</span>

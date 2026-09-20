@@ -3030,9 +3030,9 @@ class LeadImageService:
                     "SELECT locked_until FROM entry_lead_images WHERE feed_url = ? AND entry_id = ? AND locked_until IS NOT NULL",
                     (feed_url, entry_id),
                 ).fetchone()
+            return float(row[0]) if row else None
         except Exception:
             return None
-        return float(row[0]) if row else None
 
     def _extract_webcomic_panel_image(self, html_text: str, base_url: str, source_url: str) -> str | None:
         """Return the main comic-panel image for a webcomic source page, or None.
