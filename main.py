@@ -29320,116 +29320,6 @@ def save_profile_route(name: str = Form(""), email: str = Form("")):
     return JSONResponse({"ok": True})
 
 
-@app.post("/settings/deviantart/verify")
-def verify_deviantart_credentials_route():
-    """Validate the saved DeviantArt creds by requesting an app token."""
-    cid, secret = get_deviantart_credentials()
-    ok, message = deviantart_service.verify_credentials(cid, secret)
-    return JSONResponse({"ok": ok, "message": message})
-
-
-def _deviantart_redirect_uri(request: Request) -> str:
-    """Callback URL DeviantArt redirects back to (must match the app whitelist)."""
-    base = os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/")
-    if base:
-        return f"{base}/deviantart/callback"
-    return str(request.url_for("deviantart_callback"))
-
-
-@app.get("/deviantart/connect")
-def deviantart_connect(request: Request):
-    """Kick off the DeviantArt OAuth flow → redirect to their consent page."""
-    cid, secret = get_deviantart_credentials()
-    if not cid or not secret:
-        return RedirectResponse(url="/?message=" + quote_plus("Add your DeviantArt API keys in Settings first."), status_code=303)
-    state = secrets.token_urlsafe(24)
-    verifier, challenge = deviantart_service.generate_pkce_pair()
-    with get_meta_connection() as conn:
-        set_setting(conn, SETTING_DEVIANTART_OAUTH_STATE, state)
-        set_setting(conn, SETTING_DEVIANTART_OAUTH_VERIFIER, verifier)
-    url = deviantart_service.authorize_url(cid, _deviantart_redirect_uri(request), state, challenge)
-    return RedirectResponse(url=url, status_code=303)
-
-
-@app.get("/deviantart/callback")
-def deviantart_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
-    """OAuth redirect target: exchange the code for tokens and store them."""
-    if error:
-        return RedirectResponse(url="/?message=" + quote_plus(f"DeviantArt authorization failed: {error}"), status_code=303)
-    with get_meta_connection() as conn:
-        expected = get_setting(conn, SETTING_DEVIANTART_OAUTH_STATE) or ""
-        verifier = get_setting(conn, SETTING_DEVIANTART_OAUTH_VERIFIER) or ""
-    if not code or not state or state != expected:
-        return RedirectResponse(url="/?message=" + quote_plus("DeviantArt authorization failed (bad state)."), status_code=303)
-    cid, secret = get_deviantart_credentials()
-    try:
-        data = deviantart_service.exchange_code(cid, secret, code, _deviantart_redirect_uri(request), verifier)
-        token = data["access_token"]
-        username = deviantart_service.whoami(token)
-    except Exception as exc:  # noqa: BLE001
-        return RedirectResponse(url="/?message=" + quote_plus(f"DeviantArt connect failed: {exc}"), status_code=303)
-    with get_meta_connection() as conn:
-        set_setting(conn, SETTING_DEVIANTART_ACCESS_TOKEN, token)
-        if data.get("refresh_token"):
-            set_setting(conn, SETTING_DEVIANTART_REFRESH_TOKEN, data["refresh_token"])
-        set_setting(conn, SETTING_DEVIANTART_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
-        set_setting(conn, SETTING_DEVIANTART_USERNAME, username)
-        delete_setting(conn, SETTING_DEVIANTART_OAUTH_STATE)
-        delete_setting(conn, SETTING_DEVIANTART_OAUTH_VERIFIER)
-    return RedirectResponse(url="/?message=" + quote_plus(f"DeviantArt connected as {username}."), status_code=303)
-
-
-def _quire_redirect_uri(request: Request) -> str:
-    """Callback URL Quire redirects back to (must match the app's whitelist)."""
-    base = os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/")
-    if base:
-        return f"{base}/quire/callback"
-    return str(request.url_for("quire_callback"))
-
-
-@app.get("/quire/connect")
-def quire_connect(request: Request):
-    """Kick off the Quire OAuth flow → redirect to their consent page."""
-    cid, secret = get_quire_credentials()
-    if not cid or not secret:
-        return RedirectResponse(url="/?message=" + quote_plus("Add your Quire API keys in Settings first."), status_code=303)
-    state = secrets.token_urlsafe(24)
-    with get_meta_connection() as conn:
-        set_setting(conn, SETTING_QUIRE_OAUTH_STATE, state)
-    url = quire_service.authorize_url(cid, _quire_redirect_uri(request), state)
-    return RedirectResponse(url=url, status_code=303)
-
-
-@app.get("/quire/callback")
-def quire_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
-    """OAuth redirect target: exchange the code for tokens and store them."""
-    if error:
-        return RedirectResponse(url="/?message=" + quote_plus(f"Quire authorization failed: {error}"), status_code=303)
-    with get_meta_connection() as conn:
-        expected = get_setting(conn, SETTING_QUIRE_OAUTH_STATE) or ""
-    if not code or not state or state != expected:
-        return RedirectResponse(url="/?message=" + quote_plus("Quire authorization failed (bad state)."), status_code=303)
-    cid, secret = get_quire_credentials()
-    try:
-        data = quire_service.exchange_code(cid, secret, code, _quire_redirect_uri(request))
-        token = data["access_token"]
-        try:
-            username = quire_service.whoami(token)
-        except Exception:
-            username = ""
-    except Exception as exc:  # noqa: BLE001
-        return RedirectResponse(url="/?message=" + quote_plus(f"Quire connect failed: {exc}"), status_code=303)
-    with get_meta_connection() as conn:
-        set_setting(conn, SETTING_QUIRE_ACCESS_TOKEN, token)
-        if data.get("refresh_token"):
-            set_setting(conn, SETTING_QUIRE_REFRESH_TOKEN, data["refresh_token"])
-        set_setting(conn, SETTING_QUIRE_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
-        set_setting(conn, SETTING_QUIRE_USERNAME, username)
-        delete_setting(conn, SETTING_QUIRE_OAUTH_STATE)
-    notice = f"Quire connected as {username}." if username else "Quire connected."
-    return RedirectResponse(url="/?message=" + quote_plus(notice + " Pick a destination project in Settings."), status_code=303)
-
-
 @app.get("/api/quire/projects")
 def quire_projects_route():
     """List the connected user's Quire projects for the Settings destination picker."""
@@ -29444,198 +29334,6 @@ def quire_projects_route():
         LOGGER.warning("[quire] project list failed: %s", exc)
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
     return JSONResponse({"ok": True, "projects": projects})
-
-
-def _youtube_oauth_redirect_uri(request: Request) -> str:
-    """Callback URL Google redirects back to — MUST exactly match the URI
-    registered on the OAuth client in Google Cloud."""
-    base = os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/")
-    if base:
-        return f"{base}/integrations/youtube/oauth/callback"
-    return str(request.url_for("youtube_oauth_callback"))
-
-
-@app.get("/integrations/youtube/oauth/connect")
-def youtube_oauth_connect(request: Request):
-    """Kick off the YouTube OAuth flow → redirect to Google's consent page."""
-    cid, secret = get_youtube_oauth_credentials()
-    if not cid or not secret:
-        return RedirectResponse(
-            url="/?message=" + quote_plus("YouTube OAuth client is not configured (set YOUTUBE_OAUTH_CLIENT_ID/SECRET)."),
-            status_code=303,
-        )
-    state = secrets.token_urlsafe(24)
-    with get_meta_connection() as conn:
-        set_setting(conn, SETTING_YT_OAUTH_STATE, state)
-    url = youtube_oauth_service.authorize_url(cid, _youtube_oauth_redirect_uri(request), state)
-    return RedirectResponse(url=url, status_code=303)
-
-
-@app.get("/integrations/youtube/oauth/callback")
-def youtube_oauth_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
-    """OAuth redirect target: exchange the code for tokens and store them per-user."""
-    if error:
-        return RedirectResponse(url="/?message=" + quote_plus(f"YouTube authorization failed: {error}"), status_code=303)
-    with get_meta_connection() as conn:
-        expected = get_setting(conn, SETTING_YT_OAUTH_STATE) or ""
-    if not code or not state or state != expected:
-        return RedirectResponse(url="/?message=" + quote_plus("YouTube authorization failed (bad state)."), status_code=303)
-    cid, secret = get_youtube_oauth_credentials()
-    try:
-        data = youtube_oauth_service.exchange_code(cid, secret, code, _youtube_oauth_redirect_uri(request))
-    except Exception as exc:  # noqa: BLE001
-        return RedirectResponse(url="/?message=" + quote_plus(f"YouTube connect failed: {exc}"), status_code=303)
-    with get_meta_connection() as conn:
-        set_setting(conn, SETTING_YT_OAUTH_ACCESS_TOKEN, data["access_token"])
-        if data.get("refresh_token"):
-            set_setting(conn, SETTING_YT_OAUTH_REFRESH_TOKEN, data["refresh_token"])
-        set_setting(conn, SETTING_YT_OAUTH_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
-        delete_setting(conn, SETTING_YT_OAUTH_STATE)
-    return RedirectResponse(url="/?message=" + quote_plus("YouTube account connected."), status_code=303)
-
-
-@app.post("/integrations/youtube/oauth/disconnect")
-def youtube_oauth_disconnect():
-    with get_meta_connection() as conn:
-        for key in (
-            SETTING_YT_OAUTH_ACCESS_TOKEN,
-            SETTING_YT_OAUTH_REFRESH_TOKEN,
-            SETTING_YT_OAUTH_TOKEN_EXPIRES_AT,
-            SETTING_YT_OAUTH_STATE,
-        ):
-            delete_setting(conn, key)
-    return JSONResponse({"ok": True})
-
-
-# ---------------------------------------------------------------------------
-# Pinterest OAuth + save-to-board (per-entry "Pin" button)
-# ---------------------------------------------------------------------------
-def _pinterest_oauth_redirect_uri(request: Request) -> str:
-    """Callback URL Pinterest redirects back to — MUST exactly match the URI
-    registered on the OAuth app in the Pinterest developer console."""
-    base = os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/")
-    if base:
-        return f"{base}/integrations/pinterest/oauth/callback"
-    return str(request.url_for("pinterest_oauth_callback"))
-
-
-@app.get("/integrations/pinterest/oauth/connect")
-def pinterest_oauth_connect(request: Request):
-    """Kick off the Pinterest OAuth flow → redirect to Pinterest's consent page."""
-    cid, secret = get_pinterest_oauth_credentials()
-    if not cid or not secret:
-        return RedirectResponse(
-            url="/?message=" + quote_plus("Pinterest OAuth client is not configured (set PINTEREST_OAUTH_CLIENT_ID/SECRET)."),
-            status_code=303,
-        )
-    state = secrets.token_urlsafe(24)
-    with get_meta_connection() as conn:
-        set_setting(conn, SETTING_PINTEREST_OAUTH_STATE, state)
-    url = pinterest_oauth_service.authorize_url(cid, _pinterest_oauth_redirect_uri(request), state)
-    return RedirectResponse(url=url, status_code=303)
-
-
-@app.get("/integrations/pinterest/oauth/callback")
-def pinterest_oauth_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
-    """OAuth redirect target: exchange the code for tokens and store them per-user."""
-    if error:
-        return RedirectResponse(url="/?message=" + quote_plus(f"Pinterest authorization failed: {error}"), status_code=303)
-    with get_meta_connection() as conn:
-        expected = get_setting(conn, SETTING_PINTEREST_OAUTH_STATE) or ""
-    if not code or not state or state != expected:
-        return RedirectResponse(url="/?message=" + quote_plus("Pinterest authorization failed (bad state)."), status_code=303)
-    cid, secret = get_pinterest_oauth_credentials()
-    try:
-        data = pinterest_oauth_service.exchange_code(cid, secret, code, _pinterest_oauth_redirect_uri(request))
-    except Exception as exc:  # noqa: BLE001
-        return RedirectResponse(url="/?message=" + quote_plus(f"Pinterest connect failed: {exc}"), status_code=303)
-    with get_meta_connection() as conn:
-        set_setting(conn, SETTING_PINTEREST_OAUTH_ACCESS_TOKEN, data["access_token"])
-        if data.get("refresh_token"):
-            set_setting(conn, SETTING_PINTEREST_OAUTH_REFRESH_TOKEN, data["refresh_token"])
-        set_setting(conn, SETTING_PINTEREST_OAUTH_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
-        delete_setting(conn, SETTING_PINTEREST_OAUTH_STATE)
-    return RedirectResponse(url="/?message=" + quote_plus("Pinterest account connected."), status_code=303)
-
-
-@app.post("/integrations/pinterest/oauth/disconnect")
-def pinterest_oauth_disconnect():
-    with get_meta_connection() as conn:
-        for key in (
-            SETTING_PINTEREST_OAUTH_ACCESS_TOKEN,
-            SETTING_PINTEREST_OAUTH_REFRESH_TOKEN,
-            SETTING_PINTEREST_OAUTH_TOKEN_EXPIRES_AT,
-            SETTING_PINTEREST_OAUTH_STATE,
-        ):
-            delete_setting(conn, key)
-    return JSONResponse({"ok": True})
-
-
-# ---------------------------------------------------------------------------
-# Reddit OAuth routes
-# ---------------------------------------------------------------------------
-
-
-@app.get("/integrations/reddit/oauth/connect")
-def reddit_oauth_connect(request: Request):
-    """Kick off the Reddit OAuth flow → redirect to Reddit's consent page."""
-    cid, secret = get_reddit_credentials()
-    if not cid or not secret:
-        return RedirectResponse(
-            url="/?message=" + quote_plus("Reddit OAuth client is not configured (enter client ID and secret in Integrations → Reddit)."),
-            status_code=303,
-        )
-    state = secrets.token_urlsafe(24)
-    with get_meta_connection() as conn:
-        set_setting(conn, SETTING_REDDIT_OAUTH_STATE, state)
-    url = reddit_service.authorize_url(cid, _reddit_redirect_uri(request), state)
-    return RedirectResponse(url=url, status_code=303)
-
-
-@app.get("/integrations/reddit/oauth/callback")
-def reddit_oauth_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
-    """OAuth redirect target: exchange the code for tokens and store them per-user."""
-    if error:
-        return RedirectResponse(url="/?message=" + quote_plus(f"Reddit authorization failed: {error}"), status_code=303)
-    with get_meta_connection() as conn:
-        expected = get_setting(conn, SETTING_REDDIT_OAUTH_STATE) or ""
-    if not code or not state or state != expected:
-        return RedirectResponse(url="/?message=" + quote_plus("Reddit authorization failed (bad state)."), status_code=303)
-    cid, secret = get_reddit_credentials()
-    try:
-        data = reddit_service.exchange_code(cid, secret, code, _reddit_redirect_uri(request))
-    except Exception as exc:  # noqa: BLE001
-        return RedirectResponse(url="/?message=" + quote_plus(f"Reddit connect failed: {exc}"), status_code=303)
-    username = ""
-    try:
-        me = reddit_service.get_me(data["access_token"])
-        username = me.get("name", "")
-    except Exception:  # noqa: BLE001
-        pass
-    with get_meta_connection() as conn:
-        set_setting(conn, SETTING_REDDIT_ACCESS_TOKEN, data["access_token"])
-        if data.get("refresh_token"):
-            set_setting(conn, SETTING_REDDIT_REFRESH_TOKEN, data["refresh_token"])
-        set_setting(conn, SETTING_REDDIT_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
-        if username:
-            set_setting(conn, SETTING_REDDIT_USERNAME, username)
-        delete_setting(conn, SETTING_REDDIT_OAUTH_STATE)
-    msg = f"Reddit connected as /u/{username}." if username else "Reddit account connected."
-    return RedirectResponse(url="/?message=" + quote_plus(msg), status_code=303)
-
-
-@app.post("/integrations/reddit/oauth/disconnect")
-def reddit_oauth_disconnect():
-    with get_meta_connection() as conn:
-        for key in (
-            SETTING_REDDIT_ACCESS_TOKEN,
-            SETTING_REDDIT_REFRESH_TOKEN,
-            SETTING_REDDIT_TOKEN_EXPIRES_AT,
-            SETTING_REDDIT_OAUTH_STATE,
-            SETTING_REDDIT_USERNAME,
-        ):
-            delete_setting(conn, key)
-    return JSONResponse({"ok": True})
 
 
 # ---------------------------------------------------------------------------
@@ -31422,34 +31120,6 @@ def youtube_playlist_add_batch_status_route(job_id: str | None = Query(default=N
     if job_id and snapshot.get("job_id") != job_id:
         return JSONResponse({"ok": True, "running": False, "stale": True})
     return JSONResponse({"ok": True, **snapshot})
-
-
-@app.post("/deviantart/disconnect")
-def deviantart_disconnect():
-    with get_meta_connection() as conn:
-        for key in (
-            SETTING_DEVIANTART_ACCESS_TOKEN,
-            SETTING_DEVIANTART_REFRESH_TOKEN,
-            SETTING_DEVIANTART_TOKEN_EXPIRES_AT,
-            SETTING_DEVIANTART_USERNAME,
-        ):
-            delete_setting(conn, key)
-    return JSONResponse({"ok": True})
-
-
-@app.post("/quire/disconnect")
-def quire_disconnect():
-    with get_meta_connection() as conn:
-        for key in (
-            SETTING_QUIRE_ACCESS_TOKEN,
-            SETTING_QUIRE_REFRESH_TOKEN,
-            SETTING_QUIRE_TOKEN_EXPIRES_AT,
-            SETTING_QUIRE_USERNAME,
-            SETTING_QUIRE_PROJECT_OID,
-            SETTING_QUIRE_PROJECT_NAME,
-        ):
-            delete_setting(conn, key)
-    return JSONResponse({"ok": True})
 
 
 @app.post("/deviantart/sync-watchlist")
@@ -40466,6 +40136,25 @@ def miniflux_toggle_bookmark(entry_id: int, request: Request) -> Response:
     if result is None:
         return JSONResponse({"error_message": "Entry not found."}, status_code=404)
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Extracted route modules (Plan.md's main.py/index.html breakup). Imported
+# here rather than at the top of the file: each module does `from main
+# import ...` for shared connection/setting/credential helpers, which only
+# resolves once those names exist in this module's namespace.
+# ---------------------------------------------------------------------------
+from routes.integrations_deviantart import router as _deviantart_oauth_router  # noqa: E402
+from routes.integrations_pinterest import router as _pinterest_oauth_router  # noqa: E402
+from routes.integrations_quire import router as _quire_oauth_router  # noqa: E402
+from routes.integrations_reddit import router as _reddit_oauth_router  # noqa: E402
+from routes.integrations_youtube import router as _youtube_oauth_router  # noqa: E402
+
+app.include_router(_deviantart_oauth_router)
+app.include_router(_quire_oauth_router)
+app.include_router(_youtube_oauth_router)
+app.include_router(_pinterest_oauth_router)
+app.include_router(_reddit_oauth_router)
 
 
 if __name__ == "__main__":

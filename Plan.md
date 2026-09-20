@@ -51,11 +51,27 @@ compat APIs; treat as its own carefully-tested project, not part of a mechanical
 
 **Proposed order, safest → riskiest:**
 
-1. **Ready to start.** Integration OAuth/credential blocks (DeviantArt, Quire, YouTube/Pinterest/
-   Reddit/Inoreader connect/callback/disconnect + Inoreader import) → thin
-   `routes/integrations_*.py` modules. Cluster at main.py:29271–31490 (~2,220 lines); touches
-   exactly one shared singleton (`invalidate_meta_structure_cache`) — confirmed self-contained.
-   (`/youtube/sync` at 27228 and `/entries/quire` at 38895 sit outside this range — leave for later.)
+1. Integration routes cluster, main.py:29323–31562 (~2,240 lines) — bigger than first scoped: it's
+   the whole Integrations surface (OAuth + post-connect actions + Miniflux/FreshRSS/TT-RSS/Inoreader
+   importers), not just OAuth/credential + Inoreader import, and every route in it depends on
+   main.py-resident helpers (`get_meta_connection`, `get_setting`/`set_setting`/`delete_setting`,
+   `get_reader`, credential/token getters, `_get_or_create_folder_by_name`, `_run_in_user_context`),
+   not just one singleton. Extraction pattern that resolves this without a storage-layer rewrite:
+   each `routes/integrations_*.py` defines `router = APIRouter()` and does `from main import ...` at
+   module scope; main.py imports those routers and calls `app.include_router(...)` near the bottom
+   of the file (after every needed name is already defined) rather than at the top — see the comment
+   there. Split into sub-stages, tests run after each:
+   - **A — done (2026-09-19).** Pure OAuth connect/callback/disconnect/verify for DeviantArt, Quire,
+     YouTube, Pinterest, Reddit → `routes/integrations_{deviantart,quire,youtube,pinterest,reddit}.py`.
+   - B — next. Post-connect actions with no shared workers: Reddit submit, Pinterest boards/pin,
+     Quire projects, YouTube playlists (list/add/add-batch/status, incl. the `_yt_playlist_batch_jobs`
+     singleton) → same per-integration files.
+   - C — DeviantArt watchlist sync/unsubscribe/push/add-watch-feed → extends A's deviantart file.
+   - D — Miniflux/FreshRSS/TT-RSS import (test/status/start/reset + worker each). Shared helpers
+     (`_apply_migration_items`, `_canonicalize_item_feed_urls`, `_resolve_feed_url`,
+     `_canonical_feed_url_lookup`) move to a new `services/migration_common.py` first.
+   - E — Inoreader OAuth + import (biggest, ~950 lines, its own drip-step state machine) →
+     `routes/integrations_inoreader.py` + `services/inoreader_import.py`.
 2. Post-refresh automation pipeline (`_run_automation_after_refresh` + the six
    `_run_*_rules_after_refresh` functions, main.py:8921–9962) → `services/automation_rules.py`. The
    manual "run now" triggers (`_run_now_dedup`/`_run_now_pattern`/`_run_tag_filter`, ~7811–9109)
