@@ -63,9 +63,21 @@ compat APIs; treat as its own carefully-tested project, not part of a mechanical
    there. Split into sub-stages, tests run after each:
    - **A — done (2026-09-19).** Pure OAuth connect/callback/disconnect/verify for DeviantArt, Quire,
      YouTube, Pinterest, Reddit → `routes/integrations_{deviantart,quire,youtube,pinterest,reddit}.py`.
-   - B — next. Post-connect actions with no shared workers: Reddit submit, Pinterest boards/pin,
-     Quire projects, YouTube playlists (list/add/add-batch/status, incl. the `_yt_playlist_batch_jobs`
-     singleton) → same per-integration files.
+   - **B — done (2026-09-20).** Post-connect actions with no shared workers: Reddit submit, Pinterest
+     boards/pin, Quire projects, YouTube playlists (list/add/add-batch/status, incl. the
+     `_yt_playlist_batch_jobs` singleton) → same per-integration files. Found a real gotcha doing
+     this: two tests (`test_pinterest_pin_route.py`, `test_youtube_playlist_add_batch.py`) imported
+     the moved handler off `main` and monkeypatched `main.<helper>` — neither works once the handler
+     lives in a routes module, since `from main import helper` copies the reference at import time
+     (monkeypatching `main.helper` afterward doesn't touch the routes module's own binding), so tests
+     now target the routes module directly. That surfaced a second, sharper issue: a test importing
+     `routes.integrations_x` *before* anything imports `main` triggers the circular-import failure
+     for real (routes' own `from main import ...` starts loading main.py, which reaches its own
+     bottom-of-file `from routes.integrations_x import router` while that module is still mid-import
+     and hasn't defined `router` yet) — fixed by making sure the test's `import main` line sorts
+     before its `from routes import integrations_x` line; see `routes/__init__.py`'s docstring.
+     Stages C-E should check any new/updated test the same way before assuming a moved route "just
+     works" with its old test.
    - C — DeviantArt watchlist sync/unsubscribe/push/add-watch-feed → extends A's deviantart file.
    - D — Miniflux/FreshRSS/TT-RSS import (test/status/start/reset + worker each). Shared helpers
      (`_apply_migration_items`, `_canonicalize_item_feed_urls`, `_resolve_feed_url`,

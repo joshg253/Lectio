@@ -1,8 +1,4 @@
-"""Reddit OAuth: connect/callback/disconnect.
-
-The submit-to-subreddit action (`/api/reddit/submit`) still lives in main.py
-(Stage B of Plan.md's main.py/index.html breakup).
-"""
+"""Reddit OAuth (connect/callback/disconnect) and the submit-to-subreddit action."""
 
 from __future__ import annotations
 
@@ -22,7 +18,9 @@ from main import (
     _reddit_redirect_uri,
     delete_setting,
     get_meta_connection,
+    get_reader,
     get_reddit_credentials,
+    get_reddit_user_token,
     get_setting,
     set_setting,
 )
@@ -91,3 +89,42 @@ def reddit_oauth_disconnect():
         ):
             delete_setting(conn, key)
     return JSONResponse({"ok": True})
+
+
+@router.post("/api/reddit/submit")
+async def reddit_submit_route(request: Request):
+    """Submit an article link to a subreddit."""
+    body = await request.json()
+    subreddit = str(body.get("subreddit", "")).strip().removeprefix("r/").strip("/")
+    title = str(body.get("title", "")).strip()
+    url = str(body.get("url", "")).strip()
+    feed_url_param = str(body.get("feed_url", "")).strip()
+    entry_id_param = str(body.get("entry_id", "")).strip()
+
+    if not subreddit:
+        return JSONResponse({"ok": False, "error": "subreddit is required"}, status_code=400)
+
+    token = get_reddit_user_token()
+    if not token:
+        return JSONResponse({"connected": False, "error": "Reddit not connected"}, status_code=401)
+
+    # Resolve link and title from entry if not provided directly.
+    if feed_url_param and entry_id_param and not url:
+        try:
+            with get_reader() as reader:
+                entry = reader.get_entry((feed_url_param, entry_id_param))
+            url = str(getattr(entry, "link", "") or "")
+            if not title:
+                title = str(getattr(entry, "title", "") or url)
+        except Exception:  # noqa: BLE001
+            pass
+
+    if not url:
+        return JSONResponse({"ok": False, "error": "could not determine article URL"}, status_code=400)
+
+    title = title or url
+    try:
+        result = reddit_service.submit_link(token, subreddit, title, url)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True, "post_url": result.get("url", "")})

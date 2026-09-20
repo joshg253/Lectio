@@ -1,8 +1,4 @@
-"""Pinterest OAuth: connect/callback/disconnect.
-
-Board listing and pin creation (`/api/pinterest/*`) still live in main.py
-(Stage B of Plan.md's main.py/index.html breakup).
-"""
+"""Pinterest OAuth (connect/callback/disconnect) and board listing/pin creation."""
 
 from __future__ import annotations
 
@@ -19,9 +15,12 @@ from main import (
     SETTING_PINTEREST_OAUTH_REFRESH_TOKEN,
     SETTING_PINTEREST_OAUTH_STATE,
     SETTING_PINTEREST_OAUTH_TOKEN_EXPIRES_AT,
+    _derive_article_lead_image,
     delete_setting,
     get_meta_connection,
     get_pinterest_oauth_credentials,
+    get_pinterest_oauth_token,
+    get_reader,
     get_setting,
     set_setting,
 )
@@ -89,3 +88,50 @@ def pinterest_oauth_disconnect():
         ):
             delete_setting(conn, key)
     return JSONResponse({"ok": True})
+
+
+@router.get("/api/pinterest/boards")
+def pinterest_boards_route():
+    """List the connected user's boards for the Pin board-picker."""
+    token = get_pinterest_oauth_token()
+    if not token:
+        return JSONResponse({"connected": False, "boards": []})
+    try:
+        boards = pinterest_oauth_service.list_boards(token)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"connected": True, "error": str(exc), "boards": []}, status_code=502)
+    return JSONResponse({"connected": True, "boards": boards})
+
+
+@router.post("/api/pinterest/pin")
+async def pinterest_pin_route(request: Request):
+    """Pin an entry to a board. Body: {feed_url, entry_id, board_id}.
+
+    Uses the entry's lead image; entries without one can't be pinned (Pinterest
+    requires an image). Links the pin back to the entry's source URL."""
+    body = await request.json()
+    feed_url = (body.get("feed_url") or "").strip()
+    entry_id = (body.get("entry_id") or "").strip()
+    board_id = (body.get("board_id") or "").strip()
+    if not feed_url or not entry_id or not board_id:
+        return JSONResponse({"error": "feed_url, entry_id and board_id are required"}, status_code=400)
+    token = get_pinterest_oauth_token()
+    if not token:
+        return JSONResponse({"connected": False, "error": "Pinterest not connected"}, status_code=401)
+    with get_reader() as reader:
+        try:
+            entry = reader.get_entry((feed_url, entry_id), None)
+        except Exception:
+            entry = None
+    if not entry:
+        return JSONResponse({"error": "entry not found"}, status_code=404)
+    image_url = _derive_article_lead_image(entry)
+    if not image_url:
+        return JSONResponse({"error": "no image to pin for this entry"}, status_code=422)
+    link = str(getattr(entry, "link", "") or "")
+    title = str(getattr(entry, "title", "") or "")
+    try:
+        pin = pinterest_oauth_service.create_pin(token, board_id, image_url, link, title=title)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": str(exc)}, status_code=502)
+    return JSONResponse({"ok": True, "pin_id": pin.get("id", "")})

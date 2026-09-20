@@ -1,8 +1,4 @@
-"""Quire OAuth: connect/callback/disconnect.
-
-Project listing (`/api/quire/projects`) still lives in main.py (Stage B of
-Plan.md's main.py/index.html breakup).
-"""
+"""Quire OAuth (connect/callback/disconnect) and the project-listing API."""
 
 from __future__ import annotations
 
@@ -15,6 +11,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from main import (
+    LOGGER,
     SETTING_QUIRE_ACCESS_TOKEN,
     SETTING_QUIRE_OAUTH_STATE,
     SETTING_QUIRE_PROJECT_NAME,
@@ -25,6 +22,7 @@ from main import (
     delete_setting,
     get_meta_connection,
     get_quire_credentials,
+    get_quire_user_token,
     get_setting,
     set_setting,
 )
@@ -97,3 +95,19 @@ def quire_disconnect():
         ):
             delete_setting(conn, key)
     return JSONResponse({"ok": True})
+
+
+@router.get("/api/quire/projects")
+def quire_projects_route():
+    """List the connected user's Quire projects for the Settings destination picker."""
+    token = get_quire_user_token()
+    if not token:
+        return JSONResponse({"ok": False, "error": "Quire not connected."}, status_code=503)
+    try:
+        projects = quire_service.list_projects(token)
+    except quire_service.QuireRateLimited:
+        return JSONResponse({"ok": False, "error": "Quire rate limit hit — try again shortly."}, status_code=429)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[quire] project list failed: %s", exc)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+    return JSONResponse({"ok": True, "projects": projects})
