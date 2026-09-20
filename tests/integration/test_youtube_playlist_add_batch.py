@@ -9,6 +9,11 @@ one copy later removes both) is exercised directly against the worker
 function, which is where that logic actually lives now. Exercises the
 youtube_oauth_service calls monkeypatched, since the service layer itself
 just wraps the YouTube Data API.
+
+The route, worker and job-state helpers live in routes/integrations_youtube.py
+(Stage B of the main.py/index.html breakup); `get_youtube_oauth_token` is
+monkeypatched on that module (its own `from main import ...` binding), not on
+main.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ import pytest
 from fastapi import Request
 
 import main
+from routes import integrations_youtube as yt_routes
 from services import tenancy
 
 
@@ -42,10 +48,10 @@ def env(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(main, "WEBSUB_DB_PATH", tmp_path / "lectio_websub.sqlite")
     main.ensure_meta_schema()
-    monkeypatch.setattr(main, "get_youtube_oauth_token", lambda: "test-token")
+    monkeypatch.setattr(yt_routes, "get_youtube_oauth_token", lambda: "test-token")
     # Each test gets a clean job slot — the per-user dict otherwise carries a
     # "running" job (or a stale one) across tests sharing this fixture.
-    main._yt_playlist_batch_jobs = main._PerUserDict()
+    yt_routes._yt_playlist_batch_jobs = yt_routes._PerUserDict()
     try:
         yield tmp_path
     finally:
@@ -62,7 +68,7 @@ class _FakeRequest:
 
 
 def _call(payload: dict) -> dict:
-    resp = asyncio.run(main.youtube_playlist_add_batch_route(cast(Request, _FakeRequest(payload))))
+    resp = asyncio.run(yt_routes.youtube_playlist_add_batch_route(cast(Request, _FakeRequest(payload))))
     return json.loads(bytes(resp.body))
 
 
@@ -85,7 +91,7 @@ def _run_worker(video_ids: list[str], playlist_id: str = "", new_title: str = ""
         "failed": 0,
         "message": None,
     }
-    main._run_yt_playlist_batch_add(video_ids, playlist_id, new_title, job)
+    yt_routes._run_yt_playlist_batch_add(video_ids, playlist_id, new_title, job)
     return job
 
 
@@ -171,7 +177,7 @@ def test_batch_add_rejects_oversize_and_missing_target(env):
 
 
 def test_batch_add_requires_connection(env, monkeypatch):
-    monkeypatch.setattr(main, "get_youtube_oauth_token", lambda: None)
+    monkeypatch.setattr(yt_routes, "get_youtube_oauth_token", lambda: None)
     data = _call({"video_ids": ["v1"], "playlist_id": "PL1"})
     assert not data["ok"] and data["error"] == "not_connected"
 
@@ -184,17 +190,17 @@ def test_batch_add_route_starts_a_job_and_status_reports_completion(env, monkeyp
     assert data["ok"] and data["started"] and data["total"] == 2
 
     deadline = time.monotonic() + 5
-    job = main._yt_playlist_batch_job_state()
+    job = yt_routes._yt_playlist_batch_job_state()
     while job is not None and job.get("running") and time.monotonic() < deadline:
         time.sleep(0.05)
-        job = main._yt_playlist_batch_job_state()
+        job = yt_routes._yt_playlist_batch_job_state()
 
     assert job is not None and job["done"] and not job["running"]
     assert job["added"] == 2
 
 
 def test_batch_add_rejects_a_second_job_while_one_is_running(env, monkeypatch):
-    job = main._yt_playlist_batch_job_state(create=True)
+    job = yt_routes._yt_playlist_batch_job_state(create=True)
     job["running"] = True
     data = _call({"video_ids": ["v1"], "playlist_id": "PL1"})
     assert not data["ok"] and data["error"] == "busy"
@@ -214,7 +220,7 @@ def test_status_with_the_matching_job_id_reports_real_progress(env, monkeypatch)
     monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids", lambda token, pid: set())
     monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist", lambda token, pid, vid: {"id": "item"})
     data = _call({"video_ids": ["v1"], "playlist_id": "PL1"})
-    resp = main.youtube_playlist_add_batch_status_route(job_id=data["job_id"])
+    resp = yt_routes.youtube_playlist_add_batch_status_route(job_id=data["job_id"])
     body = json.loads(bytes(resp.body))
     assert body["ok"] and "stale" not in body
 
@@ -227,7 +233,7 @@ def test_status_with_a_stale_job_id_reports_not_running_instead_of_the_new_batch
     monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids", lambda token, pid: set())
     monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist", lambda token, pid, vid: {"id": "item"})
     _call({"video_ids": ["v1"], "playlist_id": "PL1"})
-    resp = main.youtube_playlist_add_batch_status_route(job_id="not-the-real-job-id")
+    resp = yt_routes.youtube_playlist_add_batch_status_route(job_id="not-the-real-job-id")
     body = json.loads(bytes(resp.body))
     assert body["ok"] and body["running"] is False and body["stale"] is True
 
@@ -238,7 +244,7 @@ def test_status_with_no_job_id_still_works(env, monkeypatch):
     monkeypatch.setattr(main.youtube_oauth_service, "list_playlist_video_ids", lambda token, pid: set())
     monkeypatch.setattr(main.youtube_oauth_service, "add_video_to_playlist", lambda token, pid, vid: {"id": "item"})
     _call({"video_ids": ["v1"], "playlist_id": "PL1"})
-    resp = main.youtube_playlist_add_batch_status_route(job_id=None)
+    resp = yt_routes.youtube_playlist_add_batch_status_route(job_id=None)
     body = json.loads(bytes(resp.body))
     assert body["ok"] and "stale" not in body
 
@@ -249,5 +255,5 @@ def test_job_update_helper_merges_under_the_lock(env):
     review 2026-08-31: a status poll landing mid-iteration used to risk a
     torn read)."""
     job: dict = {"processed": 0}
-    main._yt_playlist_job_update(job, {"processed": 1, "added": 1})
+    yt_routes._yt_playlist_job_update(job, {"processed": 1, "added": 1})
     assert job == {"processed": 1, "added": 1}

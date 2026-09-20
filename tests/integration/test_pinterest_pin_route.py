@@ -1,22 +1,32 @@
 """/api/pinterest/pin route: token gating, lead-image requirement, happy path.
 
 Mounts the handler on a bare FastAPI app (like test_instapaper_route) so the
-main app's CSRF middleware doesn't reject the test POSTs."""
+main app's CSRF middleware doesn't reject the test POSTs. The route lives in
+routes/integrations_pinterest.py (Stage B of the main.py/index.html
+breakup); monkeypatches target that module, not main, since it holds its own
+`from main import ...` bindings resolved at import time.
+
+`import main` must come before the routes import below: main.py's own
+bottom-of-file wiring is what makes routes.integrations_pinterest a complete
+module (see the comment there) — importing the routes module first triggers
+main's import machinery on a not-yet-finished module and fails with a
+circular-import error."""
 
 from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import main
+import main  # noqa: F401 — must import before routes.integrations_pinterest; see module docstring
+from routes import integrations_pinterest as pinterest_routes
 from services import pinterest_oauth as pin
 
 
 def _build_app(monkeypatch, *, token="tok", entry="__default__", image="https://img.test/p.jpg"):
     app = FastAPI()
-    app.post("/api/pinterest/pin")(main.pinterest_pin_route)
+    app.post("/api/pinterest/pin")(pinterest_routes.pinterest_pin_route)
 
-    monkeypatch.setattr(main, "get_pinterest_oauth_token", lambda: token)
+    monkeypatch.setattr(pinterest_routes, "get_pinterest_oauth_token", lambda: token)
 
     if entry == "__default__":
 
@@ -38,8 +48,8 @@ def _build_app(monkeypatch, *, token="tok", entry="__default__", image="https://
         def get_entry(self, key, default):
             return entry
 
-    monkeypatch.setattr(main, "get_reader", lambda: _FakeReader())
-    monkeypatch.setattr(main, "_derive_article_lead_image", lambda e: image)
+    monkeypatch.setattr(pinterest_routes, "get_reader", lambda: _FakeReader())
+    monkeypatch.setattr(pinterest_routes, "_derive_article_lead_image", lambda e: image)
     return app
 
 

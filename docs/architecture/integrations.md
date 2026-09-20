@@ -5,6 +5,20 @@ Per-user OAuth destinations, quotas and the automation that drives them.
 > Split out of `tenancy.md`'s security list on 2026-08-13 — these are
 > integration concerns, not security posture.
 
+> Plan.md's main.py/index.html breakup (2026-09-19/20, Stages A-E) moved every
+> integration route — OAuth connect/callback/disconnect, post-connection
+> actions (playlists, boards/pin, submit, watchlist sync), and the
+> Miniflux/FreshRSS/TT-RSS/Inoreader importers — out of main.py into
+> `routes/integrations_<name>.py`, registered via `app.include_router` near
+> the bottom of main.py. The shared migration-applier helpers live in
+> `services/migration_common.py`; Inoreader's file-based import loop and
+> API-driven drip step live in `services/inoreader_import.py`. Each of these
+> modules reaches main.py-resident primitives (connection/setting helpers,
+> `canonical_feed_url`, etc.) with `from main import ...`, which only
+> resolves because the include happens after those names are defined; see
+> the comment at the bottom of main.py and `routes/__init__.py`'s docstring
+> for the import-order mechanics.
+
 ## Per-user integrations
 
 - **YouTube quota meter (per-user)** — the Data API exposes no remaining-quota read,
@@ -79,8 +93,9 @@ Per-user OAuth destinations, quotas and the automation that drives them.
   write scope (`auth/youtube`), separate from the read-only `YOUTUBE_API_KEY`
   (durations, sub-sync). `services/youtube_oauth.py` speaks HTTP to Google
   (authorize / token exchange / refresh, `playlists.list`, `playlistItems.insert`,
-  `playlists.insert`); main.py owns the flow (`/integrations/youtube/oauth/{connect,
-  callback,disconnect}`) and stores the **refresh token per-user** in app-settings
+  `playlists.insert`); `routes/integrations_youtube.py` owns the OAuth flow
+  (`/integrations/youtube/oauth/{connect,callback,disconnect}`) and stores the
+  **refresh token per-user** in app-settings
   (`get_youtube_oauth_token()` refreshes on demand, returns "" → reconnect prompt on
   failure). The OAuth *client* creds are app-level (one registered Google app, read
   from env in both single and multi mode) — only the resulting tokens are per-user,
@@ -294,10 +309,12 @@ was already a solved problem.
   write-without-OAuth path, so `services/pinterest_oauth.py` speaks the **API v5**
   OAuth flow (authorize / token / refresh — the token endpoint authenticates the
   *client* with HTTP **Basic** auth, body form-encoded, unlike Google's JSON) plus
-  `boards.list` (scope `boards:read`) and `pins.create` (scope `pins:write`). main.py
-  owns the routes (`/integrations/pinterest/oauth/{connect,callback,disconnect}`,
-  `/api/pinterest/boards`, `/api/pinterest/pin`) and stores the **refresh token
-  per-user** (`get_pinterest_oauth_token()` refreshes on demand; "" → reconnect). The
+  `boards.list` (scope `boards:read`) and `pins.create` (scope `pins:write`).
+  `routes/integrations_pinterest.py` owns the OAuth routes
+  (`/integrations/pinterest/oauth/{connect,callback,disconnect}`) and the
+  actions (`/api/pinterest/boards`, `/api/pinterest/pin`). Tokens are
+  stored **per-user** (`get_pinterest_oauth_token()` refreshes on demand; "" →
+  reconnect). The
   OAuth *client* creds are app-level (`PINTEREST_OAUTH_CLIENT_ID/SECRET` from env,
   both modes); only the tokens are per-user. The pin route derives the entry's lead
   image via `_derive_article_lead_image` (the **source** URL, not the `/api/img`

@@ -10,8 +10,9 @@ to run, real features not blocking anything today, and deliberately-deferred big
 Within a tier, related items are clustered under a bold sub-heading. Two watch-lists (CodeQL,
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
-Tiers 1 through 3 are empty. Next up: the main.py/index.html breakup (top of Tier 4) — Josh is
-leaning toward it, and Step 1 is scoped and ready to start.
+Tiers 1 through 3 are empty. The main.py/index.html breakup's Step 1 (top of Tier 4, the
+Integration routes cluster) is done — Stages A-E all shipped 2026-09-19/20. Steps 2-7 of that
+breakup are unscoped follow-on work, not started.
 
 ## Tier 1 — actively impeding unread-clearing
 
@@ -29,9 +30,12 @@ Empty.
 
 ### main.py / index.html breakup — extraction map
 
-`main.py` is 40,405 lines / 305 route handlers; `static/js/app.js` is 20,042 lines; `index.html` is
-2,305 lines. CLAUDE.md calls for a routes/services/storage split main.py has only partly grown
-into. Not a same-session change — needs incremental extraction with tests between steps.
+`main.py` was 40,474 lines when this started (2026-09-19), now 38,218 after Step 1 (Stages A-E,
+below) moved the whole Integration routes cluster — ~44 routes plus their workers — into
+`routes/integrations_*.py` and two new services modules. `static/js/app.js` is 20,042 lines;
+`index.html` is 2,305 lines — untouched by this round. CLAUDE.md calls for a routes/services/
+storage split main.py has only partly grown into. Not a same-session change — needs incremental
+extraction with tests between steps; Steps 2-7 below are unscoped.
 
 **Already done, organically, without anyone treating it as "the breakup project":** `index.html`'s
 modal extraction (7 `{% include %}`s now — `_tree_folder_feeds.html`, `_entry_pane.html`,
@@ -51,11 +55,67 @@ compat APIs; treat as its own carefully-tested project, not part of a mechanical
 
 **Proposed order, safest → riskiest:**
 
-1. **Ready to start.** Integration OAuth/credential blocks (DeviantArt, Quire, YouTube/Pinterest/
-   Reddit/Inoreader connect/callback/disconnect + Inoreader import) → thin
-   `routes/integrations_*.py` modules. Cluster at main.py:29271–31490 (~2,220 lines); touches
-   exactly one shared singleton (`invalidate_meta_structure_cache`) — confirmed self-contained.
-   (`/youtube/sync` at 27228 and `/entries/quire` at 38895 sit outside this range — leave for later.)
+1. Integration routes cluster, main.py:29323–31562 (~2,240 lines) — bigger than first scoped: it's
+   the whole Integrations surface (OAuth + post-connect actions + Miniflux/FreshRSS/TT-RSS/Inoreader
+   importers), not just OAuth/credential + Inoreader import, and every route in it depends on
+   main.py-resident helpers (`get_meta_connection`, `get_setting`/`set_setting`/`delete_setting`,
+   `get_reader`, credential/token getters, `_get_or_create_folder_by_name`, `_run_in_user_context`),
+   not just one singleton. Extraction pattern that resolves this without a storage-layer rewrite:
+   each `routes/integrations_*.py` defines `router = APIRouter()` and does `from main import ...` at
+   module scope; main.py imports those routers and calls `app.include_router(...)` near the bottom
+   of the file (after every needed name is already defined) rather than at the top — see the comment
+   there. Split into sub-stages, tests run after each:
+   - **A — done (2026-09-19).** Pure OAuth connect/callback/disconnect/verify for DeviantArt, Quire,
+     YouTube, Pinterest, Reddit → `routes/integrations_{deviantart,quire,youtube,pinterest,reddit}.py`.
+   - **B — done (2026-09-20).** Post-connect actions with no shared workers: Reddit submit, Pinterest
+     boards/pin, Quire projects, YouTube playlists (list/add/add-batch/status, incl. the
+     `_yt_playlist_batch_jobs` singleton) → same per-integration files. Found a real gotcha doing
+     this: two tests (`test_pinterest_pin_route.py`, `test_youtube_playlist_add_batch.py`) imported
+     the moved handler off `main` and monkeypatched `main.<helper>` — neither works once the handler
+     lives in a routes module, since `from main import helper` copies the reference at import time
+     (monkeypatching `main.helper` afterward doesn't touch the routes module's own binding), so tests
+     now target the routes module directly. That surfaced a second, sharper issue: a test importing
+     `routes.integrations_x` *before* anything imports `main` triggers the circular-import failure
+     for real (routes' own `from main import ...` starts loading main.py, which reaches its own
+     bottom-of-file `from routes.integrations_x import router` while that module is still mid-import
+     and hasn't defined `router` yet) — fixed by making sure the test's `import main` line sorts
+     before its `from routes import integrations_x` line; see `routes/__init__.py`'s docstring.
+     Stages C-E should check any new/updated test the same way before assuming a moved route "just
+     works" with its old test.
+   - **C — done (2026-09-20).** DeviantArt watchlist sync/unsubscribe/push/add-watch-feed → extends
+     A's deviantart file. `test_deviantart_watchlist_autoresume.py` called two of the moved routes
+     directly off `main` (`deviantart_mark_unwatched_viewed_route`, `deviantart_unsubscribe_unwatched_
+     route`) and needed the same routes-module retarget as Stage B; its other monkeypatches
+     (`get_runtime_setting`, `disable_feed`, etc.) were untouched since those helpers stay in main.py
+     and the still-in-main functions that call them (`_load_da_sync_detail`, `bulk_feed_action`,
+     `sync_deviantart_watchlist`) resolve them from main's own namespace regardless of which module
+     calls in.
+   - **D — done (2026-09-20).** Miniflux/FreshRSS/TT-RSS import (test/status/start/reset + worker
+     each) → `routes/integrations_{miniflux,freshrss,ttrss}.py`. The shared helpers
+     (`_apply_migration_items`, `_canonicalize_item_feed_urls`, `_resolve_feed_url`,
+     `_canonical_feed_url_lookup`) moved first into a new `services/migration_common.py` — a real
+     services module (routes import it directly, not via main), but it still does `from main import
+     canonical_feed_url, get_reader, ...` at module level since those primitives have no other home
+     yet, so it's imported late from main.py's own bottom section too (Inoreader's still-resident
+     import code, Stage E, needs 3 of the 4 helpers). This taught the same lesson Stage B did, one
+     level deeper: the "import main first" rule extends to `services.migration_common` too — a test
+     touching it before `main` hits the identical circular-import failure, because loading it
+     triggers main's execution, which reaches its own late import of the same not-yet-finished
+     module. `test_migration_import_dedup.py` and `test_canonical_feed_url.py` called the moved
+     helpers directly off `main` and were retargeted the same way as prior stages.
+   - **E — done (2026-09-20).** Inoreader OAuth + import (biggest, ~800 lines, its own drip-step
+     state machine) → `routes/integrations_inoreader.py` + `services/inoreader_import.py`
+     (`_inoreader_local_import_worker`, `_run_import_loop`, `_api_resolve_entry`,
+     `_inoreader_drip_step`). This closes out the Integration routes cluster: `main.py` is
+     40,405 → 38,218 lines, and it no longer defines a single `/integrations/*` or `/deviantart|
+     quire|reddit/*` OAuth or import route — all of it lives under `routes/`. One more wrinkle on
+     top of B/D's lessons: `_inoreader_drip_step` is also called directly (not through a route) by
+     the scheduled-refresh loop still resident in main.py, so it needed the same "import back into
+     main.py's bottom section" treatment `_apply_migration_items`'s siblings got in Stage D — and
+     since that was main.py's *only* remaining use of the three `services/migration_common`
+     helpers, that now-unused late import was deleted rather than left dangling. `File(...)` route
+     defaults moved out of main.py lost its `B008` exemption in the process (`pyproject.toml`
+     scoped that to `main.py` only) — extended to `routes/*.py` too, since more stages will hit it.
 2. Post-refresh automation pipeline (`_run_automation_after_refresh` + the six
    `_run_*_rules_after_refresh` functions, main.py:8921–9962) → `services/automation_rules.py`. The
    manual "run now" triggers (`_run_now_dedup`/`_run_now_pattern`/`_run_tag_filter`, ~7811–9109)
@@ -353,7 +413,15 @@ Nothing here is scheduled — just what to check if a related symptom recurs.
 
 ### CodeQL board
 
-Zero open alerts. Notes for next time:
+9 open alerts from PR #329 (the main.py/index.html breakup, Step 1): "information exposure through
+an exception" on `return JSONResponse({"error": str(exc)}, ...)` in the moved
+`routes/integrations_*.py` files. Not new — the same pattern (`"error": str(exc)` in an exception
+handler) already exists 15+ times in main.py; CodeQL flags them because the lines are new *files*,
+not new *code*. Left open rather than dismissed or fixed inline (decided when triaging the PR); a
+real fix means picking a message for each call site that's still useful in the UI (several surface
+the caught exception directly, e.g. "Sync failed: {result['error']}"), so it's its own pass across
+every instance — including the ones still in main.py, not just the 9 CodeQL happened to flag — not
+scope for this refactor. Notes for next time on other alert classes:
 
 - A negative lookahead will not clear a ReDoS alert — CodeQL's regex model ignores lookaheads.
   Write the loop lookahead-free or move the scan into Python.

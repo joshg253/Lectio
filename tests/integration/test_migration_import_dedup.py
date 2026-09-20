@@ -20,7 +20,8 @@ from datetime import datetime, timezone
 import pytest
 
 import main
-from services import tenancy
+from services import inoreader_import as inoreader_import_service
+from services import migration_common, tenancy
 
 FEED_CANONICAL = "https://example.test/feed"
 FEED_STORED_NONCANONICAL = "https://example.test/feed/"  # trailing slash
@@ -64,10 +65,10 @@ def test_canonical_feed_url_lookup_resolves_noncanonical_stored_urls(configured)
     with main.get_reader() as reader:
         reader.add_feed(FEED_STORED_NONCANONICAL, exist_ok=True)
     with main.get_reader() as reader:
-        lookup = main._canonical_feed_url_lookup(reader)
+        lookup = migration_common._canonical_feed_url_lookup(reader)
     assert lookup[FEED_CANONICAL] == FEED_STORED_NONCANONICAL
-    assert main._resolve_feed_url(FEED_CANONICAL, lookup) == FEED_STORED_NONCANONICAL
-    assert main._resolve_feed_url("https://new.test/feed", lookup) == "https://new.test/feed"
+    assert migration_common._resolve_feed_url(FEED_CANONICAL, lookup) == FEED_STORED_NONCANONICAL
+    assert migration_common._resolve_feed_url("https://new.test/feed", lookup) == "https://new.test/feed"
 
 
 def test_migration_subscribe_does_not_duplicate_noncanonical_feed(configured):
@@ -75,7 +76,7 @@ def test_migration_subscribe_does_not_duplicate_noncanonical_feed(configured):
         reader.add_feed(FEED_STORED_NONCANONICAL, exist_ok=True)
 
     state: dict = {}
-    main._apply_migration_items([_item()], state, lambda: None)
+    migration_common._apply_migration_items([_item()], state, lambda: None)
 
     assert state.get("subs_added", 0) == 0
     with main.get_reader() as reader:
@@ -85,7 +86,7 @@ def test_migration_subscribe_does_not_duplicate_noncanonical_feed(configured):
 
 def test_migration_subscribes_a_genuinely_new_feed(configured):
     state: dict = {}
-    main._apply_migration_items([_item(feed_url="https://new.test/feed")], state, lambda: None)
+    migration_common._apply_migration_items([_item(feed_url="https://new.test/feed")], state, lambda: None)
 
     assert state.get("subs_added") == 1
     with main.get_reader() as reader:
@@ -108,7 +109,7 @@ def test_migration_tags_land_on_existing_entry_not_a_synthesized_duplicate(confi
         )
 
     state: dict = {}
-    main._apply_migration_items(
+    migration_common._apply_migration_items(
         [_item(url="https://example.test/a", starred=True, tags=["keep"])],
         state,
         lambda: None,
@@ -182,7 +183,7 @@ def test_local_import_loop_skips_a_declined_feed(configured, tmp_path, monkeypat
     json_path.write_text("{}", encoding="utf-8")
 
     state: dict = {"subs_added": 0, "items_tagged": 0, "items_starred": 0, "errors": 0}
-    main._run_import_loop([json_path], state, lambda: None)
+    inoreader_import_service._run_import_loop([json_path], state, lambda: None)
 
     with main.get_reader() as reader:
         urls = {str(f.url) for f in reader.get_feeds()}
@@ -193,7 +194,7 @@ def test_local_import_loop_skips_a_declined_feed(configured, tmp_path, monkeypat
 def test_drip_step_subscriptions_phase_skips_a_declined_feed(configured, monkeypatch):
     _decline(DECLINED_FEED)
     subs = [{"feed_url": DECLINED_FEED}, {"feed_url": NEW_FEED}]
-    monkeypatch.setattr(main, "get_inoreader_token", lambda: "fake-token")
+    monkeypatch.setattr(inoreader_import_service, "get_inoreader_token", lambda: "fake-token")
     monkeypatch.setattr(main.inoreader_service, "get_subscriptions", lambda token: (subs, {}))
 
     with main.get_meta_connection() as conn:
@@ -203,7 +204,7 @@ def test_drip_step_subscriptions_phase_skips_a_declined_feed(configured, monkeyp
             json.dumps({"phase": "subscriptions"}),
         )
 
-    main._inoreader_drip_step()
+    inoreader_import_service._inoreader_drip_step()
 
     with main.get_reader() as reader:
         urls = {str(f.url) for f in reader.get_feeds()}
@@ -217,7 +218,7 @@ def test_drip_step_subscriptions_phase_skips_a_declined_feed(configured, monkeyp
 def test_drip_step_subscriptions_phase_re_adds_when_nothing_declined(configured, monkeypatch):
     """No declined_feeds rows at all must not change existing add behavior."""
     subs = [{"feed_url": NEW_FEED}]
-    monkeypatch.setattr(main, "get_inoreader_token", lambda: "fake-token")
+    monkeypatch.setattr(inoreader_import_service, "get_inoreader_token", lambda: "fake-token")
     monkeypatch.setattr(main.inoreader_service, "get_subscriptions", lambda token: (subs, {}))
 
     with main.get_meta_connection() as conn:
@@ -227,7 +228,7 @@ def test_drip_step_subscriptions_phase_re_adds_when_nothing_declined(configured,
             json.dumps({"phase": "subscriptions"}),
         )
 
-    main._inoreader_drip_step()
+    inoreader_import_service._inoreader_drip_step()
 
     with main.get_reader() as reader:
         urls = {str(f.url) for f in reader.get_feeds()}
@@ -247,7 +248,7 @@ def test_drip_step_subscriptions_phase_places_new_feed_in_its_ino_folder(configu
             ],
         }
     ]
-    monkeypatch.setattr(main, "get_inoreader_token", lambda: "fake-token")
+    monkeypatch.setattr(inoreader_import_service, "get_inoreader_token", lambda: "fake-token")
     monkeypatch.setattr(main.inoreader_service, "get_subscriptions", lambda token: (subs, {}))
 
     with main.get_meta_connection() as conn:
@@ -257,7 +258,7 @@ def test_drip_step_subscriptions_phase_places_new_feed_in_its_ino_folder(configu
             json.dumps({"phase": "subscriptions"}),
         )
 
-    main._inoreader_drip_step()
+    inoreader_import_service._inoreader_drip_step()
 
     with main.get_meta_connection() as conn:
         row = conn.execute(
@@ -281,7 +282,7 @@ def test_drip_step_subscriptions_phase_does_not_refolder_an_existing_feed(config
         conn.commit()
 
     subs = [{"feed_url": NEW_FEED, "categories": [{"id": "user/-/label/Comics & Art"}]}]
-    monkeypatch.setattr(main, "get_inoreader_token", lambda: "fake-token")
+    monkeypatch.setattr(inoreader_import_service, "get_inoreader_token", lambda: "fake-token")
     monkeypatch.setattr(main.inoreader_service, "get_subscriptions", lambda token: (subs, {}))
 
     with main.get_meta_connection() as conn:
@@ -291,7 +292,7 @@ def test_drip_step_subscriptions_phase_does_not_refolder_an_existing_feed(config
             json.dumps({"phase": "subscriptions"}),
         )
 
-    main._inoreader_drip_step()
+    inoreader_import_service._inoreader_drip_step()
 
     with main.get_meta_connection() as conn:
         row = conn.execute(
