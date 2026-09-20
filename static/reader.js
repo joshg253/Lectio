@@ -43,9 +43,12 @@
   // bare `$` so KaTeX's own matching finds the double-dollar case first. Run
   // synchronously here, before the first pagination measurement below, so a
   // math-heavy article is paginated at its post-render size, not its raw-text
-  // size.
+  // size. Scoped to .reader-body, not the whole #reader-article -- that
+  // element also holds the headline and dateline, and a title or date with
+  // paired dollar signs must not be scanned for math (mirrors app.js scoping
+  // to .entry-content instead of the whole entry pane).
   (function renderReaderMath() {
-    var article = document.getElementById("reader-article");
+    var article = document.querySelector("#reader-article .reader-body");
     if (!article || typeof window.renderMathInElement !== "function") return;
     var text = article.textContent;
     var dollarMathEnabled = cols.getAttribute("data-katex-dollar-math") === "1";

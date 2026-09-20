@@ -23962,7 +23962,7 @@ def build_reader_page(
         f" data-katex-dollar-math='{1 if katex_dollar_math else 0}'>"
         f"<article id='reader-article'><h1 class='reader-headline'>{esc_title}</h1>"
         f"{reader_dateline}"
-        f"{article_html}</article>"
+        f"<div class='reader-body'>{article_html}</div></article>"
         "</div></main>"
         f"{tag_panel}"
         f"<script>window.__READER_TAGS__={tags_json};</script>"
