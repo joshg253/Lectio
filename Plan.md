@@ -10,8 +10,8 @@ to run, real features not blocking anything today, and deliberately-deferred big
 Within a tier, related items are clustered under a bold sub-heading. Two watch-lists (CodeQL,
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
-Tier 1 and Tier 2 are empty. Next up: the main.py/index.html breakup (top of Tier 4) — Josh is
-leaning toward it, and Step 1 is scoped and ready to start. Otherwise, work Tier 3.
+Tiers 1 through 3 are empty. Next up: the main.py/index.html breakup (top of Tier 4) — Josh is
+leaning toward it, and Step 1 is scoped and ready to start.
 
 ## Tier 1 — actively impeding unread-clearing
 
@@ -23,34 +23,7 @@ Empty.
 
 ## Tier 3 — maintenance backlog, ready to run
 
-### `fetch_missing_publish_dates.py` — escalation shipped and measured 2026-09-19, still not worth `--apply`
-
-Now escalates through `page_fetch.PageFetcher` (honest -> browser -> proxy, capped below FlareSolverr
-so a bulk pass can't monopolize the one shared solver container; `--flaresolverr` opts in for a
-`--limit`-bounded run). The ladder works as intended — confirmed live against a real 404, honest tier
-tried, then browser tier retried the same URL before giving up — but a full dry-run pass over the
-current backlog (464 epoch-dated entries, down hugely from ~1,651: other work has been re-ingesting
-real dates in the background) still came back **0 dated**. 390 of the 464 are one GuitarWorld
-redirect cluster the script's own 5-failure circuit breaker correctly short-circuits after one real
-escalated fetch confirms it 404s post-redirect on both honest and browser identity — genuinely dead,
-not blocked, so no tier would have helped. The remaining ~74 non-GuitarWorld entries split into
-"no date in the page" and slug-mismatch; still zero yield. Conclusion unchanged from 2026-07-30:
-this was a metadata-availability problem, not an access problem, so escalation doesn't move it.
-Kept for the reason already documented — cheap to re-run if a new batch of epoch-dated entries
-arrives from a site that does publish dates behind a block.
-
-### Readability grabs a devsite nav sidebar on androidstudio.googleblog.com — fixed 2026-09-19
-
-Reproduced against the live pages: it wasn't the Blogger post itself, it was a
-`developer.android.com` doc page linked from one (e.g. `/studio/preview`) — readability's own top
-pick there was a "sign up for user research" banner, ahead of the real intro paragraph inside
-`.devsite-article-body`. Fixed with a `DeveloperAndroidPlugin` in `services/site_content_plugins.py`:
-Devsite already self-marks every chrome block (banner, book-nav sidebar, breadcrumb row, footer
-promos) with its own `nocontent` class, site-wide, so one `strip_selectors` rule
-(`.nocontent`) clears all of it with nothing to keep in sync with Devsite's markup by hand. Verified
-against `/studio/preview`, `/studio/releases`, and `/studio/intro/update.html` (all were polluted)
-plus `/studio/preview/features` (was already clean, confirmed unaffected). 7 new tests in
-`tests/services/test_site_content_plugins.py`.
+Empty.
 
 ## Tier 4 — real features, not blocking anything today
 
