@@ -25,13 +25,26 @@ globally and per host, hosts are dropped after repeated failures (these are larg
 2019-era saves, so dead domains are common), and the honest Lectio user-agent is
 used throughout — no browser impersonation, no retry storm.
 
+**2026-09-19: now escalates through `page_fetch.PageFetcher`** (honest -> browser ->
+proxy, same ladder the saved-article re-fetch and lead-image paths use), so a host
+that refuses the honest identity (403/404/410/429/...) gets a browser-UA and, if
+configured, a proxied retry before being counted as failed — this is what claws back
+some of the "failed"/"wrong page" bucket the fetch-with-no-escalation version left on
+the table. Capped at the proxy tier, not FlareSolverr: a bulk pass over hundreds of
+mostly-dead hosts must not monopolize the one shared FlareSolverr container that
+live interactive fetches (re-fetch, lead images) also depend on. `--flaresolverr`
+opts into the full ladder for a deliberately small `--limit` run.
+
 ⚠ **MEASURED 2026-07-30: not worth running as things stand.** 253 epoch-dated
 entries remain (down from 1,278 — feed refreshes re-ingested most of the rest with
 real dates), and they cluster on a handful of hosts that publish no date metadata
 at all: blog.guitar-pro.com (96), joanwestenberg.com (45), what-if.xkcd.com (45),
 datagenetics.com (27). A 25-entry sample returned **zero** dates, and probing one
 page per host across 8 hosts also returned zero. One of those answered 404 with the
-404 page's own date — the exact wrong answer the guards reject.
+404 page's own date — the exact wrong answer the guards reject. That measurement
+predates the escalation ladder above — worth a fresh sample before assuming it still
+holds, since a 403/429 in that zero-dates sample would now get a browser/proxy retry
+it previously never got.
 
 **2026-07-31: fetching would have been the wrong tool for the biggest cluster.**
 blog.guitar-pro.com serves only a `dateModified` — "Last update: oct. 21, 2024" on
@@ -65,7 +78,7 @@ from urllib.parse import urlparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import main  # noqa: E402
-from services import tenancy, url_guard  # noqa: E402
+from services import page_fetch, tenancy  # noqa: E402
 from services.saved_articles import _page_is_a_different_article  # noqa: E402
 
 EPOCH_PREFIX = "1970-01-01"
@@ -83,7 +96,7 @@ def _page_title(raw_html: str) -> str:
     return " ".join((m.group(1) if m else "").split())[:200]
 
 
-def run_for_user(uid: str, apply: bool, limit: int | None) -> dict:
+def run_for_user(uid: str, apply: bool, limit: int | None, max_tier: page_fetch.FetchTier = "proxy") -> dict:
     meta = sqlite3.connect(f"file:{tenancy.meta_db_path()}?mode=ro", uri=True, timeout=30.0)
     meta.row_factory = sqlite3.Row
     saved_at = {}
@@ -126,8 +139,7 @@ def run_for_user(uid: str, apply: bool, limit: int | None) -> dict:
     host_failures: dict[str, int] = defaultdict(int)
     host_last: dict[str, float] = {}
 
-    print(f"[{uid}] {len(rows):,} epoch-dated with a URL; attempting {len(ordered):,}")
-    headers = {"User-Agent": main.READABILITY_USER_AGENT}
+    print(f"[{uid}] {len(rows):,} epoch-dated with a URL; attempting {len(ordered):,} (max tier: {max_tier})")
 
     for r in ordered:
         key = (str(r["feed"]), str(r["id"]))
@@ -145,10 +157,12 @@ def run_for_user(uid: str, apply: bool, limit: int | None) -> dict:
         stats["tried"] += 1
 
         try:
-            with url_guard.build_client(timeout=_TIMEOUT, headers=headers) as client:
-                resp = url_guard.safe_get(client, link, headers=headers)
-            resp.raise_for_status()
-            raw = resp.text
+            raw = main.page_fetcher.fetch(
+                link,
+                timeout=_TIMEOUT,
+                refusal_statuses=main._READABILITY_REFUSAL_STATUSES,
+                max_tier=max_tier,
+            ).html
         except Exception:  # noqa: BLE001 — dead domains are the norm here
             host_failures[host] += 1
             stats["failed"] += 1
@@ -197,11 +211,17 @@ def main_cli() -> int:
     ap.add_argument("--apply", action="store_true", help="write dates (default: dry run)")
     ap.add_argument("--limit", type=int, default=None, help="stop after N fetches")
     ap.add_argument("--user", default=None, help="restrict to one user_id")
+    ap.add_argument(
+        "--flaresolverr",
+        action="store_true",
+        help="escalate all the way to FlareSolverr, not just proxy — ties up the shared solver, use with --limit",
+    )
     args = ap.parse_args()
 
+    max_tier: page_fetch.FetchTier = "flaresolverr" if args.flaresolverr else "proxy"
     for uid in [args.user] if args.user else main._background_user_ids():
         with tenancy.user_context(uid):
-            run_for_user(uid, args.apply, args.limit)
+            run_for_user(uid, args.apply, args.limit, max_tier)
     return 0
 
 
