@@ -131,12 +131,18 @@ compat APIs; treat as its own carefully-tested project, not part of a mechanical
      (`tests/integration/test_email_rule_automation.py`, `test_webhook_rule_automation.py`) — neither
      had any fire-path coverage before this, despite doing real external I/O with no idempotency
      guard beyond the 15-minute `added` cutoff.
-   - **B — not started.** Move 3 leaf helpers (`_log_auto_run`, `_get_entry_excerpt`,
-     `_entry_matches_rule`) into the new `services/automation_rules.py`; leave `_is_local_dev_feed`
-     behind. Wire the bottom-of-file import-back (`from services.automation_rules import …`, same
-     pattern as `services/migration_common.py`) so `toggle_feed_tag_filter`,
-     `_flush_email_batch_for_rule`, and `_run_on_star_destinations` (all staying in main) keep
-     resolving them. Retarget `test_keyword_matcher.py`'s `main.build_keyword_matcher` patch.
+   - **B — done (2026-09-20).** Moved 3 leaf helpers (`_log_auto_run`, `_get_entry_excerpt`,
+     `_entry_matches_rule`) into the new `services/automation_rules.py`; left `_is_local_dev_feed`
+     behind (belongs to `refresh`, not automation). Wired the bottom-of-file import-back
+     (`from services.automation_rules import …`, same pattern as `services/migration_common.py`) so
+     `toggle_feed_tag_filter`, `_flush_email_batch_for_rule`, and `_run_on_star_destinations` (all
+     staying in main) keep resolving them, and extended `routes/__init__.py`'s import-order docstring
+     to name the new module. Retargeted `test_keyword_matcher.py`'s
+     `test_dry_run_run_now_and_live_matching_share_one_matcher`: `_entry_matches_rule` copied
+     `build_keyword_matcher` into its own module at import time, so `monkeypatch.setattr(main,
+     "build_keyword_matcher", spy)` alone no longer reaches it — needed a second
+     `monkeypatch.setattr(automation_rules, "build_keyword_matcher", spy)` alongside it. main.py:
+     38,218 → 38,177 lines.
    - **C — not started.** Move the 3 "run now" primitives (~470 lines) — no external side effects
      (local mark-read only), so a botched transition here is cheaply recoverable, done before D's
      external-I/O block. Retarget `test_dedup_entries.py`.

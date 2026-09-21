@@ -8413,28 +8413,6 @@ def toggle_feed_tag_filter(conn: sqlite3.Connection, feed_url: str, tag: str, si
     return {"spec": spec, "active": {v: ("+" if s == "++" else s) for s, v in tokens}, "enabled": enabled, "applied_count": applied}
 
 
-def _log_auto_run(
-    conn: sqlite3.Connection, now: str, rule_type: str, scope: str, scope_id: str, keyword: str, result: dict, trigger: str = "auto"
-) -> None:
-    """Write a rule_run_log row (+ matched entries) in the caller's transaction."""
-    cur = conn.execute(
-        "INSERT INTO rule_run_log (run_at, rule_type, scope, scope_id, keyword, entries_affected, trigger) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (now, rule_type, scope, scope_id, keyword, result["count"], trigger),
-    )
-    rows = [(e, "marked") for e in (result.get("entries") or [])]
-    rows += [(e, "kept") for e in (result.get("kept") or [])]
-    if rows and cur.lastrowid:
-        conn.executemany(
-            "INSERT INTO rule_run_log_entries"
-            " (log_id, feed_url, entry_id, title, link, feed_title, role, matched_link)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (cur.lastrowid, e["feed_url"], e["entry_id"], e["title"], e["link"], e["feed_title"], role, e.get("matched_link"))
-                for e, role in rows
-            ],
-        )
-
-
 _SHORTS_HASHTAGS = ("#shorts", "#short", "#ytshorts", "#youtubeshorts")
 
 
@@ -9074,48 +9052,12 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
         LOGGER.exception("[automation] error running automation rules after refresh")
 
 
-def _get_entry_excerpt(entry: object) -> str:
-    """Return a short plain-text excerpt from an entry's content or summary."""
-    raw = ""
-    content = getattr(entry, "content", None) or []
-    for c in content:
-        val = getattr(c, "value", None) or ""
-        if val:
-            raw = val
-            break
-    if not raw:
-        raw = str(getattr(entry, "summary", None) or "")
-    return html_sanitize.plain_text_excerpt(raw)
-
-
 def _is_local_dev_feed(feed_url: str) -> bool:
     """Return True for feeds served by Lectio itself (bypass refresh cooldown)."""
     try:
         return urlparse(feed_url).path.startswith("/dev/feeds/")
     except Exception:
         return False
-
-
-def _entry_matches_rule(entry: object, keyword: str, is_regex: bool, search_in: str) -> bool:
-    if not keyword:
-        return False
-    try:
-        match_fn = build_keyword_matcher(keyword, is_regex)
-    except re.error:
-        return False
-
-    title = str(getattr(entry, "title", None) or "")
-    body = ""
-    if search_in in ("body", "both"):
-        for c in getattr(entry, "content", None) or []:
-            body += (getattr(c, "value", None) or "") + " "
-        body += str(getattr(entry, "summary", None) or "")
-
-    if search_in == "body":
-        return match_fn(body)
-    if search_in == "both":
-        return match_fn(title) or match_fn(body)
-    return match_fn(title)
 
 
 _EMAIL_AUTO_PER_RUN_CAP = 10  # max immediate emails per refresh cycle
@@ -38192,6 +38134,15 @@ def miniflux_toggle_bookmark(entry_id: int, request: Request) -> Response:
 # only resolves once those names already exist in this module's namespace.
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
+# services/automation_rules.py (Plan.md's main.py/index.html breakup, Step 2,
+# Stage B): toggle_feed_tag_filter, _flush_email_batch_for_rule, and
+# _run_on_star_destinations above all still call one of these three directly,
+# not through a route, so they need the same late-import treatment as
+# _inoreader_drip_step above — the module does `from main import
+# build_keyword_matcher`, which only resolves once main.py has already
+# defined it.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Extracted route modules (Plan.md's main.py/index.html breakup). Imported
 # here rather than at the top of the file: each module does `from main
 # import ...` for shared connection/setting/credential helpers, which only
@@ -38206,6 +38157,7 @@ from routes.integrations_quire import router as _quire_oauth_router  # noqa: E40
 from routes.integrations_reddit import router as _reddit_oauth_router  # noqa: E402
 from routes.integrations_ttrss import router as _ttrss_import_router  # noqa: E402
 from routes.integrations_youtube import router as _youtube_oauth_router  # noqa: E402
+from services.automation_rules import _entry_matches_rule, _get_entry_excerpt, _log_auto_run  # noqa: E402
 from services.inoreader_import import _inoreader_drip_step  # noqa: E402
 
 app.include_router(_deviantart_oauth_router)

@@ -18,4 +18,7 @@ does `from main import ...` at module level (for `canonical_feed_url`,
 `get_reader`, etc. — general primitives with no other home yet) and is also
 imported late from main.py's bottom section, so a test that imports it before
 `main` has finished loading hits the identical failure.
+
+Same again for `services/automation_rules.py` (`from main import
+build_keyword_matcher`), imported late for the same reason.
 """
