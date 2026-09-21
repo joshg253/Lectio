@@ -143,9 +143,21 @@ compat APIs; treat as its own carefully-tested project, not part of a mechanical
      "build_keyword_matcher", spy)` alone no longer reaches it — needed a second
      `monkeypatch.setattr(automation_rules, "build_keyword_matcher", spy)` alongside it. main.py:
      38,218 → 38,177 lines.
-   - **C — not started.** Move the 3 "run now" primitives (~470 lines) — no external side effects
-     (local mark-read only), so a botched transition here is cheaply recoverable, done before D's
-     external-I/O block. Retarget `test_dedup_entries.py`.
+   - **C — done (2026-09-20).** Moved the 3 "run now" primitives (`_run_now_dedup`, `_run_now_pattern`,
+     `_run_tag_filter`, ~460 lines) — no external side effects (local mark-read only), so a botched
+     transition here was cheaply recoverable, done before D's external-I/O block. Left
+     `parse_tag_filter_spec`, `author_filter_token`, `get_feed_tag_filter_rule`, and
+     `toggle_feed_tag_filter` in main.py (the last two are route-side chip machinery, and
+     `toggle_feed_tag_filter` is one of the still-in-main callers the import-back serves). Extended
+     the bottom-of-file import-back and `services/automation_rules.py`'s own `from main import ...`
+     block with the dedup/pattern/scope primitives all three functions need
+     (`_resolve_dedup_feed_urls`, `_safe_dedup_collect`, `_safe_dedup_find_pairs`, `dedup_order_key`,
+     `entry_url_slug`, `normalize_entry_title_for_dedupe`, `title_word_similarity`,
+     `entry_effective_date`, `parse_folders_scope_id`, `resolve_rule_feed_urls`, `feed_display_title`,
+     `normalize_tag_value`, plus `_DEDUP_MIN_TITLE_WORDS` for `_run_now_dedup`'s import-time default
+     arg). Retargeted `test_dedup_entries.py`'s 4 `monkeypatch.setattr(main, "get_reader", …)` calls
+     to `automation_rules.get_reader` — same copied-reference trap as Stage B. main.py: 38,177 →
+     37,717 lines.
    - **D — not started.** Move the six `_after_refresh` dispatchers + `_apply_youtube_playlist_rules`
      (~854 lines, the bulk) as one atomic delete+import — `email_article` (immediate) and `webhook`
      have no idempotency guard at all (only the 15-min cutoff), so a half-moved stub left "temporarily"
