@@ -43,9 +43,8 @@ change — needs incremental extraction with tests between steps; Steps 3-8 belo
 modal extraction (7 `{% include %}`s now — `_tree_folder_feeds.html`, `_entry_pane.html`,
 `_action_modals.html`, `_add_feed_modal.html`, `_settings_modal.html`,
 `_feed_properties_modal.html`, `_folder_properties_modal.html`) and the lazy `data-lazy-src`
-panel-fetch pattern (4 panels now: `folders`/`stale`/`fetch-tiers`/`failing`). Only the 4 context
-menus (`folder-context-menu`, `root-context-menu`, `post-context-menu`, `tag-context-menu`, ~150
-lines) remain inline.
+panel-fetch pattern (4 panels now: `folders`/`stale`/`fetch-tiers`/`failing`). Step 3 below moved
+the 4 context menus out too, so `index.html` is now all `{% include %}`s plus page-level structure.
 
 **Landmines:** 10 module-level `PerUserDict` caches, 32 module-level `threading.Lock()` instances,
 20 `global` statements must stay singletons — route modules can import them but must not redefine
@@ -206,7 +205,14 @@ compat APIs; treat as its own carefully-tested project, not part of a mechanical
    Every stage's new/updated test must sort `import main` before `from services import
    automation_rules` (same circular-import rule as `routes/__init__.py`'s docstring documents for
    `migration_common`).
-3. The 4 remaining context menus → templates.
+3. **Done (2026-09-20).** The 4 remaining context menus (`folder-context-menu`,
+   `root-context-menu`, `post-context-menu`, `tag-context-menu`, 134 lines) → `_context_menus.html`,
+   a single `{% include %}` in `index.html`, same bundling precedent as `_action_modals.html`.
+   `folder_options`/`debug_mode` are already in the render context `index.html` gets, so the
+   included template needed no changes to inherit them. Two source-assertion tests
+   (`test_add_link_to_note.py`, `test_edit_tags_bulk_removal.py`) read these menu strings out of
+   `INDEX` (the raw `templates/index.html` text) directly; retargeted both to a new `CONTEXT_MENUS`
+   fixture the same way earlier extractions added `ENTRY_PANE`/`ACTION_MODALS` fixtures.
 4. Dedup engine → `services/dedup.py` — gate on "Consolidate the dedup routes" (Code health)
    getting characterization tests first.
 5. Route modules by URL prefix — mechanical once the caches/locks above are confirmed importable

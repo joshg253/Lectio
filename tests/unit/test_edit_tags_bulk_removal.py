@@ -15,12 +15,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 APP_JS = (ROOT / "static" / "js" / "app.js").read_text()
-INDEX = (ROOT / "templates" / "index.html").read_text()
+CONTEXT_MENUS = (ROOT / "templates" / "_context_menus.html").read_text()
 ACTION_MODALS = (ROOT / "templates" / "_action_modals.html").read_text()
 
 
 def test_context_menu_item_is_relabeled_edit_tags():
-    assert '<button type="button" id="ctx-post-add-tag" class="context-menu-item" hidden>Edit tags…</button>' in INDEX
+    assert '<button type="button" id="ctx-post-add-tag" class="context-menu-item" hidden>Edit tags…</button>' in CONTEXT_MENUS
 
 
 def test_bulk_tag_modal_title_and_confirm_are_relabeled():
