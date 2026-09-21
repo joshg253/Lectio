@@ -19,25 +19,28 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.saved
 
 
 @pytest.fixture(autouse=True)
 def _isolated_refetch_jobs(monkeypatch):
     monkeypatch.setattr(main, "_refetch_jobs", {})
-    monkeypatch.setattr(
-        main,
-        "_scope_refetchable",
-        lambda folder_id, list_feed_url: [
-            ("https://example.test/feed", "https://example.test/post", "https://example.test/post"),
-        ],
-    )
+    # _scope_refetchable and _run_in_user_context stay in main.py, but
+    # routes.saved (start_refetch_scope's own module) copied its reference to
+    # each at import time -- both bindings need patching.
+    fake_scope = lambda folder_id, list_feed_url: [  # noqa: E731
+        ("https://example.test/feed", "https://example.test/post", "https://example.test/post"),
+    ]
+    monkeypatch.setattr(main, "_scope_refetchable", fake_scope)
+    monkeypatch.setattr(routes.saved, "_scope_refetchable", fake_scope)
     monkeypatch.setattr(main.refetch_batch, "estimate_seconds", lambda rows: 5)
     monkeypatch.setattr(main, "_run_in_user_context", lambda uid, fn, *a, **kw: None)
+    monkeypatch.setattr(routes.saved, "_run_in_user_context", lambda uid, fn, *a, **kw: None)
 
 
 def _build_app():
     app = FastAPI()
-    app.post("/saved/refetch-scope")(main.start_refetch_scope)
+    app.post("/saved/refetch-scope")(routes.saved.start_refetch_scope)
     return app
 
 

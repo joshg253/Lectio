@@ -10,17 +10,22 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.saved
 
 
 def _build_app(monkeypatch, calls: list):
     app = FastAPI()
-    app.post("/articles/refresh-content")(main.refresh_saved_article_content)
+    app.post("/articles/refresh-content")(routes.saved.refresh_saved_article_content)
 
     def fake_refresh(feed_url, entry_id, mode="readability", bump_received=None, date_choice=None, ignore_cooldown=False):
         calls.append(date_choice)
         return {"ok": True, "refreshed": True, "extracted": True, "title": "T", "source_url": entry_id}
 
+    # _refresh_captured_article_for_current_user stays in main.py (shared with
+    # /entries/saved, /entries/tags auto-refetch), but routes.saved copied its
+    # own reference at import time -- both bindings need patching.
     monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", fake_refresh)
+    monkeypatch.setattr(routes.saved, "_refresh_captured_article_for_current_user", fake_refresh)
     return app
 
 

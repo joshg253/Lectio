@@ -91,4 +91,40 @@ calls them directly. `provision_user_storage` stays, also called from
 `bootstrap_admin`; `delete_user_storage`, its lifecycle-pair sibling defined
 right next to it far from this route cluster, stays alongside it rather than
 being split out for its single remaining caller.
+
+`routes/saved.py` (Stage 6: `/saved/*` bulk maintenance plus the
+`/articles/refresh-content`/`/articles/save` capture routes, 22 routes) has
+no ordering constraint either — nothing here touches `services.automation_rules`
+— so it's imported alongside the plain `routes.compat_*`/`routes.tags`-style
+modules. This stage moved far fewer helpers than its route count suggests:
+most of the plan/engine functions each route leans on are exercised directly
+by a dedicated test as `main.<name>` (the same precedent Stage 3 and Stage 5
+already established) and stayed in main.py rather than moving with their one
+route caller — `_autofile_excluded_targets`, `_current_unstar_tagged_plan`,
+`_saved_dup_host_slug`, `_check_saved_url` (with its own
+`_looks_like_soft_404`/`_normalize_probe_path` neighborhood), and the whole
+scoped-refetch engine (`_refetch_job_state`, `_scope_refetchable`,
+`_refetch_begin`, `_refetch_worker`, `_run_refetch_batch`, plus their two
+untested siblings `_refetch_scope_label`/`_refetch_status_payload`, kept
+alongside rather than splitting one state machine across two files).
+`_scope_starred_keys` stays for the more ordinary reason: it's also called
+from a still-in-main.py Read Mode route. Two more stay for a third reason
+found only by grepping `routes/*.py` and `scripts/*.py`, not just main.py and
+tests: `_current_autofile_plan` (also called by `routes/system.py`'s
+Instapaper import) and `_saved_dup_groups` with its
+`_SAVED_DUP_BODY_HEAD_CHARS`/`_SAVED_DUP_BODY_SQL_CHARS` constants (also
+called by two `scripts/*.py` maintenance tools as `main.<name>`) — first
+moved on the assumption they were single-route-only, then moved back after
+`import main` failed. The Save Article capture helpers are the extreme
+version of the same story — `_save_article_for_current_user`,
+`_refresh_captured_article_for_current_user`, and the whole auto-refetch-on-
+keep machinery all stay, because each is also called from `/api/save`,
+`/api/bookmarklet/save`, `/entries/saved`, `/entries/tags`, or
+`/entries/autofetch-status`, none of which moved here — only the three route
+handlers this module actually owns moved, importing almost everything they
+call back from main.py. Plan.md's own "backed by services/saved_articles.py"
+note only half held up: that service genuinely backs the capture path, but
+the dupe-scan, autofile, unstar-tagged, and archive-old *planners* are
+main.py-resident logic with no service-layer home, and moved or stayed on
+their own test-coverage and sharing merits, not a service boundary.
 """

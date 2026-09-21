@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.saved
 from services import tenancy
 
 
@@ -67,7 +68,7 @@ def test_global_note_get_empty_when_unset(tenant):
 
 def _refresh_app():
     app = FastAPI()
-    app.post("/articles/refresh-content")(main.refresh_saved_article_content)
+    app.post("/articles/refresh-content")(routes.saved.refresh_saved_article_content)
     return app
 
 
@@ -96,7 +97,12 @@ def test_refetch_forces_reextract_for_saved_entry(tenant, monkeypatch):
             "entry_id": url,
         }
 
+    # _save_article_for_current_user stays in main.py (shared with /api/save and
+    # /api/bookmarklet/save) but routes.saved copied its own reference at import
+    # time, so both bindings need patching -- same shape as Stage 1's
+    # test_websub_fanout.py double-patch.
     monkeypatch.setattr(main, "_save_article_for_current_user", fake_save)
+    monkeypatch.setattr(routes.saved, "_save_article_for_current_user", fake_save)
 
     url = "https://schacon.github.io/git/everyday.html"
     with TestClient(_refresh_app()) as client:
@@ -113,11 +119,9 @@ def test_refetch_forces_reextract_for_saved_entry(tenant, monkeypatch):
 
 
 def test_refetch_surfaces_failure(tenant, monkeypatch):
-    monkeypatch.setattr(
-        main,
-        "_save_article_for_current_user",
-        lambda url, extract=None, refresh_content=False: {"ok": False, "error": "boom"},
-    )
+    fake_save = lambda url, extract=None, refresh_content=False: {"ok": False, "error": "boom"}  # noqa: E731
+    monkeypatch.setattr(main, "_save_article_for_current_user", fake_save)
+    monkeypatch.setattr(routes.saved, "_save_article_for_current_user", fake_save)
     with TestClient(_refresh_app()) as client:
         r = client.post(
             "/articles/refresh-content",

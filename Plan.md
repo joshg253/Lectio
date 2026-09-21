@@ -167,7 +167,26 @@ ordered safest → riskiest:
    suite exercising these routes (`tests/integration/_multiuser_harness.py`) goes over real HTTP via
    `TestClient(main.app)`, so the module split is transparent to it. Full `make test`/`lint`/`types`
    pass (4,192 tests).
-6. `routes/saved.py` — `/saved/*`, `/articles/*` (~21) — backed by `services/saved_articles.py`.
+6. **Done (2026-09-21).** `routes/saved.py` — `/saved/*` + `/articles/*`, 22 routes (Plan.md's
+   "~21" was approximate) including the far-flung `POST /saved/folder/clear-curation` outlier that
+   sat ~19,000 lines from the rest of this cluster. main.py: 32,913 → 31,965 lines; new file 1,099
+   lines. **Not a thin wrapper**, unlike Stage 2's greader/fever — only the capture path
+   (`save_article`/`refresh_captured_article`) is backed by `services/saved_articles.py`; the
+   cross-feed dupe scan, autofile planner, unstar-tagged/archive-old planners, and scoped
+   batch-refetch job are all substantial main.py-resident logic with no service-layer home, and
+   mostly stayed in main.py (tested directly by dedicated test files, or shared with `/api/save`,
+   `/entries/saved`, and other still-in-main.py routes that didn't move this stage) rather than
+   moving with their single route. **Process gap found and worth carrying into every remaining
+   stage**: two helpers (`_current_autofile_plan`, `_saved_dup_groups`) were nearly left broken
+   because they're also called from *other* already-moved route modules (`routes/system.py`) and
+   from `scripts/*.py` — grepping `main.py` and test files for a helper's callers isn't enough,
+   `routes/*.py` and `scripts/*.py` need checking too before deciding something is single-route-only
+   (verified both are still correctly main.py-resident and re-imported everywhere they're used).
+   No `services.automation_rules` ordering constraint needed. 10 test files retargeted — heavy
+   gotcha traffic as expected given this area's test-coverage history (Plan.md's
+   `saved-articles-epic`/`saved-dedup-workflow` history), including one case where a helper itself
+   moved (`_check_saved_url`) so only `routes.saved` needed patching, not `main`. Full
+   `make test`/`lint`/`types` pass (4,192 tests).
 7. `routes/settings.py` — `/settings/*` (~11).
 8. `routes/feeds.py` — `/feeds*`, `/folders*`, `/tree/folder-feeds/*`, `/scraped-feeds*`,
    `/api/folders`, `/api/folder-feeds` (~61) — biggest single cluster; scope its own A-E sub-stages

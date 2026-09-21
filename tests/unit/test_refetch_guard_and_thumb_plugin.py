@@ -17,6 +17,7 @@ import inspect
 import re
 
 import main
+import routes.saved
 from services import lead_image_plugins as plugins
 from services import saved_articles as sa
 
@@ -152,7 +153,7 @@ def test_only_the_automatic_path_consults_the_cooldown():
     """Manual Re-fetch is a person asking on purpose and must never be blocked."""
     assert "_autofetch_host_in_cooldown" in inspect.getsource(main._maybe_autofetch_on_keep)
     assert "_autofetch_host_in_cooldown" not in inspect.getsource(main._refresh_captured_article_for_current_user)
-    assert "_autofetch_host_in_cooldown" not in inspect.getsource(main.refresh_saved_article_content)
+    assert "_autofetch_host_in_cooldown" not in inspect.getsource(routes.saved.refresh_saved_article_content)
 
 
 def test_a_successful_refetch_does_not_pause_the_host():

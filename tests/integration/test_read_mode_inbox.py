@@ -19,6 +19,7 @@ import pytest
 from fastapi import Request
 
 import main
+import routes.saved
 from services import tenancy
 
 # _build_read_mode_context never touches `request` — verified against main.py.
@@ -329,7 +330,7 @@ def test_unstar_scope_removes_stars_and_keeps_tags(configured):
         headers: dict = {}
         session: dict = {}
 
-    main.apply_unstar_scope(cast(Request, _Req()), folder_id=None, list_feed_url=None, tag="python")
+    routes.saved.apply_unstar_scope(cast(Request, _Req()), folder_id=None, list_feed_url=None, tag="python")
 
     with main.get_meta_connection() as conn:
         assert conn.execute("SELECT 1 FROM saved_entries WHERE entry_id = 'both'").fetchone() is None
