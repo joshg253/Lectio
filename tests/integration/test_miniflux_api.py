@@ -8,7 +8,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import main
+import main  # must sort before routes.compat_v1 — see routes/__init__.py
+import routes.compat_v1 as compat_v1
 from services import tenancy
 
 
@@ -35,6 +36,7 @@ def env(tmp_path, monkeypatch):
     with us._connect() as conn:
         conn.execute("UPDATE users SET api_token='tok-miniflux-secret' WHERE username='alice'")
     monkeypatch.setattr(main, "user_store", us)
+    monkeypatch.setattr(compat_v1, "user_store", us)
 
     # Provision alice's per-user storage (creates the user dir and DBs)
     main.provision_user_storage(alice_id)
@@ -51,16 +53,16 @@ def env(tmp_path, monkeypatch):
 
 def _client():
     app = FastAPI()
-    app.get("/v1/version")(main.miniflux_version)
-    app.get("/v1/me")(main.miniflux_me)
-    app.get("/v1/categories")(main.miniflux_categories)
-    app.get("/v1/feeds")(main.miniflux_feeds)
-    app.get("/v1/entries")(main.miniflux_entries)
-    app.get("/v1/feeds/{feed_id}/entries")(main.miniflux_feed_entries)
-    app.get("/v1/categories/{category_id}/entries")(main.miniflux_category_entries)
-    app.get("/v1/entries/{entry_id}")(main.miniflux_entry)
-    app.put("/v1/entries")(main.miniflux_update_entries)
-    app.put("/v1/entries/{entry_id}/bookmark")(main.miniflux_toggle_bookmark)
+    app.get("/v1/version")(compat_v1.miniflux_version)
+    app.get("/v1/me")(compat_v1.miniflux_me)
+    app.get("/v1/categories")(compat_v1.miniflux_categories)
+    app.get("/v1/feeds")(compat_v1.miniflux_feeds)
+    app.get("/v1/entries")(compat_v1.miniflux_entries)
+    app.get("/v1/feeds/{feed_id}/entries")(compat_v1.miniflux_feed_entries)
+    app.get("/v1/categories/{category_id}/entries")(compat_v1.miniflux_category_entries)
+    app.get("/v1/entries/{entry_id}")(compat_v1.miniflux_entry)
+    app.put("/v1/entries")(compat_v1.miniflux_update_entries)
+    app.put("/v1/entries/{entry_id}/bookmark")(compat_v1.miniflux_toggle_bookmark)
     return TestClient(app, raise_server_exceptions=True)
 
 

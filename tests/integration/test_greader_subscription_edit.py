@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-import main
+import main  # must sort before routes.compat_greader — see routes/__init__.py
+import routes.compat_greader as compat_greader
 from services import tenancy
 
 FEED = "http://skillport.example/rss.asp?eid=1"
@@ -49,7 +50,7 @@ def _folder_of(feed_url):
 
 def test_move_feed_to_folder(configured):
     assert _folder_of(FEED) == "Dev"
-    main._greader_edit_subscriptions(
+    compat_greader._greader_edit_subscriptions(
         [f"feed/{FEED}"],
         ["user/-/label/Books & Education"],
         ["user/-/label/Dev"],
@@ -61,23 +62,23 @@ def test_move_feed_to_folder(configured):
 
 
 def test_add_label_creates_missing_folder(configured):
-    main._greader_edit_subscriptions([f"feed/{FEED}"], ["user/-/label/Brand New"], [], None)
+    compat_greader._greader_edit_subscriptions([f"feed/{FEED}"], ["user/-/label/Brand New"], [], None)
     assert _folder_of(FEED) == "Brand New"
 
 
 def test_remove_only_makes_folderless(configured):
-    main._greader_edit_subscriptions([f"feed/{FEED}"], [], ["user/-/label/Dev"], None)
+    compat_greader._greader_edit_subscriptions([f"feed/{FEED}"], [], ["user/-/label/Dev"], None)
     assert _folder_of(FEED) is None  # → Uncategorized
 
 
 def test_rename_sets_user_title(configured):
-    main._greader_edit_subscriptions([f"feed/{FEED}"], [], [], "My Renamed Feed")
+    compat_greader._greader_edit_subscriptions([f"feed/{FEED}"], [], [], "My Renamed Feed")
     with main.get_reader() as reader:
         assert reader.get_feed(FEED).user_title == "My Renamed Feed"
 
 
 def test_unknown_feed_ignored(configured):
-    main._greader_edit_subscriptions(
+    compat_greader._greader_edit_subscriptions(
         ["feed/http://nope.example/x"],
         ["user/-/label/Books & Education"],
         [],
