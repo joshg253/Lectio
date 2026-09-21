@@ -76,10 +76,52 @@ references the class by name anymore (only specific instances), so `ruff --fix` 
 as unused, breaking `routes/integrations_youtube.py` and `tests/integration/test_cache_isolation.py`,
 which still do `main._PerUserDict()`. Full `make test`/`lint`/`types` pass.
 
-Next: split the rest of main.py's route handlers by URL prefix into their own modules —
-mechanical, same `router = APIRouter()` + bottom-of-file `include_router` pattern the integration
-routes used, now that the shared state they'll need is importable from `state.py` without
-redefining it.
+Next: split the rest of main.py's route handlers by URL prefix into their own modules — same
+`router = APIRouter()` + bottom-of-file `include_router` pattern the integration routes used, now
+that the shared state they'll need is importable from `state.py` without redefining it. **Scoped
+2026-09-20:** 256 `@app.*` route decorators remain, and unlike the integrations cluster (one
+contiguous 2,240-line block) these are scattered across the whole file — same URL prefix shows up
+in disjoint chunks hundreds/thousands of lines apart (e.g. `/feeds/*` routes span main.py:25294 to
+31671). So each stage below is "gather every route matching these paths, wherever it lives" rather
+than "cut one block." Grouped by conceptual area (not always the literal first path segment) and
+ordered safest → riskiest:
+
+1. `routes/system.py` — `/healthz`, `/sw.js`, `/stats`, `/login`, `/logout`,
+   `/websub/callback`, `/opml/{export,import}`, `/takeout/{export,import}`, `/thumb`,
+   `/starred-asset/{asset_hash}`, `/internal/warm-lead-image-cache`, `/email-contacts*`,
+   `/dev/feeds/*` + `/dev/flush-email-batch`, `/instapaper/import`, `/youtube/sync`,
+   `/devto-feeds/{feed_id}/config`, `/administration` — ~30 routes, lowest-traffic leaf endpoints,
+   least likely to share state with each other.
+2. `routes/compat_{greader,fever,v1}.py` — the greader/fever/v1 compat surfaces (~24 routes) are
+   already thin wrappers over `GReaderService`/`FeverService` (see `services/greader.py`,
+   `services/fever.py`), so should extract cleanly; they do call into the shared rendering core
+   (`_home_inner` etc.) which stays resident in main.py and gets imported back, same as any other
+   main-resident helper.
+3. `routes/tags.py` (`/tags/*`, `/feed-tags/dismiss`, ~11) and `routes/highlights.py`
+   (`/highlights*`, ~9) — small, single-concern.
+4. `routes/automation.py` — `/automation/history*`, `/rules/*`, `/dedup/*` (~9) — natural fit
+   alongside `services/automation_rules.py` from Step 2.
+5. `routes/admin.py` — `/admin/*`, `/debug/*`, `/account/*` (~15).
+6. `routes/saved.py` — `/saved/*`, `/articles/*` (~21) — backed by `services/saved_articles.py`.
+7. `routes/settings.py` — `/settings/*` (~11).
+8. `routes/feeds.py` — `/feeds*`, `/folders*`, `/tree/folder-feeds/*`, `/scraped-feeds*`,
+   `/api/folders`, `/api/folder-feeds` (~61) — biggest single cluster; scope its own A-E sub-stages
+   the way the integrations cluster did rather than one move.
+9. `routes/entries.py` — `/entries/*` (~46) plus the `/api/*` thumb/img/bookmarklet-save cluster
+   (`/api/entry-thumb`, `/api/favicon`, `/api/feed-thumb`, `/api/img`, `/api/bookmarklet/save`,
+   `/api/save`, `/api/unread-counts`) if that doesn't want to be its own `routes/media.py` —
+   decide at extraction time. Also biggest; needs its own sub-staging.
+10. `routes/home.py` — `/`, `/read`, `/read/offline` last: these are the routes the Landmines note
+    already flags as reused-by-everything (`_home_inner`, `build_reader_page`, pane-swap); moving
+    the handler is still just importing the core functions back from main.py like everything else,
+    but do it only after the pattern is proven on lower-traffic routes first.
+
+Each stage: `grep` the current route paths (line numbers drift as earlier stages move code, so
+don't trust line numbers from a previous stage's scoping), move handler + any single-route-only
+helper, leave shared helpers in main.py and import them back, watch for the two known gotchas
+(copied-reference monkeypatches in tests that reach a handler via `main.<name>`, and the
+import-main-before-routes circular-import rule `routes/__init__.py` documents), run
+`make test`/`lint`/`types` after each stage.
 
 ### Shared rendering core
 
