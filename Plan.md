@@ -211,10 +211,17 @@ ordered safest → riskiest:
    main.py:23641-28244, plus `/tree/folder-feeds/{folder_id}` and `/api/folder-feeds` as outliers
    around 30367/30623 — always re-grep, these numbers drift every stage). Scoped into its own A-E
    sub-stages, same reasoning as the original integrations cluster (safest → riskiest):
-   - **A.** Folder CRUD + tree reads: `/api/folders`, `POST /folders`, `/folders/rename`,
-     `/folders/delete`, `/folders/properties`, `/folders/cadence`, `/folders/retention`,
-     `/folders/mark-read`, `/tree/folder-feeds/{folder_id}`, `/api/folder-feeds` (10 routes) —
-     most self-contained, folder-tree structure only.
+   - **A — done (2026-09-21).** Folder CRUD + tree reads: `/api/folders`, `POST /folders`,
+     `/folders/rename`, `/folders/delete`, `/folders/properties`, `/folders/cadence`,
+     `/folders/retention`, `/folders/mark-read`, `/tree/folder-feeds/{folder_id}`,
+     `/api/folder-feeds` (10 routes, exactly as scoped, no discrepancy). main.py: 31,247 → 30,991
+     lines; `routes/feeds.py` created at 346 lines (sub-stages B-E extend the same file). No
+     genuinely single-route-only helper existed next to any of the 10 — everything touched was
+     either general infra or already independently tested, confirmed clean via the
+     `routes/*.py`/`scripts/*.py`/`tests/` three-way check. No `services.automation_rules` ordering
+     constraint needed. 2 test files retargeted for `POST /folders/mark-read` →
+     `routes.feeds.mark_folder_as_read`, one hitting both known gotchas (4 helpers needing a second
+     monkeypatch on `routes.feeds` alongside `main`). Full `make test`/`lint`/`types` pass.
    - **B.** Feed discovery/add flow: `/feeds/discover`, `/feeds/compare`, `POST /feeds`,
      `/scraped-feeds*` (5), `/feeds/properties`, `/feeds/suggest-migration`,
      `/feeds/set-user-title`, `/feeds/fix-url-titles`, `/feeds/lazy-titles` (13 routes).

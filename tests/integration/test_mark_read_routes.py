@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.feeds
 from services import tenancy
 
 # ---------------------------------------------------------------------------
@@ -100,15 +101,19 @@ def test_feed_mark_read_async_zero_marked(monkeypatch):
 
 def _build_folder_mark_read_app(monkeypatch, marked: int = 7) -> FastAPI:
     app = FastAPI()
-    app.post("/folders/mark-read")(main.mark_folder_as_read)
+    app.post("/folders/mark-read")(routes.feeds.mark_folder_as_read)
+    # routes.feeds did `from main import (...)` at module load, so each of these
+    # copied a reference at that time -- patching main's own attribute doesn't
+    # reach routes.feeds' copy, both need patching (routes/__init__.py's docstring).
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_conn)
+    monkeypatch.setattr(routes.feeds, "get_meta_connection", _dummy_meta_conn)
     monkeypatch.setattr(main, "get_folder_feed_urls", lambda _conn, _fid: {"https://a.com/f", "https://b.com/f"})
-    monkeypatch.setattr(
-        main,
-        "_mark_entries_as_read_for_view",
-        lambda _feed_urls, **_kwargs: (marked, "2026-07-17T00:00:00" if marked else None),
-    )
+    monkeypatch.setattr(routes.feeds, "get_folder_feed_urls", lambda _conn, _fid: {"https://a.com/f", "https://b.com/f"})
+    _mark_stub = lambda _feed_urls, **_kwargs: (marked, "2026-07-17T00:00:00" if marked else None)  # noqa: E731
+    monkeypatch.setattr(main, "_mark_entries_as_read_for_view", _mark_stub)
+    monkeypatch.setattr(routes.feeds, "_mark_entries_as_read_for_view", _mark_stub)
     monkeypatch.setattr(main, "unread_counts_cache", {})
+    monkeypatch.setattr(routes.feeds, "unread_counts_cache", {})
     return app
 
 

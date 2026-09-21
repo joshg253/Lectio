@@ -150,4 +150,24 @@ now import `routes.settings` and register `settings_routes.mark_feed_needs_repla
 shape via `inspect.getsource`: it fell back to grepping `main.__file__`'s raw text for `_ADMIN_ONLY = {` since
 `main.save_settings` never existed (the real name is `save_all_settings`), and that text is no longer in main.py now
 that the function moved — retargeted to `inspect.getsource(routes.settings.save_all_settings)` directly.
+
+`routes/feeds.py` (Stage 8 of the route-by-URL-prefix split -- the biggest single cluster at 60 routes,
+scoped into sub-stages A-E) is NOT done in one shot: this file currently holds only sub-stage A's 10
+routes (folder CRUD + tree reads -- `/api/folders`, `POST /folders`, `/folders/rename`, `/folders/delete`,
+`/folders/properties`, `/folders/cadence`, `/folders/retention`, `/folders/mark-read`,
+`/tree/folder-feeds/{folder_id}`, `/api/folder-feeds`); sub-stages B (feed discovery/add flow), C (display/
+thumbnail strategy config), D (network/fetch settings + lifecycle), and E (tags/attachments/curation/bulk
+ops) each add more routes to this same module in later tasks -- don't assume this is the final state. No
+ordering constraint for sub-stage A: none of its handlers touch `_run_automation_after_refresh` or anything
+else from the late `services.automation_rules` import, so it's imported alongside the plain
+`routes.compat_*`/`routes.tags`-style modules. No helper moved with its route -- `get_folder_properties` and
+`delete_folder` stay in main.py, tested directly as `main.<name>` by `tests/integration/test_folder_properties_counts.py`,
+`tests/integration/test_retention_purge.py`, and `tests/integration/test_feed_removal_consolidation.py`;
+`_FOLDER_CADENCE_LAST_REFRESH_PREFIX` stays, also read by the still-in-main.py cadence-refresh scheduler;
+`_mark_entries_as_read_for_view` stays, shared with the still-in-main.py `/feeds/mark-read` and
+`/entries/mark-older-than-read` routes. Two test files needed retargeting for the usual "handler registered
+directly as `main.<name>` on a bare test `FastAPI()` app" gotcha (`tests/integration/test_mark_read_routes.py`,
+`tests/integration/test_mark_read_view_scope.py`, both for `/folders/mark-read` -> `routes.feeds.mark_folder_as_read`);
+the former also hit the copied-reference monkeypatch gotcha (`get_meta_connection`, `get_folder_feed_urls`,
+`_mark_entries_as_read_for_view`, and `unread_counts_cache` all needed patching on both `main` and `routes.feeds`).
 """
