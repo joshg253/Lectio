@@ -10,7 +10,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import main
+import main  # import first: routes.tags does `from main import ...` at module scope
+import routes.tags
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -37,9 +38,9 @@ def configured(tmp_path):
 
 def _client():
     app = FastAPI()
-    app.get("/tags/global-suppressed")(main.list_globally_suppressed_tags_route)
-    app.post("/tags/global-suppressed/add")(main.add_globally_suppressed_tag_route)
-    app.post("/tags/global-suppressed/remove")(main.remove_globally_suppressed_tag_route)
+    app.get("/tags/global-suppressed")(routes.tags.list_globally_suppressed_tags_route)
+    app.post("/tags/global-suppressed/add")(routes.tags.add_globally_suppressed_tag_route)
+    app.post("/tags/global-suppressed/remove")(routes.tags.remove_globally_suppressed_tag_route)
     return TestClient(app)
 
 

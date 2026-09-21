@@ -120,8 +120,17 @@ ordered safest → riskiest:
    looked like leftover Python 2 syntax, but it's valid on Python 3.14 (confirmed: parses,
    compiles to the same tuple form as `except (A, B):`, doesn't rebind the second name) — a
    pre-existing repo-wide pattern, left alone.
-3. `routes/tags.py` (`/tags/*`, `/feed-tags/dismiss`, ~11) and `routes/highlights.py`
-   (`/highlights*`, ~9) — small, single-concern.
+3. **Done (2026-09-20).** `routes/tags.py` (`/tags/*` + `/feed-tags/dismiss`, 11 routes) and
+   `routes/highlights.py` (`/highlights*`, 9 routes). main.py: 34,576 → 33,881 lines; new files
+   275/521 lines. `normalize_tag_value` (the 51-call-site helper the Landmines note already flags)
+   confirmed left in main.py and imported back, not moved, despite living right next to the tags
+   routes — same for its whole neighborhood of alias/rename/delete helpers, all tested directly as
+   `main.<name>` elsewhere. `_validate_highlight_rule`/`_highlight_rule_response` (shared only
+   between add/edit) moved with the highlights routes. No `services.automation_rules` ordering
+   constraint needed for either module. 3 test files retargeted — all pure relocation (a test
+   registering a moved handler directly on a bare test `FastAPI()` app via `main.<handler>`, now
+   `routes.tags.<handler>`/`routes.highlights.<handler>`), no copied-reference-monkeypatch case
+   surfaced this time. Full `make test`/`lint`/`types` pass (4,192 tests).
 4. `routes/automation.py` — `/automation/history*`, `/rules/*`, `/dedup/*` (~9) — natural fit
    alongside `services/automation_rules.py` from Step 2.
 5. `routes/admin.py` — `/admin/*`, `/debug/*`, `/account/*` (~15).
