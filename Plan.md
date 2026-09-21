@@ -207,9 +207,34 @@ ordered safest → riskiest:
    but `/tmp` is a shared host-wide tmpfs, so this was flagged and a standing feedback note added
    (`feedback-subagent-no-manual-tmp-clear` in project memory) to brief every future stage against
    it explicitly. Full `make test`/`lint`/`types` pass (4,192 tests).
-8. `routes/feeds.py` — `/feeds*`, `/folders*`, `/tree/folder-feeds/*`, `/scraped-feeds*`,
-   `/api/folders`, `/api/folder-feeds` (~61) — biggest single cluster; scope its own A-E sub-stages
-   the way the integrations cluster did rather than one move.
+8. `routes/feeds.py` — biggest single cluster, 60 routes confirmed 2026-09-21 (spanning
+   main.py:23641-28244, plus `/tree/folder-feeds/{folder_id}` and `/api/folder-feeds` as outliers
+   around 30367/30623 — always re-grep, these numbers drift every stage). Scoped into its own A-E
+   sub-stages, same reasoning as the original integrations cluster (safest → riskiest):
+   - **A.** Folder CRUD + tree reads: `/api/folders`, `POST /folders`, `/folders/rename`,
+     `/folders/delete`, `/folders/properties`, `/folders/cadence`, `/folders/retention`,
+     `/folders/mark-read`, `/tree/folder-feeds/{folder_id}`, `/api/folder-feeds` (10 routes) —
+     most self-contained, folder-tree structure only.
+   - **B.** Feed discovery/add flow: `/feeds/discover`, `/feeds/compare`, `POST /feeds`,
+     `/scraped-feeds*` (5), `/feeds/properties`, `/feeds/suggest-migration`,
+     `/feeds/set-user-title`, `/feeds/fix-url-titles`, `/feeds/lazy-titles` (13 routes).
+   - **C.** Feed display/thumbnail strategy config: `/feeds/strategy`, `/feeds/display-prefs`,
+     `/feeds/backfill-hide-shorts`, `/feeds/thumbnail-url`, `/feeds/thumb-crop`,
+     `/feeds/smart-min-scale`, `/feeds/fill-zoom`, `/feeds/thumb-strategy`, `/feeds/caption-source`,
+     `/feeds/strategy-refresh` (10 routes) — likely touches `services/lead_image_plugins.py`.
+   - **D.** Feed network/fetch settings + lifecycle: `/feeds/browser-ua`, `/feeds/proxy`,
+     `/feeds/tailscale`, `/feeds/flaresolverr`, `/feeds/reparse`, `/feeds/move`, `/feeds/disable`,
+     `/feeds/enable`, `/feeds/toggle-updates`, `/feeds/change-url`, `/feeds/unsubscribe`,
+     `/feeds/curation-count` (12 routes).
+   - **E.** Feed tags/attachments/website/curation/bulk ops — riskiest, saved for last: 
+     `/feeds/suggested-tags`, `/feeds/attachment-candidates`, `/feeds/attachment-candidate-suppress`,
+     `/feeds/attachment-exts`, `/feeds/set-website`, `/feeds/url-rewrites`,
+     `/feeds/url-rewrites/delete`, `/feeds/curation-items`, `/feeds/combine`, `/feeds/duplicates`,
+     `/feeds/duplicates/undismiss`, `/feeds/duplicates/dismiss`, `/feeds/multi-folder`,
+     `/feeds/multi-folder/resolve`, `/feeds/bulk`, `/feeds/mark-read` (16 routes) — `/feeds/combine`
+     and `/feeds/duplicates*` are **feed-level** duplicate detection, a third distinct dedup surface
+     from Stage 6's saved-article dupe scan and the still-gated main entry-dedup engine — don't
+     conflate the three when scoping this sub-stage.
 9. `routes/entries.py` — `/entries/*` (~46) plus the `/api/*` thumb/img/bookmarklet-save cluster
    (`/api/entry-thumb`, `/api/favicon`, `/api/feed-thumb`, `/api/img`, `/api/bookmarklet/save`,
    `/api/save`, `/api/unread-counts`) if that doesn't want to be its own `routes/media.py` —
