@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 import main
-from services import tenancy
+from services import automation_rules, tenancy
 
 FEED = "https://example.test/feed"
 
@@ -63,7 +63,7 @@ def _seed(reader) -> None:
 
 def test_immediate_delivery_posts_once_per_match(configured, monkeypatch):
     posted = []
-    monkeypatch.setattr(main, "send_webhook", lambda url, payload: posted.append(payload) or (True, None))
+    monkeypatch.setattr(automation_rules, "send_webhook", lambda url, payload: posted.append(payload) or (True, None))
     _add_rule()
     with main.get_reader() as reader:
         _seed(reader)
@@ -77,7 +77,7 @@ def test_immediate_delivery_posts_once_per_match(configured, monkeypatch):
 
 def test_batch_delivery_sends_a_single_post(configured, monkeypatch):
     posted = []
-    monkeypatch.setattr(main, "send_webhook", lambda url, payload: posted.append(payload) or (True, None))
+    monkeypatch.setattr(automation_rules, "send_webhook", lambda url, payload: posted.append(payload) or (True, None))
     _add_rule(webhook_batch=True)
     with main.get_reader() as reader:
         _seed(reader)
@@ -92,7 +92,7 @@ def test_batch_delivery_sends_a_single_post(configured, monkeypatch):
 
 def test_no_rules_posts_nothing(configured, monkeypatch):
     calls = []
-    monkeypatch.setattr(main, "send_webhook", lambda url, payload: calls.append(1) or (True, None))
+    monkeypatch.setattr(automation_rules, "send_webhook", lambda url, payload: calls.append(1) or (True, None))
     with main.get_reader() as reader:
         _seed(reader)
     main._run_webhook_rules_after_refresh({FEED})
@@ -100,7 +100,7 @@ def test_no_rules_posts_nothing(configured, monkeypatch):
 
 
 def test_post_failure_does_not_log_a_run(configured, monkeypatch):
-    monkeypatch.setattr(main, "send_webhook", lambda url, payload: (False, "connection refused"))
+    monkeypatch.setattr(automation_rules, "send_webhook", lambda url, payload: (False, "connection refused"))
     _add_rule()
     with main.get_reader() as reader:
         _seed(reader)
@@ -115,7 +115,7 @@ def test_entries_older_than_cutoff_are_ignored(configured, monkeypatch):
     from datetime import datetime, timedelta
 
     posted = []
-    monkeypatch.setattr(main, "send_webhook", lambda url, payload: posted.append(1) or (True, None))
+    monkeypatch.setattr(automation_rules, "send_webhook", lambda url, payload: posted.append(1) or (True, None))
     _add_rule()
     with main.get_reader() as reader:
         _seed(reader)
@@ -127,6 +127,6 @@ def test_entries_older_than_cutoff_are_ignored(configured, monkeypatch):
         def now(cls, tz=None):
             return real_now(tz) + timedelta(hours=2)
 
-    monkeypatch.setattr(main, "datetime", _FakeDateTime)
+    monkeypatch.setattr(automation_rules, "datetime", _FakeDateTime)
     main._run_webhook_rules_after_refresh({FEED})
     assert posted == []

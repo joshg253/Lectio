@@ -9,7 +9,7 @@ import pytest
 from fastapi import FastAPI  # noqa: F401 — parity with sibling test modules
 
 import main
-from services import tenancy
+from services import automation_rules, tenancy
 
 FEED = "https://deals.example.test/feed"
 
@@ -102,7 +102,7 @@ def test_rule_ignores_entries_older_than_cutoff(configured, monkeypatch):
         def now(cls, tz=None):
             return real_now(tz) + timedelta(hours=2)
 
-    monkeypatch.setattr(main, "datetime", _FakeDateTime)
+    monkeypatch.setattr(automation_rules, "datetime", _FakeDateTime)
     main._run_save_article_rules_after_refresh({FEED})
     assert not _is_starred("e-match")
 

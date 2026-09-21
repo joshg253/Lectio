@@ -1,18 +1,26 @@
 """Post-refresh automation rule execution: run-log writer, entry excerpting,
-keyword-rule matching, and the three user-triggerable "run now" rule executors
-(deduplicate/mark_as_read/tag_filter) -- shared by every automation dispatcher
-(mark_as_read, dedup, email/webhook/instapaper/quire/save_article/youtube_playlist)
-and by the manual Run Now / dry-run routes still resident in main.py.
+keyword-rule matching, the three user-triggerable "run now" rule executors
+(deduplicate/mark_as_read/tag_filter), and the six after-refresh dispatchers
+(email/webhook/instapaper/quire/save_article/youtube_playlist) that
+_run_automation_after_refresh (still in main.py) calls after every scheduled
+refresh.
 
-Extracted out of main.py (Plan.md's main.py/index.html breakup, Step 2, Stages B-C).
-This module does `from main import ...` for a handful of main.py-resident
-primitives (dedup/pattern helpers staying in main.py -- see Plan.md's Step 4,
-`services/dedup.py` -- plus scope-resolution and tag helpers with no other home
-yet) -- it is imported late, from main.py's own bottom-of-file section, for the
-same reason the routes/integrations_*.py modules are: those names don't exist yet
-earlier in main.py's execution. See routes/__init__.py's docstring for the full
-mechanics and the import-order gotcha it creates for anything that imports this
-module directly before main has finished loading.
+Extracted out of main.py (Plan.md's main.py/index.html breakup, Step 2,
+Stages B-D). This module does `from main import ...` for a handful of
+main.py-resident primitives (dedup/pattern helpers staying in main.py -- see
+Plan.md's Step 4, `services/dedup.py` -- credential/action helpers like
+`_quire_add_entry`/`_instapaper_save_url`, and scope/setting helpers with no
+other home yet) -- it is imported late, from main.py's own bottom-of-file
+section, for the same reason the routes/integrations_*.py modules are: those
+names don't exist yet earlier in main.py's execution. See routes/__init__.py's
+docstring for the full mechanics and the import-order gotcha it creates for
+anything that imports this module directly before main has finished loading.
+
+Landmine: email_article (immediate) and webhook deliveries have no
+idempotency guard beyond the 15-minute `added` cutoff -- quire is likewise
+unguarded (rate-limited, not deduped). instapaper/save_article/
+youtube_playlist are all safe (URL/duplicate/INSERT-OR-IGNORE guarded). Don't
+ever leave two live copies of one of the unguarded three reachable at once.
 """
 
 from __future__ import annotations
@@ -25,25 +33,57 @@ from datetime import datetime
 from main import (
     _DEDUP_MIN_TITLE_WORDS,
     LOGGER,
+    PROFILE_EMAIL_SETTING_KEY,
+    SETTING_INSTAPAPER_PASSWORD,
+    SETTING_INSTAPAPER_USERNAME,
+    SETTING_YT_PLAYLIST_AUTO_LAST_CHECK,
     _bump_unread_counts_generation,
+    _flush_email_batch_for_rule,
+    _instapaper_save_url,
+    _is_youtube_short,
+    _quire_add_entry,
     _resolve_dedup_feed_urls,
     _safe_dedup_collect,
     _safe_dedup_find_pairs,
+    _star_entry_for_current_user,
     author_filter_token,
     build_keyword_matcher,
     dedup_order_key,
     entry_effective_date,
     entry_url_slug,
     feed_display_title,
+    feed_in_rule_scope,
+    get_folder_feed_urls,
+    get_highlight_keywords,
+    get_manual_tags_for_entry,
+    get_meta_connection,
+    get_quire_usage_status,
+    get_quire_user_token,
     get_reader,
+    get_resend_api_key,
+    get_resend_from,
+    get_runtime_setting,
+    get_setting,
+    get_youtube_oauth_token,
+    is_email_configured,
+    is_quire_configured,
+    mark_yt_quota_exhausted,
     normalize_entry_title_for_dedupe,
     normalize_tag_value,
     parse_folders_scope_id,
     parse_tag_filter_spec,
+    quire_project_oid,
     resolve_rule_feed_urls,
+    rule_scope_folder_feed_set,
+    rule_scope_folder_ids,
+    set_setting,
     title_word_similarity,
+    youtube_duration_service,
 )
-from services import html_sanitize
+from services import html_sanitize, youtube_embeds
+from services import youtube_oauth as youtube_oauth_service
+from services.email import send_article_email
+from services.webhooks import build_webhook_batch_payload, build_webhook_payload, send_webhook
 
 
 def _log_auto_run(
@@ -569,3 +609,858 @@ def _run_tag_filter(
             "good_only": bool(good and not exclude and not require),
         }
     return {"count": len(to_mark), "entries": matched_entries}
+
+
+_EMAIL_AUTO_PER_RUN_CAP = 10  # max immediate emails per refresh cycle
+
+
+def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
+    """Send or queue email_article rule matches for freshly-refreshed feeds."""
+    if not is_email_configured():
+        return
+    if not refreshed_feed_urls:
+        return
+
+    try:
+        from datetime import timedelta
+        from datetime import timezone as _tz
+
+        cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
+
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
+            folder_ids_needed: set[int] = set()
+            for r in all_rules:
+                if r.get("enabled"):
+                    folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
+            folder_feed_map: dict[int, set[str]] = {fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed}
+
+        email_rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "email_article" and r.get("email_to")]
+        if not email_rules:
+            return
+
+        immediate_sent = 0
+        now_str = datetime.now().isoformat()
+
+        for rule in email_rules:
+            try:
+                scope = str(rule.get("scope", ""))
+                scope_id = str(rule.get("scope_id") or "")
+                keyword = str(rule.get("keyword", ""))
+                rule_uid = str(rule.get("rule_uid") or "")
+                is_regex = bool(rule.get("is_regex"))
+                search_in = str(rule.get("search_in") or "title")
+                delivery = str(rule.get("delivery") or "immediately")
+                email_to = str(rule.get("email_to") or "")
+                batch_count = int(rule.get("batch_count") or 0)
+                cc_me = bool(rule.get("cc_me"))
+                # Suppress Cc when profile email is already the To recipient
+                cc_addr = profile_email if cc_me and profile_email and profile_email.lower() != email_to.lower() else None
+
+                with get_reader() as reader:
+                    feed_title_cache: dict[str, str] = {}
+
+                    for feed_url in refreshed_feed_urls:
+                        # Scope check
+                        _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
+                        in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
+                        if not in_scope:
+                            continue
+
+                        for entry in reader.get_entries(feed=feed_url):
+                            added = getattr(entry, "added", None)
+                            if not added or added < cutoff:
+                                continue
+                            if not _entry_matches_rule(entry, keyword, is_regex, search_in):
+                                continue
+
+                            fu = str(entry.feed_url or "")
+                            if fu not in feed_title_cache:
+                                try:
+                                    f = reader.get_feed(fu)
+                                    feed_title_cache[fu] = feed_display_title(f, fu)
+                                except Exception:
+                                    feed_title_cache[fu] = fu
+
+                            article = {
+                                "feed_url": fu,
+                                "entry_id": str(entry.id),
+                                "title": str(entry.title or ""),
+                                "link": str(entry.link or ""),
+                                "feed_title": feed_title_cache.get(fu, fu),
+                                "excerpt": _get_entry_excerpt(entry),
+                            }
+
+                            if delivery == "immediately":
+                                if immediate_sent >= _EMAIL_AUTO_PER_RUN_CAP:
+                                    continue
+                                ok, err = send_article_email(
+                                    get_resend_api_key(),
+                                    get_resend_from(),
+                                    email_to,
+                                    article["title"],
+                                    article["feed_title"],
+                                    article["link"],
+                                    article["excerpt"],
+                                    cc_addr=cc_addr,
+                                )
+                                if ok:
+                                    immediate_sent += 1
+                                    with get_meta_connection() as conn:
+                                        _log_auto_run(
+                                            conn,
+                                            now_str,
+                                            "email_article",
+                                            scope,
+                                            scope_id,
+                                            keyword,
+                                            {
+                                                "count": 1,
+                                                "entries": [article],
+                                            },
+                                        )
+                                else:
+                                    LOGGER.warning("[email-auto] send failed: %s", err)
+                            else:
+                                # batch mode — queue for digest
+                                with get_meta_connection() as conn:
+                                    conn.execute(
+                                        "INSERT OR IGNORE INTO email_batch_queue"
+                                        " (rule_scope, rule_scope_id, rule_keyword, rule_uid, queued_at,"
+                                        "  feed_url, entry_id, title, link, feed_title, excerpt,"
+                                        "  email_to, cc_me)"
+                                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                        (
+                                            scope,
+                                            scope_id,
+                                            keyword,
+                                            rule_uid,
+                                            now_str,
+                                            fu,
+                                            article["entry_id"],
+                                            article["title"],
+                                            article["link"],
+                                            article["feed_title"],
+                                            article["excerpt"],
+                                            email_to,
+                                            1 if cc_me else 0,
+                                        ),
+                                    )
+                                    # Flush immediately if batch_count threshold is reached.
+                                    # Counted by rule_uid when this rule has one (always, in
+                                    # practice) so a scope/keyword edit mid-backlog still counts
+                                    # entries queued under the old text as part of the same rule,
+                                    # rather than splitting the count across two identities.
+                                    if batch_count > 0:
+                                        if rule_uid:
+                                            pending = conn.execute(
+                                                "SELECT COUNT(*) FROM email_batch_queue WHERE rule_uid=? AND email_to=?",
+                                                (rule_uid, email_to),
+                                            ).fetchone()[0]
+                                        else:
+                                            pending = conn.execute(
+                                                "SELECT COUNT(*) FROM email_batch_queue"
+                                                " WHERE rule_scope=? AND rule_scope_id=? AND rule_keyword=?"
+                                                " AND email_to=?",
+                                                (scope, scope_id, keyword, email_to),
+                                            ).fetchone()[0]
+                                        if pending >= batch_count:
+                                            _flush_email_batch_for_rule(
+                                                conn,
+                                                scope,
+                                                scope_id,
+                                                keyword,
+                                                email_to,
+                                                cc_addr,
+                                                now_str,
+                                                rule_uid=rule_uid,
+                                            )
+            except Exception:
+                LOGGER.exception("[email-auto] error processing email rule %s/%s", scope, keyword)
+    except Exception:
+        LOGGER.exception("[email-auto] error in _run_email_rules_after_refresh")
+
+
+_WEBHOOK_AUTO_PER_RUN_CAP = 50  # max webhook POSTs per refresh cycle
+
+
+def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
+    """POST webhook-rule matches for freshly-refreshed feeds (immediate delivery)."""
+    if not refreshed_feed_urls:
+        return
+
+    try:
+        from datetime import timedelta
+        from datetime import timezone as _tz
+
+        cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
+
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            folder_ids_needed: set[int] = set()
+            for r in all_rules:
+                if r.get("enabled"):
+                    folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
+            folder_feed_map: dict[int, set[str]] = {fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed}
+
+        webhook_rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "webhook" and r.get("webhook_url")]
+        if not webhook_rules:
+            return
+
+        sent = 0
+        now_str = datetime.now().isoformat()
+
+        for rule in webhook_rules:
+            try:
+                scope = str(rule.get("scope", ""))
+                scope_id = str(rule.get("scope_id") or "")
+                keyword = str(rule.get("keyword", ""))
+                is_regex = bool(rule.get("is_regex"))
+                search_in = str(rule.get("search_in") or "title")
+                webhook_url = str(rule.get("webhook_url") or "")
+                webhook_format = str(rule.get("webhook_format") or "generic")
+                webhook_batch = bool(rule.get("webhook_batch"))
+
+                with get_reader() as reader:
+                    feed_title_cache: dict[str, str] = {}
+                    batch_articles: list[dict] = []
+
+                    for feed_url in refreshed_feed_urls:
+                        _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
+                        in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
+                        if not in_scope:
+                            continue
+
+                        for entry in reader.get_entries(feed=feed_url):
+                            added = getattr(entry, "added", None)
+                            if not added or added < cutoff:
+                                continue
+                            if not _entry_matches_rule(entry, keyword, is_regex, search_in):
+                                continue
+                            if sent >= _WEBHOOK_AUTO_PER_RUN_CAP:
+                                continue
+
+                            fu = str(entry.feed_url or "")
+                            if fu not in feed_title_cache:
+                                try:
+                                    f = reader.get_feed(fu)
+                                    feed_title_cache[fu] = feed_display_title(f, fu)
+                                except Exception:
+                                    feed_title_cache[fu] = fu
+
+                            published = getattr(entry, "published", None) or getattr(entry, "updated", None)
+                            article = {
+                                "feed_url": fu,
+                                "entry_id": str(entry.id),
+                                "title": str(entry.title or ""),
+                                "link": str(entry.link or ""),
+                                "feed_title": feed_title_cache.get(fu, fu),
+                                "excerpt": _get_entry_excerpt(entry),
+                                "published": published.isoformat() if published else "",
+                                "tags": get_manual_tags_for_entry(fu, str(entry.id)),
+                            }
+
+                            if webhook_batch:
+                                batch_articles.append(article)
+                                sent += 1
+                            else:
+                                payload = build_webhook_payload(article, webhook_format)
+                                ok, err = send_webhook(webhook_url, payload)
+                                if ok:
+                                    sent += 1
+                                    with get_meta_connection() as conn:
+                                        _log_auto_run(
+                                            conn,
+                                            now_str,
+                                            "webhook",
+                                            scope,
+                                            scope_id,
+                                            keyword,
+                                            {
+                                                "count": 1,
+                                                "entries": [article],
+                                            },
+                                        )
+                                else:
+                                    LOGGER.warning("[webhook-auto] POST failed: %s", err)
+
+                if webhook_batch and batch_articles:
+                    payload = build_webhook_batch_payload(batch_articles, webhook_format)
+                    ok, err = send_webhook(webhook_url, payload)
+                    if ok:
+                        with get_meta_connection() as conn:
+                            _log_auto_run(
+                                conn,
+                                now_str,
+                                "webhook",
+                                scope,
+                                scope_id,
+                                keyword,
+                                {
+                                    "count": len(batch_articles),
+                                    "entries": batch_articles,
+                                },
+                            )
+                    else:
+                        LOGGER.warning("[webhook-auto] batch POST failed: %s", err)
+            except Exception:
+                LOGGER.exception("[webhook-auto] error processing webhook rule %s/%s", scope, keyword)
+    except Exception:
+        LOGGER.exception("[webhook-auto] error in _run_webhook_rules_after_refresh")
+
+
+_INSTAPAPER_AUTO_PER_RUN_CAP = 50  # max Instapaper saves per refresh cycle
+
+
+def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
+    """Save matching freshly-refreshed entries to Instapaper. Instapaper dedupes by
+    URL, so re-saves are harmless; the 15-min cutoff + per-run cap bound the calls."""
+    if not refreshed_feed_urls:
+        return
+    username = get_runtime_setting(SETTING_INSTAPAPER_USERNAME).strip()
+    password = get_runtime_setting(SETTING_INSTAPAPER_PASSWORD).strip()
+    if not (username and password):
+        return
+
+    try:
+        from datetime import timedelta
+        from datetime import timezone as _tz
+
+        cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
+
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            folder_ids_needed: set[int] = set()
+            for r in all_rules:
+                if r.get("enabled"):
+                    folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
+            folder_feed_map: dict[int, set[str]] = {fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed}
+
+        rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "instapaper"]
+        if not rules:
+            return
+
+        sent = 0
+        now_str = datetime.now().isoformat()
+        for rule in rules:
+            try:
+                scope = str(rule.get("scope", ""))
+                scope_id = str(rule.get("scope_id") or "")
+                keyword = str(rule.get("keyword", ""))
+                is_regex = bool(rule.get("is_regex"))
+                search_in = str(rule.get("search_in") or "title")
+                with get_reader() as reader:
+                    feed_title_cache: dict[str, str] = {}
+                    for feed_url in refreshed_feed_urls:
+                        _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
+                        if not feed_in_rule_scope(scope, scope_id, feed_url, _folder_set):
+                            continue
+                        for entry in reader.get_entries(feed=feed_url):
+                            if sent >= _INSTAPAPER_AUTO_PER_RUN_CAP:
+                                break
+                            added = getattr(entry, "added", None)
+                            if not added or added < cutoff:
+                                continue
+                            # Empty keyword = save every new entry in scope.
+                            if keyword and not _entry_matches_rule(entry, keyword, is_regex, search_in):
+                                continue
+                            link = str(entry.link or "")
+                            if not link:
+                                continue
+                            ok, err = _instapaper_save_url(username, password, link, str(entry.title or ""))
+                            if not ok:
+                                LOGGER.warning("[instapaper-auto] save failed: %s", err)
+                                continue
+                            sent += 1
+                            fu = str(entry.feed_url or "")
+                            if fu not in feed_title_cache:
+                                try:
+                                    feed_title_cache[fu] = str(getattr(reader.get_feed(fu), "title", None) or fu)
+                                except Exception:
+                                    feed_title_cache[fu] = fu
+                            with get_meta_connection() as conn:
+                                _log_auto_run(
+                                    conn,
+                                    now_str,
+                                    "instapaper",
+                                    scope,
+                                    scope_id,
+                                    keyword,
+                                    {
+                                        "count": 1,
+                                        "entries": [
+                                            {
+                                                "feed_url": fu,
+                                                "entry_id": str(entry.id),
+                                                "title": str(entry.title or ""),
+                                                "link": link,
+                                                "feed_title": feed_title_cache.get(fu, fu),
+                                            }
+                                        ],
+                                    },
+                                )
+            except Exception:
+                LOGGER.exception("[instapaper-auto] error processing rule %s/%s", scope, keyword)
+    except Exception:
+        LOGGER.exception("[instapaper-auto] error in _run_instapaper_rules_after_refresh")
+
+
+_SAVE_ARTICLE_AUTO_PER_RUN_CAP = 50  # archive worker fan-out bound
+# NB: saving no longer writes an "inbox" tag. The Saved Inbox is defined by the
+# STAR (kept=starred) since 2026-08-03, so the tag stopped carrying meaning and
+# only fought the user: untagging a post put it back on the next save, because
+# a re-save counts as new or "resurfaced". Existing `inbox` tags are left alone
+# — they are the user's data, and the Tags list still lists them.
+
+
+def _run_save_article_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
+    """Star matching freshly-refreshed entries into the Saved backlog and tag
+    them 'inbox' (the Lectio-native counterpart of the Instapaper rule).
+
+    Idempotent per entry: an already-starred entry is skipped, so re-refreshes
+    never re-tag something the user already filed out of the Inbox. Bounded by
+    the 15-min added cutoff and a per-run cap like the other save-out rules."""
+    if not refreshed_feed_urls:
+        return
+    try:
+        from datetime import timedelta
+        from datetime import timezone as _tz
+
+        cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
+
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            folder_ids_needed: set[int] = set()
+            for r in all_rules:
+                if r.get("enabled"):
+                    folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
+            folder_feed_map: dict[int, set[str]] = {fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed}
+
+        rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "save_article"]
+        if not rules:
+            return
+
+        saved = 0
+        now_str = datetime.now().isoformat()
+        for rule in rules:
+            try:
+                scope = str(rule.get("scope", ""))
+                scope_id = str(rule.get("scope_id") or "")
+                keyword = str(rule.get("keyword", ""))
+                is_regex = bool(rule.get("is_regex"))
+                search_in = str(rule.get("search_in") or "title")
+                with get_reader() as reader:
+                    feed_title_cache: dict[str, str] = {}
+                    for feed_url in refreshed_feed_urls:
+                        _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
+                        if not feed_in_rule_scope(scope, scope_id, feed_url, _folder_set):
+                            continue
+                        for entry in reader.get_entries(feed=feed_url):
+                            if saved >= _SAVE_ARTICLE_AUTO_PER_RUN_CAP:
+                                break
+                            added = getattr(entry, "added", None)
+                            if not added or added < cutoff:
+                                continue
+                            # Empty keyword = save every new entry in scope.
+                            if keyword and not _entry_matches_rule(entry, keyword, is_regex, search_in):
+                                continue
+                            fu = str(entry.feed_url or "")
+                            eid = str(entry.id)
+                            result = _star_entry_for_current_user(fu, eid)
+                            if not result.get("ok") or result.get("duplicate"):
+                                continue  # missing, or already in Saved
+                            saved += 1
+                            if fu not in feed_title_cache:
+                                try:
+                                    feed_title_cache[fu] = str(getattr(reader.get_feed(fu), "title", None) or fu)
+                                except Exception:
+                                    feed_title_cache[fu] = fu
+                            with get_meta_connection() as conn:
+                                _log_auto_run(
+                                    conn,
+                                    now_str,
+                                    "save_article",
+                                    scope,
+                                    scope_id,
+                                    keyword,
+                                    {
+                                        "count": 1,
+                                        "entries": [
+                                            {
+                                                "feed_url": fu,
+                                                "entry_id": eid,
+                                                "title": str(entry.title or ""),
+                                                "link": str(entry.link or ""),
+                                                "feed_title": feed_title_cache.get(fu, fu),
+                                            }
+                                        ],
+                                    },
+                                )
+            except Exception:
+                LOGGER.exception("[save-article-auto] error processing rule %s/%s", scope, keyword)
+    except Exception:
+        LOGGER.exception("[save-article-auto] error in _run_save_article_rules_after_refresh")
+
+
+# Cap a run well under the Free-tier 50/min so an automation burst never trips the
+# Quire rate limit; the sliding-window meter is also consulted before each add.
+_QUIRE_AUTO_PER_RUN_CAP = 20
+
+
+def _run_quire_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
+    """Add matching freshly-refreshed entries as tasks to the default Quire project.
+    Bounded by the 15-min cutoff, a per-run cap, the usage meter, and 429 backoff."""
+    if not refreshed_feed_urls:
+        return
+    if not is_quire_configured():
+        return
+    project_oid = quire_project_oid()
+    token = get_quire_user_token()
+    if not token:
+        return
+
+    try:
+        from datetime import timedelta
+        from datetime import timezone as _tz
+
+        cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
+
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            folder_ids_needed: set[int] = set()
+            for r in all_rules:
+                if r.get("enabled"):
+                    folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
+            folder_feed_map: dict[int, set[str]] = {fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed}
+
+        rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "quire"]
+        if not rules:
+            return
+
+        sent = 0
+        now_str = datetime.now().isoformat()
+        for rule in rules:
+            if sent >= _QUIRE_AUTO_PER_RUN_CAP:
+                break
+            try:
+                scope = str(rule.get("scope", ""))
+                scope_id = str(rule.get("scope_id") or "")
+                keyword = str(rule.get("keyword", ""))
+                is_regex = bool(rule.get("is_regex"))
+                search_in = str(rule.get("search_in") or "title")
+                with get_reader() as reader:
+                    feed_title_cache: dict[str, str] = {}
+                    for feed_url in refreshed_feed_urls:
+                        _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
+                        if not feed_in_rule_scope(scope, scope_id, feed_url, _folder_set):
+                            continue
+                        for entry in reader.get_entries(feed=feed_url):
+                            if sent >= _QUIRE_AUTO_PER_RUN_CAP:
+                                break
+                            if get_quire_usage_status()["state"] == "blocked":
+                                LOGGER.warning("[quire-auto] rate limit reached; %d added this run", sent)
+                                return
+                            added = getattr(entry, "added", None)
+                            if not added or added < cutoff:
+                                continue
+                            if keyword and not _entry_matches_rule(entry, keyword, is_regex, search_in):
+                                continue
+                            link = str(entry.link or "")
+                            if not link:
+                                continue
+                            fu = str(entry.feed_url or "")
+                            if fu not in feed_title_cache:
+                                try:
+                                    feed_title_cache[fu] = str(getattr(reader.get_feed(fu), "title", None) or fu)
+                                except Exception:
+                                    feed_title_cache[fu] = fu
+                            ok, err = _quire_add_entry(token, project_oid, str(entry.title or ""), link, feed_title_cache.get(fu, fu))
+                            if not ok:
+                                LOGGER.warning("[quire-auto] add failed: %s", err)
+                                if isinstance(err, str) and "rate limit" in err.lower():
+                                    return  # back off the whole run on 429
+                                continue
+                            sent += 1
+                            with get_meta_connection() as conn:
+                                _log_auto_run(
+                                    conn,
+                                    now_str,
+                                    "quire",
+                                    scope,
+                                    scope_id,
+                                    keyword,
+                                    {
+                                        "count": 1,
+                                        "entries": [
+                                            {
+                                                "feed_url": fu,
+                                                "entry_id": str(entry.id),
+                                                "title": str(entry.title or ""),
+                                                "link": link,
+                                                "feed_title": feed_title_cache.get(fu, fu),
+                                            }
+                                        ],
+                                    },
+                                )
+            except Exception:
+                LOGGER.exception("[quire-auto] error processing rule %s/%s", scope, keyword)
+    except Exception:
+        LOGGER.exception("[quire-auto] error in _run_quire_rules_after_refresh")
+
+
+# Each playlistItems.insert costs 50 quota units; cap a run well under the daily
+# 10k so auto-add never exhausts the quota on a burst of new uploads.
+_YT_PLAYLIST_AUTO_PER_RUN_CAP = 25
+
+
+def _apply_youtube_playlist_rules(
+    refreshed_feed_urls: set[str],
+    cutoff: datetime,
+    yt_rules: list[dict],
+    folder_feed_map: dict[int, set[str]],
+    token: str,
+    *,
+    trigger: str = "auto",
+) -> int:
+    """Match+add entries' YouTube videos to each rule's target playlist.
+
+    Shared by the after-refresh automation (``cutoff`` = the persisted
+    watermark, ``refreshed_feed_urls`` = whatever this tick refreshed) and the
+    one-off backfill script (``cutoff`` = an arbitrary historical date,
+    ``refreshed_feed_urls`` = a rule's whole scope) — the matching, dedup-guard,
+    and quota handling are identical either way. Returns videos added.
+    """
+    added_total = 0
+    now_str = datetime.now().isoformat()
+
+    for rule in yt_rules:
+        if added_total >= _YT_PLAYLIST_AUTO_PER_RUN_CAP:
+            break
+        scope = str(rule.get("scope", ""))
+        scope_id = str(rule.get("scope_id") or "")
+        keyword = str(rule.get("keyword", ""))
+        rule_uid = str(rule.get("rule_uid") or "")
+        is_regex = bool(rule.get("is_regex"))
+        search_in = str(rule.get("search_in") or "title")
+        playlist_id = str(rule.get("yt_playlist_id") or "")
+        include_shorts = bool(rule.get("yt_include_shorts"))
+        mark_read = bool(rule.get("yt_mark_read"))
+        min_secs = max(0, int(rule.get("yt_min_minutes") or 0)) * 60
+        max_secs = max(0, int(rule.get("yt_max_minutes") or 0)) * 60
+        run_entries: list[dict] = []
+        marked: list[tuple[str, str]] = []
+        quota_hit = False
+        try:
+            with get_reader() as reader:
+                feed_title_cache: dict[str, str] = {}
+                for feed_url in refreshed_feed_urls:
+                    _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
+                    in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
+                    if not in_scope:
+                        continue
+
+                    for entry in reader.get_entries(feed=feed_url):
+                        if added_total >= _YT_PLAYLIST_AUTO_PER_RUN_CAP:
+                            break
+                        added = getattr(entry, "added", None)
+                        if not added or added < cutoff:
+                            continue
+                        # Empty keyword = add every new video in scope.
+                        if keyword and not _entry_matches_rule(entry, keyword, is_regex, search_in):
+                            continue
+                        if not include_shorts and _is_youtube_short(entry):
+                            continue
+                        link = str(entry.link or "")
+                        body = "".join((c.value or "") for c in (entry.content or []))
+                        body += str(entry.summary or "")
+                        vids = youtube_embeds.video_ids_in_text(link, body)
+                        if not vids:
+                            continue
+                        fu = str(entry.feed_url or "")
+                        eid = str(entry.id)
+                        entry_added_any = False
+                        for vid in vids:
+                            if added_total >= _YT_PLAYLIST_AUTO_PER_RUN_CAP:
+                                break
+                            # Duration filter (minutes; 0 = no limit). The video's
+                            # length comes from the same cache that powers the
+                            # [duration] title prefix; an unknown duration is skipped
+                            # this run (it's retried once the duration is cached).
+                            if min_secs or max_secs:
+                                dur = youtube_duration_service.get_cached_duration(vid)[0]
+                                if dur is None:
+                                    continue
+                                if min_secs and dur < min_secs:
+                                    continue
+                                if max_secs and dur > max_secs:
+                                    continue
+                            # Dedup guard: claim the (rule, entry, video) row first;
+                            # rowcount 0 means we've added it before — skip. Written
+                            # against BOTH identities (the legacy scope/scope_id/
+                            # keyword PK and the rule_uid partial unique index, when
+                            # rule_uid is set) — OR IGNORE backs off on a conflict
+                            # with either, so a rule edited since its last add still
+                            # dedupes correctly instead of re-submitting.
+                            with get_meta_connection() as conn:
+                                cur = conn.execute(
+                                    "INSERT OR IGNORE INTO youtube_playlist_added"
+                                    " (scope, scope_id, keyword, entry_id, video_id, added_at, rule_uid)"
+                                    " VALUES (?,?,?,?,?,?,?)",
+                                    (scope, scope_id, keyword, eid, vid, now_str, rule_uid),
+                                )
+                                claimed = cur.rowcount > 0
+                            if not claimed:
+                                continue
+                            try:
+                                youtube_oauth_service.add_video_to_playlist(token, playlist_id, vid)
+                                added_total += 1
+                                entry_added_any = True
+                            except youtube_oauth_service.QuotaExceeded:
+                                # Release the claim so it retries once quota resets,
+                                # and stop the whole run.
+                                with get_meta_connection() as conn:
+                                    conn.execute(
+                                        "DELETE FROM youtube_playlist_added"
+                                        " WHERE scope=? AND scope_id=? AND keyword=? AND entry_id=? AND video_id=?",
+                                        (scope, scope_id, keyword, eid, vid),
+                                    )
+                                mark_yt_quota_exhausted()
+                                LOGGER.warning("[yt-playlist-auto] quota exceeded; %d added this run", added_total)
+                                raise
+                            except Exception as exc:  # noqa: BLE001
+                                with get_meta_connection() as conn:
+                                    conn.execute(
+                                        "DELETE FROM youtube_playlist_added"
+                                        " WHERE scope=? AND scope_id=? AND keyword=? AND entry_id=? AND video_id=?",
+                                        (scope, scope_id, keyword, eid, vid),
+                                    )
+                                LOGGER.warning("[yt-playlist-auto] add failed for %s: %s", vid, exc)
+                        if entry_added_any:
+                            if fu not in feed_title_cache:
+                                try:
+                                    feed_title_cache[fu] = str(getattr(reader.get_feed(fu), "title", None) or fu)
+                                except Exception:
+                                    feed_title_cache[fu] = fu
+                            run_entries.append(
+                                {
+                                    "feed_url": fu,
+                                    "entry_id": eid,
+                                    "title": str(entry.title or ""),
+                                    "link": link,
+                                    "feed_title": feed_title_cache.get(fu, fu),
+                                }
+                            )
+                            if mark_read:
+                                reader.mark_entry_as_read((fu, eid))
+                                marked.append((fu, eid))
+        except youtube_oauth_service.QuotaExceeded:
+            quota_hit = True
+        except Exception:
+            LOGGER.exception("[yt-playlist-auto] error processing rule %s/%s", scope, keyword)
+
+        if marked:
+            when = datetime.now().isoformat()
+            with get_meta_connection() as conn:
+                conn.executemany(
+                    "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
+                    " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
+                    [(fu, eid, when) for fu, eid in marked],
+                )
+            _bump_unread_counts_generation()
+        if run_entries:
+            with get_meta_connection() as conn:
+                _log_auto_run(
+                    conn,
+                    now_str,
+                    "youtube_playlist",
+                    scope,
+                    scope_id,
+                    keyword,
+                    {
+                        "count": len(run_entries),
+                        "entries": run_entries,
+                    },
+                    trigger=trigger,
+                )
+        if quota_hit:
+            # Quota is exhausted for the day (units are cumulative across
+            # rules) — trying the next rule would just fail the same way.
+            LOGGER.warning("[yt-playlist-auto] quota exceeded; stopping remaining rules this run (%d added)", added_total)
+            break
+
+    return added_total
+
+
+def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
+    """Add newly-refreshed matching entries' YouTube videos to a target playlist.
+
+    A YouTube video can be embedded in any feed, so this is a general rule (any
+    feed/folder), and one entry can carry several videos. Extracts all video ids
+    from the entry link + content, inserts each into the rule's playlist, and
+    optionally marks the post read. Non-idempotent inserts are guarded by the
+    youtube_playlist_added table so a video is never added twice.
+    """
+    if not refreshed_feed_urls:
+        return
+
+    try:
+        from datetime import timedelta
+        from datetime import timezone as _tz
+
+        # Cutoff is a persisted watermark — "everything added since the last
+        # time this ran" — not a fixed "now minus N minutes" window. A fixed
+        # window silently and PERMANENTLY drops any entry ingested earlier
+        # than the window relative to whenever this function happens to run:
+        # it's called once after a whole scheduled refresh batch completes,
+        # and a large batch (hundreds of feeds, paced) can easily take longer
+        # than a short fixed window — the entry's `added` timestamp never
+        # moves, so a missed entry is missed forever, not retried next run.
+        # Confirmed live 2026-08-28: only ~1-in-7 of one channel's qualifying
+        # videos over a week had actually been added, the rest silently lost
+        # to exactly this gap. Captured BEFORE the loop (not after) so the
+        # next run's watermark can't itself open a gap while this run works.
+        run_started_at = datetime.now(_tz.utc)
+        with get_meta_connection() as conn:
+            last_check_raw = get_setting(conn, SETTING_YT_PLAYLIST_AUTO_LAST_CHECK)
+        cutoff = None
+        if last_check_raw:
+            try:
+                cutoff = datetime.fromisoformat(last_check_raw)
+                if cutoff.tzinfo is None:
+                    cutoff = cutoff.replace(tzinfo=_tz.utc)
+            except ValueError, TypeError:
+                cutoff = None
+        if cutoff is None:
+            # First run ever (or a corrupt watermark) — the original fixed
+            # window, so this doesn't suddenly bulk-add a backlog of every
+            # matching video ever ingested.
+            cutoff = run_started_at - timedelta(minutes=15)
+
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            yt_rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "youtube_playlist" and r.get("yt_playlist_id")]
+            if not yt_rules:
+                return
+            folder_feed_map: dict[int, set[str]] = {}
+            for r in yt_rules:
+                for fid in rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or "")):
+                    if fid not in folder_feed_map:
+                        folder_feed_map[fid] = get_folder_feed_urls(conn, fid)
+
+        token = get_youtube_oauth_token()
+        if not token:
+            LOGGER.warning("[yt-playlist-auto] %d rule(s) enabled but no YouTube token — reconnect needed", len(yt_rules))
+            return
+
+        _apply_youtube_playlist_rules(refreshed_feed_urls, cutoff, yt_rules, folder_feed_map, token)
+
+        # Advance the watermark to when THIS run started, not to "now" —
+        # captured up front so a slow run can't itself open a gap. A per-rule
+        # quota exhaustion doesn't affect this: entries that failed to add
+        # already had their dedup claim rolled back above, so they retry via
+        # the dedup guard regardless of where the time watermark sits next.
+        with get_meta_connection() as conn:
+            set_setting(conn, SETTING_YT_PLAYLIST_AUTO_LAST_CHECK, run_started_at.isoformat())
+    except Exception:
+        LOGGER.exception("[yt-playlist-auto] error in _run_youtube_playlist_rules_after_refresh")

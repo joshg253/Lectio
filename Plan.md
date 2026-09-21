@@ -158,13 +158,28 @@ compat APIs; treat as its own carefully-tested project, not part of a mechanical
      arg). Retargeted `test_dedup_entries.py`'s 4 `monkeypatch.setattr(main, "get_reader", …)` calls
      to `automation_rules.get_reader` — same copied-reference trap as Stage B. main.py: 38,177 →
      37,717 lines.
-   - **D — not started.** Move the six `_after_refresh` dispatchers + `_apply_youtube_playlist_rules`
-     (~854 lines, the bulk) as one atomic delete+import — `email_article` (immediate) and `webhook`
+   - **D — done (2026-09-20).** Moved the six `_after_refresh` dispatchers + `_apply_youtube_playlist_rules`
+     (~844 lines, the bulk) as one atomic delete+import — `email_article` (immediate) and `webhook`
      have no idempotency guard at all (only the 15-min cutoff), so a half-moved stub left "temporarily"
-     risks duplicate sends/POSTs; `quire` likewise (rate-limited but not deduped); `instapaper`/
-     `save_article`/`youtube_playlist` are all safe (URL/duplicate/INSERT-OR-IGNORE guarded).
-     Retarget instapaper/quire/youtube credential-getter patches and `save_article`'s
-     `monkeypatch.setattr(main, "datetime", …)` time-travel patch.
+     would have risked duplicate sends/POSTs; `quire` likewise (rate-limited but not deduped);
+     `instapaper`/`save_article`/`youtube_playlist` are all safe (URL/duplicate/INSERT-OR-IGNORE
+     guarded). `_flush_email_batch_for_rule`, `_instapaper_save_url`, `_quire_add_entry`,
+     `_star_entry_for_current_user`, `_is_youtube_short`, and the various credential/setting getters
+     all stayed in main.py and are imported into the module the same way; `send_article_email` and
+     the webhook/`youtube_embeds`/`youtube_oauth` helpers came straight from their `services.*`
+     modules instead, since main.py already imported them that way. `_entry_matches_rule` and
+     `_apply_youtube_playlist_rules` ended up with no caller left inside main.py itself (only
+     `scripts/backfill_missed_youtube_playlist_adds.py` and tests reach them via `main.<name>`), so
+     their import-back lines carry `# noqa: F401`. Retargeted 9 monkeypatches across 5 test files —
+     `test_email_rule_automation.py`/`test_webhook_rule_automation.py` (`send_article_email`/
+     `send_webhook`, both files' own characterization tests from Stage A), `test_instapaper_rule.py`
+     (`_instapaper_save_url`, 3 sites), `test_quire_rule.py` (`get_quire_user_token`/
+     `get_quire_usage_status`), `test_youtube_playlist_rules.py` (`get_youtube_oauth_token`, 2 sites
+     — every other test in that file was failing on the shared fixture, not just the 2 that looked
+     related), and `test_save_article_automation.py`'s `monkeypatch.setattr(main, "datetime", …)`
+     time-travel patch — all the same copied-reference trap as prior stages, now also hitting
+     `automation_rules`'s own `from datetime import datetime` binding. main.py: 37,717 → 36,873
+     lines; `services/automation_rules.py`: 1,466 lines.
    - **E — not started.** Move `_run_automation_after_refresh` itself last (most main-resident call
      sites: scheduler tick, WebSub fan-out, bg-refresh thread, 3 routes) — do it after everything
      else is proven so only one function's wiring is unverified at a time. Retarget

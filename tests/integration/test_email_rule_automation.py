@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 import main
-from services import tenancy
+from services import automation_rules, tenancy
 
 FEED = "https://example.test/feed"
 
@@ -67,7 +67,7 @@ def test_immediate_delivery_sends_matching_entry_only(configured, monkeypatch):
         sent.append(title)
         return True, None
 
-    monkeypatch.setattr(main, "send_article_email", fake_send)
+    monkeypatch.setattr(automation_rules, "send_article_email", fake_send)
     _add_rule()
     with main.get_reader() as reader:
         _seed(reader)
@@ -78,7 +78,7 @@ def test_immediate_delivery_sends_matching_entry_only(configured, monkeypatch):
 
 def test_no_rules_sends_nothing(configured, monkeypatch):
     calls = []
-    monkeypatch.setattr(main, "send_article_email", lambda *a, **kw: calls.append(1) or (True, None))
+    monkeypatch.setattr(automation_rules, "send_article_email", lambda *a, **kw: calls.append(1) or (True, None))
     with main.get_reader() as reader:
         _seed(reader)
     main._run_email_rules_after_refresh({FEED})
@@ -87,7 +87,7 @@ def test_no_rules_sends_nothing(configured, monkeypatch):
 
 def test_batch_delivery_queues_instead_of_sending(configured, monkeypatch):
     calls = []
-    monkeypatch.setattr(main, "send_article_email", lambda *a, **kw: calls.append(1) or (True, None))
+    monkeypatch.setattr(automation_rules, "send_article_email", lambda *a, **kw: calls.append(1) or (True, None))
     _add_rule(delivery="batch", batch_count=10)
     with main.get_reader() as reader:
         _seed(reader)
@@ -101,7 +101,7 @@ def test_batch_delivery_queues_instead_of_sending(configured, monkeypatch):
 
 def test_batch_flushes_immediately_once_threshold_reached(configured, monkeypatch):
     sent = []
-    monkeypatch.setattr(main, "send_article_email", lambda *a, **kw: sent.append(1) or (True, None))
+    monkeypatch.setattr(automation_rules, "send_article_email", lambda *a, **kw: sent.append(1) or (True, None))
     monkeypatch.setattr(main, "send_digest_email", lambda *a, **kw: sent.append(1) or (True, None))
     _add_rule(delivery="batch", batch_count=1)
     with main.get_reader() as reader:
@@ -118,7 +118,7 @@ def test_entries_older_than_cutoff_are_ignored(configured, monkeypatch):
     from datetime import datetime, timedelta
 
     sent = []
-    monkeypatch.setattr(main, "send_article_email", lambda *a, **kw: sent.append(1) or (True, None))
+    monkeypatch.setattr(automation_rules, "send_article_email", lambda *a, **kw: sent.append(1) or (True, None))
     _add_rule()
     with main.get_reader() as reader:
         _seed(reader)
@@ -130,13 +130,13 @@ def test_entries_older_than_cutoff_are_ignored(configured, monkeypatch):
         def now(cls, tz=None):
             return real_now(tz) + timedelta(hours=2)
 
-    monkeypatch.setattr(main, "datetime", _FakeDateTime)
+    monkeypatch.setattr(automation_rules, "datetime", _FakeDateTime)
     main._run_email_rules_after_refresh({FEED})
     assert sent == []
 
 
 def test_send_failure_does_not_log_a_run(configured, monkeypatch):
-    monkeypatch.setattr(main, "send_article_email", lambda *a, **kw: (False, "resend 500"))
+    monkeypatch.setattr(automation_rules, "send_article_email", lambda *a, **kw: (False, "resend 500"))
     _add_rule()
     with main.get_reader() as reader:
         _seed(reader)
@@ -151,7 +151,7 @@ def test_email_not_configured_short_circuits(configured, monkeypatch):
     with main.get_meta_connection() as conn:
         main.set_setting(conn, main.SETTING_RESEND_API_KEY, "")
     calls = []
-    monkeypatch.setattr(main, "send_article_email", lambda *a, **kw: calls.append(1) or (True, None))
+    monkeypatch.setattr(automation_rules, "send_article_email", lambda *a, **kw: calls.append(1) or (True, None))
     _add_rule()
     with main.get_reader() as reader:
         _seed(reader)
