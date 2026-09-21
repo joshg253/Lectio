@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 import main
 import routes.saved
+import routes.settings
 from services import tenancy
 
 
@@ -48,7 +49,7 @@ def test_global_note_get_returns_stored_value(tenant):
         main.set_setting(conn, main.GLOBAL_NOTE_SETTING_KEY, "remember the milk")
 
     app = FastAPI()
-    app.get("/settings/global-note")(main.get_global_note_setting)
+    app.get("/settings/global-note")(routes.settings.get_global_note_setting)
     with TestClient(app) as client:
         r = client.get("/settings/global-note")
     assert r.status_code == 200
@@ -57,7 +58,7 @@ def test_global_note_get_returns_stored_value(tenant):
 
 def test_global_note_get_empty_when_unset(tenant):
     app = FastAPI()
-    app.get("/settings/global-note")(main.get_global_note_setting)
+    app.get("/settings/global-note")(routes.settings.get_global_note_setting)
     with TestClient(app) as client:
         r = client.get("/settings/global-note")
     assert r.json()["note_text"] == ""

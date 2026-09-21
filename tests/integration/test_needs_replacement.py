@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+from routes import settings as settings_routes
 from services import tenancy
 
 FEED = "https://dead.example/feed"
@@ -35,8 +36,8 @@ def tenant(tmp_path):
 
 def _app():
     app = FastAPI()
-    app.post("/settings/problematic-feeds/mark-dead")(main.mark_feed_needs_replacement)
-    app.post("/settings/problematic-feeds/unmark-dead")(main.unmark_feed_needs_replacement)
+    app.post("/settings/problematic-feeds/mark-dead")(settings_routes.mark_feed_needs_replacement)
+    app.post("/settings/problematic-feeds/unmark-dead")(settings_routes.unmark_feed_needs_replacement)
     return app
 
 

@@ -187,7 +187,26 @@ ordered safest → riskiest:
    `saved-articles-epic`/`saved-dedup-workflow` history), including one case where a helper itself
    moved (`_check_saved_url`) so only `routes.saved` needed patching, not `main`. Full
    `make test`/`lint`/`types` pass (4,192 tests).
-7. `routes/settings.py` — `/settings/*` (~11).
+7. **Done (2026-09-21).** `routes/settings.py` — `/settings/*`, 14 routes (Plan.md's "~11" was
+   low). main.py: 31,965 → 31,247 lines; new file 941 lines. Two
+   clusters, exactly where scoped, no third outlier this time (grepped literal path strings across
+   all of main.py to confirm). `/tree/folder-feeds/{folder_id}` sits sandwiched inside the second
+   cluster but is a sidebar-fragment route, not settings — confirmed left alone. Only one
+   route-adjacent helper existed (`_keep_existing_sensitive`), stayed in main.py per the
+   tested-directly precedent; everything else these 14 routes touch (the whole settings-getter
+   family, `SETTING_*` constants, `FeedInFolder`, etc.) is pre-existing shared infrastructure,
+   confirmed via the three-way `routes/*.py`/`scripts/*.py`/`tests/` grep Stage 6 established as
+   the real bar — none of it moved. No `services.automation_rules` ordering constraint. 3 test
+   files retargeted, none of them via the usual `monkeypatch.setattr(main,` grep — this stage's
+   variant was tests registering a moved handler by name (`main.<handler>`) onto a bare test
+   `FastAPI()` app, caught by `make types`/`make test` failures rather than a grep pattern; one test
+   was reading main.py's raw source text as a live fallback and got rewritten to
+   `inspect.getsource(routes.settings.save_all_settings)`, arguably more correct than before.
+   **Process incident, not a code issue**: the agent ran `rm -rf /tmp/*` by hand while chasing a
+   test issue instead of using `make test`'s own `clear-scratch` step — no project files were hit,
+   but `/tmp` is a shared host-wide tmpfs, so this was flagged and a standing feedback note added
+   (`feedback-subagent-no-manual-tmp-clear` in project memory) to brief every future stage against
+   it explicitly. Full `make test`/`lint`/`types` pass (4,192 tests).
 8. `routes/feeds.py` — `/feeds*`, `/folders*`, `/tree/folder-feeds/*`, `/scraped-feeds*`,
    `/api/folders`, `/api/folder-feeds` (~61) — biggest single cluster; scope its own A-E sub-stages
    the way the integrations cluster did rather than one move.
