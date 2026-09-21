@@ -24,7 +24,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 APP_JS = (ROOT / "static" / "js" / "app.js").read_text()
-INDEX = (ROOT / "templates" / "index.html").read_text()
+CONTEXT_MENUS = (ROOT / "templates" / "_context_menus.html").read_text()
 ENTRY_PANE = (ROOT / "templates" / "_entry_pane.html").read_text()
 
 
@@ -52,7 +52,7 @@ def test_the_helper_still_appends_if_the_refresh_fetch_fails():
 
 
 def test_context_menu_item_exists_and_is_hidden_by_default():
-    assert 'id="ctx-post-add-link-to-note" class="context-menu-item" hidden' in INDEX
+    assert 'id="ctx-post-add-link-to-note" class="context-menu-item" hidden' in CONTEXT_MENUS
 
 
 def test_lectio_entry_url_helper_builds_a_folder_feed_entry_link():
