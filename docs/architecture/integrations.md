@@ -5,7 +5,7 @@ Per-user OAuth destinations, quotas and the automation that drives them.
 > Split out of `tenancy.md`'s security list on 2026-08-13 — these are
 > integration concerns, not security posture.
 
-> Plan.md's main.py/index.html breakup (2026-09-19/20, Stages A-E) moved every
+> Plan.md's main.py/index.html breakup (2026-09-19/20, Step 1, Stages A-E) moved every
 > integration route — OAuth connect/callback/disconnect, post-connection
 > actions (playlists, boards/pin, submit, watchlist sync), and the
 > Miniflux/FreshRSS/TT-RSS/Inoreader importers — out of main.py into
@@ -18,6 +18,19 @@ Per-user OAuth destinations, quotas and the automation that drives them.
 > resolves because the include happens after those names are defined; see
 > the comment at the bottom of main.py and `routes/__init__.py`'s docstring
 > for the import-order mechanics.
+
+> The same breakup's Step 2 (2026-09-20, Stages A-E) moved the post-refresh
+> automation pipeline this doc keeps referencing below —
+> `_run_automation_after_refresh`, the six `_run_*_rules_after_refresh`
+> dispatchers (`email`/`webhook`/`instapaper`/`save_article`/`quire`/
+> `youtube_playlist`), and the three "run now" rule executors — out of
+> main.py into `services/automation_rules.py`, reached the same
+> `from main import ...` way as the Step 1 modules. Every function this doc
+> names below by its old bare name (e.g. `_run_quire_rules_after_refresh`,
+> `_run_automation_after_refresh`) now lives there; main.py still calls
+> `_run_automation_after_refresh` (the scheduler tick, WebSub fan-out, the
+> bg-refresh thread, and 3 refresh routes all still call it directly) via the
+> same bottom-of-file import-back.
 
 ## Per-user integrations
 

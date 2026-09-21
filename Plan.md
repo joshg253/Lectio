@@ -11,8 +11,9 @@ Within a tier, related items are clustered under a bold sub-heading. Two watch-l
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
 Tiers 1 through 3 are empty. The main.py/index.html breakup's Step 1 (top of Tier 4, the
-Integration routes cluster) is done — Stages A-E all shipped 2026-09-19/20. Steps 2-7 of that
-breakup are unscoped follow-on work, not started.
+Integration routes cluster) and Step 2 (post-refresh automation pipeline, its own A-E sub-stages)
+are both done — Step 1 shipped 2026-09-19/20, Step 2 shipped 2026-09-20. Steps 3-8 of the breakup
+are unscoped follow-on work, not started.
 
 ## Tier 1 — actively impeding unread-clearing
 
@@ -30,12 +31,13 @@ Empty.
 
 ### main.py / index.html breakup — extraction map
 
-`main.py` was 40,474 lines when this started (2026-09-19), now 38,218 after Step 1 (Stages A-E,
-below) moved the whole Integration routes cluster — ~44 routes plus their workers — into
-`routes/integrations_*.py` and two new services modules. `static/js/app.js` is 20,042 lines;
-`index.html` is 2,305 lines — untouched by this round. CLAUDE.md calls for a routes/services/
-storage split main.py has only partly grown into. Not a same-session change — needs incremental
-extraction with tests between steps; Steps 2-7 below are unscoped.
+`main.py` was 40,474 lines when this started (2026-09-19), now 36,737 after Step 1 (Stages A-E)
+moved the whole Integration routes cluster — ~44 routes plus their workers — into
+`routes/integrations_*.py` and two new services modules, and Step 2 (Stages A-E) moved the
+post-refresh automation pipeline into a third new module, `services/automation_rules.py`.
+`static/js/app.js` is 20,042 lines; `index.html` is 2,305 lines — untouched by this round. CLAUDE.md
+calls for a routes/services/storage split main.py has only partly grown into. Not a same-session
+change — needs incremental extraction with tests between steps; Steps 3-8 below are unscoped.
 
 **Already done, organically, without anyone treating it as "the breakup project":** `index.html`'s
 modal extraction (7 `{% include %}`s now — `_tree_folder_feeds.html`, `_entry_pane.html`,
@@ -117,9 +119,93 @@ compat APIs; treat as its own carefully-tested project, not part of a mechanical
      defaults moved out of main.py lost its `B008` exemption in the process (`pyproject.toml`
      scoped that to `main.py` only) — extended to `routes/*.py` too, since more stages will hit it.
 2. Post-refresh automation pipeline (`_run_automation_after_refresh` + the six
-   `_run_*_rules_after_refresh` functions, main.py:8921–9962) → `services/automation_rules.py`. The
-   manual "run now" triggers (`_run_now_dedup`/`_run_now_pattern`/`_run_tag_filter`, ~7811–9109)
-   are natural siblings, worth folding in.
+   `_run_*_rules_after_refresh` functions, plus the sibling "run now" triggers `_run_now_dedup`/
+   `_run_now_pattern`/`_run_tag_filter`) → `services/automation_rules.py`, ~1,510 lines total.
+   Scoped into its own A-E sub-stages, same reasoning as Step 1:
+   - **A — done (2026-09-20).** Zero moves. Added `_bump_unread_counts_generation()` (main.py, next
+     to `invalidate_unread_counts_cache`) and rewrote every in-scope bare
+     `global _unread_counts_generation; … += 1` site to call it instead — the landmine here is
+     landmine-shaped but silent: a moved function that keeps `global _unread_counts_generation`
+     creates a *second* counter in the new module with no ImportError, just unread badges that
+     stop invalidating after dedup/mark-read automation. Also added characterization tests for
+     `_run_email_rules_after_refresh` and `_run_webhook_rules_after_refresh`
+     (`tests/integration/test_email_rule_automation.py`, `test_webhook_rule_automation.py`) — neither
+     had any fire-path coverage before this, despite doing real external I/O with no idempotency
+     guard beyond the 15-minute `added` cutoff.
+   - **B — done (2026-09-20).** Moved 3 leaf helpers (`_log_auto_run`, `_get_entry_excerpt`,
+     `_entry_matches_rule`) into the new `services/automation_rules.py`; left `_is_local_dev_feed`
+     behind (belongs to `refresh`, not automation). Wired the bottom-of-file import-back
+     (`from services.automation_rules import …`, same pattern as `services/migration_common.py`) so
+     `toggle_feed_tag_filter`, `_flush_email_batch_for_rule`, and `_run_on_star_destinations` (all
+     staying in main) keep resolving them, and extended `routes/__init__.py`'s import-order docstring
+     to name the new module. Retargeted `test_keyword_matcher.py`'s
+     `test_dry_run_run_now_and_live_matching_share_one_matcher`: `_entry_matches_rule` copied
+     `build_keyword_matcher` into its own module at import time, so `monkeypatch.setattr(main,
+     "build_keyword_matcher", spy)` alone no longer reaches it — needed a second
+     `monkeypatch.setattr(automation_rules, "build_keyword_matcher", spy)` alongside it. main.py:
+     38,218 → 38,177 lines.
+   - **C — done (2026-09-20).** Moved the 3 "run now" primitives (`_run_now_dedup`, `_run_now_pattern`,
+     `_run_tag_filter`, ~460 lines) — no external side effects (local mark-read only), so a botched
+     transition here was cheaply recoverable, done before D's external-I/O block. Left
+     `parse_tag_filter_spec`, `author_filter_token`, `get_feed_tag_filter_rule`, and
+     `toggle_feed_tag_filter` in main.py (the last two are route-side chip machinery, and
+     `toggle_feed_tag_filter` is one of the still-in-main callers the import-back serves). Extended
+     the bottom-of-file import-back and `services/automation_rules.py`'s own `from main import ...`
+     block with the dedup/pattern/scope primitives all three functions need
+     (`_resolve_dedup_feed_urls`, `_safe_dedup_collect`, `_safe_dedup_find_pairs`, `dedup_order_key`,
+     `entry_url_slug`, `normalize_entry_title_for_dedupe`, `title_word_similarity`,
+     `entry_effective_date`, `parse_folders_scope_id`, `resolve_rule_feed_urls`, `feed_display_title`,
+     `normalize_tag_value`, plus `_DEDUP_MIN_TITLE_WORDS` for `_run_now_dedup`'s import-time default
+     arg). Retargeted `test_dedup_entries.py`'s 4 `monkeypatch.setattr(main, "get_reader", …)` calls
+     to `automation_rules.get_reader` — same copied-reference trap as Stage B. main.py: 38,177 →
+     37,717 lines.
+   - **D — done (2026-09-20).** Moved the six `_after_refresh` dispatchers + `_apply_youtube_playlist_rules`
+     (~844 lines, the bulk) as one atomic delete+import — `email_article` (immediate) and `webhook`
+     have no idempotency guard at all (only the 15-min cutoff), so a half-moved stub left "temporarily"
+     would have risked duplicate sends/POSTs; `quire` likewise (rate-limited but not deduped);
+     `instapaper`/`save_article`/`youtube_playlist` are all safe (URL/duplicate/INSERT-OR-IGNORE
+     guarded). `_flush_email_batch_for_rule`, `_instapaper_save_url`, `_quire_add_entry`,
+     `_star_entry_for_current_user`, `_is_youtube_short`, and the various credential/setting getters
+     all stayed in main.py and are imported into the module the same way; `send_article_email` and
+     the webhook/`youtube_embeds`/`youtube_oauth` helpers came straight from their `services.*`
+     modules instead, since main.py already imported them that way. `_entry_matches_rule` and
+     `_apply_youtube_playlist_rules` ended up with no caller left inside main.py itself (only
+     `scripts/backfill_missed_youtube_playlist_adds.py` and tests reach them via `main.<name>`), so
+     their import-back lines carry `# noqa: F401`. Retargeted 9 monkeypatches across 5 test files —
+     `test_email_rule_automation.py`/`test_webhook_rule_automation.py` (`send_article_email`/
+     `send_webhook`, both files' own characterization tests from Stage A), `test_instapaper_rule.py`
+     (`_instapaper_save_url`, 3 sites), `test_quire_rule.py` (`get_quire_user_token`/
+     `get_quire_usage_status`), `test_youtube_playlist_rules.py` (`get_youtube_oauth_token`, 2 sites
+     — every other test in that file was failing on the shared fixture, not just the 2 that looked
+     related), and `test_save_article_automation.py`'s `monkeypatch.setattr(main, "datetime", …)`
+     time-travel patch — all the same copied-reference trap as prior stages, now also hitting
+     `automation_rules`'s own `from datetime import datetime` binding. main.py: 37,717 → 36,873
+     lines; `services/automation_rules.py`: 1,466 lines.
+   - **E — done (2026-09-20), Step 2 closed out.** Moved `_run_automation_after_refresh` itself last
+     (~140 lines) — the function with the most main-resident call sites (scheduler tick, WebSub
+     fan-out, bg-refresh thread, 3 refresh routes), done after everything else was proven so only one
+     function's wiring was ever unverified at a time. Needed 3 more main-resident imports the earlier
+     stages hadn't required yet: the three hide-* hygiene appliers (`_apply_hide_shorts`,
+     `_apply_hide_paywalled`, `_apply_hide_members_only`), the two guid-churn suppressors
+     (`_suppress_guid_churn`, `_cleanup_intra_feed_slug_dupes`), `parse_feeds_scope_id`, and
+     `_DEDUP_VALID_MATCH_METHODS`/`_dedup_fuzzy_threshold`/`_clamp_min_title_words`. With this function
+     gone, main.py no longer calls `_run_email/webhook/instapaper/save_article/quire/
+     youtube_playlist_rules_after_refresh` directly at all (their only caller was the function that
+     just moved), so those six import-back lines also picked up `# noqa: F401` — kept solely so
+     `main.<name>` still resolves for tests. Retargeted `test_dedup_fuzzy_threshold.py`'s two
+     `monkeypatch.setattr(main, "_run_now_dedup", …)` calls inside `_run_automation_after_refresh`
+     tests to `automation_rules._run_now_dedup` — same copied-reference trap, but this time because
+     the *caller* moved into the same module as the *patched name*, not the other way around, so a
+     call that used to cross from main into main now resolves entirely inside `automation_rules` and
+     never touches `main`'s namespace. The sibling `test_run_now_honors_the_saved_percent`, which
+     patches the same name but drives it through the still-in-main `rules_run_now_route`, needed no
+     change — proof the two copied-reference failure directions are genuinely different, not the same
+     bug twice. main.py: 36,873 → 36,737 lines; `services/automation_rules.py`: 1,618 lines. **Step 2
+     of the main.py/index.html breakup is now complete** — main.py: 38,218 → 36,737 lines (1,481
+     removed) since Step 1 finished.
+   Every stage's new/updated test must sort `import main` before `from services import
+   automation_rules` (same circular-import rule as `routes/__init__.py`'s docstring documents for
+   `migration_common`).
 3. The 4 remaining context menus → templates.
 4. Dedup engine → `services/dedup.py` — gate on "Consolidate the dedup routes" (Code health)
    getting characterization tests first.
@@ -127,6 +213,11 @@ compat APIs; treat as its own carefully-tested project, not part of a mechanical
    as shared singletons (worth a `state.py` module first).
 6. `ensure_meta_schema` (main.py:3708, ~1,328 lines) — low priority, do last.
 7. Shared rendering core — its own project, not part of the mechanical split.
+8. Refresh-hygiene cluster (`_is_youtube_short`, `_apply_hide_shorts`, `_apply_hide_paywalled`,
+   `_apply_hide_members_only`, `_suppress_guid_churn`, `_cleanup_intra_feed_slug_dupes`, etc.,
+   main.py ~8427–8924) → a future `services/feed_hygiene.py`. Deferred out of Step 2 because it has
+   render-path and route callers unrelated to automation, and two of its functions overlap Step 4's
+   planned dedup service.
 
 ### Page-fetch escalation ladder — follow-ups
 

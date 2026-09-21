@@ -12,7 +12,7 @@ import datetime as dt
 import pytest
 
 import main
-from services import tenancy
+from services import automation_rules, tenancy
 from services import youtube_oauth as yt
 
 FEED = "https://www.youtube.com/feeds/videos.xml?channel_id=UCABC"
@@ -35,7 +35,7 @@ def env(tmp_path, monkeypatch):
     )
     main.ensure_meta_schema()
     # A connected account by default; tests can override.
-    monkeypatch.setattr(main, "get_youtube_oauth_token", lambda: "tok")
+    monkeypatch.setattr(automation_rules, "get_youtube_oauth_token", lambda: "tok")
     # The app-settings cache is a process-wide dict keyed by user id, so a
     # setting written in one test (e.g. the auto-add watermark) leaks into
     # the next test's fresh tmp_path DB otherwise.
@@ -348,7 +348,7 @@ def test_shorts_included_when_opted_in(env, monkeypatch):
 
 
 def test_not_connected_is_noop(env, monkeypatch):
-    monkeypatch.setattr(main, "get_youtube_oauth_token", lambda: "")
+    monkeypatch.setattr(automation_rules, "get_youtube_oauth_token", lambda: "")
     called = []
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda *a: called.append(a))
     _add_entry()

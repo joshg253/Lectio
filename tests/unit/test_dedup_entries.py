@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock
 
 import main
+from services import automation_rules
 
 
 def _make_conn():
@@ -64,7 +65,7 @@ def test_slug_dedup_returns_entries_list(monkeypatch):
     e1 = _fake_entry("https://feed1.example.com/rss", "id1", "https://example.com/article/some-post", "Some Post", "Feed 1")
     e2 = _fake_entry("https://feed2.example.com/rss", "id2", "https://example.com/article/some-post", "Some Post", "Feed 2")
 
-    monkeypatch.setattr(main, "get_reader", lambda: _fake_reader_ctx([e1, e2]))
+    monkeypatch.setattr(automation_rules, "get_reader", lambda: _fake_reader_ctx([e1, e2]))
 
     result = main._run_now_dedup(
         conn=conn,
@@ -99,7 +100,7 @@ def test_safe_dedup_returns_entries_list(monkeypatch):
     e1 = _fake_entry("https://feed1.example.com/rss", "id1", "https://example.com/p/same-slug")
     e2 = _fake_entry("https://feed2.example.com/rss", "id2", "https://example.com/p/same-slug")
 
-    monkeypatch.setattr(main, "get_reader", lambda: _fake_reader_ctx([e1, e2]))
+    monkeypatch.setattr(automation_rules, "get_reader", lambda: _fake_reader_ctx([e1, e2]))
 
     result = main._run_now_dedup(
         conn=conn,
@@ -134,7 +135,7 @@ def test_slug_dedup_returns_kept_list(monkeypatch):
 
     e1 = _fake_entry("https://feed1.example.com/rss", "id1", "https://example.com/article/some-post", "Some Post", "Feed 1")
     e2 = _fake_entry("https://feed2.example.com/rss", "id2", "https://example.com/article/some-post", "Some Post", "Feed 2")
-    monkeypatch.setattr(main, "get_reader", lambda: _fake_reader_ctx_per_feed([e1, e2]))
+    monkeypatch.setattr(automation_rules, "get_reader", lambda: _fake_reader_ctx_per_feed([e1, e2]))
 
     result = main._run_now_dedup(conn=conn, scope="folder", scope_id="1", match_method="slug", window_hours=168)
 
@@ -167,7 +168,7 @@ def test_safe_dedup_returns_kept_list(monkeypatch):
     e2 = _fake_entry("https://feed2.example.com/rss", "id2", "https://example.org/p/identical-long-slug", "A Story With Enough Words Here")
     e1.summary = body
     e2.summary = body
-    monkeypatch.setattr(main, "get_reader", lambda: _fake_reader_ctx_per_feed([e1, e2]))
+    monkeypatch.setattr(automation_rules, "get_reader", lambda: _fake_reader_ctx_per_feed([e1, e2]))
 
     result = main._run_now_dedup(conn=conn, scope="folder", scope_id="1", match_method="safe", window_hours=168)
 

@@ -7,7 +7,7 @@ import datetime as dt
 import pytest
 
 import main
-from services import tenancy
+from services import automation_rules, tenancy
 
 FEED = "https://example.test/feed"
 
@@ -30,7 +30,7 @@ def env(tmp_path, monkeypatch):
     with main.get_meta_connection() as conn:
         main.set_setting(conn, main.SETTING_QUIRE_ACCESS_TOKEN, "qtok")
         main.set_setting(conn, main.SETTING_QUIRE_PROJECT_OID, "proj-oid")
-    monkeypatch.setattr(main, "get_quire_user_token", lambda: "qtok")
+    monkeypatch.setattr(automation_rules, "get_quire_user_token", lambda: "qtok")
     reader = main.get_reader()
     reader.add_feed(FEED, allow_invalid_url=True)
     reader.add_entry(
@@ -100,7 +100,7 @@ def test_not_configured_is_noop(env, monkeypatch):
 
 
 def test_run_backs_off_when_meter_blocked(env, monkeypatch):
-    monkeypatch.setattr(main, "get_quire_usage_status", lambda: {"state": "blocked"})
+    monkeypatch.setattr(automation_rules, "get_quire_usage_status", lambda: {"state": "blocked"})
     called = []
     monkeypatch.setattr(main.quire_service, "create_task", lambda *a, **k: called.append(a))
     with main.get_meta_connection() as conn:

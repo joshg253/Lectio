@@ -13,7 +13,7 @@ import re
 import pytest
 
 import main
-from services import tenancy
+from services import automation_rules, tenancy
 
 
 @pytest.fixture
@@ -132,6 +132,11 @@ def test_dry_run_run_now_and_live_matching_share_one_matcher(monkeypatch):
         return real(keyword, is_regex)
 
     monkeypatch.setattr(main, "build_keyword_matcher", spy)
+    # _entry_matches_rule lives in services.automation_rules now (main.py breakup,
+    # Step 2 Stage B) and did `from main import build_keyword_matcher` at its own
+    # module load, copying the reference -- patching main's binding alone doesn't
+    # reach it, so both bindings need the spy.
+    monkeypatch.setattr(automation_rules, "build_keyword_matcher", spy)
 
     class _Entry:
         title = "A spoiler appears"

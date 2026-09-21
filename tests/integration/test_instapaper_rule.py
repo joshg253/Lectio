@@ -7,7 +7,7 @@ import datetime as dt
 import pytest
 
 import main
-from services import tenancy
+from services import automation_rules, tenancy
 
 FEED = "https://example.test/feed"
 
@@ -71,7 +71,7 @@ def test_rule_persists(env):
 
 def test_after_refresh_saves_matching_entries(env, monkeypatch):
     saved = []
-    monkeypatch.setattr(main, "_instapaper_save_url", lambda u, p, url, title: saved.append((url, title)) or (True, None))
+    monkeypatch.setattr(automation_rules, "_instapaper_save_url", lambda u, p, url, title: saved.append((url, title)) or (True, None))
     with main.get_meta_connection() as conn:
         main.add_highlight_keyword(conn, "feed", FEED, "metal", "yellow", rule_type="instapaper", enabled=1, search_in="title")
     main._run_instapaper_rules_after_refresh({FEED})
@@ -81,7 +81,7 @@ def test_after_refresh_saves_matching_entries(env, monkeypatch):
 
 def test_blank_keyword_saves_all_in_scope(env, monkeypatch):
     saved = []
-    monkeypatch.setattr(main, "_instapaper_save_url", lambda u, p, url, title: saved.append(url) or (True, None))
+    monkeypatch.setattr(automation_rules, "_instapaper_save_url", lambda u, p, url, title: saved.append(url) or (True, None))
     with main.get_meta_connection() as conn:
         main.add_highlight_keyword(conn, "feed", FEED, "", "yellow", rule_type="instapaper", enabled=1)
     main._run_instapaper_rules_after_refresh({FEED})
@@ -93,7 +93,7 @@ def test_not_configured_is_noop(env, monkeypatch):
     with main.get_meta_connection() as conn:
         main.delete_setting(conn, main.SETTING_INSTAPAPER_PASSWORD)
     called = []
-    monkeypatch.setattr(main, "_instapaper_save_url", lambda *a: called.append(a) or (True, None))
+    monkeypatch.setattr(automation_rules, "_instapaper_save_url", lambda *a: called.append(a) or (True, None))
     with main.get_meta_connection() as conn:
         main.add_highlight_keyword(conn, "feed", FEED, "metal", "yellow", rule_type="instapaper", enabled=1)
     main._run_instapaper_rules_after_refresh({FEED})
