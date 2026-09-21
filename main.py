@@ -105,6 +105,101 @@ from services.greader import GReaderService
 from services.miniflux import MinifluxService
 from services.youtube_sync import sync_youtube_folder
 
+from state import (
+    _AUTOFETCH_HOST_COOLDOWN_S,
+    _BROWSER_UA_CACHE_TTL,
+    _DA_SYNC_MAX_AUTO_RESUMES,
+    _FLARESOLVERR_FEEDS_CACHE_TTL,
+    _INSTANCE_SETTING_TTL_SECONDS,
+    _LAST_SEEN_THROTTLE_SECONDS,
+    _MEDIA_SCAN_TTL_ERROR,
+    _PROXY_DOWN_COOLDOWN_SECONDS,
+    _PROXY_FEEDS_CACHE_TTL,
+    _TAILSCALE_DOWN_COOLDOWN_SECONDS,
+    _TAILSCALE_FEEDS_CACHE_TTL,
+    _THUMB_FETCH_FAIL_CACHE,
+    _THUMB_FETCH_FAIL_LOCK,
+    _THUMB_FETCH_FAIL_TTL,
+    _app_settings_cache,
+    _app_settings_cache_lock,
+    _autofetch_failed_hosts,
+    _autofetch_hosts_lock,
+    _browser_ua_cache,
+    _browser_ua_cache_at,
+    _browser_ua_cache_lock,
+    _da_sync_active,
+    _da_sync_lock,
+    _enhancement_inflight_feeds,
+    _enhancement_inflight_lock,
+    _feed_last_post_cache,
+    _feed_last_post_cache_lock,
+    _flaresolverr_feeds_cache,
+    _flaresolverr_feeds_cache_at,
+    _flaresolverr_feeds_cache_lock,
+    _home_request_semaphore,
+    _instance_setting_cache,
+    _instance_setting_cache_lock,
+    _last_seen_touch,
+    _last_seen_touch_lock,
+    _login_failures,
+    _login_failures_lock,
+    _media_scan_in_progress,
+    _media_scan_lock,
+    _prefetch_header_log_lock,
+    _prefetch_header_log_remaining,
+    _proxy_down_lock,
+    _proxy_down_until,
+    _proxy_feeds_cache,
+    _proxy_feeds_cache_at,
+    _proxy_feeds_cache_lock,
+    _scheduler_state,
+    _scheduler_state_lock,
+    _tag_alias_cache,
+    _tag_alias_lock,
+    _tailscale_down_lock,
+    _tailscale_down_until,
+    _tailscale_feeds_cache,
+    _tailscale_feeds_cache_at,
+    _tailscale_feeds_cache_lock,
+    FEED_LAST_POST_TTL_SECONDS,
+    updating_feeds,
+    updating_feeds_lock,
+    _PerUserDict,  # noqa: F401 -- re-exported: routes/integrations_youtube.py and tests still do `main._PerUserDict`
+    _ad_asset_hashes_cache,
+    _ad_asset_hashes_lock,
+    _autofetch_jobs,
+    _autofetch_jobs_lock,
+    _AUTOFETCH_JOB_STALE_S,
+    _has_manual_tags_cache,
+    _has_manual_tags_lock,
+    HAS_MANUAL_TAGS_CACHE_TTL_SECONDS,
+    _meta_structure_cache,
+    _meta_structure_lock,
+    _problematic_feeds_cache,
+    _problematic_feeds_cache_lock,
+    PROBLEMATIC_FEEDS_CACHE_TTL_SECONDS,
+    PROBLEMATIC_FEEDS_LIMIT,
+    _refetch_jobs,
+    _refetch_jobs_lock,
+    feed_title_map_cache,
+    feed_title_map_cache_lock,
+    FEED_TITLE_MAP_CACHE_TTL_SECONDS,
+    tag_counts_cache,
+    tag_counts_cache_lock,
+    TAG_COUNTS_CACHE_TTL_SECONDS,
+    unread_counts_cache,
+    unread_counts_cache_lock,
+    UNREAD_COUNTS_CACHE_TTL_SECONDS,
+    _bump_unread_counts_generation,
+    get_unread_counts_generation,
+    invalidate_unread_counts_cache,
+    try_start_unread_refresh,
+    clear_unread_refresh_inflight,
+    next_refresh_rotation_offset,
+    check_manual_refresh_cooldown,
+    unread_counts_compute_lock,
+)
+
 BASE_DIR = Path(__file__).resolve().parent
 # Dedicated app logger. Previously this piggybacked on "uvicorn.error", but
 # uvicorn owns that logger and (depending on startup/rollover timing) can leave
@@ -915,18 +1010,6 @@ def youtube_embed_host() -> str:
     return "www.youtube.com" if youtube_embed_account_features_enabled() else "www.youtube-nocookie.com"
 
 
-# Instance-level settings are saved from the Administration page into the
-# saving admin's own app_settings, but their consumers run in arbitrary
-# contexts: background threads (maintenance hour, image-cache eviction),
-# pre-auth requests (login lockout), or other users' requests. The admin-tier
-# lookup below makes them resolvable from any context. TTL-cached because
-# list_users() is a DB query and get_img_cache_max_dim sits on the /api/img
-# hot path; the settings-save route invalidates it so edits apply immediately.
-_INSTANCE_SETTING_TTL_SECONDS = 60.0
-_instance_setting_cache: dict[str, tuple[float, str]] = {}
-_instance_setting_cache_lock = threading.Lock()
-
-
 def invalidate_instance_setting_cache() -> None:
     with _instance_setting_cache_lock:
         _instance_setting_cache.clear()
@@ -1507,12 +1590,6 @@ def _record_da_deactivated(conn: sqlite3.Connection, username: str) -> None:
     )
 
 
-# One watch-list sync per user at a time: the Settings button, the daily
-# maintenance run, and a scheduled auto-resume can otherwise overlap and burn
-# the same DeviantArt quota adding the same artists.
-_da_sync_lock = threading.Lock()
-_da_sync_active: set[str] = set()
-_DA_SYNC_MAX_AUTO_RESUMES = 12
 _DA_SYNC_RESUME_FALLBACK_S = 900.0  # no Retry-After header → conservative delay
 
 
@@ -1989,29 +2066,6 @@ _AUTH_EXEMPT_PREFIXES = (
     "/sw.js",
 )
 
-manual_refresh_lock = threading.Lock()
-last_manual_refresh_started_at = 0.0
-updating_feeds_lock = threading.Lock()
-updating_feeds: set[str] = set()
-
-# --- Scheduler liveness, read by the watchdog and /healthz ---
-# Written by the scheduler thread, read by the watchdog and by request handlers,
-# so every field is touched under this lock. Kept as module state rather than on
-# app.state because the watchdog must be able to read it during startup, before
-# the first pass has run.
-_scheduler_state_lock = threading.Lock()
-_scheduler_state: dict[str, object] = {
-    # monotonic seconds; None when no pass is in flight
-    "pass_started_at": None,
-    "last_pass_finished_at": None,
-    # Last time the pass advanced at all, and what it was doing. "Advanced" is
-    # the honest liveness signal: elapsed time alone can't distinguish a slow
-    # 2,500-feed pass from a socket read that will never return.
-    "last_progress_at": None,
-    "stage": "idle",
-    "consecutive_stall_logs": 0,
-}
-
 
 def _note_scheduler_progress(stage: str) -> None:
     """Record that the scheduled refresh advanced, and what it is doing now."""
@@ -2033,104 +2087,6 @@ def _scheduler_stall_seconds() -> float | None:
     return time.monotonic() - float(last)  # ty: ignore[invalid-argument-type]
 
 
-class _PerUserDict:
-    """Dict-like cache partitioned by the current tenancy user, so per-user cached
-    data (folder structure, unread counts, tags, settings) never bleeds across
-    users. Implements the subset of dict operations the cache sites use; each op
-    resolves the current user via tenancy.current_user_id()."""
-
-    __slots__ = ("_by_user",)
-
-    def __init__(self) -> None:
-        self._by_user: dict[str, dict] = {}
-
-    def _d(self) -> dict:
-        return self._by_user.setdefault(tenancy.current_user_id(), {})
-
-    def __getitem__(self, k):
-        return self._d()[k]
-
-    def __setitem__(self, k, v):
-        self._d()[k] = v
-
-    def __delitem__(self, k):
-        del self._d()[k]
-
-    def __contains__(self, k):
-        return k in self._d()
-
-    def __bool__(self):
-        return bool(self._d())
-
-    def __len__(self):
-        return len(self._d())
-
-    def __iter__(self):
-        return iter(self._d())
-
-    def get(self, k, default=None):
-        return self._d().get(k, default)
-
-    def pop(self, k, *a):
-        return self._d().pop(k, *a)
-
-    def setdefault(self, k, default=None):
-        return self._d().setdefault(k, default)
-
-    def update(self, *a, **kw):
-        self._d().update(*a, **kw)
-
-    def clear(self):
-        self._d().clear()
-
-    def items(self):
-        return self._d().items()
-
-    def keys(self):
-        return self._d().keys()
-
-    def values(self):
-        return self._d().values()
-
-
-# Short in-memory TTL cache for tag counts to avoid repeatedly scanning
-# reader entries on every request. Small TTL keeps counts fresh while
-# preventing repeated expensive work during rapid navigation.
-TAG_COUNTS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_TAG_COUNTS_CACHE_TTL", "300"))
-tag_counts_cache_lock = threading.Lock()
-tag_counts_cache = _PerUserDict()
-
-# Short in-memory TTL cache for unread counts so the UI doesn't scan the
-# entire reader DB on every load. TTL is small to stay responsive to new
-# incoming posts.
-UNREAD_COUNTS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_UNREAD_COUNTS_CACHE_TTL", "300"))
-unread_counts_cache_lock = threading.Lock()
-unread_counts_cache = _PerUserDict()
-# Stale-while-revalidate: when the cache is stale we serve the prior value and
-# spawn ONE background refresh. Concurrent renders never wait on the scan.
-unread_counts_compute_lock = threading.Lock()
-unread_counts_refresh_inflight = False
-# Incremented on every invalidation so in-flight background refreshes that
-# started before the invalidation don't write stale counts back to the cache.
-_unread_counts_generation: int = 0
-# Lead-image / YouTube-duration enhancement is network-heavy, so manual refresh
-# runs it off the request path. Track in-flight feeds to skip overlapping work.
-_enhancement_inflight_lock = threading.Lock()
-_enhancement_inflight_feeds: set[str] = set()
-# Feed-title map: hits the reader DB to enumerate every feed. Cache it — feed
-# titles barely change between page renders.
-FEED_TITLE_MAP_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_FEED_TITLE_MAP_CACHE_TTL", "300"))
-feed_title_map_cache_lock = threading.Lock()
-feed_title_map_cache = _PerUserDict()
-
-# Cache the meta-DB structure snapshot. Folders / folder_feeds change only on
-# explicit user actions (subscribe, unsubscribe, add/delete folder, move feed),
-# so we cache the read-side queries indefinitely and invalidate on mutation.
-# This collapses ~5 SQL roundtrips per home render to one dict lookup.
-_meta_structure_lock = threading.Lock()
-_meta_structure_cache = _PerUserDict()
-
-
 def invalidate_meta_structure_cache() -> None:
     with _meta_structure_lock:
         _meta_structure_cache.clear()
@@ -2149,40 +2105,6 @@ def invalidate_meta_structure_cache() -> None:
         )
     except Exception:
         pass
-
-
-def invalidate_unread_counts_cache() -> None:
-    """Bump the generation + clear the cache so folder/feed unread badges recompute."""
-    global _unread_counts_generation
-    with unread_counts_cache_lock:
-        _unread_counts_generation += 1
-        unread_counts_cache.clear()
-
-
-def _bump_unread_counts_generation() -> None:
-    """Bump the generation without clearing the cache (stale-while-revalidate reads still work).
-
-    Callers that mark entries read as a side effect of automation (dedup, mark_as_read
-    rules, hide-shorts, etc.) use this instead of ``invalidate_unread_counts_cache`` --
-    deliberately not clearing, so a badge still renders from cache while it recomputes.
-    A plain ``global _unread_counts_generation; _unread_counts_generation += 1`` in a
-    function that later moves out of main.py would rebind a *second* copy of the
-    counter in the new module -- silently, with no import error -- so every automation
-    call site goes through this function instead of touching the global directly.
-    """
-    global _unread_counts_generation
-    _unread_counts_generation += 1
-
-
-# Cache for problematic-feeds list. Only changes when a refresh succeeds/fails,
-# so a TTL is fine — we don't need exact freshness on the home page.
-PROBLEMATIC_FEEDS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_PROBLEMATIC_FEEDS_CACHE_TTL", "60"))
-# How many failing feeds the list renders. Raised from 50 so the category filter
-# can triage the whole failing set (each row is small; the panel is in the
-# hidden Feeds tab). Tunable if the row weight ever matters.
-PROBLEMATIC_FEEDS_LIMIT = int(os.getenv("LECTIO_FAILING_FEEDS_LIMIT", "500"))
-_problematic_feeds_cache_lock = threading.Lock()
-_problematic_feeds_cache = _PerUserDict()
 
 
 def invalidate_problematic_feeds_cache() -> None:
@@ -2651,11 +2573,6 @@ class _SecurityHeadersMiddleware:
         await self.app(scope, receive, send_wrapper)
 
 
-_LAST_SEEN_THROTTLE_SECONDS = 300
-_last_seen_touch: dict[str, float] = {}
-_last_seen_touch_lock = threading.Lock()
-
-
 def _touch_user_last_seen(uid: str) -> None:
     """Record per-user activity time, throttled (this runs on every request)."""
     if user_store is None:
@@ -2765,11 +2682,6 @@ def _ensure_csrf_token(session: dict) -> str:
         token = secrets.token_urlsafe(32)
         session[_CSRF_SESSION_KEY] = token
     return token
-
-
-_home_request_semaphore = threading.Semaphore(int(os.getenv("LECTIO_MAX_CONCURRENT_HOME_REQUESTS", "4")))
-_prefetch_header_log_remaining = [10]  # diagnostic: log headers of the first N suspect requests
-_prefetch_header_log_lock = threading.Lock()
 
 
 class _AccessLogMiddleware:
@@ -5048,12 +4960,6 @@ def ensure_meta_schema() -> None:
         pass  # email_to seeding removed; Contacts tab manages recipients
 
 
-# Per-user (app_settings lives in each user's meta DB): user_id -> {key: value}.
-# A user absent from the map means "not loaded yet" (was the None sentinel).
-_app_settings_cache: dict[str, dict[str, str]] = {}
-_app_settings_cache_lock = threading.Lock()
-
-
 def _load_app_settings_cache(conn: sqlite3.Connection) -> dict[str, str]:
     rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
     return {str(r["key"]): str(r["value"]) for r in rows}
@@ -6781,14 +6687,6 @@ def _subtract_hidden_unpremiered_from_counts(reader_conn: sqlite3.Connection, co
         LOGGER.exception("[hide-unpremiered] failed to subtract hidden counts from unread totals")
 
 
-# Newest-post-per-feed is derived from a full GROUP BY over the reader entries
-# table, so cache it briefly (keyed per-user by reader DB path) to keep the
-# Settings → Feeds "Stale" view from re-scanning on every home render.
-_feed_last_post_cache: dict[str, tuple[float, dict[str, datetime]]] = {}
-_feed_last_post_cache_lock = threading.Lock()
-FEED_LAST_POST_TTL_SECONDS = 300
-
-
 def _parse_reader_timestamp(ts: str) -> datetime | None:
     """Parse a reader entries timestamp (ISO, possibly space-separated / naive)
     into an aware UTC datetime. Returns None if unparseable."""
@@ -6842,41 +6740,36 @@ def get_feed_last_post_dates() -> dict[str, datetime]:
 def _refresh_unread_counts_async(generation: int) -> None:
     """Single-flight background scan. Updates cache when done, unless the
     cache was invalidated (generation bumped) after this refresh started."""
-    global unread_counts_refresh_inflight
     try:
         counts = _compute_unread_counts_by_feed()
         with unread_counts_cache_lock:
-            if _unread_counts_generation == generation:
+            if get_unread_counts_generation() == generation:
                 unread_counts_cache["unread_counts"] = (time.time(), counts)
     except Exception:
         LOGGER.exception("background unread counts refresh failed")
     finally:
-        with unread_counts_compute_lock:
-            unread_counts_refresh_inflight = False
+        clear_unread_refresh_inflight()
 
 
 def get_unread_counts_by_feed() -> dict[str, int]:
     """Stale-while-revalidate: never block the request on the 33k-entry scan.
     Fresh cache → return it. Stale cache → return stale, kick off background
     refresh. Cold cache → first caller computes synchronously, others wait."""
-    global unread_counts_refresh_inflight
     now = time.time()
     with unread_counts_cache_lock:
         cached = unread_counts_cache.get("unread_counts")
-        current_gen = _unread_counts_generation
+        current_gen = get_unread_counts_generation()
     if cached:
         ts, value = cached
         if now - ts < UNREAD_COUNTS_CACHE_TTL_SECONDS:
             return value.copy()
         # Stale — serve it, spawn one refresh.
-        with unread_counts_compute_lock:
-            if not unread_counts_refresh_inflight:
-                unread_counts_refresh_inflight = True
-                threading.Thread(
-                    target=_run_in_user_context,
-                    args=(tenancy.current_user_id(), _refresh_unread_counts_async, current_gen),
-                    daemon=True,
-                ).start()
+        if try_start_unread_refresh():
+            threading.Thread(
+                target=_run_in_user_context,
+                args=(tenancy.current_user_id(), _refresh_unread_counts_async, current_gen),
+                daemon=True,
+            ).start()
         return value.copy()
 
     # Cold cache: first arriver computes synchronously, others wait on lock.
@@ -6885,14 +6778,14 @@ def get_unread_counts_by_feed() -> dict[str, int]:
             cached = unread_counts_cache.get("unread_counts")
             if cached:
                 return cached[1].copy()
-            gen_at_start = _unread_counts_generation
+            gen_at_start = get_unread_counts_generation()
         counts = _compute_unread_counts_by_feed()
         with unread_counts_cache_lock:
             # Only cache if no mark-read/refresh bumped the generation while we
             # were computing (the scan takes ~2s). Otherwise `counts` predates
             # that change and would poison the cache with stale unread counts —
             # e.g. mark-older-than-read appearing to revert seconds later.
-            if _unread_counts_generation == gen_at_start:
+            if get_unread_counts_generation() == gen_at_start:
                 unread_counts_cache["unread_counts"] = (time.time(), counts)
         return counts.copy()
 
@@ -8658,15 +8551,6 @@ class _PersistentReaderProxy:
         return getattr(self._reader, name)
 
 
-# Per-user cache of browser-UA-flagged feed URLs, consulted by reader's per-feed
-# request hook on every fetch. Refreshed on a short TTL (the set changes only when
-# a feed is flagged/unflagged) and invalidated immediately on those writes.
-_browser_ua_cache: dict[str, set[str]] = {}
-_browser_ua_cache_at: dict[str, float] = {}
-_browser_ua_cache_lock = threading.Lock()
-_BROWSER_UA_CACHE_TTL = 30.0
-
-
 def _browser_ua_feeds_for(uid: str) -> set[str]:
     now = time.monotonic()
     with _browser_ua_cache_lock:
@@ -8704,14 +8588,6 @@ def _flag_browser_ua_on_refusal(feed_url: str) -> bool:
         _invalidate_browser_ua_cache()
         LOGGER.info("[refresh] flagged %s for browser-identity fetches", feed_url)
     return newly
-
-
-# Per-user cache of as-needed-proxy-flagged feed URLs — same shape as the
-# browser-UA cache above, consulted by the same request-hook mechanism.
-_proxy_feeds_cache: dict[str, set[str]] = {}
-_proxy_feeds_cache_at: dict[str, float] = {}
-_proxy_feeds_cache_lock = threading.Lock()
-_PROXY_FEEDS_CACHE_TTL = 30.0
 
 
 def _proxy_feeds_for(uid: str) -> set[str]:
@@ -8758,14 +8634,6 @@ def _flag_proxy_feed_on_still_blocked(feed_url: str) -> bool:
     return newly
 
 
-# Per-user cache of last-resort-flagged feed URLs — same shape as the proxy
-# cache above, one rung further out.
-_tailscale_feeds_cache: dict[str, set[str]] = {}
-_tailscale_feeds_cache_at: dict[str, float] = {}
-_tailscale_feeds_cache_lock = threading.Lock()
-_TAILSCALE_FEEDS_CACHE_TTL = 30.0
-
-
 def _tailscale_feeds_for(uid: str) -> set[str]:
     now = time.monotonic()
     with _tailscale_feeds_cache_lock:
@@ -8810,13 +8678,6 @@ def _flag_tailscale_feed_on_still_blocked(feed_url: str) -> bool:
     return newly
 
 
-# Per-user cache of FlareSolverr-flagged feed URLs — same shape as the two above.
-_flaresolverr_feeds_cache: dict[str, set[str]] = {}
-_flaresolverr_feeds_cache_at: dict[str, float] = {}
-_flaresolverr_feeds_cache_lock = threading.Lock()
-_FLARESOLVERR_FEEDS_CACHE_TTL = 30.0
-
-
 def _flaresolverr_feeds_for(uid: str) -> set[str]:
     now = time.monotonic()
     with _flaresolverr_feeds_cache_lock:
@@ -8859,24 +8720,6 @@ def _flag_flaresolverr_feed_on_still_blocked(feed_url: str) -> bool:
         _invalidate_flaresolverr_feeds_cache()
         LOGGER.info("[refresh] flagged %s for FlareSolverr escalation", feed_url)
     return newly
-
-
-# A dead proxy backend (e.g. gluetun restarting, or the Tailscale exit node
-# blipping) must never be worse than not having one. On a proxy-unreachable
-# failure (see services.feed_refresh.FeedRefreshService._is_proxy_unreachable),
-# _mark_backend_unreachable skips WHICHEVER backend was actually in play for
-# that fetch, for this user, for a cooldown — across every mode, not just
-# as_needed — rather than hard-failing every fetch until someone notices.
-# Tracked separately per backend: the two have very different reliability
-# profiles (a home Tailscale exit blips far more than a dedicated VPN
-# container), and marking the wrong one down would block a perfectly fine
-# primary proxy over a last-resort hiccup, or vice versa.
-_PROXY_DOWN_COOLDOWN_SECONDS = 300.0
-_proxy_down_until: dict[str, float] = {}
-_proxy_down_lock = threading.Lock()
-_TAILSCALE_DOWN_COOLDOWN_SECONDS = 300.0
-_tailscale_down_until: dict[str, float] = {}
-_tailscale_down_lock = threading.Lock()
 
 
 def _proxy_is_down(uid: str) -> bool:
@@ -9214,13 +9057,6 @@ def normalize_tag_value_raw(value: str | None) -> str | None:
     if not TAG_VALUE_PATTERN.fullmatch(normalized):
         return None
     return normalized
-
-
-# Per-user alias map, loaded once and dropped whenever an alias changes.
-# normalize_tag_value is on every tag path there is (51 call sites, several of
-# them per-entry during a refresh), so a meta-DB read per call is not an option.
-_tag_alias_cache: dict[str, dict[str, str]] = {}
-_tag_alias_lock = threading.Lock()
 
 
 def get_tag_aliases() -> dict[str, str]:
@@ -10283,11 +10119,6 @@ def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
         return []
     dismissed_norm = {normalize_tag_value(d) for d in dismissed} | {normalize_tag_value(d) for d in global_dismissed}
     return [t for t in tags if normalize_tag_value(t) not in dismissed_norm][:MAX_FEED_TAG_SUGGESTIONS]
-
-
-_has_manual_tags_cache = _PerUserDict()
-_has_manual_tags_lock = threading.Lock()
-HAS_MANUAL_TAGS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_HAS_MANUAL_TAGS_CACHE_TTL", "60"))
 
 
 def has_any_manual_tags() -> bool:
@@ -11989,11 +11820,6 @@ def _render_entry_attachments(entry, audio_url: str | None, asset_map: dict[str,
 # catch new episodes; barely ever rescan feeds that had none.
 _MEDIA_SCAN_TTL_FOUND = 6 * 3600
 _MEDIA_SCAN_TTL_EMPTY = 7 * 24 * 3600
-# A scan that errored mid-way (e.g. discovered a host feed but couldn't fetch it)
-# isn't proof there's no audio — retry well before the long "empty" backoff.
-_MEDIA_SCAN_TTL_ERROR = 6 * 3600
-_media_scan_in_progress: set[tuple[str, str]] = set()
-_media_scan_lock = threading.Lock()
 
 
 def _lookup_media_audio(conn: sqlite3.Connection, feed_url: str, entry_id: str) -> str | None:
@@ -17188,10 +17014,6 @@ def _opener_is_own_full_image(opener_html: str, lead_image_url: str | None) -> b
     return biggest >= _FULL_SIZE_IMAGE_MIN_PX
 
 
-_ad_asset_hashes_cache = _PerUserDict()
-_ad_asset_hashes_lock = threading.Lock()
-
-
 def _ad_asset_hashes() -> set[str]:
     """Cached per user: which /starred-asset/<hash> images are ad creatives.
 
@@ -20645,9 +20467,6 @@ def _effective_auto_refresh_minutes() -> int:
         return get_auto_refresh_minutes(conn)
 
 
-_scheduled_refresh_rotation = 0
-
-
 def _rotate_for_fairness(uids: list[str]) -> list[str]:
     """Rotate the per-tick user order round-robin so the same user isn't always
     processed first.
@@ -20658,11 +20477,9 @@ def _rotate_for_fairness(uids: list[str]) -> list[str]:
     user delays a different set of downstream users each time rather than always
     the same ones. Deeper fairness at scale (per-user concurrency, fetch budgets)
     stays deferred behind this seam per the multi-user plan."""
-    global _scheduled_refresh_rotation
     if len(uids) <= 1:
         return uids
-    offset = _scheduled_refresh_rotation % len(uids)
-    _scheduled_refresh_rotation = (_scheduled_refresh_rotation + 1) % len(uids)
+    offset = next_refresh_rotation_offset(len(uids))
     return uids[offset:] + uids[:offset]
 
 
@@ -21433,14 +21250,7 @@ def _daily_maintenance_loop(stop_event: threading.Event) -> None:
 
 
 def check_and_mark_manual_refresh() -> int:
-    global last_manual_refresh_started_at
-    with manual_refresh_lock:
-        now = time.monotonic()
-        elapsed = now - last_manual_refresh_started_at
-        if elapsed < MANUAL_REFRESH_COOLDOWN_SECONDS:
-            return int(MANUAL_REFRESH_COOLDOWN_SECONDS - elapsed)
-        last_manual_refresh_started_at = now
-        return 0
+    return check_manual_refresh_cooldown(MANUAL_REFRESH_COOLDOWN_SECONDS)
 
 
 def export_opml_text(conn: sqlite3.Connection) -> str:
@@ -23374,10 +23184,6 @@ def login_page(request: Request, next: str = "/"):
     )
 
 
-_login_failures: dict[str, list[float]] = {}
-_login_failures_lock = threading.Lock()
-
-
 def _client_ip_for_rate_limit(request: Request) -> str:
     """Best-effort client identifier for rate limiting.
 
@@ -24708,8 +24514,7 @@ def _home_inner(
             except Exception:
                 LOGGER.warning("upsert_entry_read_state failed in home (db contention?); entry still marked read in reader", exc_info=True)
             with unread_counts_cache_lock:
-                global _unread_counts_generation
-                _unread_counts_generation += 1
+                _bump_unread_counts_generation()
                 unread_counts_cache.clear()
             selected_entry["read"] = True
             for post in posts:
@@ -25151,13 +24956,6 @@ _THUMB_COVER_POS: dict[str, tuple[float, float]] = {
 }
 
 
-# Short-lived negative cache for /thumb fetches that failed (timeout, 5xx, blocked).
-# A folder full of server-blocked images (e.g. Cloudflare-403 washingtonstatestandard)
-# would otherwise re-hit every dead host on every page load, each tying up a worker
-# thread. Keyed by the source image URL; brief TTL so transient failures recover.
-_THUMB_FETCH_FAIL_CACHE: dict[str, float] = {}
-_THUMB_FETCH_FAIL_LOCK = threading.Lock()
-_THUMB_FETCH_FAIL_TTL = 10 * 60  # seconds
 # Cap total time per /thumb fetch so one hanging host can't block a worker ~24s
 # (httpx's float timeout applies per-phase, so 12.0 could mean connect+read = 24s).
 _THUMB_FETCH_TIMEOUT = httpx.Timeout(6.0, connect=4.0)
@@ -28589,8 +28387,7 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
     invalidate_meta_structure_cache()
     invalidate_problematic_feeds_cache()
     invalidate_unread_counts_cache()
-    global _unread_counts_generation
-    _unread_counts_generation += 1
+    _bump_unread_counts_generation()
 
     # Bound to the requesting tenant: a bare Thread does not inherit
     # contextvars, so this refresh ran as the DEFAULT user and fetched into the
@@ -31790,8 +31587,7 @@ def mark_folder_as_read(
         tag=tag,
     )
     with unread_counts_cache_lock:
-        global _unread_counts_generation
-        _unread_counts_generation += 1
+        _bump_unread_counts_generation()
         unread_counts_cache.clear()
     message = "All posts already read." if marked_count == 0 else f"Marked {marked_count} posts as read."
     if is_async_action_request(request, "lectio-mark-read"):
@@ -31895,8 +31691,7 @@ def mark_feed_as_read(
         tag=tag,
     )
     with unread_counts_cache_lock:
-        global _unread_counts_generation
-        _unread_counts_generation += 1
+        _bump_unread_counts_generation()
         unread_counts_cache.clear()
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
@@ -31980,8 +31775,7 @@ def mark_entry_read(
                 except Exception:
                     LOGGER.warning("background append_read_history failed for %s/%s", _fu, _eid, exc_info=True)
             with unread_counts_cache_lock:
-                global _unread_counts_generation
-                _unread_counts_generation += 1
+                _bump_unread_counts_generation()
                 unread_counts_cache.clear()
 
         threading.Thread(target=_run_in_user_context, args=(_uid, _bg_toggle), daemon=True).start()
@@ -32003,8 +31797,7 @@ def mark_entry_read(
             except Exception:
                 LOGGER.warning("delete_entry_read_state failed in mark_entry_read (db contention?)", exc_info=True)
     with unread_counts_cache_lock:
-        global _unread_counts_generation
-        _unread_counts_generation += 1
+        _bump_unread_counts_generation()
         unread_counts_cache.clear()
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
@@ -32451,16 +32244,6 @@ def _entry_source_url(feed_url: str, entry_id: str) -> str | None:
     return entry_id if entry_id.startswith(("http://", "https://")) else None
 
 
-# Hosts whose last automatic re-fetch failed, and when. Auto-refetch is a
-# side effect of tagging, so a host that refuses us must not be re-asked on every
-# tag: DeviantArt answers this server with 403 every time, and a tagging session
-# across a watchlist would be dozens of requests it has already declined. Manual
-# Re-fetch ignores this entirely — that is a person asking on purpose.
-_AUTOFETCH_HOST_COOLDOWN_S = 6 * 3600
-_autofetch_failed_hosts: dict[str, float] = {}
-_autofetch_hosts_lock = threading.Lock()
-
-
 def _autofetch_host_in_cooldown(host: str) -> bool:
     if not host:
         return False
@@ -32483,17 +32266,6 @@ def _mark_autofetch_host_failed(host: str) -> None:
         if len(_autofetch_failed_hosts) > 512:
             for stale in sorted(_autofetch_failed_hosts, key=lambda h: _autofetch_failed_hosts[h])[:128]:
                 del _autofetch_failed_hosts[stale]
-
-
-# Per-(feed_url, entry_id) autofetch job tracking. Unlike _refetch_jobs' single
-# running slot (one bulk run at a time), many of these can be in flight at once
-# -- one per recently-kept stub -- and each open pane only cares about its own
-# entry's status. The pane polls /entries/autofetch-status to notice once the
-# background re-fetch below lands, since the pane already rendered (showing the
-# stub) before that thread even started.
-_autofetch_jobs = _PerUserDict()
-_autofetch_jobs_lock = threading.Lock()
-_AUTOFETCH_JOB_STALE_S = 600  # finished job records this old are dropped lazily
 
 
 def _autofetch_prune_stale_jobs() -> None:
@@ -33465,13 +33237,6 @@ def _scope_starred_keys(folder_id: int | None, list_feed_url: str | None, tag: s
     return sorted(starred)
 
 
-# One batch re-fetch at a time, per user. A bulk network job that can be started
-# twice is a politeness bug: two runs interleave and each host sees double the rate
-# the pacing promises.
-_refetch_jobs = _PerUserDict()
-_refetch_jobs_lock = threading.Lock()
-
-
 @overload
 def _refetch_job_state(create: Literal[True]) -> dict: ...
 @overload
@@ -34274,8 +34039,7 @@ def mark_entries_older_than_read(
         older_than_cutoff=cutoff,
     )
     if marked_count:
-        global _unread_counts_generation
-        _unread_counts_generation += 1
+        _bump_unread_counts_generation()
         unread_counts_cache.clear()
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
@@ -34340,8 +34104,7 @@ def undo_mark_unread(unread_at: str = Form(...)):
             [(f, e, when) for f, e in pairs],
         )
         conn.execute("DELETE FROM entry_unread_batch WHERE unread_at = ?", (unread_at,))
-    global _unread_counts_generation
-    _unread_counts_generation += 1
+    _bump_unread_counts_generation()
     unread_counts_cache.clear()
     return JSONResponse({"ok": True, "restored": restored})
 
@@ -34550,8 +34313,7 @@ def mark_entries_newer_than_unread(
                 """,
                 [(fu, eid, undo_token) for fu, eid in to_delete],
             )
-        global _unread_counts_generation
-        _unread_counts_generation += 1
+        _bump_unread_counts_generation()
         unread_counts_cache.clear()
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""

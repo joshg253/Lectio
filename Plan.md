@@ -10,10 +10,10 @@ to run, real features not blocking anything today, and deliberately-deferred big
 Within a tier, related items are clustered under a bold sub-heading. Two watch-lists (CodeQL,
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
-Tiers 1 through 3 are empty. The main.py/index.html breakup's Step 1 (top of Tier 4, the
-Integration routes cluster) and Step 2 (post-refresh automation pipeline, its own A-E sub-stages)
-are both done — Step 1 shipped 2026-09-19/20, Step 2 shipped 2026-09-20. Steps 3-8 of the breakup
-are unscoped follow-on work, not started.
+Tiers 1 through 3 are empty. The main.py/index.html breakup (Integration routes cluster,
+post-refresh automation pipeline, index.html's context menus) is done, shipped 2026-09-19/20. Its
+former "Steps 4-8, unscoped follow-on work" is now split into independent Tier 4 projects —
+dedup-routes consolidation, a `state.py` module + route split, and the shared rendering core.
 
 ## Tier 1 — actively impeding unread-clearing
 
@@ -29,201 +29,63 @@ Empty.
 
 ## Tier 4 — real features, not blocking anything today
 
-### main.py / index.html breakup — extraction map
+### main.py / index.html breakup — done
 
-`main.py` was 40,474 lines when this started (2026-09-19), now 36,737 after Step 1 (Stages A-E)
-moved the whole Integration routes cluster — ~44 routes plus their workers — into
-`routes/integrations_*.py` and two new services modules, and Step 2 (Stages A-E) moved the
-post-refresh automation pipeline into a third new module, `services/automation_rules.py`.
-`static/js/app.js` is 20,042 lines; `index.html` is 2,305 lines — untouched by this round. CLAUDE.md
-calls for a routes/services/storage split main.py has only partly grown into. Not a same-session
-change — needs incremental extraction with tests between steps; Steps 3-8 below are unscoped.
+Moved the Integration routes cluster (~44 routes + workers) into `routes/integrations_*.py` plus
+`services/migration_common.py`/`services/inoreader_import.py`, moved the post-refresh automation
+pipeline into `services/automation_rules.py`, and moved index.html's last 4 inline context menus
+into `_context_menus.html` — `index.html` is now all `{% include %}`s plus page-level structure.
+main.py: 40,474 → 36,737 lines. Stage-by-stage detail and the gotchas hit along the way (the
+copied-reference monkeypatch trap, the `import main`-must-sort-first circular-import rule, etc.)
+are in the commit history (PRs #329-#331) and `routes/__init__.py`'s docstring, not repeated here.
 
-**Already done, organically, without anyone treating it as "the breakup project":** `index.html`'s
-modal extraction (7 `{% include %}`s now — `_tree_folder_feeds.html`, `_entry_pane.html`,
-`_action_modals.html`, `_add_feed_modal.html`, `_settings_modal.html`,
-`_feed_properties_modal.html`, `_folder_properties_modal.html`) and the lazy `data-lazy-src`
-panel-fetch pattern (4 panels now: `folders`/`stale`/`fetch-tiers`/`failing`). Step 3 below moved
-the 4 context menus out too, so `index.html` is now all `{% include %}`s plus page-level structure.
+**Landmines that still apply to any further main.py extraction:** a module that imports a singleton
+cache/lock must not redefine it, and every `invalidate_*` call site has to stay wired to the same
+instance. `get_reader()` thread-local pooling and `lifespan` are startup-order-sensitive. A scalar
+rebound via `global` (a counter, an in-flight flag) has a *read*-side version of the same landmine,
+not just a write-side one: `from state import _some_counter` freezes a snapshot at import time, so
+any bare *read* of it elsewhere goes stale the same way an unconverted `global` write would — both
+need an accessor function, not a bare imported name (found while building `state.py`, below).
 
-**Landmines:** 10 module-level `PerUserDict` caches, 32 module-level `threading.Lock()` instances,
-20 `global` statements must stay singletons — route modules can import them but must not redefine
-them, and every `invalidate_*` call site has to stay wired to the same instance. `get_reader()`
-thread-local pooling and `lifespan` are startup-order-sensitive. The shared rendering core —
-`_home_inner` (main.py:25598), `list_entries_for_feeds` (15994), `get_entry_detail` (19755),
-`build_reader_page` (23797) — is reused by `/`, `/read`, pane-swap, and the greader/fever/v1
-compat APIs; treat as its own carefully-tested project, not part of a mechanical split.
+### Dedup routes consolidation → `services/dedup.py`
 
-**Proposed order, safest → riskiest:**
+Gate: the dedup routes' shared feed-URL prologue is already extracted, but the match-method bodies
+still diverge by preview-vs-apply output — full consolidation is deferred until there are broader
+characterization tests (dedup correctness is behavior-sensitive). Once that lands, pull the
+consolidated engine into `services/dedup.py`, and fold in `_suppress_guid_churn` and
+`_cleanup_intra_feed_slug_dupes` (main.py:8062-8270, refresh-time guid/slug dedup) at the same
+time — same problem space, avoids moving them twice. The three unrelated hide-* hygiene functions
+next to them in main.py (`_is_youtube_short`, `_apply_hide_shorts`, `_apply_hide_paywalled`,
+`_apply_hide_members_only`, main.py:7952-8447 minus the two above) aren't dedup — decide at
+extraction time whether they're worth carrying along in the same pass (adjacent code, same
+refresh-pipeline callers) or splitting off into a later `services/feed_hygiene.py`.
 
-1. Integration routes cluster, main.py:29323–31562 (~2,240 lines) — bigger than first scoped: it's
-   the whole Integrations surface (OAuth + post-connect actions + Miniflux/FreshRSS/TT-RSS/Inoreader
-   importers), not just OAuth/credential + Inoreader import, and every route in it depends on
-   main.py-resident helpers (`get_meta_connection`, `get_setting`/`set_setting`/`delete_setting`,
-   `get_reader`, credential/token getters, `_get_or_create_folder_by_name`, `_run_in_user_context`),
-   not just one singleton. Extraction pattern that resolves this without a storage-layer rewrite:
-   each `routes/integrations_*.py` defines `router = APIRouter()` and does `from main import ...` at
-   module scope; main.py imports those routers and calls `app.include_router(...)` near the bottom
-   of the file (after every needed name is already defined) rather than at the top — see the comment
-   there. Split into sub-stages, tests run after each:
-   - **A — done (2026-09-19).** Pure OAuth connect/callback/disconnect/verify for DeviantArt, Quire,
-     YouTube, Pinterest, Reddit → `routes/integrations_{deviantart,quire,youtube,pinterest,reddit}.py`.
-   - **B — done (2026-09-20).** Post-connect actions with no shared workers: Reddit submit, Pinterest
-     boards/pin, Quire projects, YouTube playlists (list/add/add-batch/status, incl. the
-     `_yt_playlist_batch_jobs` singleton) → same per-integration files. Found a real gotcha doing
-     this: two tests (`test_pinterest_pin_route.py`, `test_youtube_playlist_add_batch.py`) imported
-     the moved handler off `main` and monkeypatched `main.<helper>` — neither works once the handler
-     lives in a routes module, since `from main import helper` copies the reference at import time
-     (monkeypatching `main.helper` afterward doesn't touch the routes module's own binding), so tests
-     now target the routes module directly. That surfaced a second, sharper issue: a test importing
-     `routes.integrations_x` *before* anything imports `main` triggers the circular-import failure
-     for real (routes' own `from main import ...` starts loading main.py, which reaches its own
-     bottom-of-file `from routes.integrations_x import router` while that module is still mid-import
-     and hasn't defined `router` yet) — fixed by making sure the test's `import main` line sorts
-     before its `from routes import integrations_x` line; see `routes/__init__.py`'s docstring.
-     Stages C-E should check any new/updated test the same way before assuming a moved route "just
-     works" with its old test.
-   - **C — done (2026-09-20).** DeviantArt watchlist sync/unsubscribe/push/add-watch-feed → extends
-     A's deviantart file. `test_deviantart_watchlist_autoresume.py` called two of the moved routes
-     directly off `main` (`deviantart_mark_unwatched_viewed_route`, `deviantart_unsubscribe_unwatched_
-     route`) and needed the same routes-module retarget as Stage B; its other monkeypatches
-     (`get_runtime_setting`, `disable_feed`, etc.) were untouched since those helpers stay in main.py
-     and the still-in-main functions that call them (`_load_da_sync_detail`, `bulk_feed_action`,
-     `sync_deviantart_watchlist`) resolve them from main's own namespace regardless of which module
-     calls in.
-   - **D — done (2026-09-20).** Miniflux/FreshRSS/TT-RSS import (test/status/start/reset + worker
-     each) → `routes/integrations_{miniflux,freshrss,ttrss}.py`. The shared helpers
-     (`_apply_migration_items`, `_canonicalize_item_feed_urls`, `_resolve_feed_url`,
-     `_canonical_feed_url_lookup`) moved first into a new `services/migration_common.py` — a real
-     services module (routes import it directly, not via main), but it still does `from main import
-     canonical_feed_url, get_reader, ...` at module level since those primitives have no other home
-     yet, so it's imported late from main.py's own bottom section too (Inoreader's still-resident
-     import code, Stage E, needs 3 of the 4 helpers). This taught the same lesson Stage B did, one
-     level deeper: the "import main first" rule extends to `services.migration_common` too — a test
-     touching it before `main` hits the identical circular-import failure, because loading it
-     triggers main's execution, which reaches its own late import of the same not-yet-finished
-     module. `test_migration_import_dedup.py` and `test_canonical_feed_url.py` called the moved
-     helpers directly off `main` and were retargeted the same way as prior stages.
-   - **E — done (2026-09-20).** Inoreader OAuth + import (biggest, ~800 lines, its own drip-step
-     state machine) → `routes/integrations_inoreader.py` + `services/inoreader_import.py`
-     (`_inoreader_local_import_worker`, `_run_import_loop`, `_api_resolve_entry`,
-     `_inoreader_drip_step`). This closes out the Integration routes cluster: `main.py` is
-     40,405 → 38,218 lines, and it no longer defines a single `/integrations/*` or `/deviantart|
-     quire|reddit/*` OAuth or import route — all of it lives under `routes/`. One more wrinkle on
-     top of B/D's lessons: `_inoreader_drip_step` is also called directly (not through a route) by
-     the scheduled-refresh loop still resident in main.py, so it needed the same "import back into
-     main.py's bottom section" treatment `_apply_migration_items`'s siblings got in Stage D — and
-     since that was main.py's *only* remaining use of the three `services/migration_common`
-     helpers, that now-unused late import was deleted rather than left dangling. `File(...)` route
-     defaults moved out of main.py lost its `B008` exemption in the process (`pyproject.toml`
-     scoped that to `main.py` only) — extended to `routes/*.py` too, since more stages will hit it.
-2. Post-refresh automation pipeline (`_run_automation_after_refresh` + the six
-   `_run_*_rules_after_refresh` functions, plus the sibling "run now" triggers `_run_now_dedup`/
-   `_run_now_pattern`/`_run_tag_filter`) → `services/automation_rules.py`, ~1,510 lines total.
-   Scoped into its own A-E sub-stages, same reasoning as Step 1:
-   - **A — done (2026-09-20).** Zero moves. Added `_bump_unread_counts_generation()` (main.py, next
-     to `invalidate_unread_counts_cache`) and rewrote every in-scope bare
-     `global _unread_counts_generation; … += 1` site to call it instead — the landmine here is
-     landmine-shaped but silent: a moved function that keeps `global _unread_counts_generation`
-     creates a *second* counter in the new module with no ImportError, just unread badges that
-     stop invalidating after dedup/mark-read automation. Also added characterization tests for
-     `_run_email_rules_after_refresh` and `_run_webhook_rules_after_refresh`
-     (`tests/integration/test_email_rule_automation.py`, `test_webhook_rule_automation.py`) — neither
-     had any fire-path coverage before this, despite doing real external I/O with no idempotency
-     guard beyond the 15-minute `added` cutoff.
-   - **B — done (2026-09-20).** Moved 3 leaf helpers (`_log_auto_run`, `_get_entry_excerpt`,
-     `_entry_matches_rule`) into the new `services/automation_rules.py`; left `_is_local_dev_feed`
-     behind (belongs to `refresh`, not automation). Wired the bottom-of-file import-back
-     (`from services.automation_rules import …`, same pattern as `services/migration_common.py`) so
-     `toggle_feed_tag_filter`, `_flush_email_batch_for_rule`, and `_run_on_star_destinations` (all
-     staying in main) keep resolving them, and extended `routes/__init__.py`'s import-order docstring
-     to name the new module. Retargeted `test_keyword_matcher.py`'s
-     `test_dry_run_run_now_and_live_matching_share_one_matcher`: `_entry_matches_rule` copied
-     `build_keyword_matcher` into its own module at import time, so `monkeypatch.setattr(main,
-     "build_keyword_matcher", spy)` alone no longer reaches it — needed a second
-     `monkeypatch.setattr(automation_rules, "build_keyword_matcher", spy)` alongside it. main.py:
-     38,218 → 38,177 lines.
-   - **C — done (2026-09-20).** Moved the 3 "run now" primitives (`_run_now_dedup`, `_run_now_pattern`,
-     `_run_tag_filter`, ~460 lines) — no external side effects (local mark-read only), so a botched
-     transition here was cheaply recoverable, done before D's external-I/O block. Left
-     `parse_tag_filter_spec`, `author_filter_token`, `get_feed_tag_filter_rule`, and
-     `toggle_feed_tag_filter` in main.py (the last two are route-side chip machinery, and
-     `toggle_feed_tag_filter` is one of the still-in-main callers the import-back serves). Extended
-     the bottom-of-file import-back and `services/automation_rules.py`'s own `from main import ...`
-     block with the dedup/pattern/scope primitives all three functions need
-     (`_resolve_dedup_feed_urls`, `_safe_dedup_collect`, `_safe_dedup_find_pairs`, `dedup_order_key`,
-     `entry_url_slug`, `normalize_entry_title_for_dedupe`, `title_word_similarity`,
-     `entry_effective_date`, `parse_folders_scope_id`, `resolve_rule_feed_urls`, `feed_display_title`,
-     `normalize_tag_value`, plus `_DEDUP_MIN_TITLE_WORDS` for `_run_now_dedup`'s import-time default
-     arg). Retargeted `test_dedup_entries.py`'s 4 `monkeypatch.setattr(main, "get_reader", …)` calls
-     to `automation_rules.get_reader` — same copied-reference trap as Stage B. main.py: 38,177 →
-     37,717 lines.
-   - **D — done (2026-09-20).** Moved the six `_after_refresh` dispatchers + `_apply_youtube_playlist_rules`
-     (~844 lines, the bulk) as one atomic delete+import — `email_article` (immediate) and `webhook`
-     have no idempotency guard at all (only the 15-min cutoff), so a half-moved stub left "temporarily"
-     would have risked duplicate sends/POSTs; `quire` likewise (rate-limited but not deduped);
-     `instapaper`/`save_article`/`youtube_playlist` are all safe (URL/duplicate/INSERT-OR-IGNORE
-     guarded). `_flush_email_batch_for_rule`, `_instapaper_save_url`, `_quire_add_entry`,
-     `_star_entry_for_current_user`, `_is_youtube_short`, and the various credential/setting getters
-     all stayed in main.py and are imported into the module the same way; `send_article_email` and
-     the webhook/`youtube_embeds`/`youtube_oauth` helpers came straight from their `services.*`
-     modules instead, since main.py already imported them that way. `_entry_matches_rule` and
-     `_apply_youtube_playlist_rules` ended up with no caller left inside main.py itself (only
-     `scripts/backfill_missed_youtube_playlist_adds.py` and tests reach them via `main.<name>`), so
-     their import-back lines carry `# noqa: F401`. Retargeted 9 monkeypatches across 5 test files —
-     `test_email_rule_automation.py`/`test_webhook_rule_automation.py` (`send_article_email`/
-     `send_webhook`, both files' own characterization tests from Stage A), `test_instapaper_rule.py`
-     (`_instapaper_save_url`, 3 sites), `test_quire_rule.py` (`get_quire_user_token`/
-     `get_quire_usage_status`), `test_youtube_playlist_rules.py` (`get_youtube_oauth_token`, 2 sites
-     — every other test in that file was failing on the shared fixture, not just the 2 that looked
-     related), and `test_save_article_automation.py`'s `monkeypatch.setattr(main, "datetime", …)`
-     time-travel patch — all the same copied-reference trap as prior stages, now also hitting
-     `automation_rules`'s own `from datetime import datetime` binding. main.py: 37,717 → 36,873
-     lines; `services/automation_rules.py`: 1,466 lines.
-   - **E — done (2026-09-20), Step 2 closed out.** Moved `_run_automation_after_refresh` itself last
-     (~140 lines) — the function with the most main-resident call sites (scheduler tick, WebSub
-     fan-out, bg-refresh thread, 3 refresh routes), done after everything else was proven so only one
-     function's wiring was ever unverified at a time. Needed 3 more main-resident imports the earlier
-     stages hadn't required yet: the three hide-* hygiene appliers (`_apply_hide_shorts`,
-     `_apply_hide_paywalled`, `_apply_hide_members_only`), the two guid-churn suppressors
-     (`_suppress_guid_churn`, `_cleanup_intra_feed_slug_dupes`), `parse_feeds_scope_id`, and
-     `_DEDUP_VALID_MATCH_METHODS`/`_dedup_fuzzy_threshold`/`_clamp_min_title_words`. With this function
-     gone, main.py no longer calls `_run_email/webhook/instapaper/save_article/quire/
-     youtube_playlist_rules_after_refresh` directly at all (their only caller was the function that
-     just moved), so those six import-back lines also picked up `# noqa: F401` — kept solely so
-     `main.<name>` still resolves for tests. Retargeted `test_dedup_fuzzy_threshold.py`'s two
-     `monkeypatch.setattr(main, "_run_now_dedup", …)` calls inside `_run_automation_after_refresh`
-     tests to `automation_rules._run_now_dedup` — same copied-reference trap, but this time because
-     the *caller* moved into the same module as the *patched name*, not the other way around, so a
-     call that used to cross from main into main now resolves entirely inside `automation_rules` and
-     never touches `main`'s namespace. The sibling `test_run_now_honors_the_saved_percent`, which
-     patches the same name but drives it through the still-in-main `rules_run_now_route`, needed no
-     change — proof the two copied-reference failure directions are genuinely different, not the same
-     bug twice. main.py: 36,873 → 36,737 lines; `services/automation_rules.py`: 1,618 lines. **Step 2
-     of the main.py/index.html breakup is now complete** — main.py: 38,218 → 36,737 lines (1,481
-     removed) since Step 1 finished.
-   Every stage's new/updated test must sort `import main` before `from services import
-   automation_rules` (same circular-import rule as `routes/__init__.py`'s docstring documents for
-   `migration_common`).
-3. **Done (2026-09-20).** The 4 remaining context menus (`folder-context-menu`,
-   `root-context-menu`, `post-context-menu`, `tag-context-menu`, 134 lines) → `_context_menus.html`,
-   a single `{% include %}` in `index.html`, same bundling precedent as `_action_modals.html`.
-   `folder_options`/`debug_mode` are already in the render context `index.html` gets, so the
-   included template needed no changes to inherit them. Two source-assertion tests
-   (`test_add_link_to_note.py`, `test_edit_tags_bulk_removal.py`) read these menu strings out of
-   `INDEX` (the raw `templates/index.html` text) directly; retargeted both to a new `CONTEXT_MENUS`
-   fixture the same way earlier extractions added `ENTRY_PANE`/`ACTION_MODALS` fixtures.
-4. Dedup engine → `services/dedup.py` — gate on "Consolidate the dedup routes" (Code health)
-   getting characterization tests first.
-5. Route modules by URL prefix — mechanical once the caches/locks above are confirmed importable
-   as shared singletons (worth a `state.py` module first).
-6. `ensure_meta_schema` (main.py:3708, ~1,328 lines) — low priority, do last.
-7. Shared rendering core — its own project, not part of the mechanical split.
-8. Refresh-hygiene cluster (`_is_youtube_short`, `_apply_hide_shorts`, `_apply_hide_paywalled`,
-   `_apply_hide_members_only`, `_suppress_guid_churn`, `_cleanup_intra_feed_slug_dupes`, etc.,
-   main.py ~8427–8924) → a future `services/feed_hygiene.py`. Deferred out of Step 2 because it has
-   render-path and route callers unrelated to automation, and two of its functions overlap Step 4's
-   planned dedup service.
+### `state.py` module — done; route split by URL prefix still open
+
+Moved all of main.py's module-level singleton state into a new `state.py` (9 `_PerUserDict`
+caches + the class, ~20 plain dict/set/list caches with their locks, and 4 scalars previously
+rebound via `global`) with a single top-of-file `from state import (...)` back in main.py — no
+circular-import risk, since `state.py` depends on nothing in main.py. main.py: 36,737 → 36,499
+lines; `state.py`: 394 lines. The actual counts were 9/31 `_PerUserDict`/`Lock` instances, not the
+original 10/32 estimate (stale from before Step 2's edits); the `global`-rebound scalars needed
+real accessor functions, not just relocation — see the Landmines note above, and
+`get_unread_counts_generation()`/`try_start_unread_refresh()`/`clear_unread_refresh_inflight()`/
+`next_refresh_rotation_offset()`/`check_manual_refresh_cooldown()` in `state.py` for the shape.
+`_PerUserDict` itself needed an explicit `# noqa: F401` re-export — nothing in main.py's own code
+references the class by name anymore (only specific instances), so `ruff --fix` tried to prune it
+as unused, breaking `routes/integrations_youtube.py` and `tests/integration/test_cache_isolation.py`,
+which still do `main._PerUserDict()`. Full `make test`/`lint`/`types` pass.
+
+Next: split the rest of main.py's route handlers by URL prefix into their own modules —
+mechanical, same `router = APIRouter()` + bottom-of-file `include_router` pattern the integration
+routes used, now that the shared state they'll need is importable from `state.py` without
+redefining it.
+
+### Shared rendering core
+
+`_home_inner` (main.py:25598), `list_entries_for_feeds` (15994), `get_entry_detail` (19755), and
+`build_reader_page` (23797) are reused by `/`, `/read`, pane-swap, and the greader/fever/v1 compat
+APIs. Not a mechanical split — its own carefully-tested project.
 
 ### Page-fetch escalation ladder — follow-ups
 
@@ -494,12 +356,11 @@ for the precedent) plus a paced walker. Worth a real plan before any code.
   reformat commit, hash added to `.git-blame-ignore-revs`.
 - **Wrap saved-dedup storage access** (Sourcery) — the Saved duplicate scan reads reader's entries
   table directly; a thin storage-layer wrapper would localize breakage if reader's schema evolves.
-- **Consolidate the dedup routes** — partial (shared feed-URL prologue extracted). The
-  match-method bodies still diverge by preview-vs-apply output; a full merge is deferred pending
-  broader characterization tests (dedup correctness is behavior-sensitive).
+- **Consolidate the dedup routes** — see the "Dedup routes consolidation" project in Tier 4
+  (main.py/index.html breakup follow-ons); tracked there now since it also gates a
+  `services/dedup.py` extraction, not just this cleanup.
 - **`ensure_meta_schema`** (main.py:3708, ~1,328 lines) — long but linear (CREATE + idempotent
-  ALTERs), low churn. A by-area split is cosmetic. Same function the breakup's Step 6 targets —
-  keep this bullet and that step in sync.
+  ALTERs), low churn. A by-area split is cosmetic.
 - **Backfill Sphinx-math height on already-stored entries** — the ingest-time fix doesn't
   retroactively help entries stored before it; low value (few math articles), do on demand. Note:
   `entries.content` is reader's JSON structure, not raw HTML — a backfill must respect that shape.
