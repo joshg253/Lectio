@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+from routes import system as system_routes
 
 
 def _ok_meta_connection() -> sqlite3.Connection:
@@ -21,7 +22,7 @@ def _ok_meta_connection() -> sqlite3.Connection:
 
 def test_healthz_returns_ok_when_db_reachable(monkeypatch):
     app = FastAPI()
-    app.get("/healthz")(main.healthz)
+    app.get("/healthz")(system_routes.healthz)
     monkeypatch.setattr(main, "get_meta_connection", _ok_meta_connection)
 
     with TestClient(app) as client:
@@ -41,7 +42,7 @@ def test_healthz_returns_ok_even_when_db_unreachable(monkeypatch):
     seconds, so a probe that waits would cause the proxy to withdraw the
     backend even though the app is still serving requests."""
     app = FastAPI()
-    app.get("/healthz")(main.healthz)
+    app.get("/healthz")(system_routes.healthz)
 
     def _broken_conn():
         raise sqlite3.OperationalError("simulated DB outage")

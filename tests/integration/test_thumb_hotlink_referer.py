@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import main
+from routes import system as system_routes
 from services import url_guard
 
 
@@ -32,7 +33,7 @@ def _reset():
 
 def _client() -> TestClient:
     app = FastAPI()
-    app.get("/thumb")(main.thumbnail_proxy)
+    app.get("/thumb")(system_routes.thumbnail_proxy)
     return TestClient(app)
 
 

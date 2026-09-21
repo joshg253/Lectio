@@ -10,10 +10,18 @@ from __future__ import annotations
 from pathlib import Path
 
 MAIN = (Path(__file__).resolve().parents[2] / "main.py").read_text()
+SYSTEM_SRC = (Path(__file__).resolve().parents[2] / "routes" / "system.py").read_text()
 
 
 def _slice(start: str, end: str = "\ndef ") -> str:
     body = MAIN[MAIN.index(start) :]
+    return body[: body.index(end, len(start))]
+
+
+def _slice_system(start: str, end: str = "\ndef ") -> str:
+    """Same as _slice but reads from routes/system.py — thumbnail_proxy moved
+    there in Stage 1 of the main.py route-by-URL-prefix split (Plan.md)."""
+    body = SYSTEM_SRC[SYSTEM_SRC.index(start) :]
     return body[: body.index(end, len(start))]
 
 
@@ -58,7 +66,7 @@ def test_pinned_thumbnails_are_never_evicted():
 def test_thumb_proxy_serves_the_pinned_copy():
     """The post list pipes every thumbnail through /thumb, which rejects anything that is not http(s).
     Without an explicit branch the pinned bytes exist and nothing ever renders them."""
-    body = _slice("def thumbnail_proxy", "\n@app.")
+    body = _slice_system("def thumbnail_proxy")
     assert 'url.startswith("/api/feed-thumb?")' in body
     # Both serving paths go through one response builder so headers cannot drift.
     assert "_pinned_thumb_response(pinned_feed)" in body

@@ -26,10 +26,12 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import main
+from routes import system as system_routes
 from services import lead_images as lead_images_module
 from services import tenancy, url_guard
 
 MAIN = (Path(__file__).resolve().parents[2] / "main.py").read_text()
+SYSTEM_SRC = (Path(__file__).resolve().parents[2] / "routes" / "system.py").read_text()
 
 SIGNED_URL = "https://images-wixmp-abc.wixmp.com/f/deadbeef/a.jpg?token=eyFAKE.JWT.SIG"
 PLAIN_URL = "https://example.test/static/lead.jpg"
@@ -39,6 +41,13 @@ ENTRY = "entry-1"
 
 def _slice(start: str, end: str = "\ndef ") -> str:
     body = MAIN[MAIN.index(start) :]
+    return body[: body.index(end, len(start))]
+
+
+def _slice_system(start: str, end: str = "\ndef ") -> str:
+    """Same as _slice but reads from routes/system.py — thumbnail_proxy moved
+    there in Stage 1 of the main.py route-by-URL-prefix split (Plan.md)."""
+    body = SYSTEM_SRC[SYSTEM_SRC.index(start) :]
     return body[: body.index(end, len(start))]
 
 
@@ -117,7 +126,7 @@ def test_pinned_entry_thumbnails_are_never_evicted():
 
 
 def test_thumb_proxy_serves_the_pinned_copy_before_the_scheme_check():
-    body = _slice("def thumbnail_proxy", "\n@app.")
+    body = _slice_system("def thumbnail_proxy")
     assert 'url.startswith("/api/entry-thumb?")' in body
     assert "_pinned_entry_thumb_response(pinned_entry_feed, pinned_entry_id)" in body
     assert body.index('url.startswith("/api/entry-thumb?")') < body.index('parsed.scheme not in {"http", "https"}')
@@ -211,7 +220,7 @@ def test_api_entry_thumb_serves_pinned_bytes(monkeypatch):
 
 def _thumb_client() -> TestClient:
     app = FastAPI()
-    app.get("/thumb")(main.thumbnail_proxy)
+    app.get("/thumb")(system_routes.thumbnail_proxy)
     return TestClient(app)
 
 

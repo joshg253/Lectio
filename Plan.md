@@ -86,12 +86,22 @@ in disjoint chunks hundreds/thousands of lines apart (e.g. `/feeds/*` routes spa
 than "cut one block." Grouped by conceptual area (not always the literal first path segment) and
 ordered safest → riskiest:
 
-1. `routes/system.py` — `/healthz`, `/sw.js`, `/stats`, `/login`, `/logout`,
-   `/websub/callback`, `/opml/{export,import}`, `/takeout/{export,import}`, `/thumb`,
+1. **Done (2026-09-20).** `routes/system.py` — `/healthz`, `/sw.js`, `/stats`, `/login`,
+   `/logout`, `/websub/callback`, `/opml/{export,import}`, `/takeout/{export,import}`, `/thumb`,
    `/starred-asset/{asset_hash}`, `/internal/warm-lead-image-cache`, `/email-contacts*`,
    `/dev/feeds/*` + `/dev/flush-email-batch`, `/instapaper/import`, `/youtube/sync`,
-   `/devto-feeds/{feed_id}/config`, `/administration` — ~30 routes, lowest-traffic leaf endpoints,
-   least likely to share state with each other.
+   `/devto-feeds/{feed_id}/config`, `/administration` — 30 routes moved cleanly, none deferred.
+   main.py: 36,499 → 35,128 lines; `routes/system.py`: 1,554 lines. A real bug the mechanical move
+   would have introduced silently: `offline_service_worker` (serves `/sw.js`) used
+   `Path(__file__).parent`, which would have resolved to `routes/` instead of the app root once
+   moved — rewritten to use the existing `BASE_DIR` constant instead. Bottom-of-file import needed
+   `routes.system` placed *after* `services.automation_rules` (it needs
+   `_run_automation_after_refresh` bound into main's namespace first) plus `# noqa: I001` on the
+   block to stop ruff's isort from re-sorting it earlier. 13 test files retargeted for the two
+   known gotchas — `test_websub_fanout.py` was the sharpest case, needing `websub_service` and
+   `_run_automation_after_refresh` monkeypatched on *both* `main` and `routes.system` since
+   `_process_websub_push` reads both through its own copied-reference import. Full
+   `make test`/`lint`/`types` pass (4,192 tests).
 2. `routes/compat_{greader,fever,v1}.py` — the greader/fever/v1 compat surfaces (~24 routes) are
    already thin wrappers over `GReaderService`/`FeverService` (see `services/greader.py`,
    `services/fever.py`), so should extract cleanly; they do call into the shared rendering core

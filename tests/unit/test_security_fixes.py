@@ -8,6 +8,7 @@ import pytest
 
 import main
 import services.feed_discovery as feed_discovery
+from routes import system as system_routes
 
 # ── M1: allowlist HTML sanitizer (replaces the bypassable regex sanitizers) ──
 _XSS_VECTORS = [
@@ -52,12 +53,12 @@ def test_sanitizer_unwraps_unknown_tags_keeping_text():
 # ── M2: login open-redirect guard ──
 @pytest.mark.parametrize("evil", ["//evil.com", "https://evil.com", "/\\evil.com", "http://x", ""])
 def test_safe_next_blocks_offsite(evil: str):
-    assert main._safe_next(evil) == "/"
+    assert system_routes._safe_next(evil) == "/"
 
 
 @pytest.mark.parametrize("ok", ["/", "/foo", "/foo?x=1&y=2", "/?folder_id=3"])
 def test_safe_next_allows_local_paths(ok: str):
-    assert main._safe_next(ok) == ok
+    assert system_routes._safe_next(ok) == ok
 
 
 # ── H2: only http(s) feed URLs are subscribable (no file:// local reads) ──
