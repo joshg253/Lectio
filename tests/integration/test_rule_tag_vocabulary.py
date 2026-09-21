@@ -13,7 +13,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import main
+import main  # must sort before routes.automation — see routes/__init__.py
+from routes import automation as automation_routes
 from services import tenancy
 
 FEED = "https://firehose.example.test/feed"
@@ -41,7 +42,7 @@ def configured(tmp_path):
 @pytest.fixture
 def client():
     app = FastAPI()
-    app.get("/rules/tag-vocabulary")(main.rules_tag_vocabulary_route)
+    app.get("/rules/tag-vocabulary")(automation_routes.rules_tag_vocabulary_route)
     with TestClient(app) as c:
         yield c
 

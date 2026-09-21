@@ -5,13 +5,14 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import main
+import main  # noqa: F401 -- must sort before routes.automation, see routes/__init__.py
+from routes import automation as automation_routes
 
 
 def _build_app(monkeypatch, *, safe=True, send_result=(True, None)):
     app = FastAPI()
-    app.post("/rules/webhook-test")(main.webhook_test_route)
-    monkeypatch.setattr(main.url_guard, "is_safe_outbound_url", lambda _u: safe)
+    app.post("/rules/webhook-test")(automation_routes.webhook_test_route)
+    monkeypatch.setattr(automation_routes.url_guard, "is_safe_outbound_url", lambda _u: safe)
     captured = {}
 
     def _send(url, payload):
@@ -19,7 +20,10 @@ def _build_app(monkeypatch, *, safe=True, send_result=(True, None)):
         captured["payload"] = payload
         return send_result
 
-    monkeypatch.setattr(main, "send_webhook", _send)
+    # webhook_test_route moved to routes/automation.py (Stage 4) and does its own
+    # `from services.webhooks import send_webhook`, a copied reference separate
+    # from main's -- patching main.send_webhook alone would not reach it.
+    monkeypatch.setattr(automation_routes, "send_webhook", _send)
     return app, captured
 
 

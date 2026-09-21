@@ -12,7 +12,8 @@ import re
 
 import pytest
 
-import main
+import main  # must sort before routes.automation — see routes/__init__.py
+from routes import automation as automation_routes
 from services import automation_rules, tenancy
 
 
@@ -132,11 +133,16 @@ def test_dry_run_run_now_and_live_matching_share_one_matcher(monkeypatch):
         return real(keyword, is_regex)
 
     monkeypatch.setattr(main, "build_keyword_matcher", spy)
-    # _entry_matches_rule lives in services.automation_rules now (main.py breakup,
-    # Step 2 Stage B) and did `from main import build_keyword_matcher` at its own
-    # module load, copying the reference -- patching main's binding alone doesn't
-    # reach it, so both bindings need the spy.
+    # _entry_matches_rule/_run_now_pattern live in services.automation_rules now
+    # (main.py breakup, Step 2 Stage B) and did `from main import
+    # build_keyword_matcher` at their own module load, copying the reference --
+    # patching main's binding alone doesn't reach them, so that binding needs
+    # the spy too.
     monkeypatch.setattr(automation_rules, "build_keyword_matcher", spy)
+    # _dry_run_pattern moved to routes/automation.py (Stage 4 of the route split)
+    # and did its own `from main import build_keyword_matcher` at ITS module
+    # load -- a third copied reference, needing its own spy.
+    monkeypatch.setattr(automation_routes, "build_keyword_matcher", spy)
 
     class _Entry:
         title = "A spoiler appears"
@@ -149,7 +155,7 @@ def test_dry_run_run_now_and_live_matching_share_one_matcher(monkeypatch):
     # The other two call sites, which are the ones that actually drift: a preview
     # that matches differently from the run is the bug this consolidation fixes.
     with main.get_meta_connection() as conn:
-        main._dry_run_pattern(conn, "global", "", "spoiler, leak", False, "title")
+        automation_routes._dry_run_pattern(conn, "global", "", "spoiler, leak", False, "title")
         main._run_now_pattern(conn, "global", "", "leak, rumor", False, "title")
 
     assert calls == [("spoiler, leak", False), ("leak, rumor", False), ("spoiler, leak", False), ("leak, rumor", False)]
@@ -193,8 +199,8 @@ def test_dry_run_unread_only_reaches_a_match_the_capped_scan_would_miss(isolated
     )
 
     with main.get_meta_connection() as conn:
-        capped = main._dry_run_pattern(conn, "feed", feed, "Apple's iCloud", False, "title", max_entries=5)
-        uncapped = main._dry_run_pattern(conn, "feed", feed, "Apple's iCloud", False, "title", max_entries=5, unread_only=True)
+        capped = automation_routes._dry_run_pattern(conn, "feed", feed, "Apple's iCloud", False, "title", max_entries=5)
+        uncapped = automation_routes._dry_run_pattern(conn, "feed", feed, "Apple's iCloud", False, "title", max_entries=5, unread_only=True)
 
     assert capped["total_matches"] == 0
     assert uncapped["total_matches"] == 1

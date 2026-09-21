@@ -131,8 +131,23 @@ ordered safest → riskiest:
    registering a moved handler directly on a bare test `FastAPI()` app via `main.<handler>`, now
    `routes.tags.<handler>`/`routes.highlights.<handler>`), no copied-reference-monkeypatch case
    surfaced this time. Full `make test`/`lint`/`types` pass (4,192 tests).
-4. `routes/automation.py` — `/automation/history*`, `/rules/*`, `/dedup/*` (~9) — natural fit
-   alongside `services/automation_rules.py` from Step 2.
+4. **Done (2026-09-21).** `routes/automation.py` — `/automation/history*`, `/rules/*`,
+   `/dedup/false-match*` (9 routes). main.py: 33,881 → 33,285 lines; new file 677 lines. Imports
+   `_run_tag_filter`/`_run_now_dedup`/`_run_now_pattern` straight from `services.automation_rules`
+   rather than round-tripping through main.py. `_dry_run_dedup`/`_dry_run_pattern` (the `/rules/dry-run`
+   preview engine, main.py ~7307-7704) moved too — each had exactly one caller (the dry-run route)
+   so qualified as single-route-only despite being conceptually "dedup engine"; full preview/apply
+   consolidation stays the separate, still-gated "Dedup routes consolidation" project above.
+   `/entries/feed-tags`, sitting inside this same file region, correctly stayed put — entries
+   concern, not automation, despite physical proximity. Ordering: empirically verified (temporarily
+   moved the import, ran `python -c "import main"` both ways) that `services.automation_rules`'s
+   own dependencies aren't late-bound the way `_run_automation_after_refresh` was for Stage 1, so
+   strictly the ordering constraint doesn't bite here — kept `routes.automation`'s import positioned
+   after `services.automation_rules` anyway, defensively, same reasoning as Stage 1. 6 test files
+   retargeted, one hitting a three-way copied reference on `build_keyword_matcher` (bound
+   separately into `main`, `services.automation_rules`, and now `routes.automation`, each via its
+   own `from main import build_keyword_matcher` — `test_keyword_matcher.py` needed all three
+   patched). Full `make test`/`lint`/`types` pass (4,192 tests).
 5. `routes/admin.py` — `/admin/*`, `/debug/*`, `/account/*` (~15).
 6. `routes/saved.py` — `/saved/*`, `/articles/*` (~21) — backed by `services/saved_articles.py`.
 7. `routes/settings.py` — `/settings/*` (~11).
