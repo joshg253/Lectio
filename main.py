@@ -8445,146 +8445,6 @@ def _apply_hide_members_only(refreshed_feed_urls: set[str]) -> int:
         return 0
 
 
-def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
-    """Run enabled mark_as_read, deduplicate, email_article, and hide-shorts for refreshed feeds."""
-    if not refreshed_feed_urls:
-        return
-
-    # GUID-churn suppression: auto-mark re-issued entries (same slug, new GUID) as read.
-    try:
-        suppressed_total = 0
-        with get_reader() as reader:
-            with get_meta_connection() as conn:
-                for feed_url in refreshed_feed_urls:
-                    suppressed_total += _suppress_guid_churn(reader, conn, feed_url)
-        if suppressed_total:
-            _bump_unread_counts_generation()
-            LOGGER.info("[guid-churn] suppressed %d re-issued entries", suppressed_total)
-    except Exception:
-        LOGGER.exception("[guid-churn] error during suppression")
-
-    # Cross-feed identical-link dedup: catches syndication dupes (blog + planet, etc.)
-    # that the web UI hides at render time but GReader clients see as separate items.
-    try:
-        with get_reader() as reader:
-            with get_meta_connection() as conn:
-                cross_suppressed = _cleanup_intra_feed_slug_dupes(reader, conn)
-        if cross_suppressed:
-            _bump_unread_counts_generation()
-            LOGGER.info("[guid-churn] suppressed %d cross-feed duplicate entries", cross_suppressed)
-    except Exception:
-        LOGGER.exception("[guid-churn] error during cross-feed dedup")
-
-    _apply_hide_shorts(refreshed_feed_urls)
-    _apply_hide_paywalled(refreshed_feed_urls)
-    _apply_hide_members_only(refreshed_feed_urls)
-    try:
-        # ── Read phase (no write lock held) ──────────────────────────────────
-        with get_meta_connection() as conn:
-            all_rules = get_highlight_keywords(conn)
-            folder_ids_needed: set[int] = set()
-            for r in all_rules:
-                if r.get("enabled"):
-                    folder_ids_needed |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
-            folder_feed_map: dict[int, set[str]] = {fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed}
-
-        enabled_rules = [
-            r for r in all_rules if r.get("enabled") and r.get("type") in ("mark_as_read", "deduplicate", "email_article", "tag_filter")
-        ]
-        if not enabled_rules:
-            return
-
-        now = datetime.now().isoformat()
-        ran_dedup_keys: set[tuple[str, str, str]] = set()
-
-        # ── Run phase: each result gets its own short write transaction ───────
-        for rule in enabled_rules:
-            try:
-                rule_type = str(rule.get("type", ""))
-                scope = str(rule.get("scope", ""))
-                scope_id = str(rule.get("scope_id") or "")
-                keyword = str(rule.get("keyword", ""))
-                is_regex = bool(rule.get("is_regex"))
-                search_in = str(rule.get("search_in") or "title")
-
-                if rule_type == "mark_as_read":
-                    for feed_url in refreshed_feed_urls:
-                        _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
-                        in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
-
-                        if not in_scope:
-                            continue
-
-                        with get_meta_connection() as conn:
-                            result = _run_now_pattern(conn, "feed", feed_url, keyword, is_regex, search_in)
-                            if "error" not in result and result.get("count", 0) > 0:
-                                _log_auto_run(conn, now, rule_type, scope, scope_id, keyword, result)
-
-                elif rule_type == "tag_filter":
-                    for feed_url in refreshed_feed_urls:
-                        _folder_set = rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)
-                        if not feed_in_rule_scope(scope, scope_id, feed_url, _folder_set):
-                            continue
-
-                        with get_meta_connection() as conn:
-                            result = _run_tag_filter(conn, "feed", feed_url, keyword)
-                            if "error" not in result and result.get("count", 0) > 0:
-                                _log_auto_run(conn, now, rule_type, scope, scope_id, keyword, result)
-
-                elif rule_type == "deduplicate":
-                    rule_key = (scope, scope_id, keyword)
-                    if rule_key in ran_dedup_keys:
-                        continue
-
-                    if scope == "global":
-                        in_scope = True
-                    elif scope in ("folder", "folders"):
-                        in_scope = bool(refreshed_feed_urls & (rule_scope_folder_feed_set(scope, scope_id, folder_feed_map) or set()))
-                    elif scope == "feeds":
-                        in_scope = bool(refreshed_feed_urls & set(parse_feeds_scope_id(scope_id)))
-                    else:
-                        in_scope = False  # dedup requires global / folder(s) / multi-feed scope
-
-                    if not in_scope:
-                        continue
-
-                    ran_dedup_keys.add(rule_key)
-                    match_method = keyword if keyword in _DEDUP_VALID_MATCH_METHODS else "slug"
-                    window_hours = max(1, int(rule.get("dedup_window_hours") or 24))
-                    exclude_scope_ids = str(rule.get("exclude_scope_ids") or "")
-                    with get_meta_connection() as conn:
-                        result = _run_now_dedup(
-                            conn,
-                            scope,
-                            scope_id,
-                            match_method,
-                            window_hours,
-                            exclude_scope_ids=exclude_scope_ids,
-                            fuzzy_threshold=_dedup_fuzzy_threshold(rule.get("dedup_fuzzy_pct")),
-                            min_title_words=_clamp_min_title_words(rule.get("dedup_min_title_words")),
-                        )
-                        if "error" not in result and result.get("count", 0) > 0:
-                            _log_auto_run(conn, now, rule_type, scope, scope_id, keyword, result)
-                elif rule_type == "email_article":
-                    pass  # handled separately by _run_email_rules_after_refresh below
-            except Exception:
-                LOGGER.exception("[automation] error processing rule %s/%s/%s", rule_type, scope, keyword)
-
-        # Email rules run after mark_as_read/dedup to avoid re-emailing articles
-        # that were just auto-marked as read.
-        _run_email_rules_after_refresh(refreshed_feed_urls)
-        # Webhook rules likewise fire after mark_as_read/dedup.
-        _run_webhook_rules_after_refresh(refreshed_feed_urls)
-        _run_instapaper_rules_after_refresh(refreshed_feed_urls)
-        _run_save_article_rules_after_refresh(refreshed_feed_urls)
-        _run_quire_rules_after_refresh(refreshed_feed_urls)
-        # YouTube auto-add-to-playlist rules (after mark_as_read so a "mark read after
-        # add" doesn't fight an earlier rule).
-        _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls)
-    except Exception:
-        LOGGER.exception("[automation] error running automation rules after refresh")
-
-
 def _is_local_dev_feed(feed_url: str) -> bool:
     """Return True for feeds served by Lectio itself (bypass refresh cooldown)."""
     try:
@@ -36813,12 +36673,12 @@ def miniflux_toggle_bookmark(entry_id: int, request: Request) -> Response:
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # services/automation_rules.py (Plan.md's main.py/index.html breakup, Step 2,
-# Stages B-D): toggle_feed_tag_filter, _flush_email_batch_for_rule,
+# Stages B-E, now closed out): toggle_feed_tag_filter, _flush_email_batch_for_rule,
 # _run_on_star_destinations, the scheduled-refresh loop and WebSub fan-out
-# above (both via _run_automation_after_refresh, still in main.py), and the
-# manual Run Now / dry-run routes all still call one of these directly, not
-# through a route of their own, so they need the same late-import treatment
-# as _inoreader_drip_step above — the module does `from main import
+# above, the bg-refresh thread, 3 refresh routes, and the manual Run Now /
+# dry-run routes all still call one of these directly, not through a route of
+# their own, so they need the same late-import treatment as
+# _inoreader_drip_step above — the module does `from main import
 # build_keyword_matcher, ...`, which only resolves once main.py has already
 # defined those names.
 # ---------------------------------------------------------------------------
@@ -36838,21 +36698,25 @@ from routes.integrations_reddit import router as _reddit_oauth_router  # noqa: E
 from routes.integrations_ttrss import router as _ttrss_import_router  # noqa: E402
 from routes.integrations_youtube import router as _youtube_oauth_router  # noqa: E402
 from services.automation_rules import (  # noqa: E402
-    # _apply_youtube_playlist_rules/_entry_matches_rule: unused in main.py itself, kept importable here
-    # for scripts/backfill_missed_youtube_playlist_adds.py and tests that call main.<name> directly.
+    # The six _run_*_rules_after_refresh dispatchers and _apply_youtube_playlist_rules/
+    # _entry_matches_rule have no caller left inside main.py itself now that
+    # _run_automation_after_refresh has moved too -- kept importable here only for tests
+    # that call main.<name> directly, and (for _apply_youtube_playlist_rules/
+    # _entry_matches_rule) scripts/backfill_missed_youtube_playlist_adds.py.
     _apply_youtube_playlist_rules,  # noqa: F401
     _entry_matches_rule,  # noqa: F401
     _get_entry_excerpt,
     _log_auto_run,
-    _run_email_rules_after_refresh,
-    _run_instapaper_rules_after_refresh,
+    _run_automation_after_refresh,
+    _run_email_rules_after_refresh,  # noqa: F401
+    _run_instapaper_rules_after_refresh,  # noqa: F401
     _run_now_dedup,
     _run_now_pattern,
-    _run_quire_rules_after_refresh,
-    _run_save_article_rules_after_refresh,
+    _run_quire_rules_after_refresh,  # noqa: F401
+    _run_save_article_rules_after_refresh,  # noqa: F401
     _run_tag_filter,
-    _run_webhook_rules_after_refresh,
-    _run_youtube_playlist_rules_after_refresh,
+    _run_webhook_rules_after_refresh,  # noqa: F401
+    _run_youtube_playlist_rules_after_refresh,  # noqa: F401
 )
 from services.inoreader_import import _inoreader_drip_step  # noqa: E402
 

@@ -11,9 +11,9 @@ Within a tier, related items are clustered under a bold sub-heading. Two watch-l
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
 Tiers 1 through 3 are empty. The main.py/index.html breakup's Step 1 (top of Tier 4, the
-Integration routes cluster) is done — Stages A-E all shipped 2026-09-19/20. Step 2 (post-refresh
-automation pipeline) is now scoped into its own A-E sub-stages and Stage A shipped 2026-09-20.
-Steps 3-7 of the breakup are unscoped follow-on work, not started.
+Integration routes cluster) and Step 2 (post-refresh automation pipeline, its own A-E sub-stages)
+are both done — Step 1 shipped 2026-09-19/20, Step 2 shipped 2026-09-20. Steps 3-8 of the breakup
+are unscoped follow-on work, not started.
 
 ## Tier 1 — actively impeding unread-clearing
 
@@ -31,12 +31,13 @@ Empty.
 
 ### main.py / index.html breakup — extraction map
 
-`main.py` was 40,474 lines when this started (2026-09-19), now 38,218 after Step 1 (Stages A-E,
-below) moved the whole Integration routes cluster — ~44 routes plus their workers — into
-`routes/integrations_*.py` and two new services modules. `static/js/app.js` is 20,042 lines;
-`index.html` is 2,305 lines — untouched by this round. CLAUDE.md calls for a routes/services/
-storage split main.py has only partly grown into. Not a same-session change — needs incremental
-extraction with tests between steps; Steps 2-7 below are unscoped.
+`main.py` was 40,474 lines when this started (2026-09-19), now 36,737 after Step 1 (Stages A-E)
+moved the whole Integration routes cluster — ~44 routes plus their workers — into
+`routes/integrations_*.py` and two new services modules, and Step 2 (Stages A-E) moved the
+post-refresh automation pipeline into a third new module, `services/automation_rules.py`.
+`static/js/app.js` is 20,042 lines; `index.html` is 2,305 lines — untouched by this round. CLAUDE.md
+calls for a routes/services/storage split main.py has only partly grown into. Not a same-session
+change — needs incremental extraction with tests between steps; Steps 3-8 below are unscoped.
 
 **Already done, organically, without anyone treating it as "the breakup project":** `index.html`'s
 modal extraction (7 `{% include %}`s now — `_tree_folder_feeds.html`, `_entry_pane.html`,
@@ -180,10 +181,28 @@ compat APIs; treat as its own carefully-tested project, not part of a mechanical
      time-travel patch — all the same copied-reference trap as prior stages, now also hitting
      `automation_rules`'s own `from datetime import datetime` binding. main.py: 37,717 → 36,873
      lines; `services/automation_rules.py`: 1,466 lines.
-   - **E — not started.** Move `_run_automation_after_refresh` itself last (most main-resident call
-     sites: scheduler tick, WebSub fan-out, bg-refresh thread, 3 routes) — do it after everything
-     else is proven so only one function's wiring is unverified at a time. Retarget
-     `test_dedup_fuzzy_threshold.py`'s `main._run_now_dedup` patch to target the module.
+   - **E — done (2026-09-20), Step 2 closed out.** Moved `_run_automation_after_refresh` itself last
+     (~140 lines) — the function with the most main-resident call sites (scheduler tick, WebSub
+     fan-out, bg-refresh thread, 3 refresh routes), done after everything else was proven so only one
+     function's wiring was ever unverified at a time. Needed 3 more main-resident imports the earlier
+     stages hadn't required yet: the three hide-* hygiene appliers (`_apply_hide_shorts`,
+     `_apply_hide_paywalled`, `_apply_hide_members_only`), the two guid-churn suppressors
+     (`_suppress_guid_churn`, `_cleanup_intra_feed_slug_dupes`), `parse_feeds_scope_id`, and
+     `_DEDUP_VALID_MATCH_METHODS`/`_dedup_fuzzy_threshold`/`_clamp_min_title_words`. With this function
+     gone, main.py no longer calls `_run_email/webhook/instapaper/save_article/quire/
+     youtube_playlist_rules_after_refresh` directly at all (their only caller was the function that
+     just moved), so those six import-back lines also picked up `# noqa: F401` — kept solely so
+     `main.<name>` still resolves for tests. Retargeted `test_dedup_fuzzy_threshold.py`'s two
+     `monkeypatch.setattr(main, "_run_now_dedup", …)` calls inside `_run_automation_after_refresh`
+     tests to `automation_rules._run_now_dedup` — same copied-reference trap, but this time because
+     the *caller* moved into the same module as the *patched name*, not the other way around, so a
+     call that used to cross from main into main now resolves entirely inside `automation_rules` and
+     never touches `main`'s namespace. The sibling `test_run_now_honors_the_saved_percent`, which
+     patches the same name but drives it through the still-in-main `rules_run_now_route`, needed no
+     change — proof the two copied-reference failure directions are genuinely different, not the same
+     bug twice. main.py: 36,873 → 36,737 lines; `services/automation_rules.py`: 1,618 lines. **Step 2
+     of the main.py/index.html breakup is now complete** — main.py: 38,218 → 36,737 lines (1,481
+     removed) since Step 1 finished.
    Every stage's new/updated test must sort `import main` before `from services import
    automation_rules` (same circular-import rule as `routes/__init__.py`'s docstring documents for
    `migration_common`).

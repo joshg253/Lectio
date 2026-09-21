@@ -11,7 +11,7 @@ import json
 import pytest
 
 import main
-from services import tenancy
+from services import automation_rules, tenancy
 
 FEED_A = "https://a.test/feed"
 FEED_B = "https://b.test/feed"
@@ -167,7 +167,7 @@ def test_after_refresh_automation_reads_the_column(env, monkeypatch):
     with main.get_meta_connection() as conn:
         main.add_highlight_keyword(conn, "global", "", "fuzzy", "yellow", rule_type="deduplicate", enabled=1, dedup_fuzzy_pct=65)
     seen: list[float] = []
-    monkeypatch.setattr(main, "_run_now_dedup", lambda *a, **kw: seen.append(kw["fuzzy_threshold"]) or {"count": 0})
+    monkeypatch.setattr(automation_rules, "_run_now_dedup", lambda *a, **kw: seen.append(kw["fuzzy_threshold"]) or {"count": 0})
     main._run_automation_after_refresh({FEED_A})
     assert seen == [pytest.approx(0.65)]
 
@@ -219,7 +219,7 @@ def test_after_refresh_automation_reads_the_word_floor(env, monkeypatch):
     with main.get_meta_connection() as conn:
         main.add_highlight_keyword(conn, "global", "", "fuzzy", "yellow", rule_type="deduplicate", enabled=1, dedup_min_title_words=7)
     seen: list[int] = []
-    monkeypatch.setattr(main, "_run_now_dedup", lambda *a, **kw: seen.append(kw["min_title_words"]) or {"count": 0})
+    monkeypatch.setattr(automation_rules, "_run_now_dedup", lambda *a, **kw: seen.append(kw["min_title_words"]) or {"count": 0})
     main._run_automation_after_refresh({FEED_A})
     assert seen == [7]
 
