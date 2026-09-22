@@ -2,9 +2,10 @@
 route-by-URL-prefix split -- the last route module in the whole project,
 `/`, `/read`, `/read/offline`, and the shared rendering core itself).
 
-**Stage 10 is NOT done: this file currently holds only sub-stage A's 1 route,
-`GET /read/offline`.** Sub-stages B (`/read`) and C (`/`) add more routes to
-this same module in later tasks -- don't assume this is the final state. The
+**Stage 10 is NOT done yet: this file currently holds sub-stages A and B's 2
+routes, `GET /read/offline` and `GET /read`.** Sub-stage C (`/`, the last and
+highest-traffic route of the whole split) still adds one more route to this
+same module in a later task -- don't assume this is the final state. The
 shared rendering-core functions (`_home_inner`, `list_entries_for_feeds`,
 `get_entry_detail`, `build_reader_page`, `resolve_reader_article_html`) all
 stay in main.py regardless of how many of Stage 10's routes eventually move
@@ -45,6 +46,26 @@ offline` or any of its moved helpers today -- the only "read_offline" hit in
 `/read/offline/manifest` path -- so neither of the usual gotchas needed
 fixing and no test file was retargeted. No `scripts/*.py` callers turned up
 either.
+
+Stage 10B -- `GET /read` alone (`reader_view`): Read Mode's whole 2-pane browse + full-screen paginated
+reader, both states in one handler. The bigger, more central, Landmines-flagged-riskier of Stage 10's two
+remaining routes -- checked closely rather than assumed clean, and it held up the same way 9E/10A did: query
+normalization, one `resolve_reader_backlog` call for the node's item list, then either
+`_build_feeds_mode_context`/`_build_read_mode_context` + `templates.TemplateResponse` (browse state) or a
+walk of the already-fetched backlog for prev/current/next followed by `resolve_reader_article_html` +
+`build_reader_page` (read state). No inline list-building or pagination logic of its own. Per this
+sub-stage's explicit scope, ONLY the handler moved -- every function/constant it calls, including
+`resolve_reader_backlog`, `_build_feeds_mode_context`, `_build_read_mode_context`, `get_entry_detail`,
+`resolve_reader_article_html`, and `build_reader_page`, stayed in main.py untouched and got imported back,
+same as `_read_mode_date` did for 10A. `_READ_MODE_UA_SEEN` (a mutable module-level set with no other
+caller) stayed too rather than moving as a sole-caller helper the way 10A's offline helpers did -- this
+sub-stage's scope was "move only the handler," and importing a mutable set back still works correctly since
+it's mutated in place (`.add()`), never reassigned. No `services.automation_rules` ordering constraint.
+`reader_view` is a real, actively-tested UI surface (unlike 10A's route): `tests/integration/test_reader_view.py`
+hit both usual gotchas -- it registered `main.reader_view` directly on a bare test `FastAPI()` app (retargeted
+to `routes.home.reader_view`) and monkeypatched several of the above names on `main` (retargeted to
+`routes.home.<name>` wherever `reader_view` actually calls them). See that test file and this sub-stage's own
+paragraph in `routes/__init__.py` for the full per-name breakdown. No `scripts/*.py` callers turned up.
 """
 
 from __future__ import annotations
@@ -55,19 +76,41 @@ import html
 import re
 from urllib.parse import parse_qs, urlparse
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from main import (
+    _READ_MODE_UA_SEEN,
+    _READ_SORT_DEFAULT,
+    _READ_SORTS,
     BASE_DIR,
     LOGGER,
+    _build_feeds_mode_context,
+    _build_read_mode_context,
+    _csrf_token_for,
     _img_cache_get,
     _img_cache_key_url,
+    _read_browse_href,
+    _read_is_inbox_node,
     _read_mode_date,
+    _read_sort_for_node,
+    _reader_empty_response,
+    _reader_href,
     api_img_proxy,
+    build_reader_page,
+    get_all_manual_tag_names,
+    get_archived_saved_keys,
     get_entry_detail,
+    get_feed_display_prefs,
+    get_manual_tags_for_entry,
+    get_meta_connection,
+    get_root_folder_id,
     html_sanitize,
+    normalize_search_query,
+    normalize_tag_value,
     resolve_reader_article_html,
+    resolve_reader_backlog,
+    templates,
 )
 
 router = APIRouter()
@@ -216,4 +259,190 @@ def read_offline_copy(
             "Content-Disposition": f'attachment; filename="{slug}.html"',
             "Cache-Control": "no-store",
         },
+    )
+
+
+@router.get("/read", response_class=HTMLResponse)
+def reader_view(
+    request: Request,
+    feed_url: str | None = Query(default=None),
+    entry_id: str | None = Query(default=None),
+    folder_id: int | None = Query(default=None),
+    list_feed_url: str | None = Query(default=None),
+    tag: str | None = Query(default=None),
+    archived: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    scope: str = Query(default="saved"),
+    sort: str | None = Query(default=None),
+    resume_sort: str | None = Query(default=None),
+    kept: str | None = Query(default=None),
+    confirm_delete_tag: str | None = Query(default=None),
+):
+    """Read Mode. No entry selected -> the 2-pane browse; an entry selected ->
+    the full-screen paginated reader. Two scopes: ``saved`` (the starred backlog;
+    Archive is the done-axis) and ``feeds`` (ordinary unread feed reading, with a
+    feeds tree drilling to individual feeds).
+
+    *sort* is one of `_READ_SORTS` and carries through every reader link, so the
+    order you browse in is the order Next/Prev walk. The backlog has always taken
+    sort_by/sort_dir; Read Mode simply pinned them to newest-first and gave no way
+    to change it, which is wrong for a comic backlog you read oldest-first."""
+    _ua = (request.headers.get("user-agent") or "").strip()
+    if _ua and _ua not in _READ_MODE_UA_SEEN and len(_READ_MODE_UA_SEEN) < 50:
+        _READ_MODE_UA_SEEN.add(_ua)
+        LOGGER.info("[read-mode-ua] %s", _ua[:300])
+    is_feeds = scope == "feeds"
+    tag_val = normalize_tag_value(tag)
+    q_val = normalize_search_query(q)
+    feed_scope = list_feed_url or None
+    # Search reaches every saved item; otherwise the inbox, unless ?archived=1.
+    archived_view = (not is_feeds) and str(archived) == "1"
+    archived_filter = None if (is_feeds or q_val) else archived_view
+    # A node is "selected" once the user picks All (root folder), a folder, a feed,
+    # a tag, Archive, or a search. A bare /read has no node selected: it lands on
+    # the tree only, so we never auto-load the whole (huge) backlog.
+    # "All Saved" — everything kept (starred OR tagged) minus archived, i.e. what
+    # the main app's Saved view shows. Its own node rather than a mode of the
+    # Inbox: the Inbox is the to-do pile and must stay small, but the two modes
+    # disagreeing about what exists is exactly the mismatch Read Mode is meant
+    # not to have.
+    all_saved_view = (not is_feeds) and kept == "all"
+    node_selected = folder_id is not None or bool(feed_scope) or bool(tag_val) or archived_view or bool(q_val) or all_saved_view
+
+    # The Inbox opens most-recently-starred; every other node keeps newest-first.
+    # An explicit ?sort= always wins, so the switcher still works everywhere.
+    with get_meta_connection() as _root_conn:
+        _read_root_id = get_root_folder_id(_root_conn)
+    is_inbox = (not all_saved_view) and _read_is_inbox_node(folder_id, tag_val, archived_view, q_val, scope, _read_root_id)
+    sort_val = _read_sort_for_node(sort, is_inbox=is_inbox)
+    if is_feeds and sort_val == "starred":
+        # Feed entries mostly carry no star date, so this order would be noise.
+        # Reachable only by hand-editing the URL; the switcher never offers it.
+        sort_val = _READ_SORT_DEFAULT
+    resume_sort_val = resume_sort if resume_sort in _READ_SORTS else None
+    _sort_by, _sort_dir = _READ_SORTS[sort_val]
+
+    def _load_backlog(limit: int) -> list[dict]:
+        return resolve_reader_backlog(
+            folder_id=folder_id,
+            list_feed_url=feed_scope,
+            read_filter=("unread" if is_feeds else "all"),
+            star_only=(not is_feeds),
+            tag=tag_val,
+            sort_by=_sort_by,
+            sort_dir=_sort_dir,
+            search_query=q_val,
+            archived=archived_filter,
+            limit=limit,
+            # The Inbox is the to-do pile (starred only); every other saved node
+            # — tags, Archive, search — still spans the whole kept set.
+            kept_scope=("starred" if is_inbox else "kept"),
+        )
+
+    # --- BROWSE: no article selected -> 2-pane tree + list -------------------
+    if not (entry_id and feed_url):
+        items = _load_backlog(150) if node_selected else []
+        if is_feeds:
+            context = _build_feeds_mode_context(
+                request,
+                folder_id=folder_id,
+                list_feed_url=feed_scope,
+                tag=tag_val,
+                q=q_val,
+                items=items,
+                node_selected=node_selected,
+            )
+        else:
+            context = _build_read_mode_context(
+                request,
+                folder_id=folder_id,
+                tag=tag_val,
+                list_feed_url=feed_scope,
+                archived=archived_view,
+                q=q_val,
+                items=items,
+                node_selected=node_selected,
+                sort=sort_val,
+                resume_sort=resume_sort_val,
+                all_saved=all_saved_view,
+                confirm_delete_tag=confirm_delete_tag,
+            )
+        return templates.TemplateResponse(
+            request,
+            "read_mode.html",
+            context,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    # --- READ: an article is selected -> full-screen paginated reader --------
+    backlog = _load_backlog(250)
+
+    def _href(rec: dict | None) -> str:
+        if not rec:
+            return ""
+        return _reader_href(
+            rec["feed_url"],
+            rec["id"],
+            folder_id=folder_id,
+            tag=tag_val,
+            archived=archived_view,
+            q=q_val,
+            scope=scope,
+            list_feed_url=feed_scope,
+            sort=sort_val,
+            kept_all=all_saved_view,
+        )
+
+    current: dict | None = None
+    prev_rec: dict | None = None
+    next_rec: dict | None = None
+    for i, rec in enumerate(backlog):
+        if rec["feed_url"] == feed_url and rec["id"] == entry_id:
+            current = rec
+            prev_rec = backlog[i - 1] if i > 0 else None
+            next_rec = backlog[i + 1] if i + 1 < len(backlog) else None
+            break
+    if current is None:
+        # Not in the current node's list (just archived/deleted, or a stale
+        # link): still render it; "next" points at the head of what remains.
+        detail = get_entry_detail(feed_url, entry_id)
+        if detail is None and not backlog:
+            return _reader_empty_response()
+        current = detail or {"feed_url": feed_url, "id": entry_id, "title": feed_url, "link": ""}
+        next_rec = backlog[0] if backlog else None
+
+    cur_feed = str(current["feed_url"])
+    cur_id = str(current["id"])
+    cur_title = str(current.get("title") or current.get("link") or "(untitled)")
+    cur_link = str(current.get("link") or "")
+
+    # Deliberately NOT marked read here. Serving the page only means the article
+    # was opened, and in an e-ink browse loop opening is how you find out whether
+    # you want to read something — marking on render turned every peek into a
+    # read. The reader posts to /entries/read once pagination settles and the
+    # last page has actually been reached (static/reader.js), which is the first
+    # moment the whole article has been on screen. A one-page article qualifies
+    # immediately, because there it is true.
+
+    article_html = resolve_reader_article_html(cur_feed, cur_id, cur_link)
+    is_archived = (not is_feeds) and (cur_feed, cur_id) in get_archived_saved_keys()
+    with get_meta_connection() as _disp_conn:
+        _katex_dollar_math = bool(get_feed_display_prefs(_disp_conn, cur_feed).get("katex_dollar_math", 0))
+
+    return build_reader_page(
+        title=cur_title,
+        article_html=article_html,
+        source_link=cur_link,
+        prev_href=_href(prev_rec),
+        next_href=_href(next_rec),
+        back_href=_read_browse_href(folder_id, tag_val, archived_view, q_val, scope, feed_scope, sort_val),
+        feed_url=cur_feed,
+        entry_id=cur_id,
+        is_archived=is_archived,
+        csrf_token=_csrf_token_for(request),
+        show_saved_actions=not is_feeds,
+        date_display=_read_mode_date(current),
+        manual_tags=tuple(get_manual_tags_for_entry(cur_feed, cur_id)),
+        katex_dollar_math=_katex_dollar_math,
+        all_tag_names=tuple(get_all_manual_tag_names()),
     )

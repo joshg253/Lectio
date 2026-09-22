@@ -394,7 +394,22 @@ ordered safest → riskiest:
       exercises this route at all, so neither known gotcha applied — nothing to retarget. No
       `scripts/*.py` callers. Full `make test`/`lint`/`types`/`ruff format --check` pass; a live
       check confirmed real downloaded-HTML content, not just a non-404.
-    - **B.** `/read` — the e-ink Read Mode reader view.
+    - **B — done (2026-09-22).** `/read` — the e-ink Read Mode reader view. main.py: 26,047 →
+      25,861 lines; `routes/home.py`: 219 → 448 lines. Confirmed clean orchestration again, this
+      time under real scrutiny (bigger/more central than 10A): `reader_view` normalizes params,
+      calls `resolve_reader_backlog` once, then branches browse-vs-read state, calling
+      `_build_feeds_mode_context`/`_build_read_mode_context`/`resolve_reader_article_html`/
+      `build_reader_page` — no inline list-building or pagination logic of its own. All five
+      shared rendering-core functions stayed in main.py untouched; everything else the route
+      touches also stayed (correctly, per this stage's explicit scope), including
+      `_READ_MODE_UA_SEEN`, a mutable module-level set imported by reference — verified safe since
+      it's mutated via `.add()`, never reassigned, so the copied binding in `routes/home.py` still
+      points at the live object. `tests/integration/test_reader_view.py` hit both known gotchas
+      hard (an actively-tested UI surface, unlike 10A's zero-coverage route) — retargeted, with
+      `_mark_entry_read_background`/`_entry_is_starred` correctly left as `main.X` in the test
+      since `reader_view` doesn't call either (confirmed via grep on the function body, not
+      assumed). Full `make test`/`lint`/`types`/`ruff format --check` pass; live check confirmed
+      the correct `303 → /login` redirect through the real unauthenticated app.
     - **C.** `/` — the main app entry point, riskiest and highest-traffic; last.
 
 Each stage: `grep` the current route paths (line numbers drift as earlier stages move code, so

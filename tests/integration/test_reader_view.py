@@ -12,7 +12,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import main
+import main  # noqa: F401 -- must import before routes.home (see routes/__init__.py's circular-import note)
+import routes.home
 from services import tenancy
 
 
@@ -51,22 +52,28 @@ def _rec(n: int, *, read: bool = False) -> dict:
 
 def _app():
     app = FastAPI()
-    app.add_api_route("/read", main.reader_view, methods=["GET"])
+    app.add_api_route("/read", routes.home.reader_view, methods=["GET"])
     return app
 
 
 def _patch_read(monkeypatch, *, backlog, archived_keys=frozenset(), article="<p>BODY</p>", starred=True, manual_tags=(), all_tag_names=()):
+    # routes.home did `from main import ...` at import time, which copied these
+    # references into its own namespace -- reader_view now looks them up there,
+    # not on `main`, so that's what monkeypatch has to target (routes/__init__.py's
+    # copied-reference gotcha). `_mark_entry_read_background`/`_entry_is_starred`
+    # stay patched on `main`: reader_view doesn't call either (defensive stubs
+    # left over from when the done-flag lived on the star row).
     marks: list[tuple] = []
-    monkeypatch.setattr(main, "resolve_reader_backlog", lambda **k: list(backlog))
-    monkeypatch.setattr(main, "resolve_reader_article_html", lambda f, e, link: article)
+    monkeypatch.setattr(routes.home, "resolve_reader_backlog", lambda **k: list(backlog))
+    monkeypatch.setattr(routes.home, "resolve_reader_article_html", lambda f, e, link: article)
     monkeypatch.setattr(main, "_mark_entry_read_background", lambda *a: marks.append(a[:2]))
-    monkeypatch.setattr(main, "get_archived_saved_keys", lambda: set(archived_keys))
+    monkeypatch.setattr(routes.home, "get_archived_saved_keys", lambda: set(archived_keys))
     # Archive lives on the star row, so the button only renders for a starred
     # item; tags ride along so Delete's confirm can name them.
     monkeypatch.setattr(main, "_entry_is_starred", lambda f, e: starred)
-    monkeypatch.setattr(main, "get_manual_tags_for_entry", lambda f, e: list(manual_tags))
-    monkeypatch.setattr(main, "get_all_manual_tag_names", lambda: list(all_tag_names))
-    monkeypatch.setattr(main, "_csrf_token_for", lambda req: "tok")  # bare app has no session
+    monkeypatch.setattr(routes.home, "get_manual_tags_for_entry", lambda f, e: list(manual_tags))
+    monkeypatch.setattr(routes.home, "get_all_manual_tag_names", lambda: list(all_tag_names))
+    monkeypatch.setattr(routes.home, "_csrf_token_for", lambda req: "tok")  # bare app has no session
     return marks
 
 
@@ -168,7 +175,7 @@ def test_read_already_read_not_remarked(monkeypatch):
 def test_read_entry_not_in_list_renders_standalone(monkeypatch):
     _patch_read(monkeypatch, backlog=[_rec(2), _rec(3)])
     monkeypatch.setattr(
-        main,
+        routes.home,
         "get_entry_detail",
         lambda f, e: {"feed_url": "feed1", "id": "e1", "title": "Gone", "link": "https://example.com/1", "read": True},
     )
@@ -196,8 +203,8 @@ _CANNED_CTX = {
 
 
 def test_bare_read_renders_two_pane_browse(monkeypatch):
-    monkeypatch.setattr(main, "resolve_reader_backlog", lambda **k: [])
-    monkeypatch.setattr(main, "_build_read_mode_context", lambda *a, **k: dict(_CANNED_CTX))
+    monkeypatch.setattr(routes.home, "resolve_reader_backlog", lambda **k: [])
+    monkeypatch.setattr(routes.home, "_build_read_mode_context", lambda *a, **k: dict(_CANNED_CTX))
     with TestClient(_app()) as client:
         r = client.get("/read")
     body = r.text
@@ -216,8 +223,8 @@ def test_all_node_empty_glyph_renders_spacer_not_arrow(monkeypatch):
             {"label": "Tech", "glyph": "▸", "href": "/read?folder_id=5", "count": 2, "active": False},
         ],
     )
-    monkeypatch.setattr(main, "resolve_reader_backlog", lambda **k: [])
-    monkeypatch.setattr(main, "_build_read_mode_context", lambda *a, **k: dict(ctx))
+    monkeypatch.setattr(routes.home, "resolve_reader_backlog", lambda **k: [])
+    monkeypatch.setattr(routes.home, "_build_read_mode_context", lambda *a, **k: dict(ctx))
     with TestClient(_app()) as client:
         body = client.get("/read").text
     # The All row keeps an (empty) spacer; only Tech carries the arrow.
@@ -227,8 +234,8 @@ def test_all_node_empty_glyph_renders_spacer_not_arrow(monkeypatch):
 
 def test_browse_passes_archived_and_scope(monkeypatch):
     seen = {}
-    monkeypatch.setattr(main, "resolve_reader_backlog", lambda **k: seen.update(k) or [])
-    monkeypatch.setattr(main, "_build_read_mode_context", lambda *a, **k: dict(_CANNED_CTX, **{}))
+    monkeypatch.setattr(routes.home, "resolve_reader_backlog", lambda **k: seen.update(k) or [])
+    monkeypatch.setattr(routes.home, "_build_read_mode_context", lambda *a, **k: dict(_CANNED_CTX, **{}))
     with TestClient(_app()) as client:
         r = client.get("/read", params={"archived": "1", "folder_id": "5"})
     assert r.status_code == 200
@@ -237,8 +244,8 @@ def test_browse_passes_archived_and_scope(monkeypatch):
 
 def test_search_reaches_all_saved(monkeypatch):
     seen = {}
-    monkeypatch.setattr(main, "resolve_reader_backlog", lambda **k: seen.update(k) or [])
-    monkeypatch.setattr(main, "_build_read_mode_context", lambda *a, **k: dict(_CANNED_CTX))
+    monkeypatch.setattr(routes.home, "resolve_reader_backlog", lambda **k: seen.update(k) or [])
+    monkeypatch.setattr(routes.home, "_build_read_mode_context", lambda *a, **k: dict(_CANNED_CTX))
     with TestClient(_app()) as client:
         client.get("/read", params={"q": "python"})
     assert seen["archived"] is None and seen["search_query"] == "python"  # search spans archived too
@@ -294,8 +301,8 @@ _FEEDS_CTX = {
 
 def test_feeds_scope_uses_unread_not_starred(monkeypatch):
     seen = {}
-    monkeypatch.setattr(main, "resolve_reader_backlog", lambda **k: seen.update(k) or [])
-    monkeypatch.setattr(main, "_build_feeds_mode_context", lambda *a, **k: dict(_FEEDS_CTX))
+    monkeypatch.setattr(routes.home, "resolve_reader_backlog", lambda **k: seen.update(k) or [])
+    monkeypatch.setattr(routes.home, "_build_feeds_mode_context", lambda *a, **k: dict(_FEEDS_CTX))
     with TestClient(_app()) as client:
         r = client.get("/read", params={"scope": "feeds", "folder_id": "5"})
     assert r.status_code == 200 and "All Feeds" in r.text
