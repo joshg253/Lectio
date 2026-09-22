@@ -423,4 +423,19 @@ No `scripts/*.py` callers turned up. Full `make test`/`lint`/`types`/`ruff forma
 **This closes out Stage 9: `routes/entries.py` is complete at 45 routes across sub-stages A-E, no further
 sub-stages planned.** Only Stage 10 (`routes/home.py` -- `/`, `/read`, `/read/offline`, and the shared
 rendering core itself) remains of the route-by-URL-prefix split.
+
+`routes/home.py` (Stage 10, the last module of the split) **is only partially done: this file currently
+holds only sub-stage A's 1 route, `GET /read/offline`** -- sub-stages B (`/read`) and C (`/`) add more
+routes to this same module in later tasks, don't assume this is the final state. See that file's own
+docstring for the full rationale. No ordering constraint: this route touches nothing from the late
+`services.automation_rules` import, so it's imported alongside the plain `routes.compat_*`/`routes.tags`-style
+modules. Three helpers moved with the route, confirmed with no caller anywhere else: `_fetch_image_for_offline`,
+`_inline_images_as_data_uris`, and the `_OFFLINE_IMG_MAX_BYTES`/`_OFFLINE_IMG_TOTAL_BYTES`/
+`_OFFLINE_IMG_MAX_FETCHES` constants. The shared rendering-core functions this route touches
+(`get_entry_detail`, `resolve_reader_article_html`) stayed in main.py untouched and were imported back, same
+as `_read_mode_date` (a second caller, the still-in-main.py `reader_view`/`/read`, Stage 10B) and the
+widely-shared image-cache primitives `api_img_proxy`/`_img_cache_get`/`_img_cache_key_url`. Hit the same
+`Path(__file__).parent` relocation bug Stage 1 found in `offline_service_worker` -- fixed the same way, with
+`BASE_DIR`. No test exercised `/read/offline` before the move, so no test file needed retargeting for either
+gotcha, and no `scripts/*.py` callers turned up.
 """

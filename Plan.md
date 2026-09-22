@@ -386,7 +386,14 @@ ordered safest → riskiest:
     "stop and report back, don't force it" escape hatch if a stage finds otherwise. Split into 3
     sub-stages by risk, safest → riskiest (traffic volume, not just code size, drives the order —
     `/` is the highest-traffic route in the app):
-    - **A.** `/read/offline` — single-entry download, no session/pane-state coupling, safest.
+    - **A — done (2026-09-22).** `/read/offline` — creates `routes/home.py`. main.py: 26,191 →
+      26,047 lines; new file 219 lines. Confirmed pure orchestration (one `get_entry_detail` call,
+      one `resolve_reader_article_html` call, then HTML/CSS assembly) — both shared-core functions
+      stayed in main.py untouched. Same `Path(__file__).parent`-for-a-static-asset bug Stage 1's
+      `/sw.js` move hit — caught and fixed the same way, with `BASE_DIR`. No test currently
+      exercises this route at all, so neither known gotcha applied — nothing to retarget. No
+      `scripts/*.py` callers. Full `make test`/`lint`/`types`/`ruff format --check` pass; a live
+      check confirmed real downloaded-HTML content, not just a non-404.
     - **B.** `/read` — the e-ink Read Mode reader view.
     - **C.** `/` — the main app entry point, riskiest and highest-traffic; last.
 
