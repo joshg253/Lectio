@@ -7,6 +7,7 @@ from __future__ import annotations
 import pytest
 
 import main
+import routes.feeds
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -63,7 +64,7 @@ def test_multi_folder_cleanup_query_and_resolve(configured):
 
     import json
 
-    report = json.loads(main.get_multi_folder_feeds().body)
+    report = json.loads(routes.feeds.get_multi_folder_feeds().body)
     assert report["count"] == 1
     assert report["feeds"][0]["feed_url"] == FEED
     assert {f["id"] for f in report["feeds"][0]["folders"]} == {folder_a, folder_b}

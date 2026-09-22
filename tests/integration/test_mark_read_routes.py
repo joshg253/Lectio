@@ -40,14 +40,17 @@ def _dummy_meta_conn() -> sqlite3.Connection:
 
 def _build_feed_mark_read_app(monkeypatch, marked: int = 3) -> FastAPI:
     app = FastAPI()
-    app.post("/feeds/mark-read")(main.mark_feed_as_read)
-    monkeypatch.setattr(
-        main,
-        "_mark_entries_as_read_for_view",
-        lambda _feed_urls, **_kwargs: (marked, "2026-07-17T00:00:00" if marked else None),
-    )
+    app.post("/feeds/mark-read")(routes.feeds.mark_feed_as_read)
+    # routes.feeds did `from main import (...)` at module load, so each of these
+    # copied a reference at that time -- patching main's own attribute doesn't
+    # reach routes.feeds' copy, both need patching (routes/__init__.py's docstring).
+    _mark_stub = lambda _feed_urls, **_kwargs: (marked, "2026-07-17T00:00:00" if marked else None)  # noqa: E731
+    monkeypatch.setattr(main, "_mark_entries_as_read_for_view", _mark_stub)
+    monkeypatch.setattr(routes.feeds, "_mark_entries_as_read_for_view", _mark_stub)
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_conn)
+    monkeypatch.setattr(routes.feeds, "get_meta_connection", _dummy_meta_conn)
     monkeypatch.setattr(main, "unread_counts_cache", {})
+    monkeypatch.setattr(routes.feeds, "unread_counts_cache", {})
     return app
 
 

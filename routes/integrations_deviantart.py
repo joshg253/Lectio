@@ -29,7 +29,6 @@ from main import (
     _humanize_da_add_error,
     _load_da_sync_detail,
     _run_in_user_context,
-    bulk_feed_action,
     delete_setting,
     get_deviantart_credentials,
     get_deviantart_user_token,
@@ -43,6 +42,13 @@ from main import (
     set_setting,
     sync_deviantart_watchlist,
 )
+
+# bulk_feed_action moved to routes.feeds in Stage 8E of the route-by-URL-prefix
+# split (the /feeds/bulk handler); the watchlist auto-pause path below reuses it
+# for its "unsubscribe every no-longer-watched artist" action, so it's imported
+# from there now instead of from main. main.py imports routes.feeds before this
+# module for exactly this reason -- see main.py's bottom-of-file import ordering.
+from routes.feeds import bulk_feed_action
 from services import deviantart as deviantart_service
 from services import tenancy
 

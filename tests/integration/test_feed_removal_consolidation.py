@@ -467,7 +467,7 @@ class TestBulkUnsubscribeDecline:
         _add_feed_to_folder(FEED, fid)
         monkeypatch.setattr(main, "websub_service", MagicMock())
         monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
-        main.bulk_feed_action(_NO_REQUEST, action="unsubscribe", feed_urls=FEED)
+        routes.feeds.bulk_feed_action(_NO_REQUEST, action="unsubscribe", feed_urls=FEED)
         with main.get_meta_connection() as conn:
             row = conn.execute("SELECT feed_url FROM declined_feeds WHERE feed_url = ?", (FEED,)).fetchone()
         assert row is not None
@@ -702,7 +702,7 @@ class TestDuplicateScanGroupsAcrossSchemes:
         _add_feed_to_folder("https://azius.com/blog/feed", root)
         import json
 
-        dup = json.loads(main.get_feed_duplicates().body)
+        dup = json.loads(routes.feeds.get_feed_duplicates().body)
         assert ("https://azius.com/blog/feed", "http://azius.com/blog/feed") in self._keys(dup)
 
     def test_a_domain_alias_across_schemes_groups_too(self, env):
@@ -712,7 +712,7 @@ class TestDuplicateScanGroupsAcrossSchemes:
         _add_feed_to_folder("https://tapas.io/rss/series/4879", root)
         import json
 
-        dup = json.loads(main.get_feed_duplicates().body)
+        dup = json.loads(routes.feeds.get_feed_duplicates().body)
         assert ("https://tapas.io/rss/series/4879", "http://tapastic.com/rss/series/4879") in self._keys(dup)
 
     def test_the_survivor_is_always_a_subscribed_url(self, env):
@@ -725,7 +725,7 @@ class TestDuplicateScanGroupsAcrossSchemes:
             _add_feed_to_folder(u, root)
         import json
 
-        dup = json.loads(main.get_feed_duplicates().body)
+        dup = json.loads(routes.feeds.get_feed_duplicates().body)
         pairs = self._keys(dup)
         assert pairs, "the pair must be detected"
         for keep, remove in pairs:
@@ -739,7 +739,7 @@ class TestDuplicateScanGroupsAcrossSchemes:
         _add_feed_to_folder("https://b.test/feed", root)
         import json
 
-        dup = json.loads(main.get_feed_duplicates().body)
+        dup = json.loads(routes.feeds.get_feed_duplicates().body)
         assert dup["same_folder"] == [] and dup["cross_folder"] == []
 
     def test_a_trailing_slash_pair_still_keeps_the_canonical_spelling(self, env):
@@ -749,7 +749,7 @@ class TestDuplicateScanGroupsAcrossSchemes:
         _add_feed_to_folder("https://slash.test/feed/", root)
         import json
 
-        dup = json.loads(main.get_feed_duplicates().body)
+        dup = json.loads(routes.feeds.get_feed_duplicates().body)
         assert ("https://slash.test/feed", "https://slash.test/feed/") in self._keys(dup)
 
     def test_a_www_pair_is_grouped_and_bare_host_survives(self, env):
@@ -762,7 +762,7 @@ class TestDuplicateScanGroupsAcrossSchemes:
         _add_feed_to_folder("https://www.deathbulge.com/rss.xml", root)
         import json
 
-        dup = json.loads(main.get_feed_duplicates().body)
+        dup = json.loads(routes.feeds.get_feed_duplicates().body)
         assert ("https://deathbulge.com/rss.xml", "https://www.deathbulge.com/rss.xml") in self._keys(dup)
 
 
@@ -781,7 +781,7 @@ class TestDuplicateScanGroupsBySameTitle:
     def _title_groups(self):
         import json
 
-        return json.loads(main.get_feed_duplicates().body)["title_groups"]
+        return json.loads(routes.feeds.get_feed_duplicates().body)["title_groups"]
 
     def test_two_feeds_sharing_a_title_are_grouped(self, env):
         root = _root_folder_id()
@@ -870,7 +870,7 @@ class TestDuplicateScanQueryDifferingPairs:
     def _query_pairs(self):
         import json
 
-        return json.loads(main.get_feed_duplicates().body)["query_pairs"]
+        return json.loads(routes.feeds.get_feed_duplicates().body)["query_pairs"]
 
     def test_a_differing_query_pair_with_an_unrecognized_selector_is_found(self, env):
         """A param+value combo that isn't a recognized format selector still
@@ -900,7 +900,7 @@ class TestDuplicateScanQueryDifferingPairs:
         _add_feed_to_folder("https://paizo.test/blog?feed=rss", root)
         import json
 
-        dup = json.loads(main.get_feed_duplicates().body)
+        dup = json.loads(routes.feeds.get_feed_duplicates().body)
         same_folder_urls = {(d["keep"], d["remove"]) for d in dup["same_folder"]}
         assert any("tosecdev.test" in k for k, _r in same_folder_urls)
         assert any("paizo.test" in k for k, _r in same_folder_urls)
@@ -1044,7 +1044,7 @@ class TestFormatUpgradeAlternates:
     def _upgradable(self):
         import json
 
-        return json.loads(main.get_feed_duplicates().body)["upgradable"]
+        return json.loads(routes.feeds.get_feed_duplicates().body)["upgradable"]
 
     def test_a_feed_param_gets_same_family_alternates(self, env):
         _add_feed_to_folder("https://example.test/blog?feed=rss2", _root_folder_id())
@@ -1116,7 +1116,7 @@ class TestCombineFeedsSurvivorFolderPlacement:
         folder = _make_child_folder("Comics")
         _add_feed_to_folder(FEED, folder)
         new_url = "https://example.test/feed?feed=json1"
-        result = main.combine_feeds_route(
+        result = routes.feeds.combine_feeds_route(
             _NO_REQUEST,
             survivor_url=new_url,
             source_url=[FEED],
@@ -1137,7 +1137,7 @@ class TestCombineFeedsSurvivorFolderPlacement:
         folder_b = _make_child_folder("B")
         _add_feed_to_folder(FEED, folder_a)
         _add_feed_to_folder(FEED2, folder_b)
-        main.combine_feeds_route(
+        routes.feeds.combine_feeds_route(
             _NO_REQUEST,
             survivor_url=FEED,
             source_url=[FEED2],
@@ -1156,7 +1156,7 @@ class TestContentIdenticalFlag:
     def _duplicates(self):
         import json
 
-        return json.loads(main.get_feed_duplicates().body)
+        return json.loads(routes.feeds.get_feed_duplicates().body)
 
     def test_scheme_only_variant_is_content_identical(self, env):
         fid = _make_child_folder("Scheme")
@@ -1240,7 +1240,7 @@ class TestFormatUpgradeExcludesBareDomains:
     def _upgradable(self):
         import json
 
-        return json.loads(main.get_feed_duplicates().body)["upgradable"]
+        return json.loads(routes.feeds.get_feed_duplicates().body)["upgradable"]
 
     def test_root_level_feed_param_stripped_default_is_not_offered(self, env):
         """The stripped-default candidate specifically is excluded -- a
@@ -1267,7 +1267,7 @@ class TestDedupDismissal:
     def _duplicates(self):
         import json
 
-        return json.loads(main.get_feed_duplicates().body)
+        return json.loads(routes.feeds.get_feed_duplicates().body)
 
     def _dismiss(self, urls):
         import asyncio
@@ -1276,7 +1276,7 @@ class TestDedupDismissal:
             async def json(self):
                 return {"feed_urls": urls}
 
-        return asyncio.run(main.dismiss_feed_duplicate(cast(Request, _FakeRequest())))
+        return asyncio.run(routes.feeds.dismiss_feed_duplicate(cast(Request, _FakeRequest())))
 
     def test_dismissed_same_folder_pair_is_excluded(self, env):
         fid = _make_child_folder("Comics")
@@ -1331,7 +1331,7 @@ class TestDedupDismissal:
             async def json(self):
                 return {"dismiss_key": dismiss_key}
 
-        return asyncio.run(main.undismiss_feed_duplicate(cast(Request, _FakeRequest())))
+        return asyncio.run(routes.feeds.undismiss_feed_duplicate(cast(Request, _FakeRequest())))
 
     def test_dismissed_group_appears_in_dismissed_groups(self, env):
         fid = _make_child_folder("Comics")
@@ -1382,7 +1382,7 @@ class TestCombineAutoDismisses:
         """Survivor is the already-subscribed URL; sources were never
         subscribed -- nothing to delete, but the group must stop recurring."""
         _add_feed_to_folder("http://example.test/blog?feed=atom", _root_folder_id())
-        result = main.combine_feeds_route(
+        result = routes.feeds.combine_feeds_route(
             _NO_REQUEST,
             survivor_url="http://example.test/blog?feed=atom",
             source_url=["http://example.test/blog?feed=rss", "http://example.test/blog?feed=rss2"],
@@ -1405,7 +1405,7 @@ class TestCombineAutoDismisses:
         group (current + stripped default + both alternates), not just the
         two alternates."""
         _add_feed_to_folder("http://example.test/blog?feed=atom", _root_folder_id())
-        main.combine_feeds_route(
+        routes.feeds.combine_feeds_route(
             _NO_REQUEST,
             survivor_url="http://example.test/blog?feed=atom",
             source_url=[
@@ -1417,7 +1417,7 @@ class TestCombineAutoDismisses:
         )
         import json
 
-        data = json.loads(main.get_feed_duplicates().body)
+        data = json.loads(routes.feeds.get_feed_duplicates().body)
         currents = {d["current"] for d in data["upgradable"]}
         assert "http://example.test/blog?feed=atom" not in currents
 
@@ -1428,7 +1428,7 @@ class TestCombineAutoDismisses:
         root = _root_folder_id()
         _add_feed_to_folder(FEED, root)
         _add_feed_to_folder(FEED2, root)
-        main.combine_feeds_route(_NO_REQUEST, survivor_url=FEED, source_url=[FEED2], move_unread="")
+        routes.feeds.combine_feeds_route(_NO_REQUEST, survivor_url=FEED, source_url=[FEED2], move_unread="")
         key = main._dedup_dismiss_key([FEED, FEED2])
         assert key in self._dismissed_keys()
 

@@ -273,15 +273,35 @@ ordered safest → riskiest:
      raw source for, so the tests silently matched the wrong text until the docstring was reworded
      and the tests repointed at the real code. 5 test files retargeted total. Full
      `make test`/`lint`/`types` pass; live `TestClient(main.app)` confirmed all 12 paths resolve.
-   - **E.** Feed tags/attachments/website/curation/bulk ops — riskiest, saved for last: 
-     `/feeds/suggested-tags`, `/feeds/attachment-candidates`, `/feeds/attachment-candidate-suppress`,
-     `/feeds/attachment-exts`, `/feeds/set-website`, `/feeds/url-rewrites`,
-     `/feeds/url-rewrites/delete`, `/feeds/curation-items`, `/feeds/combine`, `/feeds/duplicates`,
-     `/feeds/duplicates/undismiss`, `/feeds/duplicates/dismiss`, `/feeds/multi-folder`,
-     `/feeds/multi-folder/resolve`, `/feeds/bulk`, `/feeds/mark-read` (16 routes) — `/feeds/combine`
-     and `/feeds/duplicates*` are **feed-level** duplicate detection, a third distinct dedup surface
-     from Stage 6's saved-article dupe scan and the still-gated main entry-dedup engine — don't
-     conflate the three when scoping this sub-stage.
+   - **E — done (2026-09-22), Stage 8 fully complete.** Feed tags/attachments/website/curation/bulk
+     ops: `/feeds/suggested-tags`, `/feeds/attachment-candidates`,
+     `/feeds/attachment-candidate-suppress`, `/feeds/attachment-exts`, `/feeds/set-website`,
+     `/feeds/url-rewrites`, `/feeds/url-rewrites/delete`, `/feeds/curation-items`,
+     `/feeds/combine`, `/feeds/duplicates`, `/feeds/duplicates/undismiss`,
+     `/feeds/duplicates/dismiss`, `/feeds/multi-folder`, `/feeds/multi-folder/resolve`,
+     `/feeds/bulk`, `/feeds/mark-read` (16 routes, exactly as scoped). main.py: 29,617 → 28,695
+     lines; `routes/feeds.py`: 1,934 → 2,882 lines, **61 routes total, done** — confirmed zero
+     remaining `/feeds*`/`/folders*`/`/scraped-feeds*`/`/tree/folder-feeds/*`/`/api/folders`/
+     `/api/folder-feeds` routes anywhere in main.py. The three dedup surfaces (this stage's
+     feed-level combine/duplicates, Stage 6's saved-article scan, the still-gated main entry-dedup
+     engine) stayed cleanly separate — verified via grep that none of Stage 6's or the gated
+     engine's names were touched. The riskiest sub-stage earned its billing: `bulk_feed_action`'s
+     "refresh" action calls `_run_automation_after_refresh`, a name late-bound via main.py's
+     bottom-of-file `services.automation_rules` import — moving it required relocating
+     `routes.feeds`'s own import to *after* that block (the same treatment Stage 1 needed), which
+     cascaded further since `routes/integrations_deviantart.py`'s watchlist auto-pause path calls
+     `bulk_feed_action` directly and had to switch from `from main import bulk_feed_action` to
+     `from routes.feeds import bulk_feed_action` — requiring `routes.integrations_deviantart`'s own
+     import to move to *after* `routes.feeds`'s new position too. Both moves verified independently
+     (read the actual import order in main.py, confirmed `import main` standalone still boots
+     clean, confirmed the one test importing `routes.integrations_deviantart` directly sorts
+     `import main` first per the established rule). A script-only caller found again via the
+     `scripts/*.py` grep leg (`scripts/combine_deviantart_galleries.py`, same shape Stage 8D hit
+     twice). 9 test files retargeted. Full `make test`/`lint`/`types` pass, plus an explicit
+     `ruff format --check` pass this time after Stage 8D's commit-time formatting catch.
+
+**Stage 8 (`routes/feeds.py`) is now fully done** — all 5 sub-stages (A-E), 61 routes, 0 remaining
+`/feeds`/`/folders`/`/scraped-feeds`/`/tree/folder-feeds` routes in main.py.
 9. `routes/entries.py` — `/entries/*` (~46) plus the `/api/*` thumb/img/bookmarklet-save cluster
    (`/api/entry-thumb`, `/api/favicon`, `/api/feed-thumb`, `/api/img`, `/api/bookmarklet/save`,
    `/api/save`, `/api/unread-counts`) if that doesn't want to be its own `routes/media.py` —

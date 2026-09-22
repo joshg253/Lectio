@@ -151,8 +151,8 @@ shape via `inspect.getsource`: it fell back to grepping `main.__file__`'s raw te
 `main.save_settings` never existed (the real name is `save_all_settings`), and that text is no longer in main.py now
 that the function moved — retargeted to `inspect.getsource(routes.settings.save_all_settings)` directly.
 
-`routes/feeds.py` (Stage 8 of the route-by-URL-prefix split -- the biggest single cluster at 60 routes,
-scoped into sub-stages A-E) is NOT done in one shot: this file currently holds only sub-stage A's 10
+`routes/feeds.py` (Stage 8 of the route-by-URL-prefix split -- the biggest single cluster at 61 routes,
+scoped into sub-stages A-E) was NOT done in one shot: this file started with only sub-stage A's 10
 routes (folder CRUD + tree reads -- `/api/folders`, `POST /folders`, `/folders/rename`, `/folders/delete`,
 `/folders/properties`, `/folders/cadence`, `/folders/retention`, `/folders/mark-read`,
 `/tree/folder-feeds/{folder_id}`, `/api/folder-feeds`); sub-stages B (feed discovery/add flow), C (display/
@@ -194,5 +194,24 @@ logic, not thin wrappers; only `feed_curation_counts` moved as a genuinely singl
 with still-in-main.py code, other `routes/*.py` modules, or tested directly. Two scripts
 (`scripts/fix_reddit_rss_host.py`, `scripts/find_redirecting_feeds.py`) called `change_feed_url_route` directly as
 a plain function and were retargeted from `main.change_feed_url_route` to `routes.feeds.change_feed_url_route`.
-Sub-stage E (tags/attachments/curation/bulk ops) is the last one, still to come.
+
+Stage 8E added the final cluster (16 more routes: tags/attachments/curation/bulk ops --
+`/feeds/suggested-tags`, `/feeds/attachment-candidates`, `/feeds/attachment-candidate-suppress`,
+`/feeds/attachment-exts`, `/feeds/set-website`, `/feeds/url-rewrites`, `/feeds/url-rewrites/delete`,
+`/feeds/curation-items`, `/feeds/combine`, `/feeds/duplicates`, `/feeds/duplicates/undismiss`,
+`/feeds/duplicates/dismiss`, `/feeds/multi-folder`, `/feeds/multi-folder/resolve`, `/feeds/bulk`,
+`/feeds/mark-read`) to `routes/feeds.py` -- see that file's own docstring for the full rationale. **This
+closes out Stage 8: `routes/feeds.py` is complete at 61 routes across sub-stages A-E, and no further
+sub-stages are planned.** The one new wrinkle this sub-stage hit: `bulk_feed_action`'s "refresh" action
+calls `_run_automation_after_refresh` directly, so `routes/feeds.py` itself now needs the same late-import
+treatment `routes/system.py` and `routes/automation.py` already needed -- its import moved from the early
+alphabetical block in main.py's bottom-of-file import section to after the `services.automation_rules`
+import. `routes/integrations_deviantart.py` had to move later still, since its watchlist auto-pause path
+calls `bulk_feed_action` directly and switched from `from main import bulk_feed_action` to `from
+routes.feeds import bulk_feed_action` -- which only resolves once `routes.feeds` has already fully loaded.
+One script (`scripts/combine_deviantart_galleries.py`) called `combine_feeds_route` directly as a plain
+function, the same shape Stage 8D found twice, and was retargeted the same way. Nine test files needed
+retargeting for the usual gotchas (handler-on-a-bare-`FastAPI()`-app and copied-reference monkeypatches);
+`tests/integration/test_feed_removal_consolidation.py` needed the largest sweep since it calls several of
+this sub-stage's routes as plain functions throughout the file.
 """

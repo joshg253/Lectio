@@ -50,6 +50,7 @@ from fastapi import Request
 sys.path.insert(0, "/app")
 
 import main  # noqa: E402
+import routes.feeds  # noqa: E402
 from services import deviantart as da  # noqa: E402
 from services import tenancy  # noqa: E402
 
@@ -85,7 +86,9 @@ def run(user_id: str, limit: int, apply: bool) -> int:
         for i, (feed_id, user) in enumerate(gallery, 1):
             src = da.feed_file_url(feed_id)
             try:
-                resp = main.combine_feeds_route(request=cast(Request, None), survivor_url=survivor, source_url=[src], move_unread="1")
+                resp = routes.feeds.combine_feeds_route(
+                    request=cast(Request, None), survivor_url=survivor, source_url=[src], move_unread="1"
+                )
                 body = json.loads(bytes(resp.body).decode())
                 if not body.get("ok"):
                     failed += 1

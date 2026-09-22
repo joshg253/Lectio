@@ -70,7 +70,7 @@ def _folder_app():
 
 def _feed_app():
     app = FastAPI()
-    app.post("/feeds/mark-read")(main.mark_feed_as_read)
+    app.post("/feeds/mark-read")(routes.feeds.mark_feed_as_read)
     return app
 
 

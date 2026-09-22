@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[2]
 MAIN = (ROOT / "main.py").read_text()
 APP_JS = (ROOT / "static" / "js" / "app.js").read_text()
 # change_feed_url_route (and its _feed_url_tables list) moved to routes/feeds.py
-# in Stage 8D of the main.py route-by-URL-prefix split.
+# in Stage 8D of the main.py route-by-URL-prefix split; feed_attachment_candidates_route/
+# suppress_feed_attachment_candidate_route moved there too in Stage 8E.
 ROUTES_FEEDS = (ROOT / "routes" / "feeds.py").read_text()
 
 
@@ -34,9 +35,11 @@ def test_scan_filters_dismissed_extensions():
 
 
 def test_suppress_route_round_trips_and_returns_fresh_lists():
-    assert '@app.post("/feeds/attachment-candidate-suppress")' in MAIN
-    route = MAIN[MAIN.index('@app.post("/feeds/attachment-candidate-suppress")') :]
-    route = route[: route.index("\n@app.")]
+    # feed_attachment_candidates_route/suppress_feed_attachment_candidate_route
+    # moved to routes/feeds.py in Stage 8E of the main.py route-by-URL-prefix split.
+    assert '@router.post("/feeds/attachment-candidate-suppress")' in ROUTES_FEEDS
+    route = ROUTES_FEEDS[ROUTES_FEEDS.index('@router.post("/feeds/attachment-candidate-suppress")') :]
+    route = route[: route.index("\n@router.")]
     # Restore has to be reachable, not just dismissal.
     assert 'suppressed: str = Form("1")' in route
     assert '{"0", "false", "no", ""}' in route
@@ -44,8 +47,8 @@ def test_suppress_route_round_trips_and_returns_fresh_lists():
 
 
 def test_candidates_route_reports_what_was_dismissed():
-    route = MAIN[MAIN.index('@app.get("/feeds/attachment-candidates")') :]
-    route = route[: route.index("\n@app.post")]
+    route = ROUTES_FEEDS[ROUTES_FEEDS.index('@router.get("/feeds/attachment-candidates")') :]
+    route = route[: route.index("\n@router.post")]
     assert "suppressed_attachment_ext_list(feed_url)" in route
 
 
