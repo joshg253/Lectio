@@ -376,10 +376,19 @@ ordered safest → riskiest:
      mark-read side effect fired.
 
 **Stage 9 (`routes/entries.py`) is now fully done** — all 5 sub-stages (A-E), 45 routes.
-10. `routes/home.py` — `/`, `/read`, `/read/offline` last: these are the routes the Landmines note
-    already flags as reused-by-everything (`_home_inner`, `build_reader_page`, pane-swap); moving
-    the handler is still just importing the core functions back from main.py like everything else,
-    but do it only after the pattern is proven on lower-traffic routes first.
+10. `routes/home.py` — `/`, `/read`, `/read/offline`. Scoped 2026-09-22 after confirming size:
+    `read_offline_copy` (main.py:21904-21980, ~76 lines), `reader_view`/`/read`
+    (main.py:21981-22169, ~188 lines), `home`/`/` (main.py:22280-22383, ~104 lines) — each is a
+    reasonably-sized wrapper that delegates into the shared core (`_home_inner` sits immediately
+    after `home`, not interleaved with it), not the deeply-entangled case that would force this
+    into its own non-mechanical project. Stage 9E already proved the mechanical pattern holds even
+    for a shared-core-adjacent route (`/entries/pane`) — same expectation here, with the same
+    "stop and report back, don't force it" escape hatch if a stage finds otherwise. Split into 3
+    sub-stages by risk, safest → riskiest (traffic volume, not just code size, drives the order —
+    `/` is the highest-traffic route in the app):
+    - **A.** `/read/offline` — single-entry download, no session/pane-state coupling, safest.
+    - **B.** `/read` — the e-ink Read Mode reader view.
+    - **C.** `/` — the main app entry point, riskiest and highest-traffic; last.
 
 Each stage: `grep` the current route paths (line numbers drift as earlier stages move code, so
 don't trust line numbers from a previous stage's scoping), move handler + any single-route-only
