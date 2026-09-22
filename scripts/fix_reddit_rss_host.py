@@ -2,7 +2,7 @@
 subreddit subscriptions (all in Deals) started failing with a SAXParseException
 once that redirect page got fed to the XML parser. www.reddit.com/.../.rss
 still serves plain unauthenticated Atom, so this is a host swap, not an API-key
-problem. Reuses the app's own Change URL path (main.change_feed_url_route),
+problem. Reuses the app's own Change URL path (routes.feeds.change_feed_url_route),
 which does the full migration: folder membership, tags, read state, archive
 rows, failure-state reset, and seeds the feed_url_rewrites alias.
 
@@ -20,6 +20,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import main  # noqa: E402
+import routes.feeds  # noqa: E402
 from services import tenancy  # noqa: E402
 
 _SUBREDDITS = ["VinylDeals", "GameDeals", "LaptopDeals", "Boardgamedeals", "buildapcsales"]
@@ -44,7 +45,7 @@ def fix_for_user(user_id: str, apply: bool, force: int = 0) -> None:
         return
 
     for old, new in pairs:
-        result = main.change_feed_url_route(old_url=old, new_url=new, force=force)
+        result = routes.feeds.change_feed_url_route(old_url=old, new_url=new, force=force)
         body = getattr(result, "body", b"").decode("utf-8", "replace")
         status = getattr(result, "status_code", None)
         print(f"    [{status}] {old} -> {new}: {body}", flush=True)

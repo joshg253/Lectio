@@ -2,11 +2,11 @@
 the route-by-URL-prefix split -- the biggest single cluster at 60 routes,
 scoped into its own A-E sub-stages so it doesn't land as one huge diff).
 
-**This file is not done yet.** Sub-stages A-C (folder CRUD + tree reads, feed
-discovery/add flow, display/thumbnail strategy config) are the only parts
-that exist so far -- sub-stages D-E (network/fetch settings + lifecycle, and
-tags/attachments/curation/bulk ops) each add more routes to this same module
-in later tasks. Don't assume the routes below are the final contents.
+**This file is not done yet.** Sub-stages A-D (folder CRUD + tree reads, feed
+discovery/add flow, display/thumbnail strategy config, network/fetch settings
++ lifecycle) are the only parts that exist so far -- sub-stage E
+(tags/attachments/curation/bulk ops) adds more routes to this same module in
+a later task. Don't assume the routes below are the final contents.
 
 Stage 8A -- folder CRUD + tree reads, 10 routes: `POST /api/folders`,
 `POST /folders`, `POST /folders/rename`, `POST /folders/delete`,
@@ -125,6 +125,59 @@ copied at import time. `tests/unit/test_pinned_feed_thumbnail.py` slices main.py
 `set_feed_thumbnail_url_route`; retargeted that one slice to read from `routes/feeds.py` (its end-of-function marker
 changed from `"\n@app."` to `"\n@router."` to match) -- its other slices (`_feed_thumb_cache_key`,
 `_pin_feed_thumbnail_bytes`, `_evict_img_cache`) stay pointed at main.py since those functions didn't move.
+
+Stage 8D added the feed network/fetch settings + lifecycle cluster (12 routes): `POST /feeds/browser-ua`,
+`POST /feeds/proxy`, `POST /feeds/tailscale`, `POST /feeds/flaresolverr`, `POST /feeds/reparse`, `POST /feeds/move`,
+`POST /feeds/disable`, `POST /feeds/enable`, `POST /feeds/toggle-updates`, `POST /feeds/change-url`,
+`POST /feeds/unsubscribe`, `GET /feeds/curation-count` -- confirmed exactly as scoped, no discrepancy. Same
+no-ordering-constraint story as 8A-8C. This is real feed-lifecycle logic (`/feeds/disable`, `/feeds/enable`,
+`/feeds/unsubscribe`, `/feeds/change-url`, `/feeds/move` mutate feed state the refresh scheduler, unread counts, and
+the rest of the app depend on), not thin wrappers.
+
+Only one genuinely single-route-only helper moved: `feed_curation_counts` (with `feed_curation_count_route`) --
+no other caller anywhere, unlike its sibling `feed_curation_items` (backs the not-yet-moved `/feeds/curation-items`,
+correctly left alone -- stage E territory despite sitting right next to it in main.py). Everything else this
+cluster touches stays in main.py and is imported back, confirmed via the `routes/*.py` + `scripts/*.py` + `tests/`
+three-way grep: the `flag_*_feed`/`unflag_*_feed`/`_invalidate_*_feeds_cache` families for browser-UA/proxy/
+tailscale/FlareSolverr are each also called from the still-in-main.py escalation chain (the
+`_flag_proxy_feed_on_still_blocked`-style callbacks around main.py's fetch-refusal handling) and are individually
+tested directly as `main.<name>` by `tests/integration/test_proxy_feeds.py`/`test_browser_ua_feeds.py`/
+`test_instance_settings.py` -- exactly the "looks single-route but is a load-bearing shared primitive" trap this
+stage was briefed to watch for. `disable_feed`/`enable_feed` stay for the same reason, amplified: both are called
+from the DeviantArt watchlist auto-pause path, the scheduled-refresh disable/enable path, and `routes/settings.py`
+(already importing them back) in addition to this stage's own routes -- confirmed genuinely shared, not just
+routed-through. `_flag_browser_ua_on_refusal` stays, also wired into `feed_refresh_service`'s
+`on_fetch_refused` callback at construction time. `move_feed_to_folder` stays, tested directly as `main.<name>` by
+`tests/integration/test_single_folder_enforcement.py`. `_normalize_alias_host`/`migrate_feed_host_rewrite` stay,
+shared with the still-in-main.py `/feeds/url-rewrites*` cluster (stage E) that sits immediately next to
+`change_feed_url_route`'s old location. `get_feeds_needing_replacement`/`invalidate_problematic_feeds_cache`/
+`invalidate_unread_counts_cache`/`archive_conn` stay, each widely shared (routes/settings.py, routes/system.py,
+routes/saved.py, scripts/*.py, and/or tested directly). `restar_curated_entries`/`drop_all_curation` stay despite
+having only one route-caller each, both tested directly as `main.<name>` (and monkeypatched that way) by
+`tests/integration/test_feed_removal_consolidation.py`. `purge_orphaned_feed` stays, heavily shared (dedup/combine,
+delete_folder, scheduled cleanup, several scripts). `_extract_tag_key`/`MANUAL_TAG_KEY_PREFIX` (needed by the moved
+`feed_curation_counts`) stay, both widely used elsewhere in main.py's tag machinery. `FeedRefreshService` and
+`FeedNotFoundError`/`FeedExistsError` are imported directly from `services.feed_refresh`/`reader.exceptions` rather
+than round-tripped through main.py, same pattern `routes/system.py` and `routes/automation.py` already established
+for direct service/library imports.
+
+Two scripts call `change_feed_url_route` directly as a plain function (not through HTTP) rather than any of this
+cluster's other routes/helpers: `scripts/fix_reddit_rss_host.py` and `scripts/find_redirecting_feeds.py` (its
+`--apply` path). Both retargeted from `main.change_feed_url_route` to `routes.feeds.change_feed_url_route` --
+found only by the scripts/*.py leg of the three-way grep, not by main.py or tests/ alone.
+
+Three test files needed retargeting. `tests/integration/test_change_feed_url_validate.py` and
+`tests/integration/test_reparse_route.py` both hit the usual "handler registered directly as `main.<name>` on a
+bare test `FastAPI()` app" gotcha (`main.change_feed_url_route` -> `routes.feeds.change_feed_url_route`,
+`main.reparse_feed_route` -> `routes.feeds.reparse_feed_route`); the latter also hit the copied-reference variant,
+since its `monkeypatch.setattr(main, "get_reader", ...)` no longer reaches `routes.feeds`'s own copy -- now patched
+on both. `tests/integration/test_feed_removal_consolidation.py` (already importing `routes.feeds` from Stage 8B)
+needed its `restar_curated_entries`/`drop_all_curation` monkeypatches (which exercise `/feeds/unsubscribe` through a
+real `TestClient(main.app)` post) doubled onto `routes.feeds` as well, for the same copied-reference reason. Two
+more test files were reading main.py's raw source text as a live fallback for the `_feed_url_tables` list (the
+meta-DB tables `change_feed_url_route` migrates) and needed that slice repointed at `routes/feeds.py`:
+`tests/integration/test_undo_unstar.py` and `tests/unit/test_attachment_ext_suppression.py` (the latter's other three
+source-slicing assertions, for still-in-main.py attachment-suppression routes, stay pointed at `main.py`).
 """
 
 from __future__ import annotations
@@ -139,12 +192,14 @@ from urllib.parse import quote_plus, urlparse
 
 from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from reader.exceptions import FeedExistsError, FeedNotFoundError
 
 from main import (
     _DISPLAY_PREF_KEYS,
     _FOLDER_CADENCE_LAST_REFRESH_PREFIX,
     _VALID_THUMB_CROPS,
     LOGGER,
+    MANUAL_TAG_KEY_PREFIX,
     UNCATEGORIZED_FOLDER_ID,
     FeedInFolder,
     _apply_deviantart_image_strategy,
@@ -153,14 +208,21 @@ from main import (
     _devto_config_from_form,
     _disambiguate_feed_titles,
     _drop_pinned_feed_thumbnail,
+    _extract_tag_key,
+    _flag_browser_ua_on_refusal,
     _invalidate_browser_ua_cache,
+    _invalidate_flaresolverr_feeds_cache,
+    _invalidate_proxy_feeds_cache,
+    _invalidate_tailscale_feeds_cache,
     _is_youtube_host,
     _mark_entries_as_read_for_view,
     _mark_existing_shorts_read,
+    _normalize_alias_host,
     _pin_feed_thumbnail_bytes,
     _run_in_user_context,
     _site_name_from_subtitle,
     add_feed_to_folder,
+    archive_conn,
     assume_https_if_schemeless,
     build_read_filter_query,
     build_resume_read_filter_query,
@@ -170,12 +232,18 @@ from main import (
     delete_folder,
     deviantart_service,
     devto_service,
+    disable_feed,
     discover_feed_urls_ex,
+    drop_all_curation,
+    enable_feed,
     feed_discovery,
     feed_refresh_service,
     feed_title_map_cache,
     feed_title_map_cache_lock,
     flag_browser_ua_feed,
+    flag_flaresolverr_feed,
+    flag_proxy_feed,
+    flag_tailscale_feed,
     format_datetime_for_ui,
     get_all_feed_urls,
     get_all_reader_feed_urls,
@@ -185,6 +253,7 @@ from main import (
     get_favicon_url,
     get_feed_properties,
     get_feed_title_map,
+    get_feeds_needing_replacement,
     get_folder_feed_urls,
     get_folder_properties,
     get_meta_connection,
@@ -196,19 +265,29 @@ from main import (
     get_setting,
     get_unread_counts_by_feed,
     invalidate_meta_structure_cache,
+    invalidate_problematic_feeds_cache,
+    invalidate_unread_counts_cache,
     is_async_action_request,
     lead_image_service,
+    migrate_feed_host_rewrite,
+    move_feed_to_folder,
     normalize_read_filter,
     normalize_sort_by,
     normalize_sort_dir,
     normalize_star_only,
     normalize_tag_value,
+    purge_orphaned_feed,
+    restar_curated_entries,
     saved_articles_service,
     scraper_service,
     set_setting,
     sort_setting_keys,
     templates,
     tenancy,
+    unflag_browser_ua_feed,
+    unflag_flaresolverr_feed,
+    unflag_proxy_feed,
+    unflag_tailscale_feed,
     unread_counts_cache,
     unread_counts_cache_lock,
     upsert_feed_display_pref,
@@ -219,6 +298,7 @@ from main import (
     url_guard,
     youtube_hide_shorts_global,
 )
+from services.feed_refresh import FeedRefreshService
 
 router = APIRouter()
 
@@ -1262,3 +1342,593 @@ def refresh_feed_strategy_cache_route(
         )
 
     return JSONResponse({"ok": True, "strategy_cache": results})
+
+
+@router.post("/feeds/browser-ua")
+def set_feed_browser_ua_route(feed_url: str = Form(...), enabled: int = Form(...)):
+    """Manually flag/unflag a feed for browser-identity fetches. Auto-set on
+    refusal; this lets the user reset a feed back to the honest identity (or force
+    it on)."""
+    feed_url = feed_url.strip()
+    with get_meta_connection() as conn:
+        if enabled:
+            flag_browser_ua_feed(conn, feed_url, reason="manual")
+        else:
+            unflag_browser_ua_feed(conn, feed_url)
+    _invalidate_browser_ua_cache()
+    return JSONResponse({"ok": True, "browser_ua": bool(enabled)})
+
+
+@router.post("/feeds/proxy")
+def set_feed_proxy_route(feed_url: str = Form(...), enabled: int = Form(...)):
+    """Manually flag/unflag a feed for as-needed proxy escalation. Auto-set when
+    browser-UA was already in play and the fetch still failed; this lets the user
+    reset a feed back to direct/browser-UA (or force it on). Only takes effect
+    when the resolving mode is as_needed — off/always never consult this flag."""
+    feed_url = feed_url.strip()
+    with get_meta_connection() as conn:
+        if enabled:
+            flag_proxy_feed(conn, feed_url, reason="manual")
+        else:
+            unflag_proxy_feed(conn, feed_url)
+    _invalidate_proxy_feeds_cache()
+    return JSONResponse({"ok": True, "proxied": bool(enabled)})
+
+
+@router.post("/feeds/tailscale")
+def set_feed_tailscale_route(feed_url: str = Form(...), enabled: int = Form(...)):
+    """Manually flag/unflag a feed for last-resort proxy escalation. Auto-set
+    when the primary proxy was already in play and the fetch still failed; this
+    lets the user reset a feed back to direct/browser-UA/proxy (or force it on).
+    Only takes effect when the resolving mode is as_needed AND a last-resort
+    backend is configured — same gating as _flag_tailscale_feed_on_still_blocked."""
+    feed_url = feed_url.strip()
+    with get_meta_connection() as conn:
+        if enabled:
+            flag_tailscale_feed(conn, feed_url, reason="manual")
+        else:
+            unflag_tailscale_feed(conn, feed_url)
+    _invalidate_tailscale_feeds_cache()
+    return JSONResponse({"ok": True, "tailscaled": bool(enabled)})
+
+
+@router.post("/feeds/flaresolverr")
+def set_feed_flaresolverr_route(feed_url: str = Form(...), enabled: int = Form(...)):
+    """Manually flag/unflag a feed for FlareSolverr escalation. Auto-set when
+    the primary proxy was already in play and the fetch was still specifically
+    a bot-challenge; this lets the user reset a feed back to direct/browser-UA
+    /proxy (or force it on). Only takes effect when the resolving mode is
+    as_needed AND FlareSolverr is configured — same gating as
+    _flag_flaresolverr_feed_on_still_blocked."""
+    feed_url = feed_url.strip()
+    with get_meta_connection() as conn:
+        if enabled:
+            flag_flaresolverr_feed(conn, feed_url, reason="manual")
+        else:
+            unflag_flaresolverr_feed(conn, feed_url)
+    _invalidate_flaresolverr_feeds_cache()
+    return JSONResponse({"ok": True, "flaresolverred": bool(enabled)})
+
+
+@router.post("/feeds/reparse")
+def reparse_feed_route(feed_url: str = Form(...)):
+    """Force a full re-fetch + re-parse of one feed to backfill embeds on old
+    entries.
+
+    Entries stored before ingest stopped sanitizing feed HTML (see
+    services.reader_sanitize) have their iframe/SVG embeds stripped; they only
+    return when reader re-stores the entry on a content change. reader skips
+    unchanged feeds via conditional GET, so we mark the feed stale first
+    (reader's own mechanism to ignore the cached ETag/Last-Modified) and then
+    update it: the now-unsanitized re-parse yields a different content hash for
+    those old entries, so reader re-stores them with embeds intact. Read/star
+    state is preserved (reader keys on entry id, not content)."""
+    try:
+        with get_reader() as reader:
+            # set_feed_stale is reader's supported "ignore HTTP caching on next
+            # update" flag (used by its own --new=False path); private attr but
+            # stable across reader 3.x.
+            reader._storage.set_feed_stale(feed_url, True)
+            try:
+                updated = reader.update_feed(feed_url)
+            except Exception as exc:
+                # If the host refused our honest UA, flag it for browser identity
+                # and retry once — otherwise a WAF-blocked feed can never backfill.
+                if FeedRefreshService._is_fetch_refusal(exc) and _flag_browser_ua_on_refusal(feed_url):
+                    updated = reader.update_feed(feed_url)
+                else:
+                    raise
+    except Exception as exc:  # FeedNotFoundError, network/parse errors
+        LOGGER.warning("[reparse] failed for %s: %s", feed_url, exc)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    modified = int(getattr(updated, "modified", 0)) if updated else 0
+    new = int(getattr(updated, "new", 0)) if updated else 0
+    return JSONResponse({"ok": True, "modified": modified, "new": new})
+
+
+@router.post("/feeds/move")
+def move_feed(
+    request: Request,
+    feed_url: str = Form(...),
+    from_folder_id: int = Form(...),
+    to_folder_id: int = Form(...),
+    current_folder_id: int | None = Form(default=None),
+    current_list_feed_url: str | None = Form(default=None),
+    sort_by: str | None = Form(default=None),
+    sort_dir: str | None = Form(default=None),
+    read_filter: str | None = Form(default=None),
+    star_only: str | None = Form(default=None),
+    resume_read_filter: str | None = Form(default=None),
+):
+    normalized_read_filter = normalize_read_filter(read_filter)
+    sort_query = build_sort_query(sort_by, sort_dir)
+    star_only_query = build_star_only_query(star_only)
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
+    read_filter_query = build_read_filter_query(read_filter)
+
+    # Only "follow" the feed to its new folder if it's the feed the user is
+    # currently viewing. Right-clicking a feed you aren't looking at (to file it)
+    # should leave your current view put.
+    following = bool(current_list_feed_url) and current_list_feed_url == feed_url
+    if following:
+        dest_folder_id: int = to_folder_id
+        dest_feed = feed_url
+    else:
+        dest_folder_id = current_folder_id if current_folder_id is not None else to_folder_id
+        dest_feed = current_list_feed_url or ""
+
+    def _dest(message: str) -> str:
+        feed_q = f"&list_feed_url={quote_plus(dest_feed)}" if dest_feed else ""
+        return (
+            f"/?folder_id={dest_folder_id}{feed_q}"
+            f"{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}"
+            f"&message={quote_plus(message)}"
+        )
+
+    def _respond(message: str, ok: bool = True):
+        # AJAX caller (sidebar move submenu) wants JSON so it can relocate the
+        # feed node in place instead of a full-page reload.
+        requested_with = (request.headers.get("x-requested-with") or "").lower()
+        if "lectio" in requested_with or requested_with == "xmlhttprequest":
+            return JSONResponse(
+                {
+                    "ok": ok,
+                    "message": message,
+                    "following": following,
+                    "feed_url": feed_url,
+                    "from_folder_id": from_folder_id,
+                    "to_folder_id": to_folder_id,
+                },
+                status_code=200 if ok else 500,
+            )
+        return RedirectResponse(url=_dest(message), status_code=303)
+
+    if from_folder_id == to_folder_id:
+        return _respond("Feed is already in that folder.")
+
+    message = "Feed moved."
+    ok = True
+    try:
+        move_feed_to_folder(feed_url, from_folder_id, to_folder_id)
+    except ValueError:
+        message = "Couldn't move the feed to that folder."
+        ok = False
+    except Exception:
+        LOGGER.exception("[feeds/move] failed feed=%s -> folder=%s", feed_url, to_folder_id)
+        message = "Feed move failed."
+        ok = False
+
+    return _respond(message, ok)
+
+
+@router.post("/feeds/disable")
+def disable_feed_route(request: Request, folder_id: int = Form(...), feed_url: str = Form(...)):
+    disable_feed(feed_url)
+    # AJAX caller (e.g. the Feeds settings tree) wants JSON so it can update the
+    # DOM in place instead of navigating away and closing the settings modal.
+    requested_with = request.headers.get("x-requested-with", "").lower()
+    if "lectio" in requested_with or requested_with == "xmlhttprequest":
+        return JSONResponse({"ok": True, "feed_url": feed_url}, status_code=200)
+    return RedirectResponse(url=f"/?folder_id={folder_id}", status_code=303)
+
+
+@router.post("/feeds/enable")
+def enable_feed_route(request: Request, folder_id: int | None = Form(default=None), feed_url: str = Form(...)):
+    enable_feed(feed_url)
+    requested_with = request.headers.get("x-requested-with", "").lower()
+    if "lectio" in requested_with or requested_with == "xmlhttprequest":
+        return JSONResponse({"ok": True, "feed_url": feed_url}, status_code=200)
+    dest = f"/?folder_id={folder_id}" if folder_id else "/"
+    return RedirectResponse(url=dest, status_code=303)
+
+
+@router.post("/feeds/toggle-updates")
+def toggle_feed_updates(feed_url: str = Form(...), enabled: str = Form(...)):
+    """Pause/resume = enable/disable a feed (same unified state). Delegates to
+    enable_feed/disable_feed, which set both Lectio's disabled_feeds row and
+    reader's updates_enabled flag so every surface agrees."""
+    want_enabled = enabled.lower() in ("1", "true", "yes")
+    try:
+        if want_enabled:
+            enable_feed(feed_url)
+        else:
+            disable_feed(feed_url)
+        return JSONResponse({"ok": True, "updates_enabled": want_enabled})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@router.post("/feeds/change-url")
+def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), force: int = Form(0)):
+    """Change the URL of a feed, migrating all associated data.
+
+    Unless ``force`` is set, the new URL is validated like Add Feed: it's
+    probed, and if it's a real feed (or a page that advertises exactly the
+    feed we want) the resolved feed URL is used. A URL that doesn't validate
+    returns needs_confirm so the UI can offer 'Change anyway' — feeds behind
+    auth or bot-walls that Lectio can't fetch are still allowed on override."""
+    new_url = assume_https_if_schemeless(new_url.strip())
+    parsed = urlparse(new_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return JSONResponse({"ok": False, "error": "Invalid URL — must be http or https."}, status_code=400)
+    if new_url == old_url:
+        return JSONResponse({"ok": False, "error": "New URL is the same as the current URL."}, status_code=400)
+
+    # Validate/resolve the target (skipped on force). Deliberately does NOT fall
+    # back to a Page Feed — Change URL is for swapping one real feed for another.
+    if not force:
+        from services.feed_discovery import probe_url as _probe_url
+
+        result = _probe_url(new_url)
+        feeds = result.get("feeds") or []
+        if result.get("status") in ("feed", "feeds") and feeds:
+            resolved = str(feeds[0]["url"])  # resolved feed (post-redirect / discovered)
+            # A PAGE that advertises a feed on another host is advertising a
+            # different publication, not a redirect of what was typed: a section
+            # page hands back the network-wide feed, and swapping it in silently
+            # replaces the subscription with something far broader — then seeds a
+            # host-alias rule for it. Ask first. A direct feed URL that redirects
+            # across hosts is still the same feed, so that resolves silently.
+            typed_host = _normalize_alias_host(parsed.netloc)
+            resolved_host = _normalize_alias_host(urlparse(resolved).netloc)
+            if not result.get("direct") and typed_host and resolved_host and typed_host != resolved_host:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "needs_confirm": True,
+                        "attempted_url": new_url,
+                        "resolved_url": resolved,
+                        "error": f"That page advertises a feed on a different site:\n\n{resolved}\n\n"
+                        "It may cover much more than the page you pasted. Use it anyway?",
+                    },
+                    status_code=422,
+                )
+            new_url = resolved
+        else:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "needs_confirm": True,
+                    "error": (result.get("message") or "That URL doesn't look like a feed.") + " Change anyway?",
+                    "attempted_url": new_url,
+                },
+                status_code=422,
+            )
+        if new_url == old_url:
+            return JSONResponse({"ok": False, "error": "That resolves to the feed's current URL."}, status_code=400)
+        # Name the URL that actually collides — reader raises FeedExistsError for
+        # the resolved address, which the user never typed and cannot see.
+        with get_reader() as reader:
+            if reader.get_feed(new_url, None) is not None:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": f"That resolves to {new_url}, which you are already "
+                        "subscribed to. Consolidate the duplicate instead (Settings → Feeds → Utilities).",
+                    },
+                    status_code=409,
+                )
+
+    try:
+        with get_reader() as reader:
+            reader.change_feed_url(old_url, new_url)
+    except FeedNotFoundError:
+        # The submitted "current" URL isn't in reader — almost always a stale
+        # page whose feed was redirected out from under it (a FeedBurner-style
+        # redirector resolving to the publisher's own URL). Point the user at
+        # a reload rather than the raw reader exception.
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "This feed's current URL has changed (it may have been "
+                "redirected). Reload the page and try again — the Change URL field will show "
+                "the up-to-date URL.",
+            },
+            status_code=409,
+        )
+    except FeedExistsError:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "A feed with that URL already exists. Consolidate the duplicate instead (Settings → Feeds → Utilities).",
+            },
+            status_code=409,
+        )
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    # Migrate all meta DB tables that reference the old feed_url.
+    _feed_url_tables = [
+        "archived_entry",
+        "archived_asset_link",
+        "folder_feeds",
+        "saved_entries",
+        "entry_read_state",
+        "entry_unread_batch",
+        "entry_unstar_batch",
+        "read_history",
+        "feed_failure_state",
+        "entry_lead_images",
+        "entry_feed_tags",
+        "feed_lead_image_strategy",
+        "disabled_feeds",
+        "feed_display_prefs",
+        "feed_strategy_cache",
+        # Dismissed suggestion chips are per feed, so they have to follow the feed when its URL is
+        # rewritten — otherwise the dismissals orphan and every chip the user waved off comes back.
+        "suppressed_feed_tags",
+        "suppressed_feed_attachment_exts",
+        "rule_run_log_entries",
+        "email_batch_queue",
+    ]
+    _was_needs_replacement = old_url in get_feeds_needing_replacement()
+    with get_meta_connection() as conn:
+        for table in _feed_url_tables:
+            try:
+                conn.execute(f"UPDATE {table} SET feed_url = ? WHERE feed_url = ?", (new_url, old_url))
+            except Exception:
+                pass
+        # highlight_keywords uses scope/scope_id rather than feed_url
+        try:
+            conn.execute(
+                "UPDATE highlight_keywords SET scope_id = ? WHERE scope = 'feed' AND scope_id = ?",
+                (new_url, old_url),
+            )
+        except Exception:
+            pass
+
+    # Migrate starred archive DB tables.
+    try:
+        with archive_conn() as arch_conn:
+            for table in ("archived_entry", "archived_asset_link"):
+                try:
+                    arch_conn.execute(f"UPDATE {table} SET feed_url = ? WHERE feed_url = ?", (new_url, old_url))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Migrate lead-image in-memory caches: re-key (old_url, entry_id) → (new_url, entry_id).
+    lead_image_service.rename_feed_url_in_cache(old_url, new_url)
+
+    # Clear any backoff/failure state the old URL accumulated so the new URL
+    # gets fetched immediately rather than waiting for the next scheduled retry.
+    with get_meta_connection() as conn:
+        conn.execute("DELETE FROM feed_failure_state WHERE feed_url = ?", (new_url,))
+        # A URL change on a needs-replacement feed IS the replacement: clear the
+        # dead-triage flag (migrated to new_url above) so it leaves the worklist.
+        conn.execute("DELETE FROM feeds_needing_replacement WHERE feed_url IN (?, ?)", (old_url, new_url))
+    if _was_needs_replacement:
+        # It was disabled while dead; the working replacement should fetch again.
+        enable_feed(new_url)
+
+    # A feed that moved to a new HOST moved the site with it. Seed the same
+    # alias rule Edit Website seeds, so the old domain keeps resolving: the
+    # entry-link rebase, the dupe scan, the favicon, re-fetch AND the Website
+    # shown in Feed Properties all read through feed_url_rewrites, so one rule
+    # fixes all of them. Doing it by hand afterwards is easy to forget, and the
+    # symptom (Website still naming a dead domain) does not look like something
+    # the URL change caused.
+    alias: dict | None = None
+    _old_host = _normalize_alias_host(urlparse(old_url).netloc)
+    _new_host = _normalize_alias_host(urlparse(new_url).netloc)
+    if _old_host and _new_host and _old_host != _new_host:
+        try:
+            with get_meta_connection() as conn:
+                already = conn.execute(
+                    "SELECT 1 FROM feed_url_rewrites WHERE feed_url = ? AND from_host = ?",
+                    (new_url, _old_host),
+                ).fetchone()
+                if already is None:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO feed_url_rewrites (feed_url, from_host, to_host) VALUES (?, ?, ?)",
+                        (new_url, _old_host, _new_host),
+                    )
+            if already is None:
+                stats = migrate_feed_host_rewrite(new_url, {_old_host: _new_host})
+                alias = {"from_host": _old_host, "to_host": _new_host, "migrated": int(stats.get("migrated", 0) or 0)}
+        except Exception:  # noqa: BLE001 — the URL change itself already succeeded
+            LOGGER.warning("[change-url] alias seeding failed for %s", new_url, exc_info=True)
+
+    invalidate_meta_structure_cache()
+    invalidate_problematic_feeds_cache()
+    invalidate_unread_counts_cache()
+    _bump_unread_counts_generation()
+
+    # Bound to the requesting tenant: a bare Thread does not inherit
+    # contextvars, so this refresh ran as the DEFAULT user and fetched into the
+    # wrong (or no) database. The URL change itself succeeded, so the symptom
+    # was a feed that had plainly moved yet still showed the OLD site's title
+    # and link until some later scheduled cycle happened to pick it up —
+    # looking for all the world like the change hadn't taken.
+    threading.Thread(
+        target=_run_in_user_context,
+        args=(tenancy.current_user_id(), feed_refresh_service.update_feeds, [new_url]),
+        daemon=True,
+        name="refresh-after-url-change",
+    ).start()
+
+    # The folder the feed sits in, so the client can navigate back to it WITH
+    # its scope. Without this the redirect carried only list_feed_url, and a
+    # feed URL with no folder_id leaves the sidebar with nothing to select —
+    # the feed is open in the list but invisible in the tree, so there is no
+    # way back to its context menu.
+    folder_id = None
+    try:
+        with get_meta_connection() as conn:
+            row = conn.execute("SELECT folder_id FROM folder_feeds WHERE feed_url = ? LIMIT 1", (new_url,)).fetchone()
+            folder_id = int(row["folder_id"]) if row else None
+    except Exception:  # noqa: BLE001 — navigation nicety, never fail the change
+        LOGGER.warning("[change-url] folder lookup failed for %s", new_url, exc_info=True)
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "new_url": new_url,
+            "folder_id": folder_id,
+            "old_host": _old_host,
+            "alias": alias,
+        }
+    )
+
+
+@router.post("/feeds/unsubscribe")
+def unsubscribe_feed(
+    request: Request,
+    folder_id: int = Form(...),
+    feed_url: str = Form(...),
+    sort_by: str | None = Form(default=None),
+    sort_dir: str | None = Form(default=None),
+    read_filter: str | None = Form(default=None),
+    star_only: str | None = Form(default=None),
+    resume_read_filter: str | None = Form(default=None),
+    migrate_curation_to: str | None = Form(default=None),
+    restar_curated: str = Form(default=""),
+    drop_curation: str = Form(default=""),
+):
+    normalized_read_filter = normalize_read_filter(read_filter)
+    sort_query_s = build_sort_query(sort_by, sort_dir)
+    star_only_query = build_star_only_query(star_only)
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
+    read_filter_query_s = build_read_filter_query(read_filter)
+
+    ok = True
+    message = "Feed unsubscribed."
+    try:
+        # Before anything is removed: the option to bring this feed's curated
+        # items back to the top of the Inbox. Runs first so the entries are
+        # still readable and so the capture it enqueues is flushed by the
+        # force-archive both branches below already perform.
+        restarred = restar_curated_entries(feed_url) if normalize_star_only(restar_curated) else 0
+
+        # "Unsubscribe and drop everything": strip the keep signals BEFORE the
+        # removal, so the purge below finds nothing worth preserving and the
+        # posts do not survive in Saved as orphan archives.
+        dropped: dict[str, int] | None = drop_all_curation(feed_url) if normalize_star_only(drop_curation) else None
+
+        with get_meta_connection() as conn:
+            conn.execute(
+                "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
+                (folder_id, feed_url),
+            )
+            still_used = conn.execute(
+                "SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1",
+                (feed_url,),
+            ).fetchone()
+
+        if not still_used:
+            # When a target feed is given, migrate this feed's tags/stars onto it
+            # (synthesizing entries) instead of archiving the stars — so curation
+            # isn't lost on unsubscribe.
+            _migrate_to = (migrate_curation_to or "").strip() or None
+            if _migrate_to == feed_url:
+                _migrate_to = None  # can't migrate onto itself
+            with get_reader() as reader:
+                with get_meta_connection() as conn:
+                    purge_orphaned_feed(
+                        reader,
+                        conn,
+                        feed_url,
+                        archive_pending=_migrate_to is None,
+                        migrate_curation_to=_migrate_to,
+                    )
+                    conn.execute(
+                        "INSERT OR REPLACE INTO declined_feeds (feed_url, declined_at) VALUES (?, ?)",
+                        (feed_url, datetime.now().isoformat()),
+                    )
+                    conn.commit()
+        if dropped:
+            message = (
+                "Feed unsubscribed; "
+                f"{dropped['untagged']} untagged, {dropped['unstarred']} unstarred, "
+                f"{dropped['archives']} offline cop{'y' if dropped['archives'] == 1 else 'ies'} deleted."
+            )
+        if restarred:
+            message += f" {restarred} curated post{'' if restarred == 1 else 's'} moved to the top of the Inbox."
+        invalidate_meta_structure_cache()
+    except Exception as exc:
+        ok = False
+        message = f"Unsubscribe failed: {exc}"
+
+    # AJAX caller (e.g. problematic-feeds modal trash button) wants a JSON
+    # response so it can update the DOM in place instead of navigating away.
+    requested_with = request.headers.get("x-requested-with", "").lower()
+    if "lectio" in requested_with or requested_with == "xmlhttprequest":
+        return JSONResponse({"ok": ok, "feed_url": feed_url, "message": message}, status_code=200 if ok else 500)
+
+    return RedirectResponse(
+        url=(
+            f"/?folder_id={folder_id}"
+            f"{sort_query_s}"
+            f"{read_filter_query_s}"
+            f"{star_only_query}"
+            f"{resume_read_filter_query}"
+            f"&message={quote_plus(message)}"
+        ),
+        status_code=303,
+    )
+
+
+def feed_curation_counts(reader, conn: sqlite3.Connection, feed_url: str) -> dict:
+    """Count the manual tags and stars a feed carries (curation that would be lost
+    on unsubscribe). Returns ``{"tagged": n, "stars": n}`` — ``tagged`` is the number
+    of entries with at least one manual tag, ``stars`` the number of saved entries."""
+    stars = conn.execute("SELECT COUNT(*) FROM saved_entries WHERE feed_url = ?", (feed_url,)).fetchone()[0]
+    tagged = 0
+    try:
+        for e in reader.get_entries(feed=feed_url):
+            keys = [_extract_tag_key(t) for t in reader.get_tags(e.resource_id)]
+            if any(k and k.startswith(MANUAL_TAG_KEY_PREFIX) for k in keys):
+                tagged += 1
+    except Exception:  # noqa: BLE001
+        pass
+    return {"tagged": tagged, "stars": int(stars)}
+
+
+@router.get("/feeds/curation-count")
+def feed_curation_count_route(feed_url: str = Query(...)):
+    """Return how much curation (manual tags + stars) a feed carries, so the UI
+    can offer to migrate it before an unsubscribe drops it."""
+    try:
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                counts = feed_curation_counts(reader, conn, feed_url)
+                # Candidate migration targets: every other subscribed feed, so the
+                # dialog's picker doesn't depend on what's rendered in the DOM.
+                # Prefer the user's custom title (what they see in the sidebar)
+                # over reader's real feed title, and sort by that rendered title so
+                # the picker order matches the labels (reader's sort="title" orders
+                # by the real title, which can differ once user_title is applied).
+                candidates = sorted(
+                    (
+                        {"url": f.url, "title": getattr(f, "user_title", None) or f.title or f.url}
+                        for f in reader.get_feeds()
+                        if f.url != feed_url
+                    ),
+                    key=lambda c: c["title"].lower(),
+                )
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[curation] count failed for %s: %s", feed_url, exc)
+        return JSONResponse({"error": "Could not read this feed's curation."}, status_code=500)
+    counts["candidates"] = candidates
+    return JSONResponse(counts)

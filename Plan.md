@@ -256,10 +256,23 @@ ordered safest → riskiest:
      cluster, confirmed untouched. 2 test files retargeted for the usual two gotchas. Full
      `make test`/`lint`/`types` pass; live `TestClient(main.app)` hit all 10 paths for a real
      (auth-rejected but router-resolved) response.
-   - **D.** Feed network/fetch settings + lifecycle: `/feeds/browser-ua`, `/feeds/proxy`,
-     `/feeds/tailscale`, `/feeds/flaresolverr`, `/feeds/reparse`, `/feeds/move`, `/feeds/disable`,
-     `/feeds/enable`, `/feeds/toggle-updates`, `/feeds/change-url`, `/feeds/unsubscribe`,
-     `/feeds/curation-count` (12 routes).
+   - **D — done (2026-09-22).** Feed network/fetch settings + lifecycle: `/feeds/browser-ua`,
+     `/feeds/proxy`, `/feeds/tailscale`, `/feeds/flaresolverr`, `/feeds/reparse`, `/feeds/move`,
+     `/feeds/disable`, `/feeds/enable`, `/feeds/toggle-updates`, `/feeds/change-url`,
+     `/feeds/unsubscribe`, `/feeds/curation-count` (12 routes, exactly as scoped). main.py: 30,208
+     → 29,618 lines; `routes/feeds.py`: 1,264 → 1,934 lines (45 routes across 8A-D). Only 1
+     genuinely single-route helper moved (`feed_curation_counts`); `disable_feed`/`enable_feed` and
+     the whole `flag_*_feed`/`_invalidate_*_feeds_cache` family confirmed as load-bearing shared
+     primitives (DeviantArt watchlist auto-pause, the fetch-refusal escalation chain, other
+     already-moved route modules) — exactly the trap this sub-stage was briefed to watch for, and
+     it held. Found via the `scripts/*.py` leg of the three-way grep (not tests, not routes/*.py):
+     2 scripts call `change_feed_url_route` directly as a plain function, not over HTTP
+     (`scripts/fix_reddit_rss_host.py`, `scripts/find_redirecting_feeds.py --apply`) — both
+     retargeted. One self-inflicted near-miss caught mid-verification: a docstring the agent wrote
+     into `routes/feeds.py` happened to contain the same substring two tests were slicing main.py's
+     raw source for, so the tests silently matched the wrong text until the docstring was reworded
+     and the tests repointed at the real code. 5 test files retargeted total. Full
+     `make test`/`lint`/`types` pass; live `TestClient(main.app)` confirmed all 12 paths resolve.
    - **E.** Feed tags/attachments/website/curation/bulk ops — riskiest, saved for last: 
      `/feeds/suggested-tags`, `/feeds/attachment-candidates`, `/feeds/attachment-candidate-suppress`,
      `/feeds/attachment-exts`, `/feeds/set-website`, `/feeds/url-rewrites`,

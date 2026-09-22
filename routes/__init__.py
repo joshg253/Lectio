@@ -182,6 +182,17 @@ Stage 8C added the feed display/thumbnail strategy config cluster (10 more route
 `/feeds/smart-min-scale`, `/feeds/fill-zoom`, `/feeds/thumb-strategy`, `/feeds/caption-source`,
 `/feeds/strategy-refresh`) to the same `routes/feeds.py` module -- see that file's own docstring for the full
 rationale, including which helpers moved (`_VALID_MANUAL_STRATEGIES`, `upsert_feed_thumb_crop`) versus stayed in
-main.py and got imported back. Sub-stages D-E (network/fetch settings + lifecycle, tags/attachments/curation/bulk
-ops) still come later.
+main.py and got imported back. Sub-stage E (tags/attachments/curation/bulk ops) still comes later.
+
+Stage 8D added the feed network/fetch settings + lifecycle cluster (12 more routes: `/feeds/browser-ua`,
+`/feeds/proxy`, `/feeds/tailscale`, `/feeds/flaresolverr`, `/feeds/reparse`, `/feeds/move`, `/feeds/disable`,
+`/feeds/enable`, `/feeds/toggle-updates`, `/feeds/change-url`, `/feeds/unsubscribe`, `/feeds/curation-count`) to
+the same `routes/feeds.py` module -- see that file's own docstring for the full rationale. Real feed-lifecycle
+logic, not thin wrappers; only `feed_curation_counts` moved as a genuinely single-route-only helper, while the
+`flag_*`/`unflag_*`/`_invalidate_*_feeds_cache` fetch-escalation families, `disable_feed`/`enable_feed`,
+`purge_orphaned_feed`, and several others stayed in main.py despite looking route-adjacent, each confirmed shared
+with still-in-main.py code, other `routes/*.py` modules, or tested directly. Two scripts
+(`scripts/fix_reddit_rss_host.py`, `scripts/find_redirecting_feeds.py`) called `change_feed_url_route` directly as
+a plain function and were retargeted from `main.change_feed_url_route` to `routes.feeds.change_feed_url_route`.
+Sub-stage E (tags/attachments/curation/bulk ops) is the last one, still to come.
 """

@@ -1509,6 +1509,7 @@ class TestRestarCuratedEntries:
         """Off by default — unsubscribing must not reorder the Inbox unasked."""
         calls = []
         monkeypatch.setattr(main, "restar_curated_entries", lambda u: calls.append(u) or 0)
+        monkeypatch.setattr(routes.feeds, "restar_curated_entries", lambda u: calls.append(u) or 0)
         monkeypatch.setattr(main, "websub_service", MagicMock())
 
         monkeypatch.setattr(main, "AUTH_ENABLED", False)
@@ -1547,6 +1548,7 @@ class TestRestarCuratedEntries:
             return 0
 
         monkeypatch.setattr(main, "restar_curated_entries", _spy)
+        monkeypatch.setattr(routes.feeds, "restar_curated_entries", _spy)
         monkeypatch.setattr(main, "websub_service", MagicMock())
         monkeypatch.setattr(main, "AUTH_ENABLED", False)
         _add_feed_to_folder(FEED, _root_folder_id())
@@ -1657,6 +1659,7 @@ class TestDropAllCuration:
     def test_route_runs_it_only_when_asked(self, env, monkeypatch):
         calls = []
         monkeypatch.setattr(main, "drop_all_curation", lambda u: calls.append(u) or {"untagged": 0, "unstarred": 0, "archives": 0})
+        monkeypatch.setattr(routes.feeds, "drop_all_curation", lambda u: calls.append(u) or {"untagged": 0, "unstarred": 0, "archives": 0})
         monkeypatch.setattr(main, "websub_service", MagicMock())
         monkeypatch.setattr(main, "AUTH_ENABLED", False)
 
