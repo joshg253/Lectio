@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -47,7 +48,7 @@ def _add_entry(entry_id: str) -> None:
 
 def _client() -> TestClient:
     app = FastAPI()
-    app.post("/entries/delete")(main.delete_entry_route)
+    app.post("/entries/delete")(routes.entries.delete_entry_route)
     return TestClient(app)
 
 

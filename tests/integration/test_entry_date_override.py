@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -45,7 +46,7 @@ def configured(tmp_path):
 
 def _client() -> TestClient:
     app = FastAPI()
-    app.post("/entries/set-date")(main.set_entry_date_route)
+    app.post("/entries/set-date")(routes.entries.set_entry_date_route)
     return TestClient(app)
 
 
@@ -119,7 +120,7 @@ def test_a_date_only_input_is_local_midnight_not_utc(configured):
     """
     from datetime import datetime, timezone
 
-    main.set_entry_date_route(feed_url=FEED, entry_id="e1", published="2023-07-06")
+    routes.entries.set_entry_date_route(feed_url=FEED, entry_id="e1", published="2023-07-06")
 
     with main.get_meta_connection() as conn:
         stored = conn.execute(
@@ -136,7 +137,7 @@ def test_a_date_only_input_is_local_midnight_not_utc(configured):
 
 def test_an_explicit_offset_is_respected(configured):
     """A caller that states its zone must not be re-interpreted as local."""
-    main.set_entry_date_route(feed_url=FEED, entry_id="e1", published="2023-07-06T00:00:00+00:00")
+    routes.entries.set_entry_date_route(feed_url=FEED, entry_id="e1", published="2023-07-06T00:00:00+00:00")
 
     with main.get_meta_connection() as conn:
         stored = str(
@@ -176,7 +177,7 @@ def test_refetch_learns_a_date_only_when_we_have_none(configured):
 
 def test_refetch_never_overrides_a_pinned_date(configured):
     """An explicit correction outranks anything inferred from a page."""
-    main.set_entry_date_route(feed_url=FEED, entry_id="e1", published="2023-04-05")
+    routes.entries.set_entry_date_route(feed_url=FEED, entry_id="e1", published="2023-04-05")
     pinned = _reader_published()
     with main.get_reader() as reader:
         db = reader._storage.get_db()

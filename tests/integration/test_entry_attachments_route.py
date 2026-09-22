@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -64,7 +65,7 @@ def test_kept_and_available_for_a_live_entry(configured):
             (FEED, ENTRY),
         )
 
-    resp = main.entry_attachments_route(feed_url=FEED, entry_id=ENTRY)
+    resp = routes.entries.entry_attachments_route(feed_url=FEED, entry_id=ENTRY)
     import json as _json
 
     data = _json.loads(resp.body.decode())
@@ -93,7 +94,7 @@ def test_enclosure_only_file_is_available_even_with_no_body_link(configured):
             }
         )
     # Nothing archived at all -- the fully un-kept state after untag+unstar.
-    resp = main.entry_attachments_route(feed_url=FEED, entry_id=ENTRY)
+    resp = routes.entries.entry_attachments_route(feed_url=FEED, entry_id=ENTRY)
     import json as _json
 
     data = _json.loads(resp.body.decode())
@@ -119,7 +120,7 @@ def test_enclosure_audio_and_image_are_excluded_from_available(configured):
                 ],
             }
         )
-    resp = main.entry_attachments_route(feed_url=FEED, entry_id=ENTRY)
+    resp = routes.entries.entry_attachments_route(feed_url=FEED, entry_id=ENTRY)
     import json as _json
 
     data = _json.loads(resp.body.decode())
@@ -154,7 +155,7 @@ def test_enclosure_already_kept_is_not_duplicated_into_available(configured):
             (FEED, ENTRY),
         )
 
-    resp = main.entry_attachments_route(feed_url=FEED, entry_id=ENTRY)
+    resp = routes.entries.entry_attachments_route(feed_url=FEED, entry_id=ENTRY)
     import json as _json
 
     data = _json.loads(resp.body.decode())
@@ -173,7 +174,7 @@ def test_orphan_entry_falls_back_to_archived_readability(configured):
             (FEED, ENTRY, ENTRY, __import__("zlib").compress(b'<a href="https://cdn.test/orphaned.pdf">file</a>')),
         )
 
-    resp = main.entry_attachments_route(feed_url=FEED, entry_id=ENTRY)
+    resp = routes.entries.entry_attachments_route(feed_url=FEED, entry_id=ENTRY)
     import json as _json
 
     data = _json.loads(resp.body.decode())

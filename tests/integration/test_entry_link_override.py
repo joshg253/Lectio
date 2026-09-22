@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -55,7 +56,7 @@ def configured(tmp_path):
 
 def _client() -> TestClient:
     app = FastAPI()
-    app.post("/entries/set-link")(main.set_entry_link_route)
+    app.post("/entries/set-link")(routes.entries.set_entry_link_route)
     return TestClient(app)
 
 

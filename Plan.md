@@ -322,9 +322,16 @@ ordered safest → riskiest:
      Stage 8D/6 already found twice. 5 test files retargeted for the usual two gotchas, no
      `scripts/*.py` callers found this time. Full `make test`/`lint`/`types`/`ruff format --check`
      pass; live `TestClient(main.app)` confirmed all 12 paths resolve.
-   - **B.** Entry metadata edits + attachments (9): `/entries/set-date`, `/entries/set-title`,
-     `/entries/set-link`, `/entries/delete`, `/entries/attachments`, `/entries/attachments/delete`,
-     `/entries/attachments/delete-all`, `/entries/attachments/save`, `/entries/attachments/save-all`.
+   - **B — done (2026-09-22).** Entry metadata edits + attachments (9, exactly as scoped):
+     `/entries/set-date`, `/entries/set-title`, `/entries/set-link`, `/entries/delete`,
+     `/entries/attachments`, `/entries/attachments/delete`, `/entries/attachments/delete-all`,
+     `/entries/attachments/save`, `/entries/attachments/save-all`. main.py: 28,254 → 27,908 lines;
+     `routes/entries.py`: 560 → 916 lines. `_hard_delete_entry` confirmed genuinely shared
+     (`routes/saved.py` calls it directly, plus 2 other still-in-main.py call sites) — stayed,
+     imported back. Self-caught mistake during the move: `_ENTRY_LINK_MAX_LEN` was deleted along
+     with its route block, then re-added in main.py once the "tested directly as `main.<name>`"
+     check caught it. 6 test files retargeted, no `monkeypatch.setattr(main,` hits and no
+     `scripts/*.py` callers this time. Full `make test`/`lint`/`types`/`ruff format --check` pass.
    - **C.** Move/organize + tags (9): `/entries/move-to-feed`, `/entries/move-to-feed-batch`,
      `/entries/select-all-visible`, `/entries/move-visible-to-feed`, `/entries/purge`,
      `/entries/discard`, `/entries/manual-tags-batch`, `/entries/tags`, `/entries/tags-batch`.

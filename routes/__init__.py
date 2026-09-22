@@ -258,4 +258,33 @@ over real HTTP: `tests/integration/test_reader_view_stored_content_fallback.py` 
 `main.build_readability_response` and then hits `GET /entries/readability` via `TestClient(main.app)` --
 since `entry_readability` now does its own `from main import build_readability_response`, the patch needed
 doubling onto `routes.entries.build_readability_response` too.
+
+Stage 9B -- entry metadata edits + attachments, 9 routes: `POST /entries/delete`, `POST /entries/set-date`,
+`POST /entries/set-title`, `POST /entries/set-link`, `GET /entries/attachments`,
+`POST /entries/attachments/delete`, `POST /entries/attachments/delete-all`, `POST /entries/attachments/save`,
+`POST /entries/attachments/save-all`. Sub-stages C (move/organize + tags), D (read/unread/star state +
+integration sends), and E (`/entries/pane` alone, last) still come later. `_parse_local_date_to_utc` and
+`_set_orphan_entry_date` moved with `/entries/set-date` (the former has no caller besides the latter, and the
+latter's own only caller is `set_entry_date_route`); `_ENTRY_TITLE_MAX_LEN` moved with `/entries/set-title`;
+`_entry_content_html_and_base` moved with `/entries/attachments`. `_hard_delete_entry` stayed and is imported
+back despite sitting immediately above `/entries/delete` -- its own docstring says it's "shared by
+/entries/delete and /saved/deduplicate", and `routes/saved.py` already imports it directly, confirmed via the
+`routes/*.py`/`scripts/*.py`/`tests/` three-way grep rather than assumed from the docstring alone (it's also
+tested directly as `main._hard_delete_entry` by two dedicated test files). `_ENTRY_LINK_MAX_LEN` stayed too,
+for the "tested directly as `main.<name>`" reason Stage 9A's `_CLEANUP_ERROR_MESSAGES` and several earlier
+stages' constants already established (`tests/integration/test_entry_link_override.py`);
+`STARRED_ASSET_URL_PREFIX` (8 other call sites across main.py), `candidate_attachment_links_in_html` (tested
+directly as `main.<name>`), `_filtered_file_enclosures` (a second still-in-main.py caller besides
+`_entry_content_html_and_base`), and `get_starred_archive_connection`/`invalidate_unread_counts_cache`
+(widely-shared low-level primitives) all stayed too and got imported back. Four test files needed
+retargeting for the "handler registered directly as `main.<name>` on a bare test `FastAPI()` app" gotcha:
+`tests/integration/test_delete_entry_tombstone.py` (-> `routes.entries.delete_entry_route`),
+`tests/integration/test_entry_title_override.py` (-> `routes.entries.set_entry_title_route`),
+`tests/integration/test_entry_link_override.py` (-> `routes.entries.set_entry_link_route`), and both
+`tests/integration/test_entry_date_override.py` and
+`tests/integration/test_backfill_url_inferred_dates_refresh_safety.py` (-> `routes.entries.set_entry_date_route`,
+the same handler registered in two separate test files). One test hit the plain-function-call variant:
+`tests/integration/test_entry_attachments_route.py` calls `main.entry_attachments_route(...)` directly five
+times, retargeted to `routes.entries.entry_attachments_route`. No script-only callers turned up for any of
+this sub-stage's 9 routes or their moved helpers.
 """
