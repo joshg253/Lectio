@@ -3,10 +3,12 @@ route-by-URL-prefix split -- 45 `/entries/*` routes, scoped into its own A-E
 sub-stages so it doesn't land as one huge diff, same reasoning as Stage 8's
 `routes/feeds.py`).
 
-**Stage 9A only, so far.** Sub-stages B (entry metadata edits + attachments),
-C (move/organize + tags), D (read/unread/star state + integration sends), and
-E (`/entries/pane` alone, last) will add to this same module in later tasks --
-don't assume this is the final state.
+**Stage 9 is now COMPLETE.** Sub-stages A (content/reading utility), B (entry
+metadata edits + attachments), C (move/organize + tags), D (read/unread/star
+state + integration sends), and E (`/entries/pane` alone) have all landed in
+this module -- 45 routes total, no further sub-stages planned. B/C/D's own
+per-stage notes live only in `routes/__init__.py`'s docstring (not narrated
+here); this file's notes below cover 9A in detail, then jump to 9E.
 
 Stage 9A -- content/reading utility, 12 routes: `GET /entries/lead-image`,
 `GET /entries/media/audio`, `GET /entries/media/download`,
@@ -60,6 +62,25 @@ monkeypatches `main.build_readability_response` and then hits
 `GET /entries/readability` via `TestClient(main.app)` -- since
 `entry_readability` now does its own `from main import build_readability_response`,
 the patch needed doubling onto `routes.entries.build_readability_response` too.
+
+Stage 9E -- `GET /entries/pane` alone (1 route, the last sub-stage). `entry_pane` is pure orchestration: param
+normalization, one `get_entry_detail` call for the selected entry, a small feed_url->folder_id map, a few
+integration-configured checks, and a `templates.TemplateResponse` render -- it does not call `_home_inner`,
+`list_entries_for_feeds`, or `build_reader_page`, the other shared rendering-core functions Plan.md's Landmines
+note flags; `get_entry_detail` is the only one it touches, and it (along with the other three) stays in main.py,
+imported back. `_get_email_to_default` moved with the route (no other caller, no dedicated test).
+`_mark_entry_read_background` looked single-route-only by the same grep but stayed in main.py and got imported
+back instead: `tests/integration/test_reader_view.py` monkeypatches `main._mark_entry_read_background` as a
+defensive stub for the unrelated `reader_view` (`/read`) route, which doesn't actually call it -- moving the
+function out of main.py would still have broken that `setattr` (it requires the attribute to exist), so it was
+left in place rather than touching an unrelated test for a route this stage didn't move.
+`normalize_resume_read_filter`/`unsubscribed_feed_urls_among` stayed too, confirmed shared with `_home_inner`.
+`get_meta_structure_snapshot`, `is_instapaper_configured`, `is_quire_configured`, `pinterest_oauth_connected`,
+`reddit_connected`, and `templates` are pre-existing widely-shared main.py infrastructure -- none of it moved.
+No `services.automation_rules` ordering constraint. One test file retargeted for the "handler registered
+directly as `main.<name>` on a bare test `FastAPI()` app" gotcha: `tests/integration/test_hide_locked_comics.py`
+(-> `routes.entries.entry_pane`). No `scripts/*.py` callers. See `routes/__init__.py`'s docstring for the fuller
+write-up.
 """
 
 from __future__ import annotations
@@ -69,8 +90,10 @@ import json
 import re
 import sqlite3
 import threading
+import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from typing import cast
 from urllib.parse import quote_plus, urlparse
 
 import httpx
@@ -85,6 +108,7 @@ from main import (
     _RANGE_READ_LIMIT,
     _READER_VIEW_MEDIA_CSS,
     _VALID_THUMB_CROPS,
+    EMAIL_TO_SETTING_KEY,
     LOGGER,
     MAX_MANUAL_TAGS,
     PROFILE_EMAIL_SETTING_KEY,
@@ -102,6 +126,7 @@ from main import (
     _instapaper_save_url,
     _lead_image_display_url,
     _mark_entries_as_read_for_view,
+    _mark_entry_read_background,
     _maybe_autofetch_on_keep,
     _move_entry_to_feed,
     _prune_entries,
@@ -143,6 +168,7 @@ from main import (
     get_manual_tags_for_entry,
     get_manual_tags_for_resource,
     get_meta_connection,
+    get_meta_structure_snapshot,
     get_quire_usage_status,
     get_quire_user_token,
     get_reader,
@@ -158,12 +184,15 @@ from main import (
     invalidate_unread_counts_cache,
     is_async_action_request,
     is_email_configured,
+    is_instapaper_configured,
+    is_quire_configured,
     is_quire_connected,
     lead_image_service,
     list_entries_for_feeds,
     mark_entry_read_everywhere,
     merge_orphan_saved_entries,
     normalize_read_filter,
+    normalize_resume_read_filter,
     normalize_search_query,
     normalize_sort_by,
     normalize_sort_dir,
@@ -172,16 +201,20 @@ from main import (
     parse_manual_hashtags,
     parse_manual_tag_edit_tokens,
     parse_tag_filter_spec,
+    pinterest_oauth_connected,
     probe_frameability,
     quire_project_oid,
+    reddit_connected,
     saved_articles_service,
     search_terms_from_query,
     send_article_email,
     set_entry_archived,
     set_manual_tags_for_entry,
     starred_archive_service,
+    templates,
     unread_counts_cache,
     unread_counts_cache_lock,
+    unsubscribed_feed_urls_among,
     upsert_entry_read_state,
     url_guard,
 )
@@ -2617,3 +2650,82 @@ def add_to_quire(
         return JSONResponse({"ok": True})
     LOGGER.warning("Quire add failed for %s: %s", entry.link or entry_id, err)
     return JSONResponse({"ok": False, "error": err}, status_code=502)
+
+
+@router.get("/entries/pane", response_class=HTMLResponse)
+def entry_pane(
+    request: Request,
+    folder_id: int,
+    feed_url: str,
+    entry_id: str,
+    list_feed_url: str | None = None,
+    tag: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    read_filter: str | None = None,
+    star_only: str | None = None,
+    resume_read_filter: str | None = None,
+):
+    normalized_tag = normalize_tag_value(tag)
+    normalized_sort_by = normalize_sort_by(sort_by)
+    normalized_sort_dir = normalize_sort_dir(sort_dir)
+    normalized_read_filter = normalize_read_filter(read_filter)
+    normalized_star_only = normalize_star_only(star_only)
+    normalized_resume_read_filter = normalize_resume_read_filter(resume_read_filter)
+
+    _pane_t0 = time.monotonic()
+    selected_entry = get_entry_detail(feed_url, entry_id)
+    _detail_ms = int((time.monotonic() - _pane_t0) * 1000)
+    if _detail_ms > 500:
+        LOGGER.info("[perf] entry_pane: get_entry_detail=%dms feed=%s", _detail_ms, feed_url)
+    if selected_entry and not selected_entry["read"]:
+        selected_entry["read"] = True
+        _mark_entry_read_background(
+            feed_url,
+            entry_id,
+            str(selected_entry.get("title") or ""),
+            str(selected_entry.get("link") or ""),
+            str(selected_entry.get("feed_title") or ""),
+        )
+
+    # Build a tiny feed_url→folder_id map for the entry pane's feed-name link
+    # so it lands in the feed's actual containing folder.
+    feed_to_folder: dict[str, int] = {}
+    with get_meta_connection() as conn:
+        snapshot = get_meta_structure_snapshot(conn)
+    direct = cast(dict[int, list[str]], snapshot["direct_feed_urls_by_folder"])
+    for fid, urls in direct.items():
+        for url in urls:
+            feed_to_folder[url] = fid
+
+    return templates.TemplateResponse(
+        request,
+        "_entry_pane.html",
+        {
+            "selected_folder_id": folder_id,
+            "selected_feed_url": list_feed_url,
+            "selected_tag": normalized_tag,
+            "selected_sort_by": normalized_sort_by,
+            "selected_sort_dir": normalized_sort_dir,
+            "selected_read_filter": normalized_read_filter,
+            "selected_star_only": normalized_star_only,
+            "selected_resume_read_filter": normalized_resume_read_filter,
+            "selected_entry": selected_entry,
+            "feed_to_folder": feed_to_folder,
+            "unsubscribed_feed_urls": unsubscribed_feed_urls_among([selected_entry.get("feed_url")] if selected_entry else []),
+            "email_configured": is_email_configured(),
+            "email_to_default": _get_email_to_default(),
+            "instapaper_configured": is_instapaper_configured(),
+            "pinterest_connected": pinterest_oauth_connected(),
+            "quire_configured": is_quire_configured(),
+            "reddit_connected": reddit_connected(),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _get_email_to_default() -> str:
+    if not is_email_configured():
+        return ""
+    with get_meta_connection() as conn:
+        return get_setting(conn, EMAIL_TO_SETTING_KEY) or ""

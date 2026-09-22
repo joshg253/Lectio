@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://cad-comic.com/feed/"
@@ -369,7 +370,7 @@ def _app():
     app = FastAPI()
     app.add_middleware(SessionMiddleware, secret_key="test-only")
     app.get("/")(main.home)
-    app.get("/entries/pane")(main.entry_pane)
+    app.get("/entries/pane")(routes.entries.entry_pane)
     return app
 
 

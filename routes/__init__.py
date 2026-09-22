@@ -394,4 +394,33 @@ each stubs several main.py-resident getters (`is_email_configured`, `get_resend_
 `quire_project_oid`, `get_quire_usage_status`, `_quire_add_entry`, `get_reader`) that now also need patching on
 `routes.entries`, doubled the same way Stage 8A's `_build_feed_mark_read_app` established. No script-only
 callers turned up for any of this sub-stage's 14 routes or their private helpers.
+
+Stage 9E -- `GET /entries/pane` alone (1 route), the last sub-stage of `routes/entries.py`. Landmines-flagged as
+the riskiest sub-stage going in, but it turned out low-risk: `entry_pane` itself is pure orchestration -- param
+normalization, one `get_entry_detail` call for the single selected entry, a small feed_url->folder_id map built
+from `get_meta_structure_snapshot`, a handful of integration-configured checks, and a `templates.TemplateResponse`
+render. It does NOT call `_home_inner`, `list_entries_for_feeds`, or `build_reader_page` -- those three plus
+`get_entry_detail` are the shared rendering-core functions Plan.md's Landmines note and the "Shared rendering
+core" section both flag as reused by `/`, `/read`, pane-swap, and the compat APIs; `get_entry_detail` is the only
+one this route touches, and it (along with `_home_inner`/`build_reader_page`) stays in main.py untouched, imported
+back like every other main.py-resident helper. `_get_email_to_default` moved with the route -- confirmed via the
+three-way grep to have no caller besides `entry_pane` and no dedicated test. `_mark_entry_read_background` looked
+single-route-only by the same grep (only caller is `entry_pane`) but stayed in main.py and got imported back
+instead: `tests/integration/test_reader_view.py` monkeypatches `main._mark_entry_read_background` as a defensive
+stub in its `_patch_read` helper for the unrelated still-in-main.py `reader_view` (`/read`) route, which doesn't
+actually call it -- moving the function out of main.py entirely would still have broken that `monkeypatch.setattr`
+(it requires the attribute to exist on the target), so it was left as the safer "tested/patched directly as
+`main.<name>`" case Stage 3/5/6/8/9A already established, rather than touching an unrelated test file for a
+route this stage didn't move. `normalize_resume_read_filter` and `unsubscribed_feed_urls_among` both stayed too,
+confirmed shared with `_home_inner` (main.py, the `/`+`/read` home-view core, Stage 10 territory) via the same
+grep. `get_meta_structure_snapshot`, `is_instapaper_configured`, `is_quire_configured`, `pinterest_oauth_connected`,
+`reddit_connected`, and `templates` are all pre-existing widely-shared main.py infrastructure (several already
+re-imported by `routes/feeds.py`/`routes/settings.py`) -- none of it moved. No `services.automation_rules`
+ordering constraint. One test file needed retargeting for the "handler registered directly as `main.<name>` on a
+bare test `FastAPI()` app" gotcha: `tests/integration/test_hide_locked_comics.py` (-> `routes.entries.entry_pane`).
+No `scripts/*.py` callers turned up. Full `make test`/`lint`/`types`/`ruff format --check` pass.
+
+**This closes out Stage 9: `routes/entries.py` is complete at 45 routes across sub-stages A-E, no further
+sub-stages planned.** Only Stage 10 (`routes/home.py` -- `/`, `/read`, `/read/offline`, and the shared
+rendering core itself) remains of the route-by-URL-prefix split.
 """

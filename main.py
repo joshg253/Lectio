@@ -15417,7 +15417,7 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     # exactly as available as they are for a live entry. This was hardcoded to
     # [] before, so an orphan feed's suggestion chip never showed no matter
     # what was pinned to it. Same "already applied -> stop suggesting" rule
-    # as the live path (main.entry_pane).
+    # as the live path (routes.entries.entry_pane).
     _manual_now = {normalize_tag_value(t) for t in manual_tags}
     feed_tag_suggestions = [t for t in get_feed_pinned_tags(feed_url) if t not in _manual_now]
 
@@ -18320,85 +18320,6 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "pending_lead_image": _pending_lead_image,
             "audio_feed_suggestion": _audio_feed_suggestion,
         }
-
-
-def _get_email_to_default() -> str:
-    if not is_email_configured():
-        return ""
-    with get_meta_connection() as conn:
-        return get_setting(conn, EMAIL_TO_SETTING_KEY) or ""
-
-
-@app.get("/entries/pane", response_class=HTMLResponse)
-def entry_pane(
-    request: Request,
-    folder_id: int,
-    feed_url: str,
-    entry_id: str,
-    list_feed_url: str | None = None,
-    tag: str | None = None,
-    sort_by: str | None = None,
-    sort_dir: str | None = None,
-    read_filter: str | None = None,
-    star_only: str | None = None,
-    resume_read_filter: str | None = None,
-):
-    normalized_tag = normalize_tag_value(tag)
-    normalized_sort_by = normalize_sort_by(sort_by)
-    normalized_sort_dir = normalize_sort_dir(sort_dir)
-    normalized_read_filter = normalize_read_filter(read_filter)
-    normalized_star_only = normalize_star_only(star_only)
-    normalized_resume_read_filter = normalize_resume_read_filter(resume_read_filter)
-
-    _pane_t0 = time.monotonic()
-    selected_entry = get_entry_detail(feed_url, entry_id)
-    _detail_ms = int((time.monotonic() - _pane_t0) * 1000)
-    if _detail_ms > 500:
-        LOGGER.info("[perf] entry_pane: get_entry_detail=%dms feed=%s", _detail_ms, feed_url)
-    if selected_entry and not selected_entry["read"]:
-        selected_entry["read"] = True
-        _mark_entry_read_background(
-            feed_url,
-            entry_id,
-            str(selected_entry.get("title") or ""),
-            str(selected_entry.get("link") or ""),
-            str(selected_entry.get("feed_title") or ""),
-        )
-
-    # Build a tiny feed_url→folder_id map for the entry pane's feed-name link
-    # so it lands in the feed's actual containing folder.
-    feed_to_folder: dict[str, int] = {}
-    with get_meta_connection() as conn:
-        snapshot = get_meta_structure_snapshot(conn)
-    direct = cast(dict[int, list[str]], snapshot["direct_feed_urls_by_folder"])
-    for fid, urls in direct.items():
-        for url in urls:
-            feed_to_folder[url] = fid
-
-    return templates.TemplateResponse(
-        request,
-        "_entry_pane.html",
-        {
-            "selected_folder_id": folder_id,
-            "selected_feed_url": list_feed_url,
-            "selected_tag": normalized_tag,
-            "selected_sort_by": normalized_sort_by,
-            "selected_sort_dir": normalized_sort_dir,
-            "selected_read_filter": normalized_read_filter,
-            "selected_star_only": normalized_star_only,
-            "selected_resume_read_filter": normalized_resume_read_filter,
-            "selected_entry": selected_entry,
-            "feed_to_folder": feed_to_folder,
-            "unsubscribed_feed_urls": unsubscribed_feed_urls_among([selected_entry.get("feed_url")] if selected_entry else []),
-            "email_configured": is_email_configured(),
-            "email_to_default": _get_email_to_default(),
-            "instapaper_configured": is_instapaper_configured(),
-            "pinterest_connected": pinterest_oauth_connected(),
-            "quire_configured": is_quire_configured(),
-            "reddit_connected": reddit_connected(),
-        },
-        headers={"Cache-Control": "no-store"},
-    )
 
 
 def mark_feeds_as_read(feed_urls: set[str]) -> tuple[int, str | None]:

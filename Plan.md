@@ -358,9 +358,24 @@ ordered safest → riskiest:
      name, so no cascade into other modules this time (unlike Stage 8E). `_mark_entries_as_read_for_view`
      confirmed shared with `routes/feeds.py`, stayed in main.py. 16 test files retargeted, no
      `scripts/*.py` callers found. Full `make test`/`lint`/`types`/`ruff format --check` pass.
-   - **E.** `/entries/pane` alone (1 route) — the pane-swap endpoint itself, same
-     reused-by-everything status Stage 10's `/`/`/read` have per the Landmines note; riskiest,
-     saved for last, same reasoning as Stage 8E and Stage 10.
+   - **E — done (2026-09-22), Stage 9 fully complete.** `/entries/pane` alone. main.py: 26,270 →
+     26,191 lines; `routes/entries.py`: 2,619 → 2,731 lines, **45 routes total, done**. Turned out
+     not to be the risky entanglement case the Landmines note warned about: `entry_pane` is pure
+     orchestration — of the four shared rendering-core functions (`_home_inner`,
+     `list_entries_for_feeds`, `build_reader_page`, `get_entry_detail`), it only calls
+     `get_entry_detail`, confirmed by reading the handler body directly. All four stayed in
+     main.py untouched (verified: still defined there). One subtle judgment call: `_mark_entry_read_background`
+     had only one caller (`entry_pane`) but stayed in main.py anyway, because an unrelated
+     still-in-main.py test (`test_reader_view.py`, for the `/read` route) defensively monkeypatches
+     `main._mark_entry_read_background` even though that route never calls it — moving the function
+     would have broken `monkeypatch.setattr`'s requirement that the target attribute exist, for a
+     route this stage didn't touch. 1 test file retargeted. A stale main.py comment referencing
+     `main.entry_pane` (now wrong) was caught and fixed inline. Full
+     `make test`/`lint`/`types`/`ruff format --check` pass; a live `TestClient` check went beyond
+     the usual "not a 404" bar — seeded a real entry and confirmed actual rendered HTML + the
+     mark-read side effect fired.
+
+**Stage 9 (`routes/entries.py`) is now fully done** — all 5 sub-stages (A-E), 45 routes.
 10. `routes/home.py` — `/`, `/read`, `/read/offline` last: these are the routes the Landmines note
     already flags as reused-by-everything (`_home_inner`, `build_reader_page`, pane-swap); moving
     the handler is still just importing the core functions back from main.py like everything else,
