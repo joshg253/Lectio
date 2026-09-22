@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -85,7 +86,7 @@ def test_kicks_off_a_job_and_the_status_route_reflects_it_running_then_done(thin
     assert job is not None and job["running"] is True
 
     app = FastAPI()
-    app.get("/entries/autofetch-status")(main.entry_autofetch_status)
+    app.get("/entries/autofetch-status")(routes.entries.entry_autofetch_status)
     with TestClient(app) as client:
         r = client.get("/entries/autofetch-status", params={"feed_url": FEED, "entry_id": ENTRY})
         assert r.json() == {"ok": True, "pending": True, "done": False, "success": None}
@@ -98,7 +99,7 @@ def test_kicks_off_a_job_and_the_status_route_reflects_it_running_then_done(thin
 
 def test_status_route_is_a_harmless_noop_for_an_entry_with_no_job(thin_entry):
     app = FastAPI()
-    app.get("/entries/autofetch-status")(main.entry_autofetch_status)
+    app.get("/entries/autofetch-status")(routes.entries.entry_autofetch_status)
     with TestClient(app) as client:
         r = client.get("/entries/autofetch-status", params={"feed_url": FEED, "entry_id": "never-tagged"})
         assert r.json() == {"ok": True, "pending": False, "done": False, "success": None}

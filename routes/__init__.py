@@ -214,4 +214,48 @@ function, the same shape Stage 8D found twice, and was retargeted the same way. 
 retargeting for the usual gotchas (handler-on-a-bare-`FastAPI()`-app and copied-reference monkeypatches);
 `tests/integration/test_feed_removal_consolidation.py` needed the largest sweep since it calls several of
 this sub-stage's routes as plain functions throughout the file.
+
+`routes/entries.py` (Stage 9 of the route-by-URL-prefix split -- 45 `/entries/*` routes, scoped into its
+own A-E sub-stages, same reasoning as Stage 8) **is only partially done: this file started with only
+sub-stage A's 12 routes** -- sub-stages B (entry metadata edits + attachments), C (move/organize + tags), D
+(read/unread/star state + integration sends), and E (`/entries/pane` alone, last) each add more routes to
+this same module in later tasks -- don't assume this is the final state.
+
+Stage 9A -- content/reading utility: `GET /entries/lead-image`, `GET /entries/media/audio`,
+`GET /entries/media/download`, `POST /entries/thumb-crop`, `GET /entries/readability`, `GET /entries/source`,
+`GET /entries/frame-check`, `GET /entries/feed-tags`, `GET /entries/content/has-original`,
+`POST /entries/content/clean`, `POST /entries/content/revert`, `GET /entries/autofetch-status` (12 routes,
+exactly as scoped). main.py: 28,695 -> 28,254 lines; `routes/entries.py` created at 560 lines (sub-stages
+B-E extend the same file). No ordering constraint: none of these handlers touch
+`_run_automation_after_refresh` or anything else from the late `services.automation_rules` import, so this
+module is imported alongside the plain `routes.compat_*`/`routes.tags`-style modules.
+
+Only one helper moved with its route, having no caller anywhere else: `_wrap_readability_html` (with
+`entry_readability`). Its immediate neighbor `_resolve_archived_readability_html` looked like the same
+shape but stayed in main.py and got imported back instead -- it's also called by
+`resolve_reader_article_html`, the still-in-main.py e-ink `/read` view's article resolver (Stage 10), so
+moving it would have broken that caller; confirmed via the `routes/*.py`/`scripts/*.py`/`tests/` three-way
+grep, not assumed from physical adjacency. Everything else these 12 routes touch stayed in main.py and got
+imported back: widely-shared services/singletons (`lead_image_service`, `starred_archive_service`,
+`saved_articles_service`, `feed_tag_service`, `feed_tags_service_mod`, `content_edits`, `html_sanitize`,
+`url_guard`, `feed_refresh_service`, `get_reader`, `get_meta_connection`), helpers with a second
+still-in-main.py caller (`_resolve_entry_audio_url`/`_find_entry_audio_url`, shared between the two media
+routes and a third caller besides; `_lead_image_display_url`; `_resolve_entry_content_html`), a
+`state.py`-sourced `_PerUserDict` singleton also written by the still-in-main.py star/tag routes
+(`_autofetch_jobs`, Stage 9D), and helpers tested directly as `main.<name>` by a dedicated test file
+(`build_readability_response`, `_CLEANUP_ERROR_MESSAGES`/`_CLEANUP_ERROR_FALLBACK`). `_VALID_THUMB_CROPS` is
+the same constant `routes/feeds.py` has re-imported since Stage 8C.
+
+Four test files needed retargeting for the "handler registered directly as `main.<name>`" gotcha, in both
+its shapes: `tests/integration/test_autofetch_pane_refresh.py` and
+`tests/integration/test_entry_content_cleanup.py` register a moved handler directly onto a bare test
+`FastAPI()` app (-> `routes.entries.entry_autofetch_status` and
+`routes.entries.clean_entry_content_route`/`routes.entries.revert_entry_content_route`);
+`tests/integration/test_feed_tag_dismiss_survives_reharvest.py` and
+`tests/integration/test_orphan_entry_tags.py` (three call sites) call a moved handler directly as a plain
+function (-> `routes.entries.entry_feed_tags_route`). One test hit the copied-reference monkeypatch gotcha
+over real HTTP: `tests/integration/test_reader_view_stored_content_fallback.py` monkeypatches
+`main.build_readability_response` and then hits `GET /entries/readability` via `TestClient(main.app)` --
+since `entry_readability` now does its own `from main import build_readability_response`, the patch needed
+doubling onto `routes.entries.build_readability_response` too.
 """

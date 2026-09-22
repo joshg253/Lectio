@@ -310,10 +310,18 @@ ordered safest → riskiest:
    endpoints that belong with Stage 6's `routes/saved.py` instead, and `/api/unread-counts` gets
    decided when reached (natural fit is wherever the read-state sub-stage below lands). Scoped into
    its own A-E sub-stages, same reasoning as Stage 8, safest → riskiest:
-   - **A.** Content/reading utility (12): `/entries/lead-image`, `/entries/media/audio`,
-     `/entries/media/download`, `/entries/readability`, `/entries/source`, `/entries/frame-check`,
-     `/entries/feed-tags`, `/entries/content/has-original`, `/entries/content/clean`,
-     `/entries/content/revert`, `/entries/thumb-crop`, `/entries/autofetch-status`.
+   - **A — done (2026-09-22).** Content/reading utility (12, exactly as scoped): `/entries/lead-image`,
+     `/entries/media/audio`, `/entries/media/download`, `/entries/readability`, `/entries/source`,
+     `/entries/frame-check`, `/entries/feed-tags`, `/entries/content/has-original`,
+     `/entries/content/clean`, `/entries/content/revert`, `/entries/thumb-crop`,
+     `/entries/autofetch-status`. main.py: 28,695 → 28,254 lines; `routes/entries.py` created at
+     560 lines. No `services.automation_rules` ordering constraint needed. Only 1 single-route
+     helper moved (`_wrap_readability_html`); `_resolve_archived_readability_html` sat right next
+     to it but stayed — also called by the still-in-main.py e-ink `/read` article resolver (Stage
+     10 territory), confirmed via the three-way grep rather than assumed from adjacency, same trap
+     Stage 8D/6 already found twice. 5 test files retargeted for the usual two gotchas, no
+     `scripts/*.py` callers found this time. Full `make test`/`lint`/`types`/`ruff format --check`
+     pass; live `TestClient(main.app)` confirmed all 12 paths resolve.
    - **B.** Entry metadata edits + attachments (9): `/entries/set-date`, `/entries/set-title`,
      `/entries/set-link`, `/entries/delete`, `/entries/attachments`, `/entries/attachments/delete`,
      `/entries/attachments/delete-all`, `/entries/attachments/save`, `/entries/attachments/save-all`.

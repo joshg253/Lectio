@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -152,7 +153,11 @@ def test_readability_route_prefers_stored_content_over_a_second_live_fetch(confi
     def _boom(url):
         raise AssertionError("must not build a live readability response when stored content is available")
 
+    # entry_readability now lives in routes.entries and did its own `from main
+    # import build_readability_response` at module load, so patching main's
+    # copy alone would not reach it -- both need patching.
     monkeypatch.setattr(main, "build_readability_response", _boom)
+    monkeypatch.setattr(routes.entries, "build_readability_response", _boom)
 
     resp = _client().get("/entries/readability", params={"url": LINK, "feed_url": FEED, "entry_id": ENTRY})
     assert resp.status_code == 200
@@ -163,6 +168,7 @@ def test_readability_route_with_no_archive_still_falls_through_to_live_fetch(con
     monkeypatch.setattr(main, "AUTH_ENABLED", False)
     _seed_entry("<p>thin stub</p>")
     monkeypatch.setattr(main, "build_readability_response", lambda url: main.HTMLResponse("<article>live fetched</article>"))
+    monkeypatch.setattr(routes.entries, "build_readability_response", lambda url: main.HTMLResponse("<article>live fetched</article>"))
 
     resp = _client().get("/entries/readability", params={"url": LINK, "feed_url": FEED, "entry_id": ENTRY})
     assert resp.status_code == 200

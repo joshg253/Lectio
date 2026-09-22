@@ -47,7 +47,7 @@ feedparser.registerDateHandler(_parse_month_first_pubdate)
 # This import's position is load-bearing, not alphabetical — hence the I001.
 import services  # noqa: F401,I001
 
-from fastapi import FastAPI, Form, HTTPException, Query, Request
+from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -20721,149 +20721,6 @@ def check_and_mark_manual_refresh() -> int:
 # Startup/shutdown handled by the lifespan() context manager above.
 
 
-@app.get("/entries/lead-image")
-def entry_lead_image_status(feed_url: str, entry_id: str):
-    """Lightweight polling endpoint for background lead-image fetch status.
-
-    Returns {"status": "pending"|"none"|"ready", "url": str|null}.
-    """
-    key = (feed_url, entry_id)
-    cached = lead_image_service._cache.get(key, "ABSENT")
-    in_progress = key in lead_image_service._source_fetch_in_progress
-    if cached != "ABSENT" and cached is not None:
-        # The rule can only ever rewrite a query parameter, so a URL without a
-        # query cannot be affected and does not need the lookup. This branch is
-        # the terminal one — polling stops once it returns "ready" — so the read
-        # is at most one per entry, not one per poll.
-        _rule = None
-        if "?" in cached:
-            with get_meta_connection() as _conn:
-                _rule = get_feed_display_prefs(_conn, feed_url).get("image_size_rule")
-        display_url = _lead_image_display_url(cached, _rule)
-        return JSONResponse({"status": "ready", "url": display_url})
-    if in_progress:
-        return JSONResponse({"status": "pending", "url": None})
-    return JSONResponse({"status": "none", "url": None})
-
-
-@app.get("/entries/media/audio")
-def media_audio_redirect(feed_url: str, entry_id: str):
-    """Redirect to the entry's audio enclosure URL.
-
-    If the stored URL returns a non-2xx response (e.g. Patreon signed URLs
-    expire after ~24 h), the feed is refreshed once to obtain a fresh URL
-    before redirecting.
-    """
-    with get_reader() as reader:
-        entry = reader.get_entry((feed_url, entry_id), None)
-        if not entry:
-            raise HTTPException(status_code=404, detail="Entry not found")
-        with get_meta_connection() as _mconn:
-            audio_url = _resolve_entry_audio_url(_mconn, feed_url, entry_id, entry)
-        if not audio_url:
-            raise HTTPException(status_code=404, detail="No audio enclosure found")
-
-        # Quick validity check; refresh the feed if the URL is expired.
-        try:
-            head = httpx.head(
-                audio_url,
-                follow_redirects=True,
-                timeout=4.0,
-                headers={"User-Agent": READABILITY_USER_AGENT},
-            )
-            if head.status_code not in (200, 206):
-                try:
-                    feed_refresh_service.update_feeds([feed_url])
-                    fresh = reader.get_entry((feed_url, entry_id), None)
-                    if fresh:
-                        fresh_url = _find_entry_audio_url(fresh)
-                        if fresh_url:
-                            audio_url = fresh_url
-                except Exception:
-                    LOGGER.warning("Audio URL refresh failed for %s", feed_url, exc_info=True)
-        except Exception:
-            pass  # Network error on HEAD — try the stored URL anyway
-
-    return RedirectResponse(audio_url, status_code=302)
-
-
-@app.get("/entries/media/download")
-def media_audio_download(feed_url: str, entry_id: str):
-    """Proxy the entry's audio enclosure as an attachment download.
-
-    Handles expired signed URLs the same way as /entries/media/audio.
-    Uses a streaming proxy so the file is downloaded through the server,
-    which avoids cross-origin restrictions on the browser download attribute.
-    """
-    with get_reader() as reader:
-        entry = reader.get_entry((feed_url, entry_id), None)
-        if not entry:
-            raise HTTPException(status_code=404, detail="Entry not found")
-        with get_meta_connection() as _mconn:
-            audio_url = _resolve_entry_audio_url(_mconn, feed_url, entry_id, entry)
-        if not audio_url:
-            raise HTTPException(status_code=404, detail="No audio enclosure found")
-        entry_title = str(entry.title or "audio")
-
-        # Refresh if expired.
-        try:
-            head = httpx.head(
-                audio_url,
-                follow_redirects=True,
-                timeout=4.0,
-                headers={"User-Agent": READABILITY_USER_AGENT},
-            )
-            if head.status_code not in (200, 206):
-                try:
-                    feed_refresh_service.update_feeds([feed_url])
-                    fresh = reader.get_entry((feed_url, entry_id), None)
-                    if fresh:
-                        fresh_url = _find_entry_audio_url(fresh)
-                        if fresh_url:
-                            audio_url = fresh_url
-                except Exception:
-                    LOGGER.warning("Audio URL refresh failed for %s", feed_url, exc_info=True)
-        except Exception:
-            pass
-
-    # Derive a clean filename from the URL path, falling back to entry title.
-    parsed_path = urlparse(audio_url).path.rstrip("/").split("/")[-1]
-    if parsed_path and "." in parsed_path:
-        filename = re.sub(r"[^\w.\-]", "_", parsed_path)
-    else:
-        safe_title = re.sub(r"[^\w\- ]", "", entry_title).strip()[:80] or "audio"
-        filename = safe_title.replace(" ", "_") + ".mp3"
-
-    def _stream():
-        with url_guard.build_client(
-            follow_redirects=True,
-            timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0),
-            headers={"User-Agent": READABILITY_USER_AGENT},
-        ) as client:
-            with client.stream("GET", audio_url) as resp:
-                resp.raise_for_status()
-                for chunk in resp.iter_bytes(chunk_size=65536):
-                    yield chunk
-
-    return StreamingResponse(
-        _stream(),
-        media_type="audio/mpeg",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-@app.post("/entries/thumb-crop")
-def set_entry_thumb_crop_route(
-    feed_url: str = Form(...),
-    entry_id: str = Form(...),
-    crop: str = Form(default=""),
-):
-    """Save (or clear) a per-entry thumbnail crop override."""
-    effective = crop.strip() if crop.strip() in _VALID_THUMB_CROPS else None
-    lead_image_service.store_entry_thumb_crop(feed_url, entry_id, effective)
-    return JSONResponse({"ok": True, "crop": effective})
-
-
 def _resolve_archived_readability_html(feed_url: str | None, entry_id: str | None) -> str | None:
     """Return the offline archived readability HTML for a starred entry with its
     local image assets rewritten to /starred-asset/ URLs, or None when no
@@ -20878,67 +20735,6 @@ def _resolve_archived_readability_html(feed_url: str | None, entry_id: str | Non
     if asset_map:
         archived_html = starred_archive_service.rewrite_html_assets(archived_html, asset_map, STARRED_ASSET_URL_PREFIX)
     return archived_html
-
-
-@app.get("/entries/readability")
-def entry_readability(
-    url: str,
-    feed_url: str | None = Query(default=None),
-    entry_id: str | None = Query(default=None),
-):
-    # If this entry is starred and a complete archive exists, serve the
-    # archived readability HTML so the view stays available even if the
-    # source is gone. Otherwise fall through to the live extractor.
-    archived_html = _resolve_archived_readability_html(feed_url, entry_id)
-    if archived_html:
-        return _wrap_readability_html(archived_html, url)
-    # A complete archive with no readability copy (the recapture mismatch
-    # guard refused a parked/replaced page, or the live fetch failed outright)
-    # means capture already tried once -- the entry's own stored content is a
-    # safer bet than a second live fetch of a page that has already shown
-    # itself untrustworthy or unreachable. Scoped to kept entries specifically:
-    # an ordinary entry with no archive at all must still reach the live
-    # fetch below, which is what recovers a full article from a thin RSS
-    # stub in the common case.
-    if feed_url and entry_id and starred_archive_service.has_complete_archive(feed_url, entry_id):
-        detail = get_entry_detail(feed_url, entry_id)
-        stored = str((detail or {}).get("content_html") or "")
-        if stored:
-            return _wrap_readability_html(stored, url)
-    return build_readability_response(url)
-
-
-def _wrap_readability_html(article_html: str, source_url: str) -> HTMLResponse:
-    escaped_source = html.escape(source_url)
-    article_html = _strip_bandcamp_track_signature(article_html)
-    return HTMLResponse(
-        (
-            "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-            "<title>Reader view</title>"
-            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-            "<style>body{margin:0;background:#f6f8fb;color:#1a2430;font-family:Georgia,serif;}"
-            "main{max-width:760px;margin:0 auto;padding:1.2rem 1rem 2rem;}"
-            "header{font-family:Segoe UI,Arial,sans-serif;margin-bottom:1rem;padding-bottom:.75rem;border-bottom:1px solid #d4dbe5;}"
-            "a{color:#0a5ca4;}article{font-size:1.05rem;line-height:1.7;}" + _READER_VIEW_MEDIA_CSS + "article pre{white-space:pre-wrap;}"
-            "article *{color:inherit !important;background-color:transparent !important;}"
-            "</style></head>"
-            f"<body><main><header>"
-            f"<a href='{escaped_source}' target='_blank' rel='noopener noreferrer'>Open original</a>"
-            "</header>"
-            f"<article>{article_html}</article></main></body></html>"
-        ),
-        status_code=200,
-    )
-
-
-@app.get("/entries/source")
-def entry_source(url: str):
-    return build_source_proxy_response(url)
-
-
-@app.get("/entries/frame-check")
-def entry_frame_check(url: str):
-    return JSONResponse(probe_frameability(url))
 
 
 # ---------------------------------------------------------------------------
@@ -24024,101 +23820,6 @@ def api_entry_thumb(feed_url: str = Query(...), entry_id: str = Query(...)):
     return _pinned_entry_thumb_response(feed_url, entry_id)
 
 
-@app.get("/entries/feed-tags")
-def entry_feed_tags_route(
-    feed_url: str = Query(...),
-    entry_id: str = Query(...),
-):
-    """Late chip delivery: the entry pane calls this after render when it has
-    no feed-tag chips. Waits briefly for the background source-page fetch the
-    entry-open queued (whose sink persists harvested tags), then returns the
-    normalized suggestions + filter-rule signs so the client can inject the
-    [ + tag ▲ ▼ ] chips into the already-open pane.
-
-    An orphan entry (feed unsubscribed) has no reader resource for
-    get_feed_tag_suggestions/get_manual_tags_for_resource to read, and no
-    live page to fetch publisher tags from — but it still has manual tags
-    (orphan_entry_tags) and pinned/suggested tags (feed_display_prefs, same
-    as a live feed). Without this branch, saving a new suggested tag from
-    Feed Properties on an already-open orphan entry called this route (see
-    submitFeedPropSuggestedTags) and got a 404, so the chip never appeared
-    without a full pane reopen — same bug class as _build_orphan_entry_detail
-    previously hardcoding feed_tag_suggestions=[].
-    """
-    with get_reader() as reader:
-        entry = reader.get_entry((feed_url, entry_id), None)
-        if entry is not None:
-            entry_link = str(entry.link or "")
-            manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
-
-    if entry is None:
-        if starred_archive_service.get_orphan_feed_title(feed_url) is None:
-            return JSONResponse({"error": "unknown entry"}, status_code=404)
-        entry_link = ""
-        manual_tags = _get_orphan_manual_tags(feed_url, entry_id)
-        raw_tags: list[str] = []
-    else:
-        raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
-        if not raw_tags and entry_link and url_guard.is_safe_outbound_url(entry_link):
-            # Wait for the fetch queued by the entry-open handler (returns
-            # immediately when it already finished or none is in flight).
-            lead_image_service.wait_for_source_html_fetch(entry_link, timeout=8.0)
-            raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
-            if not raw_tags:
-                # Fetch finished before the sink existed or raced it — harvest
-                # directly from the cached page as a last resort.
-                cached = lead_image_service.get_cached_source_html(entry_link)
-                if cached is not None:
-                    page_tags = feed_tags_service_mod.extract_page_tags(cached[1], entry_link)
-                    if page_tags:
-                        feed_tag_service.record_entry_tags(feed_url, [(entry_id, page_tags)])
-                        # Re-derive dismissal-aware, same reason as the pane build.
-                        raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
-
-    # The user's pinned tags go FIRST — they are the ones being reached for, and
-    # a feed that ships 28 tags a post would otherwise bury them past the
-    # collapse. Prepending rather than a separate list means the existing
-    # dedupe below is also what guarantees "never show a chip twice": a pinned
-    # tag the publisher happens to ship too appears once, in the pinned position.
-    pinned = get_feed_pinned_tags(feed_url)
-    _publisher = {n for n in (normalize_tag_value(t) for t in raw_tags) if n}
-    # See the entry-pane build for why these two lists exist: a pinned tag the
-    # publisher never ships gets no filter arrows, and disappears from the
-    # suggestions once it has actually been applied.
-    pinned_only = [t for t in pinned if t not in _publisher]
-    _manual_now = {normalize_tag_value(t) for t in manual_tags}
-    tags: list[str] = []
-    for raw_tag in [*pinned, *raw_tags]:
-        normalized = normalize_tag_value(raw_tag)
-        if not normalized or normalized in tags:
-            continue
-        if normalized in pinned_only and normalized in _manual_now:
-            continue
-        tags.append(normalized)
-
-    signs: dict[str, str] = {}
-    if tags:
-        with get_meta_connection() as conn:
-            rule = get_feed_tag_filter_rule(conn, feed_url)
-        if rule:
-            _req, _good, _exc = parse_tag_filter_spec(str(rule["keyword"] or ""))
-            signs = {t: "+" for t in (_req | _good)} | {t: "-" for t in _exc}
-
-    return JSONResponse(
-        {
-            "ok": True,
-            "tags": tags,
-            "signs": signs,
-            # Which of them are the user's own pinned tags, so the client can mark
-            # them: they are a different KIND of suggestion (a standing decision
-            # about the feed, not something the publisher said about this post).
-            "pinned": pinned,
-            "pinned_only": pinned_only,
-            "manual_tags": [normalize_tag_value(t) for t in manual_tags],
-        }
-    )
-
-
 def _keep_existing_sensitive(key: str, str_val: str, sensitive: set[str]) -> bool:
     """True if a sensitive-field save should be ignored (leave the stored value).
 
@@ -24537,139 +24238,6 @@ _CLEANUP_ERROR_MESSAGES = {
     "would_empty": "That would remove the entire article body.",
 }
 _CLEANUP_ERROR_FALLBACK = "That cleanup could not be applied."
-
-
-@app.post("/entries/content/clean")
-def clean_entry_content_route(
-    feed_url: str = Form(...),
-    entry_id: str = Form(...),
-    ops: str = Form(...),
-):
-    """Apply the reading pane's Aardvark-style cleanup to a post's stored body.
-
-    The browser sends *what it removed* (an ordered op list of structural paths
-    + fingerprints), not the edited HTML — see services/content_edits for why.
-    The ops are replayed here against reader's stored content, the result is
-    sanitized and written back through the same path a content re-fetch uses
-    (`replace_entry_content`, with `pin_content` so the next refresh can't
-    re-serve the junk), and the pristine body is snapshotted first so
-    /entries/content/revert can put it back.
-
-    Ops that match nothing are reported rather than guessed at: a rendered node
-    that isn't in the stored body (an injected embed, something a render-time
-    cleanup already removed) simply has nothing to delete.
-    """
-    with get_reader() as reader:
-        entry = reader.get_entry((feed_url, entry_id), None)
-        if entry is None:
-            return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
-        try:
-            parsed_ops = content_edits.parse_ops(ops)
-            content_html = _resolve_entry_content_html(entry)
-            new_html, applied, unmatched = content_edits.apply_ops(content_html, parsed_ops)
-        except content_edits.ContentEditError as exc:
-            # The wording lives here, keyed by the error's own code, so nothing
-            # derived from an exception object reaches the response — the
-            # dataflow behind py/stack-trace-exposure does not exist rather than
-            # being argued about. The exception's message still goes to the log.
-            LOGGER.info("[cleanup] refused for %s: %s", entry_id, exc)
-            return JSONResponse(
-                {"ok": False, "error": _CLEANUP_ERROR_MESSAGES.get(getattr(exc, "code", ""), _CLEANUP_ERROR_FALLBACK)},
-                status_code=400,
-            )
-        if not applied:
-            return JSONResponse(
-                {"ok": False, "error": "None of those elements could be matched in the stored article.", "unmatched": unmatched},
-                status_code=409,
-            )
-        # The result is user-directed but still passes the normal allowlist —
-        # a cleanup must never be a way to widen what the body may contain.
-        new_html = html_sanitize.sanitize_html(new_html)
-        original_content = saved_articles_service.read_entry_content_json(reader, feed_url, entry_id)
-        with get_meta_connection() as conn:
-            if original_content is not None:
-                # First edit only: repeated cleanups must still revert to the
-                # true original rather than to the previous cleanup's output.
-                conn.execute(
-                    "INSERT OR IGNORE INTO entry_content_edits"
-                    " (feed_url, entry_id, original_content, ops, edited_at)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    (feed_url, entry_id, original_content, "[]", datetime.now(timezone.utc).isoformat()),
-                )
-            existing = conn.execute(
-                "SELECT ops FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
-                (feed_url, entry_id),
-            ).fetchone()
-            prior_ops = []
-            if existing:
-                try:
-                    prior_ops = json.loads(existing[0]) or []
-                except TypeError, ValueError:
-                    prior_ops = []
-            conn.execute(
-                "UPDATE entry_content_edits SET ops = ?, edited_at = ? WHERE feed_url = ? AND entry_id = ?",
-                (json.dumps(prior_ops + parsed_ops), datetime.now(timezone.utc).isoformat(), feed_url, entry_id),
-            )
-            conn.commit()
-            saved_articles_service.replace_entry_content(
-                reader,
-                conn,
-                entry_id,
-                "",
-                new_html,
-                feed_url=feed_url,
-                bump_received=False,
-                pin_content=True,
-            )
-    return JSONResponse({"ok": True, "applied": applied, "unmatched": unmatched})
-
-
-@app.get("/entries/content/has-original")
-def entry_has_original_content_route(feed_url: str = Query(...), entry_id: str = Query(...)):
-    """Whether this post has a stored original to restore.
-
-    Asked per post so the menu can offer Restore only when it would do
-    something — a dead control is worse than an absent one, and this is the
-    recovery path for a re-fetch that replaced an article, so it has to be
-    trustworthy when it does appear.
-    """
-    try:
-        with get_meta_connection() as conn:
-            found = conn.execute(
-                "SELECT 1 FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
-                (feed_url, entry_id),
-            ).fetchone()
-    except sqlite3.OperationalError:
-        found = None  # tenant DB predates the table
-    return JSONResponse({"ok": True, "has_original": bool(found)})
-
-
-@app.post("/entries/content/revert")
-def revert_entry_content_route(feed_url: str = Form(...), entry_id: str = Form(...)):
-    """Undo every cleanup on a post, restoring the body as the feed served it."""
-    with get_meta_connection() as conn:
-        row = conn.execute(
-            "SELECT original_content FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
-            (feed_url, entry_id),
-        ).fetchone()
-        if row is None:
-            return JSONResponse({"ok": False, "error": "This post has no cleanup to revert."}, status_code=404)
-        with get_reader() as reader:
-            if reader.get_entry((feed_url, entry_id), None) is None:
-                return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
-            saved_articles_service.restore_entry_content(reader, feed_url, entry_id, row[0])
-        # Drop the pin too, or the refresh service would re-apply the cleaned
-        # copy over the body we just restored.
-        conn.execute(
-            "DELETE FROM entry_content_overrides WHERE feed_url = ? AND entry_id = ?",
-            (feed_url, entry_id),
-        )
-        conn.execute(
-            "DELETE FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
-            (feed_url, entry_id),
-        )
-        conn.commit()
-    return JSONResponse({"ok": True})
 
 
 def _swap_host_in_url(url: str, host_map: dict[str, str]) -> str:
@@ -26279,17 +25847,6 @@ def _autofetch_prune_stale_jobs() -> None:
         job = _autofetch_jobs.get(key)
         if job and not job.get("running") and (now - (job.get("finished_at") or now)) > _AUTOFETCH_JOB_STALE_S:
             _autofetch_jobs.pop(key, None)
-
-
-@app.get("/entries/autofetch-status")
-def entry_autofetch_status(feed_url: str = Query(...), entry_id: str = Query(...)):
-    """Poll target for a pane whose star/tag response flagged autofetch_pending —
-    reports whether _maybe_autofetch_on_keep's background re-fetch for THIS entry
-    is still running, and if not, whether it actually found a fuller copy."""
-    job = _autofetch_jobs.get((feed_url, entry_id))
-    if job is None:
-        return JSONResponse({"ok": True, "pending": False, "done": False, "success": None})
-    return JSONResponse({"ok": True, "pending": bool(job.get("running")), "done": not job.get("running"), "success": job.get("ok")})
 
 
 def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> bool:
@@ -28599,6 +28156,7 @@ from routes.admin import router as _admin_router  # noqa: E402, I001
 from routes.compat_fever import router as _compat_fever_router  # noqa: E402
 from routes.compat_greader import router as _compat_greader_router  # noqa: E402
 from routes.compat_v1 import router as _compat_v1_router  # noqa: E402
+from routes.entries import router as _entries_router  # noqa: E402
 from routes.highlights import router as _highlights_router  # noqa: E402
 from routes.integrations_freshrss import router as _freshrss_import_router  # noqa: E402
 from routes.integrations_inoreader import router as _inoreader_router  # noqa: E402
@@ -28672,6 +28230,7 @@ app.include_router(_compat_fever_router)
 app.include_router(_compat_greader_router)
 app.include_router(_compat_v1_router)
 app.include_router(_deviantart_oauth_router)
+app.include_router(_entries_router)
 app.include_router(_feeds_router)
 app.include_router(_quire_oauth_router)
 app.include_router(_youtube_oauth_router)
