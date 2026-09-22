@@ -222,9 +222,23 @@ ordered safest → riskiest:
      constraint needed. 2 test files retargeted for `POST /folders/mark-read` →
      `routes.feeds.mark_folder_as_read`, one hitting both known gotchas (4 helpers needing a second
      monkeypatch on `routes.feeds` alongside `main`). Full `make test`/`lint`/`types` pass.
-   - **B.** Feed discovery/add flow: `/feeds/discover`, `/feeds/compare`, `POST /feeds`,
-     `/scraped-feeds*` (5), `/feeds/properties`, `/feeds/suggest-migration`,
-     `/feeds/set-user-title`, `/feeds/fix-url-titles`, `/feeds/lazy-titles` (13 routes).
+   - **B — done (2026-09-22).** Feed discovery/add flow: `/feeds/discover`, `/feeds/compare`,
+     `POST /feeds`, `/scraped-feeds*` (5), `/feeds/properties`, `/feeds/suggest-migration`,
+     `/feeds/set-user-title`, `/feeds/fix-url-titles`, `/feeds/lazy-titles` (13 routes, exactly as
+     scoped). main.py: 30,991 → 30,520 lines; `routes/feeds.py`: 346 → 898 lines (23 routes total
+     across 8A+8B). **Not a thin wrapper**, closer to Stage 6 — `create_feed` has real branching
+     (dev.to, DeviantArt watch-vs-gallery, discovery-refusal classification, browser-UA escalation)
+     and the `/scraped-feeds` cluster does meaningful validation/orchestration around
+     `services/scraper_service.py`, not pure pass-through. Only 2 genuinely single-route helpers
+     moved (`_is_youtube_url`, `_site_name_from_feed_url` + its constants); everything else stayed
+     in main.py — several confirmed shared with other already-moved route modules
+     (`_devto_config_from_form` with `routes/system.py`; `get_deviantart_user_token`/
+     `get_deviantart_credentials` with `routes/integrations_deviantart.py`/`routes/settings.py`),
+     one confirmed via a `scripts/*.py` caller (`_is_youtube_host`). Verification went beyond the
+     usual three checks: FastAPI 0.141 wraps included routers in a lazy object so `main.app.routes`
+     no longer flattens sub-router routes (a dead end chased and ruled out), so correctness was
+     confirmed instead with a live `TestClient(main.app)` hitting all 13 moved paths for real
+     200s. 4 test files retargeted for the usual two gotchas. Full `make test`/`lint`/`types` pass.
    - **C.** Feed display/thumbnail strategy config: `/feeds/strategy`, `/feeds/display-prefs`,
      `/feeds/backfill-hide-shorts`, `/feeds/thumbnail-url`, `/feeds/thumb-crop`,
      `/feeds/smart-min-scale`, `/feeds/fill-zoom`, `/feeds/thumb-strategy`, `/feeds/caption-source`,

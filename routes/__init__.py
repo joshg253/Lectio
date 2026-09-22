@@ -170,4 +170,10 @@ directly as `main.<name>` on a bare test `FastAPI()` app" gotcha (`tests/integra
 `tests/integration/test_mark_read_view_scope.py`, both for `/folders/mark-read` -> `routes.feeds.mark_folder_as_read`);
 the former also hit the copied-reference monkeypatch gotcha (`get_meta_connection`, `get_folder_feed_urls`,
 `_mark_entries_as_read_for_view`, and `unread_counts_cache` all needed patching on both `main` and `routes.feeds`).
+
+Stage 8B added the feed discovery/add flow (13 more routes: `/feeds/discover`, `/feeds/compare`, `POST /feeds`,
+the `/scraped-feeds*` cluster, `/feeds/properties`, `/feeds/suggest-migration`, `/feeds/set-user-title`,
+`/feeds/fix-url-titles`, `/feeds/lazy-titles`) to the same `routes/feeds.py` module -- see that file's own
+docstring for the full rationale. Sub-stages C-E (display/thumbnail strategy config, network/fetch settings +
+lifecycle, tags/attachments/curation/bulk ops) still come later.
 """

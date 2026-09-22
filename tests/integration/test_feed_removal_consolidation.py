@@ -26,6 +26,7 @@ from fastapi import Request
 from fastapi.testclient import TestClient
 
 import main
+import routes.feeds
 from services import tenancy
 
 # combine_feeds_route never touches `request` — verified against main.py.
@@ -995,7 +996,7 @@ class TestLazyFeedTitles:
     def _lazy_titles(self):
         import json
 
-        return json.loads(main.get_lazy_titles().body)["lazy_titles"]
+        return json.loads(routes.feeds.get_lazy_titles().body)["lazy_titles"]
 
     def test_a_generic_title_is_flagged_with_a_suggested_rename(self, env):
         _add_feed_to_folder("https://tosecdev.org/feed", _root_folder_id())
@@ -1196,7 +1197,7 @@ class TestLazyFeedTitlesFeedburner:
     def _lazy_titles(self):
         import json
 
-        return json.loads(main.get_lazy_titles().body)["lazy_titles"]
+        return json.loads(routes.feeds.get_lazy_titles().body)["lazy_titles"]
 
     def test_feedburner_uses_the_path_slug_not_the_host(self, env):
         _add_feed_to_folder("https://feeds.feedburner.com/concept2", _root_folder_id())
