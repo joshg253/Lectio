@@ -302,10 +302,33 @@ ordered safest → riskiest:
 
 **Stage 8 (`routes/feeds.py`) is now fully done** — all 5 sub-stages (A-E), 61 routes, 0 remaining
 `/feeds`/`/folders`/`/scraped-feeds`/`/tree/folder-feeds` routes in main.py.
-9. `routes/entries.py` — `/entries/*` (~46) plus the `/api/*` thumb/img/bookmarklet-save cluster
-   (`/api/entry-thumb`, `/api/favicon`, `/api/feed-thumb`, `/api/img`, `/api/bookmarklet/save`,
-   `/api/save`, `/api/unread-counts`) if that doesn't want to be its own `routes/media.py` —
-   decide at extraction time. Also biggest; needs its own sub-staging.
+9. `routes/entries.py` — 45 `/entries/*` routes confirmed 2026-09-22 (main.py:18332-28044, an even
+   wider span than Stage 8's feeds cluster was). Decided at extraction time on the `/api/*`
+   question Plan.md deferred: don't fold it into `routes/entries.py`, it doesn't share one owner —
+   `/api/entry-thumb`/`/api/feed-thumb`/`/api/img`/`/api/favicon` are pure image-proxy concerns (a
+   later small `routes/media.py`), `/api/save`/`/api/bookmarklet/save` are external save-capture
+   endpoints that belong with Stage 6's `routes/saved.py` instead, and `/api/unread-counts` gets
+   decided when reached (natural fit is wherever the read-state sub-stage below lands). Scoped into
+   its own A-E sub-stages, same reasoning as Stage 8, safest → riskiest:
+   - **A.** Content/reading utility (12): `/entries/lead-image`, `/entries/media/audio`,
+     `/entries/media/download`, `/entries/readability`, `/entries/source`, `/entries/frame-check`,
+     `/entries/feed-tags`, `/entries/content/has-original`, `/entries/content/clean`,
+     `/entries/content/revert`, `/entries/thumb-crop`, `/entries/autofetch-status`.
+   - **B.** Entry metadata edits + attachments (9): `/entries/set-date`, `/entries/set-title`,
+     `/entries/set-link`, `/entries/delete`, `/entries/attachments`, `/entries/attachments/delete`,
+     `/entries/attachments/delete-all`, `/entries/attachments/save`, `/entries/attachments/save-all`.
+   - **C.** Move/organize + tags (9): `/entries/move-to-feed`, `/entries/move-to-feed-batch`,
+     `/entries/select-all-visible`, `/entries/move-visible-to-feed`, `/entries/purge`,
+     `/entries/discard`, `/entries/manual-tags-batch`, `/entries/tags`, `/entries/tags-batch`.
+   - **D.** Read/unread/star state + integration sends (14) — biggest, most state-coupled, touches
+     `unread_counts_cache` heavily: `/entries/read`, `/entries/saved`, `/entries/archive`,
+     `/entries/read-batch`, `/entries/star-batch`, `/entries/mark-range-read`,
+     `/entries/mark-older-than-read`, `/entries/undo-mark-unread`, `/entries/undo-mark-read`,
+     `/entries/undo-unstar`, `/entries/mark-newer-than-unread`, `/entries/email`,
+     `/entries/instapaper`, `/entries/quire`.
+   - **E.** `/entries/pane` alone (1 route) — the pane-swap endpoint itself, same
+     reused-by-everything status Stage 10's `/`/`/read` have per the Landmines note; riskiest,
+     saved for last, same reasoning as Stage 8E and Stage 10.
 10. `routes/home.py` — `/`, `/read`, `/read/offline` last: these are the routes the Landmines note
     already flags as reused-by-everything (`_home_inner`, `build_reader_page`, pane-swap); moving
     the handler is still just importing the core functions back from main.py like everything else,
