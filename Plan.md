@@ -239,10 +239,23 @@ ordered safest → riskiest:
      no longer flattens sub-router routes (a dead end chased and ruled out), so correctness was
      confirmed instead with a live `TestClient(main.app)` hitting all 13 moved paths for real
      200s. 4 test files retargeted for the usual two gotchas. Full `make test`/`lint`/`types` pass.
-   - **C.** Feed display/thumbnail strategy config: `/feeds/strategy`, `/feeds/display-prefs`,
-     `/feeds/backfill-hide-shorts`, `/feeds/thumbnail-url`, `/feeds/thumb-crop`,
-     `/feeds/smart-min-scale`, `/feeds/fill-zoom`, `/feeds/thumb-strategy`, `/feeds/caption-source`,
-     `/feeds/strategy-refresh` (10 routes) — likely touches `services/lead_image_plugins.py`.
+   - **C — done (2026-09-22).** Feed display/thumbnail strategy config: `/feeds/strategy`,
+     `/feeds/display-prefs`, `/feeds/backfill-hide-shorts`, `/feeds/thumbnail-url`,
+     `/feeds/thumb-crop`, `/feeds/smart-min-scale`, `/feeds/fill-zoom`, `/feeds/thumb-strategy`,
+     `/feeds/caption-source`, `/feeds/strategy-refresh` (10 routes, exactly as scoped). main.py:
+     30,520 → 30,208 lines; `routes/feeds.py`: 898 → 1,264 lines (33 routes across 8A-C). Touches
+     `lead_image_service` (the shared singleton) but nothing moved out of
+     `services/lead_image_plugins.py`/`services/lead_images.py` themselves, as expected. Only 2
+     single-route helpers moved (`_VALID_MANUAL_STRATEGIES`, `upsert_feed_thumb_crop`); its four
+     sibling `upsert_feed_*` helpers each stayed — every one individually tested directly as
+     `main.<name>` by its own dedicated test file, confirmed via the three-way grep rather than
+     assumed from the sibling pattern. `_pin_feed_thumbnail_bytes`/`_drop_pinned_feed_thumbnail`
+     correctly left alone despite being route-adjacent — they belong to the still-in-main.py
+     `/api/feed-thumb` pinning machinery, out of this sub-stage's scope entirely.
+     `/entries/feed-tags` and `_keep_existing_sensitive`, both physically sandwiched inside this
+     cluster, confirmed untouched. 2 test files retargeted for the usual two gotchas. Full
+     `make test`/`lint`/`types` pass; live `TestClient(main.app)` hit all 10 paths for a real
+     (auth-rejected but router-resolved) response.
    - **D.** Feed network/fetch settings + lifecycle: `/feeds/browser-ua`, `/feeds/proxy`,
      `/feeds/tailscale`, `/feeds/flaresolverr`, `/feeds/reparse`, `/feeds/move`, `/feeds/disable`,
      `/feeds/enable`, `/feeds/toggle-updates`, `/feeds/change-url`, `/feeds/unsubscribe`,

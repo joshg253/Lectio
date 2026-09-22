@@ -176,4 +176,12 @@ the `/scraped-feeds*` cluster, `/feeds/properties`, `/feeds/suggest-migration`, 
 `/feeds/fix-url-titles`, `/feeds/lazy-titles`) to the same `routes/feeds.py` module -- see that file's own
 docstring for the full rationale. Sub-stages C-E (display/thumbnail strategy config, network/fetch settings +
 lifecycle, tags/attachments/curation/bulk ops) still come later.
+
+Stage 8C added the feed display/thumbnail strategy config cluster (10 more routes, all `POST`: `/feeds/strategy`,
+`/feeds/display-prefs`, `/feeds/backfill-hide-shorts`, `/feeds/thumbnail-url`, `/feeds/thumb-crop`,
+`/feeds/smart-min-scale`, `/feeds/fill-zoom`, `/feeds/thumb-strategy`, `/feeds/caption-source`,
+`/feeds/strategy-refresh`) to the same `routes/feeds.py` module -- see that file's own docstring for the full
+rationale, including which helpers moved (`_VALID_MANUAL_STRATEGIES`, `upsert_feed_thumb_crop`) versus stayed in
+main.py and got imported back. Sub-stages D-E (network/fetch settings + lifecycle, tags/attachments/curation/bulk
+ops) still come later.
 """

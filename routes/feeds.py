@@ -2,11 +2,11 @@
 the route-by-URL-prefix split -- the biggest single cluster at 60 routes,
 scoped into its own A-E sub-stages so it doesn't land as one huge diff).
 
-**This file is not done yet.** Sub-stages A and B (folder CRUD + tree reads,
-feed discovery/add flow) are the only parts that exist so far -- sub-stages
-C-E (display/thumbnail strategy config, network/fetch settings + lifecycle,
-and tags/attachments/curation/bulk ops) each add more routes to this same
-module in later tasks. Don't assume the routes below are the final contents.
+**This file is not done yet.** Sub-stages A-C (folder CRUD + tree reads, feed
+discovery/add flow, display/thumbnail strategy config) are the only parts
+that exist so far -- sub-stages D-E (network/fetch settings + lifecycle, and
+tags/attachments/curation/bulk ops) each add more routes to this same module
+in later tasks. Don't assume the routes below are the final contents.
 
 Stage 8A -- folder CRUD + tree reads, 10 routes: `POST /api/folders`,
 `POST /folders`, `POST /folders/rename`, `POST /folders/delete`,
@@ -87,12 +87,53 @@ to `routes.feeds.create_feed`) and separately monkeypatches
 `routes.feeds`. `tests/integration/test_feed_removal_consolidation.py` called
 `main.get_lazy_titles()` directly in two helper methods; retargeted to
 `routes.feeds.get_lazy_titles()`.
+
+Stage 8C added the feed display/thumbnail strategy config cluster (10 routes, all `POST`): `/feeds/strategy`,
+`/feeds/display-prefs`, `/feeds/backfill-hide-shorts`, `/feeds/thumbnail-url`, `/feeds/thumb-crop`,
+`/feeds/smart-min-scale`, `/feeds/fill-zoom`, `/feeds/thumb-strategy`, `/feeds/caption-source`,
+`/feeds/strategy-refresh`. Same no-ordering-constraint story as 8A/8B. This cluster calls the existing
+`lead_image_service` singleton (`services/lead_images.py`) for strategy storage/backfill/comparison, but no code moved
+out of that services module or `services/lead_image_plugins.py` -- only the route handlers themselves, exactly as
+scoped.
+
+Two small single-route-only pieces moved with their route, having no caller anywhere else: the
+`_VALID_MANUAL_STRATEGIES` constant (with `set_feed_image_strategy`) and the whole `upsert_feed_thumb_crop` helper
+(with `set_feed_thumb_crop_route`) -- its sibling upsert helpers (`upsert_feed_display_pref`,
+`upsert_feed_thumbnail_url`, `upsert_feed_smart_min_scale`, `upsert_feed_fill_zoom`, `upsert_feed_thumb_strategy`) all
+stay in main.py and get imported back, each exercised directly as `main.<name>` by its own dedicated test file (the
+same "tested directly" precedent Stage 6/8A established), except `upsert_feed_display_pref`, kept for that reason plus
+being called from several still-in-main.py display-pref routes far outside this cluster. `_DISPLAY_PREF_KEYS` and
+`_VALID_THUMB_CROPS` stay too (both back other main.py-resident code -- `_DISPLAY_PREF_COLS`/`_DISPLAY_PREF_SQLS`
+derive from the former at module scope, and the latter is read by two more main.py routes outside this stage) and get
+imported back, the latter also backing the moved `upsert_feed_thumb_crop`. `_mark_existing_shorts_read` stays --
+shared by two of this stage's own routes plus tested directly as `main.<name>` -- and `youtube_hide_shorts_global`
+stays, already shared with `routes/settings.py`. `_pin_feed_thumbnail_bytes`/`_drop_pinned_feed_thumbnail` stay: they
+sit inside a larger still-in-main.py thumbnail-pinning block (`_feed_thumb_cache_key`, `/api/feed-thumb`, the parallel
+per-entry pinning machinery) that this sub-stage's routes don't own, and `_feed_thumb_cache_key` itself is read by
+still-in-main.py code outside this cluster -- only the two functions `set_feed_thumbnail_url_route` calls get imported
+back. `format_datetime_for_ui` and `lead_image_service` are widely-shared infrastructure already imported by other
+`routes/*.py` modules (`routes/system.py`, `routes/settings.py`).
+
+One test file needed retargeting for the usual "handler registered directly as `main.<name>` on a bare test
+`FastAPI()` app" gotcha, combined with the copied-reference variant:
+`tests/integration/test_feed_strategy_routes.py` registers `main.set_feed_image_strategy`/`main.set_feed_thumb_strategy_route`
+directly (retargeted to `routes.feeds.set_feed_image_strategy`/`routes.feeds.set_feed_thumb_strategy_route`) and
+monkeypatches `main.get_meta_connection`/`main.upsert_feed_thumb_strategy`, which no longer reach `routes.feeds`'s own
+copies of those names -- both patches now also target `routes.feeds`; its `main.lead_image_service`/`main.threading`/
+`main.tenancy` patches needed no change since those patch attributes on shared module/singleton objects, not names
+copied at import time. `tests/unit/test_pinned_feed_thumbnail.py` slices main.py's source text by function name for
+`set_feed_thumbnail_url_route`; retargeted that one slice to read from `routes/feeds.py` (its end-of-function marker
+changed from `"\n@app."` to `"\n@router."` to match) -- its other slices (`_feed_thumb_cache_key`,
+`_pin_feed_thumbnail_bytes`, `_evict_img_cache`) stay pointed at main.py since those functions didn't move.
 """
 
 from __future__ import annotations
 
 import re
+import sqlite3
 import threading
+import time
+from datetime import datetime, timezone
 from typing import cast
 from urllib.parse import quote_plus, urlparse
 
@@ -100,7 +141,9 @@ from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from main import (
+    _DISPLAY_PREF_KEYS,
     _FOLDER_CADENCE_LAST_REFRESH_PREFIX,
+    _VALID_THUMB_CROPS,
     LOGGER,
     UNCATEGORIZED_FOLDER_ID,
     FeedInFolder,
@@ -109,9 +152,12 @@ from main import (
     _compare_one_feed,
     _devto_config_from_form,
     _disambiguate_feed_titles,
+    _drop_pinned_feed_thumbnail,
     _invalidate_browser_ua_cache,
     _is_youtube_host,
     _mark_entries_as_read_for_view,
+    _mark_existing_shorts_read,
+    _pin_feed_thumbnail_bytes,
     _run_in_user_context,
     _site_name_from_subtitle,
     add_feed_to_folder,
@@ -130,6 +176,7 @@ from main import (
     feed_title_map_cache,
     feed_title_map_cache_lock,
     flag_browser_ua_feed,
+    format_datetime_for_ui,
     get_all_feed_urls,
     get_all_reader_feed_urls,
     get_deviantart_credentials,
@@ -150,6 +197,7 @@ from main import (
     get_unread_counts_by_feed,
     invalidate_meta_structure_cache,
     is_async_action_request,
+    lead_image_service,
     normalize_read_filter,
     normalize_sort_by,
     normalize_sort_dir,
@@ -163,7 +211,13 @@ from main import (
     tenancy,
     unread_counts_cache,
     unread_counts_cache_lock,
+    upsert_feed_display_pref,
+    upsert_feed_fill_zoom,
+    upsert_feed_smart_min_scale,
+    upsert_feed_thumb_strategy,
+    upsert_feed_thumbnail_url,
     url_guard,
+    youtube_hide_shorts_global,
 )
 
 router = APIRouter()
@@ -896,3 +950,315 @@ def get_lazy_titles():
             )
     results.sort(key=lambda r: r["title"].casefold())
     return JSONResponse({"lazy_titles": results})
+
+
+_VALID_MANUAL_STRATEGIES = {"auto", "inline", "og_scrape", "media_rss", "enclosure", "none", "webcomic", "artwork"}
+
+
+@router.post("/feeds/strategy")
+def set_feed_image_strategy(feed_url: str = Form(...), strategy: str = Form(...)):
+    if strategy not in _VALID_MANUAL_STRATEGIES:
+        return JSONResponse({"error": "invalid strategy"}, status_code=400)
+    if strategy == "auto":
+        # Remove manual lock — delete so auto-detection starts fresh.
+        try:
+            with get_meta_connection() as conn:
+                conn.execute("DELETE FROM feed_lead_image_strategy WHERE feed_url = ?", (feed_url,))
+        except Exception:
+            pass
+    else:
+        lead_image_service.store_feed_strategy(feed_url, strategy, manual=True)
+    # Clear cached images and the strategy comparison grid so entries
+    # re-resolve under the new strategy.
+    lead_image_service.clear_lead_image_cache(feed_url)
+    try:
+        with get_meta_connection() as conn:
+            conn.execute("DELETE FROM feed_strategy_cache WHERE feed_url = ?", (feed_url,))
+    except Exception:
+        pass
+    # Re-fetch images for recent entries using the new strategy.  Bypass the
+    # chunk-backfill semaphore so this isn't silently dropped if another
+    # backfill is in flight.
+    if strategy not in ("auto", "none"):
+
+        def _refetch(furl: str) -> None:
+            try:
+                with get_reader() as reader:
+                    entries = list(reader.get_entries(feed=furl, limit=50))
+                if strategy in ("inline", "artwork", "enclosure"):
+                    # _do_backfill_entry_list skips inline/artwork/enclosure (no source-page
+                    # fetches needed), so run inline extraction directly using full
+                    # Entry objects which carry the feed content and enclosures.
+                    for entry in entries:
+                        furl_str = str(getattr(entry, "feed_url", "") or "")
+                        eid = str(getattr(entry, "id", "") or "")
+                        if not furl_str or not eid:
+                            continue
+                        url = lead_image_service.extract_entry_thumbnail_url(entry)
+                        lead_image_service.store_entry_lead_image(furl_str, eid, url)
+                else:
+                    posts = [
+                        {
+                            "feed_url": str(getattr(e, "feed_url", "") or ""),
+                            "id": str(getattr(e, "id", "") or ""),
+                            "link": str(getattr(e, "link", "") or ""),
+                        }
+                        for e in entries
+                    ]
+                    lead_image_service._do_backfill_entry_list(posts)
+            except Exception:
+                pass
+
+        # Capture the request's tenancy user; a raw daemon thread does not
+        # inherit contextvars and would otherwise re-fetch as the default user,
+        # writing to the wrong DB and leaving this user's cache empty.
+        _uid = tenancy.current_user_id()
+        threading.Thread(target=_run_in_user_context, args=(_uid, _refetch, feed_url), daemon=True).start()
+    return JSONResponse({"ok": True, "strategy": strategy})
+
+
+@router.post("/feeds/display-prefs")
+def set_feed_display_pref_route(
+    feed_url: str = Form(...),
+    key: str = Form(...),
+    value: int = Form(...),
+):
+    if key not in _DISPLAY_PREF_KEYS:
+        return JSONResponse({"error": "invalid key"}, status_code=400)
+    with get_meta_connection() as conn:
+        upsert_feed_display_pref(conn, feed_url, key, value)
+    # Turning Hide Shorts on clears the existing backlog immediately, not just
+    # future refreshes.
+    marked = 0
+    if key == "hide_shorts" and value:
+        try:
+            marked = _mark_existing_shorts_read({feed_url})
+        except Exception:
+            LOGGER.exception("[display-prefs] error marking existing shorts read")
+    return JSONResponse({"ok": True, "key": key, "value": value, "marked_read": marked})
+
+
+@router.post("/feeds/backfill-hide-shorts")
+def backfill_hide_shorts_route():
+    """Re-run the hide-shorts cleanup across all feeds that have hide_shorts=1.
+
+    Useful after the Shorts detection logic is improved (e.g. #shorts hashtag
+    or cached duration), so previously-missed Shorts get marked read without
+    the user having to re-toggle the pref on every feed."""
+    with get_meta_connection() as conn:
+        rows = conn.execute("SELECT feed_url FROM feed_display_prefs WHERE hide_shorts = 1").fetchall()
+    feed_urls = {str(r["feed_url"]) for r in rows}
+    if youtube_hide_shorts_global():
+        with get_meta_connection() as conn:
+            all_yt = conn.execute(
+                "SELECT DISTINCT feed_url FROM feed_display_prefs WHERE feed_url LIKE 'https://www.youtube.com/%'"
+            ).fetchall()
+        feed_urls |= {str(r["feed_url"]) for r in all_yt}
+    try:
+        marked = _mark_existing_shorts_read(feed_urls)
+    except Exception:
+        LOGGER.exception("[backfill-hide-shorts] error")
+        return JSONResponse({"error": "backfill failed"}, status_code=500)
+    return JSONResponse({"ok": True, "marked": marked})
+
+
+@router.post("/feeds/thumbnail-url")
+def set_feed_thumbnail_url_route(
+    feed_url: str = Form(...),
+    thumbnail_url: str = Form(default=""),
+):
+    with get_meta_connection() as conn:
+        cleaned = thumbnail_url.strip() or None
+        upsert_feed_thumbnail_url(conn, feed_url, cleaned)
+        # Pinning a thumbnail URL implies the user wants thumbnails visible —
+        # re-enable them if the feed was previously set to Disabled.
+        if cleaned:
+            upsert_feed_display_pref(conn, feed_url, "show_lead_image_as_thumb", 1)
+    pinned = False
+    if cleaned and cleaned != "__favicon__":
+        pinned = _pin_feed_thumbnail_bytes(feed_url, cleaned)
+    else:
+        _drop_pinned_feed_thumbnail(feed_url)
+    return JSONResponse({"ok": True, "pinned": pinned})
+
+
+def upsert_feed_thumb_crop(conn: sqlite3.Connection, feed_url: str, crop: str) -> None:
+    crop = crop if crop in _VALID_THUMB_CROPS else "cover"
+    conn.execute(
+        "INSERT INTO feed_display_prefs (feed_url) VALUES (?) ON CONFLICT(feed_url) DO NOTHING",
+        (feed_url,),
+    )
+    conn.execute(
+        "UPDATE feed_display_prefs SET thumb_crop = ? WHERE feed_url = ?",
+        (crop, feed_url),
+    )
+
+
+@router.post("/feeds/thumb-crop")
+def set_feed_thumb_crop_route(
+    feed_url: str = Form(...),
+    crop: str = Form(...),
+):
+    if crop not in _VALID_THUMB_CROPS:
+        return JSONResponse({"error": "invalid crop"}, status_code=400)
+    with get_meta_connection() as conn:
+        upsert_feed_thumb_crop(conn, feed_url, crop)
+    return JSONResponse({"ok": True})
+
+
+@router.post("/feeds/smart-min-scale")
+def set_feed_smart_min_scale_route(
+    feed_url: str = Form(...),
+    min_scale: str = Form(default=""),  # empty → clear back to default
+):
+    parsed: float | None = None
+    if min_scale.strip():
+        try:
+            parsed = float(min_scale)
+        except ValueError:
+            return JSONResponse({"error": "invalid min_scale"}, status_code=400)
+    with get_meta_connection() as conn:
+        upsert_feed_smart_min_scale(conn, feed_url, parsed)
+    return JSONResponse({"ok": True})
+
+
+@router.post("/feeds/fill-zoom")
+def set_feed_fill_zoom_route(
+    feed_url: str = Form(...),
+    zoom: str = Form(default=""),  # empty → clear back to default 1.0
+):
+    parsed: float | None = None
+    if zoom.strip():
+        try:
+            parsed = float(zoom)
+        except ValueError:
+            return JSONResponse({"error": "invalid zoom"}, status_code=400)
+    with get_meta_connection() as conn:
+        upsert_feed_fill_zoom(conn, feed_url, parsed)
+    return JSONResponse({"ok": True})
+
+
+@router.post("/feeds/thumb-strategy")
+def set_feed_thumb_strategy_route(
+    feed_url: str = Form(...),
+    strategy: str = Form(default=""),  # Pydantic v2: empty form field → missing, so use default
+):
+    with get_meta_connection() as conn:
+        upsert_feed_thumb_strategy(conn, feed_url, strategy or None)
+    # When switching to auto (no override), backfill any entries not yet in
+    # entry_lead_images so thumbnails appear without waiting for the next
+    # scheduled refresh.  Already-cached entries are skipped by the backfill.
+    if not strategy:
+
+        def _backfill(furl: str) -> None:
+            try:
+                with get_reader() as reader:
+                    entries = list(reader.get_entries(feed=furl, limit=50))
+                posts = [
+                    {
+                        "feed_url": str(getattr(e, "feed_url", "") or ""),
+                        "id": str(getattr(e, "id", "") or ""),
+                        "link": str(getattr(e, "link", "") or ""),
+                    }
+                    for e in entries
+                ]
+                lead_image_service._do_backfill_entry_list(posts)
+            except Exception:
+                pass
+
+        # Re-bind the request's tenancy user inside the daemon thread; otherwise
+        # the backfill runs as the default user and writes to the wrong DB.
+        _uid = tenancy.current_user_id()
+        threading.Thread(target=_run_in_user_context, args=(_uid, _backfill, feed_url), daemon=True).start()
+    return JSONResponse({"ok": True})
+
+
+@router.post("/feeds/caption-source")
+def set_feed_caption_source(
+    feed_url: str = Form(...),
+    source: str = Form(...),
+):
+    _VALID = {"auto", "alt", "title", "both", "none"}
+    if source not in _VALID:
+        return JSONResponse({"error": "invalid source"}, status_code=400)
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO feed_display_prefs (feed_url) VALUES (?) ON CONFLICT(feed_url) DO NOTHING",
+            (feed_url,),
+        )
+        conn.execute(
+            "UPDATE feed_display_prefs SET caption_source = ? WHERE feed_url = ?",
+            (None if source == "auto" else source, feed_url),
+        )
+    return JSONResponse({"ok": True, "source": source})
+
+
+@router.post("/feeds/strategy-refresh")
+def refresh_feed_strategy_cache_route(
+    feed_url: str = Form(...),
+    entry_id: str | None = Form(None),
+):
+    with get_reader() as reader:
+        entries = list(reader.get_entries(feed=feed_url, read=None))
+    if not entries:
+        return JSONResponse({"ok": False, "error": "No entries found for this feed."}, status_code=404)
+
+    sample_entry = None
+    if entry_id:
+        sample_entry = next((e for e in entries if str(getattr(e, "id", "")) == entry_id), None)
+
+    if sample_entry is None:
+
+        def _best_date(e: object) -> float:
+            for attr in ("published", "updated", "added"):
+                dt = getattr(e, attr, None)
+                if dt:
+                    return dt.timestamp()
+            return 0.0
+
+        sample_entry = max(entries, key=_best_date)
+    strategy_rows = lead_image_service.test_entry_strategies(sample_entry)
+
+    now = time.time()
+    formatted_now = format_datetime_for_ui(datetime.fromtimestamp(now, tz=timezone.utc))
+    results: list[dict] = []
+    with get_meta_connection() as conn:
+        for row in strategy_rows:
+            conn.execute(
+                "INSERT OR REPLACE INTO feed_strategy_cache "
+                "(feed_url, strategy, image_url, fetched_at, error, image_alt, image_title) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (feed_url, row["strategy"], row["image_url"], now, row["error"], row.get("image_alt"), row.get("image_title")),
+            )
+            results.append(
+                {
+                    "strategy": row["strategy"],
+                    "image_url": row["image_url"],
+                    "fetched_at": formatted_now,
+                    "error": row["error"],
+                    "image_alt": row.get("image_alt"),
+                    "image_title": row.get("image_title"),
+                }
+            )
+
+    # Sync the active strategy's alt/title into entry_lead_images so caption_source
+    # rendering can read them immediately without waiting for the next feed refresh.
+    _active_strat, _, _ = lead_image_service.get_feed_strategy(feed_url)
+    _active_row = next(
+        (r for r in strategy_rows if r["strategy"] == _active_strat and r.get("image_url")),
+        None,
+    )
+    if _active_row and sample_entry:
+        lead_image_service.store_entry_image_alt(
+            feed_url,
+            str(sample_entry.id),
+            _active_row.get("image_alt"),
+            title_text=_active_row.get("image_title"),
+        )
+        lead_image_service.store_entry_lead_image(
+            feed_url,
+            str(sample_entry.id),
+            _active_row["image_url"],
+        )
+
+    return JSONResponse({"ok": True, "strategy_cache": results})

@@ -11,6 +11,7 @@ from pathlib import Path
 
 MAIN = (Path(__file__).resolve().parents[2] / "main.py").read_text()
 SYSTEM_SRC = (Path(__file__).resolve().parents[2] / "routes" / "system.py").read_text()
+FEEDS_SRC = (Path(__file__).resolve().parents[2] / "routes" / "feeds.py").read_text()
 
 
 def _slice(start: str, end: str = "\ndef ") -> str:
@@ -25,6 +26,13 @@ def _slice_system(start: str, end: str = "\ndef ") -> str:
     return body[: body.index(end, len(start))]
 
 
+def _slice_feeds(start: str, end: str = "\ndef ") -> str:
+    """Same as _slice but reads from routes/feeds.py — set_feed_thumbnail_url_route
+    moved there in Stage 8C of the main.py route-by-URL-prefix split (Plan.md)."""
+    body = FEEDS_SRC[FEEDS_SRC.index(start) :]
+    return body[: body.index(end, len(start))]
+
+
 def test_cache_key_is_per_feed_not_per_url():
     """Keyed by URL, re-pinning would orphan the old copy and expiry would still win."""
     body = _slice("def _feed_thumb_cache_key")
@@ -33,7 +41,7 @@ def test_cache_key_is_per_feed_not_per_url():
 
 
 def test_save_pins_the_bytes_and_clearing_drops_them():
-    body = _slice("def set_feed_thumbnail_url_route", "\n@app.")
+    body = _slice_feeds("def set_feed_thumbnail_url_route")
     assert "_pin_feed_thumbnail_bytes(feed_url, cleaned)" in body
     assert "_drop_pinned_feed_thumbnail(feed_url)" in body
     # __favicon__ is a sentinel, not a URL to fetch.
