@@ -332,9 +332,17 @@ ordered safest → riskiest:
      with its route block, then re-added in main.py once the "tested directly as `main.<name>`"
      check caught it. 6 test files retargeted, no `monkeypatch.setattr(main,` hits and no
      `scripts/*.py` callers this time. Full `make test`/`lint`/`types`/`ruff format --check` pass.
-   - **C.** Move/organize + tags (9): `/entries/move-to-feed`, `/entries/move-to-feed-batch`,
-     `/entries/select-all-visible`, `/entries/move-visible-to-feed`, `/entries/purge`,
-     `/entries/discard`, `/entries/manual-tags-batch`, `/entries/tags`, `/entries/tags-batch`.
+   - **C — done (2026-09-22).** Move/organize + tags (9, exactly as scoped): `/entries/move-to-feed`,
+     `/entries/move-to-feed-batch`, `/entries/select-all-visible`, `/entries/move-visible-to-feed`,
+     `/entries/purge`, `/entries/discard`, `/entries/manual-tags-batch`, `/entries/tags`,
+     `/entries/tags-batch`. main.py: 27,908 → 27,244 lines; `routes/entries.py`: 916 → 1,613
+     lines. Confirmed the predicted overlap: the two tag routes lean on the same widely-shared tag
+     machinery Stage 3 left in main.py (`normalize_tag_value` and its whole neighborhood) — only
+     the handlers + `_merge_manual_tags` moved. `_move_entry_to_feed` confirmed shared
+     (`routes/saved.py` calls it directly, plus 2 scripts — a third script's mention turned out to
+     be just a comment, not an actual call, on independent spot-check). 8 test files retargeted,
+     no `scripts/*.py` callers of the moved routes themselves. Full
+     `make test`/`lint`/`types`/`ruff format --check` pass.
    - **D.** Read/unread/star state + integration sends (14) — biggest, most state-coupled, touches
      `unread_counts_cache` heavily: `/entries/read`, `/entries/saved`, `/entries/archive`,
      `/entries/read-batch`, `/entries/star-batch`, `/entries/mark-range-read`,

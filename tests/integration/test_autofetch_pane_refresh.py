@@ -147,7 +147,7 @@ def test_star_route_response_flags_autofetch_pending_for_a_stub(thin_entry, monk
 def test_tags_route_response_flags_autofetch_pending_for_a_stub(thin_entry, monkeypatch):
     monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e: {"ok": True})
     app = FastAPI()
-    app.post("/entries/tags")(main.set_entry_manual_tags)
+    app.post("/entries/tags")(routes.entries.set_entry_manual_tags)
     with TestClient(app) as client:
         r = client.post(
             "/entries/tags",

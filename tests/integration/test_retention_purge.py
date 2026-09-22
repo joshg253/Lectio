@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 from services import saved_articles as saved_articles_service
 from services import tenancy
 
@@ -194,7 +195,7 @@ def test_prune_writes_timestamped_tombstones(configured):
 
 def _purge_client() -> TestClient:
     app = FastAPI()
-    app.post("/entries/purge")(main.purge_old_entries)
+    app.post("/entries/purge")(routes.entries.purge_old_entries)
     return TestClient(app)
 
 

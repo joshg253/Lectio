@@ -11,6 +11,7 @@ import json
 import pytest
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -52,7 +53,7 @@ def _tags(entry_id: str) -> list[str]:
 
 
 def _batch(pairs, tags_text: str) -> dict:
-    resp = main.edit_manual_tags_on_entries_batch_route(entries=json.dumps(pairs), tags_text=tags_text)
+    resp = routes.entries.edit_manual_tags_on_entries_batch_route(entries=json.dumps(pairs), tags_text=tags_text)
     return json.loads(bytes(resp.body))
 
 
@@ -85,7 +86,7 @@ def test_batch_tag_rejects_no_valid_tags(env):
 def test_batch_tag_rejects_oversize_and_bad_payload(env):
     data = _batch([[FEED, str(i)] for i in range(main._MOVE_BATCH_CAP + 1)], "tag")
     assert not data["ok"] and "Too many" in data["error"]
-    resp = main.edit_manual_tags_on_entries_batch_route(entries="not json", tags_text="tag")
+    resp = routes.entries.edit_manual_tags_on_entries_batch_route(entries="not json", tags_text="tag")
     assert not json.loads(bytes(resp.body))["ok"]
 
 
@@ -158,7 +159,7 @@ def test_a_tag_removed_and_re_added_in_the_same_edit_stays_removed(env):
 
 
 def _coverage(pairs) -> dict:
-    resp = main.get_entries_manual_tags_batch_route(entries=json.dumps(pairs))
+    resp = routes.entries.get_entries_manual_tags_batch_route(entries=json.dumps(pairs))
     return json.loads(bytes(resp.body))
 
 
@@ -196,5 +197,5 @@ def test_coverage_works_for_a_single_entry_selection(env):
 def test_coverage_rejects_oversize_and_bad_payload(env):
     data = _coverage([[FEED, str(i)] for i in range(main._MOVE_BATCH_CAP + 1)])
     assert not data["ok"] and "Too many" in data["error"]
-    resp = main.get_entries_manual_tags_batch_route(entries="not json")
+    resp = routes.entries.get_entries_manual_tags_batch_route(entries="not json")
     assert not json.loads(bytes(resp.body))["ok"]

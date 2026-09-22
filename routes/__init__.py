@@ -219,7 +219,8 @@ this sub-stage's routes as plain functions throughout the file.
 own A-E sub-stages, same reasoning as Stage 8) **is only partially done: this file started with only
 sub-stage A's 12 routes** -- sub-stages B (entry metadata edits + attachments), C (move/organize + tags), D
 (read/unread/star state + integration sends), and E (`/entries/pane` alone, last) each add more routes to
-this same module in later tasks -- don't assume this is the final state.
+this same module in later tasks -- don't assume this is the final state. A/B/C are now in; D and E still come
+later.
 
 Stage 9A -- content/reading utility: `GET /entries/lead-image`, `GET /entries/media/audio`,
 `GET /entries/media/download`, `POST /entries/thumb-crop`, `GET /entries/readability`, `GET /entries/source`,
@@ -287,4 +288,57 @@ the same handler registered in two separate test files). One test hit the plain-
 `tests/integration/test_entry_attachments_route.py` calls `main.entry_attachments_route(...)` directly five
 times, retargeted to `routes.entries.entry_attachments_route`. No script-only callers turned up for any of
 this sub-stage's 9 routes or their moved helpers.
+
+Stage 9C -- move/organize + tags, 9 routes: `POST /entries/move-to-feed`, `POST /entries/move-to-feed-batch`,
+`POST /entries/select-all-visible`, `POST /entries/move-visible-to-feed`, `POST /entries/purge`,
+`GET /entries/manual-tags-batch`, `POST /entries/tags`, `POST /entries/tags-batch`, `POST /entries/discard`.
+Sub-stages D (read/unread/star state + integration sends) and E (`/entries/pane` alone, last) still come
+later. These 9 routes were NOT contiguous in main.py -- scattered lines 24117-26596, interleaved with several
+Stage 9D routes (`/entries/read*`, `/entries/saved`, `/entries/archive`, `/entries/star-batch`,
+`/entries/mark-*`, `/entries/undo-*`, `/entries/email`, `/entries/instapaper`, `/entries/quire`) that stayed
+untouched despite sitting right next to a moved route.
+
+The two tag routes (`/entries/tags`, `/entries/tags-batch`) confirmed Plan.md's Landmines prediction: they
+lean on the same widely-shared tag machinery Stage 3's `routes/tags.py` already left behind --
+`get_manual_tags_for_entry`, `set_manual_tags_for_entry`, `parse_manual_hashtags`, `normalize_tag_value`, and
+`MAX_MANUAL_TAGS` all stayed in main.py and got imported back, each with call sites well outside this
+sub-stage (`set_manual_tags_for_entry` alone is also driven by the feed auto-taggers at ingest).
+`parse_manual_tag_edit_tokens`/`apply_manual_tag_edits` (the bulk route's own `+/-tag` parser) also stayed --
+both are tested directly as `main.<name>` by `tests/unit/test_manual_tag_edit_tokens.py`. `_merge_manual_tags`
+(the single-entry append-mode helper) *did* move with `/entries/tags`: despite its own docstring claiming it
+was "shared by the single-entry append path and the bulk tag-add route," the three-way grep found only one
+live caller (`set_entry_manual_tags`) -- the bulk route now goes through `apply_manual_tag_edits` instead, so
+the docstring was stale.
+
+`_move_entry_to_feed` (the per-entry move engine both `/entries/move-to-feed` and the batch/visible variants
+call) stayed in main.py despite sitting in the middle of this cluster: `routes/saved.py` already imports it
+directly for the saved-duplicate merge flow, and three scripts (`dedupe_orphan_archives.py`,
+`merge_saved_vs_real_duplicates.py`, `rehome_article_feeds.py`) call it as `main._move_entry_to_feed`.
+`_MOVE_BATCH_CAP` stayed too -- shared with the still-in-main.py `/entries/read-batch` and `/entries/star-batch`
+routes (Stage 9D) and re-imported by `routes/integrations_youtube.py`. `_prune_entries` (the purge/retention
+engine `/entries/purge` calls) stayed, also called by main.py's own nightly per-folder retention sweep and
+tested directly as `main._prune_entries` by several files. `set_entry_archived`/`apply_star_state`/
+`mark_entry_read_everywhere` (the three primitives `/entries/discard` chains) all stayed -- each has other
+still-in-main.py callers among the Stage 9D star/archive routes, and `apply_star_state` is also called from
+`routes/saved.py` and a script.
+
+`_resolve_view_posts`, `_view_filter_predicate`, `_MOVE_VISIBLE_LIMIT`, `_folder_is_yt_folder`, and the
+duration-filter trio (`_DURATION_FILTER_RE`/`_parse_duration_filter`/`_parse_duration_filter_seconds`) all
+moved together: confirmed via the three-way grep to have no caller anywhere outside
+`select_all_visible_entries_route` and `move_visible_entries_to_feed_route`, both of which moved in this same
+sub-stage, so the whole cluster came across as one block.
+
+Six test files needed retargeting for the "handler registered directly as `main.<name>` on a bare test
+`FastAPI()` app" gotcha: `tests/integration/test_select_all_visible.py` (->
+`routes.entries.select_all_visible_entries_route`), `tests/integration/test_move_visible_to_feed.py` (->
+`routes.entries.move_visible_entries_to_feed_route`), `tests/integration/test_retention_purge.py` (->
+`routes.entries.purge_old_entries`), and `tests/integration/test_autofetch_pane_refresh.py` (one more handler
+added to its existing `routes.entries` registrations, -> `routes.entries.set_entry_manual_tags`). Three more
+hit the plain-function-call variant: `tests/integration/test_move_entry_to_feed.py` (batch route, two call
+sites), `tests/integration/test_tags_batch.py` (both batch routes, four call sites), and
+`tests/integration/test_archive_discard_semantics.py` (`discard_entry`, six call sites). One unit test file,
+`tests/unit/test_keep_signal_followups.py`, used `inspect.getsource(main.set_entry_manual_tags)` and needed
+retargeting to `entries_routes.set_entry_manual_tags` (a fresh `from routes import entries as entries_routes`
+import, matching that file's existing `system_routes` alias style) since the function no longer lives in
+main.py's namespace. No script-only callers turned up for any of this sub-stage's 9 routes.
 """

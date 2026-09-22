@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://blog.example.com/feed/"
@@ -46,7 +47,7 @@ def tenant(tmp_path):
 
 def _app():
     app = FastAPI()
-    app.post("/entries/select-all-visible")(main.select_all_visible_entries_route)
+    app.post("/entries/select-all-visible")(routes.entries.select_all_visible_entries_route)
     return app
 
 
