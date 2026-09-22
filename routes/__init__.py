@@ -219,8 +219,8 @@ this sub-stage's routes as plain functions throughout the file.
 own A-E sub-stages, same reasoning as Stage 8) **is only partially done: this file started with only
 sub-stage A's 12 routes** -- sub-stages B (entry metadata edits + attachments), C (move/organize + tags), D
 (read/unread/star state + integration sends), and E (`/entries/pane` alone, last) each add more routes to
-this same module in later tasks -- don't assume this is the final state. A/B/C are now in; D and E still come
-later.
+this same module in later tasks -- don't assume this is the final state. A/B/C/D are now in; E (`/entries/pane`
+alone) is the only sub-stage still remaining.
 
 Stage 9A -- content/reading utility: `GET /entries/lead-image`, `GET /entries/media/audio`,
 `GET /entries/media/download`, `POST /entries/thumb-crop`, `GET /entries/readability`, `GET /entries/source`,
@@ -341,4 +341,57 @@ sites), `tests/integration/test_tags_batch.py` (both batch routes, four call sit
 retargeting to `entries_routes.set_entry_manual_tags` (a fresh `from routes import entries as entries_routes`
 import, matching that file's existing `system_routes` alias style) since the function no longer lives in
 main.py's namespace. No script-only callers turned up for any of this sub-stage's 9 routes.
+
+Stage 9D -- read/unread/star state + integration sends, the biggest and most state-coupled sub-stage of
+`routes/entries.py`, deliberately scoped second-to-last: `POST /entries/read`, `POST /entries/saved`,
+`POST /entries/archive`, `POST /entries/read-batch`, `POST /entries/star-batch`, `POST /entries/mark-range-read`,
+`POST /entries/mark-older-than-read`, `POST /entries/undo-mark-unread`, `POST /entries/undo-mark-read`,
+`POST /entries/undo-unstar`, `POST /entries/mark-newer-than-unread`, `POST /entries/email`,
+`POST /entries/instapaper`, `POST /entries/quire` (14 routes). Only sub-stage E (`/entries/pane` alone) remains
+after this. No ordering constraint: none of these handlers touch `_run_automation_after_refresh` or anything
+else from the late `services.automation_rules` import, so this module keeps its existing import position.
+
+Every one of these routes touches the `unread_counts_cache`/`unread_counts_cache_lock`/
+`_bump_unread_counts_generation` trio from `state.py` (re-exported through `main`, same as every earlier
+stage's cache-touching routes) -- moved verbatim, same lock-then-bump-then-clear shape main.py already used,
+never a raw `global` re-derivation. `get_unread_counts_generation()` is exercised (not by these routes directly,
+but by the pre-existing regression tests that watch it) via `tests/integration/test_read_batch.py`'s
+`test_batch_read_invalidates_unread_count_cache`/`test_batch_unread_invalidates_unread_count_cache`, both
+retargeted to call `routes.entries.mark_entries_read_batch_route` directly and re-verified green after the move.
+
+None of the private helpers these 14 routes lean on moved with them -- every one has a caller elsewhere that
+would have broken, confirmed via the `routes/*.py`/`scripts/*.py`/`tests/` three-way grep, not assumed from
+adjacency: `_run_on_star_destinations` (called from `apply_star_state`, itself unmoved, plus tested directly as
+`main.<name>`), `_instapaper_save_url` and `_quire_add_entry` (each also called from `_run_on_star_destinations`,
+and each tested directly as `main.<name>`), `_undo_token_problem` (also called from `apply_star_state`),
+`_mark_entries_as_read_for_view` (shared with `routes/feeds.py`'s `/folders/mark-read` and `/feeds/mark-read`,
+already imported there since Stage 8A), `_youtube_unpremiered_video_id`, `get_tagged_entry_keys`, and
+`entry_effective_date` (each with several other still-in-main.py or cross-module callers), and `_sanitize_html_allowlist`
+(tested directly as `main.<name>` by `tests/unit/test_security_fixes.py`). All of these stayed in main.py and
+were imported back into `routes/entries.py` instead. `_RANGE_READ_LIMIT` and `_UNDO_MARK_READ_WINDOW` likewise
+stayed: the former has a second caller elsewhere in main.py, the latter is private to `_undo_token_problem`,
+which itself stayed.
+
+Thirteen test files needed retargeting for the "handler registered directly as `main.<name>` on a bare test
+`FastAPI()` app" gotcha: `tests/integration/test_mark_read_routes.py` (four handlers: `mark_entry_read`,
+`mark_entries_older_than_read` twice, `mark_entries_newer_than_unread`), `tests/integration/test_undo_unstar.py`
+(`toggle_entry_saved` and `undo_unstar`), `tests/integration/test_autofetch_pane_refresh.py` (one more handler
+added to its existing `routes.entries` registrations, `toggle_entry_saved`), `tests/integration/test_unstar_husk_cleanup.py`,
+`tests/integration/test_tag_as_keep.py` (both `toggle_entry_saved`), `tests/integration/test_youtube_unpremiered.py`
+(`mark_entries_older_than_read` and `mark_entries_range_read`), `tests/integration/test_mark_range_read.py`
+(`mark_entries_range_read`), `tests/integration/test_mark_read_view_scope.py` (`mark_entries_older_than_read`),
+`tests/integration/test_undo_mark_read.py` (`undo_mark_read`), `tests/integration/test_email_route.py`
+(`email_entry`), `tests/integration/test_instapaper_route.py` (`save_to_instapaper`), and
+`tests/integration/test_quire_add_route.py` (`add_to_quire`). Four more hit the plain-function-call variant:
+`tests/integration/test_archive_discard_semantics.py` (`toggle_entry_archived`), `tests/integration/test_read_batch.py`
+(`mark_entries_read_batch_route`, two call sites), and `tests/integration/test_star_batch.py`
+(`star_entries_batch_route` and `undo_unstar`, five call sites combined). One unit test file,
+`tests/unit/test_keep_signal_followups.py`, used `inspect.getsource(main.toggle_entry_saved)` (twice) and needed
+retargeting to `entries_routes.toggle_entry_saved`, the same alias `set_entry_manual_tags` already used in Stage
+9C. The email/instapaper/quire test files also hit the copied-reference monkeypatch gotcha over real HTTP --
+each stubs several main.py-resident getters (`is_email_configured`, `get_resend_api_key`, `get_resend_from`,
+`send_article_email`, `get_setting`, `get_runtime_setting`, `is_quire_connected`, `get_quire_user_token`,
+`quire_project_oid`, `get_quire_usage_status`, `_quire_add_entry`, `get_reader`) that now also need patching on
+`routes.entries`, doubled the same way Stage 8A's `_build_feed_mark_read_app` established. No script-only
+callers turned up for any of this sub-stage's 14 routes or their private helpers.
 """

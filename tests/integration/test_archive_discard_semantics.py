@@ -74,7 +74,7 @@ def configured(tmp_path, monkeypatch):
 
 
 def _archive(feed: str, eid: str, on: bool = True):
-    return main.toggle_entry_archived(_NO_REQUEST, feed_url=feed, entry_id=eid, archived=int(on))
+    return routes.entries.toggle_entry_archived(_NO_REQUEST, feed_url=feed, entry_id=eid, archived=int(on))
 
 
 def _starred(feed: str, eid: str) -> bool:

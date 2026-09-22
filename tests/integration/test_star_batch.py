@@ -10,6 +10,7 @@ import json
 import pytest
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -66,7 +67,7 @@ def _is_starred(feed_url: str, entry_id: str) -> bool:
 
 
 def _batch(pairs, saved: int) -> dict:
-    resp = main.star_entries_batch_route(entries=json.dumps(pairs), saved=saved)
+    resp = routes.entries.star_entries_batch_route(entries=json.dumps(pairs), saved=saved)
     return json.loads(bytes(resp.body))
 
 
@@ -105,7 +106,7 @@ def test_batch_remove_star_unstars_and_returns_an_undo_token(env):
     assert not _is_starred(FEED, "e1")
     assert not _is_starred(FEED, "e2")
 
-    undo_resp = main.undo_unstar(unstarred_at=token)
+    undo_resp = routes.entries.undo_unstar(unstarred_at=token)
     undo_data = json.loads(bytes(undo_resp.body))
     assert undo_data == {"ok": True, "restored": 2, "gone": 0}
     assert _is_starred(FEED, "e1") and _is_starred(FEED, "e2")
@@ -140,7 +141,7 @@ def test_batch_remove_star_does_not_delete_saved_article_husks_immediately(env):
         assert reader.get_entry((SAVED, "husk-1"), None) is not None
     assert main._sweep_husked_saved_articles() == 0  # still inside its undo window
 
-    undo_resp = main.undo_unstar(unstarred_at=data["undo_token"])
+    undo_resp = routes.entries.undo_unstar(unstarred_at=data["undo_token"])
     assert undo_resp.status_code == 200
     assert _is_starred(SAVED, "husk-1")
 
@@ -164,7 +165,7 @@ def test_batch_mixed_selection_undo_restores_only_the_survivors(env):
         entry = reader.get_entry((SAVED, "husk-1"))
         main._hard_delete_entry(reader, SAVED, "husk-1", entry)
 
-    undo_resp = main.undo_unstar(unstarred_at=token)
+    undo_resp = routes.entries.undo_unstar(unstarred_at=token)
     undo_data = json.loads(bytes(undo_resp.body))
     assert undo_data == {"ok": True, "restored": 1, "gone": 1}
     assert _is_starred(FEED, "e1")
@@ -173,7 +174,7 @@ def test_batch_mixed_selection_undo_restores_only_the_survivors(env):
 def test_batch_rejects_oversize_and_bad_payload(env):
     data = _batch([[FEED, str(i)] for i in range(main._MOVE_BATCH_CAP + 1)], saved=1)
     assert not data["ok"] and "Too many" in data["error"]
-    resp = main.star_entries_batch_route(entries="not json", saved=1)
+    resp = routes.entries.star_entries_batch_route(entries="not json", saved=1)
     assert not json.loads(bytes(resp.body))["ok"]
 
 

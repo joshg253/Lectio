@@ -7,6 +7,7 @@ import json
 import pytest
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -50,7 +51,7 @@ def _is_read(feed_url: str, entry_id: str) -> bool:
 
 
 def _batch(pairs, read: int = 1) -> dict:
-    resp = main.mark_entries_read_batch_route(entries=json.dumps(pairs), read=read)
+    resp = routes.entries.mark_entries_read_batch_route(entries=json.dumps(pairs), read=read)
     return json.loads(bytes(resp.body))
 
 
@@ -94,7 +95,7 @@ def test_batch_read_invalidates_unread_count_cache(env):
 def test_batch_read_rejects_oversize_and_bad_payload(env):
     data = _batch([[FEED, str(i)] for i in range(main._MOVE_BATCH_CAP + 1)])
     assert not data["ok"] and "Too many" in data["error"]
-    resp = main.mark_entries_read_batch_route(entries="not json")
+    resp = routes.entries.mark_entries_read_batch_route(entries="not json")
     assert not json.loads(bytes(resp.body))["ok"]
 
 

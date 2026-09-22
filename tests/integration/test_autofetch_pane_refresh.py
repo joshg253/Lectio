@@ -134,7 +134,7 @@ def test_a_second_call_while_the_first_job_is_still_running_does_not_spawn_anoth
 def test_star_route_response_flags_autofetch_pending_for_a_stub(thin_entry, monkeypatch):
     monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e: {"ok": True})
     app = FastAPI()
-    app.post("/entries/saved")(main.toggle_entry_saved)
+    app.post("/entries/saved")(routes.entries.toggle_entry_saved)
     with TestClient(app) as client:
         r = client.post(
             "/entries/saved",

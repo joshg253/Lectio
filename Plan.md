@@ -343,12 +343,21 @@ ordered safest → riskiest:
      be just a comment, not an actual call, on independent spot-check). 8 test files retargeted,
      no `scripts/*.py` callers of the moved routes themselves. Full
      `make test`/`lint`/`types`/`ruff format --check` pass.
-   - **D.** Read/unread/star state + integration sends (14) — biggest, most state-coupled, touches
-     `unread_counts_cache` heavily: `/entries/read`, `/entries/saved`, `/entries/archive`,
-     `/entries/read-batch`, `/entries/star-batch`, `/entries/mark-range-read`,
-     `/entries/mark-older-than-read`, `/entries/undo-mark-unread`, `/entries/undo-mark-read`,
-     `/entries/undo-unstar`, `/entries/mark-newer-than-unread`, `/entries/email`,
-     `/entries/instapaper`, `/entries/quire`.
+   - **D — done (2026-09-22).** Read/unread/star state + integration sends (14, exactly as
+     scoped): `/entries/read`, `/entries/saved`, `/entries/archive`, `/entries/read-batch`,
+     `/entries/star-batch`, `/entries/mark-range-read`, `/entries/mark-older-than-read`,
+     `/entries/undo-mark-unread`, `/entries/undo-mark-read`, `/entries/undo-unstar`,
+     `/entries/mark-newer-than-unread`, `/entries/email`, `/entries/instapaper`,
+     `/entries/quire`. main.py: 27,244 → 26,270 lines; `routes/entries.py`: 1,613 → 2,619 lines.
+     Every unread-count touch confirmed going through the real accessor functions
+     (`_bump_unread_counts_generation()` under `unread_counts_cache_lock`), never a raw `global` —
+     grepped `routes/entries.py` for stray `global` statements to confirm zero, and the two
+     generation-bump tests (`test_read_batch.py`'s cache-invalidation pair) explicitly assert the
+     generation actually changes post-move, not just that the call succeeds. No
+     `services.automation_rules` ordering constraint needed — none of these 14 touch a late-bound
+     name, so no cascade into other modules this time (unlike Stage 8E). `_mark_entries_as_read_for_view`
+     confirmed shared with `routes/feeds.py`, stayed in main.py. 16 test files retargeted, no
+     `scripts/*.py` callers found. Full `make test`/`lint`/`types`/`ruff format --check` pass.
    - **E.** `/entries/pane` alone (1 route) — the pane-swap endpoint itself, same
      reused-by-everything status Stage 10's `/`/`/read` have per the Landmines note; riskiest,
      saved for last, same reasoning as Stage 8E and Stage 10.

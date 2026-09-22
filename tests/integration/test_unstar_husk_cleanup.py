@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 from services import tenancy
 
 SAVED = main.saved_articles_service.SAVED_FEED_URL
@@ -49,7 +50,7 @@ def tenant(tmp_path):
 
 def _app():
     app = FastAPI()
-    app.post("/entries/saved")(main.toggle_entry_saved)
+    app.post("/entries/saved")(routes.entries.toggle_entry_saved)
     return app
 
 

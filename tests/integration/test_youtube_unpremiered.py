@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 from services import tenancy
 
 YT_FEED = "https://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv"
@@ -176,7 +177,7 @@ def test_mark_feeds_as_read_skips_unpremiered(configured):
 
 def _older_than_app():
     app = FastAPI()
-    app.post("/entries/mark-older-than-read")(main.mark_entries_older_than_read)
+    app.post("/entries/mark-older-than-read")(routes.entries.mark_entries_older_than_read)
     return app
 
 
@@ -205,7 +206,7 @@ def test_mark_older_than_skips_unpremiered(configured):
 
 def _range_app():
     app = FastAPI()
-    app.post("/entries/mark-range-read")(main.mark_entries_range_read)
+    app.post("/entries/mark-range-read")(routes.entries.mark_entries_range_read)
     return app
 
 

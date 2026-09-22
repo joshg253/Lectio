@@ -6,15 +6,22 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 
 
 def _build_app(monkeypatch, *, configured: bool = True, entry=None, send_result=(True, None)):
     app = FastAPI()
-    app.post("/entries/email")(main.email_entry)
+    app.post("/entries/email")(routes.entries.email_entry)
 
+    # routes.entries did `from main import (...)` at module load, so each of these
+    # copied a reference at that time -- patching main's own attribute doesn't
+    # reach routes.entries' copy, both need patching (routes/__init__.py's docstring).
     monkeypatch.setattr(main, "is_email_configured", lambda: configured)
+    monkeypatch.setattr(routes.entries, "is_email_configured", lambda: configured)
     monkeypatch.setattr(main, "get_resend_api_key", lambda: "re_test" if configured else "")
+    monkeypatch.setattr(routes.entries, "get_resend_api_key", lambda: "re_test" if configured else "")
     monkeypatch.setattr(main, "get_resend_from", lambda: "from@example.com" if configured else "")
+    monkeypatch.setattr(routes.entries, "get_resend_from", lambda: "from@example.com" if configured else "")
 
     class _FakeReader:
         def __enter__(self):
@@ -27,7 +34,9 @@ def _build_app(monkeypatch, *, configured: bool = True, entry=None, send_result=
             return entry
 
     monkeypatch.setattr(main, "get_reader", lambda: _FakeReader())
+    monkeypatch.setattr(routes.entries, "get_reader", lambda: _FakeReader())
     monkeypatch.setattr(main, "send_article_email", lambda **_kw: send_result)
+    monkeypatch.setattr(routes.entries, "send_article_email", lambda **_kw: send_result)
 
     return app
 
@@ -82,6 +91,7 @@ def _capture_excerpt(monkeypatch):
         return (True, None)
 
     monkeypatch.setattr(main, "send_article_email", _send)
+    monkeypatch.setattr(routes.entries, "send_article_email", _send)
     return captured
 
 
@@ -107,7 +117,9 @@ def _capture_cc(monkeypatch, *, profile_email):
     """Stub profile-email lookup + send, returning a dict that records cc_addr."""
     captured: dict = {}
     monkeypatch.setattr(main, "get_meta_connection", lambda: _DummyConn())
+    monkeypatch.setattr(routes.entries, "get_meta_connection", lambda: _DummyConn())
     monkeypatch.setattr(main, "get_setting", lambda conn, key: profile_email)
+    monkeypatch.setattr(routes.entries, "get_setting", lambda conn, key: profile_email)
 
     def _send(**kw):
         captured["cc_addr"] = kw.get("cc_addr")
@@ -115,6 +127,7 @@ def _capture_cc(monkeypatch, *, profile_email):
         return (True, None)
 
     monkeypatch.setattr(main, "send_article_email", _send)
+    monkeypatch.setattr(routes.entries, "send_article_email", _send)
     return captured
 
 

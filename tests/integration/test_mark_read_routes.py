@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 import routes.feeds
 from services import tenancy
 
@@ -169,11 +170,18 @@ def test_folder_mark_read_async_no_redirect(monkeypatch):
 
 def _build_older_than_app(monkeypatch) -> FastAPI:
     app = FastAPI()
-    app.post("/entries/mark-older-than-read")(main.mark_entries_older_than_read)
+    app.post("/entries/mark-older-than-read")(routes.entries.mark_entries_older_than_read)
+    # routes.entries did `from main import (...)` at module load, so each of these
+    # copied a reference at that time -- patching main's own attribute doesn't
+    # reach routes.entries' copy, both need patching (routes/__init__.py's docstring).
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_conn)
+    monkeypatch.setattr(routes.entries, "get_meta_connection", _dummy_meta_conn)
     monkeypatch.setattr(main, "get_folder_feed_urls", lambda _conn, _fid: set())
+    monkeypatch.setattr(routes.entries, "get_folder_feed_urls", lambda _conn, _fid: set())
     monkeypatch.setattr(main, "filter_feed_urls", lambda feed_urls, _list_feed_url: feed_urls)
+    monkeypatch.setattr(routes.entries, "filter_feed_urls", lambda feed_urls, _list_feed_url: feed_urls)
     monkeypatch.setattr(main, "unread_counts_cache", {})
+    monkeypatch.setattr(routes.entries, "unread_counts_cache", {})
     return app
 
 
@@ -255,11 +263,20 @@ def test_older_than_marks_entries_dated_only_by_added(monkeypatch):
         return conn
 
     app = FastAPI()
-    app.post("/entries/mark-older-than-read")(main.mark_entries_older_than_read)
+    app.post("/entries/mark-older-than-read")(routes.entries.mark_entries_older_than_read)
+    # routes.entries did `from main import (...)` at module load, so each of these
+    # copied a reference at that time -- patching main's own attribute doesn't
+    # reach routes.entries' copy, both need patching (routes/__init__.py's docstring).
+    # get_reader/list_entries_for_feeds are only reached inside
+    # _mark_entries_as_read_for_view, which stays in main.py, so only main needs those two.
     monkeypatch.setattr(main, "get_meta_connection", _meta_conn_with_read_state)
+    monkeypatch.setattr(routes.entries, "get_meta_connection", _meta_conn_with_read_state)
     monkeypatch.setattr(main, "get_folder_feed_urls", lambda _c, _f: {"http://feed/"})
+    monkeypatch.setattr(routes.entries, "get_folder_feed_urls", lambda _c, _f: {"http://feed/"})
     monkeypatch.setattr(main, "filter_feed_urls", lambda urls, _l: urls)
+    monkeypatch.setattr(routes.entries, "filter_feed_urls", lambda urls, _l: urls)
     monkeypatch.setattr(main, "unread_counts_cache", {})
+    monkeypatch.setattr(routes.entries, "unread_counts_cache", {})
     monkeypatch.setattr(main, "get_reader", lambda: fake)
     # This test is about the date-cutoff logic (entry_effective_date), not view
     # filtering -- stub list_entries_for_feeds (which needs a real meta-DB
@@ -310,7 +327,7 @@ class _FakeThread:
 
 def test_entries_read_async_binds_request_user_to_bg_thread(monkeypatch):
     app = FastAPI()
-    app.post("/entries/read")(main.mark_entry_read)
+    app.post("/entries/read")(routes.entries.mark_entry_read)
     monkeypatch.setattr(tenancy, "current_user_id", lambda: "u_request_user")
     monkeypatch.setattr(main.tenancy, "current_user_id", lambda: "u_request_user")
     monkeypatch.setattr(main.threading, "Thread", _FakeThread)
@@ -442,14 +459,23 @@ def _build_newer_than_app(monkeypatch, entries, kept=frozenset(), saved=()):
     from datetime import datetime, timedelta, timezone
 
     app = FastAPI()
-    app.post("/entries/mark-newer-than-unread")(main.mark_entries_newer_than_unread)
+    app.post("/entries/mark-newer-than-unread")(routes.entries.mark_entries_newer_than_unread)
     reader = _UnreadReader(entries)
+    # routes.entries did `from main import (...)` at module load, so each of these
+    # copied a reference at that time -- patching main's own attribute doesn't
+    # reach routes.entries' copy, both need patching (routes/__init__.py's docstring).
     monkeypatch.setattr(main, "get_meta_connection", lambda: _unread_meta_conn(saved))
+    monkeypatch.setattr(routes.entries, "get_meta_connection", lambda: _unread_meta_conn(saved))
     monkeypatch.setattr(main, "get_folder_feed_urls", lambda _c, _f: {"http://feed/"})
+    monkeypatch.setattr(routes.entries, "get_folder_feed_urls", lambda _c, _f: {"http://feed/"})
     monkeypatch.setattr(main, "filter_feed_urls", lambda urls, _l: urls)
+    monkeypatch.setattr(routes.entries, "filter_feed_urls", lambda urls, _l: urls)
     monkeypatch.setattr(main, "get_tagged_entry_keys", lambda _urls: set(kept))
+    monkeypatch.setattr(routes.entries, "get_tagged_entry_keys", lambda _urls: set(kept))
     monkeypatch.setattr(main, "get_reader", lambda: reader)
+    monkeypatch.setattr(routes.entries, "get_reader", lambda: reader)
     monkeypatch.setattr(main, "unread_counts_cache", {})
+    monkeypatch.setattr(routes.entries, "unread_counts_cache", {})
     return app, reader, datetime, timedelta, timezone
 
 
