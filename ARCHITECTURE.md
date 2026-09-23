@@ -25,6 +25,26 @@ shape is defending against.
 
 The layers run in one process today, but the boundaries should stay clean.
 
+### Route modules
+
+Routes are split out of `main.py` into `routes/*.py` by URL prefix (`system`, `compat_{fever,greader,v1}`,
+`tags`, `highlights`, `automation`, `admin`, `saved`, `settings`, `feeds`, `entries`, `home`), each a
+plain `router = APIRouter()` included from `main.py`'s bottom-of-file block. Shared module-level state
+(caches, locks, generation counters) lives in `state.py`; route modules import it back rather than
+redefining it.
+
+Gotchas that apply to any further extraction out of `main.py`: a module that imports a singleton
+cache/lock must not redefine it, and every `invalidate_*` call site has to stay wired to the same
+instance. `get_reader()`'s thread-local pooling and `lifespan` are startup-order-sensitive. A name
+late-bound at the bottom of `main.py` (e.g. `_run_automation_after_refresh` from
+`services.automation_rules`) needs the importing module's own import positioned after that block, or
+import fails — and this cascades, since a route module that itself gets imported by another route
+module needing the same treatment must move after it too. A scalar rebound via `global` needs a real
+accessor function, not a bare imported name: `from state import _some_counter` freezes a snapshot at
+import time and goes stale on every later write, the same failure mode a leftover `global` write has.
+Before assuming a helper is single-route-only, grep `routes/*.py` and `scripts/*.py` too, not just
+`main.py` and `tests/` — several "obviously local" helpers turned out to have script-only callers.
+
 ## Reader-first philosophy
 
 `reader` is the primary storage/ops primitive. It already covers:

@@ -5,16 +5,21 @@ explains why the code looks the way it does, in ARCHITECTURE.md.
 
 ## Now
 
-Five tiers: actively impeding unread-clearing, small independent wins, maintenance backlog ready
-to run, real features not blocking anything today, and deliberately-deferred big investments.
+Five tiers: actively impeding unread-clearing, small independent wins, sized work with no open
+decision, real features not blocking anything today, and deliberately-deferred big investments.
 Within a tier, related items are clustered under a bold sub-heading. Two watch-lists (CodeQL,
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
-Tiers 1 through 3 are empty. The main.py/index.html breakup and both of its follow-on Tier 4
-projects — the `state.py` singleton extraction and the full route-by-URL-prefix split (256 routes
-across 10 stages) — are all done, shipped 2026-09-19 through 2026-09-22. What's left in Tier 4:
-dedup-routes consolidation (still gated on characterization tests) and the shared rendering core
-(not started, deliberately — see the route split's closing note for why it stayed untouched).
+Tier 1 is empty. Tier 2 is empty — nothing currently qualifies as small *and* fast *and*
+independent; the ready items below all take real focused time. Tier 3 holds six items that are
+sized, have no outstanding decision, and are ready to pick up (2026-09-22: Josh decided the
+archive-capture-failures item, promoting it in from Tier 4's decision list; the tag-filter-chip
+scope item stayed on that list pending further discussion; offline star/unstar was decided closed,
+not built). The main.py/index.html breakup, the `state.py` singleton extraction, and the full
+route-by-URL-prefix split (256 routes across 10 stages) are all done, shipped 2026-09-19 through
+2026-09-22 (PRs #329-#342). Tier 4 opens with the remaining items blocked on a product decision,
+not on code, plus the `/api/*` cluster split (deferred, undecided) and the shared rendering core
+(not started, deliberately).
 
 ## Tier 1 — actively impeding unread-clearing
 
@@ -24,442 +29,113 @@ Empty.
 
 Empty.
 
-## Tier 3 — maintenance backlog, ready to run
+## Tier 3 — sized, no open decision, ready to build
 
-Empty.
+No outstanding decision blocks any of these — pick up in whatever order suits, ordered here
+roughly cheapest-first.
 
-## Tier 4 — real features, not blocking anything today
+### Tag filtering for firehose feeds — follow-ups
 
-### main.py / index.html breakup — done
+`tag_filter` rule type is shipped (include/exclude feed-tag lists, any scope, auto-mark-read,
+dry-run/run-now/history). Remaining:
 
-Moved the Integration routes cluster (~44 routes + workers) into `routes/integrations_*.py` plus
-`services/migration_common.py`/`services/inoreader_import.py`, moved the post-refresh automation
-pipeline into `services/automation_rules.py`, and moved index.html's last 4 inline context menus
-into `_context_menus.html` — `index.html` is now all `{% include %}`s plus page-level structure.
-main.py: 40,474 → 36,737 lines. Stage-by-stage detail and the gotchas hit along the way (the
-copied-reference monkeypatch trap, the `import main`-must-sort-first circular-import rule, etc.)
-are in the commit history (PRs #329-#331) and `routes/__init__.py`'s docstring, not repeated here.
+- dev.to adapter: extend to multiple include tags (one API call per tag, merged/deduped by
+  article id, exclusion applied client-side on `tag_list`).
+- freeCodeCamp per-tag Ghost RSS (`/news/tag/<slug>/rss/`) as a fallback if include-list recall is
+  insufficient.
 
-**Landmines that still apply to any further main.py extraction:** a module that imports a singleton
-cache/lock must not redefine it, and every `invalidate_*` call site has to stay wired to the same
-instance. `get_reader()` thread-local pooling and `lifespan` are startup-order-sensitive. A scalar
-rebound via `global` (a counter, an in-flight flag) has a *read*-side version of the same landmine,
-not just a write-side one: `from state import _some_counter` freezes a snapshot at import time, so
-any bare *read* of it elsewhere goes stale the same way an unconverted `global` write would — both
-need an accessor function, not a bare imported name (found while building `state.py`, below).
+### Entry-pane loading state/timeout
+
+Slow pane loads still look like dead clicks. Part of the page-weight reduction work (PR #146); the
+render-splitting/fragment-endpoint idea from that same follow-up list is bigger and optional, left
+in Tier 4.
+
+### Full-content fetch at ingest for body-less feeds
+
+meetingcpp.com's feed went title+link-only (CMS change, upstream). A per-feed "fetch full content
+from the source page at ingest" opt-in (readability pipeline already exists), capped/throttled
+like enhancement, would fix such feeds generally. Also unblocks the Email "full article text"
+follow-up in Tier 4, which is sequenced after this so both share one "thin" threshold.
+
+### Single-post pages: fix raw/full-page capture quality
+
+Some "feeds" are really one standing document (e.g. a single tutorial page), saved via a
+manufactured feed. Readability can return a small fraction of such a page, and the wrong node.
+(The workflow-simplification half of this idea is superseded — Josh's preference is filing such
+pages into an existing related feed, which auto-filing already does in bulk — so this is capture
+quality only.)
+
+### Archive capture failures are indistinguishable from real empty content
+
+`_archive_entry`'s source fetch (`_fetch_text_with_url`) swallows every exception identically —
+a 404, a 403, a TLS error, anything — and stores an empty "complete" archive with no error
+recorded. Found 2026-09-19 auditing 633 such rows live: mostly dead links, a handful recoverable,
+but nothing short of a manual per-entry fetch could tell which was which beforehand. Decided
+2026-09-22: add a status column (queryable/reportable later) rather than just logging — needs the
+per-user startup migration plus recording the failure kind at capture time; UI surfacing can follow
+once the column exists.
 
 ### Dedup routes consolidation → `services/dedup.py`
 
-Gate: the dedup routes' shared feed-URL prologue is already extracted, but the match-method bodies
-still diverge by preview-vs-apply output — full consolidation is deferred until there are broader
-characterization tests (dedup correctness is behavior-sensitive). Once that lands, pull the
-consolidated engine into `services/dedup.py`, and fold in `_suppress_guid_churn` and
-`_cleanup_intra_feed_slug_dupes` (main.py:8062-8270, refresh-time guid/slug dedup) at the same
-time — same problem space, avoids moving them twice. The three unrelated hide-* hygiene functions
-next to them in main.py (`_is_youtube_short`, `_apply_hide_shorts`, `_apply_hide_paywalled`,
-`_apply_hide_members_only`, main.py:7952-8447 minus the two above) aren't dedup — decide at
-extraction time whether they're worth carrying along in the same pass (adjacent code, same
-refresh-pipeline callers) or splitting off into a later `services/feed_hygiene.py`.
+Next concrete step: write characterization tests for the dedup match-method bodies (now
+`_dry_run_dedup` in `routes/automation.py`, `_run_now_dedup` in `services/automation_rules.py`) —
+dedup correctness is behavior-sensitive, so this needs to happen before touching the preview/apply
+logic, not as an afterthought. Once tests land, pull the consolidated engine into
+`services/dedup.py`, and fold in `_suppress_guid_churn` and `_cleanup_intra_feed_slug_dupes`
+(main.py:7589-7798, refresh-time guid/slug dedup — line numbers drift with every main.py change,
+re-grep before trusting them) at the same time — same problem space, avoids moving them twice. The
+three unrelated hide-* hygiene functions next to them in main.py (`_is_youtube_short`,
+`_apply_hide_shorts`, `_apply_hide_paywalled`, `_apply_hide_members_only`, main.py:7479-7974 minus
+the two above) aren't dedup — decide at extraction time whether they're worth carrying along in
+the same pass (adjacent code, same refresh-pipeline callers) or splitting off into a later
+`services/feed_hygiene.py`.
 
-### `state.py` module — done; route split by URL prefix still open
+## Tier 4 — real features, not blocking anything today
 
-Moved all of main.py's module-level singleton state into a new `state.py` (9 `_PerUserDict`
-caches + the class, ~20 plain dict/set/list caches with their locks, and 4 scalars previously
-rebound via `global`) with a single top-of-file `from state import (...)` back in main.py — no
-circular-import risk, since `state.py` depends on nothing in main.py. main.py: 36,737 → 36,499
-lines; `state.py`: 394 lines. The actual counts were 9/31 `_PerUserDict`/`Lock` instances, not the
-original 10/32 estimate (stale from before Step 2's edits); the `global`-rebound scalars needed
-real accessor functions, not just relocation — see the Landmines note above, and
-`get_unread_counts_generation()`/`try_start_unread_refresh()`/`clear_unread_refresh_inflight()`/
-`next_refresh_rotation_offset()`/`check_manual_refresh_cooldown()` in `state.py` for the shape.
-`_PerUserDict` itself needed an explicit `# noqa: F401` re-export — nothing in main.py's own code
-references the class by name anymore (only specific instances), so `ruff --fix` tried to prune it
-as unused, breaking `routes/integrations_youtube.py` and `tests/integration/test_cache_isolation.py`,
-which still do `main._PerUserDict()`. Full `make test`/`lint`/`types` pass.
+### Needs a decision from Josh before these can be built
 
-Next: split the rest of main.py's route handlers by URL prefix into their own modules — same
-`router = APIRouter()` + bottom-of-file `include_router` pattern the integration routes used, now
-that the shared state they'll need is importable from `state.py` without redefining it. **Scoped
-2026-09-20:** 256 `@app.*` route decorators remain, and unlike the integrations cluster (one
-contiguous 2,240-line block) these are scattered across the whole file — same URL prefix shows up
-in disjoint chunks hundreds/thousands of lines apart (e.g. `/feeds/*` routes span main.py:25294 to
-31671). So each stage below is "gather every route matching these paths, wherever it lives" rather
-than "cut one block." Grouped by conceptual area (not always the literal first path segment) and
-ordered safest → riskiest:
+Everything below is sized or scoped already — each is waiting on one call only Josh can make, not
+on more investigation. Once answered, each drops into Tier 2 or 3.
 
-1. **Done (2026-09-20).** `routes/system.py` — `/healthz`, `/sw.js`, `/stats`, `/login`,
-   `/logout`, `/websub/callback`, `/opml/{export,import}`, `/takeout/{export,import}`, `/thumb`,
-   `/starred-asset/{asset_hash}`, `/internal/warm-lead-image-cache`, `/email-contacts*`,
-   `/dev/feeds/*` + `/dev/flush-email-batch`, `/instapaper/import`, `/youtube/sync`,
-   `/devto-feeds/{feed_id}/config`, `/administration` — 30 routes moved cleanly, none deferred.
-   main.py: 36,499 → 35,128 lines; `routes/system.py`: 1,554 lines. A real bug the mechanical move
-   would have introduced silently: `offline_service_worker` (serves `/sw.js`) used
-   `Path(__file__).parent`, which would have resolved to `routes/` instead of the app root once
-   moved — rewritten to use the existing `BASE_DIR` constant instead. Bottom-of-file import needed
-   `routes.system` placed *after* `services.automation_rules` (it needs
-   `_run_automation_after_refresh` bound into main's namespace first) plus `# noqa: I001` on the
-   block to stop ruff's isort from re-sorting it earlier. 13 test files retargeted for the two
-   known gotchas — `test_websub_fanout.py` was the sharpest case, needing `websub_service` and
-   `_run_automation_after_refresh` monkeypatched on *both* `main` and `routes.system` since
-   `_process_websub_push` reads both through its own copied-reference import. Full
-   `make test`/`lint`/`types` pass (4,192 tests).
-2. **Done (2026-09-20).** `routes/compat_{fever,greader,v1}.py` — 2/14/11 = 27 routes, all
-   confirmed thin wrappers over `fever_service`/`greader_service`/`miniflux_service` (the v1 compat
-   surface is Miniflux-protocol, not a distinct thing — no `services/v1.py` needed). main.py:
-   35,128 → 34,576 lines; new files 115/281/223 lines. `_run_in_user_context`,
-   `_spawn_feed_enhancement`, and `_enhance_feeds_background` sat inside the same file region but
-   are shared with other still-in-main.py call sites (6 other `routes/integrations_*.py` modules,
-   4 scripts, 3 other main.py call sites) — stayed in main.py, imported back like any other
-   main-resident helper, the region's stale "GReader API" comment retitled to reflect that. No
-   `services.automation_rules` ordering constraint needed (unlike Stage 1) — none of these handlers
-   touch a late-bound name. 2 test files retargeted, one hitting each known gotcha:
-   `test_greader_subscription_edit.py` (pure relocation, `main._greader_edit_subscriptions` →
-   `compat_greader._greader_edit_subscriptions`) and `test_miniflux_api.py` (copied-reference
-   monkeypatch, same shape as Stage 1's `test_websub_fanout.py` — `user_store` patched on both
-   `main` and `compat_v1`). Full `make test`/`lint`/`types` pass (4,192 tests). Aside: main.py (and
-   now these 3 files) use bare `except TypeErrorType, ValueErrorType:` (no parens) throughout —
-   looked like leftover Python 2 syntax, but it's valid on Python 3.14 (confirmed: parses,
-   compiles to the same tuple form as `except (A, B):`, doesn't rebind the second name) — a
-   pre-existing repo-wide pattern, left alone.
-3. **Done (2026-09-20).** `routes/tags.py` (`/tags/*` + `/feed-tags/dismiss`, 11 routes) and
-   `routes/highlights.py` (`/highlights*`, 9 routes). main.py: 34,576 → 33,881 lines; new files
-   275/521 lines. `normalize_tag_value` (the 51-call-site helper the Landmines note already flags)
-   confirmed left in main.py and imported back, not moved, despite living right next to the tags
-   routes — same for its whole neighborhood of alias/rename/delete helpers, all tested directly as
-   `main.<name>` elsewhere. `_validate_highlight_rule`/`_highlight_rule_response` (shared only
-   between add/edit) moved with the highlights routes. No `services.automation_rules` ordering
-   constraint needed for either module. 3 test files retargeted — all pure relocation (a test
-   registering a moved handler directly on a bare test `FastAPI()` app via `main.<handler>`, now
-   `routes.tags.<handler>`/`routes.highlights.<handler>`), no copied-reference-monkeypatch case
-   surfaced this time. Full `make test`/`lint`/`types` pass (4,192 tests).
-4. **Done (2026-09-21).** `routes/automation.py` — `/automation/history*`, `/rules/*`,
-   `/dedup/false-match*` (9 routes). main.py: 33,881 → 33,285 lines; new file 677 lines. Imports
-   `_run_tag_filter`/`_run_now_dedup`/`_run_now_pattern` straight from `services.automation_rules`
-   rather than round-tripping through main.py. `_dry_run_dedup`/`_dry_run_pattern` (the `/rules/dry-run`
-   preview engine, main.py ~7307-7704) moved too — each had exactly one caller (the dry-run route)
-   so qualified as single-route-only despite being conceptually "dedup engine"; full preview/apply
-   consolidation stays the separate, still-gated "Dedup routes consolidation" project above.
-   `/entries/feed-tags`, sitting inside this same file region, correctly stayed put — entries
-   concern, not automation, despite physical proximity. Ordering: empirically verified (temporarily
-   moved the import, ran `python -c "import main"` both ways) that `services.automation_rules`'s
-   own dependencies aren't late-bound the way `_run_automation_after_refresh` was for Stage 1, so
-   strictly the ordering constraint doesn't bite here — kept `routes.automation`'s import positioned
-   after `services.automation_rules` anyway, defensively, same reasoning as Stage 1. 6 test files
-   retargeted, one hitting a three-way copied reference on `build_keyword_matcher` (bound
-   separately into `main`, `services.automation_rules`, and now `routes.automation`, each via its
-   own `from main import build_keyword_matcher` — `test_keyword_matcher.py` needed all three
-   patched). Full `make test`/`lint`/`types` pass (4,192 tests).
-5. **Done (2026-09-21).** `routes/admin.py` — `/account/*` (3), `/admin/users/*` + `/admin/logs`
-   (7), `/debug/*` (5) — 15 routes. main.py: 33,285 → 32,913 lines; new file 447 lines. Security
-   check (this cluster does real auth/account mutations, so worth confirming rather than assuming):
-   `_CSRFMiddleware` and the auth session gate are both `app.add_middleware`-level, keyed off the
-   request path string (`_CSRF_EXEMPT_PREFIXES`, main.py:2651), not which router module registered
-   a handler — moving a route between files can't change its CSRF/auth exposure as long as the URL
-   path is unchanged, verified by reading the middleware directly rather than trusting the stage's
-   own claim. Password hashing/`UserStore` singleton untouched, just imported back.
-   `_read_log_tail`/`_log_line_dt`/`_parse_local_ts` deliberately NOT moved despite `admin_logs`
-   being their only route-caller — `tests/unit/test_admin_log_tail.py` calls them directly as
-   `main.<name>`, same "exercised directly by a dedicated test file" precedent Stage 3 set for
-   `get_highlight_keywords`. `delete_user_storage` also stayed (flagged as a judgment call: only
-   one remaining caller, but it's the lifecycle-pair sibling of `provision_user_storage` ~19,000
-   lines away in a shared "user storage lifecycle" section — kept the pair together rather than
-   split one out). No `services.automation_rules` ordering constraint needed. No test files
-   required retargeting for either gotcha — nothing imports `routes.admin` directly, and the one
-   suite exercising these routes (`tests/integration/_multiuser_harness.py`) goes over real HTTP via
-   `TestClient(main.app)`, so the module split is transparent to it. Full `make test`/`lint`/`types`
-   pass (4,192 tests).
-6. **Done (2026-09-21).** `routes/saved.py` — `/saved/*` + `/articles/*`, 22 routes (Plan.md's
-   "~21" was approximate) including the far-flung `POST /saved/folder/clear-curation` outlier that
-   sat ~19,000 lines from the rest of this cluster. main.py: 32,913 → 31,965 lines; new file 1,099
-   lines. **Not a thin wrapper**, unlike Stage 2's greader/fever — only the capture path
-   (`save_article`/`refresh_captured_article`) is backed by `services/saved_articles.py`; the
-   cross-feed dupe scan, autofile planner, unstar-tagged/archive-old planners, and scoped
-   batch-refetch job are all substantial main.py-resident logic with no service-layer home, and
-   mostly stayed in main.py (tested directly by dedicated test files, or shared with `/api/save`,
-   `/entries/saved`, and other still-in-main.py routes that didn't move this stage) rather than
-   moving with their single route. **Process gap found and worth carrying into every remaining
-   stage**: two helpers (`_current_autofile_plan`, `_saved_dup_groups`) were nearly left broken
-   because they're also called from *other* already-moved route modules (`routes/system.py`) and
-   from `scripts/*.py` — grepping `main.py` and test files for a helper's callers isn't enough,
-   `routes/*.py` and `scripts/*.py` need checking too before deciding something is single-route-only
-   (verified both are still correctly main.py-resident and re-imported everywhere they're used).
-   No `services.automation_rules` ordering constraint needed. 10 test files retargeted — heavy
-   gotcha traffic as expected given this area's test-coverage history (Plan.md's
-   `saved-articles-epic`/`saved-dedup-workflow` history), including one case where a helper itself
-   moved (`_check_saved_url`) so only `routes.saved` needed patching, not `main`. Full
-   `make test`/`lint`/`types` pass (4,192 tests).
-7. **Done (2026-09-21).** `routes/settings.py` — `/settings/*`, 14 routes (Plan.md's "~11" was
-   low). main.py: 31,965 → 31,247 lines; new file 941 lines. Two
-   clusters, exactly where scoped, no third outlier this time (grepped literal path strings across
-   all of main.py to confirm). `/tree/folder-feeds/{folder_id}` sits sandwiched inside the second
-   cluster but is a sidebar-fragment route, not settings — confirmed left alone. Only one
-   route-adjacent helper existed (`_keep_existing_sensitive`), stayed in main.py per the
-   tested-directly precedent; everything else these 14 routes touch (the whole settings-getter
-   family, `SETTING_*` constants, `FeedInFolder`, etc.) is pre-existing shared infrastructure,
-   confirmed via the three-way `routes/*.py`/`scripts/*.py`/`tests/` grep Stage 6 established as
-   the real bar — none of it moved. No `services.automation_rules` ordering constraint. 3 test
-   files retargeted, none of them via the usual `monkeypatch.setattr(main,` grep — this stage's
-   variant was tests registering a moved handler by name (`main.<handler>`) onto a bare test
-   `FastAPI()` app, caught by `make types`/`make test` failures rather than a grep pattern; one test
-   was reading main.py's raw source text as a live fallback and got rewritten to
-   `inspect.getsource(routes.settings.save_all_settings)`, arguably more correct than before.
-   **Process incident, not a code issue**: the agent ran `rm -rf /tmp/*` by hand while chasing a
-   test issue instead of using `make test`'s own `clear-scratch` step — no project files were hit,
-   but `/tmp` is a shared host-wide tmpfs, so this was flagged and a standing feedback note added
-   (`feedback-subagent-no-manual-tmp-clear` in project memory) to brief every future stage against
-   it explicitly. Full `make test`/`lint`/`types` pass (4,192 tests).
-8. `routes/feeds.py` — biggest single cluster, 60 routes confirmed 2026-09-21 (spanning
-   main.py:23641-28244, plus `/tree/folder-feeds/{folder_id}` and `/api/folder-feeds` as outliers
-   around 30367/30623 — always re-grep, these numbers drift every stage). Scoped into its own A-E
-   sub-stages, same reasoning as the original integrations cluster (safest → riskiest):
-   - **A — done (2026-09-21).** Folder CRUD + tree reads: `/api/folders`, `POST /folders`,
-     `/folders/rename`, `/folders/delete`, `/folders/properties`, `/folders/cadence`,
-     `/folders/retention`, `/folders/mark-read`, `/tree/folder-feeds/{folder_id}`,
-     `/api/folder-feeds` (10 routes, exactly as scoped, no discrepancy). main.py: 31,247 → 30,991
-     lines; `routes/feeds.py` created at 346 lines (sub-stages B-E extend the same file). No
-     genuinely single-route-only helper existed next to any of the 10 — everything touched was
-     either general infra or already independently tested, confirmed clean via the
-     `routes/*.py`/`scripts/*.py`/`tests/` three-way check. No `services.automation_rules` ordering
-     constraint needed. 2 test files retargeted for `POST /folders/mark-read` →
-     `routes.feeds.mark_folder_as_read`, one hitting both known gotchas (4 helpers needing a second
-     monkeypatch on `routes.feeds` alongside `main`). Full `make test`/`lint`/`types` pass.
-   - **B — done (2026-09-22).** Feed discovery/add flow: `/feeds/discover`, `/feeds/compare`,
-     `POST /feeds`, `/scraped-feeds*` (5), `/feeds/properties`, `/feeds/suggest-migration`,
-     `/feeds/set-user-title`, `/feeds/fix-url-titles`, `/feeds/lazy-titles` (13 routes, exactly as
-     scoped). main.py: 30,991 → 30,520 lines; `routes/feeds.py`: 346 → 898 lines (23 routes total
-     across 8A+8B). **Not a thin wrapper**, closer to Stage 6 — `create_feed` has real branching
-     (dev.to, DeviantArt watch-vs-gallery, discovery-refusal classification, browser-UA escalation)
-     and the `/scraped-feeds` cluster does meaningful validation/orchestration around
-     `services/scraper_service.py`, not pure pass-through. Only 2 genuinely single-route helpers
-     moved (`_is_youtube_url`, `_site_name_from_feed_url` + its constants); everything else stayed
-     in main.py — several confirmed shared with other already-moved route modules
-     (`_devto_config_from_form` with `routes/system.py`; `get_deviantart_user_token`/
-     `get_deviantart_credentials` with `routes/integrations_deviantart.py`/`routes/settings.py`),
-     one confirmed via a `scripts/*.py` caller (`_is_youtube_host`). Verification went beyond the
-     usual three checks: FastAPI 0.141 wraps included routers in a lazy object so `main.app.routes`
-     no longer flattens sub-router routes (a dead end chased and ruled out), so correctness was
-     confirmed instead with a live `TestClient(main.app)` hitting all 13 moved paths for real
-     200s. 4 test files retargeted for the usual two gotchas. Full `make test`/`lint`/`types` pass.
-   - **C — done (2026-09-22).** Feed display/thumbnail strategy config: `/feeds/strategy`,
-     `/feeds/display-prefs`, `/feeds/backfill-hide-shorts`, `/feeds/thumbnail-url`,
-     `/feeds/thumb-crop`, `/feeds/smart-min-scale`, `/feeds/fill-zoom`, `/feeds/thumb-strategy`,
-     `/feeds/caption-source`, `/feeds/strategy-refresh` (10 routes, exactly as scoped). main.py:
-     30,520 → 30,208 lines; `routes/feeds.py`: 898 → 1,264 lines (33 routes across 8A-C). Touches
-     `lead_image_service` (the shared singleton) but nothing moved out of
-     `services/lead_image_plugins.py`/`services/lead_images.py` themselves, as expected. Only 2
-     single-route helpers moved (`_VALID_MANUAL_STRATEGIES`, `upsert_feed_thumb_crop`); its four
-     sibling `upsert_feed_*` helpers each stayed — every one individually tested directly as
-     `main.<name>` by its own dedicated test file, confirmed via the three-way grep rather than
-     assumed from the sibling pattern. `_pin_feed_thumbnail_bytes`/`_drop_pinned_feed_thumbnail`
-     correctly left alone despite being route-adjacent — they belong to the still-in-main.py
-     `/api/feed-thumb` pinning machinery, out of this sub-stage's scope entirely.
-     `/entries/feed-tags` and `_keep_existing_sensitive`, both physically sandwiched inside this
-     cluster, confirmed untouched. 2 test files retargeted for the usual two gotchas. Full
-     `make test`/`lint`/`types` pass; live `TestClient(main.app)` hit all 10 paths for a real
-     (auth-rejected but router-resolved) response.
-   - **D — done (2026-09-22).** Feed network/fetch settings + lifecycle: `/feeds/browser-ua`,
-     `/feeds/proxy`, `/feeds/tailscale`, `/feeds/flaresolverr`, `/feeds/reparse`, `/feeds/move`,
-     `/feeds/disable`, `/feeds/enable`, `/feeds/toggle-updates`, `/feeds/change-url`,
-     `/feeds/unsubscribe`, `/feeds/curation-count` (12 routes, exactly as scoped). main.py: 30,208
-     → 29,618 lines; `routes/feeds.py`: 1,264 → 1,934 lines (45 routes across 8A-D). Only 1
-     genuinely single-route helper moved (`feed_curation_counts`); `disable_feed`/`enable_feed` and
-     the whole `flag_*_feed`/`_invalidate_*_feeds_cache` family confirmed as load-bearing shared
-     primitives (DeviantArt watchlist auto-pause, the fetch-refusal escalation chain, other
-     already-moved route modules) — exactly the trap this sub-stage was briefed to watch for, and
-     it held. Found via the `scripts/*.py` leg of the three-way grep (not tests, not routes/*.py):
-     2 scripts call `change_feed_url_route` directly as a plain function, not over HTTP
-     (`scripts/fix_reddit_rss_host.py`, `scripts/find_redirecting_feeds.py --apply`) — both
-     retargeted. One self-inflicted near-miss caught mid-verification: a docstring the agent wrote
-     into `routes/feeds.py` happened to contain the same substring two tests were slicing main.py's
-     raw source for, so the tests silently matched the wrong text until the docstring was reworded
-     and the tests repointed at the real code. 5 test files retargeted total. Full
-     `make test`/`lint`/`types` pass; live `TestClient(main.app)` confirmed all 12 paths resolve.
-   - **E — done (2026-09-22), Stage 8 fully complete.** Feed tags/attachments/website/curation/bulk
-     ops: `/feeds/suggested-tags`, `/feeds/attachment-candidates`,
-     `/feeds/attachment-candidate-suppress`, `/feeds/attachment-exts`, `/feeds/set-website`,
-     `/feeds/url-rewrites`, `/feeds/url-rewrites/delete`, `/feeds/curation-items`,
-     `/feeds/combine`, `/feeds/duplicates`, `/feeds/duplicates/undismiss`,
-     `/feeds/duplicates/dismiss`, `/feeds/multi-folder`, `/feeds/multi-folder/resolve`,
-     `/feeds/bulk`, `/feeds/mark-read` (16 routes, exactly as scoped). main.py: 29,617 → 28,695
-     lines; `routes/feeds.py`: 1,934 → 2,882 lines, **61 routes total, done** — confirmed zero
-     remaining `/feeds*`/`/folders*`/`/scraped-feeds*`/`/tree/folder-feeds/*`/`/api/folders`/
-     `/api/folder-feeds` routes anywhere in main.py. The three dedup surfaces (this stage's
-     feed-level combine/duplicates, Stage 6's saved-article scan, the still-gated main entry-dedup
-     engine) stayed cleanly separate — verified via grep that none of Stage 6's or the gated
-     engine's names were touched. The riskiest sub-stage earned its billing: `bulk_feed_action`'s
-     "refresh" action calls `_run_automation_after_refresh`, a name late-bound via main.py's
-     bottom-of-file `services.automation_rules` import — moving it required relocating
-     `routes.feeds`'s own import to *after* that block (the same treatment Stage 1 needed), which
-     cascaded further since `routes/integrations_deviantart.py`'s watchlist auto-pause path calls
-     `bulk_feed_action` directly and had to switch from `from main import bulk_feed_action` to
-     `from routes.feeds import bulk_feed_action` — requiring `routes.integrations_deviantart`'s own
-     import to move to *after* `routes.feeds`'s new position too. Both moves verified independently
-     (read the actual import order in main.py, confirmed `import main` standalone still boots
-     clean, confirmed the one test importing `routes.integrations_deviantart` directly sorts
-     `import main` first per the established rule). A script-only caller found again via the
-     `scripts/*.py` grep leg (`scripts/combine_deviantart_galleries.py`, same shape Stage 8D hit
-     twice). 9 test files retargeted. Full `make test`/`lint`/`types` pass, plus an explicit
-     `ruff format --check` pass this time after Stage 8D's commit-time formatting catch.
+- **Post-header tag-filter chips don't reflect a folder/global-scoped rule** — `get_feed_tag_filter_rule`
+  only checks feed-scoped rules, so a feed covered only by a folder-scoped rule shows unlit chips,
+  and clicking one forks a brand-new disabled per-feed rule instead of touching the folder rule.
+  Partially discussed 2026-09-22: chips governed by a folder/global rule should look visually
+  distinct (a different color) from feed-scoped ones, so the governing level is visible before the
+  click-behavior question even comes up. The click-behavior decision itself (edit the shared rule
+  vs. fork a feed-level override) is still open — talk through with Josh before sizing. Once both
+  are settled: a lookup-order change to `get_feed_tag_filter_rule` plus one new branch in
+  `toggle_feed_tag_filter`, plus the chip-coloring CSS/markup.
+- **Email template overhaul** — Josh wants to revisit the emailed-article template's look. No
+  specifics yet — needs his input on what to change before this can be scoped at all.
 
-**Stage 8 (`routes/feeds.py`) is now fully done** — all 5 sub-stages (A-E), 61 routes, 0 remaining
-`/feeds`/`/folders`/`/scraped-feeds`/`/tree/folder-feeds` routes in main.py.
-9. `routes/entries.py` — 45 `/entries/*` routes confirmed 2026-09-22 (main.py:18332-28044, an even
-   wider span than Stage 8's feeds cluster was). Decided at extraction time on the `/api/*`
-   question Plan.md deferred: don't fold it into `routes/entries.py`, it doesn't share one owner —
-   `/api/entry-thumb`/`/api/feed-thumb`/`/api/img`/`/api/favicon` are pure image-proxy concerns (a
-   later small `routes/media.py`), `/api/save`/`/api/bookmarklet/save` are external save-capture
-   endpoints that belong with Stage 6's `routes/saved.py` instead, and `/api/unread-counts` gets
-   decided when reached (natural fit is wherever the read-state sub-stage below lands). Scoped into
-   its own A-E sub-stages, same reasoning as Stage 8, safest → riskiest:
-   - **A — done (2026-09-22).** Content/reading utility (12, exactly as scoped): `/entries/lead-image`,
-     `/entries/media/audio`, `/entries/media/download`, `/entries/readability`, `/entries/source`,
-     `/entries/frame-check`, `/entries/feed-tags`, `/entries/content/has-original`,
-     `/entries/content/clean`, `/entries/content/revert`, `/entries/thumb-crop`,
-     `/entries/autofetch-status`. main.py: 28,695 → 28,254 lines; `routes/entries.py` created at
-     560 lines. No `services.automation_rules` ordering constraint needed. Only 1 single-route
-     helper moved (`_wrap_readability_html`); `_resolve_archived_readability_html` sat right next
-     to it but stayed — also called by the still-in-main.py e-ink `/read` article resolver (Stage
-     10 territory), confirmed via the three-way grep rather than assumed from adjacency, same trap
-     Stage 8D/6 already found twice. 5 test files retargeted for the usual two gotchas, no
-     `scripts/*.py` callers found this time. Full `make test`/`lint`/`types`/`ruff format --check`
-     pass; live `TestClient(main.app)` confirmed all 12 paths resolve.
-   - **B — done (2026-09-22).** Entry metadata edits + attachments (9, exactly as scoped):
-     `/entries/set-date`, `/entries/set-title`, `/entries/set-link`, `/entries/delete`,
-     `/entries/attachments`, `/entries/attachments/delete`, `/entries/attachments/delete-all`,
-     `/entries/attachments/save`, `/entries/attachments/save-all`. main.py: 28,254 → 27,908 lines;
-     `routes/entries.py`: 560 → 916 lines. `_hard_delete_entry` confirmed genuinely shared
-     (`routes/saved.py` calls it directly, plus 2 other still-in-main.py call sites) — stayed,
-     imported back. Self-caught mistake during the move: `_ENTRY_LINK_MAX_LEN` was deleted along
-     with its route block, then re-added in main.py once the "tested directly as `main.<name>`"
-     check caught it. 6 test files retargeted, no `monkeypatch.setattr(main,` hits and no
-     `scripts/*.py` callers this time. Full `make test`/`lint`/`types`/`ruff format --check` pass.
-   - **C — done (2026-09-22).** Move/organize + tags (9, exactly as scoped): `/entries/move-to-feed`,
-     `/entries/move-to-feed-batch`, `/entries/select-all-visible`, `/entries/move-visible-to-feed`,
-     `/entries/purge`, `/entries/discard`, `/entries/manual-tags-batch`, `/entries/tags`,
-     `/entries/tags-batch`. main.py: 27,908 → 27,244 lines; `routes/entries.py`: 916 → 1,613
-     lines. Confirmed the predicted overlap: the two tag routes lean on the same widely-shared tag
-     machinery Stage 3 left in main.py (`normalize_tag_value` and its whole neighborhood) — only
-     the handlers + `_merge_manual_tags` moved. `_move_entry_to_feed` confirmed shared
-     (`routes/saved.py` calls it directly, plus 2 scripts — a third script's mention turned out to
-     be just a comment, not an actual call, on independent spot-check). 8 test files retargeted,
-     no `scripts/*.py` callers of the moved routes themselves. Full
-     `make test`/`lint`/`types`/`ruff format --check` pass.
-   - **D — done (2026-09-22).** Read/unread/star state + integration sends (14, exactly as
-     scoped): `/entries/read`, `/entries/saved`, `/entries/archive`, `/entries/read-batch`,
-     `/entries/star-batch`, `/entries/mark-range-read`, `/entries/mark-older-than-read`,
-     `/entries/undo-mark-unread`, `/entries/undo-mark-read`, `/entries/undo-unstar`,
-     `/entries/mark-newer-than-unread`, `/entries/email`, `/entries/instapaper`,
-     `/entries/quire`. main.py: 27,244 → 26,270 lines; `routes/entries.py`: 1,613 → 2,619 lines.
-     Every unread-count touch confirmed going through the real accessor functions
-     (`_bump_unread_counts_generation()` under `unread_counts_cache_lock`), never a raw `global` —
-     grepped `routes/entries.py` for stray `global` statements to confirm zero, and the two
-     generation-bump tests (`test_read_batch.py`'s cache-invalidation pair) explicitly assert the
-     generation actually changes post-move, not just that the call succeeds. No
-     `services.automation_rules` ordering constraint needed — none of these 14 touch a late-bound
-     name, so no cascade into other modules this time (unlike Stage 8E). `_mark_entries_as_read_for_view`
-     confirmed shared with `routes/feeds.py`, stayed in main.py. 16 test files retargeted, no
-     `scripts/*.py` callers found. Full `make test`/`lint`/`types`/`ruff format --check` pass.
-   - **E — done (2026-09-22), Stage 9 fully complete.** `/entries/pane` alone. main.py: 26,270 →
-     26,191 lines; `routes/entries.py`: 2,619 → 2,731 lines, **45 routes total, done**. Turned out
-     not to be the risky entanglement case the Landmines note warned about: `entry_pane` is pure
-     orchestration — of the four shared rendering-core functions (`_home_inner`,
-     `list_entries_for_feeds`, `build_reader_page`, `get_entry_detail`), it only calls
-     `get_entry_detail`, confirmed by reading the handler body directly. All four stayed in
-     main.py untouched (verified: still defined there). One subtle judgment call: `_mark_entry_read_background`
-     had only one caller (`entry_pane`) but stayed in main.py anyway, because an unrelated
-     still-in-main.py test (`test_reader_view.py`, for the `/read` route) defensively monkeypatches
-     `main._mark_entry_read_background` even though that route never calls it — moving the function
-     would have broken `monkeypatch.setattr`'s requirement that the target attribute exist, for a
-     route this stage didn't touch. 1 test file retargeted. A stale main.py comment referencing
-     `main.entry_pane` (now wrong) was caught and fixed inline. Full
-     `make test`/`lint`/`types`/`ruff format --check` pass; a live `TestClient` check went beyond
-     the usual "not a 404" bar — seeded a real entry and confirmed actual rendered HTML + the
-     mark-read side effect fired.
+### main.py / index.html breakup — done
 
-**Stage 9 (`routes/entries.py`) is now fully done** — all 5 sub-stages (A-E), 45 routes.
-10. `routes/home.py` — `/`, `/read`, `/read/offline`. Scoped 2026-09-22 after confirming size:
-    `read_offline_copy` (main.py:21904-21980, ~76 lines), `reader_view`/`/read`
-    (main.py:21981-22169, ~188 lines), `home`/`/` (main.py:22280-22383, ~104 lines) — each is a
-    reasonably-sized wrapper that delegates into the shared core (`_home_inner` sits immediately
-    after `home`, not interleaved with it), not the deeply-entangled case that would force this
-    into its own non-mechanical project. Stage 9E already proved the mechanical pattern holds even
-    for a shared-core-adjacent route (`/entries/pane`) — same expectation here, with the same
-    "stop and report back, don't force it" escape hatch if a stage finds otherwise. Split into 3
-    sub-stages by risk, safest → riskiest (traffic volume, not just code size, drives the order —
-    `/` is the highest-traffic route in the app):
-    - **A — done (2026-09-22).** `/read/offline` — creates `routes/home.py`. main.py: 26,191 →
-      26,047 lines; new file 219 lines. Confirmed pure orchestration (one `get_entry_detail` call,
-      one `resolve_reader_article_html` call, then HTML/CSS assembly) — both shared-core functions
-      stayed in main.py untouched. Same `Path(__file__).parent`-for-a-static-asset bug Stage 1's
-      `/sw.js` move hit — caught and fixed the same way, with `BASE_DIR`. No test currently
-      exercises this route at all, so neither known gotcha applied — nothing to retarget. No
-      `scripts/*.py` callers. Full `make test`/`lint`/`types`/`ruff format --check` pass; a live
-      check confirmed real downloaded-HTML content, not just a non-404.
-    - **B — done (2026-09-22).** `/read` — the e-ink Read Mode reader view. main.py: 26,047 →
-      25,861 lines; `routes/home.py`: 219 → 448 lines. Confirmed clean orchestration again, this
-      time under real scrutiny (bigger/more central than 10A): `reader_view` normalizes params,
-      calls `resolve_reader_backlog` once, then branches browse-vs-read state, calling
-      `_build_feeds_mode_context`/`_build_read_mode_context`/`resolve_reader_article_html`/
-      `build_reader_page` — no inline list-building or pagination logic of its own. All five
-      shared rendering-core functions stayed in main.py untouched; everything else the route
-      touches also stayed (correctly, per this stage's explicit scope), including
-      `_READ_MODE_UA_SEEN`, a mutable module-level set imported by reference — verified safe since
-      it's mutated via `.add()`, never reassigned, so the copied binding in `routes/home.py` still
-      points at the live object. `tests/integration/test_reader_view.py` hit both known gotchas
-      hard (an actively-tested UI surface, unlike 10A's zero-coverage route) — retargeted, with
-      `_mark_entry_read_background`/`_entry_is_starred` correctly left as `main.X` in the test
-      since `reader_view` doesn't call either (confirmed via grep on the function body, not
-      assumed). Full `make test`/`lint`/`types`/`ruff format --check` pass; live check confirmed
-      the correct `303 → /login` redirect through the real unauthenticated app.
-    - **C — done (2026-09-22), Stage 10 fully complete.** `/` — the main app entry point,
-      highest-traffic route in the whole app. main.py: 25,861 → 25,757 lines; `routes/home.py`:
-      448 → 596 lines, **3 routes total, done**. The biggest test of the "shared rendering core
-      moves cleanly via the mechanical pattern" claim held one more time: `home` is a thin
-      wrapper (Supernote e-ink UA sniff + redirect, bare-`/` scope-tab-landing default, a
-      `_home_request_semaphore` capacity gate, one `_home_inner(...)` call carrying every query
-      param through, a `?full=1` cookie set) — confirmed it calls `_home_inner` and nothing else
-      from the Landmines-flagged cluster (`list_entries_for_feeds`/`get_entry_detail`/
-      `build_reader_page` untouched, not even referenced). All four stayed in main.py, verified
-      independently by reading the function body and confirming all four definitions still live
-      in main.py. `_home_request_semaphore` needed a `noqa: F401` re-export in main.py's
-      `from state import (...)` block, same as prior `state.py`-sourced singletons. Biggest
-      test-retargeting sweep of any stage, as predicted — 5 files. No `services.automation_rules`
-      ordering constraint, no cascade, no script-only callers. Full
-      `make test`/`lint`/`types`/`ruff format --check` pass; independently re-verified (not just
-      trusted) both the unauthenticated 303→`/login` redirect and, per the agent's report, a real
-      authenticated 200 with actual rendered `index.html`.
+`main.py` went from 40,474 lines to 25,757 across three chained projects (2026-09-19 through
+2026-09-22, PRs #329-#342): the Integration routes cluster + automation pipeline + index.html's
+last inline context menus moved out first, then all module-level singleton state moved into
+`state.py`, then all 256 remaining `@app.*` route handlers moved into `routes/*.py` by URL prefix
+(`system`, `compat_{fever,greader,v1}`, `tags`, `highlights`, `automation`, `admin`, `saved`,
+`settings`, `feeds` — the biggest at 61 routes, `entries` — 45 routes, `home` — 3 routes but the
+riskiest). The shared rendering core (`_home_inner`, `list_entries_for_feeds`, `get_entry_detail`,
+`build_reader_page`) deliberately stayed in `main.py` throughout — every route that calls into it
+just imports the functions back. Stage-by-stage detail lives in the PR history, not here; the
+durable gotchas (copied-reference monkeypatch traps, import-ordering rules, the `global`-vs-accessor
+landmine) are in [ARCHITECTURE.md](ARCHITECTURE.md)'s "Route modules" section since they apply to
+any future extraction, not just this one.
 
-**Stage 10 (`routes/home.py`) is now fully done** — all 3 sub-stages (A-C), 3 routes.
+### `/api/*` cluster split — undecided
 
-## The main.py route-by-URL-prefix split is now fully complete
-
-All 10 stages done. 256 `@app.*` route decorators moved out of main.py into `routes/*.py`
-modules by URL prefix, across ~3 days (2026-09-20 through 2026-09-22). main.py: 36,499 lines when
-this project started (right after the separate `state.py` singleton extraction) → 25,757 lines
-now — 10,742 lines moved out. Route modules: `routes/system.py`, `routes/compat_{fever,greader,v1}.py`,
-`routes/tags.py`, `routes/highlights.py`, `routes/automation.py`, `routes/admin.py`,
-`routes/saved.py`, `routes/settings.py`, `routes/feeds.py` (61 routes, the biggest), `routes/entries.py`
-(45 routes), `routes/home.py` (3 routes, the riskiest per-route). The shared rendering core
-(`_home_inner`, `list_entries_for_feeds`, `get_entry_detail`, `build_reader_page`) stayed in
-main.py throughout, exactly as scoped — every stage that touched a route calling into it just
-imported the functions back, never refactored them. Remaining deferred work from this whole
-effort: the `/api/*` cluster split three ways (image-proxy → `routes/media.py`, save-capture →
-extend `routes/saved.py`, `/api/unread-counts` → undecided), Dedup routes consolidation (still
-gated on characterization tests), and the shared rendering core itself as its own future project
-if it's ever worth refactoring.
-
-Each stage: `grep` the current route paths (line numbers drift as earlier stages move code, so
-don't trust line numbers from a previous stage's scoping), move handler + any single-route-only
-helper, leave shared helpers in main.py and import them back, watch for the two known gotchas
-(copied-reference monkeypatches in tests that reach a handler via `main.<name>`, and the
-import-main-before-routes circular-import rule `routes/__init__.py` documents), run
-`make test`/`lint`/`types` after each stage.
+Deferred out of the route split rather than decided: `/api/entry-thumb`, `/api/feed-thumb`,
+`/api/img`, `/api/favicon` are pure image-proxy concerns (candidate: a small `routes/media.py`);
+`/api/save`, `/api/bookmarklet/save` are external save-capture endpoints, natural fit in
+`routes/saved.py`; `/api/unread-counts` has no obvious owner yet — decide when picked up.
 
 ### Shared rendering core
 
-`_home_inner` (main.py:25598), `list_entries_for_feeds` (15994), `get_entry_detail` (19755), and
-`build_reader_page` (23797) are reused by `/`, `/read`, pane-swap, and the greader/fever/v1 compat
-APIs. Not a mechanical split — its own carefully-tested project.
+`_home_inner`, `list_entries_for_feeds`, `get_entry_detail`, and `build_reader_page` are reused by
+`/`, `/read`, pane-swap, and the greader/fever/v1 compat APIs. Not a mechanical split like the
+route-by-prefix work — its own carefully-tested project if ever undertaken.
 
 ### Page-fetch escalation ladder — follow-ups
 
@@ -467,10 +143,39 @@ APIs. Not a mechanical split — its own carefully-tested project.
   covered ~622 feeds; ~210 genuinely have no taxonomy, ~107 still blocked, mostly ArtStation's
   JS-heavy tag widget). No more broad surveys needed unless the untagged count grows a lot.
 - Persist `HostEscalationState` to a `host_fetch_tiers` table if in-memory proves insufficient.
-- Consolidate `feed_discovery._get_with_escalation` onto `PageFetcher` (currently a separate,
-  older "honest then browser UA" implementation).
 - Key `_autofetch_failed_hosts` on deepest-available-tier, same fix `HostEscalationState`'s
   cooldown got, if it matters in practice.
+
+### Unify the escalation ladder as one fetch layer in front of every outbound content fetch
+
+Idea from Josh, 2026-09-23. Today the per-host escalation logic (`HostEscalationState`, honest UA →
+browser UA → FlareSolverr) is split across at least three places that don't share state cleanly:
+`services/page_fetch.py`'s `PageFetcher` (used by `main.py` and `services/lead_images.py`),
+`services/feed_discovery.py`'s own separate, older `_get_with_escalation`/`HostEscalationState`
+(feed refresh's fetch path), and `main.py`'s `/api/img` proxy, which doesn't escalate at all — it
+only *borrows* FlareSolverr-solved cookies from a prior `PageFetcher` solve for the same host
+(`page_fetcher.cookies_for_host`), one-way and only when a page fetch happened to solve that host
+first. That gap is the likely root cause of the Parked "play.nobleknight.com images 403 despite
+FlareSolverr cookie reuse" item — no page fetch ever solved that host, so there's no cookie to
+borrow, and the image path has no fallback of its own. `/api/favicon` and thumbnail generation are
+unaudited but likely the same shape.
+
+The idea: one shared fetch layer (`PageFetcher`, extended, or a new front for it) that every
+content-fetching call site goes through — feed refresh, page/readability fetch, `/api/img`,
+`/api/favicon` — keyed by host, sharing one `HostEscalationState`/cooldown table instead of three
+copies of the concept. A host escalated for its feed or a page fetch would already be at the right
+tier for its images, no separate solve needed. Out of scope: the OAuth/API integrations
+(DeviantArt, Reddit, YouTube, Bluesky, etc. in `services/*.py`) — those hit trusted APIs, not
+scraped pages, so they don't need anti-block escalation, just their own auth.
+
+Not small and not safe to rush: this sits in front of the two highest-traffic, most
+correctness-sensitive fetch paths in the app (feed refresh — see the refresh-scheduler-stall
+history — and the image proxy, which is also the one place `url_guard`'s SSRF guarding has to keep
+working exactly as it does today). The already-scoped "consolidate `feed_discovery._get_with_escalation`
+onto `PageFetcher`" follow-up above is the first slice of this same idea, not a separate item —
+do that first as the smaller, lower-risk step, and let it validate the shared-state shape before
+extending to images/favicons. Worth a real plan before any of it, same bar as the dedup-combining
+idea below.
 
 **Dedup subsystem** — biggest single feature idea on the list.
 
@@ -511,28 +216,6 @@ if the exact tiers still leave real dupes behind after the cross-feed item above
 
 **Rules engine follow-ups**
 
-### Tag filtering for firehose feeds — follow-ups
-
-`tag_filter` rule type is shipped (include/exclude feed-tag lists, any scope, auto-mark-read,
-dry-run/run-now/history). Remaining:
-
-- dev.to adapter: extend to multiple include tags (one API call per tag, merged/deduped by
-  article id, exclusion applied client-side on `tag_list`).
-- freeCodeCamp per-tag Ghost RSS (`/news/tag/<slug>/rss/`) as a fallback if include-list recall is
-  insufficient.
-
-### Post-header tag-filter chips don't reflect a folder/global-scoped rule
-
-`get_feed_tag_filter_rule` only checks feed-scoped rules, so a feed covered only by a
-folder-scoped rule shows unlit chips, and clicking one forks a brand-new disabled per-feed rule
-instead of touching the folder rule. Fix shape: a scope hierarchy the chip lookup walks (feed →
-folder → global) with a governing-level indicator in the chip UI.
-
-Blocked on a product decision, not missing investigation: should clicking a chip when only a
-folder rule covers a feed edit that folder rule (affects every feed in it), or create an explicit
-feed-level override? Sizing once decided: small — a lookup-order change to
-`get_feed_tag_filter_rule` plus one new branch in `toggle_feed_tag_filter`.
-
 ### Article cleanup — Phase 2: promote a removal into a per-feed rule
 
 Phase 1 (manual per-article cleanup via the pane's 🧹, with `entry_content_edits` recording both
@@ -540,11 +223,12 @@ the pristine body and the replayed ops) is shipped. Phase 2 would add a `feed_co
 + render-time matcher, a Cleanups section in Feed Properties showing match counts before promoting,
 and selector derivation from the recorded ops.
 
-Measured: corpus too small to build on yet (4 edited entries / 67 ops), and ~30% of ops can't
-generalize past a bare tag (no id/class to key on) — a promotion UI needs to show which ops are
-promotable. Any future rule should key on entry-link host, not `feed_url` (most edits are on the
-`lectio:saved` pseudo-feed, which spans every site). Re-measure once there are edits on ≥3 entries
-of the same real feed.
+Measured 2026-09-22: grown to 15 edited entries / 111 ops (from 4/67), spread across 9 feeds —
+7 on `lectio:saved`, one each on 8 real feeds (lwn.net, Scott Hanselman, commandlinefu, guitar-pro,
+OSNews, Lambgoat, kingcountyweeds, PBS NewsHour). Still not ready: the trigger is ≥3 edited entries
+on the *same* real feed, and every real feed still has exactly 1. Any future rule should key on
+entry-link host, not `feed_url` (most edits are on the `lectio:saved` pseudo-feed, which spans every
+site). Re-check the per-feed distribution periodically rather than assuming the old snapshot holds.
 
 ### Refetch-All has no "already re-fetched recently" skip
 
@@ -553,36 +237,25 @@ something else). Sizing if ever wanted: small — one new column (needs the per-
 migration) + a skip check in the Refetch-All loop. Not requested yet — not scheduled ahead of
 demand.
 
-### Archive capture failures are indistinguishable from real empty content
-
-`_archive_entry`'s source fetch (`_fetch_text_with_url`) swallows every exception identically —
-a 404, a 403, a TLS error, anything — and stores an empty "complete" archive with no error
-recorded. Found 2026-09-19 auditing 633 such rows live: mostly dead links, a handful recoverable,
-but nothing short of a manual per-entry fetch could tell which was which beforehand. Not sized —
-worth recording which kind of failure happened (or at least logging above DEBUG) so a future case
-doesn't need the same manual audit, but the actual design (a status column? just better logging?)
-isn't decided yet.
-
 ### Read Mode: no Back guard
 
 `/read` has no equivalent of the main app's Back-button guard. Not cheap: `/read` has no drawer
 for Back to land on, and a Back that visibly does nothing is worse than one that exits the app.
 Give Read Mode a collapsible folder tree first, then add the guard.
 
-### Page-weight reduction — follow-ups
+### Page-weight reduction — optional follow-up
 
-- Entry-pane loading state/timeout — slow pane loads still look like dead clicks.
-- Optional: a render-splitting/fragment endpoint for `.pane-posts`/`.pane-entry` (pane-swap
-  currently re-renders the full page server-side per fetch, ~200KB).
+Render-splitting/fragment endpoint for `.pane-posts`/`.pane-entry` — pane-swap currently
+re-renders the full page server-side per fetch (~200KB). Bigger and optional; the other follow-up
+from this same PR (#146) list, entry-pane loading state, is sized and ready — see Tier 3.
 
-### Offline actions — two pieces left
+### Offline actions — stale-action guard
 
-- **Stale-action guard.** Today's conflict rule is last-writer-wins; "accept the server's version
-  if it already moved" needs a per-entry modification timestamp the schema doesn't carry. Low
-  urgency (the only conflicting writer is Josh on another device, within minutes) — do only if a
-  surprising revert is actually observed.
-- **Offline star/unstar.** Scoped but not built — the reader has no star control today, only
-  Archive (unstars) and Delete. UI question first; Read Mode deliberately has few controls.
+Today's conflict rule is last-writer-wins; "accept the server's version if it already moved" needs
+a per-entry modification timestamp the schema doesn't carry. Low urgency (the only conflicting
+writer is Josh on another device, within minutes) — do only if a surprising revert is actually
+observed. Offline star/unstar, the other piece this project used to carry, is decided closed
+(2026-09-22): star stays a desktop-only action, Read Mode's control set stays Archive/Delete.
 
 Deliberately *not* built: a `synced_actions` idempotency table — the four outbox routes are
 already idempotent set-state operations, so replaying one is a no-op.
@@ -590,15 +263,10 @@ already idempotent set-state operations, so replaying one is a no-op.
 ### Email "full article text" doesn't run Readability on thin-stub feeds
 
 The full-text Email Article option only pulls stored content — still a thin email for a
-thin-stub feed. meetingcpp.com (see "Full-content fetch at ingest" below) is the concrete example.
-Scope: at send time, if the stored body is thin, run the same readability fetch Save/re-fetch
-already uses. Sequence after the ingest item below so both share one "thin" threshold rather than
+thin-stub feed. meetingcpp.com is the concrete example (see "Full-content fetch at ingest" in
+Tier 3). Scope: at send time, if the stored body is thin, run the same readability fetch Save/re-fetch
+already uses. Sequence after that item lands so both share one "thin" threshold rather than
 inventing two.
-
-### Email template overhaul
-
-Josh wants to revisit the emailed-article template's look. No specifics yet — needs his input on
-what to change before this can be scoped.
 
 ### One stored image per entry, but three feeds want two
 
@@ -608,13 +276,6 @@ Arcade, dresdencodak); the third needed nothing (`media_rss` already picks up th
 publisher-supplied thumbnail) — check what a feed already provides before writing a plugin. General
 fix — a second stored URL + a per-feed "thumbnail source" setting — needs the startup migration;
 worth doing when a fourth feed wants it, not before.
-
-### Full-content fetch at ingest for body-less feeds
-
-meetingcpp.com's feed went title+link-only (CMS change, upstream). A per-feed "fetch full content
-from the source page at ingest" opt-in (readability pipeline already exists), capped/throttled
-like enhancement, would fix such feeds generally. Also the concrete example the Email item above
-needed.
 
 ### FakeFeedz `content_selector` has no edit UI for existing feeds
 
@@ -638,14 +299,6 @@ direction (Lectio receiving from the Readit extension's save protocol) already w
 Queue/playlist across a folder, remember position per episode, Media Session API (lock-screen
 controls), speed presets.
 
-### Single-post pages: fix raw/full-page capture quality
-
-Some "feeds" are really one standing document (e.g. a single tutorial page), saved via a
-manufactured feed. The capture-quality half is worth fixing (readability can return a small
-fraction of such a page, and the wrong node); the workflow-simplification half is superseded —
-Josh's preference is filing such pages into an existing related feed, which auto-filing already
-does in bulk.
-
 ## Tier 5 — deliberately deferred / big investments
 
 **Architecture**
@@ -655,8 +308,11 @@ does in bulk.
 `DEFAULT_USER_ID` still silently resolves any unbound code path to stale legacy top-level DBs
 instead of failing loudly — quietly-wrong answers, not an error. Fix: default the
 `lectio_current_user` ContextVar to `None`, raise on unbound resolution, then delete the legacy
-path branches and stale DB files. Not small: 54 references outside `tenancy.py`/`tests/`. Wants
-its own PR and a check of the per-user startup migration. Related: the bg-thread tenancy rule
+path branches and stale DB files. Re-counted 2026-09-22: down to 7 references outside
+`tenancy.py`/`tests/` (2 are comments), across 4 files — `main.py` (3), `services/users.py` (1),
+`services/starred_archive.py` (1), `scripts/screenshots/seed.py` (1 comment). Smaller than it used
+to be (previously scoped at 54); worth re-sizing at pickup time rather than trusting either number.
+Wants its own PR and a check of the per-user startup migration. Related: the bg-thread tenancy rule
 already in place (`_run_in_user_context`).
 
 ### Add OIDC login
@@ -730,10 +386,9 @@ for the precedent) plus a paced walker. Worth a real plan before any code.
   reformat commit, hash added to `.git-blame-ignore-revs`.
 - **Wrap saved-dedup storage access** (Sourcery) — the Saved duplicate scan reads reader's entries
   table directly; a thin storage-layer wrapper would localize breakage if reader's schema evolves.
-- **Consolidate the dedup routes** — see the "Dedup routes consolidation" project in Tier 4
-  (main.py/index.html breakup follow-ons); tracked there now since it also gates a
-  `services/dedup.py` extraction, not just this cleanup.
-- **`ensure_meta_schema`** (main.py:3708, ~1,328 lines) — long but linear (CREATE + idempotent
+- **Consolidate the dedup routes** — see "Dedup routes consolidation" in Tier 3; tracked there
+  since it also gates a `services/dedup.py` extraction, not just this cleanup.
+- **`ensure_meta_schema`** (main.py:3626, ~1,332 lines) — long but linear (CREATE + idempotent
   ALTERs), low churn. A by-area split is cosmetic.
 - **Backfill Sphinx-math height on already-stored entries** — the ingest-time fix doesn't
   retroactively help entries stored before it; low value (few math articles), do on demand. Note:
@@ -774,6 +429,15 @@ heuristic uses to associate an alert with "changed" code. The other 22 (`routes/
 `RedirectResponse(url=f"/?...")`-with-query-params and `str(exc)` patterns used everywhere else in
 this app, newly visible because they're now in a new file. Not fixed as part of the route split
 for the same reason as the PR #329 batch — left open.
+
+Re-checked 2026-09-22, after all 10 route-split stages: 48 open alerts total (28 `py/url-redirection`,
+20 `py/stack-trace-exposure`), now spread across every stage's output file, not just the two above —
+`routes/feeds.py` (19), `routes/integrations_*.py` (8, one dismissed/fixed since the PR #329 count of
+9), `routes/entries.py` (6), `routes/system.py` (6), `routes/automation.py` (4), `routes/settings.py`
+(2). Same "new file, not new code" attribution expected to hold for the later stages too (not
+individually re-verified per-file the way PR #329/#340 were) — no reason to expect otherwise, since
+every stage used the same mechanical move. Still left open for the same reason: a real fix is one
+pass picking a useful message per call site, across the whole app, not scoped to any one refactor.
 
 ### Feed-tag suggestion suppression — do not attempt a third heuristic
 
@@ -826,7 +490,9 @@ Nothing to do here until one of these recurs or a lead turns up.
   smells like sandbox-specific networking) — check real CI is clean before spending time on it.
 - makeuseof re-fetch returns white images — seen once, waiting for a second sighting.
 - play.nobleknight.com images 403 despite FlareSolverr cookie reuse — the solve never returns the
-  actual `cf_clearance` cookie for this host; would need per-image browser routing.
+  actual `cf_clearance` cookie for this host; would need per-image browser routing. Likely explained
+  by the fetch-unification idea in Tier 4 ("Unify the escalation ladder...") — no page fetch solved
+  this host first, so there's no cookie to borrow and the image path has no escalation of its own.
 - guitarworld.com lessons: a MatchMySound practice widget is entirely missing from capture
   (likely a client-side paywall gate defeated by Josh's own adblocker) — one article, not chased
   further.
