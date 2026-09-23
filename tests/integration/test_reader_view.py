@@ -324,7 +324,7 @@ def test_feeds_reader_hides_saved_actions(monkeypatch):
 
 def _home_app():
     app = FastAPI()
-    app.add_api_route("/", main.home, methods=["GET"])
+    app.add_api_route("/", routes.home.home, methods=["GET"])
     return app
 
 
@@ -340,7 +340,7 @@ def test_supernote_redirects_to_feeds_read_mode():
 def test_supernote_full_opt_out_sets_cookie(monkeypatch):
     from fastapi.responses import PlainTextResponse
 
-    monkeypatch.setattr(main, "_home_inner", lambda **k: PlainTextResponse("app"))
+    monkeypatch.setattr(routes.home, "_home_inner", lambda **k: PlainTextResponse("app"))
     with TestClient(_home_app()) as client:
         r = client.get("/", params={"full": "1"}, headers={"User-Agent": _SUPERNOTE_UA}, follow_redirects=False)
     assert r.status_code == 200 and "lectio_full_app" in r.headers.get("set-cookie", "")
@@ -349,7 +349,7 @@ def test_supernote_full_opt_out_sets_cookie(monkeypatch):
 def test_non_supernote_not_redirected(monkeypatch):
     from fastapi.responses import PlainTextResponse
 
-    monkeypatch.setattr(main, "_home_inner", lambda **k: PlainTextResponse("app"))
+    monkeypatch.setattr(routes.home, "_home_inner", lambda **k: PlainTextResponse("app"))
     with TestClient(_home_app()) as client:
         r = client.get("/", headers={"User-Agent": "Mozilla/5.0 Chrome/120"}, follow_redirects=False)
     assert r.status_code == 200

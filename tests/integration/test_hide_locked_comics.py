@@ -16,6 +16,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import main
 import routes.entries
+import routes.home
 from services import tenancy
 
 FEED = "https://cad-comic.com/feed/"
@@ -369,7 +370,7 @@ def test_unread_count_unaffected_once_unlock_date_passes(configured):
 def _app():
     app = FastAPI()
     app.add_middleware(SessionMiddleware, secret_key="test-only")
-    app.get("/")(main.home)
+    app.get("/")(routes.home.home)
     app.get("/entries/pane")(routes.entries.entry_pane)
     return app
 

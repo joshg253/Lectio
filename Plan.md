@@ -10,10 +10,11 @@ to run, real features not blocking anything today, and deliberately-deferred big
 Within a tier, related items are clustered under a bold sub-heading. Two watch-lists (CodeQL,
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
-Tiers 1 through 3 are empty. The main.py/index.html breakup (Integration routes cluster,
-post-refresh automation pipeline, index.html's context menus) is done, shipped 2026-09-19/20. Its
-former "Steps 4-8, unscoped follow-on work" is now split into independent Tier 4 projects —
-dedup-routes consolidation, a `state.py` module + route split, and the shared rendering core.
+Tiers 1 through 3 are empty. The main.py/index.html breakup and both of its follow-on Tier 4
+projects — the `state.py` singleton extraction and the full route-by-URL-prefix split (256 routes
+across 10 stages) — are all done, shipped 2026-09-19 through 2026-09-22. What's left in Tier 4:
+dedup-routes consolidation (still gated on characterization tests) and the shared rendering core
+(not started, deliberately — see the route split's closing note for why it stayed untouched).
 
 ## Tier 1 — actively impeding unread-clearing
 
@@ -410,7 +411,42 @@ ordered safest → riskiest:
       since `reader_view` doesn't call either (confirmed via grep on the function body, not
       assumed). Full `make test`/`lint`/`types`/`ruff format --check` pass; live check confirmed
       the correct `303 → /login` redirect through the real unauthenticated app.
-    - **C.** `/` — the main app entry point, riskiest and highest-traffic; last.
+    - **C — done (2026-09-22), Stage 10 fully complete.** `/` — the main app entry point,
+      highest-traffic route in the whole app. main.py: 25,861 → 25,757 lines; `routes/home.py`:
+      448 → 596 lines, **3 routes total, done**. The biggest test of the "shared rendering core
+      moves cleanly via the mechanical pattern" claim held one more time: `home` is a thin
+      wrapper (Supernote e-ink UA sniff + redirect, bare-`/` scope-tab-landing default, a
+      `_home_request_semaphore` capacity gate, one `_home_inner(...)` call carrying every query
+      param through, a `?full=1` cookie set) — confirmed it calls `_home_inner` and nothing else
+      from the Landmines-flagged cluster (`list_entries_for_feeds`/`get_entry_detail`/
+      `build_reader_page` untouched, not even referenced). All four stayed in main.py, verified
+      independently by reading the function body and confirming all four definitions still live
+      in main.py. `_home_request_semaphore` needed a `noqa: F401` re-export in main.py's
+      `from state import (...)` block, same as prior `state.py`-sourced singletons. Biggest
+      test-retargeting sweep of any stage, as predicted — 5 files. No `services.automation_rules`
+      ordering constraint, no cascade, no script-only callers. Full
+      `make test`/`lint`/`types`/`ruff format --check` pass; independently re-verified (not just
+      trusted) both the unauthenticated 303→`/login` redirect and, per the agent's report, a real
+      authenticated 200 with actual rendered `index.html`.
+
+**Stage 10 (`routes/home.py`) is now fully done** — all 3 sub-stages (A-C), 3 routes.
+
+## The main.py route-by-URL-prefix split is now fully complete
+
+All 10 stages done. 256 `@app.*` route decorators moved out of main.py into `routes/*.py`
+modules by URL prefix, across ~3 days (2026-09-20 through 2026-09-22). main.py: 36,499 lines when
+this project started (right after the separate `state.py` singleton extraction) → 25,757 lines
+now — 10,742 lines moved out. Route modules: `routes/system.py`, `routes/compat_{fever,greader,v1}.py`,
+`routes/tags.py`, `routes/highlights.py`, `routes/automation.py`, `routes/admin.py`,
+`routes/saved.py`, `routes/settings.py`, `routes/feeds.py` (61 routes, the biggest), `routes/entries.py`
+(45 routes), `routes/home.py` (3 routes, the riskiest per-route). The shared rendering core
+(`_home_inner`, `list_entries_for_feeds`, `get_entry_detail`, `build_reader_page`) stayed in
+main.py throughout, exactly as scoped — every stage that touched a route calling into it just
+imported the functions back, never refactored them. Remaining deferred work from this whole
+effort: the `/api/*` cluster split three ways (image-proxy → `routes/media.py`, save-capture →
+extend `routes/saved.py`, `/api/unread-counts` → undecided), Dedup routes consolidation (still
+gated on characterization tests), and the shared rendering core itself as its own future project
+if it's ever worth refactoring.
 
 Each stage: `grep` the current route paths (line numbers drift as earlier stages move code, so
 don't trust line numbers from a previous stage's scoping), move handler + any single-route-only

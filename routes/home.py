@@ -2,14 +2,15 @@
 route-by-URL-prefix split -- the last route module in the whole project,
 `/`, `/read`, `/read/offline`, and the shared rendering core itself).
 
-**Stage 10 is NOT done yet: this file currently holds sub-stages A and B's 2
-routes, `GET /read/offline` and `GET /read`.** Sub-stage C (`/`, the last and
-highest-traffic route of the whole split) still adds one more route to this
-same module in a later task -- don't assume this is the final state. The
-shared rendering-core functions (`_home_inner`, `list_entries_for_feeds`,
-`get_entry_detail`, `build_reader_page`, `resolve_reader_article_html`) all
-stay in main.py regardless of how many of Stage 10's routes eventually move
-here -- see Plan.md's Landmines note.
+**Stage 10 is now COMPLETE at 3 routes across sub-stages A-C: `GET
+/read/offline`, `GET /read`, and `GET /`.** This closes out the entire
+main.py route-by-URL-prefix split project -- all 10 stages, ~256 routes
+moved out of main.py since Stage 1. The shared rendering-core functions
+(`_home_inner`, `list_entries_for_feeds`, `get_entry_detail`,
+`build_reader_page`, `resolve_reader_article_html`) all stay in main.py, per
+Plan.md's Landmines note -- see the per-sub-stage paragraphs below for how
+each of this module's three routes confirmed that boundary rather than
+assuming it.
 
 Stage 10A -- `GET /read/offline` alone. Landmines-flagged going in as the
 cluster to treat carefully, but this individual route turned out to be the
@@ -66,6 +67,47 @@ hit both usual gotchas -- it registered `main.reader_view` directly on a bare te
 to `routes.home.reader_view`) and monkeypatched several of the above names on `main` (retargeted to
 `routes.home.<name>` wherever `reader_view` actually calls them). See that test file and this sub-stage's own
 paragraph in `routes/__init__.py` for the full per-name breakdown. No `scripts/*.py` callers turned up.
+
+Stage 10C -- `GET /` alone (`home`), the last route of the entire route-by-URL-prefix split. The highest-traffic
+route in the app and the one Plan.md's Landmines note singled out most, but it turned out to be the cleanest
+orchestration of the three Stage 10 routes: `home` is a thin wrapper around `_home_inner` -- Supernote e-ink
+auto-detect (a UA sniff + an early `RedirectResponse`), the bare-`/` scope-tab-landing default (`home = 1` when
+no query params were supplied), a `_home_request_semaphore` non-blocking acquire/release to cap concurrent
+expensive renders (503 with `Retry-After` when saturated), one `_home_inner(...)` call carrying every query
+param through, and a `set_cookie` on the response when `?full=1` opts back into the full app. All of the actual
+list-building, scope resolution, and template rendering happens inside `_home_inner`, which -- per Plan.md's
+Landmines note -- stays in main.py untouched, imported back like every other shared rendering-core function.
+`home` does not call `list_entries_for_feeds`, `get_entry_detail`, or `build_reader_page` at all; the only
+shared rendering-core touch point is the one `_home_inner` call itself. `_home_request_semaphore` (a
+`state.py`-sourced `threading.Semaphore` re-exported through `main`, same shape as `_READ_MODE_UA_SEEN` in Stage
+10B) is imported back too, needing a `# noqa: F401` re-export comment on its `from state import (...)` line in
+main.py since nothing left in main.py itself still references it by name. No `services.automation_rules`
+ordering constraint: `home` touches nothing from that late import.
+
+Five test files needed retargeting for the "handler registered directly as `main.<name>` on a bare test
+`FastAPI()` app" gotcha: `tests/integration/test_yt_folder_duration_filter_gate.py`,
+`tests/integration/test_phone_up_to_folder_button.py`, `tests/integration/test_add_link_to_note_button.py`,
+`tests/integration/test_hide_locked_comics.py` (already importing `routes.entries` for Stage 9E; added a
+`routes.home` import alongside it), and `tests/integration/test_reader_view.py`'s own `_home_app()` helper (->
+`routes.home.home` in each case, `import main` kept first per the circular-import note). The last of those also
+hit the copied-reference monkeypatch gotcha: its two `?full=1`/non-Supernote tests stub `_home_inner` to a
+`PlainTextResponse` to isolate the redirect/cookie logic from a real render, and since `home` now does its own
+`from main import _home_inner`, both `monkeypatch.setattr(main, "_home_inner", ...)` calls needed retargeting to
+`routes.home`. `tests/integration/test_saved_inbox_chunking.py` calls `main._home_inner` directly and needed no
+change, since that function never moved. Verified live beyond the usual test-suite bar per this stage's own
+elevated scrutiny: `TestClient(main.app)` hitting `GET /` unauthenticated correctly 303s to `/login`, and a real
+login (bootstrapped admin credentials) followed by `GET /` returns 200 with a full rendered `index.html` page
+(title, CSRF meta tag, manifest link all present) -- not just a status code. No `scripts/*.py` callers turned up.
+
+**This closes out Stage 10: `routes/home.py` is complete at 3 routes across sub-stages A-C (`GET /read/offline`,
+`GET /read`, `GET /`), and with it the entire main.py route-by-URL-prefix split project is done.** Per Plan.md's
+own scoping note, 256 `@app.*` route decorators remained across main.py when the split began; main.py has gone
+from 36,499 lines (state.py extraction complete, route split not yet started) to its current size entirely via
+this stage-by-stage mechanical pattern -- and, per the Landmines note that motivated treating every stage
+touching `_home_inner`/`list_entries_for_feeds`/`get_entry_detail`/`build_reader_page`/
+`resolve_reader_article_html` with extra scrutiny (Stage 9E, 10A, 10B, and now 10C), all five of those shared
+rendering-core functions remain exactly where they started: in main.py, untouched, imported back by every route
+module that calls them.
 """
 
 from __future__ import annotations
@@ -77,7 +119,7 @@ import re
 from urllib.parse import parse_qs, urlparse
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from main import (
     _READ_MODE_UA_SEEN,
@@ -88,6 +130,8 @@ from main import (
     _build_feeds_mode_context,
     _build_read_mode_context,
     _csrf_token_for,
+    _home_inner,
+    _home_request_semaphore,
     _img_cache_get,
     _img_cache_key_url,
     _read_browse_href,
@@ -446,3 +490,107 @@ def reader_view(
         katex_dollar_math=_katex_dollar_math,
         all_tag_names=tuple(get_all_manual_tag_names()),
     )
+
+
+@router.get("/")
+def home(
+    request: Request,
+    folder_id: int | None = None,
+    list_feed_url: str | None = None,
+    tag: str | None = None,
+    feed_tag: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    read_filter: str | None = None,
+    star_only: str | None = None,
+    saved_home: int | None = None,
+    home: int | None = None,
+    resume_read_filter: str | None = None,
+    feed_url: str | None = None,
+    entry_id: str | None = None,
+    q: str | None = None,
+    message: str | None = None,
+    no_rss_url: str | None = None,
+    force_url: str | None = None,
+    chunk: int | None = None,
+    chunk_delta: str | None = None,
+    subscribe: str | None = None,
+    subscribe_to: str | None = None,
+    full: int | None = None,
+    kept: str | None = None,
+):
+    # E-ink auto-detect: a Supernote tablet's browser gets the light, paginated
+    # Feeds Read Mode instead of the heavy three-pane app. `?full=1` (the Read
+    # Mode exit link) opts back into the full app and remembers it in a cookie so
+    # in-app navigation isn't re-redirected.
+    _ua = (request.headers.get("user-agent") or "").lower()
+    if "supernote" in _ua and not full and not request.cookies.get("lectio_full_app"):
+        return RedirectResponse("/read?scope=feeds", status_code=302)
+
+    # A bare `/` (fresh open, logo click, post-login) is the scope-tab landing:
+    # tree only, no posts — same as clicking the Feeds tab. Loading the whole
+    # All-feeds view on every app open was slow and never a deliberate choice.
+    # Chunk params don't exempt: a chunk fetch against a bare URL is the SPA
+    # paginating the landing (deliberate views always carry folder/feed/tag).
+    if (
+        folder_id is None
+        and list_feed_url is None
+        and tag is None
+        and feed_url is None
+        and entry_id is None
+        and q is None
+        and subscribe is None
+        and subscribe_to is None
+        and star_only is None
+        and read_filter is None
+        and saved_home is None
+        and home is None
+    ):
+        home = 1
+
+    # Limit concurrent expensive home renders (DB queries + context building).
+    # Release before returning StreamingResponse so slow network delivery on the
+    # client side doesn't hold the semaphore and block new renders with 503s.
+    if not _home_request_semaphore.acquire(blocking=False):
+        return Response(
+            status_code=503,
+            headers={"Retry-After": "2", "Cache-Control": "no-store"},
+        )
+    try:
+        _resp = _home_inner(
+            request=request,
+            folder_id=folder_id,
+            list_feed_url=list_feed_url,
+            tag=tag,
+            feed_tag=feed_tag,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            read_filter=read_filter,
+            star_only=star_only,
+            saved_home=saved_home,
+            home=home,
+            resume_read_filter=resume_read_filter,
+            feed_url=feed_url,
+            entry_id=entry_id,
+            q=q,
+            message=message,
+            no_rss_url=no_rss_url,
+            force_url=force_url,
+            chunk=chunk,
+            chunk_delta=chunk_delta,
+            subscribe=subscribe or subscribe_to,
+            kept=kept,
+        )
+        if full:
+            # Remember the full-app opt-out on this device (Supernote) so later
+            # in-app navigation isn't redirected back to Read Mode.
+            _resp.set_cookie(
+                "lectio_full_app",
+                "1",
+                max_age=60 * 60 * 24 * 365,
+                httponly=True,
+                samesite="lax",
+            )
+        return _resp
+    finally:
+        _home_request_semaphore.release()

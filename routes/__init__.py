@@ -424,13 +424,12 @@ No `scripts/*.py` callers turned up. Full `make test`/`lint`/`types`/`ruff forma
 sub-stages planned.** Only Stage 10 (`routes/home.py` -- `/`, `/read`, `/read/offline`, and the shared
 rendering core itself) remains of the route-by-URL-prefix split.
 
-`routes/home.py` (Stage 10, the last module of the split) **is not yet done: this file currently
-holds sub-stages A and B's 2 routes, `GET /read/offline` and `GET /read`** -- sub-stage C (`/`, the
-whole-app entry point, last and highest-traffic route of the whole split) still adds one more route
-to this same module in a later task, don't assume this is the final state. See that file's own
-docstring for the full rationale. No ordering constraint: this route touches nothing from the late
-`services.automation_rules` import, so it's imported alongside the plain `routes.compat_*`/`routes.tags`-style
-modules. Three helpers moved with the route, confirmed with no caller anywhere else: `_fetch_image_for_offline`,
+`routes/home.py` (Stage 10, the last module of the split) is done: this file holds all 3 of
+Stage 10's routes across sub-stages A-C -- `GET /read/offline`, `GET /read`, and `GET /`. See that
+file's own docstring for the full rationale of each sub-stage. No ordering constraint: none of the
+three routes touches anything from the late `services.automation_rules` import, so this module is
+imported alongside the plain `routes.compat_*`/`routes.tags`-style modules. Three helpers moved with
+sub-stage A's route, confirmed with no caller anywhere else: `_fetch_image_for_offline`,
 `_inline_images_as_data_uris`, and the `_OFFLINE_IMG_MAX_BYTES`/`_OFFLINE_IMG_TOTAL_BYTES`/
 `_OFFLINE_IMG_MAX_FETCHES` constants. The shared rendering-core functions this route touches
 (`get_entry_detail`, `resolve_reader_article_html`) stayed in main.py untouched and were imported back, same
@@ -473,4 +472,45 @@ star row, same status Stage 9E already found for `_mark_entry_read_background`).
 `main.*` patches/calls (`resolve_reader_article_html`, `get_entry_detail`, `build_reader_page`, `_home_inner`,
 etc.) test those still-in-main.py functions directly, not through the moved route, so they were left as `main.*`.
 No `scripts/*.py` callers turned up.
+
+Stage 10C -- `GET /` alone (`home`), the last route of the entire route-by-URL-prefix split. Landmines-flagged
+as the route most likely to need the "own project, stop here" outcome -- it's the actual home page, hit on
+every navigation, with the most branching of any route in the project -- but checked closely and it held up as
+the cleanest orchestration of Stage 10's three routes: `home` is a thin wrapper around `_home_inner` -- a
+Supernote e-ink UA sniff + early `RedirectResponse`, the bare-`/` scope-tab-landing default (`home = 1` when no
+query params were supplied), a `_home_request_semaphore` non-blocking acquire/release capping concurrent
+expensive renders (503 when saturated), one `_home_inner(...)` call carrying every query param through, and a
+`set_cookie` when `?full=1` opts back into the full app. No inline list-building, scope resolution, or
+rendering logic -- all of that lives inside `_home_inner`, which stays in main.py untouched, per Plan.md's
+Landmines note, and gets imported back like every other shared rendering-core function. `home` doesn't call
+`list_entries_for_feeds`, `get_entry_detail`, or `build_reader_page` at all; `_home_inner` is the only shared
+rendering-core function it touches. `_home_request_semaphore` (a `state.py`-sourced semaphore re-exported
+through `main`, same shape as Stage 10B's `_READ_MODE_UA_SEEN`) moved to being imported back too, needing a
+`# noqa: F401` re-export comment added to its `from state import (...)` line in main.py since nothing left in
+main.py itself still references it by name. No `services.automation_rules` ordering constraint.
+
+Five test files needed retargeting for the "handler registered directly as `main.<name>` on a bare test
+`FastAPI()` app" gotcha -- the largest sweep this specific gotcha has had, as expected going in since `/` is
+among the most heavily-tested routes in the suite: `tests/integration/test_yt_folder_duration_filter_gate.py`,
+`tests/integration/test_phone_up_to_folder_button.py`, `tests/integration/test_add_link_to_note_button.py`,
+`tests/integration/test_hide_locked_comics.py` (already importing `routes.entries` since Stage 9E; added a
+`routes.home` import alongside it), and `tests/integration/test_reader_view.py`'s own `_home_app()` helper --
+all retargeted to `routes.home.home`, `import main` kept first in each per the circular-import note. That last
+file also hit the copied-reference monkeypatch gotcha: two tests stub `_home_inner` to a bare
+`PlainTextResponse` to isolate the redirect/cookie logic, and since `home` now does its own `from main import
+_home_inner`, both `monkeypatch.setattr(main, "_home_inner", ...)` calls needed retargeting to `routes.home`.
+`tests/integration/test_saved_inbox_chunking.py` calls `main._home_inner` directly and needed no change, since
+`_home_inner` itself never moved. Given this route's traffic and centrality, verified beyond the usual bar:
+`TestClient(main.app)` hitting `GET /` unauthenticated correctly 303s to `/login`, and a real login (bootstrapped
+admin credentials) followed by `GET /` returns 200 with a full rendered `index.html` page (title, CSRF meta tag,
+manifest link all present), not just a status code. No `scripts/*.py` callers turned up.
+
+**This closes out Stage 10: `routes/home.py` is complete at 3 routes across sub-stages A-C (`GET /read/offline`,
+`GET /read`, `GET /`) -- and with it, the entire main.py route-by-URL-prefix split project is done.** Per
+Plan.md's own scoping note, 256 `@app.*` route decorators remained across main.py when the split began
+(2026-09-20, right after the separate `state.py` extraction, at which point main.py stood at 36,499 lines); ten
+stages later, every one of them has been moved into a `routes/*.py` module by URL prefix, and the shared
+rendering core the Landmines note warned about from the start -- `_home_inner`, `list_entries_for_feeds`,
+`get_entry_detail`, `build_reader_page`, `resolve_reader_article_html` -- remains exactly where it started: in
+main.py, untouched, imported back by every route module that calls it.
 """

@@ -132,7 +132,7 @@ from state import (
     _flaresolverr_feeds_cache,
     _flaresolverr_feeds_cache_at,
     _flaresolverr_feeds_cache_lock,
-    _home_request_semaphore,
+    _home_request_semaphore,  # noqa: F401 -- re-exported: routes/home.py's `home` route does `main._home_request_semaphore`
     _instance_setting_cache,
     _instance_setting_cache_lock,
     _last_seen_touch,
@@ -21943,110 +21943,6 @@ def _read_log_tail(
         elif include_current:
             kept.append(line)  # continuation (traceback etc.) of an included record
     return kept[-max_lines:], True, len(kept) > max_lines
-
-
-@app.get("/")
-def home(
-    request: Request,
-    folder_id: int | None = None,
-    list_feed_url: str | None = None,
-    tag: str | None = None,
-    feed_tag: str | None = None,
-    sort_by: str | None = None,
-    sort_dir: str | None = None,
-    read_filter: str | None = None,
-    star_only: str | None = None,
-    saved_home: int | None = None,
-    home: int | None = None,
-    resume_read_filter: str | None = None,
-    feed_url: str | None = None,
-    entry_id: str | None = None,
-    q: str | None = None,
-    message: str | None = None,
-    no_rss_url: str | None = None,
-    force_url: str | None = None,
-    chunk: int | None = None,
-    chunk_delta: str | None = None,
-    subscribe: str | None = None,
-    subscribe_to: str | None = None,
-    full: int | None = None,
-    kept: str | None = None,
-):
-    # E-ink auto-detect: a Supernote tablet's browser gets the light, paginated
-    # Feeds Read Mode instead of the heavy three-pane app. `?full=1` (the Read
-    # Mode exit link) opts back into the full app and remembers it in a cookie so
-    # in-app navigation isn't re-redirected.
-    _ua = (request.headers.get("user-agent") or "").lower()
-    if "supernote" in _ua and not full and not request.cookies.get("lectio_full_app"):
-        return RedirectResponse("/read?scope=feeds", status_code=302)
-
-    # A bare `/` (fresh open, logo click, post-login) is the scope-tab landing:
-    # tree only, no posts — same as clicking the Feeds tab. Loading the whole
-    # All-feeds view on every app open was slow and never a deliberate choice.
-    # Chunk params don't exempt: a chunk fetch against a bare URL is the SPA
-    # paginating the landing (deliberate views always carry folder/feed/tag).
-    if (
-        folder_id is None
-        and list_feed_url is None
-        and tag is None
-        and feed_url is None
-        and entry_id is None
-        and q is None
-        and subscribe is None
-        and subscribe_to is None
-        and star_only is None
-        and read_filter is None
-        and saved_home is None
-        and home is None
-    ):
-        home = 1
-
-    # Limit concurrent expensive home renders (DB queries + context building).
-    # Release before returning StreamingResponse so slow network delivery on the
-    # client side doesn't hold the semaphore and block new renders with 503s.
-    if not _home_request_semaphore.acquire(blocking=False):
-        return Response(
-            status_code=503,
-            headers={"Retry-After": "2", "Cache-Control": "no-store"},
-        )
-    try:
-        _resp = _home_inner(
-            request=request,
-            folder_id=folder_id,
-            list_feed_url=list_feed_url,
-            tag=tag,
-            feed_tag=feed_tag,
-            sort_by=sort_by,
-            sort_dir=sort_dir,
-            read_filter=read_filter,
-            star_only=star_only,
-            saved_home=saved_home,
-            home=home,
-            resume_read_filter=resume_read_filter,
-            feed_url=feed_url,
-            entry_id=entry_id,
-            q=q,
-            message=message,
-            no_rss_url=no_rss_url,
-            force_url=force_url,
-            chunk=chunk,
-            chunk_delta=chunk_delta,
-            subscribe=subscribe or subscribe_to,
-            kept=kept,
-        )
-        if full:
-            # Remember the full-app opt-out on this device (Supernote) so later
-            # in-app navigation isn't redirected back to Read Mode.
-            _resp.set_cookie(
-                "lectio_full_app",
-                "1",
-                max_age=60 * 60 * 24 * 365,
-                httponly=True,
-                samesite="lax",
-            )
-        return _resp
-    finally:
-        _home_request_semaphore.release()
 
 
 def _home_inner(
