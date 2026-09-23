@@ -18,6 +18,7 @@ import re
 
 import main
 import routes.saved
+import routes.settings
 from services import lead_image_plugins as plugins
 from services import saved_articles as sa
 
@@ -178,11 +179,10 @@ def test_the_size_budget_is_configurable_in_administration():
 def test_the_size_budget_is_admin_only_like_its_neighbours():
     """Instance-level config: a non-admin tenant must not be able to change how
     every user's images are stored."""
-    src = inspect.getsource(main.save_settings) if hasattr(main, "save_settings") else ""
-    if not src:
-        import pathlib
-
-        src = pathlib.Path(main.__file__).read_text()
+    # save_all_settings (the /settings/all POST handler) moved to routes/settings.py
+    # in Stage 7 of the route-by-URL-prefix split -- its source, not main.py's, is
+    # where _ADMIN_ONLY now lives.
+    src = inspect.getsource(routes.settings.save_all_settings)
     admin_only = src[src.index("_ADMIN_ONLY = {") :]
     admin_only = admin_only[: admin_only.index("}")]
     assert "SETTING_IMG_TARGET_BYTES" in admin_only

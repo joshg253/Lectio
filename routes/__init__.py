@@ -127,4 +127,27 @@ note only half held up: that service genuinely backs the capture path, but
 the dupe-scan, autofile, unstar-tagged, and archive-old *planners* are
 main.py-resident logic with no service-layer home, and moved or stayed on
 their own test-coverage and sharing merits, not a service boundary.
+
+`routes/settings.py` (Stage 7: profile/email-bcc, the `/settings/all` bulk get/save, the manual maintenance trigger,
+auto-refresh, the Global Note, the lazy Settings -> Feeds panels, and the problematic-feeds triage actions — 14 routes)
+has no ordering constraint either — nothing here touches `services.automation_rules` — so it's imported alongside the
+plain `routes.compat_*`/`routes.tags`-style modules. The two clusters this stage's routes came from were not contiguous
+in main.py (`/settings/email-bcc` through `/settings/maintenance/run-now` sat together; `/settings/auto-refresh` through
+the `/settings/problematic-feeds/*` group sat ~5,600 lines away), and `/tree/folder-feeds/{folder_id}` — a sidebar
+fragment route, not a settings concern despite living inside that second block — stays in main.py. No third outlier
+turned up. Only one helper sat immediately next to a moved route: `_keep_existing_sensitive` (the masked-secret-field
+guard `save_all_settings` uses so a routine re-save never blanks a stored secret just because the masked "••••"
+placeholder came back) — it stays in main.py and is imported back, for the same "exercised directly as `main.<name>` by
+a dedicated test file" reason Stage 3/5/6 kept their own adjacent helpers (`tests/unit/test_settings_sensitive_save.py`).
+Everything else these routes call is pre-existing main.py-resident, widely-shared infrastructure (the whole family of
+settings getters, `FeedInFolder`, `_disambiguate_feed_titles`, `_run_youtube_sync`, and so on) with callers well outside
+this cluster — none of it moved. Three tests needed retargeting for the copied-reference gotcha, none via
+`monkeypatch.setattr(main, ...)` but via a subtler variant of the same shape: registering a moved handler function
+object directly onto a test-local `FastAPI()` app as `main.<handler_name>` no longer works once the handler lives in
+`routes.settings` — `tests/integration/test_needs_replacement.py` and `tests/integration/test_note_title_img_reextract.py`
+now import `routes.settings` and register `settings_routes.mark_feed_needs_replacement`/`unmark_feed_needs_replacement`/
+`get_global_note_setting` instead of `main.<name>`. `tests/unit/test_refetch_guard_and_thumb_plugin.py` hit the same
+shape via `inspect.getsource`: it fell back to grepping `main.__file__`'s raw text for `_ADMIN_ONLY = {` since
+`main.save_settings` never existed (the real name is `save_all_settings`), and that text is no longer in main.py now
+that the function moved — retargeted to `inspect.getsource(routes.settings.save_all_settings)` directly.
 """
