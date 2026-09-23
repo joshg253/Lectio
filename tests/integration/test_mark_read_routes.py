@@ -350,11 +350,11 @@ def test_cold_compute_discards_stale_counts_after_generation_bump(monkeypatch):
     generation must not overwrite the freshly-cleared cache with its pre-mark
     counts — otherwise the marked entries appear to revert seconds later."""
     monkeypatch.setattr(main, "unread_counts_cache", {})
-    monkeypatch.setattr(main, "unread_counts_refresh_inflight", False)
+    main.clear_unread_refresh_inflight()
 
     def _compute_with_concurrent_mark():
         # Simulate a mark-read landing while the ~2s scan is running.
-        main._unread_counts_generation += 1
+        main._bump_unread_counts_generation()
         return {"http://feed/": 5}
 
     monkeypatch.setattr(main, "_compute_unread_counts_by_feed", _compute_with_concurrent_mark)
@@ -371,7 +371,7 @@ def test_cold_compute_discards_stale_counts_after_generation_bump(monkeypatch):
 def test_cold_compute_caches_counts_when_generation_stable(monkeypatch):
     """The happy path: no concurrent change, so the computed counts are cached."""
     monkeypatch.setattr(main, "unread_counts_cache", {})
-    monkeypatch.setattr(main, "unread_counts_refresh_inflight", False)
+    main.clear_unread_refresh_inflight()
     monkeypatch.setattr(main, "_compute_unread_counts_by_feed", lambda: {"http://feed/": 2})
 
     result = main.get_unread_counts_by_feed()

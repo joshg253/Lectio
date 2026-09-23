@@ -84,10 +84,10 @@ def test_batch_read_skips_unpremiered_youtube_video(env):
 def test_batch_read_invalidates_unread_count_cache(env):
     _setup_entries()
     main.unread_counts_cache["unread_counts"] = {"stale": True}
-    gen_before = main._unread_counts_generation
+    gen_before = main.get_unread_counts_generation()
     data = _batch([[FEED, "e1"]])
     assert data["ok"] and data["marked"] == 1
-    assert main._unread_counts_generation != gen_before
+    assert main.get_unread_counts_generation() != gen_before
     assert "unread_counts" not in main.unread_counts_cache
 
 
@@ -160,8 +160,8 @@ def test_batch_unread_invalidates_unread_count_cache(env):
     with main.get_reader() as reader:
         reader.mark_entry_as_read((FEED, "e1"))
     main.unread_counts_cache["unread_counts"] = {"stale": True}
-    gen_before = main._unread_counts_generation
+    gen_before = main.get_unread_counts_generation()
     data = _batch([[FEED, "e1"]], read=0)
     assert data["ok"] and data["marked"] == 1
-    assert main._unread_counts_generation != gen_before
+    assert main.get_unread_counts_generation() != gen_before
     assert "unread_counts" not in main.unread_counts_cache

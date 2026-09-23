@@ -7,17 +7,18 @@ from __future__ import annotations
 import pytest
 
 import main
+import state
 from services import tenancy
 
 
 @pytest.fixture(autouse=True)
 def reset_rotation():
-    saved = main._scheduled_refresh_rotation
-    main._scheduled_refresh_rotation = 0
+    saved = state._scheduled_refresh_rotation
+    state._scheduled_refresh_rotation = 0
     try:
         yield
     finally:
-        main._scheduled_refresh_rotation = saved
+        state._scheduled_refresh_rotation = saved
 
 
 def test_rotation_cycles_start_user():
@@ -36,7 +37,7 @@ def test_single_user_is_unchanged():
     # Single-user mode (one background user) must behave exactly as before.
     assert main._rotate_for_fairness(["only"]) == ["only"]
     assert main._rotate_for_fairness([]) == []
-    assert main._scheduled_refresh_rotation == 0  # no rotation advanced
+    assert state._scheduled_refresh_rotation == 0  # no rotation advanced
 
 
 def test_scheduled_refresh_runs_each_user_under_its_context(monkeypatch):
