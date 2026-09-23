@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 import main
+from routes import system as system_routes
 from services import tenancy
 from services.saved_articles import SAVED_FEED_URL
 
@@ -67,7 +68,9 @@ def configured(tmp_path, monkeypatch):
 
 
 def _import(csv: str = CSV) -> dict:
-    return main._import_instapaper_for_current_user(csv.encode())
+    # _import_instapaper_for_current_user moved to routes/system.py (Stage 1 of
+    # the main.py route-by-URL-prefix split).
+    return system_routes._import_instapaper_for_current_user(csv.encode())
 
 
 def test_summary_counts_what_could_be_filed(configured):
@@ -126,8 +129,10 @@ def test_a_matcher_failure_never_fails_the_import(configured, monkeypatch):
     """The hint is a reporting extra bolted onto a destructive-ish operation
     that has already committed; it must not turn a successful import into an
     error."""
+    # _current_autofile_plan stays in main.py but is read through routes.system's
+    # own `from main import _current_autofile_plan` binding — patch it there.
     monkeypatch.setattr(
-        main,
+        system_routes,
         "_current_autofile_plan",
         lambda restrict_to=None: (_ for _ in ()).throw(RuntimeError("boom")),
     )

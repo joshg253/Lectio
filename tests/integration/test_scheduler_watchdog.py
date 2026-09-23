@@ -13,6 +13,7 @@ import time
 import pytest
 
 import main
+from routes import system as system_routes
 
 
 @pytest.fixture(autouse=True)
@@ -177,11 +178,11 @@ def test_watchdog_leaves_a_healthy_scheduler_alone(monkeypatch, caplog):
 def test_healthz_reports_a_stall_but_still_returns_200(monkeypatch):
     """/healthz is the Docker HEALTHCHECK and Traefik's. A reader whose refresh is
     stuck is still readable, so a stall must not withdraw the backend."""
-    monkeypatch.setattr(main, "SCHEDULER_STALL_SECONDS", 60)
+    monkeypatch.setattr(system_routes, "SCHEDULER_STALL_SECONDS", 60)
     now = time.monotonic()
     _set_state(pass_started_at=now - 900, last_progress_at=now - 900, stage="feed 7/900")
 
-    response = main.healthz()
+    response = system_routes.healthz()
 
     assert response.status_code == 200
     import json

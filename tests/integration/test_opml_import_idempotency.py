@@ -22,7 +22,8 @@ import sqlite3
 
 import pytest
 
-import main
+import main  # noqa: F401 -- must import before routes.system (see routes/__init__.py)
+from routes import system as system_routes
 
 
 @pytest.fixture
@@ -53,8 +54,10 @@ def conn(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-    monkeypatch.setattr(main, "get_root_folder_id", lambda _c: 1)
-    monkeypatch.setattr(main, "get_reader", lambda: FakeReader())
+    # import_opml moved to routes/system.py (Stage 1 of the main.py
+    # route-by-URL-prefix split) and reads its own copied bindings for these.
+    monkeypatch.setattr(system_routes, "get_root_folder_id", lambda _c: 1)
+    monkeypatch.setattr(system_routes, "get_reader", lambda: FakeReader())
     return c, added
 
 
@@ -71,7 +74,7 @@ def test_a_trailing_slash_variant_is_not_a_new_feed(conn):
     conn.execute("INSERT INTO folder_feeds VALUES (2, 'https://oglaf.com/feeds/rss/')")
     conn.commit()
 
-    imported = main.import_opml(conn, _opml("https://oglaf.com/feeds/rss/"))
+    imported = system_routes.import_opml(conn, _opml("https://oglaf.com/feeds/rss/"))
 
     assert imported == 0
     assert conn.execute("SELECT count(*) FROM folder_feeds").fetchone()[0] == 1
@@ -89,7 +92,7 @@ def test_reimporting_what_was_exported_is_a_no_op(conn):
         conn.execute("INSERT INTO folder_feeds VALUES (2, ?)", (url,))
     conn.commit()
 
-    imported = main.import_opml(conn, _opml(*stored))
+    imported = system_routes.import_opml(conn, _opml(*stored))
 
     assert imported == 0
     assert conn.execute("SELECT count(*) FROM folder_feeds").fetchone()[0] == len(stored)
@@ -101,7 +104,7 @@ def test_a_genuinely_new_feed_is_still_imported(conn):
     conn.execute("INSERT INTO folder_feeds VALUES (2, 'https://oglaf.com/feeds/rss/')")
     conn.commit()
 
-    imported = main.import_opml(conn, _opml("https://danluu.com/atom.xml"))
+    imported = system_routes.import_opml(conn, _opml("https://danluu.com/atom.xml"))
 
     assert imported == 1
     assert "https://danluu.com/atom.xml" in added
@@ -109,7 +112,7 @@ def test_a_genuinely_new_feed_is_still_imported(conn):
 
 def test_two_spellings_of_one_feed_in_the_same_file_import_once(conn):
     conn, added = conn
-    imported = main.import_opml(conn, _opml("https://oglaf.com/feeds/rss", "https://oglaf.com/feeds/rss/"))
+    imported = system_routes.import_opml(conn, _opml("https://oglaf.com/feeds/rss", "https://oglaf.com/feeds/rss/"))
     assert imported == 1
     assert conn.execute("SELECT count(*) FROM folder_feeds").fetchone()[0] == 1
 
@@ -117,7 +120,7 @@ def test_two_spellings_of_one_feed_in_the_same_file_import_once(conn):
 def test_non_http_entries_are_refused(conn):
     """reader fetches file:// natively, so an OPML must never be able to add one."""
     conn, added = conn
-    imported = main.import_opml(
+    imported = system_routes.import_opml(
         conn,
         _opml("file:///data/lectio_meta.sqlite3", "ftp://example.com/f.xml", "just some text"),
     )

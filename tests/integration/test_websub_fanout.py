@@ -14,8 +14,16 @@ import time
 import pytest
 
 import main
+from routes import system as system_routes
 from services import tenancy
 from services.websub import WebSubService
+
+# _process_websub_push/_websub_verify_fanout moved to routes/system.py (Stage 1
+# of the main.py route-by-URL-prefix split) with the /websub/callback routes,
+# and do `from main import (websub_service, _run_automation_after_refresh, ...)`
+# at module scope -- a copied reference at import time, so a monkeypatch of
+# `main.websub_service` / `main._run_automation_after_refresh` alone would not
+# reach them. The fixture below patches both main and routes.system.
 
 FEED = "https://example.test/feed"
 BODY = b"<feed><entry>new</entry></feed>"
@@ -70,6 +78,7 @@ def fanout(tmp_path, monkeypatch):
         logger=main.LOGGER,
     )
     monkeypatch.setattr(main, "websub_service", svc)
+    monkeypatch.setattr(system_routes, "websub_service", svc)
     refreshed: list[tuple[str, tuple]] = []
     monkeypatch.setattr(
         main.feed_refresh_service,
@@ -90,7 +99,7 @@ def test_push_refreshes_only_registered_subscriber(fanout):
     _seed_subscription(wconn, secret="shared-secret")
     _add_subscriber(wconn, "alice")  # bob not subscribed
 
-    main._process_websub_push(FEED, BODY, _sig("shared-secret"))
+    system_routes._process_websub_push(FEED, BODY, _sig("shared-secret"))
 
     assert refreshed == [("alice", (FEED,))]
 
@@ -101,7 +110,7 @@ def test_push_fans_out_to_all_subscribers(fanout):
     _add_subscriber(wconn, "alice")
     _add_subscriber(wconn, "bob")
 
-    main._process_websub_push(FEED, BODY, _sig("shared-secret"))
+    system_routes._process_websub_push(FEED, BODY, _sig("shared-secret"))
 
     assert {uid for uid, _ in refreshed} == {"alice", "bob"}
 
@@ -111,7 +120,7 @@ def test_forged_push_is_ignored(fanout):
     _seed_subscription(wconn, secret="shared-secret")
     _add_subscriber(wconn, "alice")
 
-    main._process_websub_push(FEED, BODY, _sig("wrong-secret"))
+    system_routes._process_websub_push(FEED, BODY, _sig("wrong-secret"))
 
     assert refreshed == []
 
@@ -121,7 +130,7 @@ def test_push_ignored_when_no_subscribers(fanout):
     _seed_subscription(wconn, secret="shared-secret")
     # No subscriber rows
 
-    main._process_websub_push(FEED, BODY, _sig("shared-secret"))
+    system_routes._process_websub_push(FEED, BODY, _sig("shared-secret"))
 
     assert refreshed == []
 
@@ -137,13 +146,11 @@ def test_push_runs_automation_per_subscriber(fanout, monkeypatch):
     _add_subscriber(wconn, "bob")
 
     automated: list[tuple[str, frozenset]] = []
-    monkeypatch.setattr(
-        main,
-        "_run_automation_after_refresh",
-        lambda feeds: automated.append((tenancy.current_user_id(), frozenset(feeds))),
-    )
+    _spy = lambda feeds: automated.append((tenancy.current_user_id(), frozenset(feeds)))  # noqa: E731
+    monkeypatch.setattr(main, "_run_automation_after_refresh", _spy)
+    monkeypatch.setattr(system_routes, "_run_automation_after_refresh", _spy)
 
-    main._process_websub_push(FEED, BODY, _sig("shared-secret"))
+    system_routes._process_websub_push(FEED, BODY, _sig("shared-secret"))
 
     # Automation ran once per subscriber, scoped to the pushed feed, under that
     # subscriber's tenancy context.
@@ -155,7 +162,7 @@ def test_verification_confirms_pending_subscription(fanout):
     refreshed, wconn = fanout
     _seed_subscription(wconn, secret="sec", verified=0)
 
-    challenge = main._websub_verify_fanout(FEED, FEED, "chal-xyz", 86400)
+    challenge = system_routes._websub_verify_fanout(FEED, FEED, "chal-xyz", 86400)
 
     assert challenge == "chal-xyz"
     row = wconn.execute("SELECT verified FROM websub_subscriptions WHERE feed_url=?", (FEED,)).fetchone()
@@ -165,7 +172,7 @@ def test_verification_confirms_pending_subscription(fanout):
 def test_verification_rejects_unknown_feed(fanout):
     _, wconn = fanout
     # No subscription row at all
-    challenge = main._websub_verify_fanout(FEED, FEED, "chal-xyz", 86400)
+    challenge = system_routes._websub_verify_fanout(FEED, FEED, "chal-xyz", 86400)
     assert challenge is None
 
 

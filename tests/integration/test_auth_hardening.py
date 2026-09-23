@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 import main
+from routes import system as system_routes
 
 
 def _reset_login_rate_limit():
@@ -17,9 +18,13 @@ def _reset_login_rate_limit():
 
 
 def _enable_auth(monkeypatch, *, debug=False, max_failures=5, window_seconds=300):
-    monkeypatch.setattr(main, "DEBUG_MODE", debug)
-    monkeypatch.setattr(main, "get_login_max_failures", lambda: max_failures)
-    monkeypatch.setattr(main, "get_login_window_seconds", lambda: window_seconds)
+    # login_page/login_submit moved to routes/system.py (Stage 1 of the main.py
+    # route-by-URL-prefix split) and do `from main import (DEBUG_MODE, ...)` at
+    # module scope, which copies the reference at import time — patching `main`
+    # alone would not reach them, so these are patched on routes.system too.
+    monkeypatch.setattr(system_routes, "DEBUG_MODE", debug)
+    monkeypatch.setattr(system_routes, "get_login_max_failures", lambda: max_failures)
+    monkeypatch.setattr(system_routes, "get_login_window_seconds", lambda: window_seconds)
 
     # Make user_store.verify_login accept "tester"/"secret" as valid credentials.
     def _fake_verify(username, password, **kwargs):

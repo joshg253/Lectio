@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 
 import main
+from routes import system as system_routes
 from services import lead_images
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -108,7 +109,7 @@ def test_the_thumbnail_proxy_consults_the_image_byte_cache():
     it answers after the token dies. The thumbnail path did not consult it: it
     re-fetched the dead URL, got a 401, and marked the host failed — a post whose
     image displayed fine and whose thumbnail never appeared, permanently."""
-    src = inspect.getsource(main.thumbnail_proxy)
+    src = inspect.getsource(system_routes.thumbnail_proxy)
     assert "_img_cache_get" in src
     assert "_img_cache_key_url" in src
 
@@ -117,7 +118,7 @@ def test_a_cached_image_is_thumbnailed_even_when_its_host_is_failing():
     """The recently-failed short-circuit has to come after the cache lookup, or
     the bug survives: the host IS failing (expired token), which is exactly when
     the cached bytes are the only way to get a thumbnail."""
-    src = inspect.getsource(main.thumbnail_proxy)
+    src = inspect.getsource(system_routes.thumbnail_proxy)
     cache_at = src.index("_img_cache_get")
     guard_at = src.index("_thumb_fetch_recently_failed")
     assert cache_at < guard_at
@@ -125,7 +126,7 @@ def test_a_cached_image_is_thumbnailed_even_when_its_host_is_failing():
 
 
 def test_the_network_fetch_is_skipped_when_the_cache_answered():
-    src = inspect.getsource(main.thumbnail_proxy)
+    src = inspect.getsource(system_routes.thumbnail_proxy)
     assert re.search(r"if raw is None:\s*\n\s*try:", src)
 
 

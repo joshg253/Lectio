@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
+from routes import system as system_routes
 
 
 @pytest.fixture(autouse=True)
@@ -133,7 +134,9 @@ def test_post_with_wrong_token_is_rejected():
 def test_login_post_is_csrf_exempt(monkeypatch):
     """/login must work without a CSRF token (auth gate, rate-limited
     separately). Otherwise nobody could log in."""
-    monkeypatch.setattr(main, "DEBUG_MODE", False)
+    # login_submit moved to routes/system.py (Stage 1 of the main.py
+    # route-by-URL-prefix split) and reads its own copied `DEBUG_MODE` binding.
+    monkeypatch.setattr(system_routes, "DEBUG_MODE", False)
     main._login_failures.clear()
     # Make verify_login accept "tester"/"secret" without needing a real DB user.
     if main.user_store is not None:
