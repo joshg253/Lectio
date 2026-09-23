@@ -764,6 +764,17 @@ scope for this refactor. Notes for next time on other alert classes:
   for a guard-aware custom query (see the SSRF/path-injection ones modeling our sanitizers as
   barriers).
 
+25 more alerts (3 flagged "high") surfaced on PR #340 (route-split Stage 8, `routes/feeds.py`) —
+same "new file, not new code" attribution as above, verified individually rather than assumed:
+the polynomial-regex pair (`services/saved_articles.py:221/224`) and the reflected-XSS one
+(`main.py:20916`) are both years-old code untouched by this PR (confirmed via `git log -S`/`-L`),
+just re-attributed because a large file-restructuring diff shifts line numbers CodeQL's PR-diff
+heuristic uses to associate an alert with "changed" code. The other 22 (`routes/feeds.py`'s own
+"URL redirection from remote source"/"information exposure through an exception") are the same
+`RedirectResponse(url=f"/?...")`-with-query-params and `str(exc)` patterns used everywhere else in
+this app, newly visible because they're now in a new file. Not fixed as part of the route split
+for the same reason as the PR #329 batch — left open.
+
 ### Feed-tag suggestion suppression — do not attempt a third heuristic
 
 Tried twice, reverted both times: coverage-based suppression wrongly caught legitimate filing tags
