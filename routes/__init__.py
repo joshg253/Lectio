@@ -70,4 +70,25 @@ preview-vs-apply dedup engine into `services/dedup.py` is a separate,
 deliberately-deferred Plan.md project. `resolve_rule_feed_urls`,
 `toggle_feed_tag_filter`, and `feed_tag_service` stay in main.py: shared with
 `services/automation_rules.py` and/or other still-in-main.py routes.
+
+`routes/admin.py` (Stage 5: `/account/*` self-service, admin-only
+`/admin/users/*` and `/admin/logs`, and the `/debug/*` maintenance toggles)
+has no ordering constraint either — none of its handlers touch
+`services.automation_rules` — so it's imported alongside the plain
+`routes.compat_*`/`routes.tags`-style modules. `_username_error`,
+`_password_error`, `_account_redirect` (and the USERNAME_MIN_LEN/
+PASSWORD_MIN_LEN constants) and `_purge_thumb_cache_for_urls` moved with
+their routes, having no caller left in main.py. `_dir_bytes` stayed and gets
+imported back even though `admin_vacuum_user` is its only caller in this
+module, because `routes/system.py` (Stage 1) also calls it for the Admin ->
+storage-usage stats. `_is_web_admin`/`_current_web_user` stay too, called
+from several still-in-main.py routes. `_read_log_tail`/`_log_line_dt`/
+`_parse_local_ts` (and the `_LOG_LEVEL_RANK`/`_LOG_LINE_RE` constants) stay
+in main.py rather than moving with `admin_logs`, for the same "exercised
+directly as `main.<name>` by a dedicated test file" reason Stage 3 kept
+`get_highlight_keywords` and friends: `tests/unit/test_admin_log_tail.py`
+calls them directly. `provision_user_storage` stays, also called from
+`bootstrap_admin`; `delete_user_storage`, its lifecycle-pair sibling defined
+right next to it far from this route cluster, stays alongside it rather than
+being split out for its single remaining caller.
 """

@@ -148,7 +148,25 @@ ordered safest → riskiest:
    separately into `main`, `services.automation_rules`, and now `routes.automation`, each via its
    own `from main import build_keyword_matcher` — `test_keyword_matcher.py` needed all three
    patched). Full `make test`/`lint`/`types` pass (4,192 tests).
-5. `routes/admin.py` — `/admin/*`, `/debug/*`, `/account/*` (~15).
+5. **Done (2026-09-21).** `routes/admin.py` — `/account/*` (3), `/admin/users/*` + `/admin/logs`
+   (7), `/debug/*` (5) — 15 routes. main.py: 33,285 → 32,913 lines; new file 447 lines. Security
+   check (this cluster does real auth/account mutations, so worth confirming rather than assuming):
+   `_CSRFMiddleware` and the auth session gate are both `app.add_middleware`-level, keyed off the
+   request path string (`_CSRF_EXEMPT_PREFIXES`, main.py:2651), not which router module registered
+   a handler — moving a route between files can't change its CSRF/auth exposure as long as the URL
+   path is unchanged, verified by reading the middleware directly rather than trusting the stage's
+   own claim. Password hashing/`UserStore` singleton untouched, just imported back.
+   `_read_log_tail`/`_log_line_dt`/`_parse_local_ts` deliberately NOT moved despite `admin_logs`
+   being their only route-caller — `tests/unit/test_admin_log_tail.py` calls them directly as
+   `main.<name>`, same "exercised directly by a dedicated test file" precedent Stage 3 set for
+   `get_highlight_keywords`. `delete_user_storage` also stayed (flagged as a judgment call: only
+   one remaining caller, but it's the lifecycle-pair sibling of `provision_user_storage` ~19,000
+   lines away in a shared "user storage lifecycle" section — kept the pair together rather than
+   split one out). No `services.automation_rules` ordering constraint needed. No test files
+   required retargeting for either gotcha — nothing imports `routes.admin` directly, and the one
+   suite exercising these routes (`tests/integration/_multiuser_harness.py`) goes over real HTTP via
+   `TestClient(main.app)`, so the module split is transparent to it. Full `make test`/`lint`/`types`
+   pass (4,192 tests).
 6. `routes/saved.py` — `/saved/*`, `/articles/*` (~21) — backed by `services/saved_articles.py`.
 7. `routes/settings.py` — `/settings/*` (~11).
 8. `routes/feeds.py` — `/feeds*`, `/folders*`, `/tree/folder-feeds/*`, `/scraped-feeds*`,
