@@ -1,8 +1,9 @@
 """Account self-service, admin user management, and debug/maintenance toggles:
 `/account/*` (own password/API-token/username), `/admin/users/*` (admin-only
-create/disable/delete/reset-password/rename/vacuum of OTHER users),
-`/admin/logs` (Admin -> Logs tab), and `/debug/*` (lead-image cache clearing
-and feed-bypass toggles).
+user management: create/disable/delete/reset-password/rename/vacuum of any
+user -- only disable and delete reject targeting your own account;
+rename/reset-password don't), `/admin/logs` (Admin -> Logs tab), and
+`/debug/*` (lead-image cache clearing and feed-bypass toggles).
 
 Stage 5 of the main.py route-by-URL-prefix split (Plan.md). No ordering
 constraint: none of these handlers reference `_run_automation_after_refresh`
