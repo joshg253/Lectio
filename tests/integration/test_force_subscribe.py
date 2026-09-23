@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.feeds
 from services import tenancy
 
 
@@ -37,12 +38,15 @@ def configured(tmp_path):
 
 def _client() -> TestClient:
     app = FastAPI()
-    app.post("/feeds")(main.create_feed)
+    app.post("/feeds")(routes.feeds.create_feed)
     return TestClient(app, follow_redirects=False)
 
 
 def _patch(monkeypatch, *, probe_status: str):
+    # discover_feed_urls_ex is `from main import ...`-ed into routes.feeds at
+    # import time, so patching main's copy alone doesn't reach the route.
     monkeypatch.setattr(main, "discover_feed_urls_ex", lambda url, **kw: ([], False))
+    monkeypatch.setattr(routes.feeds, "discover_feed_urls_ex", lambda url, **kw: ([], False))
     from services import feed_discovery
 
     monkeypatch.setattr(feed_discovery, "probe_url", lambda url, **kw: {"status": probe_status, "feeds": [], "message": ""})
@@ -73,7 +77,9 @@ def test_force_skips_discovery_entirely(configured, monkeypatch):
     """The whole point: the address cannot be validated, so do not try."""
     called = []
     monkeypatch.setattr(main, "discover_feed_urls_ex", lambda url, **kw: called.append(url) or ([], False))
+    monkeypatch.setattr(routes.feeds, "discover_feed_urls_ex", lambda url, **kw: called.append(url) or ([], False))
     monkeypatch.setattr(main, "add_feed_to_folder", lambda url, fid: url)
+    monkeypatch.setattr(routes.feeds, "add_feed_to_folder", lambda url, fid: url)
 
     _client().post("/feeds", data={"feed_url": "https://walled.test/feed", "folder_id": "1", "force": "1"})
 

@@ -22,14 +22,16 @@ from services import tenancy
 
 FEED = "https://example.test/feed"
 SAVED = main.saved_articles_service.SAVED_FEED_URL
-_MAIN_SRC = (Path(__file__).resolve().parents[2] / "main.py").read_text()
+# change_feed_url_route (and its _feed_url_tables list) moved to routes/feeds.py
+# in Stage 8D of the main.py route-by-URL-prefix split.
+_ROUTES_FEEDS_SRC = (Path(__file__).resolve().parents[2] / "routes" / "feeds.py").read_text()
 
 
 def test_table_is_migrated_on_change_feed_url():
     """A short-lived undo token in flight during a Change-URL must survive it
     — entry_unread_batch (the mark-unread equivalent) is already in this
     list for the same reason."""
-    body = _MAIN_SRC[_MAIN_SRC.index("_feed_url_tables = [") :]
+    body = _ROUTES_FEEDS_SRC[_ROUTES_FEEDS_SRC.index("_feed_url_tables = [") :]
     body = body[: body.index("]")]
     assert '"entry_unstar_batch"' in body
 

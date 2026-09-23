@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 import main
+import routes.feeds
 from services import tenancy
 
 ORPHAN_FEED = "https://gone.example/feed.xml"
@@ -242,13 +243,13 @@ def test_feed_properties_orphan_reflects_already_set_suggested_tags(orphan_env):
 
 def test_suggested_tags_route_saves_for_a_known_orphan_feed(orphan_env):
     _seed_archive_row()
-    resp = main.set_feed_suggested_tags_route(feed_url=ORPHAN_FEED, tags="c++")
+    resp = routes.feeds.set_feed_suggested_tags_route(feed_url=ORPHAN_FEED, tags="c++")
     assert resp.status_code == 200
     assert main.get_feed_pinned_tags(ORPHAN_FEED) == ["c++"]
 
 
 def test_suggested_tags_route_still_404s_for_a_genuinely_unknown_url(orphan_env):
-    resp = main.set_feed_suggested_tags_route(feed_url="https://never-heard-of.example/feed", tags="c++")
+    resp = routes.feeds.set_feed_suggested_tags_route(feed_url="https://never-heard-of.example/feed", tags="c++")
     assert resp.status_code == 404
 
 

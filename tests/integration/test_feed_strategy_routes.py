@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.feeds
 
 
 class _FakeThread:
@@ -51,10 +52,11 @@ def _dummy_meta_cm():
 
 def test_image_strategy_change_binds_request_user_to_bg_thread(monkeypatch):
     app = FastAPI()
-    app.post("/feeds/strategy")(main.set_feed_image_strategy)
+    app.post("/feeds/strategy")(routes.feeds.set_feed_image_strategy)
     monkeypatch.setattr(main.lead_image_service, "store_feed_strategy", lambda *a, **k: None)
     monkeypatch.setattr(main.lead_image_service, "clear_lead_image_cache", lambda *a, **k: ([], []))
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_cm)
+    monkeypatch.setattr(routes.feeds, "get_meta_connection", _dummy_meta_cm)
     monkeypatch.setattr(main.tenancy, "current_user_id", lambda: "u_request_user")
     monkeypatch.setattr(main.threading, "Thread", _FakeThread)
 
@@ -75,9 +77,11 @@ def test_image_strategy_change_binds_request_user_to_bg_thread(monkeypatch):
 
 def test_thumb_strategy_auto_binds_request_user_to_bg_thread(monkeypatch):
     app = FastAPI()
-    app.post("/feeds/thumb-strategy")(main.set_feed_thumb_strategy_route)
+    app.post("/feeds/thumb-strategy")(routes.feeds.set_feed_thumb_strategy_route)
     monkeypatch.setattr(main, "upsert_feed_thumb_strategy", lambda *a, **k: None)
+    monkeypatch.setattr(routes.feeds, "upsert_feed_thumb_strategy", lambda *a, **k: None)
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_cm)
+    monkeypatch.setattr(routes.feeds, "get_meta_connection", _dummy_meta_cm)
     monkeypatch.setattr(main.tenancy, "current_user_id", lambda: "u_request_user")
     monkeypatch.setattr(main.threading, "Thread", _FakeThread)
 

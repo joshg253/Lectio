@@ -11,11 +11,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.feeds
 
 
 def _build_app() -> FastAPI:
     app = FastAPI()
-    app.post("/feeds/reparse")(main.reparse_feed_route)
+    app.post("/feeds/reparse")(routes.feeds.reparse_feed_route)
     return app
 
 
@@ -44,6 +45,7 @@ def _patch_reader(monkeypatch, reader):
         yield reader
 
     monkeypatch.setattr(main, "get_reader", _get_reader)
+    monkeypatch.setattr(routes.feeds, "get_reader", _get_reader)
 
 
 def test_reparse_marks_stale_then_updates(monkeypatch):

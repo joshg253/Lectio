@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.feeds
 from services import tenancy
 
 FEED = "https://example.test/feed.xml"
@@ -36,7 +37,7 @@ def configured(tmp_path):
 
 def _client() -> TestClient:
     app = FastAPI()
-    app.post("/feeds/change-url")(main.change_feed_url_route)
+    app.post("/feeds/change-url")(routes.feeds.change_feed_url_route)
     return TestClient(app)
 
 

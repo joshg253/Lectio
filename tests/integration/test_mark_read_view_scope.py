@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.feeds
 from services import tenancy
 
 FEED_A = "https://a.example.test/feed"
@@ -63,13 +64,13 @@ def _seed_entry(reader, *, feed_url: str, entry_id: str, published=OLD) -> None:
 
 def _folder_app():
     app = FastAPI()
-    app.post("/folders/mark-read")(main.mark_folder_as_read)
+    app.post("/folders/mark-read")(routes.feeds.mark_folder_as_read)
     return app
 
 
 def _feed_app():
     app = FastAPI()
-    app.post("/feeds/mark-read")(main.mark_feed_as_read)
+    app.post("/feeds/mark-read")(routes.feeds.mark_feed_as_read)
     return app
 
 

@@ -7,13 +7,14 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import main
+import main  # noqa: F401 -- must import before routes.feeds (see routes/__init__.py)
+import routes.feeds
 from services import feed_discovery
 
 
 def _app():
     app = FastAPI()
-    app.get("/feeds/discover")(main.discover_feed_route)
+    app.get("/feeds/discover")(routes.feeds.discover_feed_route)
     return app
 
 

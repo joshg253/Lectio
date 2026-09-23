@@ -17,8 +17,8 @@ Two distinctions this makes, or reporting/applying it does damage:
      probe_dead_feeds.py already guards against, reused here via
      _looks_like_same_feed.
 
---apply calls main.change_feed_url_route directly (same function the Change
-Feed URL UI posts to, and the same pattern scripts/apply_feed_url_rewrites.py
+--apply calls routes.feeds.change_feed_url_route directly (same function the
+Change Feed URL UI posts to, and the same pattern scripts/apply_feed_url_rewrites.py
 already uses for a live-app helper) with force=0, so its own independent
 probe_url verification and full meta-table migration still run -- this script
 only picks which URLs are worth offering it, never bypasses its checks.
@@ -161,7 +161,8 @@ def main_cli(argv: list[str] | None = None) -> int:
         print(f"wrote {args.json}")
 
     if args.apply:
-        import main  # noqa: E402
+        import main  # noqa: E402,F401 -- must import before routes.feeds (see routes/__init__.py)
+        import routes.feeds  # noqa: E402
         from services import tenancy  # noqa: E402
 
         candidates = [x for x in results if x["verdict"] == "candidate"]
@@ -169,7 +170,7 @@ def main_cli(argv: list[str] | None = None) -> int:
         applied = skipped = 0
         with tenancy.user_context(args.user):
             for x in candidates:
-                resp = main.change_feed_url_route(old_url=x["url"], new_url=x["final_url"], force=0)
+                resp = routes.feeds.change_feed_url_route(old_url=x["url"], new_url=x["final_url"], force=0)
                 ok = getattr(resp, "status_code", 500) < 400
                 print(f"  {'OK ' if ok else 'ERR'}  {x['url'][:60]} -> {x['final_url'][:60]}")
                 if ok:

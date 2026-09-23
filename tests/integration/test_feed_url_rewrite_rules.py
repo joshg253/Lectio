@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.feeds
 from services import tenancy
 
 FEED = "https://tush.ar/rss.xml"
@@ -59,8 +60,8 @@ def configured(tmp_path):
 
 def _client() -> TestClient:
     app = FastAPI()
-    app.post("/feeds/url-rewrites")(main.add_feed_url_rewrite_route)
-    app.post("/feeds/url-rewrites/delete")(main.delete_feed_url_rewrite_route)
+    app.post("/feeds/url-rewrites")(routes.feeds.add_feed_url_rewrite_route)
+    app.post("/feeds/url-rewrites/delete")(routes.feeds.delete_feed_url_rewrite_route)
     return TestClient(app)
 
 

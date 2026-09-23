@@ -12,12 +12,13 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import main
+import main  # noqa: F401 -- must import before routes.feeds (see routes/__init__.py)
+import routes.feeds
 
 
 def _app():
     app = FastAPI()
-    app.get("/feeds/suggest-migration")(main.suggest_feed_migration_route)
+    app.get("/feeds/suggest-migration")(routes.feeds.suggest_feed_migration_route)
     return app
 
 

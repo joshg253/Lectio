@@ -150,4 +150,68 @@ now import `routes.settings` and register `settings_routes.mark_feed_needs_repla
 shape via `inspect.getsource`: it fell back to grepping `main.__file__`'s raw text for `_ADMIN_ONLY = {` since
 `main.save_settings` never existed (the real name is `save_all_settings`), and that text is no longer in main.py now
 that the function moved — retargeted to `inspect.getsource(routes.settings.save_all_settings)` directly.
+
+`routes/feeds.py` (Stage 8 of the route-by-URL-prefix split -- the biggest single cluster at 61 routes,
+scoped into sub-stages A-E) was NOT done in one shot: this file started with only sub-stage A's 10
+routes (folder CRUD + tree reads -- `/api/folders`, `POST /folders`, `/folders/rename`, `/folders/delete`,
+`/folders/properties`, `/folders/cadence`, `/folders/retention`, `/folders/mark-read`,
+`/tree/folder-feeds/{folder_id}`, `/api/folder-feeds`); sub-stages B (feed discovery/add flow), C (display/
+thumbnail strategy config), D (network/fetch settings + lifecycle), and E (tags/attachments/curation/bulk
+ops) each add more routes to this same module in later tasks -- don't assume this is the final state. No
+ordering constraint for sub-stage A: none of its handlers touch `_run_automation_after_refresh` or anything
+else from the late `services.automation_rules` import, so it's imported alongside the plain
+`routes.compat_*`/`routes.tags`-style modules. No helper moved with its route -- `get_folder_properties` and
+`delete_folder` stay in main.py, tested directly as `main.<name>` by `tests/integration/test_folder_properties_counts.py`,
+`tests/integration/test_retention_purge.py`, and `tests/integration/test_feed_removal_consolidation.py`;
+`_FOLDER_CADENCE_LAST_REFRESH_PREFIX` stays, also read by the still-in-main.py cadence-refresh scheduler;
+`_mark_entries_as_read_for_view` stays, shared with the still-in-main.py `/feeds/mark-read` and
+`/entries/mark-older-than-read` routes. Two test files needed retargeting for the usual "handler registered
+directly as `main.<name>` on a bare test `FastAPI()` app" gotcha (`tests/integration/test_mark_read_routes.py`,
+`tests/integration/test_mark_read_view_scope.py`, both for `/folders/mark-read` -> `routes.feeds.mark_folder_as_read`);
+the former also hit the copied-reference monkeypatch gotcha (`get_meta_connection`, `get_folder_feed_urls`,
+`_mark_entries_as_read_for_view`, and `unread_counts_cache` all needed patching on both `main` and `routes.feeds`).
+
+Stage 8B added the feed discovery/add flow (13 more routes: `/feeds/discover`, `/feeds/compare`, `POST /feeds`,
+the `/scraped-feeds*` cluster, `/feeds/properties`, `/feeds/suggest-migration`, `/feeds/set-user-title`,
+`/feeds/fix-url-titles`, `/feeds/lazy-titles`) to the same `routes/feeds.py` module -- see that file's own
+docstring for the full rationale. Sub-stages C-E (display/thumbnail strategy config, network/fetch settings +
+lifecycle, tags/attachments/curation/bulk ops) still come later.
+
+Stage 8C added the feed display/thumbnail strategy config cluster (10 more routes, all `POST`: `/feeds/strategy`,
+`/feeds/display-prefs`, `/feeds/backfill-hide-shorts`, `/feeds/thumbnail-url`, `/feeds/thumb-crop`,
+`/feeds/smart-min-scale`, `/feeds/fill-zoom`, `/feeds/thumb-strategy`, `/feeds/caption-source`,
+`/feeds/strategy-refresh`) to the same `routes/feeds.py` module -- see that file's own docstring for the full
+rationale, including which helpers moved (`_VALID_MANUAL_STRATEGIES`, `upsert_feed_thumb_crop`) versus stayed in
+main.py and got imported back. Sub-stage E (tags/attachments/curation/bulk ops) still comes later.
+
+Stage 8D added the feed network/fetch settings + lifecycle cluster (12 more routes: `/feeds/browser-ua`,
+`/feeds/proxy`, `/feeds/tailscale`, `/feeds/flaresolverr`, `/feeds/reparse`, `/feeds/move`, `/feeds/disable`,
+`/feeds/enable`, `/feeds/toggle-updates`, `/feeds/change-url`, `/feeds/unsubscribe`, `/feeds/curation-count`) to
+the same `routes/feeds.py` module -- see that file's own docstring for the full rationale. Real feed-lifecycle
+logic, not thin wrappers; only `feed_curation_counts` moved as a genuinely single-route-only helper, while the
+`flag_*`/`unflag_*`/`_invalidate_*_feeds_cache` fetch-escalation families, `disable_feed`/`enable_feed`,
+`purge_orphaned_feed`, and several others stayed in main.py despite looking route-adjacent, each confirmed shared
+with still-in-main.py code, other `routes/*.py` modules, or tested directly. Two scripts
+(`scripts/fix_reddit_rss_host.py`, `scripts/find_redirecting_feeds.py`) called `change_feed_url_route` directly as
+a plain function and were retargeted from `main.change_feed_url_route` to `routes.feeds.change_feed_url_route`.
+
+Stage 8E added the final cluster (16 more routes: tags/attachments/curation/bulk ops --
+`/feeds/suggested-tags`, `/feeds/attachment-candidates`, `/feeds/attachment-candidate-suppress`,
+`/feeds/attachment-exts`, `/feeds/set-website`, `/feeds/url-rewrites`, `/feeds/url-rewrites/delete`,
+`/feeds/curation-items`, `/feeds/combine`, `/feeds/duplicates`, `/feeds/duplicates/undismiss`,
+`/feeds/duplicates/dismiss`, `/feeds/multi-folder`, `/feeds/multi-folder/resolve`, `/feeds/bulk`,
+`/feeds/mark-read`) to `routes/feeds.py` -- see that file's own docstring for the full rationale. **This
+closes out Stage 8: `routes/feeds.py` is complete at 61 routes across sub-stages A-E, and no further
+sub-stages are planned.** The one new wrinkle this sub-stage hit: `bulk_feed_action`'s "refresh" action
+calls `_run_automation_after_refresh` directly, so `routes/feeds.py` itself now needs the same late-import
+treatment `routes/system.py` and `routes/automation.py` already needed -- its import moved from the early
+alphabetical block in main.py's bottom-of-file import section to after the `services.automation_rules`
+import. `routes/integrations_deviantart.py` had to move later still, since its watchlist auto-pause path
+calls `bulk_feed_action` directly and switched from `from main import bulk_feed_action` to `from
+routes.feeds import bulk_feed_action` -- which only resolves once `routes.feeds` has already fully loaded.
+One script (`scripts/combine_deviantart_galleries.py`) called `combine_feeds_route` directly as a plain
+function, the same shape Stage 8D found twice, and was retargeted the same way. Nine test files needed
+retargeting for the usual gotchas (handler-on-a-bare-`FastAPI()`-app and copied-reference monkeypatches);
+`tests/integration/test_feed_removal_consolidation.py` needed the largest sweep since it calls several of
+this sub-stage's routes as plain functions throughout the file.
 """

@@ -207,9 +207,101 @@ ordered safest → riskiest:
    but `/tmp` is a shared host-wide tmpfs, so this was flagged and a standing feedback note added
    (`feedback-subagent-no-manual-tmp-clear` in project memory) to brief every future stage against
    it explicitly. Full `make test`/`lint`/`types` pass (4,192 tests).
-8. `routes/feeds.py` — `/feeds*`, `/folders*`, `/tree/folder-feeds/*`, `/scraped-feeds*`,
-   `/api/folders`, `/api/folder-feeds` (~61) — biggest single cluster; scope its own A-E sub-stages
-   the way the integrations cluster did rather than one move.
+8. `routes/feeds.py` — biggest single cluster, 60 routes confirmed 2026-09-21 (spanning
+   main.py:23641-28244, plus `/tree/folder-feeds/{folder_id}` and `/api/folder-feeds` as outliers
+   around 30367/30623 — always re-grep, these numbers drift every stage). Scoped into its own A-E
+   sub-stages, same reasoning as the original integrations cluster (safest → riskiest):
+   - **A — done (2026-09-21).** Folder CRUD + tree reads: `/api/folders`, `POST /folders`,
+     `/folders/rename`, `/folders/delete`, `/folders/properties`, `/folders/cadence`,
+     `/folders/retention`, `/folders/mark-read`, `/tree/folder-feeds/{folder_id}`,
+     `/api/folder-feeds` (10 routes, exactly as scoped, no discrepancy). main.py: 31,247 → 30,991
+     lines; `routes/feeds.py` created at 346 lines (sub-stages B-E extend the same file). No
+     genuinely single-route-only helper existed next to any of the 10 — everything touched was
+     either general infra or already independently tested, confirmed clean via the
+     `routes/*.py`/`scripts/*.py`/`tests/` three-way check. No `services.automation_rules` ordering
+     constraint needed. 2 test files retargeted for `POST /folders/mark-read` →
+     `routes.feeds.mark_folder_as_read`, one hitting both known gotchas (4 helpers needing a second
+     monkeypatch on `routes.feeds` alongside `main`). Full `make test`/`lint`/`types` pass.
+   - **B — done (2026-09-22).** Feed discovery/add flow: `/feeds/discover`, `/feeds/compare`,
+     `POST /feeds`, `/scraped-feeds*` (5), `/feeds/properties`, `/feeds/suggest-migration`,
+     `/feeds/set-user-title`, `/feeds/fix-url-titles`, `/feeds/lazy-titles` (13 routes, exactly as
+     scoped). main.py: 30,991 → 30,520 lines; `routes/feeds.py`: 346 → 898 lines (23 routes total
+     across 8A+8B). **Not a thin wrapper**, closer to Stage 6 — `create_feed` has real branching
+     (dev.to, DeviantArt watch-vs-gallery, discovery-refusal classification, browser-UA escalation)
+     and the `/scraped-feeds` cluster does meaningful validation/orchestration around
+     `services/scraper_service.py`, not pure pass-through. Only 2 genuinely single-route helpers
+     moved (`_is_youtube_url`, `_site_name_from_feed_url` + its constants); everything else stayed
+     in main.py — several confirmed shared with other already-moved route modules
+     (`_devto_config_from_form` with `routes/system.py`; `get_deviantart_user_token`/
+     `get_deviantart_credentials` with `routes/integrations_deviantart.py`/`routes/settings.py`),
+     one confirmed via a `scripts/*.py` caller (`_is_youtube_host`). Verification went beyond the
+     usual three checks: FastAPI 0.141 wraps included routers in a lazy object so `main.app.routes`
+     no longer flattens sub-router routes (a dead end chased and ruled out), so correctness was
+     confirmed instead with a live `TestClient(main.app)` hitting all 13 moved paths for real
+     200s. 4 test files retargeted for the usual two gotchas. Full `make test`/`lint`/`types` pass.
+   - **C — done (2026-09-22).** Feed display/thumbnail strategy config: `/feeds/strategy`,
+     `/feeds/display-prefs`, `/feeds/backfill-hide-shorts`, `/feeds/thumbnail-url`,
+     `/feeds/thumb-crop`, `/feeds/smart-min-scale`, `/feeds/fill-zoom`, `/feeds/thumb-strategy`,
+     `/feeds/caption-source`, `/feeds/strategy-refresh` (10 routes, exactly as scoped). main.py:
+     30,520 → 30,208 lines; `routes/feeds.py`: 898 → 1,264 lines (33 routes across 8A-C). Touches
+     `lead_image_service` (the shared singleton) but nothing moved out of
+     `services/lead_image_plugins.py`/`services/lead_images.py` themselves, as expected. Only 2
+     single-route helpers moved (`_VALID_MANUAL_STRATEGIES`, `upsert_feed_thumb_crop`); its four
+     sibling `upsert_feed_*` helpers each stayed — every one individually tested directly as
+     `main.<name>` by its own dedicated test file, confirmed via the three-way grep rather than
+     assumed from the sibling pattern. `_pin_feed_thumbnail_bytes`/`_drop_pinned_feed_thumbnail`
+     correctly left alone despite being route-adjacent — they belong to the still-in-main.py
+     `/api/feed-thumb` pinning machinery, out of this sub-stage's scope entirely.
+     `/entries/feed-tags` and `_keep_existing_sensitive`, both physically sandwiched inside this
+     cluster, confirmed untouched. 2 test files retargeted for the usual two gotchas. Full
+     `make test`/`lint`/`types` pass; live `TestClient(main.app)` hit all 10 paths for a real
+     (auth-rejected but router-resolved) response.
+   - **D — done (2026-09-22).** Feed network/fetch settings + lifecycle: `/feeds/browser-ua`,
+     `/feeds/proxy`, `/feeds/tailscale`, `/feeds/flaresolverr`, `/feeds/reparse`, `/feeds/move`,
+     `/feeds/disable`, `/feeds/enable`, `/feeds/toggle-updates`, `/feeds/change-url`,
+     `/feeds/unsubscribe`, `/feeds/curation-count` (12 routes, exactly as scoped). main.py: 30,208
+     → 29,618 lines; `routes/feeds.py`: 1,264 → 1,934 lines (45 routes across 8A-D). Only 1
+     genuinely single-route helper moved (`feed_curation_counts`); `disable_feed`/`enable_feed` and
+     the whole `flag_*_feed`/`_invalidate_*_feeds_cache` family confirmed as load-bearing shared
+     primitives (DeviantArt watchlist auto-pause, the fetch-refusal escalation chain, other
+     already-moved route modules) — exactly the trap this sub-stage was briefed to watch for, and
+     it held. Found via the `scripts/*.py` leg of the three-way grep (not tests, not routes/*.py):
+     2 scripts call `change_feed_url_route` directly as a plain function, not over HTTP
+     (`scripts/fix_reddit_rss_host.py`, `scripts/find_redirecting_feeds.py --apply`) — both
+     retargeted. One self-inflicted near-miss caught mid-verification: a docstring the agent wrote
+     into `routes/feeds.py` happened to contain the same substring two tests were slicing main.py's
+     raw source for, so the tests silently matched the wrong text until the docstring was reworded
+     and the tests repointed at the real code. 5 test files retargeted total. Full
+     `make test`/`lint`/`types` pass; live `TestClient(main.app)` confirmed all 12 paths resolve.
+   - **E — done (2026-09-22), Stage 8 fully complete.** Feed tags/attachments/website/curation/bulk
+     ops: `/feeds/suggested-tags`, `/feeds/attachment-candidates`,
+     `/feeds/attachment-candidate-suppress`, `/feeds/attachment-exts`, `/feeds/set-website`,
+     `/feeds/url-rewrites`, `/feeds/url-rewrites/delete`, `/feeds/curation-items`,
+     `/feeds/combine`, `/feeds/duplicates`, `/feeds/duplicates/undismiss`,
+     `/feeds/duplicates/dismiss`, `/feeds/multi-folder`, `/feeds/multi-folder/resolve`,
+     `/feeds/bulk`, `/feeds/mark-read` (16 routes, exactly as scoped). main.py: 29,617 → 28,695
+     lines; `routes/feeds.py`: 1,934 → 2,882 lines, **61 routes total, done** — confirmed zero
+     remaining `/feeds*`/`/folders*`/`/scraped-feeds*`/`/tree/folder-feeds/*`/`/api/folders`/
+     `/api/folder-feeds` routes anywhere in main.py. The three dedup surfaces (this stage's
+     feed-level combine/duplicates, Stage 6's saved-article scan, the still-gated main entry-dedup
+     engine) stayed cleanly separate — verified via grep that none of Stage 6's or the gated
+     engine's names were touched. The riskiest sub-stage earned its billing: `bulk_feed_action`'s
+     "refresh" action calls `_run_automation_after_refresh`, a name late-bound via main.py's
+     bottom-of-file `services.automation_rules` import — moving it required relocating
+     `routes.feeds`'s own import to *after* that block (the same treatment Stage 1 needed), which
+     cascaded further since `routes/integrations_deviantart.py`'s watchlist auto-pause path calls
+     `bulk_feed_action` directly and had to switch from `from main import bulk_feed_action` to
+     `from routes.feeds import bulk_feed_action` — requiring `routes.integrations_deviantart`'s own
+     import to move to *after* `routes.feeds`'s new position too. Both moves verified independently
+     (read the actual import order in main.py, confirmed `import main` standalone still boots
+     clean, confirmed the one test importing `routes.integrations_deviantart` directly sorts
+     `import main` first per the established rule). A script-only caller found again via the
+     `scripts/*.py` grep leg (`scripts/combine_deviantart_galleries.py`, same shape Stage 8D hit
+     twice). 9 test files retargeted. Full `make test`/`lint`/`types` pass, plus an explicit
+     `ruff format --check` pass this time after Stage 8D's commit-time formatting catch.
+
+**Stage 8 (`routes/feeds.py`) is now fully done** — all 5 sub-stages (A-E), 61 routes, 0 remaining
+`/feeds`/`/folders`/`/scraped-feeds`/`/tree/folder-feeds` routes in main.py.
 9. `routes/entries.py` — `/entries/*` (~46) plus the `/api/*` thumb/img/bookmarklet-save cluster
    (`/api/entry-thumb`, `/api/favicon`, `/api/feed-thumb`, `/api/img`, `/api/bookmarklet/save`,
    `/api/save`, `/api/unread-counts`) if that doesn't want to be its own `routes/media.py` —

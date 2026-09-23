@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.feeds
 from services import tenancy
 
 FEED = "https://tush.ar/rss.xml"
@@ -75,7 +76,7 @@ def _seed_old_domain_posts():
 
 def _app():
     app = FastAPI()
-    app.post("/feeds/set-website")(main.set_feed_website_route)
+    app.post("/feeds/set-website")(routes.feeds.set_feed_website_route)
     return app
 
 
