@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import pytest
 
-import main
+import main  # import first: routes.highlights does `from main import ...` at module scope
+import routes.highlights
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -499,8 +500,8 @@ def _app():
     from fastapi import FastAPI
 
     app = FastAPI()
-    app.get("/highlights/suggestions")(main.get_highlight_suggestions_route)
-    app.post("/highlights/merge-group")(main.merge_highlight_group_route)
+    app.get("/highlights/suggestions")(routes.highlights.get_highlight_suggestions_route)
+    app.post("/highlights/merge-group")(routes.highlights.merge_highlight_group_route)
     return app
 
 
@@ -696,7 +697,7 @@ def test_suggestions_route_includes_regex_convertible_bucket(env):
     _add_rule("folder", str(fid), "AirPods|iPhone", type="mark_as_read", is_regex=True)
 
     app = _app()
-    app.post("/highlights/merge-group-regex-convert")(main.merge_highlight_group_regex_convert_route)
+    app.post("/highlights/merge-group-regex-convert")(routes.highlights.merge_highlight_group_regex_convert_route)
     with TestClient(app) as client:
         r = client.get("/highlights/suggestions")
     assert r.status_code == 200
@@ -709,7 +710,7 @@ def test_merge_group_regex_convert_route_applies_and_persists(env):
     _add_rule("global", "", "Lowe's", is_regex=False)
     _add_rule("global", "", "AirPods|iPhone", is_regex=True)
     app = _app()
-    app.post("/highlights/merge-group-regex-convert")(main.merge_highlight_group_regex_convert_route)
+    app.post("/highlights/merge-group-regex-convert")(routes.highlights.merge_highlight_group_regex_convert_route)
     with TestClient(app) as client:
         r = client.post(
             "/highlights/merge-group-regex-convert",

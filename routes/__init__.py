@@ -35,4 +35,18 @@ imported late from main.py's bottom section, so a test that imports it before
 
 Same again for `services/automation_rules.py` (`from main import
 build_keyword_matcher`), imported late for the same reason.
+
+`routes/tags.py` (Stage 3: tag alias/inventory/global-suppression CRUD, plus
+`/feed-tags/dismiss` which is a tags concern despite its URL) and
+`routes/highlights.py` (Stage 3: the highlight/automation-rule CRUD surface —
+add/edit/remove/toggle/reorder plus the merge-suggestion routes) have no
+ordering constraint either, and are imported alongside the plain
+`routes.integrations_*`/`routes.compat_*` modules. Both leave their
+widely-shared helpers in main.py rather than moving them: `normalize_tag_value`
+(51 call sites) and the rest of the tag-alias/rename/delete helpers for
+`routes.tags`, and `get_highlight_keywords`/`add_highlight_keyword`/the
+rule-group finder-and-merge functions for `routes.highlights` — all of these
+are also called from `services/automation_rules.py`, other main.py-resident
+routes, scripts, or are exercised directly as `main.<name>` by dedicated test
+files.
 """

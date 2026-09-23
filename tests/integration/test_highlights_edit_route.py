@@ -15,7 +15,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import main
+import main  # import first: routes.highlights does `from main import ...` at module scope
+import routes.highlights
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -41,9 +42,9 @@ def env(tmp_path):
 
 def _app():
     app = FastAPI()
-    app.post("/highlights/add")(main.add_highlight_route)
-    app.post("/highlights/edit")(main.edit_highlight_route)
-    app.post("/highlights/remove")(main.remove_highlight_route)
+    app.post("/highlights/add")(routes.highlights.add_highlight_route)
+    app.post("/highlights/edit")(routes.highlights.edit_highlight_route)
+    app.post("/highlights/remove")(routes.highlights.remove_highlight_route)
     return app
 
 
