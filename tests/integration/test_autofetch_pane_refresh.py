@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -85,7 +86,7 @@ def test_kicks_off_a_job_and_the_status_route_reflects_it_running_then_done(thin
     assert job is not None and job["running"] is True
 
     app = FastAPI()
-    app.get("/entries/autofetch-status")(main.entry_autofetch_status)
+    app.get("/entries/autofetch-status")(routes.entries.entry_autofetch_status)
     with TestClient(app) as client:
         r = client.get("/entries/autofetch-status", params={"feed_url": FEED, "entry_id": ENTRY})
         assert r.json() == {"ok": True, "pending": True, "done": False, "success": None}
@@ -98,7 +99,7 @@ def test_kicks_off_a_job_and_the_status_route_reflects_it_running_then_done(thin
 
 def test_status_route_is_a_harmless_noop_for_an_entry_with_no_job(thin_entry):
     app = FastAPI()
-    app.get("/entries/autofetch-status")(main.entry_autofetch_status)
+    app.get("/entries/autofetch-status")(routes.entries.entry_autofetch_status)
     with TestClient(app) as client:
         r = client.get("/entries/autofetch-status", params={"feed_url": FEED, "entry_id": "never-tagged"})
         assert r.json() == {"ok": True, "pending": False, "done": False, "success": None}
@@ -133,7 +134,7 @@ def test_a_second_call_while_the_first_job_is_still_running_does_not_spawn_anoth
 def test_star_route_response_flags_autofetch_pending_for_a_stub(thin_entry, monkeypatch):
     monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e: {"ok": True})
     app = FastAPI()
-    app.post("/entries/saved")(main.toggle_entry_saved)
+    app.post("/entries/saved")(routes.entries.toggle_entry_saved)
     with TestClient(app) as client:
         r = client.post(
             "/entries/saved",
@@ -146,7 +147,7 @@ def test_star_route_response_flags_autofetch_pending_for_a_stub(thin_entry, monk
 def test_tags_route_response_flags_autofetch_pending_for_a_stub(thin_entry, monkeypatch):
     monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e: {"ok": True})
     app = FastAPI()
-    app.post("/entries/tags")(main.set_entry_manual_tags)
+    app.post("/entries/tags")(routes.entries.set_entry_manual_tags)
     with TestClient(app) as client:
         r = client.post(
             "/entries/tags",

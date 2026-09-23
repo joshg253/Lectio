@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -61,8 +62,8 @@ def tenant(tmp_path):
 
 def _app():
     app = FastAPI()
-    app.post("/entries/saved")(main.toggle_entry_saved)
-    app.post("/entries/undo-unstar")(main.undo_unstar)
+    app.post("/entries/saved")(routes.entries.toggle_entry_saved)
+    app.post("/entries/undo-unstar")(routes.entries.undo_unstar)
     return app
 
 

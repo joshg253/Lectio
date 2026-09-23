@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -16,16 +17,17 @@ import main
 
 def _build_app(monkeypatch, *, username: str = "user", password: str = "pass", entry=None):
     app = FastAPI()
-    app.post("/entries/instapaper")(main.save_to_instapaper)
+    app.post("/entries/instapaper")(routes.entries.save_to_instapaper)
 
-    monkeypatch.setattr(
-        main,
-        "get_runtime_setting",
-        lambda key: {
-            main.SETTING_INSTAPAPER_USERNAME: username,
-            main.SETTING_INSTAPAPER_PASSWORD: password,
-        }.get(key, ""),
-    )
+    # routes.entries did `from main import (...)` at module load, so each of these
+    # copied a reference at that time -- patching main's own attribute doesn't
+    # reach routes.entries' copy, both need patching (routes/__init__.py's docstring).
+    _get_setting = lambda key: {  # noqa: E731
+        main.SETTING_INSTAPAPER_USERNAME: username,
+        main.SETTING_INSTAPAPER_PASSWORD: password,
+    }.get(key, "")
+    monkeypatch.setattr(main, "get_runtime_setting", _get_setting)
+    monkeypatch.setattr(routes.entries, "get_runtime_setting", _get_setting)
 
     class _FakeReader:
         def __enter__(self):
@@ -38,6 +40,7 @@ def _build_app(monkeypatch, *, username: str = "user", password: str = "pass", e
             return entry
 
     monkeypatch.setattr(main, "get_reader", lambda: _FakeReader())
+    monkeypatch.setattr(routes.entries, "get_reader", lambda: _FakeReader())
     return app
 
 

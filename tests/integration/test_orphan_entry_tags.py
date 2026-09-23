@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 import main
+import routes.entries
 import routes.feeds
 from services import tenancy
 
@@ -307,14 +308,14 @@ def test_orphan_entry_detail_stops_suggesting_a_pinned_tag_once_applied(orphan_e
 
 
 def test_entry_feed_tags_route_404s_for_a_genuinely_unknown_entry(orphan_env):
-    resp = main.entry_feed_tags_route(feed_url="https://never-heard-of.example/feed", entry_id="x")
+    resp = routes.entries.entry_feed_tags_route(feed_url="https://never-heard-of.example/feed", entry_id="x")
     assert resp.status_code == 404
 
 
 def test_entry_feed_tags_route_serves_pinned_tags_for_an_orphan_entry(orphan_env):
     _seed_archive_row()
     main.set_feed_pinned_tags(ORPHAN_FEED, "c++")
-    resp = main.entry_feed_tags_route(feed_url=ORPHAN_FEED, entry_id=ORPHAN_ENTRY)
+    resp = routes.entries.entry_feed_tags_route(feed_url=ORPHAN_FEED, entry_id=ORPHAN_ENTRY)
     assert resp.status_code == 200
     import json
 
@@ -328,7 +329,7 @@ def test_entry_feed_tags_route_excludes_already_applied_orphan_tag(orphan_env):
     _seed_archive_row()
     main.set_feed_pinned_tags(ORPHAN_FEED, "c++")
     main.set_manual_tags_for_entry(ORPHAN_FEED, ORPHAN_ENTRY, "c++")
-    resp = main.entry_feed_tags_route(feed_url=ORPHAN_FEED, entry_id=ORPHAN_ENTRY)
+    resp = routes.entries.entry_feed_tags_route(feed_url=ORPHAN_FEED, entry_id=ORPHAN_ENTRY)
     import json
 
     body = json.loads(resp.body)

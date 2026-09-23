@@ -7,6 +7,7 @@ import zlib
 import pytest
 
 import main
+import routes.entries
 from services import tenancy
 
 SRC = "https://example.test/src"
@@ -167,7 +168,7 @@ def test_move_rejects_missing_entry_and_feed_and_self(env):
 def _batch(pairs, target=DST):
     import json
 
-    resp = main.move_entries_to_feed_batch_route(entries=json.dumps(pairs), target_url=target)
+    resp = routes.entries.move_entries_to_feed_batch_route(entries=json.dumps(pairs), target_url=target)
     return json.loads(bytes(resp.body))
 
 
@@ -193,7 +194,7 @@ def test_batch_move_rejects_oversize_and_bad_payload(env):
 
     data = _batch([[SRC, str(i)] for i in range(main._MOVE_BATCH_CAP + 1)])
     assert not data["ok"] and "Too many" in data["error"]
-    resp = main.move_entries_to_feed_batch_route(entries="not json", target_url=DST)
+    resp = routes.entries.move_entries_to_feed_batch_route(entries="not json", target_url=DST)
     assert not json.loads(bytes(resp.body))["ok"]
 
 

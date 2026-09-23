@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://concept2.example.test/feed"
@@ -108,7 +109,7 @@ def test_get_entry_detail_still_shows_an_undismissed_re_harvested_tag(configured
 
 def test_entry_feed_tags_route_does_not_resurrect_a_dismissed_tag(configured, monkeypatch):
     _dismiss_after_initial_harvest(monkeypatch)
-    resp = main.entry_feed_tags_route(feed_url=FEED, entry_id=ENTRY_LINK)
+    resp = routes.entries.entry_feed_tags_route(feed_url=FEED, entry_id=ENTRY_LINK)
     import json
 
     body = json.loads(resp.body)

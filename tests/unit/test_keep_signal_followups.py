@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 
 import main
+from routes import entries as entries_routes
 from routes import system as system_routes
 from services import lead_images
 
@@ -182,8 +183,8 @@ def test_auto_refetch_is_wired_to_the_routes_not_the_tag_service():
     ingest, across everything a refresh just delivered — hooking it would turn
     one refresh into a burst of outbound requests at one host."""
     assert "_maybe_autofetch_on_keep" not in inspect.getsource(main.set_manual_tags_for_entry)
-    assert "_maybe_autofetch_on_keep" in inspect.getsource(main.set_entry_manual_tags)
-    assert "_maybe_autofetch_on_keep" in inspect.getsource(main.toggle_entry_saved)
+    assert "_maybe_autofetch_on_keep" in inspect.getsource(entries_routes.set_entry_manual_tags)
+    assert "_maybe_autofetch_on_keep" in inspect.getsource(entries_routes.toggle_entry_saved)
 
 
 def test_auto_refetch_skips_lectio_captures():
@@ -194,9 +195,9 @@ def test_auto_refetch_skips_lectio_captures():
 
 
 def test_auto_refetch_does_not_fire_on_unstar_or_on_clearing_tags():
-    star = inspect.getsource(main.toggle_entry_saved)
+    star = inspect.getsource(entries_routes.toggle_entry_saved)
     assert re.search(r"if saved:\s*\n\s*\w+\s*=\s*_maybe_autofetch_on_keep", star)
-    tags = inspect.getsource(main.set_entry_manual_tags)
+    tags = inspect.getsource(entries_routes.set_entry_manual_tags)
     assert re.search(r"if tags:\s*\n\s*\w+\s*=\s*_maybe_autofetch_on_keep", tags)
 
 

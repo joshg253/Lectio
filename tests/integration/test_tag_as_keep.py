@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -119,7 +120,7 @@ def _unstar_via_route(feed_url: str, entry_id: str):
     bare app so no lifespan/auth/background threads run), exercising the star-off
     keep-guard branch symmetrically with the tag paths above."""
     app = FastAPI()
-    app.post("/entries/saved")(main.toggle_entry_saved)
+    app.post("/entries/saved")(routes.entries.toggle_entry_saved)
     with TestClient(app) as client:
         return client.post(
             "/entries/saved",

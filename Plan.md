@@ -302,10 +302,80 @@ ordered safest → riskiest:
 
 **Stage 8 (`routes/feeds.py`) is now fully done** — all 5 sub-stages (A-E), 61 routes, 0 remaining
 `/feeds`/`/folders`/`/scraped-feeds`/`/tree/folder-feeds` routes in main.py.
-9. `routes/entries.py` — `/entries/*` (~46) plus the `/api/*` thumb/img/bookmarklet-save cluster
-   (`/api/entry-thumb`, `/api/favicon`, `/api/feed-thumb`, `/api/img`, `/api/bookmarklet/save`,
-   `/api/save`, `/api/unread-counts`) if that doesn't want to be its own `routes/media.py` —
-   decide at extraction time. Also biggest; needs its own sub-staging.
+9. `routes/entries.py` — 45 `/entries/*` routes confirmed 2026-09-22 (main.py:18332-28044, an even
+   wider span than Stage 8's feeds cluster was). Decided at extraction time on the `/api/*`
+   question Plan.md deferred: don't fold it into `routes/entries.py`, it doesn't share one owner —
+   `/api/entry-thumb`/`/api/feed-thumb`/`/api/img`/`/api/favicon` are pure image-proxy concerns (a
+   later small `routes/media.py`), `/api/save`/`/api/bookmarklet/save` are external save-capture
+   endpoints that belong with Stage 6's `routes/saved.py` instead, and `/api/unread-counts` gets
+   decided when reached (natural fit is wherever the read-state sub-stage below lands). Scoped into
+   its own A-E sub-stages, same reasoning as Stage 8, safest → riskiest:
+   - **A — done (2026-09-22).** Content/reading utility (12, exactly as scoped): `/entries/lead-image`,
+     `/entries/media/audio`, `/entries/media/download`, `/entries/readability`, `/entries/source`,
+     `/entries/frame-check`, `/entries/feed-tags`, `/entries/content/has-original`,
+     `/entries/content/clean`, `/entries/content/revert`, `/entries/thumb-crop`,
+     `/entries/autofetch-status`. main.py: 28,695 → 28,254 lines; `routes/entries.py` created at
+     560 lines. No `services.automation_rules` ordering constraint needed. Only 1 single-route
+     helper moved (`_wrap_readability_html`); `_resolve_archived_readability_html` sat right next
+     to it but stayed — also called by the still-in-main.py e-ink `/read` article resolver (Stage
+     10 territory), confirmed via the three-way grep rather than assumed from adjacency, same trap
+     Stage 8D/6 already found twice. 5 test files retargeted for the usual two gotchas, no
+     `scripts/*.py` callers found this time. Full `make test`/`lint`/`types`/`ruff format --check`
+     pass; live `TestClient(main.app)` confirmed all 12 paths resolve.
+   - **B — done (2026-09-22).** Entry metadata edits + attachments (9, exactly as scoped):
+     `/entries/set-date`, `/entries/set-title`, `/entries/set-link`, `/entries/delete`,
+     `/entries/attachments`, `/entries/attachments/delete`, `/entries/attachments/delete-all`,
+     `/entries/attachments/save`, `/entries/attachments/save-all`. main.py: 28,254 → 27,908 lines;
+     `routes/entries.py`: 560 → 916 lines. `_hard_delete_entry` confirmed genuinely shared
+     (`routes/saved.py` calls it directly, plus 2 other still-in-main.py call sites) — stayed,
+     imported back. Self-caught mistake during the move: `_ENTRY_LINK_MAX_LEN` was deleted along
+     with its route block, then re-added in main.py once the "tested directly as `main.<name>`"
+     check caught it. 6 test files retargeted, no `monkeypatch.setattr(main,` hits and no
+     `scripts/*.py` callers this time. Full `make test`/`lint`/`types`/`ruff format --check` pass.
+   - **C — done (2026-09-22).** Move/organize + tags (9, exactly as scoped): `/entries/move-to-feed`,
+     `/entries/move-to-feed-batch`, `/entries/select-all-visible`, `/entries/move-visible-to-feed`,
+     `/entries/purge`, `/entries/discard`, `/entries/manual-tags-batch`, `/entries/tags`,
+     `/entries/tags-batch`. main.py: 27,908 → 27,244 lines; `routes/entries.py`: 916 → 1,613
+     lines. Confirmed the predicted overlap: the two tag routes lean on the same widely-shared tag
+     machinery Stage 3 left in main.py (`normalize_tag_value` and its whole neighborhood) — only
+     the handlers + `_merge_manual_tags` moved. `_move_entry_to_feed` confirmed shared
+     (`routes/saved.py` calls it directly, plus 2 scripts — a third script's mention turned out to
+     be just a comment, not an actual call, on independent spot-check). 8 test files retargeted,
+     no `scripts/*.py` callers of the moved routes themselves. Full
+     `make test`/`lint`/`types`/`ruff format --check` pass.
+   - **D — done (2026-09-22).** Read/unread/star state + integration sends (14, exactly as
+     scoped): `/entries/read`, `/entries/saved`, `/entries/archive`, `/entries/read-batch`,
+     `/entries/star-batch`, `/entries/mark-range-read`, `/entries/mark-older-than-read`,
+     `/entries/undo-mark-unread`, `/entries/undo-mark-read`, `/entries/undo-unstar`,
+     `/entries/mark-newer-than-unread`, `/entries/email`, `/entries/instapaper`,
+     `/entries/quire`. main.py: 27,244 → 26,270 lines; `routes/entries.py`: 1,613 → 2,619 lines.
+     Every unread-count touch confirmed going through the real accessor functions
+     (`_bump_unread_counts_generation()` under `unread_counts_cache_lock`), never a raw `global` —
+     grepped `routes/entries.py` for stray `global` statements to confirm zero, and the two
+     generation-bump tests (`test_read_batch.py`'s cache-invalidation pair) explicitly assert the
+     generation actually changes post-move, not just that the call succeeds. No
+     `services.automation_rules` ordering constraint needed — none of these 14 touch a late-bound
+     name, so no cascade into other modules this time (unlike Stage 8E). `_mark_entries_as_read_for_view`
+     confirmed shared with `routes/feeds.py`, stayed in main.py. 16 test files retargeted, no
+     `scripts/*.py` callers found. Full `make test`/`lint`/`types`/`ruff format --check` pass.
+   - **E — done (2026-09-22), Stage 9 fully complete.** `/entries/pane` alone. main.py: 26,270 →
+     26,191 lines; `routes/entries.py`: 2,619 → 2,731 lines, **45 routes total, done**. Turned out
+     not to be the risky entanglement case the Landmines note warned about: `entry_pane` is pure
+     orchestration — of the four shared rendering-core functions (`_home_inner`,
+     `list_entries_for_feeds`, `build_reader_page`, `get_entry_detail`), it only calls
+     `get_entry_detail`, confirmed by reading the handler body directly. All four stayed in
+     main.py untouched (verified: still defined there). One subtle judgment call: `_mark_entry_read_background`
+     had only one caller (`entry_pane`) but stayed in main.py anyway, because an unrelated
+     still-in-main.py test (`test_reader_view.py`, for the `/read` route) defensively monkeypatches
+     `main._mark_entry_read_background` even though that route never calls it — moving the function
+     would have broken `monkeypatch.setattr`'s requirement that the target attribute exist, for a
+     route this stage didn't touch. 1 test file retargeted. A stale main.py comment referencing
+     `main.entry_pane` (now wrong) was caught and fixed inline. Full
+     `make test`/`lint`/`types`/`ruff format --check` pass; a live `TestClient` check went beyond
+     the usual "not a 404" bar — seeded a real entry and confirmed actual rendered HTML + the
+     mark-read side effect fired.
+
+**Stage 9 (`routes/entries.py`) is now fully done** — all 5 sub-stages (A-E), 45 routes.
 10. `routes/home.py` — `/`, `/read`, `/read/offline` last: these are the routes the Landmines note
     already flags as reused-by-everything (`_home_inner`, `build_reader_page`, pane-swap); moving
     the handler is still just importing the core functions back from main.py like everything else,

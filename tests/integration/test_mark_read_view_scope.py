@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 import routes.feeds
 from services import tenancy
 
@@ -76,7 +77,7 @@ def _feed_app():
 
 def _older_than_app():
     app = FastAPI()
-    app.post("/entries/mark-older-than-read")(main.mark_entries_older_than_read)
+    app.post("/entries/mark-older-than-read")(routes.entries.mark_entries_older_than_read)
     return app
 
 

@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 from services import tenancy
 
 FEED = "https://blog.example.com/feed/"
@@ -61,7 +62,7 @@ def _seed(n):
 
 def _app():
     app = FastAPI()
-    app.post("/entries/mark-range-read")(main.mark_entries_range_read)
+    app.post("/entries/mark-range-read")(routes.entries.mark_entries_range_read)
     return app
 
 

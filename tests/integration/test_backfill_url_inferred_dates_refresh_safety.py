@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.entries
 import scripts.backfill_url_inferred_dates as backfill
 from services import tenancy
 
@@ -64,7 +65,7 @@ def configured(tmp_path):
 
 def _client() -> TestClient:
     app = FastAPI()
-    app.post("/entries/set-date")(main.set_entry_date_route)
+    app.post("/entries/set-date")(routes.entries.set_entry_date_route)
     return TestClient(app)
 
 

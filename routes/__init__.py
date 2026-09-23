@@ -214,4 +214,213 @@ function, the same shape Stage 8D found twice, and was retargeted the same way. 
 retargeting for the usual gotchas (handler-on-a-bare-`FastAPI()`-app and copied-reference monkeypatches);
 `tests/integration/test_feed_removal_consolidation.py` needed the largest sweep since it calls several of
 this sub-stage's routes as plain functions throughout the file.
+
+`routes/entries.py` (Stage 9 of the route-by-URL-prefix split -- 45 `/entries/*` routes, scoped into its
+own A-E sub-stages, same reasoning as Stage 8) **is only partially done: this file started with only
+sub-stage A's 12 routes** -- sub-stages B (entry metadata edits + attachments), C (move/organize + tags), D
+(read/unread/star state + integration sends), and E (`/entries/pane` alone, last) each add more routes to
+this same module in later tasks -- don't assume this is the final state. A/B/C/D are now in; E (`/entries/pane`
+alone) is the only sub-stage still remaining.
+
+Stage 9A -- content/reading utility: `GET /entries/lead-image`, `GET /entries/media/audio`,
+`GET /entries/media/download`, `POST /entries/thumb-crop`, `GET /entries/readability`, `GET /entries/source`,
+`GET /entries/frame-check`, `GET /entries/feed-tags`, `GET /entries/content/has-original`,
+`POST /entries/content/clean`, `POST /entries/content/revert`, `GET /entries/autofetch-status` (12 routes,
+exactly as scoped). main.py: 28,695 -> 28,254 lines; `routes/entries.py` created at 560 lines (sub-stages
+B-E extend the same file). No ordering constraint: none of these handlers touch
+`_run_automation_after_refresh` or anything else from the late `services.automation_rules` import, so this
+module is imported alongside the plain `routes.compat_*`/`routes.tags`-style modules.
+
+Only one helper moved with its route, having no caller anywhere else: `_wrap_readability_html` (with
+`entry_readability`). Its immediate neighbor `_resolve_archived_readability_html` looked like the same
+shape but stayed in main.py and got imported back instead -- it's also called by
+`resolve_reader_article_html`, the still-in-main.py e-ink `/read` view's article resolver (Stage 10), so
+moving it would have broken that caller; confirmed via the `routes/*.py`/`scripts/*.py`/`tests/` three-way
+grep, not assumed from physical adjacency. Everything else these 12 routes touch stayed in main.py and got
+imported back: widely-shared services/singletons (`lead_image_service`, `starred_archive_service`,
+`saved_articles_service`, `feed_tag_service`, `feed_tags_service_mod`, `content_edits`, `html_sanitize`,
+`url_guard`, `feed_refresh_service`, `get_reader`, `get_meta_connection`), helpers with a second
+still-in-main.py caller (`_resolve_entry_audio_url`/`_find_entry_audio_url`, shared between the two media
+routes and a third caller besides; `_lead_image_display_url`; `_resolve_entry_content_html`), a
+`state.py`-sourced `_PerUserDict` singleton also written by the still-in-main.py star/tag routes
+(`_autofetch_jobs`, Stage 9D), and helpers tested directly as `main.<name>` by a dedicated test file
+(`build_readability_response`, `_CLEANUP_ERROR_MESSAGES`/`_CLEANUP_ERROR_FALLBACK`). `_VALID_THUMB_CROPS` is
+the same constant `routes/feeds.py` has re-imported since Stage 8C.
+
+Four test files needed retargeting for the "handler registered directly as `main.<name>`" gotcha, in both
+its shapes: `tests/integration/test_autofetch_pane_refresh.py` and
+`tests/integration/test_entry_content_cleanup.py` register a moved handler directly onto a bare test
+`FastAPI()` app (-> `routes.entries.entry_autofetch_status` and
+`routes.entries.clean_entry_content_route`/`routes.entries.revert_entry_content_route`);
+`tests/integration/test_feed_tag_dismiss_survives_reharvest.py` and
+`tests/integration/test_orphan_entry_tags.py` (three call sites) call a moved handler directly as a plain
+function (-> `routes.entries.entry_feed_tags_route`). One test hit the copied-reference monkeypatch gotcha
+over real HTTP: `tests/integration/test_reader_view_stored_content_fallback.py` monkeypatches
+`main.build_readability_response` and then hits `GET /entries/readability` via `TestClient(main.app)` --
+since `entry_readability` now does its own `from main import build_readability_response`, the patch needed
+doubling onto `routes.entries.build_readability_response` too.
+
+Stage 9B -- entry metadata edits + attachments, 9 routes: `POST /entries/delete`, `POST /entries/set-date`,
+`POST /entries/set-title`, `POST /entries/set-link`, `GET /entries/attachments`,
+`POST /entries/attachments/delete`, `POST /entries/attachments/delete-all`, `POST /entries/attachments/save`,
+`POST /entries/attachments/save-all`. Sub-stages C (move/organize + tags), D (read/unread/star state +
+integration sends), and E (`/entries/pane` alone, last) still come later. `_parse_local_date_to_utc` and
+`_set_orphan_entry_date` moved with `/entries/set-date` (the former has no caller besides the latter, and the
+latter's own only caller is `set_entry_date_route`); `_ENTRY_TITLE_MAX_LEN` moved with `/entries/set-title`;
+`_entry_content_html_and_base` moved with `/entries/attachments`. `_hard_delete_entry` stayed and is imported
+back despite sitting immediately above `/entries/delete` -- its own docstring says it's "shared by
+/entries/delete and /saved/deduplicate", and `routes/saved.py` already imports it directly, confirmed via the
+`routes/*.py`/`scripts/*.py`/`tests/` three-way grep rather than assumed from the docstring alone (it's also
+tested directly as `main._hard_delete_entry` by two dedicated test files). `_ENTRY_LINK_MAX_LEN` stayed too,
+for the "tested directly as `main.<name>`" reason Stage 9A's `_CLEANUP_ERROR_MESSAGES` and several earlier
+stages' constants already established (`tests/integration/test_entry_link_override.py`);
+`STARRED_ASSET_URL_PREFIX` (8 other call sites across main.py), `candidate_attachment_links_in_html` (tested
+directly as `main.<name>`), `_filtered_file_enclosures` (a second still-in-main.py caller besides
+`_entry_content_html_and_base`), and `get_starred_archive_connection`/`invalidate_unread_counts_cache`
+(widely-shared low-level primitives) all stayed too and got imported back. Four test files needed
+retargeting for the "handler registered directly as `main.<name>` on a bare test `FastAPI()` app" gotcha:
+`tests/integration/test_delete_entry_tombstone.py` (-> `routes.entries.delete_entry_route`),
+`tests/integration/test_entry_title_override.py` (-> `routes.entries.set_entry_title_route`),
+`tests/integration/test_entry_link_override.py` (-> `routes.entries.set_entry_link_route`), and both
+`tests/integration/test_entry_date_override.py` and
+`tests/integration/test_backfill_url_inferred_dates_refresh_safety.py` (-> `routes.entries.set_entry_date_route`,
+the same handler registered in two separate test files). One test hit the plain-function-call variant:
+`tests/integration/test_entry_attachments_route.py` calls `main.entry_attachments_route(...)` directly five
+times, retargeted to `routes.entries.entry_attachments_route`. No script-only callers turned up for any of
+this sub-stage's 9 routes or their moved helpers.
+
+Stage 9C -- move/organize + tags, 9 routes: `POST /entries/move-to-feed`, `POST /entries/move-to-feed-batch`,
+`POST /entries/select-all-visible`, `POST /entries/move-visible-to-feed`, `POST /entries/purge`,
+`GET /entries/manual-tags-batch`, `POST /entries/tags`, `POST /entries/tags-batch`, `POST /entries/discard`.
+Sub-stages D (read/unread/star state + integration sends) and E (`/entries/pane` alone, last) still come
+later. These 9 routes were NOT contiguous in main.py -- scattered lines 24117-26596, interleaved with several
+Stage 9D routes (`/entries/read*`, `/entries/saved`, `/entries/archive`, `/entries/star-batch`,
+`/entries/mark-*`, `/entries/undo-*`, `/entries/email`, `/entries/instapaper`, `/entries/quire`) that stayed
+untouched despite sitting right next to a moved route.
+
+The two tag routes (`/entries/tags`, `/entries/tags-batch`) confirmed Plan.md's Landmines prediction: they
+lean on the same widely-shared tag machinery Stage 3's `routes/tags.py` already left behind --
+`get_manual_tags_for_entry`, `set_manual_tags_for_entry`, `parse_manual_hashtags`, `normalize_tag_value`, and
+`MAX_MANUAL_TAGS` all stayed in main.py and got imported back, each with call sites well outside this
+sub-stage (`set_manual_tags_for_entry` alone is also driven by the feed auto-taggers at ingest).
+`parse_manual_tag_edit_tokens`/`apply_manual_tag_edits` (the bulk route's own `+/-tag` parser) also stayed --
+both are tested directly as `main.<name>` by `tests/unit/test_manual_tag_edit_tokens.py`. `_merge_manual_tags`
+(the single-entry append-mode helper) *did* move with `/entries/tags`: despite its own docstring claiming it
+was "shared by the single-entry append path and the bulk tag-add route," the three-way grep found only one
+live caller (`set_entry_manual_tags`) -- the bulk route now goes through `apply_manual_tag_edits` instead, so
+the docstring was stale.
+
+`_move_entry_to_feed` (the per-entry move engine both `/entries/move-to-feed` and the batch/visible variants
+call) stayed in main.py despite sitting in the middle of this cluster: `routes/saved.py` already imports it
+directly for the saved-duplicate merge flow, and three scripts (`dedupe_orphan_archives.py`,
+`merge_saved_vs_real_duplicates.py`, `rehome_article_feeds.py`) call it as `main._move_entry_to_feed`.
+`_MOVE_BATCH_CAP` stayed too -- shared with the still-in-main.py `/entries/read-batch` and `/entries/star-batch`
+routes (Stage 9D) and re-imported by `routes/integrations_youtube.py`. `_prune_entries` (the purge/retention
+engine `/entries/purge` calls) stayed, also called by main.py's own nightly per-folder retention sweep and
+tested directly as `main._prune_entries` by several files. `set_entry_archived`/`apply_star_state`/
+`mark_entry_read_everywhere` (the three primitives `/entries/discard` chains) all stayed -- each has other
+still-in-main.py callers among the Stage 9D star/archive routes, and `apply_star_state` is also called from
+`routes/saved.py` and a script.
+
+`_resolve_view_posts`, `_view_filter_predicate`, `_MOVE_VISIBLE_LIMIT`, `_folder_is_yt_folder`, and the
+duration-filter trio (`_DURATION_FILTER_RE`/`_parse_duration_filter`/`_parse_duration_filter_seconds`) all
+moved together: confirmed via the three-way grep to have no caller anywhere outside
+`select_all_visible_entries_route` and `move_visible_entries_to_feed_route`, both of which moved in this same
+sub-stage, so the whole cluster came across as one block.
+
+Six test files needed retargeting for the "handler registered directly as `main.<name>` on a bare test
+`FastAPI()` app" gotcha: `tests/integration/test_select_all_visible.py` (->
+`routes.entries.select_all_visible_entries_route`), `tests/integration/test_move_visible_to_feed.py` (->
+`routes.entries.move_visible_entries_to_feed_route`), `tests/integration/test_retention_purge.py` (->
+`routes.entries.purge_old_entries`), and `tests/integration/test_autofetch_pane_refresh.py` (one more handler
+added to its existing `routes.entries` registrations, -> `routes.entries.set_entry_manual_tags`). Three more
+hit the plain-function-call variant: `tests/integration/test_move_entry_to_feed.py` (batch route, two call
+sites), `tests/integration/test_tags_batch.py` (both batch routes, four call sites), and
+`tests/integration/test_archive_discard_semantics.py` (`discard_entry`, six call sites). One unit test file,
+`tests/unit/test_keep_signal_followups.py`, used `inspect.getsource(main.set_entry_manual_tags)` and needed
+retargeting to `entries_routes.set_entry_manual_tags` (a fresh `from routes import entries as entries_routes`
+import, matching that file's existing `system_routes` alias style) since the function no longer lives in
+main.py's namespace. No script-only callers turned up for any of this sub-stage's 9 routes.
+
+Stage 9D -- read/unread/star state + integration sends, the biggest and most state-coupled sub-stage of
+`routes/entries.py`, deliberately scoped second-to-last: `POST /entries/read`, `POST /entries/saved`,
+`POST /entries/archive`, `POST /entries/read-batch`, `POST /entries/star-batch`, `POST /entries/mark-range-read`,
+`POST /entries/mark-older-than-read`, `POST /entries/undo-mark-unread`, `POST /entries/undo-mark-read`,
+`POST /entries/undo-unstar`, `POST /entries/mark-newer-than-unread`, `POST /entries/email`,
+`POST /entries/instapaper`, `POST /entries/quire` (14 routes). Only sub-stage E (`/entries/pane` alone) remains
+after this. No ordering constraint: none of these handlers touch `_run_automation_after_refresh` or anything
+else from the late `services.automation_rules` import, so this module keeps its existing import position.
+
+Every one of these routes touches the `unread_counts_cache`/`unread_counts_cache_lock`/
+`_bump_unread_counts_generation` trio from `state.py` (re-exported through `main`, same as every earlier
+stage's cache-touching routes) -- moved verbatim, same lock-then-bump-then-clear shape main.py already used,
+never a raw `global` re-derivation. `get_unread_counts_generation()` is exercised (not by these routes directly,
+but by the pre-existing regression tests that watch it) via `tests/integration/test_read_batch.py`'s
+`test_batch_read_invalidates_unread_count_cache`/`test_batch_unread_invalidates_unread_count_cache`, both
+retargeted to call `routes.entries.mark_entries_read_batch_route` directly and re-verified green after the move.
+
+None of the private helpers these 14 routes lean on moved with them -- every one has a caller elsewhere that
+would have broken, confirmed via the `routes/*.py`/`scripts/*.py`/`tests/` three-way grep, not assumed from
+adjacency: `_run_on_star_destinations` (called from `apply_star_state`, itself unmoved, plus tested directly as
+`main.<name>`), `_instapaper_save_url` and `_quire_add_entry` (each also called from `_run_on_star_destinations`,
+and each tested directly as `main.<name>`), `_undo_token_problem` (also called from `apply_star_state`),
+`_mark_entries_as_read_for_view` (shared with `routes/feeds.py`'s `/folders/mark-read` and `/feeds/mark-read`,
+already imported there since Stage 8A), `_youtube_unpremiered_video_id`, `get_tagged_entry_keys`, and
+`entry_effective_date` (each with several other still-in-main.py or cross-module callers), and `_sanitize_html_allowlist`
+(tested directly as `main.<name>` by `tests/unit/test_security_fixes.py`). All of these stayed in main.py and
+were imported back into `routes/entries.py` instead. `_RANGE_READ_LIMIT` and `_UNDO_MARK_READ_WINDOW` likewise
+stayed: the former has a second caller elsewhere in main.py, the latter is private to `_undo_token_problem`,
+which itself stayed.
+
+Thirteen test files needed retargeting for the "handler registered directly as `main.<name>` on a bare test
+`FastAPI()` app" gotcha: `tests/integration/test_mark_read_routes.py` (four handlers: `mark_entry_read`,
+`mark_entries_older_than_read` twice, `mark_entries_newer_than_unread`), `tests/integration/test_undo_unstar.py`
+(`toggle_entry_saved` and `undo_unstar`), `tests/integration/test_autofetch_pane_refresh.py` (one more handler
+added to its existing `routes.entries` registrations, `toggle_entry_saved`), `tests/integration/test_unstar_husk_cleanup.py`,
+`tests/integration/test_tag_as_keep.py` (both `toggle_entry_saved`), `tests/integration/test_youtube_unpremiered.py`
+(`mark_entries_older_than_read` and `mark_entries_range_read`), `tests/integration/test_mark_range_read.py`
+(`mark_entries_range_read`), `tests/integration/test_mark_read_view_scope.py` (`mark_entries_older_than_read`),
+`tests/integration/test_undo_mark_read.py` (`undo_mark_read`), `tests/integration/test_email_route.py`
+(`email_entry`), `tests/integration/test_instapaper_route.py` (`save_to_instapaper`), and
+`tests/integration/test_quire_add_route.py` (`add_to_quire`). Four more hit the plain-function-call variant:
+`tests/integration/test_archive_discard_semantics.py` (`toggle_entry_archived`), `tests/integration/test_read_batch.py`
+(`mark_entries_read_batch_route`, two call sites), and `tests/integration/test_star_batch.py`
+(`star_entries_batch_route` and `undo_unstar`, five call sites combined). One unit test file,
+`tests/unit/test_keep_signal_followups.py`, used `inspect.getsource(main.toggle_entry_saved)` (twice) and needed
+retargeting to `entries_routes.toggle_entry_saved`, the same alias `set_entry_manual_tags` already used in Stage
+9C. The email/instapaper/quire test files also hit the copied-reference monkeypatch gotcha over real HTTP --
+each stubs several main.py-resident getters (`is_email_configured`, `get_resend_api_key`, `get_resend_from`,
+`send_article_email`, `get_setting`, `get_runtime_setting`, `is_quire_connected`, `get_quire_user_token`,
+`quire_project_oid`, `get_quire_usage_status`, `_quire_add_entry`, `get_reader`) that now also need patching on
+`routes.entries`, doubled the same way Stage 8A's `_build_feed_mark_read_app` established. No script-only
+callers turned up for any of this sub-stage's 14 routes or their private helpers.
+
+Stage 9E -- `GET /entries/pane` alone (1 route), the last sub-stage of `routes/entries.py`. Landmines-flagged as
+the riskiest sub-stage going in, but it turned out low-risk: `entry_pane` itself is pure orchestration -- param
+normalization, one `get_entry_detail` call for the single selected entry, a small feed_url->folder_id map built
+from `get_meta_structure_snapshot`, a handful of integration-configured checks, and a `templates.TemplateResponse`
+render. It does NOT call `_home_inner`, `list_entries_for_feeds`, or `build_reader_page` -- those three plus
+`get_entry_detail` are the shared rendering-core functions Plan.md's Landmines note and the "Shared rendering
+core" section both flag as reused by `/`, `/read`, pane-swap, and the compat APIs; `get_entry_detail` is the only
+one this route touches, and it (along with `_home_inner`/`build_reader_page`) stays in main.py untouched, imported
+back like every other main.py-resident helper. `_get_email_to_default` moved with the route -- confirmed via the
+three-way grep to have no caller besides `entry_pane` and no dedicated test. `_mark_entry_read_background` looked
+single-route-only by the same grep (only caller is `entry_pane`) but stayed in main.py and got imported back
+instead: `tests/integration/test_reader_view.py` monkeypatches `main._mark_entry_read_background` as a defensive
+stub in its `_patch_read` helper for the unrelated still-in-main.py `reader_view` (`/read`) route, which doesn't
+actually call it -- moving the function out of main.py entirely would still have broken that `monkeypatch.setattr`
+(it requires the attribute to exist on the target), so it was left as the safer "tested/patched directly as
+`main.<name>`" case Stage 3/5/6/8/9A already established, rather than touching an unrelated test file for a
+route this stage didn't move. `normalize_resume_read_filter` and `unsubscribed_feed_urls_among` both stayed too,
+confirmed shared with `_home_inner` (main.py, the `/`+`/read` home-view core, Stage 10 territory) via the same
+grep. `get_meta_structure_snapshot`, `is_instapaper_configured`, `is_quire_configured`, `pinterest_oauth_connected`,
+`reddit_connected`, and `templates` are all pre-existing widely-shared main.py infrastructure (several already
+re-imported by `routes/feeds.py`/`routes/settings.py`) -- none of it moved. No `services.automation_rules`
+ordering constraint. One test file needed retargeting for the "handler registered directly as `main.<name>` on a
+bare test `FastAPI()` app" gotcha: `tests/integration/test_hide_locked_comics.py` (-> `routes.entries.entry_pane`).
+No `scripts/*.py` callers turned up. Full `make test`/`lint`/`types`/`ruff format --check` pass.
+
+**This closes out Stage 9: `routes/entries.py` is complete at 45 routes across sub-stages A-E, no further
+sub-stages planned.** Only Stage 10 (`routes/home.py` -- `/`, `/read`, `/read/offline`, and the shared
+rendering core itself) remains of the route-by-URL-prefix split.
 """

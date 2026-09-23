@@ -23,6 +23,7 @@ import pytest
 from fastapi import Request
 
 import main
+import routes.entries
 from services import tenancy
 from services.saved_articles import SAVED_FEED_URL
 
@@ -73,7 +74,7 @@ def configured(tmp_path, monkeypatch):
 
 
 def _archive(feed: str, eid: str, on: bool = True):
-    return main.toggle_entry_archived(_NO_REQUEST, feed_url=feed, entry_id=eid, archived=int(on))
+    return routes.entries.toggle_entry_archived(_NO_REQUEST, feed_url=feed, entry_id=eid, archived=int(on))
 
 
 def _starred(feed: str, eid: str) -> bool:
@@ -170,7 +171,7 @@ def test_unarchive_leaves_read_state_alone(configured):
 
 # ── Delete ──
 def test_discard_drops_every_keep_signal_and_marks_read(configured):
-    main.discard_entry(_NO_REQUEST, feed_url=FEED, entry_id="tagged")
+    routes.entries.discard_entry(_NO_REQUEST, feed_url=FEED, entry_id="tagged")
 
     assert not _starred(FEED, "tagged")
     assert main.get_manual_tags_for_entry(FEED, "tagged") == []
@@ -180,7 +181,7 @@ def test_discard_drops_every_keep_signal_and_marks_read(configured):
 def test_discard_releases_the_capture(configured):
     """The inverse of Archive: Delete explicitly does not need the contents."""
     removals = configured
-    main.discard_entry(_NO_REQUEST, feed_url=FEED, entry_id="star")
+    routes.entries.discard_entry(_NO_REQUEST, feed_url=FEED, entry_id="star")
 
     assert (FEED, "star") in removals
 
@@ -193,7 +194,7 @@ def test_discard_clears_tags_before_unstarring(configured):
     captured copy is stranded with nothing keeping it.
     """
     removals = configured
-    main.discard_entry(_NO_REQUEST, feed_url=FEED, entry_id="tagged")
+    routes.entries.discard_entry(_NO_REQUEST, feed_url=FEED, entry_id="tagged")
 
     assert (FEED, "tagged") in removals
 
@@ -201,7 +202,7 @@ def test_discard_clears_tags_before_unstarring(configured):
 def test_discard_does_not_delete_an_ordinary_feed_post(configured):
     """ "Don't necessarily delete it now" — a feed post goes back to being a feed
     post and takes its chances with per-folder retention."""
-    main.discard_entry(_NO_REQUEST, feed_url=FEED, entry_id="star")
+    routes.entries.discard_entry(_NO_REQUEST, feed_url=FEED, entry_id="star")
 
     with main.get_reader() as reader:
         assert reader.get_entry((FEED, "star"), None) is not None
@@ -214,7 +215,7 @@ def test_discard_also_clears_the_archived_row(configured):
     still sat in the Archive list, because nothing cleared the done-axis row.
     """
     _archive(FEED, "star")
-    main.discard_entry(_NO_REQUEST, feed_url=FEED, entry_id="star")
+    routes.entries.discard_entry(_NO_REQUEST, feed_url=FEED, entry_id="star")
 
     assert (FEED, "star") not in main.get_archived_saved_keys()
 
@@ -230,5 +231,5 @@ def test_discarding_an_archived_item_still_releases_the_capture(configured):
     _archive(FEED, "star")
     assert removals == []  # archiving kept it, as it must
 
-    main.discard_entry(_NO_REQUEST, feed_url=FEED, entry_id="star")
+    routes.entries.discard_entry(_NO_REQUEST, feed_url=FEED, entry_id="star")
     assert (FEED, "star") in removals
