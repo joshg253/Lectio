@@ -102,11 +102,24 @@ ordered safest → riskiest:
    `_run_automation_after_refresh` monkeypatched on *both* `main` and `routes.system` since
    `_process_websub_push` reads both through its own copied-reference import. Full
    `make test`/`lint`/`types` pass (4,192 tests).
-2. `routes/compat_{greader,fever,v1}.py` — the greader/fever/v1 compat surfaces (~24 routes) are
-   already thin wrappers over `GReaderService`/`FeverService` (see `services/greader.py`,
-   `services/fever.py`), so should extract cleanly; they do call into the shared rendering core
-   (`_home_inner` etc.) which stays resident in main.py and gets imported back, same as any other
-   main-resident helper.
+2. **Done (2026-09-20).** `routes/compat_{fever,greader,v1}.py` — 2/14/11 = 27 routes, all
+   confirmed thin wrappers over `fever_service`/`greader_service`/`miniflux_service` (the v1 compat
+   surface is Miniflux-protocol, not a distinct thing — no `services/v1.py` needed). main.py:
+   35,128 → 34,576 lines; new files 115/281/223 lines. `_run_in_user_context`,
+   `_spawn_feed_enhancement`, and `_enhance_feeds_background` sat inside the same file region but
+   are shared with other still-in-main.py call sites (6 other `routes/integrations_*.py` modules,
+   4 scripts, 3 other main.py call sites) — stayed in main.py, imported back like any other
+   main-resident helper, the region's stale "GReader API" comment retitled to reflect that. No
+   `services.automation_rules` ordering constraint needed (unlike Stage 1) — none of these handlers
+   touch a late-bound name. 2 test files retargeted, one hitting each known gotcha:
+   `test_greader_subscription_edit.py` (pure relocation, `main._greader_edit_subscriptions` →
+   `compat_greader._greader_edit_subscriptions`) and `test_miniflux_api.py` (copied-reference
+   monkeypatch, same shape as Stage 1's `test_websub_fanout.py` — `user_store` patched on both
+   `main` and `compat_v1`). Full `make test`/`lint`/`types` pass (4,192 tests). Aside: main.py (and
+   now these 3 files) use bare `except TypeErrorType, ValueErrorType:` (no parens) throughout —
+   looked like leftover Python 2 syntax, but it's valid on Python 3.14 (confirmed: parses,
+   compiles to the same tuple form as `except (A, B):`, doesn't rebind the second name) — a
+   pre-existing repo-wide pattern, left alone.
 3. `routes/tags.py` (`/tags/*`, `/feed-tags/dismiss`, ~11) and `routes/highlights.py`
    (`/highlights*`, ~9) — small, single-concern.
 4. `routes/automation.py` — `/automation/history*`, `/rules/*`, `/dedup/*` (~9) — natural fit
