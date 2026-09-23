@@ -49,4 +49,25 @@ rule-group finder-and-merge functions for `routes.highlights` — all of these
 are also called from `services/automation_rules.py`, other main.py-resident
 routes, scripts, or are exercised directly as `main.<name>` by dedicated test
 files.
+
+`routes/automation.py` (Stage 4: `/rules/*`, `/automation/history*`,
+`/dedup/*`) is the first module in this split to import from
+`services/automation_rules.py` directly (`_run_tag_filter`, `_run_now_dedup`,
+`_run_now_pattern`) rather than round-tripping those names through main.py —
+combining both gotchas above in one module. Empirically neither import order
+actually breaks (verified by testing both), since none of
+`services/automation_rules.py`'s own `from main import (...)` dependencies are
+late-bound names, unlike `_run_automation_after_refresh`; it's imported after
+the `services.automation_rules` block anyway, for the same reason `routes.system`
+is — so that module is already fully loaded before anything reaches into it,
+rather than routes.automation's own import being what first triggers
+`services/automation_rules.py`'s module load mid-way through main.py's
+execution. `_dry_run_dedup`/`_dry_run_pattern` (the `/rules/dry-run` preview
+engine, each with exactly one caller) moved here too, pulling their own
+shared helpers (`_resolve_dedup_feed_urls`, `dedup_order_key`,
+`build_keyword_matcher`, etc.) back from main.py — full consolidation of the
+preview-vs-apply dedup engine into `services/dedup.py` is a separate,
+deliberately-deferred Plan.md project. `resolve_rule_feed_urls`,
+`toggle_feed_tag_filter`, and `feed_tag_service` stay in main.py: shared with
+`services/automation_rules.py` and/or other still-in-main.py routes.
 """

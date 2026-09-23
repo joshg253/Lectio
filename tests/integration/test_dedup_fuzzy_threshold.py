@@ -10,7 +10,8 @@ import json
 
 import pytest
 
-import main
+import main  # must sort before routes.automation — see routes/__init__.py
+from routes import automation as automation_routes
 from services import automation_rules, tenancy
 
 FEED_A = "https://a.test/feed"
@@ -45,7 +46,9 @@ def env(tmp_path):
 
 def _fuzzy_marks(threshold: float) -> int:
     with main.get_meta_connection() as conn:
-        res = main._dry_run_dedup(conn, "global", "", "fuzzy", 168, custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=threshold)
+        res = automation_routes._dry_run_dedup(
+            conn, "global", "", "fuzzy", 168, custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=threshold
+        )
     return res["total_would_mark_read"]
 
 
@@ -59,7 +62,7 @@ def test_loosened_threshold_catches_it(env):
 
 def test_route_passes_the_percent_knob_through(env):
     def run(pct: int) -> int:
-        res = main.rules_dry_run_route(
+        res = automation_routes.rules_dry_run_route(
             type="deduplicate",
             scope="global",
             scope_id="",
@@ -85,7 +88,7 @@ def test_route_without_a_percent_uses_the_default(env):
     answer as one that sends the default explicitly."""
 
     def run(**kw) -> int:
-        res = main.rules_dry_run_route(
+        res = automation_routes.rules_dry_run_route(
             type="deduplicate",
             scope="global",
             scope_id="",
@@ -147,9 +150,12 @@ def test_run_now_honors_the_saved_percent(env, monkeypatch):
     """The after-refresh automation reads the rule's column; Run Now sends it as a
     form field. Both land on _run_now_dedup's fuzzy_threshold."""
     seen: list[float] = []
-    real = main._run_now_dedup
-    monkeypatch.setattr(main, "_run_now_dedup", lambda *a, **kw: (seen.append(kw["fuzzy_threshold"]), real(*a, **kw))[1])
-    main.rules_run_now_route(
+    # rules_run_now_route moved to routes/automation.py (Stage 4) and does its own
+    # `from services.automation_rules import _run_now_dedup`, a copied reference
+    # separate from main's -- patching main._run_now_dedup alone would not reach it.
+    real = automation_routes._run_now_dedup
+    monkeypatch.setattr(automation_routes, "_run_now_dedup", lambda *a, **kw: (seen.append(kw["fuzzy_threshold"]), real(*a, **kw))[1])
+    automation_routes.rules_run_now_route(
         type="deduplicate",
         scope="global",
         scope_id="",
@@ -184,8 +190,8 @@ def test_short_titles_are_skipped_by_fuzzy(env):
             {"feed_url": feed, "id": eid, "title": "weekly open thread", "link": f"{feed}/{eid}", "summary": "x", "published": when}
         )
     with main.get_meta_connection() as conn:
-        at4 = main._dry_run_dedup(conn, "global", "", "fuzzy", 168, custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.80)
-        at3 = main._dry_run_dedup(
+        at4 = automation_routes._dry_run_dedup(conn, "global", "", "fuzzy", 168, custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.80)
+        at3 = automation_routes._dry_run_dedup(
             conn, "global", "", "fuzzy", 168, custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.80, min_title_words=3
         )
     assert at4["total_would_mark_read"] == 0
@@ -198,8 +204,8 @@ def test_title_mode_now_has_a_floor(env):
     for feed, eid in [(FEED_A, "t-a"), (FEED_B, "t-b")]:
         reader.add_entry({"feed_url": feed, "id": eid, "title": "Open Thread", "link": f"{feed}/{eid}", "summary": "x", "published": when})
     with main.get_meta_connection() as conn:
-        res = main._dry_run_dedup(conn, "global", "", "title", 168, custom_feed_urls={FEED_A, FEED_B})
-        low = main._dry_run_dedup(conn, "global", "", "title", 168, custom_feed_urls={FEED_A, FEED_B}, min_title_words=2)
+        res = automation_routes._dry_run_dedup(conn, "global", "", "title", 168, custom_feed_urls={FEED_A, FEED_B})
+        low = automation_routes._dry_run_dedup(conn, "global", "", "title", 168, custom_feed_urls={FEED_A, FEED_B}, min_title_words=2)
     assert res["total_would_mark_read"] == 0
     assert low["total_would_mark_read"] == 1
 
@@ -286,14 +292,14 @@ def test_preview_reports_how_many_matches_are_actionable(env):
     reader.mark_entry_as_read((FEED_A, "e-a"))
     reader.mark_entry_as_read((FEED_B, "e-b"))
     with main.get_meta_connection() as conn:
-        res = main._dry_run_dedup(conn, "global", "", "fuzzy", 168, custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
+        res = automation_routes._dry_run_dedup(conn, "global", "", "fuzzy", 168, custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
     assert res["total_would_mark_read"] == 1
     assert res["total_unread_would_mark_read"] == 0
 
 
 def test_all_unread_matches_report_the_same_number(env):
     with main.get_meta_connection() as conn:
-        res = main._dry_run_dedup(conn, "global", "", "fuzzy", 168, custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
+        res = automation_routes._dry_run_dedup(conn, "global", "", "fuzzy", 168, custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
     assert res["total_would_mark_read"] == res["total_unread_would_mark_read"] == 1
 
 
@@ -304,9 +310,9 @@ def test_a_pair_whose_older_copy_is_read_is_not_actionable(env):
     on its own promised a mark that never arrived."""
     reader = main.get_reader()
     with main.get_meta_connection() as conn:
-        before = main._dry_run_dedup(conn, "global", "", "fuzzy", 168, custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
+        before = automation_routes._dry_run_dedup(conn, "global", "", "fuzzy", 168, custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
         reader.mark_entry_as_read((FEED_A, "e-a"))
-        after = main._dry_run_dedup(conn, "global", "", "fuzzy", 168, custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
+        after = automation_routes._dry_run_dedup(conn, "global", "", "fuzzy", 168, custom_feed_urls={FEED_A, FEED_B}, fuzzy_threshold=0.60)
     assert before["total_unread_would_mark_read"] == 1
     assert after["total_would_mark_read"] == 1  # still previewed
     assert after["total_unread_would_mark_read"] == 0  # but nothing Run Now could do
@@ -333,6 +339,6 @@ def test_three_copies_with_a_read_oldest_still_leave_one_mark(env):
     reader.mark_entry_as_read((FEED_A, "e-a"))  # the oldest copy
     feeds = {FEED_A, "https://c.test/feed", "https://d.test/feed"}
     with main.get_meta_connection() as conn:
-        res = main._dry_run_dedup(conn, "global", "", "title", 168, custom_feed_urls=feeds)
+        res = automation_routes._dry_run_dedup(conn, "global", "", "title", 168, custom_feed_urls=feeds)
     assert res["total_would_mark_read"] == 2  # preview counts all three
     assert res["total_unread_would_mark_read"] == 1  # Run Now keeps one unread, marks one

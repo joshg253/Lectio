@@ -8,7 +8,8 @@ from __future__ import annotations
 import pytest
 from fastapi import FastAPI  # noqa: F401 — parity with sibling test modules
 
-import main
+import main  # must sort before routes.automation — see routes/__init__.py
+from routes import automation as automation_routes
 from services import automation_rules, tenancy
 
 FEED = "https://deals.example.test/feed"
@@ -115,7 +116,7 @@ def test_dry_run_supports_save_article_with_blank_keyword(configured):
     with main.get_reader() as reader:
         _seed(reader)
     app = FastAPI()
-    app.get("/rules/dry-run")(main.rules_dry_run_route)
+    app.get("/rules/dry-run")(automation_routes.rules_dry_run_route)
     with TestClient(app) as c:
         r = c.get("/rules/dry-run", params={"type": "save_article", "scope": "feed", "scope_id": FEED, "keyword": ""})
     assert r.status_code == 200
@@ -134,9 +135,12 @@ def test_run_now_dedup_sweeps_full_backlog(configured, monkeypatch):
         seen["max_per_feed"] = max_per_feed
         return {"count": 0, "entries": [], "kept": []}
 
-    monkeypatch.setattr(main, "_run_now_dedup", fake_run_now_dedup)
+    # rules_run_now_route moved to routes/automation.py (Stage 4) and does its own
+    # `from services.automation_rules import _run_now_dedup`, a copied reference
+    # separate from main's -- patching main._run_now_dedup alone would not reach it.
+    monkeypatch.setattr(automation_routes, "_run_now_dedup", fake_run_now_dedup)
     app = FastAPI()
-    app.post("/rules/run-now")(main.rules_run_now_route)
+    app.post("/rules/run-now")(automation_routes.rules_run_now_route)
     with TestClient(app) as c:
         r = c.post("/rules/run-now", data={"type": "deduplicate", "scope": "folder", "scope_id": "8", "keyword": "safe"})
     assert r.status_code == 200

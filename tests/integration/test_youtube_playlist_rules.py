@@ -11,7 +11,8 @@ import datetime as dt
 
 import pytest
 
-import main
+import main  # must sort before routes.automation — see routes/__init__.py
+from routes import automation as automation_routes
 from services import automation_rules, tenancy
 from services import youtube_oauth as yt
 
@@ -181,11 +182,11 @@ def test_dry_run_blank_keyword_matches_all_in_scope(env):
     # and a blank keyword previewed nothing).
     _add_entry()
     with main.get_meta_connection() as conn:
-        res = main._dry_run_pattern(conn, "feed", FEED, "", False, "title", match_all_if_empty=True)
+        res = automation_routes._dry_run_pattern(conn, "feed", FEED, "", False, "title", match_all_if_empty=True)
     assert res["total_matches"] >= 1
     # Without the flag (other rule types), a blank keyword still matches nothing.
     with main.get_meta_connection() as conn:
-        res0 = main._dry_run_pattern(conn, "feed", FEED, "", False, "title")
+        res0 = automation_routes._dry_run_pattern(conn, "feed", FEED, "", False, "title")
     assert res0["total_matches"] == 0
 
 
@@ -195,8 +196,8 @@ def test_dry_run_excludes_shorts_when_opted_out(env):
     _add_entry(entry_id="vid", link=f"https://www.youtube.com/watch?v={VID}")
     _add_entry(entry_id="short", link=f"https://www.youtube.com/shorts/{VID}")
     with main.get_meta_connection() as conn:
-        excl = main._dry_run_pattern(conn, "feed", FEED, "", False, "title", match_all_if_empty=True, exclude_shorts=True)
-        incl = main._dry_run_pattern(conn, "feed", FEED, "", False, "title", match_all_if_empty=True, exclude_shorts=False)
+        excl = automation_routes._dry_run_pattern(conn, "feed", FEED, "", False, "title", match_all_if_empty=True, exclude_shorts=True)
+        incl = automation_routes._dry_run_pattern(conn, "feed", FEED, "", False, "title", match_all_if_empty=True, exclude_shorts=False)
     assert excl["total_matches"] == 1  # the Short is dropped
     assert incl["total_matches"] == 2  # both included
 
