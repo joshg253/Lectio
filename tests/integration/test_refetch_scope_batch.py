@@ -15,6 +15,7 @@ import pytest
 from fastapi import Request
 
 import main
+import routes.saved
 from services import refetch_batch, tenancy
 
 FEED_A = "https://a.test/feed"
@@ -114,7 +115,7 @@ def test_the_job_and_the_cli_share_one_set_of_delays():
 
 # ── the route ──
 def _preview(**kw):
-    return json.loads(bytes(main.preview_refetch_scope(**kw).body))
+    return json.loads(bytes(routes.saved.preview_refetch_scope(**kw).body))
 
 
 def test_preview_reports_count_hosts_and_runtime(configured):
@@ -126,7 +127,7 @@ def test_preview_reports_count_hosts_and_runtime(configured):
 
 
 def test_status_is_idle_before_anything_runs(configured):
-    assert json.loads(bytes(main.refetch_scope_status().body))["idle"] is True
+    assert json.loads(bytes(routes.saved.refetch_scope_status().body))["idle"] is True
 
 
 class _Req:
@@ -140,7 +141,7 @@ class _Req:
 def _start(payload):
     import asyncio
 
-    resp = asyncio.run(main.start_refetch_scope(cast(Request, _Req(payload))))
+    resp = asyncio.run(routes.saved.start_refetch_scope(cast(Request, _Req(payload))))
     return resp.status_code, json.loads(bytes(resp.body))
 
 
@@ -183,7 +184,7 @@ def test_the_queue_is_visible_in_the_status(configured):
     job.update({"running": True, "done": 2, "total": 5, "scope": "A", "queue": []})
     _start({"list_feed_url": FEED_A})
 
-    body = json.loads(bytes(main.refetch_scope_status().body))
+    body = json.loads(bytes(routes.saved.refetch_scope_status().body))
 
     assert body["running"] is True
     assert (body["done"], body["total"], body["scope"]) == (2, 5, "A")
@@ -197,7 +198,7 @@ def test_the_status_payload_never_exposes_the_cancel_flag(configured):
     job = main._refetch_job_state(create=True)
     job.update({"running": True, "cancel": False, "done": 1, "total": 5})
 
-    assert "cancel" not in json.loads(bytes(main.refetch_scope_status().body))
+    assert "cancel" not in json.loads(bytes(routes.saved.refetch_scope_status().body))
 
 
 # ── the run loop ──
@@ -322,7 +323,7 @@ def test_a_queued_scope_can_be_dropped_without_stopping_the_run(configured):
     job.update({"running": True, "queue": []})
     _start({"list_feed_url": FEED_A})
 
-    asyncio.run(main.cancel_refetch_scope(cast(Request, _Req({"queued_index": 0}))))
+    asyncio.run(routes.saved.cancel_refetch_scope(cast(Request, _Req({"queued_index": 0}))))
 
     assert job["queue"] == []
     assert job["running"] is True  # the batch in flight is untouched
@@ -335,7 +336,7 @@ def test_cancel_all_empties_the_queue_too(configured):
     job.update({"running": True, "queue": []})
     _start({"list_feed_url": FEED_A})
 
-    asyncio.run(main.cancel_refetch_scope(cast(Request, _Req({"all": True}))))
+    asyncio.run(routes.saved.cancel_refetch_scope(cast(Request, _Req({"all": True}))))
 
     assert job["queue"] == []
     assert job["cancel"] is True

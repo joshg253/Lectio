@@ -17,6 +17,7 @@ import pytest
 from fastapi import Request
 
 import main
+import routes.saved
 from services import tenancy
 
 FEED = "https://example.test/feed"
@@ -66,7 +67,7 @@ def _apply(days: int = 30, basis: str = "saved") -> dict:
         async def json(self):
             return {"days": days, "basis": basis}
 
-    return json.loads(bytes(asyncio.run(main.apply_archive_old_stars(cast(Request, _Req()))).body))
+    return json.loads(bytes(asyncio.run(routes.saved.apply_archive_old_stars(cast(Request, _Req()))).body))
 
 
 def _starred(eid: str) -> bool:
@@ -75,7 +76,7 @@ def _starred(eid: str) -> bool:
 
 
 def test_preview_changes_nothing(configured):
-    res = json.loads(bytes(main.preview_archive_old_stars(days=30, basis="saved").body))
+    res = json.loads(bytes(routes.saved.preview_archive_old_stars(days=30, basis="saved").body))
 
     assert res["totals"]["to_archive"] == 2  # old, old-tagged
     assert res["totals"]["remaining"] == 1  # fresh
@@ -224,12 +225,12 @@ def test_published_basis_is_the_default_when_omitted():
     option."""
     import inspect
 
-    default = inspect.signature(main.preview_archive_old_stars).parameters["basis"].default
+    default = inspect.signature(routes.saved.preview_archive_old_stars).parameters["basis"].default
     assert getattr(default, "default", default) == "published"
 
 
 def test_published_basis_ignores_saved_at_and_uses_the_articles_own_date(published_configured):
-    res = json.loads(bytes(main.preview_archive_old_stars(days=30, basis="published").body))
+    res = json.loads(bytes(routes.saved.preview_archive_old_stars(days=30, basis="published").body))
 
     assert res["basis"] == "published"
     assert res["totals"]["to_archive"] == 1  # old-pub only; no-pub has no date to go on
@@ -244,7 +245,7 @@ def test_published_basis_leaves_entries_with_no_published_date_alone(published_c
         async def json(self):
             return {"days": 30, "basis": "published"}
 
-    body = json.loads(bytes(asyncio.run(main.apply_archive_old_stars(cast(Request, _Req()))).body))
+    body = json.loads(bytes(asyncio.run(routes.saved.apply_archive_old_stars(cast(Request, _Req()))).body))
 
     assert main.get_archived_saved_keys() == {(PFEED, "old-pub")}
     with main.get_meta_connection() as conn:
@@ -256,13 +257,13 @@ def test_saved_basis_still_available_and_sees_a_different_set(published_configur
     """The old behavior is preserved as an explicit option — all three rows
     here were saved 1 day ago, so a 30-day saved-basis cutoff archives none
     of them, unlike the published-basis result above."""
-    res = json.loads(bytes(main.preview_archive_old_stars(days=30, basis="saved").body))
+    res = json.loads(bytes(routes.saved.preview_archive_old_stars(days=30, basis="saved").body))
 
     assert res["basis"] == "saved"
     assert res["totals"]["to_archive"] == 0
 
 
 def test_unknown_basis_falls_back_to_published(published_configured):
-    res = json.loads(bytes(main.preview_archive_old_stars(days=30, basis="nonsense").body))
+    res = json.loads(bytes(routes.saved.preview_archive_old_stars(days=30, basis="nonsense").body))
 
     assert res["basis"] == "published"

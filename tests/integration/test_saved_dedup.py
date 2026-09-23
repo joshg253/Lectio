@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.saved
 from services import saved_articles as saved_articles_service
 from services import tenancy
 
@@ -58,10 +59,10 @@ def _add_entry(
 
 def _client() -> TestClient:
     app = FastAPI()
-    app.get("/saved/duplicates")(main.get_saved_duplicates)
-    app.post("/saved/deduplicate")(main.deduplicate_saved)
-    app.post("/saved/duplicates/preview")(main.preview_saved_duplicates)
-    app.post("/saved/duplicates/check-urls")(main.check_saved_duplicate_urls)
+    app.get("/saved/duplicates")(routes.saved.get_saved_duplicates)
+    app.post("/saved/deduplicate")(routes.saved.deduplicate_saved)
+    app.post("/saved/duplicates/preview")(routes.saved.preview_saved_duplicates)
+    app.post("/saved/duplicates/check-urls")(routes.saved.check_saved_duplicate_urls)
     return TestClient(app)
 
 
@@ -306,8 +307,14 @@ def test_check_urls_reports_per_entry_results(configured, monkeypatch):
         keeper: {"status": 404, "alive": False, "dead": True, "final_url": keeper, "error": None},
         dupe: {"status": 200, "alive": True, "dead": False, "final_url": "https://a.example.test/lessons/my-great-article", "error": None},
     }
+    # _check_saved_url stays in main.py (exercised directly by
+    # test_check_saved_url_classification below), but routes.saved copied its
+    # own reference at import time -- both bindings need patching.
+    # _SAVED_DUP_CHECK_PAUSE moved with the route it paces, so it only exists
+    # on routes.saved now.
     monkeypatch.setattr(main, "_check_saved_url", lambda url: canned[url])
-    monkeypatch.setattr(main, "_SAVED_DUP_CHECK_PAUSE", 0)
+    monkeypatch.setattr(routes.saved, "_check_saved_url", lambda url: canned[url])
+    monkeypatch.setattr(routes.saved, "_SAVED_DUP_CHECK_PAUSE", 0)
     with _client() as c:
         r = c.post("/saved/duplicates/check-urls", json={"entry_ids": [keeper, dupe, "https://nope.example.test/gone"]})
     assert r.status_code == 200

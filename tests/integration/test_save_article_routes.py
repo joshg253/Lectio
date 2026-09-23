@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+import routes.saved
 
 
 def _ok_result(entry_id="https://example.com/post", duplicate=False):
@@ -24,8 +25,8 @@ def _ok_result(entry_id="https://example.com/post", duplicate=False):
 
 def _build_app(monkeypatch, result):
     app = FastAPI()
-    app.post("/articles/save")(main.save_article_route)
-    app.get("/articles/save")(main.save_article_bookmarklet)
+    app.post("/articles/save")(routes.saved.save_article_route)
+    app.get("/articles/save")(routes.saved.save_article_bookmarklet)
     app.add_api_route("/api/save", main.api_save_article, methods=["GET", "POST"])
 
     calls: list[str] = []
@@ -38,7 +39,12 @@ def _build_app(monkeypatch, result):
         return result
 
     extracts: list = []
+    # _save_article_for_current_user stays in main.py (shared with /api/save,
+    # /api/bookmarklet/save), but routes.saved copied its own reference at
+    # import time -- both bindings need patching for the /articles/save* routes
+    # (main's own binding is enough for /api/save, still main-resident).
     monkeypatch.setattr(main, "_save_article_for_current_user", fake_save)
+    monkeypatch.setattr(routes.saved, "_save_article_for_current_user", fake_save)
     app.state.save_extracts = extracts
     return app, calls
 
