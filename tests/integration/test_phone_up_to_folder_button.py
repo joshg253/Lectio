@@ -13,7 +13,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import main
+import main  # noqa: F401 -- must import before routes.home (see routes/__init__.py's circular-import note)
+import routes.home
 from services import tenancy
 
 FEED = "https://guitarplayer.example.com/feed"
@@ -27,7 +28,7 @@ def _app():
 
     app = FastAPI()
     app.add_middleware(SessionMiddleware, secret_key="test-only")
-    app.get("/")(main.home)
+    app.get("/")(routes.home.home)
     return app
 
 

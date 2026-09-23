@@ -10,10 +10,11 @@ to run, real features not blocking anything today, and deliberately-deferred big
 Within a tier, related items are clustered under a bold sub-heading. Two watch-lists (CodeQL,
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
-Tiers 1 through 3 are empty. The main.py/index.html breakup (Integration routes cluster,
-post-refresh automation pipeline, index.html's context menus) is done, shipped 2026-09-19/20. Its
-former "Steps 4-8, unscoped follow-on work" is now split into independent Tier 4 projects —
-dedup-routes consolidation, a `state.py` module + route split, and the shared rendering core.
+Tiers 1 through 3 are empty. The main.py/index.html breakup and both of its follow-on Tier 4
+projects — the `state.py` singleton extraction and the full route-by-URL-prefix split (256 routes
+across 10 stages) — are all done, shipped 2026-09-19 through 2026-09-22. What's left in Tier 4:
+dedup-routes consolidation (still gated on characterization tests) and the shared rendering core
+(not started, deliberately — see the route split's closing note for why it stayed untouched).
 
 ## Tier 1 — actively impeding unread-clearing
 
@@ -376,10 +377,76 @@ ordered safest → riskiest:
      mark-read side effect fired.
 
 **Stage 9 (`routes/entries.py`) is now fully done** — all 5 sub-stages (A-E), 45 routes.
-10. `routes/home.py` — `/`, `/read`, `/read/offline` last: these are the routes the Landmines note
-    already flags as reused-by-everything (`_home_inner`, `build_reader_page`, pane-swap); moving
-    the handler is still just importing the core functions back from main.py like everything else,
-    but do it only after the pattern is proven on lower-traffic routes first.
+10. `routes/home.py` — `/`, `/read`, `/read/offline`. Scoped 2026-09-22 after confirming size:
+    `read_offline_copy` (main.py:21904-21980, ~76 lines), `reader_view`/`/read`
+    (main.py:21981-22169, ~188 lines), `home`/`/` (main.py:22280-22383, ~104 lines) — each is a
+    reasonably-sized wrapper that delegates into the shared core (`_home_inner` sits immediately
+    after `home`, not interleaved with it), not the deeply-entangled case that would force this
+    into its own non-mechanical project. Stage 9E already proved the mechanical pattern holds even
+    for a shared-core-adjacent route (`/entries/pane`) — same expectation here, with the same
+    "stop and report back, don't force it" escape hatch if a stage finds otherwise. Split into 3
+    sub-stages by risk, safest → riskiest (traffic volume, not just code size, drives the order —
+    `/` is the highest-traffic route in the app):
+    - **A — done (2026-09-22).** `/read/offline` — creates `routes/home.py`. main.py: 26,191 →
+      26,047 lines; new file 219 lines. Confirmed pure orchestration (one `get_entry_detail` call,
+      one `resolve_reader_article_html` call, then HTML/CSS assembly) — both shared-core functions
+      stayed in main.py untouched. Same `Path(__file__).parent`-for-a-static-asset bug Stage 1's
+      `/sw.js` move hit — caught and fixed the same way, with `BASE_DIR`. No test currently
+      exercises this route at all, so neither known gotcha applied — nothing to retarget. No
+      `scripts/*.py` callers. Full `make test`/`lint`/`types`/`ruff format --check` pass; a live
+      check confirmed real downloaded-HTML content, not just a non-404.
+    - **B — done (2026-09-22).** `/read` — the e-ink Read Mode reader view. main.py: 26,047 →
+      25,861 lines; `routes/home.py`: 219 → 448 lines. Confirmed clean orchestration again, this
+      time under real scrutiny (bigger/more central than 10A): `reader_view` normalizes params,
+      calls `resolve_reader_backlog` once, then branches browse-vs-read state, calling
+      `_build_feeds_mode_context`/`_build_read_mode_context`/`resolve_reader_article_html`/
+      `build_reader_page` — no inline list-building or pagination logic of its own. All five
+      shared rendering-core functions stayed in main.py untouched; everything else the route
+      touches also stayed (correctly, per this stage's explicit scope), including
+      `_READ_MODE_UA_SEEN`, a mutable module-level set imported by reference — verified safe since
+      it's mutated via `.add()`, never reassigned, so the copied binding in `routes/home.py` still
+      points at the live object. `tests/integration/test_reader_view.py` hit both known gotchas
+      hard (an actively-tested UI surface, unlike 10A's zero-coverage route) — retargeted, with
+      `_mark_entry_read_background`/`_entry_is_starred` correctly left as `main.X` in the test
+      since `reader_view` doesn't call either (confirmed via grep on the function body, not
+      assumed). Full `make test`/`lint`/`types`/`ruff format --check` pass; live check confirmed
+      the correct `303 → /login` redirect through the real unauthenticated app.
+    - **C — done (2026-09-22), Stage 10 fully complete.** `/` — the main app entry point,
+      highest-traffic route in the whole app. main.py: 25,861 → 25,757 lines; `routes/home.py`:
+      448 → 596 lines, **3 routes total, done**. The biggest test of the "shared rendering core
+      moves cleanly via the mechanical pattern" claim held one more time: `home` is a thin
+      wrapper (Supernote e-ink UA sniff + redirect, bare-`/` scope-tab-landing default, a
+      `_home_request_semaphore` capacity gate, one `_home_inner(...)` call carrying every query
+      param through, a `?full=1` cookie set) — confirmed it calls `_home_inner` and nothing else
+      from the Landmines-flagged cluster (`list_entries_for_feeds`/`get_entry_detail`/
+      `build_reader_page` untouched, not even referenced). All four stayed in main.py, verified
+      independently by reading the function body and confirming all four definitions still live
+      in main.py. `_home_request_semaphore` needed a `noqa: F401` re-export in main.py's
+      `from state import (...)` block, same as prior `state.py`-sourced singletons. Biggest
+      test-retargeting sweep of any stage, as predicted — 5 files. No `services.automation_rules`
+      ordering constraint, no cascade, no script-only callers. Full
+      `make test`/`lint`/`types`/`ruff format --check` pass; independently re-verified (not just
+      trusted) both the unauthenticated 303→`/login` redirect and, per the agent's report, a real
+      authenticated 200 with actual rendered `index.html`.
+
+**Stage 10 (`routes/home.py`) is now fully done** — all 3 sub-stages (A-C), 3 routes.
+
+## The main.py route-by-URL-prefix split is now fully complete
+
+All 10 stages done. 256 `@app.*` route decorators moved out of main.py into `routes/*.py`
+modules by URL prefix, across ~3 days (2026-09-20 through 2026-09-22). main.py: 36,499 lines when
+this project started (right after the separate `state.py` singleton extraction) → 25,757 lines
+now — 10,742 lines moved out. Route modules: `routes/system.py`, `routes/compat_{fever,greader,v1}.py`,
+`routes/tags.py`, `routes/highlights.py`, `routes/automation.py`, `routes/admin.py`,
+`routes/saved.py`, `routes/settings.py`, `routes/feeds.py` (61 routes, the biggest), `routes/entries.py`
+(45 routes), `routes/home.py` (3 routes, the riskiest per-route). The shared rendering core
+(`_home_inner`, `list_entries_for_feeds`, `get_entry_detail`, `build_reader_page`) stayed in
+main.py throughout, exactly as scoped — every stage that touched a route calling into it just
+imported the functions back, never refactored them. Remaining deferred work from this whole
+effort: the `/api/*` cluster split three ways (image-proxy → `routes/media.py`, save-capture →
+extend `routes/saved.py`, `/api/unread-counts` → undecided), Dedup routes consolidation (still
+gated on characterization tests), and the shared rendering core itself as its own future project
+if it's ever worth refactoring.
 
 Each stage: `grep` the current route paths (line numbers drift as earlier stages move code, so
 don't trust line numbers from a previous stage's scoping), move handler + any single-route-only
@@ -696,6 +763,17 @@ scope for this refactor. Notes for next time on other alert classes:
 - If the reflective-XSS class keeps recurring, `.github/codeql/queries/` already has the pattern
   for a guard-aware custom query (see the SSRF/path-injection ones modeling our sanitizers as
   barriers).
+
+25 more alerts (3 flagged "high") surfaced on PR #340 (route-split Stage 8, `routes/feeds.py`) —
+same "new file, not new code" attribution as above, verified individually rather than assumed:
+the polynomial-regex pair (`services/saved_articles.py:221/224`) and the reflected-XSS one
+(`main.py:20916`) are both years-old code untouched by this PR (confirmed via `git log -S`/`-L`),
+just re-attributed because a large file-restructuring diff shifts line numbers CodeQL's PR-diff
+heuristic uses to associate an alert with "changed" code. The other 22 (`routes/feeds.py`'s own
+"URL redirection from remote source"/"information exposure through an exception") are the same
+`RedirectResponse(url=f"/?...")`-with-query-params and `str(exc)` patterns used everywhere else in
+this app, newly visible because they're now in a new file. Not fixed as part of the route split
+for the same reason as the PR #329 batch — left open.
 
 ### Feed-tag suggestion suppression — do not attempt a third heuristic
 
