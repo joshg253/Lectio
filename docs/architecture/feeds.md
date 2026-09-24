@@ -24,7 +24,12 @@ The same bug shipped, unnoticed, in every OTHER importer this section says is "w
 
 ## Duplicate entry suppression
 
-Two mechanisms prevent duplicate articles from accumulating in the reader DB:
+All matching lives in `services/dedup.py`. The deduplicate rule's preview (`_dry_run_dedup`) and Run Now (`_run_now_dedup`) are thin
+wrappers over one engine (`collect_records` + `find_groups`); they differ only in what they read (preview: read + unread, global cap;
+Run Now: unread only, per-feed cap) and whether they mark. `tests/integration/test_dedup_characterization.py` pins every method's
+output. Scope resolution (`_resolve_dedup_feed_urls`) stays in main.py because it reads folder/feed storage.
+
+Two refresh-time mechanisms prevent duplicate articles from accumulating in the reader DB:
 
 **GUID-churn suppression** (`_suppress_guid_churn`, runs after each refresh): detects entries that reappear with a new GUID but the same URL slug, or the same title + publication date (within 7 days). Checks both read history AND existing unread entries so that multiple copies arriving before any are opened are also caught.
 

@@ -53,15 +53,10 @@ from main import (
     _is_youtube_short,
     _quire_add_entry,
     _resolve_dedup_feed_urls,
-    _safe_dedup_collect,
-    _safe_dedup_find_pairs,
     _star_entry_for_current_user,
-    _suppress_guid_churn,
     author_filter_token,
     build_keyword_matcher,
-    dedup_order_key,
     entry_effective_date,
-    entry_url_slug,
     feed_display_title,
     feed_in_rule_scope,
     get_folder_feed_urls,
@@ -79,7 +74,6 @@ from main import (
     is_email_configured,
     is_quire_configured,
     mark_yt_quota_exhausted,
-    normalize_entry_title_for_dedupe,
     normalize_tag_value,
     parse_feeds_scope_id,
     parse_folders_scope_id,
@@ -89,10 +83,9 @@ from main import (
     rule_scope_folder_feed_set,
     rule_scope_folder_ids,
     set_setting,
-    title_word_similarity,
     youtube_duration_service,
 )
-from services import html_sanitize, youtube_embeds
+from services import dedup, html_sanitize, youtube_embeds
 from services import youtube_oauth as youtube_oauth_service
 from services.email import send_article_email
 from services.webhooks import build_webhook_batch_payload, build_webhook_payload, send_webhook
@@ -156,6 +149,10 @@ def _entry_matches_rule(entry: object, keyword: str, is_regex: bool, search_in: 
     return match_fn(title)
 
 
+def _dedup_false_matches(conn: sqlite3.Connection) -> set[str]:
+    return {r[0] + "||" + r[1] for r in conn.execute("SELECT keep_link, mark_link FROM dedup_false_matches").fetchall()}
+
+
 def _run_now_dedup(
     conn: sqlite3.Connection,
     scope: str,
@@ -173,193 +170,46 @@ def _run_now_dedup(
         return feed_urls  # {"error": ...}
     if len(feed_urls) < 2:
         return {"count": 0, "message": "Need at least 2 feeds in scope"}
-
-    if match_method == "safe":
-        false_rows = conn.execute("SELECT keep_link, mark_link FROM dedup_false_matches").fetchall()
-        false_matches: set[str] = {r[0] + "||" + r[1] for r in false_rows}
-        with get_reader() as reader:
-            records = _safe_dedup_collect(reader, feed_urls, max_per_feed, False)
-        pair_modes = _safe_dedup_find_pairs(records)
-        link_to_rec = {r["link"]: r for r in records if r["link"]}
-        to_mark: set[tuple[str, str]] = set()
-        kept_keys: set[tuple[str, str]] = set()
-        mark_to_keep: dict[tuple[str, str], str] = {}
-        for (keep_link, mark_link), _modes in pair_modes.items():
-            if keep_link + "||" + mark_link in false_matches:
-                continue
-            mark_rec = link_to_rec.get(mark_link)
-            if mark_rec:
-                to_mark.add((mark_rec["feed_url"], mark_rec["entry_id"]))
-                mark_to_keep[(mark_rec["feed_url"], mark_rec["entry_id"])] = keep_link
-                keep_rec = link_to_rec.get(keep_link)
-                if keep_rec:
-                    kept_keys.add((keep_rec["feed_url"], keep_rec["entry_id"]))
-        with get_reader() as reader:
-            for feed_url, entry_id in to_mark:
-                reader.mark_entry_as_read((feed_url, entry_id))
-        if to_mark:
-            when = datetime.now().isoformat()
-            conn.executemany(
-                "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
-                " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
-                [(fu, eid, when) for fu, eid in to_mark],
-            )
-            _bump_unread_counts_generation()
-        rec_map = {(r["feed_url"], r["entry_id"]): r for r in records}
-
-        def _rec_info(fu: str, eid: str, matched_link: str | None = None) -> dict:
-            return {
-                "feed_url": fu,
-                "entry_id": eid,
-                "title": rec_map.get((fu, eid), {}).get("title", ""),
-                "link": rec_map.get((fu, eid), {}).get("link", ""),
-                "feed_title": rec_map.get((fu, eid), {}).get("feed_title", ""),
-                "matched_link": matched_link,
-            }
-
-        matched_entries = [_rec_info(fu, eid, mark_to_keep.get((fu, eid))) for fu, eid in to_mark]
-        kept_entries = [_rec_info(fu, eid, rec_map.get((fu, eid), {}).get("link", "")) for fu, eid in kept_keys - to_mark]
-        return {"count": len(to_mark), "entries": matched_entries, "kept": kept_entries}
-
-    slug_index: dict[str, list[dict]] = {}
-    title_index: dict[str, list[dict]] = {}
-    combined_index: dict[tuple[str, str], list[dict]] = {}
-    fuzzy_entries: dict[str, list[dict]] = {}
-    window_secs = window_hours * 3600
-    _FUZZY_THRESHOLD = fuzzy_threshold
-
+    false_matches = _dedup_false_matches(conn) if match_method == "safe" else set()
     with get_reader() as reader:
-        for feed_url in feed_urls:
-            try:
-                for entry in reader.get_entries(feed=feed_url, read=False, limit=max_per_feed):
-                    published = entry_effective_date(entry)
-                    info = {
-                        "feed_url": str(entry.feed_url or ""),
-                        "entry_id": str(entry.id),
-                        "link": str(entry.link or ""),
-                        "title": str(entry.title or ""),
-                        "feed_title": str(getattr(entry, "feed_resolved_title", None) or entry.feed_url or ""),
-                        "published_ts": published.timestamp() if published else 0.0,
-                    }
-                    if match_method == "slug" and entry.link:
-                        slug = entry_url_slug(entry.link)
-                        if slug and len(slug) >= 4:
-                            slug_index.setdefault(slug, []).append(info)
-                    if match_method == "title" and entry.title:
-                        norm = normalize_entry_title_for_dedupe(entry.title)
-                        if norm and len(norm.split()) >= min_title_words:
-                            title_index.setdefault(norm, []).append(info)
-                    if match_method == "both" and entry.link and entry.title:
-                        slug = entry_url_slug(entry.link)
-                        norm = normalize_entry_title_for_dedupe(entry.title)
-                        if slug and norm:
-                            combined_index.setdefault((slug, norm), []).append(info)
-                    if match_method == "fuzzy" and entry.title:
-                        norm = normalize_entry_title_for_dedupe(entry.title)
-                        if norm and len(norm.split()) >= min_title_words:
-                            info["norm_title"] = norm
-                            fuzzy_entries.setdefault(str(entry.feed_url or ""), []).append(info)
-            except Exception:
-                LOGGER.exception("run-now-dedup: error reading feed %s", feed_url)
-
-        to_mark: set[tuple[str, str]] = set()
-        kept_keys: set[tuple[str, str]] = set()
-        # (marked key) -> the kept copy's link it matched, so run history can pair
-        # each duplicate with its keeper. The keeper is always sorted_entries[0].
-        mark_to_keep: dict[tuple[str, str], str] = {}
-
-        if match_method == "slug":
-            for _slug, entries in slug_index.items():
-                if len({e["feed_url"] for e in entries}) < 2:
-                    continue
-                sorted_entries = sorted(entries, key=dedup_order_key)
-                kept_keys.add((sorted_entries[0]["feed_url"], sorted_entries[0]["entry_id"]))
-                for e in sorted_entries[1:]:
-                    to_mark.add((e["feed_url"], e["entry_id"]))
-                    mark_to_keep[(e["feed_url"], e["entry_id"])] = sorted_entries[0].get("link", "")
-
-        if match_method == "title":
-            for _norm_title, entries in title_index.items():
-                if len({e["feed_url"] for e in entries}) < 2:
-                    continue
-                sorted_entries = sorted(entries, key=dedup_order_key)
-                oldest_ts = sorted_entries[0]["published_ts"] or 0.0
-                newest_ts = sorted_entries[-1]["published_ts"] or 0.0
-                if oldest_ts > 0 and newest_ts > 0 and (newest_ts - oldest_ts) > window_secs:
-                    continue
-                kept_keys.add((sorted_entries[0]["feed_url"], sorted_entries[0]["entry_id"]))
-                for e in sorted_entries[1:]:
-                    to_mark.add((e["feed_url"], e["entry_id"]))
-                    mark_to_keep[(e["feed_url"], e["entry_id"])] = sorted_entries[0].get("link", "")
-
-        if match_method == "both":
-            for (_slug, _norm_title), entries in combined_index.items():
-                if len({e["feed_url"] for e in entries}) < 2:
-                    continue
-                sorted_entries = sorted(entries, key=dedup_order_key)
-                oldest_ts = sorted_entries[0]["published_ts"] or 0.0
-                newest_ts = sorted_entries[-1]["published_ts"] or 0.0
-                if oldest_ts > 0 and newest_ts > 0 and (newest_ts - oldest_ts) > window_secs:
-                    continue
-                kept_keys.add((sorted_entries[0]["feed_url"], sorted_entries[0]["entry_id"]))
-                for e in sorted_entries[1:]:
-                    to_mark.add((e["feed_url"], e["entry_id"]))
-                    mark_to_keep[(e["feed_url"], e["entry_id"])] = sorted_entries[0].get("link", "")
-
-        if match_method == "fuzzy":
-            feed_list = sorted(u for u in feed_urls if u in fuzzy_entries)
-            for i, feed_i in enumerate(feed_list):
-                for feed_j in feed_list[i + 1 :]:
-                    for ei in fuzzy_entries[feed_i]:
-                        for ej in fuzzy_entries[feed_j]:
-                            ts_i = ei["published_ts"] or 0.0
-                            ts_j = ej["published_ts"] or 0.0
-                            if window_secs > 0 and abs(ts_i - ts_j) > window_secs:
-                                continue
-                            sim = title_word_similarity(ei["norm_title"], ej["norm_title"])
-                            if sim < _FUZZY_THRESHOLD:
-                                continue
-                            newer = ej if dedup_order_key(ei) <= dedup_order_key(ej) else ei
-                            older = ei if newer is ej else ej
-                            to_mark.add((newer["feed_url"], newer["entry_id"]))
-                            kept_keys.add((older["feed_url"], older["entry_id"]))
-                            mark_to_keep[(newer["feed_url"], newer["entry_id"])] = older.get("link", "")
-
-        for feed_url, entry_id in to_mark:
-            reader.mark_entry_as_read((feed_url, entry_id))
-
-    if to_mark:
+        records = dedup.collect_records(
+            reader,
+            feed_urls,
+            per_feed_limit=max_per_feed,
+            read=False,
+            feed_title=lambda f: feed_display_title(f, str(f.url)),
+            effective_date=entry_effective_date,
+            safe_fields=match_method == "safe",
+        )
+        groups = dedup.find_groups(
+            records,
+            match_method,
+            window_hours=window_hours,
+            fuzzy_threshold=fuzzy_threshold,
+            min_title_words=min_title_words,
+            false_matches=false_matches,
+        )
+        marked, kept = dedup.marks_from_groups(groups)
+        for key in marked:
+            reader.mark_entry_as_read(key)
+    if marked:
         when = datetime.now().isoformat()
         conn.executemany(
             "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
             " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
-            [(fu, eid, when) for fu, eid in to_mark],
+            [(fu, eid, when) for fu, eid in marked],
         )
         _bump_unread_counts_generation()
 
-    all_info = (
-        list(slug_index.get(k, []) for k in slug_index)
-        + list(title_index.get(k, []) for k in title_index)
-        + list(combined_index.get(k, []) for k in combined_index)
-        + list(fuzzy_entries.get(k, []) for k in fuzzy_entries)
-    )
-    entry_map = {(r["feed_url"], r["entry_id"]): r for sublist in all_info for r in sublist}
+    def _info(rec: dict, matched_link: str) -> dict:
+        # marked: the kept copy it matched; kept: its own link (group anchor).
+        return {k: rec[k] for k in ("feed_url", "entry_id", "title", "link", "feed_title")} | {"matched_link": matched_link}
 
-    def _entry_info(fu: str, eid: str, matched_link: str | None = None) -> dict:
-        info = entry_map.get((fu, eid), {})
-        return {
-            "feed_url": fu,
-            "entry_id": eid,
-            "title": info.get("title", ""),
-            "link": info.get("link", ""),
-            "feed_title": info.get("feed_title", ""),
-            # marked: the kept copy it matched; kept: its own link (group anchor).
-            "matched_link": matched_link,
-        }
-
-    matched_entries = [_entry_info(fu, eid, mark_to_keep.get((fu, eid))) for fu, eid in to_mark]
-    kept_entries = [_entry_info(fu, eid, entry_map.get((fu, eid), {}).get("link", "")) for fu, eid in kept_keys - to_mark]
-    return {"count": len(to_mark), "entries": matched_entries, "kept": kept_entries}
+    return {
+        "count": len(marked),
+        "entries": [_info(r, r["matched_link"]) for r in marked.values()],
+        "kept": [_info(r, r["link"]) for r in kept.values()],
+    }
 
 
 def _run_now_pattern(
@@ -1489,7 +1339,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
         with get_reader() as reader:
             with get_meta_connection() as conn:
                 for feed_url in refreshed_feed_urls:
-                    suppressed_total += _suppress_guid_churn(reader, conn, feed_url)
+                    suppressed_total += dedup._suppress_guid_churn(reader, conn, feed_url)
         if suppressed_total:
             _bump_unread_counts_generation()
             LOGGER.info("[guid-churn] suppressed %d re-issued entries", suppressed_total)

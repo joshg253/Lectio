@@ -87,10 +87,6 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from main import (
-    _SAFE_DEDUP_MIN_BODY_CHARS,
-    _SAFE_DEDUP_MIN_TITLE_WORDS,
-    _SAFE_DEDUP_TAG_RE,
-    _SAFE_DEDUP_UNCLOSED_TAG_RE,
     _SAVED_DUP_BODY_HEAD_CHARS,
     _SAVED_DUP_BODY_SQL_CHARS,
     CAPTURE_MODE_FULL,
@@ -132,6 +128,12 @@ from main import (
     saved_articles_service,
     saved_autofile_service,
     tenancy,
+)
+from services.dedup import (
+    _SAFE_DEDUP_MIN_BODY_CHARS,
+    _SAFE_DEDUP_MIN_TITLE_WORDS,
+    _SAFE_DEDUP_TAG_RE,
+    _SAFE_DEDUP_UNCLOSED_TAG_RE,
 )
 from state import _refetch_jobs_lock
 

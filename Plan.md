@@ -10,20 +10,10 @@ decision, real features not blocking anything today, and deliberately-deferred b
 Within a tier, related items are clustered under a bold sub-heading. Two watch-lists (CodeQL,
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
-Tier 1 is empty. Tier 2 is empty — nothing currently qualifies as small *and* fast *and*
-independent; the ready items below all take real focused time. Tier 3 holds two items that are
-sized, have no outstanding decision, and are ready to pick up (2026-09-22: Josh decided the
-archive-capture-failures item, promoting it in from Tier 4's decision list; the tag-filter-chip
-scope item stayed on that list pending further discussion; offline star/unstar was decided closed,
-not built; 2026-09-22: dev.to multi-tag support shipped, dropping "Tag filtering for firehose
-feeds — follow-ups" off this tier; 2026-09-23: entry-pane loading state/timeout shipped; 2026-09-23:
-archive `source_fetch_status` column shipped, follow-ups in Tier 4; full-content fetch at ingest
-shipped). The
-main.py/index.html breakup, the `state.py` singleton extraction, and the full
-route-by-URL-prefix split (256 routes across 10 stages) are all done, shipped 2026-09-19 through
-2026-09-22 (PRs #329-#342). Tier 4 opens with the remaining items blocked on a product decision,
-not on code, plus the `/api/*` cluster split (deferred, undecided) and the shared rendering core
-(not started, deliberately).
+Tiers 1-3 are empty (2026-09-24): archive fetch status, full-content fetch at ingest, and the `services/dedup.py` consolidation
+shipped; single-post capture quality was deferred to Tier 4. Tier 4 opens with items blocked on a product decision, not on code,
+plus the `/api/*` cluster split (deferred, undecided) and the shared rendering core (not started, deliberately). The main.py
+breakup and route-by-URL-prefix split are done (PRs #329-#342).
 
 ## Tier 1 — actively impeding unread-clearing
 
@@ -35,31 +25,7 @@ Empty.
 
 ## Tier 3 — sized, no open decision, ready to build
 
-No outstanding decision blocks any of these — pick up in whatever order suits, ordered here
-roughly cheapest-first.
-
-### Single-post pages: fix raw/full-page capture quality
-
-Some "feeds" are really one standing document (e.g. a single tutorial page), saved via a
-manufactured feed. Readability can return a small fraction of such a page, and the wrong node.
-(The workflow-simplification half of this idea is superseded — Josh's preference is filing such
-pages into an existing related feed, which auto-filing already does in bulk — so this is capture
-quality only.)
-
-### Dedup routes consolidation → `services/dedup.py`
-
-Next concrete step: write characterization tests for the dedup match-method bodies (now
-`_dry_run_dedup` in `routes/automation.py`, `_run_now_dedup` in `services/automation_rules.py`) —
-dedup correctness is behavior-sensitive, so this needs to happen before touching the preview/apply
-logic, not as an afterthought. Once tests land, pull the consolidated engine into
-`services/dedup.py`, and fold in `_suppress_guid_churn` and `_cleanup_intra_feed_slug_dupes`
-(main.py:7589-7798, refresh-time guid/slug dedup — line numbers drift with every main.py change,
-re-grep before trusting them) at the same time — same problem space, avoids moving them twice. The
-three unrelated hide-* hygiene functions next to them in main.py (`_is_youtube_short`,
-`_apply_hide_shorts`, `_apply_hide_paywalled`, `_apply_hide_members_only`, main.py:7479-7974 minus
-the two above) aren't dedup — decide at extraction time whether they're worth carrying along in
-the same pass (adjacent code, same refresh-pipeline callers) or splitting off into a later
-`services/feed_hygiene.py`.
+Empty.
 
 ## Tier 4 — real features, not blocking anything today
 
@@ -68,6 +34,9 @@ the same pass (adjacent code, same refresh-pipeline callers) or splitting off in
 Everything below is sized or scoped already — each is waiting on one call only Josh can make, not
 on more investigation. Once answered, each drops into Tier 2 or 3.
 
+- **Single-post pages: raw/full-page capture quality** — some "feeds" are one standing document (a single tutorial page) saved via a
+  manufactured feed; readability can return a small fraction of the page, or the wrong node. Deferred by Josh 2026-09-24; needs a
+  concrete example page before it can be scoped. (Workflow half superseded: such pages get filed into a related feed by auto-filing.)
 - **Archive fetch-status follow-ups** — `archived_entry.source_fetch_status` exists (2026-09-23), so what to build on it needs a call:
   (a) where to surface it (Saved filter/badge for failed captures?); (b) backfill the ~633 pre-column empty-complete rows by having
   `scripts/probe_empty_archives.py` write the column; (c) whether transient kinds (`timeout`/`connect`/`http_5xx`) auto-retry.
@@ -361,8 +330,9 @@ for the precedent) plus a paced walker. Worth a real plan before any code.
   reformat commit, hash added to `.git-blame-ignore-revs`.
 - **Wrap saved-dedup storage access** (Sourcery) — the Saved duplicate scan reads reader's entries
   table directly; a thin storage-layer wrapper would localize breakage if reader's schema evolves.
-- **Consolidate the dedup routes** — see "Dedup routes consolidation" in Tier 3; tracked there
-  since it also gates a `services/dedup.py` extraction, not just this cleanup.
+- **Hide-* refresh hygiene → `services/feed_hygiene.py`** — `_is_youtube_short`, `_apply_hide_shorts`, `_apply_hide_paywalled`,
+  `_apply_hide_members_only` stayed in main.py when dedup moved to `services/dedup.py` (2026-09-24): same refresh-pipeline callers,
+  but not dedup. Cosmetic until something else needs to touch them.
 - **`ensure_meta_schema`** (main.py:3626, ~1,332 lines) — long but linear (CREATE + idempotent
   ALTERs), low churn. A by-area split is cosmetic.
 - **Backfill Sphinx-math height on already-stored entries** — the ingest-time fix doesn't
