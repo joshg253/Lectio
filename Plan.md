@@ -11,11 +11,13 @@ Within a tier, related items are clustered under a bold sub-heading. Two watch-l
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
 Tier 1 is empty. Tier 2 is empty — nothing currently qualifies as small *and* fast *and*
-independent; the ready items below all take real focused time. Tier 3 holds six items that are
+independent; the ready items below all take real focused time. Tier 3 holds five items that are
 sized, have no outstanding decision, and are ready to pick up (2026-09-22: Josh decided the
 archive-capture-failures item, promoting it in from Tier 4's decision list; the tag-filter-chip
 scope item stayed on that list pending further discussion; offline star/unstar was decided closed,
-not built). The main.py/index.html breakup, the `state.py` singleton extraction, and the full
+not built; 2026-09-22: dev.to multi-tag support shipped, dropping "Tag filtering for firehose
+feeds — follow-ups" off this tier). The main.py/index.html breakup, the `state.py` singleton
+extraction, and the full
 route-by-URL-prefix split (256 routes across 10 stages) are all done, shipped 2026-09-19 through
 2026-09-22 (PRs #329-#342). Tier 4 opens with the remaining items blocked on a product decision,
 not on code, plus the `/api/*` cluster split (deferred, undecided) and the shared rendering core
@@ -33,16 +35,6 @@ Empty.
 
 No outstanding decision blocks any of these — pick up in whatever order suits, ordered here
 roughly cheapest-first.
-
-### Tag filtering for firehose feeds — follow-ups
-
-`tag_filter` rule type is shipped (include/exclude feed-tag lists, any scope, auto-mark-read,
-dry-run/run-now/history). Remaining:
-
-- dev.to adapter: extend to multiple include tags (one API call per tag, merged/deduped by
-  article id, exclusion applied client-side on `tag_list`).
-- freeCodeCamp per-tag Ghost RSS (`/news/tag/<slug>/rss/`) as a fallback if include-list recall is
-  insufficient.
 
 ### Entry-pane loading state/timeout
 

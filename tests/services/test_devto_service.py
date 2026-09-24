@@ -96,18 +96,18 @@ def test_feed_id_from_url_rejects_other_dirs():
 
 
 def test_build_params_full_config():
-    params = devto._build_params(
-        {
-            "tag": " Python ",
-            "top_days": 7,
-            "tags_exclude": "WebDev, career ,",
-        }
-    )
-    assert params == {"per_page": 80, "tag": "python", "top": 7, "tags_exclude": "webdev,career"}
+    params = devto._build_params({"top_days": 7}, "python")
+    assert params == {"per_page": 80, "tag": "python", "top": 7}
 
 
 def test_build_params_front_page_defaults():
-    assert devto._build_params({}) == {"per_page": 80}
+    assert devto._build_params({}, None) == {"per_page": 80}
+
+
+def test_include_tags_parses_and_normalizes():
+    assert devto._include_tags({"tag": " Python , Rust ,"}) == ["python", "rust"]
+    assert devto._include_tags({}) == []
+    assert devto._include_tags({"tag": ""}) == []
 
 
 def test_filters_english_only():
@@ -123,6 +123,14 @@ def test_filters_min_reactions():
     assert devto._passes_filters(_article(positive_reactions_count=12), cfg)
     assert not devto._passes_filters(_article(positive_reactions_count=9), cfg)
     assert devto._passes_filters(_article(positive_reactions_count=0), {})
+
+
+def test_filters_tags_exclude_client_side():
+    cfg = {"tags_exclude": "WebDev, career ,"}
+    assert devto._passes_filters(_article(tag_list=["python", "tutorial"]), cfg)
+    assert not devto._passes_filters(_article(tag_list=["python", "webdev"]), cfg)
+    assert not devto._passes_filters(_article(tag_list=["Career"]), cfg)
+    assert devto._passes_filters(_article(tag_list=["python"]), {})
 
 
 # --- article mapping + RSS ---
@@ -168,8 +176,14 @@ def test_generate_rss_xml_structure():
 def test_default_title():
     assert devto.default_title({}) == "dev.to"
     assert devto.default_title({"tag": "python"}) == "dev.to #python"
+    assert devto.default_title({"tag": "python, rust"}) == "dev.to #python/rust"
     t = devto.default_title({"tag": "cpp", "top_days": 7, "min_reactions": 10})
     assert "cpp" in t and "7d" in t and "10" in t
+
+
+def test_page_url_uses_first_tag():
+    assert devto._page_url("python,rust") == "https://dev.to/t/python"
+    assert devto._page_url(None) == "https://dev.to/"
 
 
 # --- HTTP (mocked) ---
@@ -210,6 +224,15 @@ def test_fetch_articles_filters_client_side():
     with patch("services.devto.httpx.Client", return_value=_mock_client([(200, articles, {})])):
         out = devto.fetch_articles({"tag": "python", "english_only": True, "min_reactions": 5})
     assert [a["id"] for a in out] == [1]
+
+
+def test_fetch_articles_multi_tag_merges_dedupes_and_excludes():
+    python_page = [_article(id=1, tag_list=["python", "tutorial"]), _article(id=2, tag_list=["python", "webdev"])]
+    rust_page = [_article(id=2, tag_list=["python", "webdev"]), _article(id=3, tag_list=["rust"])]
+    with patch("services.devto.httpx.Client", return_value=_mock_client([(200, python_page, {}), (200, rust_page, {})])) as client_cls:
+        out = devto.fetch_articles({"tag": "python, rust", "tags_exclude": "webdev"})
+    assert client_cls.call_count == 2
+    assert sorted(a["id"] for a in out) == [1, 3]
 
 
 def test_request_raises_rate_limited_after_max_retries():

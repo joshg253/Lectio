@@ -3,18 +3,21 @@
 Dev.to's RSS feeds (front page and per-tag) are unfiltered firehoses that mix
 languages. Its public, unauthenticated JSON API exposes what the RSS doesn't:
 a per-article ``language`` label, reaction counts, and a ``top=N`` ranking
-window. We fetch ``GET https://dev.to/api/articles`` once per refresh, filter
-client-side (the API ignores ``?language=``), and render the survivors to a
-``file://`` RSS file the ``reader`` library subscribes to — the same pattern
-as the DeviantArt and FakeFeedz adapters.
+window. We fetch ``GET https://dev.to/api/articles`` once per refresh per
+include tag, filter client-side, and render the survivors to a ``file://`` RSS
+file the ``reader`` library subscribes to — the same pattern as the
+DeviantArt and FakeFeedz adapters.
 
 Per-feed config lives in the per-user meta DB (``devto_feeds``):
-  tag           optional; empty = front page
+  tag           optional comma list; empty = front page. dev.to's ``tag`` API
+                param takes one value with no server-side OR, so multiple
+                tags mean one API call each, merged/deduped by article id.
   top_days      optional; N = dev.to's "top of last N days" ranking, empty = latest
   english_only  filter on the API's own ``language == "en"`` label (source's
                 classification, deliberately not our own detection)
   min_reactions optional floor on positive_reactions_count
-  tags_exclude  optional comma list passed straight to the API
+  tags_exclude  optional comma list, filtered client-side against each
+                article's own ``tag_list`` (consistent across merged calls)
 """
 
 from __future__ import annotations
@@ -154,17 +157,17 @@ def _request(url: str, *, params: dict, timeout: float = 20.0):
     raise DevToRateLimited(msg)
 
 
-def _build_params(config: dict) -> dict:
+def _include_tags(config: dict) -> list[str]:
+    return [t.strip().lower() for t in (config.get("tag") or "").split(",") if t.strip()]
+
+
+def _build_params(config: dict, tag: str | None) -> dict:
     params: dict = {"per_page": _PER_PAGE}
-    tag = (config.get("tag") or "").strip().lower()
     if tag:
         params["tag"] = tag
     top_days = config.get("top_days")
     if top_days:
         params["top"] = int(top_days)
-    tags_exclude = (config.get("tags_exclude") or "").strip()
-    if tags_exclude:
-        params["tags_exclude"] = ",".join(t.strip().lower() for t in tags_exclude.split(",") if t.strip())
     return params
 
 
@@ -174,12 +177,17 @@ def _passes_filters(article: dict, config: dict) -> bool:
     min_reactions = config.get("min_reactions")
     if min_reactions and int(article.get("positive_reactions_count") or 0) < int(min_reactions):
         return False
+    tags_exclude = (config.get("tags_exclude") or "").strip()
+    if tags_exclude:
+        excluded = {t.strip().lower() for t in tags_exclude.split(",") if t.strip()}
+        article_tags = {str(t).strip().lower() for t in (article.get("tag_list") or [])}
+        if excluded & article_tags:
+            return False
     return True
 
 
-def fetch_articles(config: dict) -> list[dict]:
-    """One polite API call, then client-side language/reactions filtering."""
-    resp = _request(_API_URL, params=_build_params(config))
+def _fetch_one(tag: str | None, config: dict) -> list[dict]:
+    resp = _request(_API_URL, params=_build_params(config, tag))
     if resp.status_code != 200:
         raise RuntimeError(f"dev.to fetch failed: HTTP {resp.status_code}: {resp.text[:200]}")
     try:
@@ -188,7 +196,22 @@ def fetch_articles(config: dict) -> list[dict]:
         raise RuntimeError(f"dev.to fetch failed: invalid JSON ({exc})") from exc
     if not isinstance(articles, list):
         raise RuntimeError("dev.to fetch failed: unexpected response shape")
-    return [a for a in articles if isinstance(a, dict) and _passes_filters(a, config)]
+    return [a for a in articles if isinstance(a, dict)]
+
+
+def fetch_articles(config: dict) -> list[dict]:
+    """One polite API call per include tag (dev.to's `tag` param takes a single
+    value; there's no server-side OR), merged/deduped by article id, then
+    client-side language/reactions/exclude-tag filtering.
+    """
+    tags = _include_tags(config)
+    seen: dict = {}
+    for tag in tags or [None]:
+        for a in _fetch_one(tag, config):
+            article_id = a.get("id")
+            if article_id is not None:
+                seen[article_id] = a
+    return [a for a in seen.values() if _passes_filters(a, config)]
 
 
 def _article_to_entry(a: dict) -> dict | None:
@@ -277,12 +300,13 @@ def _generate_rss_xml(feed_title: str, source_url: str, entries: list[dict]) -> 
 
 
 def _page_url(tag: str | None) -> str:
-    return f"https://dev.to/t/{tag}" if tag else "https://dev.to/"
+    first = (tag or "").split(",")[0].strip()
+    return f"https://dev.to/t/{first}" if first else "https://dev.to/"
 
 
 def default_title(config: dict) -> str:
-    tag = (config.get("tag") or "").strip()
-    base = f"dev.to #{tag}" if tag else "dev.to"
+    tags = _include_tags(config)
+    base = f"dev.to #{'/'.join(tags)}" if tags else "dev.to"
     bits = []
     if config.get("top_days"):
         bits.append(f"top {int(config['top_days'])}d")
@@ -393,7 +417,7 @@ def create_devto_feed(conn: sqlite3.Connection, reader, config: dict, feed_title
         (
             feed_id,
             title,
-            (config.get("tag") or "").strip().lower() or None,
+            ",".join(_include_tags(config)) or None,
             config.get("top_days"),
             1 if config.get("english_only") else 0,
             config.get("min_reactions"),
@@ -435,7 +459,7 @@ def update_devto_feed_config(conn: sqlite3.Connection, reader, feed_id: str, con
         "UPDATE devto_feeds SET feed_title = ?, tag = ?, top_days = ?, english_only = ?, min_reactions = ?, tags_exclude = ? WHERE id = ?",
         (
             feed_title,
-            (config.get("tag") or "").strip().lower() or None,
+            ",".join(_include_tags(config)) or None,
             config.get("top_days"),
             1 if config.get("english_only") else 0,
             config.get("min_reactions"),
