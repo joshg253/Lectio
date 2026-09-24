@@ -514,6 +514,10 @@ Revert and the refresh pin apply. Off-thread because the scheduled refresh runs 
 minute. Each entry is attempted once; a failure pauses the host via the shared auto-refetch cooldown, and entries on a paused host
 stay queued. Comic/photo posts also fail the thin test — the opt-in is what keeps them out, not the threshold.
 
+The manual "Email → full article text" send reuses the same thin test at send time (`_email_full_body` in routes/entries.py): a thin
+stored body is swapped for the kept offline copy, else a live readability fetch capped at the proxy tier (the sender is waiting), and
+only when the result is richer. Nothing is written back to the entry.
+
 ## FakeFeedz entries get the article's own date, and optionally their own body
 
 A listing page is a wall of links: titles and hrefs are there, dates usually are

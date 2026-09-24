@@ -108,6 +108,8 @@ from main import (
     _RANGE_READ_LIMIT,
     _READER_VIEW_MEDIA_CSS,
     _VALID_THUMB_CROPS,
+    _archived_copy_is_plausible,
+    _reader_copy_is_richer,
     EMAIL_TO_SETTING_KEY,
     LOGGER,
     MAX_MANUAL_TAGS,
@@ -217,6 +219,7 @@ from main import (
     unsubscribed_feed_urls_among,
     upsert_entry_read_state,
     url_guard,
+    fetch_readability_article,
 )
 from services import tenancy
 
@@ -2512,6 +2515,22 @@ def mark_entries_newer_than_unread(
     )
 
 
+def _email_full_body(feed_url: str, entry_id: str, link: str, stored: str) -> str:
+    """The body a "full article text" email sends. A thin stored body (a teaser-only feed) is swapped for the kept offline copy, or a
+    live readability fetch — the same thin test as full-content fetch at ingest. Capped at the proxy tier: the sender is waiting on
+    the request. Anything that fails, or isn't richer than what's stored, falls back to the stored body."""
+    if _archived_copy_is_plausible(stored) or not link.startswith(("http://", "https://")):
+        return stored
+    candidate = _resolve_archived_readability_html(feed_url, entry_id) or ""
+    if not candidate:
+        try:
+            _title, candidate = fetch_readability_article(link)
+        except Exception as exc:  # noqa: BLE001 — a failed fetch still sends what's stored
+            LOGGER.info("email full text: readability fetch failed for %s: %s", link, exc)
+            return stored
+    return candidate if _reader_copy_is_richer(candidate, stored) else stored
+
+
 @router.post("/entries/email")
 def email_entry(
     request: Request,
@@ -2560,6 +2579,7 @@ def email_entry(
         # Full text wants the article body, not the (often much shorter) feed
         # summary — opposite preference order from the snippet case below.
         raw = (entry.content[0].value if entry.content else "") or entry.summary or ""
+        raw = _email_full_body(feed_url, entry_id, link, raw)
         excerpt = html_sanitize.plain_text_full(raw)
         # The HTML part renders the sanitized article body directly — real
         # paragraphs/bold/links/lists, not the plain-text wall above (that's
