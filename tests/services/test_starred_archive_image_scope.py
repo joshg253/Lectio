@@ -45,7 +45,7 @@ def _archive_conn_factory(tmp_path):
             starred_at REAL NOT NULL, archived_at REAL, error TEXT,
             source_html_zlib BLOB, readability_html_zlib BLOB, content_html_zlib BLOB,
             title TEXT, link TEXT, feed_title TEXT, author TEXT,
-            published_at REAL, received_at REAL, content_size_bytes INTEGER,
+            published_at REAL, received_at REAL, content_size_bytes INTEGER, source_fetch_status TEXT,
             PRIMARY KEY (feed_url, entry_id)
         )
         """
@@ -83,8 +83,8 @@ def _service(tmp_path):
 
 
 def _fetch_stub(source_html: str):
-    def _fetch(url: str) -> tuple[str, str]:
-        return source_html, url
+    def _fetch(url: str) -> tuple[tuple[str, str], str]:
+        return (source_html, url), "ok"
 
     return _fetch
 
@@ -130,7 +130,7 @@ def test_images_found_only_in_the_raw_page_chrome_are_not_archived(tmp_path, mon
     svc = _service(tmp_path)
     entry = _entry()
     svc._get_reader = lambda: _FakeReader(entry)
-    svc._fetch_text_with_url = _fetch_stub(source_html)
+    svc._fetch_source_page = _fetch_stub(source_html)
     monkeypatch.setattr(
         starred_archive,
         "Document",
@@ -162,7 +162,7 @@ def test_an_image_that_survives_into_readability_html_is_still_archived(tmp_path
     svc = _service(tmp_path)
     entry = _entry()
     svc._get_reader = lambda: _FakeReader(entry)
-    svc._fetch_text_with_url = _fetch_stub(source_html)
+    svc._fetch_source_page = _fetch_stub(source_html)
     monkeypatch.setattr(
         starred_archive,
         "Document",
@@ -201,7 +201,7 @@ def test_linked_file_attachment_scan_still_sees_source_html(tmp_path, monkeypatc
     )
     entry = _entry()
     svc._get_reader = lambda: _FakeReader(entry)
-    svc._fetch_text_with_url = _fetch_stub(source_html)
+    svc._fetch_source_page = _fetch_stub(source_html)
     monkeypatch.setattr(
         starred_archive,
         "Document",

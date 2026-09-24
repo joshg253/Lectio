@@ -3481,6 +3481,10 @@ def ensure_starred_archive_schema() -> None:
             # from LENGTH()+join on every render. NULL until the first successful
             # archive. See Plan.md "Saved: see and sort by item size".
             ("content_size_bytes", "INTEGER"),
+            # How the source-page fetch went at capture time: ok, no_link, http_<code>, timeout, tls, connect, blocked,
+            # error. NULL for rows captured before this existed. A failed fetch still archives as 'complete' (the feed's
+            # own content may be all there is), so this is the only record of WHY a complete archive can be empty.
+            ("source_fetch_status", "TEXT"),
         ):
             if col_name not in existing_cols:
                 conn.execute(f"ALTER TABLE archived_entry ADD COLUMN {col_name} {col_decl}")

@@ -1062,6 +1062,13 @@ an automatic capture would — `archive_one_attachment` checks the link table
 afterward rather than trusting `_archive_asset`'s silent-skip return to know
 whether it actually landed.
 
+## Source-fetch status on captured archives
+
+A failed source-page fetch still completes the archive (the feed's own content may be all there is), so `status='complete'` alone
+can't tell a dead link from a real empty post. `_archive_entry` records the fetch outcome in `archived_entry.source_fetch_status`
+(`ok`, `no_link`, `http_<code>`, `timeout`, `tls`, `connect`, `blocked`, `error`; see `_classify_fetch_error`). Rows captured before
+2026-09-23 are NULL. It's a column, not just a log line, so it can be queried and surfaced later.
+
 ## Saved/Kept item size: maintained, not computed live
 
 `archived_entry.content_size_bytes` is written once, at archive-completion

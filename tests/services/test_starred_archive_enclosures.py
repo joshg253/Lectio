@@ -47,7 +47,7 @@ def _archive_conn_factory(tmp_path):
             starred_at REAL NOT NULL, archived_at REAL, error TEXT,
             source_html_zlib BLOB, readability_html_zlib BLOB, content_html_zlib BLOB,
             title TEXT, link TEXT, feed_title TEXT, author TEXT,
-            published_at REAL, received_at REAL, content_size_bytes INTEGER,
+            published_at REAL, received_at REAL, content_size_bytes INTEGER, source_fetch_status TEXT,
             PRIMARY KEY (feed_url, entry_id)
         )
         """
