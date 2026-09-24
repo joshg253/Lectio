@@ -12432,6 +12432,8 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
        * because the type you were working in is almost always the one you come
        * back to. */
       const HL_TYPE_FILTER_KEY = 'lectio-rule-type-filter';
+      // Not a type: a cross-type view of every switched-off rule, kept under its type headings.
+      const HL_FILTER_DISABLED = '__disabled__';
       let hlTypeFilter = (() => {
         try { return window.localStorage.getItem(HL_TYPE_FILTER_KEY) || ''; }
         catch { return ''; }
@@ -12456,9 +12458,11 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           const t = r.type || 'highlight';
           counts.set(t, (counts.get(t) || 0) + 1);
         }
-        // A filter pinned to a type whose last rule was just deleted would show
-        // an empty list with no way back, so fall back to All.
-        if (hlTypeFilter && !counts.has(hlTypeFilter)) hlTypeFilter = '';
+        const disabledCount = hlRules.filter(r => r.enabled === 0).length;
+        // A filter pinned to a type whose last rule was just deleted (or to
+        // Disabled after the last one was switched back on) would show an empty
+        // list with no way back, so fall back to All.
+        if (hlTypeFilter === HL_FILTER_DISABLED ? disabledCount === 0 : (hlTypeFilter && !counts.has(hlTypeFilter))) hlTypeFilter = '';
         if (hlRules.length === 0) return;
 
         const mk = (value, label, count) => {
@@ -12480,6 +12484,11 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         for (const t of HL_TYPE_ORDER) {
           if (!counts.has(t)) continue;
           bar.appendChild(mk(t, HL_TYPE_LABELS[t] || t, counts.get(t)));
+        }
+        if (disabledCount > 0) {
+          const d = mk(HL_FILTER_DISABLED, 'Disabled', disabledCount);
+          d.classList.add('hl-type-chip--disabled');
+          bar.appendChild(d);
         }
       }
 
@@ -12523,13 +12532,16 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         const TYPE_ORDER = HL_TYPE_ORDER;
         const TYPE_LABELS = HL_TYPE_LABELS;
         for (const sectionType of TYPE_ORDER) {
+          const disabledOnly = hlTypeFilter === HL_FILTER_DISABLED;
           // Filtered to one type: skip every other section entirely.
-          if (hlTypeFilter && sectionType !== hlTypeFilter) continue;
-          const sectionRules = hlRules.map((r, i) => ({ r, i })).filter(({ r }) => (r.type || 'highlight') === sectionType);
+          if (hlTypeFilter && !disabledOnly && sectionType !== hlTypeFilter) continue;
+          const sectionRules = hlRules
+            .map((r, i) => ({ r, i }))
+            .filter(({ r }) => (r.type || 'highlight') === sectionType && (!disabledOnly || r.enabled === 0));
           if (sectionRules.length === 0) continue;
           // The section heading is the chip you just clicked — repeating it
-          // under the filter row says nothing.
-          if (!hlTypeFilter) {
+          // under the filter row says nothing. The Disabled view spans types, so it keeps them.
+          if (!hlTypeFilter || disabledOnly) {
             const labelEl = document.createElement('div');
             labelEl.className = 'hl-section-label';
             labelEl.textContent = TYPE_LABELS[sectionType] || sectionType;
