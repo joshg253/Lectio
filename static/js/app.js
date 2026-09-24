@@ -16873,7 +16873,11 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       feedsTab.addEventListener('change', (e) => {
         if (e.target.id === 'sfc-check-all-global') {
           const on = e.target.checked;
-          selectableFeedRows(null).forEach(r => {
+          // Checking respects the filter; UNchecking clears everything. A row the
+          // filter hides that stays checked still counts toward the selection and
+          // every bulk action — reported as a "1 selected" that deselect-all could
+          // not clear (the survivor of an earlier Combine, filtered out of view).
+          (on ? selectableFeedRows(null) : [...feedsTab.querySelectorAll('.settings-feed-row')]).forEach(r => {
             const cb = r.querySelector('.sfc-check');
             if (cb) cb.checked = on;
           });
@@ -16892,7 +16896,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           // reported after filtering to a few Slickdeals feeds and finding
           // "select all" had taken the whole library.
           const fid = e.target.dataset.folderCheck;
-          selectableFeedRows(fid).forEach(r => {
+          (e.target.checked ? selectableFeedRows(fid) : [...feedsTab.querySelectorAll(`.settings-feed-row[data-folder-feeds="${fid}"]`)]).forEach(r => {
             const cb = r.querySelector('.sfc-check');
             if (cb) cb.checked = e.target.checked;
           });
@@ -16915,6 +16919,12 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       const _ACTION_LABEL = { move: 'moved', disable: 'disabled', enable: 'enabled',
                               unsubscribe: 'unsubscribed', refresh: 'refreshed', 'mark-read': 'marked read' };
       function selectedUrls() { return getSelectedFeeds().map(f => f.url); }
+      function clearSelection() {
+        feedsTab.querySelectorAll('.sfc-check:checked').forEach(cb => { cb.checked = false; });
+        feedsTab.querySelectorAll('.sfc-check-all').forEach(cb => { cb.checked = false; cb.indeterminate = false; });
+        syncGlobalCheck();
+        updateToolbar();
+      }
       function removeRowsFor(urls) {
         const set = new Set(urls);
         const affectedFolders = new Set();
@@ -17043,6 +17053,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             const data = await r.json().catch(() => ({}));
             if (!data.ok) { alert(data.message || 'Combine failed.'); go.disabled = false; go.textContent = `Combine ${selected.length} feeds`; return; }
             removeRowsFor(sources);
+            clearSelection();  // the merge is done; a still-checked survivor would ride into the next action
             panel.hidden = true; panel.innerHTML = '';
             if (typeof showToastMessage === 'function') showToastMessage(data.message);
           } catch (e) { alert('Combine failed: ' + e); go.disabled = false; }
