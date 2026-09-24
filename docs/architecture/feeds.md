@@ -518,6 +518,15 @@ The manual "Email → full article text" send reuses the same thin test at send 
 stored body is swapped for the kept offline copy, else a live readability fetch capped at the proxy tier (the sender is waiting), and
 only when the result is richer. Nothing is written back to the entry.
 
+## Page topics at ingest (`services/page_topics.py`)
+
+Same opt-in shape and NEW-entry hook as full-content fetch (column `capture_page_topics`). Fetches only the first 64KB of each new
+post's page (`url_guard.safe_get_prefix` streams and hangs up — the tag metas sit in `<head>`, ~3.6KB into a 2MB PC Gamer page whose
+`</head>` is ~1MB in) with the honest UA and no escalation; a refusal pauses the host for an hour. Tags come from
+`extract_page_tags` and are stored in `entry_feed_tags` with `source='page'`: the feed's per-entry replace only deletes `source='feed'`
+rows, so topics survive the feed re-delivering the entry. Topics land after the after-refresh tag-filter pass, so a tag-filter rule
+matches them only on later runs.
+
 ## FakeFeedz entries get the article's own date, and optionally their own body
 
 A listing page is a wall of links: titles and hrefs are there, dates usually are

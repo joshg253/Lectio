@@ -200,6 +200,16 @@
                 <option value="0">Off</option>
               </select>
             </label>
+            {# The publisher's own article tags (article:tag metas — PC Gamer's "Topics") as tag suggestions, fetched for each new
+               post (first 64KB of the page only). Inherit = the folder's setting. #}
+            <label class="feed-prop-toggle-row">
+              <span>Capture page topics as tag suggestions</span>
+              <select id="feed-prop-page-topics" class="feed-prop-strategy-select" style="width:auto">
+                <option value="-1" id="feed-prop-page-topics-inherit">Folder setting</option>
+                <option value="1">On</option>
+                <option value="0">Off</option>
+              </select>
+            </label>
             {# Opt-in per feed: a *partial* feed is all stubs by design, so
                enabling this there would empty it. #}
             <label class="feed-prop-toggle-row">

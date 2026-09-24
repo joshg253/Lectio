@@ -129,3 +129,37 @@ def test_async_redirect_to_internal_blocked(allow_public):
 
     with pytest.raises(url_guard.UnsafeURLError):
         asyncio.run(run())
+
+
+# --- safe_get_prefix: read only the head of a page ------------------------------------------------------------------------------------
+
+
+class _CountingStream(httpx.SyncByteStream):
+    """A 2MB body in 16KB chunks that records how many chunks were actually pulled."""
+
+    def __init__(self) -> None:
+        self.pulled = 0
+
+    def __iter__(self):
+        for _ in range(128):
+            self.pulled += 1
+            yield b"x" * 16384
+
+
+def test_prefix_stops_reading_after_max_bytes(allow_public):
+    stream = _CountingStream()
+
+    def handler(request):
+        if str(request.url) == "https://pub.test/redir":
+            return httpx.Response(302, headers={"location": "https://pub.test/page"})
+        return httpx.Response(200, headers={"content-type": "text/html"}, stream=stream)
+
+    with httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False) as client:
+        text, final_url, status = url_guard.safe_get_prefix(client, "https://pub.test/redir", max_bytes=64 * 1024)
+    assert (len(text), final_url, status) == (64 * 1024, "https://pub.test/page", 200)
+    assert stream.pulled <= 5  # 4 chunks fill 64KB; the other ~124 are never read
+
+
+def test_prefix_blocks_an_unsafe_redirect(allow_public):
+    with _sync_client() as client, pytest.raises(url_guard.UnsafeURLError):
+        url_guard.safe_get_prefix(client, "https://pub.test/redir-evil", max_bytes=1024)

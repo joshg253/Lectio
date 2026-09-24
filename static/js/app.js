@@ -3273,6 +3273,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
     const feedPropInjectSourceImages = document.getElementById('feed-prop-inject-source-images');
     const feedPropKatexDollarMath = document.getElementById('feed-prop-katex-dollar-math');
     const feedPropFullContent = document.getElementById('feed-prop-full-content');
+    const feedPropPageTopics = document.getElementById('feed-prop-page-topics');
     const feedPropPresetBtns = document.querySelectorAll('.feed-prop-preset-btn');
     const feedPropCaptionTitle = document.getElementById('feed-prop-caption-title');
     const feedPropCaptionAlt = document.getElementById('feed-prop-caption-alt');
@@ -6053,6 +6054,13 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             const inheritOpt = document.getElementById('feed-prop-full-content-inherit');
             if (inheritOpt) inheritOpt.textContent = `Folder setting (${data.folder_fetch_full_content ? 'on' : 'off'})`;
           }
+          if (feedPropPageTopics) {
+            feedPropPageTopics.value = String(data.capture_page_topics ?? -1);
+            feedPropPageTopics.dataset.feedUrl = feedUrl;
+            feedPropPageTopics.dataset.prev = feedPropPageTopics.value;
+            const topicsInherit = document.getElementById('feed-prop-page-topics-inherit');
+            if (topicsInherit) topicsInherit.textContent = `Folder setting (${data.folder_capture_page_topics ? 'on' : 'off'})`;
+          }
           if (feedPropCaptionTitle && feedPropCaptionAlt && feedPropCaptionAutoBtn) {
             const src = data.caption_source || 'auto';
             feedPropCaptionTitle.checked = src === 'title' || src === 'both';
@@ -6682,6 +6690,13 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         }
         const fullContentStatus = document.getElementById('folder-prop-full-content-status');
         if (fullContentStatus) fullContentStatus.textContent = '';
+        const pageTopicsBox = document.getElementById('folder-prop-page-topics');
+        if (pageTopicsBox) {
+          pageTopicsBox.dataset.folderId = String(folderId);
+          pageTopicsBox.checked = !!data.capture_page_topics;
+        }
+        const pageTopicsStatus = document.getElementById('folder-prop-page-topics-status');
+        if (pageTopicsStatus) pageTopicsStatus.textContent = '';
 
         const total = data.total_articles ?? 0;
         const unread = data.unread_articles ?? 0;
@@ -7938,6 +7953,15 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         await saveDisplayPref(feedUrl, 'fetch_full_content', parseInt(feedPropFullContent.value, 10));
         feedPropFullContent.dataset.prev = feedPropFullContent.value;
       } catch (e) { feedPropFullContent.value = feedPropFullContent.dataset.prev || '-1'; }
+    });
+
+    feedPropPageTopics?.addEventListener('change', async () => {
+      const feedUrl = feedPropPageTopics.dataset.feedUrl;
+      if (!feedUrl) return;
+      try {
+        await saveDisplayPref(feedUrl, 'capture_page_topics', parseInt(feedPropPageTopics.value, 10));
+        feedPropPageTopics.dataset.prev = feedPropPageTopics.value;
+      } catch (e) { feedPropPageTopics.value = feedPropPageTopics.dataset.prev || '-1'; }
     });
 
     feedPropFlushBatchBtn?.addEventListener('click', async () => {
@@ -16109,6 +16133,24 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       try {
         const body = new URLSearchParams({ folder_id: folderId, enabled: box.checked ? '1' : '0' });
         const resp = await fetch('/folders/full-content', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (!json.ok) throw new Error(json.error || 'save failed');
+        if (status) status.textContent = '';
+      } catch (err) {
+        box.checked = !box.checked;
+        if (status) status.textContent = `Error: ${err.message}`;
+      }
+    });
+
+    document.getElementById('folder-prop-page-topics')?.addEventListener('change', async (e) => {
+      const box = e.target;
+      const folderId = box.dataset.folderId;
+      if (!folderId) return;
+      const status = document.getElementById('folder-prop-page-topics-status');
+      if (status) status.textContent = 'Saving…';
+      try {
+        const body = new URLSearchParams({ folder_id: folderId, enabled: box.checked ? '1' : '0' });
+        const resp = await fetch('/folders/page-topics', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
         const json = await resp.json();
         if (!json.ok) throw new Error(json.error || 'save failed');
         if (status) status.textContent = '';

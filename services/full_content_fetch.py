@@ -37,29 +37,42 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    folder_cols = {row[1] for row in conn.execute("PRAGMA table_info(folders)").fetchall()}
-    if "fetch_full_content" not in folder_cols:
-        conn.execute("ALTER TABLE folders ADD COLUMN fetch_full_content INTEGER DEFAULT NULL")
-    pref_cols = {row[1] for row in conn.execute("PRAGMA table_info(feed_display_prefs)").fetchall()}
-    if "fetch_full_content" not in pref_cols:
-        conn.execute(f"ALTER TABLE feed_display_prefs ADD COLUMN fetch_full_content INTEGER NOT NULL DEFAULT {FEED_INHERIT}")
+    ensure_toggle_columns(conn, "fetch_full_content")
 
 
-def is_enabled_for_feed(conn: sqlite3.Connection, feed_url: str) -> bool:
+# Folder-on / feed Inherit-On-Off toggles resolved the same way. Column names are interpolated into SQL, so only these are allowed.
+_TOGGLE_COLUMNS = frozenset({"fetch_full_content", "capture_page_topics"})
+
+
+def is_enabled_for_feed(conn: sqlite3.Connection, feed_url: str, column: str = "fetch_full_content") -> bool:
     """Feed setting wins unless it's Inherit; then the feed's folder decides."""
-    row = conn.execute("SELECT fetch_full_content FROM feed_display_prefs WHERE feed_url = ?", (feed_url,)).fetchone()
+    if column not in _TOGGLE_COLUMNS:
+        raise ValueError(column)
+    row = conn.execute(f"SELECT {column} FROM feed_display_prefs WHERE feed_url = ?", (feed_url,)).fetchone()
     feed_value = row[0] if row is not None and row[0] is not None else FEED_INHERIT
     if feed_value != FEED_INHERIT:
         return feed_value == FEED_ON
-    return folder_enabled(conn, feed_url)
+    return folder_enabled(conn, feed_url, column)
 
 
-def folder_enabled(conn: sqlite3.Connection, feed_url: str) -> bool:
+def folder_enabled(conn: sqlite3.Connection, feed_url: str, column: str = "fetch_full_content") -> bool:
+    if column not in _TOGGLE_COLUMNS:
+        raise ValueError(column)
     row = conn.execute(
-        "SELECT 1 FROM folder_feeds ff JOIN folders f ON f.id = ff.folder_id WHERE ff.feed_url = ? AND f.fetch_full_content = 1 LIMIT 1",
+        f"SELECT 1 FROM folder_feeds ff JOIN folders f ON f.id = ff.folder_id WHERE ff.feed_url = ? AND f.{column} = 1 LIMIT 1",
         (feed_url,),
     ).fetchone()
     return row is not None
+
+
+def ensure_toggle_columns(conn: sqlite3.Connection, column: str) -> None:
+    """Add *column* to folders (on/NULL) and feed_display_prefs (-1 inherit / 0 / 1)."""
+    if column not in _TOGGLE_COLUMNS:
+        raise ValueError(column)
+    if column not in {row[1] for row in conn.execute("PRAGMA table_info(folders)").fetchall()}:
+        conn.execute(f"ALTER TABLE folders ADD COLUMN {column} INTEGER DEFAULT NULL")
+    if column not in {row[1] for row in conn.execute("PRAGMA table_info(feed_display_prefs)").fetchall()}:
+        conn.execute(f"ALTER TABLE feed_display_prefs ADD COLUMN {column} INTEGER NOT NULL DEFAULT {FEED_INHERIT}")
 
 
 def _entry_body(entry: Any) -> str:

@@ -61,6 +61,7 @@ from services import bluesky
 from services import flaresolverr as flaresolverr_service
 from services import page_fetch
 from services import full_content_fetch
+from services import page_topics
 from services import site_content_plugins
 from services import publish_date as publish_date_service
 from services import deviantart as deviantart_service
@@ -4068,6 +4069,10 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Where a tag came from: 'feed' (ingest) or 'page' (page topics, services/page_topics.py). The feed's per-entry replace only
+        # touches its own rows, so page topics survive the feed re-delivering an entry on every refresh.
+        if "source" not in {r[1] for r in conn.execute("PRAGMA table_info(entry_feed_tags)").fetchall()}:
+            conn.execute("ALTER TABLE entry_feed_tags ADD COLUMN source TEXT NOT NULL DEFAULT 'feed'")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS domain_failure_state (
@@ -4857,6 +4862,7 @@ def ensure_meta_schema() -> None:
         except Exception:
             pass
         full_content_fetch.ensure_schema(conn)
+        page_topics.ensure_schema(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS websub_subscriptions (
@@ -5036,6 +5042,7 @@ _DISPLAY_PREF_KEYS = frozenset(
         "inject_source_images",
         "katex_dollar_math",
         "fetch_full_content",
+        "capture_page_topics",
     }
 )
 # Pre-built UPDATE statements (one per column) so conn.execute() never receives an f-string.
@@ -5053,6 +5060,7 @@ _DISPLAY_PREF_DEFAULTS: dict = {
     "inject_source_images": 0,
     "katex_dollar_math": 0,
     "fetch_full_content": full_content_fetch.FEED_INHERIT,
+    "capture_page_topics": full_content_fetch.FEED_INHERIT,
     "feed_thumbnail_url": None,
     "thumb_crop": "cover",
     "thumb_strategy": None,
@@ -9674,6 +9682,7 @@ def get_feed_properties(feed_url: str) -> dict:
         with get_meta_connection() as _pc:
             _disp = get_feed_display_prefs(_pc, feed_url)
             _folder_full_content = full_content_fetch.folder_enabled(_pc, feed_url)
+            _folder_page_topics = page_topics.folder_enabled(_pc, feed_url)
             _strat_rows = _pc.execute(
                 "SELECT strategy, image_url, fetched_at, error, image_alt, image_title "
                 "FROM feed_strategy_cache WHERE feed_url = ? ORDER BY strategy",
@@ -9764,6 +9773,8 @@ def get_feed_properties(feed_url: str) -> dict:
             "katex_dollar_math": bool(_disp.get("katex_dollar_math", 0)),
             "fetch_full_content": int(_disp.get("fetch_full_content", full_content_fetch.FEED_INHERIT)),
             "folder_fetch_full_content": _folder_full_content,
+            "capture_page_topics": int(_disp.get("capture_page_topics", full_content_fetch.FEED_INHERIT)),
+            "folder_capture_page_topics": _folder_page_topics,
             "feed_thumbnail_url": _disp.get("feed_thumbnail_url") or None,
             "thumb_crop": str(_disp.get("thumb_crop") or "cover"),
             "thumb_strategy": _disp.get("thumb_strategy") or None,
@@ -9865,7 +9876,7 @@ def get_folder_properties(folder_id: int) -> dict:
     with get_meta_connection() as conn:
         folder_row = conn.execute(
             """
-            SELECT f.id, f.name, f.cadence_minutes, f.retention_days, f.fetch_full_content,
+            SELECT f.id, f.name, f.cadence_minutes, f.retention_days, f.fetch_full_content, f.capture_page_topics,
                 CASE WHEN f.parent_id IS NULL THEN f.name
                      ELSE root.name || ' / ' || f.name END AS path
             FROM folders f
@@ -9902,6 +9913,7 @@ def get_folder_properties(folder_id: int) -> dict:
             "cadence_minutes": folder_row["cadence_minutes"],
             "retention_days": folder_row["retention_days"],
             "fetch_full_content": bool(folder_row["fetch_full_content"]),
+            "capture_page_topics": bool(folder_row["capture_page_topics"]),
             "deleted_articles": 0,
             "feed_count": 0,
             "total_articles": 0,
@@ -9999,6 +10011,7 @@ def get_folder_properties(folder_id: int) -> dict:
         "cadence_minutes": folder_row["cadence_minutes"],
         "retention_days": folder_row["retention_days"],
         "fetch_full_content": bool(folder_row["fetch_full_content"]),
+        "capture_page_topics": bool(folder_row["capture_page_topics"]),
         "deleted_articles": deleted_articles,
         "feed_count": feed_count,
         "total_articles": total_articles,
@@ -23854,10 +23867,12 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> bool:
 
 
 def _full_content_entry_hook(uid: str, entry, is_new: bool) -> None:
+    """reader NEW-entry hook: queue ingest-time page work (full-content fetch, page topics)."""
     if not is_new:
         return
     with tenancy.user_context(uid):
         full_content_fetch_service.on_entry_updated(entry, is_new)
+        page_topics_service.on_entry_updated(entry, is_new)
 
 
 def _spawn_full_content_drain(feed_urls: list[str]) -> None:
@@ -23866,11 +23881,9 @@ def _spawn_full_content_drain(feed_urls: list[str]) -> None:
     if not feed_urls:
         return
     uid = tenancy.current_user_id()
-    threading.Thread(
-        target=_run_in_user_context,
-        args=(uid, full_content_fetch_service.drain, list(feed_urls), uid),
-        daemon=True,
-    ).start()
+    # Separate threads: a page-topics fetch is a few KB and shouldn't queue behind a minute-long full-page fetch.
+    for drain in (full_content_fetch_service.drain, page_topics_service.drain):
+        threading.Thread(target=_run_in_user_context, args=(uid, drain, list(feed_urls), uid), daemon=True).start()
 
 
 full_content_fetch_service = full_content_fetch.FullContentFetchService(
@@ -23880,6 +23893,22 @@ full_content_fetch_service = full_content_fetch.FullContentFetchService(
     is_thin=lambda html: not _archived_copy_is_plausible(html),
     host_in_cooldown=lambda host: _autofetch_host_in_cooldown(host),
     mark_host_failed=lambda host: _mark_autofetch_host_failed(host),
+    is_excluded_feed=lambda feed_url: saved_articles_service.is_saved_articles_feed(feed_url),
+)
+
+
+def _fetch_page_prefix(url: str) -> tuple[str, int]:
+    with url_guard.build_client(timeout=10.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+        html, _final_url, status = url_guard.safe_get_prefix(client, url, max_bytes=page_topics.PREFIX_BYTES)
+    return html, status
+
+
+page_topics_service = page_topics.PageTopicsService(
+    get_meta_connection=lambda: get_meta_connection(),
+    get_reader=lambda: get_reader(),
+    fetch_prefix=_fetch_page_prefix,
+    extract_tags=lambda html, url: feed_tags_service_mod.extract_page_tags(html, url),
+    record_tags=lambda feed_url, entry_id, tags: feed_tag_service.record_entry_tags(feed_url, [(entry_id, tags)], source="page"),
     is_excluded_feed=lambda feed_url: saved_articles_service.is_saved_articles_feed(feed_url),
 )
 
