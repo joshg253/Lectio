@@ -11,13 +11,13 @@ Within a tier, related items are clustered under a bold sub-heading. Two watch-l
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
 Tier 1 is empty. Tier 2 is empty — nothing currently qualifies as small *and* fast *and*
-independent; the ready items below all take real focused time. Tier 3 holds five items that are
+independent; the ready items below all take real focused time. Tier 3 holds four items that are
 sized, have no outstanding decision, and are ready to pick up (2026-09-22: Josh decided the
 archive-capture-failures item, promoting it in from Tier 4's decision list; the tag-filter-chip
 scope item stayed on that list pending further discussion; offline star/unstar was decided closed,
 not built; 2026-09-22: dev.to multi-tag support shipped, dropping "Tag filtering for firehose
-feeds — follow-ups" off this tier). The main.py/index.html breakup, the `state.py` singleton
-extraction, and the full
+feeds — follow-ups" off this tier; 2026-09-23: entry-pane loading state/timeout shipped). The
+main.py/index.html breakup, the `state.py` singleton extraction, and the full
 route-by-URL-prefix split (256 routes across 10 stages) are all done, shipped 2026-09-19 through
 2026-09-22 (PRs #329-#342). Tier 4 opens with the remaining items blocked on a product decision,
 not on code, plus the `/api/*` cluster split (deferred, undecided) and the shared rendering core
@@ -35,12 +35,6 @@ Empty.
 
 No outstanding decision blocks any of these — pick up in whatever order suits, ordered here
 roughly cheapest-first.
-
-### Entry-pane loading state/timeout
-
-Slow pane loads still look like dead clicks. Part of the page-weight reduction work (PR #146); the
-render-splitting/fragment-endpoint idea from that same follow-up list is bigger and optional, left
-in Tier 4.
 
 ### Full-content fetch at ingest for body-less feeds
 
@@ -239,7 +233,8 @@ Give Read Mode a collapsible folder tree first, then add the guard.
 
 Render-splitting/fragment endpoint for `.pane-posts`/`.pane-entry` — pane-swap currently
 re-renders the full page server-side per fetch (~200KB). Bigger and optional; the other follow-up
-from this same PR (#146) list, entry-pane loading state, is sized and ready — see Tier 3.
+from this same PR (#146) list, entry-pane loading state, shipped 2026-09-23 (loading bar + "still
+loading" hint + fetch timeout, see `docs/architecture/views.md`).
 
 ### Offline actions — stale-action guard
 

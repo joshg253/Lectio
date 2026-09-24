@@ -303,6 +303,30 @@ synchronously inside the tap handler, before the `await fetch` — nothing they
 decide (`onScopeList`/`pushHistory`/`url`) depends on the fetch response, only
 `document.title` and `armDrawerBack()` still run after it, on the same entry.
 
+### Entry-pane loading indicator and fetch timeout
+
+A slow `/entries/pane` fetch (bluesky video/image lookups and stripped-embed
+recovery in `get_entry_detail` are both live, cached-but-uncapped network
+calls) used to give zero feedback — the click just sat there, indistinguishable
+from a dead handler. `loadEntryPaneWithoutFullRefresh` now calls
+`beginPaneLoadIndicator()`/`endPaneLoadIndicator()` (defined next to it) around
+the whole fetch-and-swap `try`, via a `finally` so every exit path (success,
+full-page fallback, post-swap binder failure) clears it. Two independently
+timed UI elements, both fixed-position siblings of `.pane-entry` so a pane swap
+never touches them: a slim top progress bar shown only after `PANE_LOAD_BAR_DELAY_MS`
+(200ms — avoids a flash on the common fast case) and a "still loading" pill
+shown after `PANE_LOAD_HINT_DELAY_MS` (8s — only reachable on a genuinely slow
+fetch). The fetch itself carries `AbortSignal.timeout(PANE_FETCH_TIMEOUT_MS)`
+(45s per attempt) so a truly hung request eventually surfaces as an error and
+falls back to full navigation, same as any other fetch failure, instead of
+leaving the indicator spinning forever.
+
+`endPaneLoadIndicator()` only fires when `token === entryPaneRequestToken` —
+the same per-request token already used to drop stale in-flight responses.
+Without that guard, a slow first click's `finally` could fire *after* a second,
+faster click has already started and shown its own indicator, hiding it out
+from under the still-in-flight second request.
+
 ### Off-site links never open in the reading tab
 
 Following a link in place loses your position, and on a phone Back no longer

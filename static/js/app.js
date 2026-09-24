@@ -3413,6 +3413,31 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
     let sourceDirectLoaded = false;
     let frameCheckRequestToken = 0;
     let entryPaneRequestToken = 0;
+    const PANE_LOAD_BAR_DELAY_MS = 200; // avoid a flash on fast loads
+    const PANE_LOAD_HINT_DELAY_MS = 8000; // reassure once a load is clearly slow
+    const PANE_FETCH_TIMEOUT_MS = 45000; // hard ceiling per attempt; a hung fetch must not look like a dead click forever
+    let _paneLoadBarTimer = null;
+    let _paneLoadHintTimer = null;
+
+    function beginPaneLoadIndicator() {
+      clearTimeout(_paneLoadBarTimer);
+      clearTimeout(_paneLoadHintTimer);
+      _paneLoadBarTimer = setTimeout(() => {
+        document.getElementById('pane-load-bar')?.classList.add('is-active');
+      }, PANE_LOAD_BAR_DELAY_MS);
+      _paneLoadHintTimer = setTimeout(() => {
+        const hint = document.getElementById('pane-load-hint');
+        if (hint) hint.hidden = false;
+      }, PANE_LOAD_HINT_DELAY_MS);
+    }
+
+    function endPaneLoadIndicator() {
+      clearTimeout(_paneLoadBarTimer);
+      clearTimeout(_paneLoadHintTimer);
+      document.getElementById('pane-load-bar')?.classList.remove('is-active');
+      const hint = document.getElementById('pane-load-hint');
+      if (hint) hint.hidden = true;
+    }
     let scopePaneRequestToken = 0;
     let activeScopeUrl = window.location.href;
     let _prevPaneEntryOverflow = null;
@@ -4611,6 +4636,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         }
       }
 
+      beginPaneLoadIndicator();
       try {
         const headers = { 'X-Requested-With': 'lectio-entry-pane' };
         const requestUrl = new URL(url, window.location.origin);
@@ -4630,7 +4656,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         let response = null;
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
-            response = await fetch(requestUrl.toString(), { headers, credentials: 'same-origin' });
+            response = await fetch(requestUrl.toString(), { headers, credentials: 'same-origin', signal: AbortSignal.timeout(PANE_FETCH_TIMEOUT_MS) });
             if (response.ok) break;
           } catch (fetchError) {
             response = null;
@@ -4716,6 +4742,9 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           throw _error;
         }
         console.error('[lectio] entry-pane post-swap enhancement failed (pane content is fine):', _error);
+      } finally {
+        // A newer request already reset/owns the indicator if this one is stale.
+        if (token === entryPaneRequestToken) endPaneLoadIndicator();
       }
     }
 

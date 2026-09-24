@@ -165,6 +165,9 @@
 </head>
 <body data-tree-filter="{{ 'unread' if selected_read_filter == 'unread' and not selected_star_only else 'all' }}">
 
+  <div id="pane-load-bar" class="pane-load-bar" aria-hidden="true"></div>
+  <div id="pane-load-hint" class="pane-load-hint" hidden>Still loading — this can take a while for hard-to-fetch sites.</div>
+
   <form id="opml-import-form" method="post" action="/opml/import" enctype="multipart/form-data" hidden>
     {{ csrf_input(request)|safe }}
     <input id="opml-file-input" type="file" name="opml_file" accept=".opml,.xml,text/xml,application/xml" required />
