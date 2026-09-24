@@ -191,6 +191,15 @@
         </div>
           <h4 class="feed-prop-section-title">Content</h4>
           <div class="feed-prop-toggles">
+            {# Full-article fetch at ingest for thin (teaser-only) new posts. Inherit = the folder's setting. #}
+            <label class="feed-prop-toggle-row">
+              <span>Fetch full article for thin new posts</span>
+              <select id="feed-prop-full-content" class="feed-prop-strategy-select" style="width:auto">
+                <option value="-1" id="feed-prop-full-content-inherit">Folder setting</option>
+                <option value="1">On</option>
+                <option value="0">Off</option>
+              </select>
+            </label>
             {# Opt-in per feed: a *partial* feed is all stubs by design, so
                enabling this there would empty it. #}
             <label class="feed-prop-toggle-row">

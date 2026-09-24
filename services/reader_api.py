@@ -9,10 +9,10 @@ import sqlite3
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Any, TypedDict, cast
 
 import reader._storage._base as _reader_storage_base
-from reader import make_reader
+from reader import EntryUpdateStatus, make_reader
 from reader._storage import Storage as _ReaderStorage
 
 from services import bot_challenge, flaresolverr, reader_sanitize
@@ -373,6 +373,7 @@ class ReaderApi:
         proxy_resolver: Callable[[str], str | None] | None = None,
         flaresolverr_resolver: Callable[[str], tuple[str, str | None] | None] | None = None,
         session_timeout: tuple[float, float] | None = None,
+        entry_update_hook: Callable[[Any, bool], None] | None = None,
     ) -> None:
         self._db_path = str(db_path)
         # Returns the set of feed URLs that should fetch with a browser identity.
@@ -396,6 +397,9 @@ class ReaderApi:
         # (connect, read) seconds for every feed fetch. Passed through to reader's
         # requests session. None keeps reader's own default.
         self._session_timeout = session_timeout
+        # Called as hook(entry_data, is_new) after reader stores each updated entry, from every update path (scheduled, manual,
+        # WebSub). Used for ingest-time work that must only see genuinely new entries (services/full_content_fetch.py).
+        self._entry_update_hook = entry_update_hook
 
     def client(self):
         # Give reader's SQLite connections a 30-second busy-wait timeout so
@@ -461,6 +465,10 @@ class ReaderApi:
         # Replace feedparser's destroy-everything sanitizer with Lectio's own
         # allowlist (keeps safe embeds: iframes from trusted hosts, SVG, MathML).
         reader_sanitize.install(r)
+
+        if self._entry_update_hook is not None:
+            hook = self._entry_update_hook
+            r.after_entry_update_hooks.append(lambda _reader, entry, status: hook(entry, status == EntryUpdateStatus.NEW))
 
         return r
 

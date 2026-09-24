@@ -85,6 +85,8 @@ short version:
 - **Fix a post in place.** Edit its date, title or URL; clean up its body with
   an Aardvark-style element remover; re-fetch its content — undoably, with an
   Internet Archive fallback — one post, or a whole feed or folder at a time.
+  Teaser-only feeds can fetch the full article automatically as new posts
+  arrive, switched on per folder or per feed.
 - **Yours to run.** Isolated per-user databases with shared content caches,
   Google Reader / Fever / Miniflux v1 APIs, WebSub push, Takeout-style
   export/import, and no build step: plain HTML and JS, no bundler, no framework.
