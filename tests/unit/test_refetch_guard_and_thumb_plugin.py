@@ -283,7 +283,10 @@ def test_a_filter_pinned_to_a_vanished_type_falls_back_to_all():
     list with no visible way back."""
     js = (main.BASE_DIR / "static" / "js" / "app.js").read_text()
     fn = js[js.index("function hlRenderTypeFilter") :]
-    assert "if (hlTypeFilter && !counts.has(hlTypeFilter)) hlTypeFilter = '';" in fn[:1600]
+    assert (
+        "if (hlTypeFilter === HL_FILTER_DISABLED ? disabledCount === 0 : (hlTypeFilter && !counts.has(hlTypeFilter))) hlTypeFilter = '';"
+        in fn[:1800]
+    )
 
 
 def test_the_chosen_type_persists():

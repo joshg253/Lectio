@@ -800,13 +800,12 @@ class TapasPlugin:
         return host == self._HOST or host.endswith("." + self._HOST)
 
     def should_bypass_cached_url(self, *, entry_link: str, cached_url: str) -> bool:
-        # Bypass anything that is not the feed's own panel spelling. The cards
-        # are .png and the panels .jpg on the same CDN, so the extension is the
-        # only URL-level signal — enough to force a re-resolve of a cached card
-        # without churning a cached panel on every render.
-        if not self._is_target(entry_link):
-            return False
-        return not urlparse(cached_url).path.lower().endswith((".jpg", ".jpeg"))
+        # Never. This used to bypass any cached .png as a card, but panels are
+        # .png too on some series (3346 ships every panel as .png): that hid all
+        # 40 such thumbnails. With source lookup skipped, a new cache row can only
+        # come from the feed body, so there is no card left to re-resolve; the
+        # extension was never a reliable signal anyway.
+        return False
 
     def should_skip_source_lookup(self, *, entry_link: str) -> bool:
         return self._is_target(entry_link)

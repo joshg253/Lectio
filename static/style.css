@@ -7777,6 +7777,8 @@ mark.highlight-mark {
   color: #fff;
   font-weight: 600;
 }
+/* Disabled is a state, not a type: set apart from the type chips so it doesn't read as one more rule kind. */
+.hl-type-chip--disabled:not(.hl-type-chip--active) { border-style: dashed; }
 /* The count is secondary to the label, and must stay legible when the chip
    inverts — so it dims relative to whatever the chip's own colour is. */
 .hl-type-chip-count {

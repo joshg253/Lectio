@@ -508,6 +508,15 @@ def set_folder_full_content(folder_id: int = Form(...), enabled: int = Form(...)
     return JSONResponse({"ok": True, "fetch_full_content": bool(enabled)})
 
 
+@router.post("/folders/page-topics")
+def set_folder_page_topics(folder_id: int = Form(...), enabled: int = Form(...)):
+    """Turn page-topic capture at ingest on/off for a folder's feeds (a feed's own setting overrides it; see
+    services/page_topics.py)."""
+    with get_meta_connection() as conn:
+        conn.execute("UPDATE folders SET capture_page_topics = ? WHERE id = ?", (1 if enabled else None, folder_id))
+    return JSONResponse({"ok": True, "capture_page_topics": bool(enabled)})
+
+
 @router.post("/folders/mark-read")
 def mark_folder_as_read(
     request: Request,

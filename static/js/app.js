@@ -3273,6 +3273,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
     const feedPropInjectSourceImages = document.getElementById('feed-prop-inject-source-images');
     const feedPropKatexDollarMath = document.getElementById('feed-prop-katex-dollar-math');
     const feedPropFullContent = document.getElementById('feed-prop-full-content');
+    const feedPropPageTopics = document.getElementById('feed-prop-page-topics');
     const feedPropPresetBtns = document.querySelectorAll('.feed-prop-preset-btn');
     const feedPropCaptionTitle = document.getElementById('feed-prop-caption-title');
     const feedPropCaptionAlt = document.getElementById('feed-prop-caption-alt');
@@ -6053,6 +6054,13 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             const inheritOpt = document.getElementById('feed-prop-full-content-inherit');
             if (inheritOpt) inheritOpt.textContent = `Folder setting (${data.folder_fetch_full_content ? 'on' : 'off'})`;
           }
+          if (feedPropPageTopics) {
+            feedPropPageTopics.value = String(data.capture_page_topics ?? -1);
+            feedPropPageTopics.dataset.feedUrl = feedUrl;
+            feedPropPageTopics.dataset.prev = feedPropPageTopics.value;
+            const topicsInherit = document.getElementById('feed-prop-page-topics-inherit');
+            if (topicsInherit) topicsInherit.textContent = `Folder setting (${data.folder_capture_page_topics ? 'on' : 'off'})`;
+          }
           if (feedPropCaptionTitle && feedPropCaptionAlt && feedPropCaptionAutoBtn) {
             const src = data.caption_source || 'auto';
             feedPropCaptionTitle.checked = src === 'title' || src === 'both';
@@ -6682,6 +6690,13 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         }
         const fullContentStatus = document.getElementById('folder-prop-full-content-status');
         if (fullContentStatus) fullContentStatus.textContent = '';
+        const pageTopicsBox = document.getElementById('folder-prop-page-topics');
+        if (pageTopicsBox) {
+          pageTopicsBox.dataset.folderId = String(folderId);
+          pageTopicsBox.checked = !!data.capture_page_topics;
+        }
+        const pageTopicsStatus = document.getElementById('folder-prop-page-topics-status');
+        if (pageTopicsStatus) pageTopicsStatus.textContent = '';
 
         const total = data.total_articles ?? 0;
         const unread = data.unread_articles ?? 0;
@@ -7938,6 +7953,15 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         await saveDisplayPref(feedUrl, 'fetch_full_content', parseInt(feedPropFullContent.value, 10));
         feedPropFullContent.dataset.prev = feedPropFullContent.value;
       } catch (e) { feedPropFullContent.value = feedPropFullContent.dataset.prev || '-1'; }
+    });
+
+    feedPropPageTopics?.addEventListener('change', async () => {
+      const feedUrl = feedPropPageTopics.dataset.feedUrl;
+      if (!feedUrl) return;
+      try {
+        await saveDisplayPref(feedUrl, 'capture_page_topics', parseInt(feedPropPageTopics.value, 10));
+        feedPropPageTopics.dataset.prev = feedPropPageTopics.value;
+      } catch (e) { feedPropPageTopics.value = feedPropPageTopics.dataset.prev || '-1'; }
     });
 
     feedPropFlushBatchBtn?.addEventListener('click', async () => {
@@ -12432,6 +12456,8 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
        * because the type you were working in is almost always the one you come
        * back to. */
       const HL_TYPE_FILTER_KEY = 'lectio-rule-type-filter';
+      // Not a type: a cross-type view of every switched-off rule, kept under its type headings.
+      const HL_FILTER_DISABLED = '__disabled__';
       let hlTypeFilter = (() => {
         try { return window.localStorage.getItem(HL_TYPE_FILTER_KEY) || ''; }
         catch { return ''; }
@@ -12456,9 +12482,11 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           const t = r.type || 'highlight';
           counts.set(t, (counts.get(t) || 0) + 1);
         }
-        // A filter pinned to a type whose last rule was just deleted would show
-        // an empty list with no way back, so fall back to All.
-        if (hlTypeFilter && !counts.has(hlTypeFilter)) hlTypeFilter = '';
+        const disabledCount = hlRules.filter(r => r.enabled === 0).length;
+        // A filter pinned to a type whose last rule was just deleted (or to
+        // Disabled after the last one was switched back on) would show an empty
+        // list with no way back, so fall back to All.
+        if (hlTypeFilter === HL_FILTER_DISABLED ? disabledCount === 0 : (hlTypeFilter && !counts.has(hlTypeFilter))) hlTypeFilter = '';
         if (hlRules.length === 0) return;
 
         const mk = (value, label, count) => {
@@ -12480,6 +12508,11 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         for (const t of HL_TYPE_ORDER) {
           if (!counts.has(t)) continue;
           bar.appendChild(mk(t, HL_TYPE_LABELS[t] || t, counts.get(t)));
+        }
+        if (disabledCount > 0) {
+          const d = mk(HL_FILTER_DISABLED, 'Disabled', disabledCount);
+          d.classList.add('hl-type-chip--disabled');
+          bar.appendChild(d);
         }
       }
 
@@ -12523,13 +12556,16 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         const TYPE_ORDER = HL_TYPE_ORDER;
         const TYPE_LABELS = HL_TYPE_LABELS;
         for (const sectionType of TYPE_ORDER) {
+          const disabledOnly = hlTypeFilter === HL_FILTER_DISABLED;
           // Filtered to one type: skip every other section entirely.
-          if (hlTypeFilter && sectionType !== hlTypeFilter) continue;
-          const sectionRules = hlRules.map((r, i) => ({ r, i })).filter(({ r }) => (r.type || 'highlight') === sectionType);
+          if (hlTypeFilter && !disabledOnly && sectionType !== hlTypeFilter) continue;
+          const sectionRules = hlRules
+            .map((r, i) => ({ r, i }))
+            .filter(({ r }) => (r.type || 'highlight') === sectionType && (!disabledOnly || r.enabled === 0));
           if (sectionRules.length === 0) continue;
           // The section heading is the chip you just clicked — repeating it
-          // under the filter row says nothing.
-          if (!hlTypeFilter) {
+          // under the filter row says nothing. The Disabled view spans types, so it keeps them.
+          if (!hlTypeFilter || disabledOnly) {
             const labelEl = document.createElement('div');
             labelEl.className = 'hl-section-label';
             labelEl.textContent = TYPE_LABELS[sectionType] || sectionType;
@@ -16106,6 +16142,24 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       }
     });
 
+    document.getElementById('folder-prop-page-topics')?.addEventListener('change', async (e) => {
+      const box = e.target;
+      const folderId = box.dataset.folderId;
+      if (!folderId) return;
+      const status = document.getElementById('folder-prop-page-topics-status');
+      if (status) status.textContent = 'Saving…';
+      try {
+        const body = new URLSearchParams({ folder_id: folderId, enabled: box.checked ? '1' : '0' });
+        const resp = await fetch('/folders/page-topics', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (!json.ok) throw new Error(json.error || 'save failed');
+        if (status) status.textContent = '';
+      } catch (err) {
+        box.checked = !box.checked;
+        if (status) status.textContent = `Error: ${err.message}`;
+      }
+    });
+
     let _folderPropCloseOnClick = false;
     folderPropertiesModal?.addEventListener('pointerdown', (event) => {
       _folderPropCloseOnClick = event.target === folderPropertiesModal;
@@ -16873,7 +16927,11 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       feedsTab.addEventListener('change', (e) => {
         if (e.target.id === 'sfc-check-all-global') {
           const on = e.target.checked;
-          selectableFeedRows(null).forEach(r => {
+          // Checking respects the filter; UNchecking clears everything. A row the
+          // filter hides that stays checked still counts toward the selection and
+          // every bulk action — reported as a "1 selected" that deselect-all could
+          // not clear (the survivor of an earlier Combine, filtered out of view).
+          (on ? selectableFeedRows(null) : [...feedsTab.querySelectorAll('.settings-feed-row')]).forEach(r => {
             const cb = r.querySelector('.sfc-check');
             if (cb) cb.checked = on;
           });
@@ -16892,7 +16950,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           // reported after filtering to a few Slickdeals feeds and finding
           // "select all" had taken the whole library.
           const fid = e.target.dataset.folderCheck;
-          selectableFeedRows(fid).forEach(r => {
+          (e.target.checked ? selectableFeedRows(fid) : [...feedsTab.querySelectorAll(`.settings-feed-row[data-folder-feeds="${fid}"]`)]).forEach(r => {
             const cb = r.querySelector('.sfc-check');
             if (cb) cb.checked = e.target.checked;
           });
@@ -16915,6 +16973,12 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       const _ACTION_LABEL = { move: 'moved', disable: 'disabled', enable: 'enabled',
                               unsubscribe: 'unsubscribed', refresh: 'refreshed', 'mark-read': 'marked read' };
       function selectedUrls() { return getSelectedFeeds().map(f => f.url); }
+      function clearSelection() {
+        feedsTab.querySelectorAll('.sfc-check:checked').forEach(cb => { cb.checked = false; });
+        feedsTab.querySelectorAll('.sfc-check-all').forEach(cb => { cb.checked = false; cb.indeterminate = false; });
+        syncGlobalCheck();
+        updateToolbar();
+      }
       function removeRowsFor(urls) {
         const set = new Set(urls);
         const affectedFolders = new Set();
@@ -17043,6 +17107,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             const data = await r.json().catch(() => ({}));
             if (!data.ok) { alert(data.message || 'Combine failed.'); go.disabled = false; go.textContent = `Combine ${selected.length} feeds`; return; }
             removeRowsFor(sources);
+            clearSelection();  // the merge is done; a still-checked survivor would ride into the next action
             panel.hidden = true; panel.innerHTML = '';
             if (typeof showToastMessage === 'function') showToastMessage(data.message);
           } catch (e) { alert('Combine failed: ' + e); go.disabled = false; }

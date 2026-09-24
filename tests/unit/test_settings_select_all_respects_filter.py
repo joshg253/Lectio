@@ -64,10 +64,14 @@ def test_select_all_goes_through_the_filtered_row_set():
     )
     assert m, "the sfc-check-all branch should still exist"
     branch = m.group(1)
-    assert "selectableFeedRows(fid)" in branch
-    assert "querySelectorAll(`.settings-feed-row[data-folder-feeds=" not in branch, (
-        "select-all must not bypass the filter by re-querying every row"
-    )
+    # Checking goes through the filtered set; only UNchecking reaches every row, so a filtered-out row can't stay selected
+    # (and ride into a bulk action) after "deselect all".
+    assert "(e.target.checked ? selectableFeedRows(fid) : [...feedsTab.querySelectorAll(`.settings-feed-row[data-folder-feeds=" in branch
+
+
+def test_deselect_all_clears_filtered_out_rows_too():
+    src = _src()
+    assert "(on ? selectableFeedRows(null) : [...feedsTab.querySelectorAll('.settings-feed-row')])" in src
 
 
 def test_the_folder_checkbox_state_counts_the_same_rows():

@@ -343,3 +343,9 @@ def test_plain_links_and_hidden_links_both_appear():
     assert len(got) == 2
     assert any(u.endswith(".pdf") for u in got)
     assert any(u.endswith(".gp") for u in got)
+
+
+def test_scan_ignores_digit_only_version_extensions(configured):
+    for i in range(3):  # recurring, so only the digit rule can drop it
+        _seed_entry(f"v{i}", f'<a href="https://github.com/o/r/releases/tag/v3.1.{i}">r</a><a href="/x/song{i}.gp">t</a>')
+    assert [r["ext"] for r in main.scan_feed_attachment_extensions(FEED)] == ["gp"]

@@ -212,6 +212,41 @@ def safe_get(
     raise UnsafeURLError(f"too many redirects starting from {url!r}")
 
 
+def safe_get_prefix(
+    client: httpx.Client,
+    url: str,
+    *,
+    max_bytes: int,
+    headers: dict | None = None,
+    max_redirects: int = DEFAULT_MAX_REDIRECTS,
+) -> tuple[str, str, int]:
+    """SSRF-safe GET that reads at most *max_bytes* of the (decompressed) body, then drops the connection.
+
+    Returns ``(text, final_url, status_code)``. For metadata that lives near the top of a page (``<meta>`` tags): the rest of the
+    document, inline scripts included, is never downloaded. Same per-hop validation as :func:`safe_get`; ``client`` MUST be built
+    with ``follow_redirects=False``.
+    """
+    current = url
+    for _ in range(max_redirects + 1):
+        if not is_safe_outbound_url(current):
+            raise UnsafeURLError(current)
+        with client.stream("GET", current, headers=headers) as resp:
+            if resp.is_redirect:
+                nxt = _redirect_target(resp)
+                if nxt is None:
+                    return "", str(resp.url), resp.status_code
+                current = nxt
+                continue
+            buf = bytearray()
+            for chunk in resp.iter_bytes():
+                buf.extend(chunk)
+                if len(buf) >= max_bytes:
+                    break
+            text = bytes(buf[:max_bytes]).decode(resp.encoding or "utf-8", errors="replace")
+            return text, str(resp.url), resp.status_code
+    raise UnsafeURLError(f"too many redirects starting from {url!r}")
+
+
 def safe_post(
     client: httpx.Client,
     url: str,

@@ -708,13 +708,14 @@ class FeedTagService:
     def __init__(self, *, get_meta_connection: Callable) -> None:
         self._get_meta_connection = get_meta_connection
 
-    def record_entry_tags(self, feed_url: str, pairs: list[tuple[str, list[str]]]) -> None:
+    def record_entry_tags(self, feed_url: str, pairs: list[tuple[str, list[str]]], *, source: str = "feed") -> None:
         """Persist tags for entries of ``feed_url``.
 
         ``pairs`` is ``[(entry_id, tags), ...]``. Replace-per-entry semantics:
         an entry seen again with different tags gets its rows replaced, so
         publisher tag edits propagate; entries absent from ``pairs`` keep
-        their existing rows.
+        their existing rows. The replace is scoped to *source* ("feed" or
+        "page"), so each writer only ever replaces its own rows.
         """
         if not pairs:
             return
@@ -724,13 +725,13 @@ class FeedTagService:
                 if not entry_id or not tags:
                     continue
                 conn.execute(
-                    "DELETE FROM entry_feed_tags WHERE feed_url = ? AND entry_id = ?",
-                    (feed_url, entry_id),
+                    "DELETE FROM entry_feed_tags WHERE feed_url = ? AND entry_id = ? AND source = ?",
+                    (feed_url, entry_id, source),
                 )
-                # INSERT OR IGNORE guards case-collisions within one entry's tags.
+                # INSERT OR IGNORE guards case-collisions within one entry's tags, and a tag the other source already holds.
                 conn.executemany(
-                    "INSERT OR IGNORE INTO entry_feed_tags (feed_url, entry_id, tag, first_seen_at) VALUES (?, ?, ?, ?)",
-                    [(feed_url, entry_id, tag, now) for tag in tags],
+                    "INSERT OR IGNORE INTO entry_feed_tags (feed_url, entry_id, tag, first_seen_at, source) VALUES (?, ?, ?, ?, ?)",
+                    [(feed_url, entry_id, tag, now, source) for tag in tags],
                 )
 
     def get_tags_for_entry(self, feed_url: str, entry_id: str) -> list[str]:

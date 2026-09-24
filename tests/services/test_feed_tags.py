@@ -26,6 +26,7 @@ def conn():
             entry_id TEXT NOT NULL,
             tag TEXT NOT NULL,
             first_seen_at REAL NOT NULL,
+            source TEXT NOT NULL DEFAULT 'feed',
             PRIMARY KEY (feed_url, entry_id, tag)
         )
         """
