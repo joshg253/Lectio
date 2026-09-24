@@ -7,16 +7,9 @@ Stage 4 of the main.py route-by-URL-prefix split (Plan.md). `/entries/feed-tags`
 sits in this same main.py region but is an entries concern (late chip delivery
 for the entry pane), not automation, and stays in main.py.
 
-`_run_tag_filter`, `_run_now_dedup`, `_run_now_pattern` come straight from
-`services/automation_rules.py` (Step 2 of the breakup) rather than being
-re-imported through main.py, since that's their actual home now. `_dry_run_dedup`
-and `_dry_run_pattern` (the /rules/dry-run preview engine) moved here too --
-each had exactly one caller, the dry-run route -- and pull their own shared
-helpers (`_resolve_dedup_feed_urls`, `dedup_order_key`, `build_keyword_matcher`,
-etc.) back from main.py, same as `_run_now_dedup`/`_run_now_pattern` already do
-from services/automation_rules.py. Full consolidation of the preview-vs-apply
-dedup engine into services/dedup.py is a separate, deliberately-deferred Plan.md
-project ("Dedup routes consolidation"), gated on broader characterization tests.
+`_run_tag_filter`, `_run_now_dedup`, `_run_now_pattern` come straight from services/automation_rules.py. `_dry_run_dedup` and
+`_dry_run_pattern` (the /rules/dry-run preview engine) live here, each with exactly one caller; the dedup preview and Run Now are thin
+wrappers over the shared matching engine in services/dedup.py.
 
 `resolve_rule_feed_urls`, `toggle_feed_tag_filter`, `feed_tag_service`, and the
 rest of the generic dedup/tag-scope helpers stay in main.py: they're shared
@@ -38,31 +31,25 @@ from main import (
     _DEDUP_FUZZY_PCT_DEFAULT,
     _DEDUP_MIN_TITLE_WORDS,
     _DEDUP_VALID_MATCH_METHODS,
-    LOGGER,
     _clamp_min_title_words,
     _dedup_fuzzy_threshold,
     _is_youtube_short,
     _resolve_dedup_feed_urls,
-    _safe_dedup_collect,
-    _safe_dedup_find_pairs,
     build_keyword_matcher,
-    dedup_order_key,
     entry_effective_date,
-    entry_url_slug,
     feed_display_title,
     feed_tag_service,
     get_meta_connection,
     get_reader,
-    normalize_entry_title_for_dedupe,
     normalize_tag_value,
     parse_folders_scope_id,
     resolve_rule_feed_urls,
-    title_word_similarity,
     toggle_feed_tag_filter,
     url_guard,
     youtube_duration_service,
 )
-from services.automation_rules import _run_now_dedup, _run_now_pattern, _run_tag_filter
+from services import dedup
+from services.automation_rules import _dedup_false_matches, _run_now_dedup, _run_now_pattern, _run_tag_filter
 from services.webhooks import WEBHOOK_VALID_FORMATS, build_webhook_payload, send_webhook
 
 router = APIRouter()
@@ -150,178 +137,31 @@ def _dry_run_dedup(
             "total_would_mark_read": 0,
             "message": "Need at least 2 feeds in scope to deduplicate",
         }
-
-    if match_method == "safe":
-        per_feed_limit = max(1, max_entries // max(1, len(feed_urls)))
-        false_matches: set[str] = set()
-        rows = conn.execute("SELECT keep_link, mark_link FROM dedup_false_matches").fetchall()
-        false_matches = {r[0] + "||" + r[1] for r in rows}
-        with get_reader() as reader:
-            records = _safe_dedup_collect(reader, feed_urls, per_feed_limit, None)
-        pair_modes = _safe_dedup_find_pairs(records)
-        link_to_rec = {r["link"]: r for r in records if r["link"]}
-        by_keep: dict[str, dict] = {}
-        seen_mark: set[str] = set()
-        for (keep_link, mark_link), modes in sorted(
-            pair_modes.items(),
-            key=lambda kv: -len(kv[1]),  # most signals first
-        ):
-            if keep_link + "||" + mark_link in false_matches:
-                continue
-            keep_rec = link_to_rec.get(keep_link)
-            mark_rec = link_to_rec.get(mark_link)
-            if not keep_rec or not mark_rec:
-                continue
-            if keep_link not in by_keep:
-                by_keep[keep_link] = {
-                    "match_by": "safe",
-                    "matched_value": "+".join(modes),
-                    "keep": keep_rec,
-                    "mark_read": [],
-                }
-            if mark_link not in seen_mark:
-                by_keep[keep_link]["mark_read"].append(mark_rec)
-                seen_mark.add(mark_link)
-        groups = [g for g in by_keep.values() if g["mark_read"]]
-        return {
-            "groups": groups,
-            "total_entries_scanned": len(records),
-            "total_would_mark_read": len(seen_mark),
-        }
-
-    per_feed_limit = max(1, max_entries // max(1, len(feed_urls)))
-
+    false_matches = _dedup_false_matches(conn) if match_method == "safe" else set()
     with get_reader() as reader:
-        feed_title_map = {f.url: feed_display_title(f, str(f.url)) for f in reader.get_feeds()}
-        slug_index: dict[str, list[dict]] = {}
-        title_index: dict[str, list[dict]] = {}
-        combined_index: dict[tuple[str, str], list[dict]] = {}
-        fuzzy_entries: dict[str, list[dict]] = {}
-        total_scanned = 0
-
-        for feed_url in feed_urls:
-            if total_scanned >= max_entries:
-                break
-            try:
-                for entry in reader.get_entries(feed=feed_url, limit=per_feed_limit):
-                    if total_scanned >= max_entries:
-                        break
-                    total_scanned += 1
-                    published = entry_effective_date(entry)
-                    info: dict = {
-                        "title": str(entry.title or ""),
-                        "link": str(entry.link or ""),
-                        "feed_url": str(entry.feed_url or ""),
-                        "feed_title": feed_title_map.get(str(entry.feed_url or ""), str(entry.feed_url or "")),
-                        "published": published.isoformat() if published else None,
-                        "published_ts": published.timestamp() if published else 0.0,
-                        # The preview deliberately scans read entries too — a folder
-                        # whose duplicates were already marked would otherwise preview
-                        # as a bare zero, and there would be nothing to tune a
-                        # threshold against. But the rule only ever acts on UNREAD, so
-                        # the count has to say how many of these are actionable.
-                        "read": bool(getattr(entry, "read", False)),
-                    }
-                    if match_method == "slug" and entry.link:
-                        slug = entry_url_slug(entry.link)
-                        if slug and len(slug) >= 4:
-                            slug_index.setdefault(slug, []).append(info)
-                    if match_method == "title" and entry.title:
-                        norm = normalize_entry_title_for_dedupe(entry.title)
-                        if norm and len(norm.split()) >= min_title_words:
-                            title_index.setdefault(norm, []).append(info)
-                    if match_method == "both" and entry.link and entry.title:
-                        slug = entry_url_slug(entry.link)
-                        norm = normalize_entry_title_for_dedupe(entry.title)
-                        if slug and norm:
-                            combined_index.setdefault((slug, norm), []).append(info)
-                    if match_method == "fuzzy" and entry.title:
-                        norm = normalize_entry_title_for_dedupe(entry.title)
-                        if norm and len(norm.split()) >= min_title_words:
-                            info["norm_title"] = norm
-                            fuzzy_entries.setdefault(str(entry.feed_url or ""), []).append(info)
-            except Exception:
-                LOGGER.exception("dry-run-dedup: error reading feed %s", feed_url)
-
-    groups: list[dict] = []
-    seen_links: set[str] = set()
-    window_secs = window_hours * 3600
-    _FUZZY_THRESHOLD = fuzzy_threshold
-
-    if match_method == "slug":
-        for slug, entries in slug_index.items():
-            if len({e["feed_url"] for e in entries}) < 2:
-                continue
-            sorted_entries = sorted(entries, key=dedup_order_key)
-            keep = sorted_entries[0]
-            mark_read = sorted_entries[1:]
-            groups.append({"match_by": "slug", "matched_value": slug, "keep": keep, "mark_read": mark_read})
-            for e in entries:
-                seen_links.add(e["link"])
-
-    if match_method == "title":
-        for norm_title, entries in title_index.items():
-            if len({e["feed_url"] for e in entries}) < 2:
-                continue
-            sorted_entries = sorted(entries, key=dedup_order_key)
-            oldest_ts = sorted_entries[0]["published_ts"] or 0.0
-            newest_ts = sorted_entries[-1]["published_ts"] or 0.0
-            if oldest_ts > 0 and newest_ts > 0 and (newest_ts - oldest_ts) > window_secs:
-                continue
-            keep = sorted_entries[0]
-            mark_read = sorted_entries[1:]
-            groups.append({"match_by": "title", "matched_value": norm_title, "keep": keep, "mark_read": mark_read})
-
-    if match_method == "both":
-        for (_slug, norm_title), entries in combined_index.items():
-            if len({e["feed_url"] for e in entries}) < 2:
-                continue
-            sorted_entries = sorted(entries, key=dedup_order_key)
-            oldest_ts = sorted_entries[0]["published_ts"] or 0.0
-            newest_ts = sorted_entries[-1]["published_ts"] or 0.0
-            if oldest_ts > 0 and newest_ts > 0 and (newest_ts - oldest_ts) > window_secs:
-                continue
-            keep = sorted_entries[0]
-            mark_read = sorted_entries[1:]
-            groups.append({"match_by": "slug+title", "matched_value": norm_title, "keep": keep, "mark_read": mark_read})
-
-    if match_method == "fuzzy":
-        feed_list = sorted(u for u in feed_urls if u in fuzzy_entries)
-        seen_mark_links: set[str] = set()
-        for i, feed_i in enumerate(feed_list):
-            for feed_j in feed_list[i + 1 :]:
-                for ei in fuzzy_entries[feed_i]:
-                    for ej in fuzzy_entries[feed_j]:
-                        ts_i = ei["published_ts"] or 0.0
-                        ts_j = ej["published_ts"] or 0.0
-                        if window_secs > 0 and abs(ts_i - ts_j) > window_secs:
-                            continue
-                        sim = title_word_similarity(ei["norm_title"], ej["norm_title"])
-                        if sim < _FUZZY_THRESHOLD:
-                            continue
-                        keep, newer = (ei, ej) if dedup_order_key(ei) <= dedup_order_key(ej) else (ej, ei)
-                        if newer["link"] in seen_mark_links:
-                            continue
-                        seen_mark_links.add(newer["link"])
-                        groups.append(
-                            {
-                                "match_by": "fuzzy",
-                                "matched_value": f"{round(sim * 100)}% similar",
-                                "keep": keep,
-                                "mark_read": [newer],
-                            }
-                        )
-
+        records = dedup.collect_records(
+            reader,
+            feed_urls,
+            per_feed_limit=max(1, max_entries // max(1, len(feed_urls))),
+            read=None,
+            feed_title=lambda f: feed_display_title(f, str(f.url)),
+            effective_date=entry_effective_date,
+            max_total=max_entries,
+            safe_fields=match_method == "safe",
+        )
+    groups = dedup.find_groups(
+        records,
+        match_method,
+        window_hours=window_hours,
+        fuzzy_threshold=fuzzy_threshold,
+        min_title_words=min_title_words,
+        false_matches=false_matches,
+    )
     return {
         "groups": groups,
-        "total_entries_scanned": total_scanned,
+        "total_entries_scanned": len(records),
         "total_would_mark_read": sum(len(g["mark_read"]) for g in groups),
-        # What Run Now would actually do. It loads UNREAD entries only, so a group
-        # is reproduced there only by its unread members — and one of them becomes
-        # the keeper. A pair whose older copy is already read simply does not form:
-        # counting the unread mark alone promised a mark that never came, and Run
-        # Now answered "no matching unread entries found".
-        "total_unread_would_mark_read": sum(max(0, sum(1 for e in [g["keep"], *g["mark_read"]] if not e.get("read")) - 1) for g in groups),
+        "total_unread_would_mark_read": dedup.unread_actionable(groups),
     }
 
 

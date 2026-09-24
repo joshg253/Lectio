@@ -171,14 +171,14 @@ EXPECTED_PREVIEW = {
         7,
         6,
     ),
-    # Safe preview has never reported the unread-actionable count.
+    # Safe preview reports the unread-actionable count like every other method (it didn't before services/dedup.py).
     "safe": (
         [
             ("safe", "guid", DEAL_B, (DEAL_C,)),
             ("safe", "title+body+body_fuzzy", SAFE_A, (SAFE_C,)),
         ],
         2,
-        None,
+        2,
     ),
 }
 
@@ -195,9 +195,10 @@ EXPECTED_RUN = {
         [(WIRE_B, WIRE_A), (FOX_B, FOX_A), (FOX_C, FOX_A)],
         [FOX_A, WIRE_A],
     ),
-    # FOX_C's matched_link is FOX_B (itself marked read), not the kept FOX_A: the B-C pair is processed last and overwrites it.
+    # FOX_C pairs with the kept FOX_A, as in the preview. (Before services/dedup.py it pointed at FOX_B, itself marked read, because
+    # the B-C pair was processed last and overwrote it.)
     "fuzzy": (
-        [(FZ_B, FZ_A), (TITLE_B, TITLE_A), (WIRE_B, WIRE_A), (FOX_B, FOX_A), (SAFE_C, SAFE_A), (FOX_C, FOX_B)],
+        [(FZ_B, FZ_A), (TITLE_B, TITLE_A), (WIRE_B, WIRE_A), (FOX_B, FOX_A), (SAFE_C, SAFE_A), (FOX_C, FOX_A)],
         [FZ_A, TITLE_A, FOX_A, SAFE_A, WIRE_A],
     ),
     "safe": (

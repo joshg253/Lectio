@@ -10,7 +10,7 @@ from fastapi import FastAPI  # noqa: F401 — parity with sibling test modules
 
 import main  # must sort before routes.automation — see routes/__init__.py
 from routes import automation as automation_routes
-from services import automation_rules, tenancy
+from services import automation_rules, dedup, tenancy
 
 FEED = "https://deals.example.test/feed"
 
@@ -170,7 +170,7 @@ def test_safe_dedup_same_guid_cross_feed_is_sufficient():
         _rec("https://a.test/f1", "https://slickdeals.net/thread-19718808", "https://a.test/f/1?src=1"),
         _rec("https://a.test/f2", "https://slickdeals.net/thread-19718808", "https://a.test/f/1?src=2"),
     ]
-    pairs = main._safe_dedup_find_pairs(records)
+    pairs = dedup._safe_dedup_find_pairs(records)
     assert len(pairs) == 1
     assert list(pairs.values())[0] == ["guid"]
 
@@ -181,4 +181,4 @@ def test_safe_dedup_short_or_distinct_guids_do_not_match():
         _rec("https://a.test/f1", "1", "https://a.test/x", title="Same Great Title Here"),
         _rec("https://a.test/f2", "1", "https://a.test/y", title="Same Great Title Here"),
     ]
-    assert main._safe_dedup_find_pairs(records) == {}
+    assert dedup._safe_dedup_find_pairs(records) == {}

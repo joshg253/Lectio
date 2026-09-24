@@ -28,7 +28,10 @@ from collections import Counter
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import main  # noqa: E402
-from services import tenancy  # noqa: E402
+from services import (
+    dedup,  # noqa: E402
+    tenancy,  # noqa: E402
+)
 
 _BODY_SQL_CHARS = main._SAVED_DUP_BODY_SQL_CHARS
 _BODY_HEAD_CHARS = main._SAVED_DUP_BODY_HEAD_CHARS
@@ -73,8 +76,8 @@ def _load_records(uid: str) -> list[dict]:
             continue
         body = ""
         if body_head:
-            body = main._SAFE_DEDUP_TAG_RE.sub(" ", body_head)
-            body = main._SAFE_DEDUP_UNCLOSED_TAG_RE.sub("", body)
+            body = dedup._SAFE_DEDUP_TAG_RE.sub(" ", body_head)
+            body = dedup._SAFE_DEDUP_UNCLOSED_TAG_RE.sub("", body)
             body = html_module.unescape(body)
             body = " ".join(body.split())[:_BODY_HEAD_CHARS].lower()
         ntitle = main.normalize_entry_title_for_dedupe(title)
@@ -86,8 +89,8 @@ def _load_records(uid: str) -> list[dict]:
                 "title": str(title or ""),
                 "_canon": main.normalize_entry_link_for_dedupe(link, host_aliases),
                 "_slug": main._saved_dup_host_slug(link, host_aliases),
-                "_ntitle": ntitle if len(ntitle.split()) >= main._SAFE_DEDUP_MIN_TITLE_WORDS else "",
-                "_body": body if len(body) >= main._SAFE_DEDUP_MIN_BODY_CHARS else "",
+                "_ntitle": ntitle if len(ntitle.split()) >= dedup._SAFE_DEDUP_MIN_TITLE_WORDS else "",
+                "_body": body if len(body) >= dedup._SAFE_DEDUP_MIN_BODY_CHARS else "",
             }
         )
     return records

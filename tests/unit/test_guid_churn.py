@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
-import main
+from services import dedup
 
 
 def _make_conn():
@@ -61,7 +61,7 @@ def test_suppresses_entry_with_same_slug_as_read_entry():
     reader = _fake_reader([new], [old])
     conn = _make_conn()
 
-    count = main._suppress_guid_churn(reader, conn, FEED)
+    count = dedup._suppress_guid_churn(reader, conn, FEED)
 
     assert count == 1
     reader.mark_entry_as_read.assert_called_once_with((FEED, "new-guid-1"))
@@ -77,7 +77,7 @@ def test_does_not_suppress_genuinely_new_entry():
     reader = _fake_reader([new], [old])
     conn = _make_conn()
 
-    count = main._suppress_guid_churn(reader, conn, FEED)
+    count = dedup._suppress_guid_churn(reader, conn, FEED)
 
     assert count == 0
     reader.mark_entry_as_read.assert_not_called()
@@ -91,7 +91,7 @@ def test_ignores_entries_not_recently_added():
     reader = _fake_reader([old_new], [old_read])
     conn = _make_conn()
 
-    count = main._suppress_guid_churn(reader, conn, FEED)
+    count = dedup._suppress_guid_churn(reader, conn, FEED)
 
     assert count == 0
 
@@ -101,7 +101,7 @@ def test_no_read_history_returns_zero():
     reader = _fake_reader([new], [])
     conn = _make_conn()
 
-    count = main._suppress_guid_churn(reader, conn, FEED)
+    count = dedup._suppress_guid_churn(reader, conn, FEED)
 
     assert count == 0
 
@@ -114,7 +114,7 @@ def test_entry_without_link_skipped():
     reader = _fake_reader([new], [old])
     conn = _make_conn()
 
-    count = main._suppress_guid_churn(reader, conn, FEED)
+    count = dedup._suppress_guid_churn(reader, conn, FEED)
 
     assert count == 0
 
@@ -130,6 +130,6 @@ def test_suppresses_multiple_churned_entries():
     reader = _fake_reader([new1, new2, new3], [old1, old2])
     conn = _make_conn()
 
-    count = main._suppress_guid_churn(reader, conn, FEED)
+    count = dedup._suppress_guid_churn(reader, conn, FEED)
 
     assert count == 2  # new3 has no read history match
