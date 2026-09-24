@@ -37,8 +37,15 @@ def _build_app(monkeypatch, *, configured: bool = True, entry=None, send_result=
     monkeypatch.setattr(routes.entries, "get_reader", lambda: _FakeReader())
     monkeypatch.setattr(main, "send_article_email", lambda **_kw: send_result)
     monkeypatch.setattr(routes.entries, "send_article_email", lambda **_kw: send_result)
+    # Full-text sends of a thin body fetch the article; never reach the network from these tests.
+    monkeypatch.setattr(routes.entries, "_resolve_archived_readability_html", lambda *_a: None)
+    monkeypatch.setattr(routes.entries, "fetch_readability_article", _no_fetch)
 
     return app
+
+
+def _no_fetch(url, **_kw):
+    raise RuntimeError("network disabled in tests")
 
 
 def test_email_not_configured_returns_503(monkeypatch):
@@ -250,3 +257,67 @@ def test_send_failure_returns_500(monkeypatch):
     data = r.json()
     assert data["ok"] is False
     assert "Resend API error" in data["error"]
+
+
+# --- full text for a thin (teaser-only) body -----------------------------------------------------------------------------------------
+
+FULL_ARTICLE = "<p>" + "The complete article body from the source page. " * 20 + "</p>"
+
+
+def _send_full(monkeypatch, entry, *, fetch=None, archived=None):
+    app = _build_app(monkeypatch, entry=entry)
+    captured = _capture_excerpt(monkeypatch)
+    calls: list[str] = []
+
+    def _fetch(url, **_kw):
+        calls.append(url)
+        if fetch is None:
+            raise RuntimeError("blocked")
+        return "Title", fetch
+
+    monkeypatch.setattr(routes.entries, "fetch_readability_article", _fetch)
+    monkeypatch.setattr(routes.entries, "_resolve_archived_readability_html", lambda *_a: archived)
+    with TestClient(app) as client:
+        r = client.post("/entries/email", data={"feed_url": "f", "entry_id": "1", "to_addr": "a@b.com", "full_text": "1"})
+    assert r.status_code == 200
+    return captured, calls
+
+
+def test_full_text_of_a_thin_body_fetches_the_article(monkeypatch):
+    captured, calls = _send_full(monkeypatch, _make_entry(summary="Just a teaser."), fetch=FULL_ARTICLE)
+    assert calls == ["https://example.com/article"]
+    assert "complete article body" in captured["excerpt_html"]
+    assert "complete article body" in captured["excerpt"]
+
+
+def test_full_text_prefers_the_kept_offline_copy(monkeypatch):
+    captured, calls = _send_full(monkeypatch, _make_entry(summary="Just a teaser."), fetch="<p>x</p>", archived=FULL_ARTICLE)
+    assert calls == []
+    assert "complete article body" in captured["excerpt_html"]
+
+
+def test_full_text_falls_back_to_the_stored_body_when_the_fetch_fails(monkeypatch):
+    captured, calls = _send_full(monkeypatch, _make_entry(summary="Just a teaser."), fetch=None)
+    assert calls == ["https://example.com/article"]
+    assert "Just a teaser." in captured["excerpt_html"]
+
+
+def test_full_text_of_a_full_body_does_not_fetch(monkeypatch):
+    captured, calls = _send_full(monkeypatch, _make_entry(summary=FULL_ARTICLE), fetch="<p>other</p>")
+    assert calls == []
+    assert "complete article body" in captured["excerpt_html"]
+
+
+def test_full_text_keeps_the_stored_body_when_the_fetch_is_no_richer(monkeypatch):
+    captured, _calls = _send_full(monkeypatch, _make_entry(summary="<p>Just a teaser, fairly long.</p>"), fetch="<p>Nav</p>")
+    assert "Just a teaser" in captured["excerpt_html"]
+
+
+def test_snippet_email_never_fetches(monkeypatch):
+    app = _build_app(monkeypatch, entry=_make_entry(summary="Just a teaser."))
+    _capture_excerpt(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(routes.entries, "fetch_readability_article", lambda url, **_kw: calls.append(url))
+    with TestClient(app) as client:
+        client.post("/entries/email", data={"feed_url": "f", "entry_id": "1", "to_addr": "a@b.com"})
+    assert calls == []

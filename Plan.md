@@ -236,13 +236,6 @@ observed. Offline star/unstar, the other piece this project used to carry, is de
 Deliberately *not* built: a `synced_actions` idempotency table — the four outbox routes are
 already idempotent set-state operations, so replaying one is a no-op.
 
-### Email "full article text" doesn't run Readability on thin-stub feeds
-
-The full-text Email Article option only pulls stored content — still a thin email for a
-thin-stub feed. meetingcpp.com is the concrete example. Scope: at send time, if the stored body is thin, run the same
-readability fetch Save/re-fetch already uses. Unblocked 2026-09-23: reuse the thin test full-content fetch at ingest uses
-(`not _archived_copy_is_plausible`), not a second threshold.
-
 ### One stored image per entry, but three feeds want two
 
 Three comic feeds want a different image in the list than in the article; Lectio stores one URL
