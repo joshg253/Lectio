@@ -62,3 +62,17 @@ def test_dedupes_repeated_links():
 def test_empty_html_returns_nothing():
     assert main.candidate_attachment_links_in_html("", "https://example.test/post") == []
     assert main.candidate_attachment_links_in_html(None, "https://example.test/post") == []
+
+
+def test_version_numbers_in_page_links_are_not_files():
+    """A GitHub release tag (.../tag/v3.1.0) read as a file with extension "0" and showed up as an attachment named "v3.1.0"."""
+    html = (
+        '<a href="https://github.com/o/r/releases/tag/v3.1.0">release</a>'
+        '<a href="https://example.test/notes/release-1.2">notes</a>'
+        '<a href="https://example.test/dl/tool-3.1.0.tar.gz">tarball</a>'
+        '<a href="https://example.test/dl/archive.7z">7z</a>'
+    )
+    assert main.candidate_attachment_links_in_html(html, "https://example.test/post") == [
+        "https://example.test/dl/tool-3.1.0.tar.gz",
+        "https://example.test/dl/archive.7z",
+    ]

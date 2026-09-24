@@ -8801,6 +8801,9 @@ _NEVER_ATTACHMENT_EXTS = frozenset(
 # are refused separately and at match time too, so even a broad prefix can never
 # reach an .html.
 _ATTACHMENT_EXT_RE = re.compile(r"^[a-z0-9]{1,8}$")
+# What an auto-detected file extension must also match: at least one letter. A digits-only "extension" is a version or a number
+# in a page URL (.../releases/tag/v3.1.0 -> "0"), not a file type. Explicit per-feed lists still accept digits.
+_DETECTED_EXT_RE = re.compile(r"[a-z]")
 _ATTACHMENT_PREFIX_RE = re.compile(r"^([a-z0-9]{2,8})\*$")
 _HREF_ATTR_RE = re.compile(r'href=[\'"]([^\'"]+)[\'"]', re.I)
 
@@ -8936,7 +8939,7 @@ def scan_feed_attachment_extensions(feed_url: str, limit: int = 10) -> list[dict
                     if dot < 0:
                         continue
                     ext = path[dot + 1 :]
-                    if not _ATTACHMENT_EXT_RE.match(ext):
+                    if not _ATTACHMENT_EXT_RE.match(ext) or not _DETECTED_EXT_RE.search(ext):
                         continue
                     if ext in _NEVER_ATTACHMENT_EXTS or ext in _ARCHIVED_IMAGE_EXTS or ext in _TLD_LOOKALIKES or ext in dismissed:
                         continue
@@ -9076,7 +9079,7 @@ def candidate_attachment_links_in_html(content_html: str | None, base_url: str) 
         if dot < 0:
             continue
         ext = path[dot + 1 :]
-        if not _ATTACHMENT_EXT_RE.match(ext):
+        if not _ATTACHMENT_EXT_RE.match(ext) or not _DETECTED_EXT_RE.search(ext):
             continue
         if ext in _NEVER_ATTACHMENT_EXTS or ext in _ARCHIVED_IMAGE_EXTS or ext in _TLD_LOOKALIKES:
             continue
