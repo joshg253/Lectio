@@ -25114,6 +25114,10 @@ def _enhance_feeds_background(feed_urls: list[str]) -> None:
     """Run lead-image + YouTube-duration enhancement for ``feed_urls``, skipping
     feeds another enhancement run is already handling so concurrent manual /
     scheduled refreshes don't duplicate the network work."""
+    # Ingest page work (full-content fetch, page topics) doesn't depend on enhancement, so it starts first, for every refreshed
+    # feed. Started after, it waited out the whole batch's lead-image pass (minutes on a large refresh) and never ran at all for a
+    # feed whose enhancement was skipped as already in flight.
+    _spawn_full_content_drain(list(feed_urls))
     with _enhancement_inflight_lock:
         todo = [u for u in feed_urls if u not in _enhancement_inflight_feeds]
         _enhancement_inflight_feeds.update(todo)
@@ -25124,7 +25128,6 @@ def _enhance_feeds_background(feed_urls: list[str]) -> None:
     finally:
         with _enhancement_inflight_lock:
             _enhancement_inflight_feeds.difference_update(todo)
-    _spawn_full_content_drain(todo)
 
 
 def _spawn_feed_enhancement(feed_urls: Iterable[str]) -> None:
