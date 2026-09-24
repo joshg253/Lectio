@@ -11,13 +11,14 @@ Within a tier, related items are clustered under a bold sub-heading. Two watch-l
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
 Tier 1 is empty. Tier 2 is empty — nothing currently qualifies as small *and* fast *and*
-independent; the ready items below all take real focused time. Tier 3 holds three items that are
+independent; the ready items below all take real focused time. Tier 3 holds two items that are
 sized, have no outstanding decision, and are ready to pick up (2026-09-22: Josh decided the
 archive-capture-failures item, promoting it in from Tier 4's decision list; the tag-filter-chip
 scope item stayed on that list pending further discussion; offline star/unstar was decided closed,
 not built; 2026-09-22: dev.to multi-tag support shipped, dropping "Tag filtering for firehose
 feeds — follow-ups" off this tier; 2026-09-23: entry-pane loading state/timeout shipped; 2026-09-23:
-archive `source_fetch_status` column shipped, follow-ups in Tier 4). The
+archive `source_fetch_status` column shipped, follow-ups in Tier 4; full-content fetch at ingest
+shipped). The
 main.py/index.html breakup, the `state.py` singleton extraction, and the full
 route-by-URL-prefix split (256 routes across 10 stages) are all done, shipped 2026-09-19 through
 2026-09-22 (PRs #329-#342). Tier 4 opens with the remaining items blocked on a product decision,
@@ -36,13 +37,6 @@ Empty.
 
 No outstanding decision blocks any of these — pick up in whatever order suits, ordered here
 roughly cheapest-first.
-
-### Full-content fetch at ingest for body-less feeds
-
-meetingcpp.com's feed went title+link-only (CMS change, upstream). A per-feed "fetch full content
-from the source page at ingest" opt-in (readability pipeline already exists), capped/throttled
-like enhancement, would fix such feeds generally. Also unblocks the Email "full article text"
-follow-up in Tier 4, which is sequenced after this so both share one "thin" threshold.
 
 ### Single-post pages: fix raw/full-page capture quality
 
@@ -245,10 +239,9 @@ already idempotent set-state operations, so replaying one is a no-op.
 ### Email "full article text" doesn't run Readability on thin-stub feeds
 
 The full-text Email Article option only pulls stored content — still a thin email for a
-thin-stub feed. meetingcpp.com is the concrete example (see "Full-content fetch at ingest" in
-Tier 3). Scope: at send time, if the stored body is thin, run the same readability fetch Save/re-fetch
-already uses. Sequence after that item lands so both share one "thin" threshold rather than
-inventing two.
+thin-stub feed. meetingcpp.com is the concrete example. Scope: at send time, if the stored body is thin, run the same
+readability fetch Save/re-fetch already uses. Unblocked 2026-09-23: reuse the thin test full-content fetch at ingest uses
+(`not _archived_copy_is_plausible`), not a second threshold.
 
 ### One stored image per entry, but three feeds want two
 

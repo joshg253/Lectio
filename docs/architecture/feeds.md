@@ -498,6 +498,17 @@ from the lead-image service's source-HTML cache — zero extra requests when pri
 and on a miss the tags appear next open, the same deferral as image captions. Only
 runs when the entry has no rows, so feed tags stay authoritative.
 
+## Full-content fetch at ingest (`services/full_content_fetch.py`)
+
+Opt-in: `folders.fetch_full_content` (on/off), overridden by `feed_display_prefs.fetch_full_content` (-1 inherit, 0 off, 1 on). "New
+entries only" comes from reader's own `after_entry_update_hooks` (status NEW, fired on every update path), wired through
+`ReaderApi(entry_update_hook=...)` — not a timestamp compare. The hook only queues (`full_content_fetch_queue`) a thin body
+(`not _archived_copy_is_plausible`, the same test the star/tag auto-refetch uses); a drain on its own thread, single-flight per user,
+spawned after each enhancement pass, re-fetches up to 10 per feed per cycle via `_refresh_captured_article_for_current_user`, so
+Revert and the refresh pin apply. Off-thread because the scheduled refresh runs enhancement in-line and a full-ladder fetch can take a
+minute. Each entry is attempted once; a failure pauses the host via the shared auto-refetch cooldown, and entries on a paused host
+stay queued. Comic/photo posts also fail the thin test — the opt-in is what keeps them out, not the threshold.
+
 ## FakeFeedz entries get the article's own date, and optionally their own body
 
 A listing page is a wall of links: titles and hrefs are there, dates usually are

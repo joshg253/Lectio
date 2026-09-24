@@ -499,6 +499,15 @@ def set_folder_retention(folder_id: int = Form(...), retention_days: str = Form(
     return JSONResponse({"ok": True, "retention_days": days if days > 0 else None})
 
 
+@router.post("/folders/full-content")
+def set_folder_full_content(folder_id: int = Form(...), enabled: int = Form(...)):
+    """Turn full-content fetch at ingest on/off for a folder's feeds (a feed's own setting overrides it; see
+    services/full_content_fetch.py)."""
+    with get_meta_connection() as conn:
+        conn.execute("UPDATE folders SET fetch_full_content = ? WHERE id = ?", (1 if enabled else None, folder_id))
+    return JSONResponse({"ok": True, "fetch_full_content": bool(enabled)})
+
+
 @router.post("/folders/mark-read")
 def mark_folder_as_read(
     request: Request,

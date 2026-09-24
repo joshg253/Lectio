@@ -3272,6 +3272,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
     const feedPropShowInArticle = document.getElementById('feed-prop-show-in-article');
     const feedPropInjectSourceImages = document.getElementById('feed-prop-inject-source-images');
     const feedPropKatexDollarMath = document.getElementById('feed-prop-katex-dollar-math');
+    const feedPropFullContent = document.getElementById('feed-prop-full-content');
     const feedPropPresetBtns = document.querySelectorAll('.feed-prop-preset-btn');
     const feedPropCaptionTitle = document.getElementById('feed-prop-caption-title');
     const feedPropCaptionAlt = document.getElementById('feed-prop-caption-alt');
@@ -6045,6 +6046,13 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             feedPropKatexDollarMath.checked = !!data.katex_dollar_math;
             feedPropKatexDollarMath.dataset.feedUrl = feedUrl;
           }
+          if (feedPropFullContent) {
+            feedPropFullContent.value = String(data.fetch_full_content ?? -1);
+            feedPropFullContent.dataset.feedUrl = feedUrl;
+            feedPropFullContent.dataset.prev = feedPropFullContent.value;
+            const inheritOpt = document.getElementById('feed-prop-full-content-inherit');
+            if (inheritOpt) inheritOpt.textContent = `Folder setting (${data.folder_fetch_full_content ? 'on' : 'off'})`;
+          }
           if (feedPropCaptionTitle && feedPropCaptionAlt && feedPropCaptionAutoBtn) {
             const src = data.caption_source || 'auto';
             feedPropCaptionTitle.checked = src === 'title' || src === 'both';
@@ -6667,6 +6675,13 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         }
         const retentionStatus = document.getElementById('folder-prop-retention-status');
         if (retentionStatus) retentionStatus.textContent = '';
+        const fullContentBox = document.getElementById('folder-prop-full-content');
+        if (fullContentBox) {
+          fullContentBox.dataset.folderId = String(folderId);
+          fullContentBox.checked = !!data.fetch_full_content;
+        }
+        const fullContentStatus = document.getElementById('folder-prop-full-content-status');
+        if (fullContentStatus) fullContentStatus.textContent = '';
 
         const total = data.total_articles ?? 0;
         const unread = data.unread_articles ?? 0;
@@ -7914,6 +7929,15 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       if (!feedUrl) return;
       try { await saveDisplayPref(feedUrl, 'katex_dollar_math', feedPropKatexDollarMath.checked ? 1 : 0); }
       catch (e) { feedPropKatexDollarMath.checked = !feedPropKatexDollarMath.checked; }
+    });
+
+    feedPropFullContent?.addEventListener('change', async () => {
+      const feedUrl = feedPropFullContent.dataset.feedUrl;
+      if (!feedUrl) return;
+      try {
+        await saveDisplayPref(feedUrl, 'fetch_full_content', parseInt(feedPropFullContent.value, 10));
+        feedPropFullContent.dataset.prev = feedPropFullContent.value;
+      } catch (e) { feedPropFullContent.value = feedPropFullContent.dataset.prev || '-1'; }
     });
 
     feedPropFlushBatchBtn?.addEventListener('click', async () => {
@@ -16060,6 +16084,24 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         if (!json.ok) throw new Error(json.error || 'save failed');
         if (status) status.textContent = '';
       } catch (err) {
+        if (status) status.textContent = `Error: ${err.message}`;
+      }
+    });
+
+    document.getElementById('folder-prop-full-content')?.addEventListener('change', async (e) => {
+      const box = e.target;
+      const folderId = box.dataset.folderId;
+      if (!folderId) return;
+      const status = document.getElementById('folder-prop-full-content-status');
+      if (status) status.textContent = 'Saving…';
+      try {
+        const body = new URLSearchParams({ folder_id: folderId, enabled: box.checked ? '1' : '0' });
+        const resp = await fetch('/folders/full-content', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (!json.ok) throw new Error(json.error || 'save failed');
+        if (status) status.textContent = '';
+      } catch (err) {
+        box.checked = !box.checked;
         if (status) status.textContent = `Error: ${err.message}`;
       }
     });
