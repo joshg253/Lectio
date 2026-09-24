@@ -91,10 +91,17 @@ class TestTapasPlugin:
     def test_the_episode_page_is_never_scraped(self):
         assert self._p().should_skip_source_lookup(entry_link=self.ENTRY) is True
 
-    def test_a_cached_card_is_bypassed_but_a_panel_is_kept(self):
+    def test_a_cached_panel_is_kept_whatever_its_extension(self):
+        """Series 3346 ships its panels as .png; bypassing .png (the old card test) hid every one of its thumbnails."""
         p = self._p()
-        assert p.should_bypass_cached_url(entry_link=self.ENTRY, cached_url=self.CARD) is True
+        png_panel = "https://us-a.tapas.io/sa/22/ff84950a-7a6a-45ee-88a6-961dccb653bd.png"
         assert p.should_bypass_cached_url(entry_link=self.ENTRY, cached_url=self.PANEL) is False
+        assert p.should_bypass_cached_url(entry_link=self.ENTRY, cached_url=png_panel) is False
+
+    def test_a_png_panel_in_the_body_is_the_lead_image(self):
+        png_panel = "https://us-a.tapas.io/sa/22/ff84950a-7a6a-45ee-88a6-961dccb653bd.png"
+        body = f'<p>text</p><img src="{png_panel}"/>'
+        assert self._p().fallback_lead_image_url(entry_link=self.ENTRY, content_html=body, summary=None) == png_panel
 
     def test_series_and_www_hosts_are_covered_but_lookalikes_are_not(self):
         p = self._p()
