@@ -24,6 +24,7 @@ import io
 import logging
 import re
 import sqlite3
+import ssl
 import threading
 import time
 import zlib
@@ -73,6 +74,24 @@ def _download_name_for(source_url: str) -> str:
 
     name = unquote(urlparse(source_url or "").path.rsplit("/", 1)[-1]).strip()
     return _UNSAFE_NAME_RE.sub("_", name).strip(". ")[:120]
+
+
+def _classify_fetch_error(exc: BaseException) -> str:
+    """Short, queryable failure kind for a source-page fetch exception (see `archived_entry.source_fetch_status`)."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"http_{exc.response.status_code}"
+    if isinstance(exc, url_guard.UnsafeURLError):
+        return "blocked"
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    cause: BaseException | None = exc
+    while cause is not None:
+        if isinstance(cause, ssl.SSLError):
+            return "tls"
+        cause = cause.__cause__ or cause.__context__
+    if isinstance(exc, (httpx.ConnectError, httpx.NetworkError)):
+        return "connect"
+    return "error"
 
 
 class StarredArchiveService:
@@ -1516,8 +1535,9 @@ class StarredArchiveService:
         #    archive their content_html + assets within it).
         source_html = ""
         readability_html = ""
+        source_fetch_status = "no_link"
         if entry_link:
-            fetched_page = self._fetch_text_with_url(entry_link)
+            fetched_page, source_fetch_status = self._fetch_source_page(entry_link)
             source_html = fetched_page[0] if fetched_page else ""
             if fetched_page and self._on_canonical_link is not None:
                 final_url = fetched_page[1]
@@ -1716,6 +1736,7 @@ class StarredArchiveService:
                        published_at = ?,
                        received_at = ?,
                        content_size_bytes = ?,
+                       source_fetch_status = ?,
                        error = NULL
                  WHERE feed_url = ? AND entry_id = ?
                 """,
@@ -1731,6 +1752,7 @@ class StarredArchiveService:
                     published_at,
                     received_at,
                     content_size_bytes,
+                    source_fetch_status,
                     feed_url,
                     entry_id,
                 ),
@@ -1795,12 +1817,21 @@ class StarredArchiveService:
 
     def _fetch_text_with_url(self, url: str) -> tuple[str, str] | None:
         """Like _fetch_text but also returns the final URL after redirects."""
+        return self._fetch_source_page(url)[0]
+
+    def _fetch_source_page(self, url: str) -> tuple[tuple[str, str] | None, str]:
+        """Fetch a page, returning ((text, final_url) or None, fetch status).
+
+        The status is what `_archive_entry` records in `archived_entry.source_fetch_status`, so a dead link, a block, and a
+        transient failure stay distinguishable after the fact instead of all collapsing into an empty "complete" archive.
+        """
         try:
             resp = self._fetch_guarded(url)
-            return resp.text, str(resp.url)
+            return (resp.text, str(resp.url)), "ok"
         except Exception as exc:  # noqa: BLE001
-            LOGGER.debug("starred archive: text fetch failed for %s: %s", url, exc)
-            return None
+            status = _classify_fetch_error(exc)
+            LOGGER.info("starred archive: text fetch failed for %s (%s): %s", url, status, exc)
+            return None, status
 
     def _fetch_bytes(self, url: str) -> tuple[bytes, str] | None:
         try:

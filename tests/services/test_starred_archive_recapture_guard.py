@@ -49,7 +49,7 @@ def _archive_conn_factory(tmp_path):
             starred_at REAL NOT NULL, archived_at REAL, error TEXT,
             source_html_zlib BLOB, readability_html_zlib BLOB, content_html_zlib BLOB,
             title TEXT, link TEXT, feed_title TEXT, author TEXT,
-            published_at REAL, received_at REAL, content_size_bytes INTEGER,
+            published_at REAL, received_at REAL, content_size_bytes INTEGER, source_fetch_status TEXT,
             PRIMARY KEY (feed_url, entry_id)
         )
         """
@@ -87,8 +87,8 @@ def _service(tmp_path):
 
 
 def _fetch_stub(source_html: str):
-    def _fetch(url: str) -> tuple[str, str]:
-        return source_html, url
+    def _fetch(url: str) -> tuple[tuple[str, str], str]:
+        return (source_html, url), "ok"
 
     return _fetch
 
@@ -129,7 +129,7 @@ def test_a_parked_page_is_not_stored_as_the_recaptured_readability_copy(tmp_path
     svc = _service(tmp_path)
     entry = _entry("33 Ornament, Dingbat, and Other Decorative Fonts")
     svc._get_reader = lambda: _FakeReader(entry)
-    svc._fetch_text_with_url = _fetch_stub(source_html)
+    svc._fetch_source_page = _fetch_stub(source_html)
     monkeypatch.setattr(
         starred_archive,
         "Document",
@@ -153,7 +153,7 @@ def test_a_genuine_matching_article_is_still_stored(tmp_path, monkeypatch):
     svc = _service(tmp_path)
     entry = _entry("33 Ornament, Dingbat, and Other Decorative Fonts")
     svc._get_reader = lambda: _FakeReader(entry)
-    svc._fetch_text_with_url = _fetch_stub(source_html)
+    svc._fetch_source_page = _fetch_stub(source_html)
     monkeypatch.setattr(
         starred_archive,
         "Document",
@@ -199,7 +199,7 @@ def test_a_sibling_boilerplate_match_is_not_stored_even_when_the_title_guard_pas
         "How to Simulate Other Instruments on Guitar", link="https://example.test/lessons/how-simulate-other-instruments-guitar"
     )
     svc._get_reader = lambda: _FakeReader(entry1)
-    svc._fetch_text_with_url = _fetch_stub(category_page_html)
+    svc._fetch_source_page = _fetch_stub(category_page_html)
     svc.enqueue_archive(FEED, "e1")
     svc._archive_entry(FEED, "e1")
     assert _stored_readability(tmp_path, svc) == category_page_extraction
@@ -232,7 +232,7 @@ def test_a_document_fake_with_no_short_title_still_archives(tmp_path, monkeypatc
     svc = _service(tmp_path)
     entry = _entry("Whatever")
     svc._get_reader = lambda: _FakeReader(entry)
-    svc._fetch_text_with_url = _fetch_stub(source_html)
+    svc._fetch_source_page = _fetch_stub(source_html)
     monkeypatch.setattr(
         starred_archive,
         "Document",

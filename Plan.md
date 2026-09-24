@@ -11,12 +11,13 @@ Within a tier, related items are clustered under a bold sub-heading. Two watch-l
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
 Tier 1 is empty. Tier 2 is empty — nothing currently qualifies as small *and* fast *and*
-independent; the ready items below all take real focused time. Tier 3 holds four items that are
+independent; the ready items below all take real focused time. Tier 3 holds three items that are
 sized, have no outstanding decision, and are ready to pick up (2026-09-22: Josh decided the
 archive-capture-failures item, promoting it in from Tier 4's decision list; the tag-filter-chip
 scope item stayed on that list pending further discussion; offline star/unstar was decided closed,
 not built; 2026-09-22: dev.to multi-tag support shipped, dropping "Tag filtering for firehose
-feeds — follow-ups" off this tier; 2026-09-23: entry-pane loading state/timeout shipped). The
+feeds — follow-ups" off this tier; 2026-09-23: entry-pane loading state/timeout shipped; 2026-09-23:
+archive `source_fetch_status` column shipped, follow-ups in Tier 4). The
 main.py/index.html breakup, the `state.py` singleton extraction, and the full
 route-by-URL-prefix split (256 routes across 10 stages) are all done, shipped 2026-09-19 through
 2026-09-22 (PRs #329-#342). Tier 4 opens with the remaining items blocked on a product decision,
@@ -51,16 +52,6 @@ manufactured feed. Readability can return a small fraction of such a page, and t
 pages into an existing related feed, which auto-filing already does in bulk — so this is capture
 quality only.)
 
-### Archive capture failures are indistinguishable from real empty content
-
-`_archive_entry`'s source fetch (`_fetch_text_with_url`) swallows every exception identically —
-a 404, a 403, a TLS error, anything — and stores an empty "complete" archive with no error
-recorded. Found 2026-09-19 auditing 633 such rows live: mostly dead links, a handful recoverable,
-but nothing short of a manual per-entry fetch could tell which was which beforehand. Decided
-2026-09-22: add a status column (queryable/reportable later) rather than just logging — needs the
-per-user startup migration plus recording the failure kind at capture time; UI surfacing can follow
-once the column exists.
-
 ### Dedup routes consolidation → `services/dedup.py`
 
 Next concrete step: write characterization tests for the dedup match-method bodies (now
@@ -82,6 +73,10 @@ the same pass (adjacent code, same refresh-pipeline callers) or splitting off in
 
 Everything below is sized or scoped already — each is waiting on one call only Josh can make, not
 on more investigation. Once answered, each drops into Tier 2 or 3.
+
+- **Archive fetch-status follow-ups** — `archived_entry.source_fetch_status` exists (2026-09-23), so what to build on it needs a call:
+  (a) where to surface it (Saved filter/badge for failed captures?); (b) backfill the ~633 pre-column empty-complete rows by having
+  `scripts/probe_empty_archives.py` write the column; (c) whether transient kinds (`timeout`/`connect`/`http_5xx`) auto-retry.
 
 - **Post-header tag-filter chips don't reflect a folder/global-scoped rule** — `get_feed_tag_filter_rule`
   only checks feed-scoped rules, so a feed covered only by a folder-scoped rule shows unlit chips,
