@@ -37,9 +37,10 @@ on more investigation. Once answered, each drops into Tier 2 or 3.
 - **Single-post pages: raw/full-page capture quality** — some "feeds" are one standing document (a single tutorial page) saved via a
   manufactured feed; readability can return a small fraction of the page, or the wrong node. Deferred by Josh 2026-09-24; needs a
   concrete example page before it can be scoped. (Workflow half superseded: such pages get filed into a related feed by auto-filing.)
-- **Archive fetch-status follow-ups** — `archived_entry.source_fetch_status` exists (2026-09-23), so what to build on it needs a call:
-  (a) where to surface it (Saved filter/badge for failed captures?); (b) backfill the ~633 pre-column empty-complete rows by having
-  `scripts/probe_empty_archives.py` write the column; (c) whether transient kinds (`timeout`/`connect`/`http_5xx`) auto-retry.
+- **Archive fetch-status follow-ups** — `archived_entry.source_fetch_status` exists (2026-09-23) and the pre-column empty archives
+  were backfilled by `scripts/probe_empty_archives.py --write` (2026-09-25; reachable-now rows left NULL as recapture candidates).
+  Still needs a call: (a) where to surface it (Saved filter/badge for failed captures?); (c) whether transient kinds
+  (`timeout`/`connect`/`http_5xx`) auto-retry.
 
 - **Post-header tag-filter chips don't reflect a folder/global-scoped rule** — `get_feed_tag_filter_rule`
   only checks feed-scoped rules, so a feed covered only by a folder-scoped rule shows unlit chips,
