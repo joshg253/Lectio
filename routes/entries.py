@@ -2531,6 +2531,20 @@ def _email_full_body(feed_url: str, entry_id: str, link: str, stored: str) -> st
     return candidate if _reader_copy_is_richer(candidate, stored) else stored
 
 
+def _email_article_extras(feed_url: str, entry_id: str, entry) -> dict:
+    """What makes a shared article look like the entry pane: its lead image (the raw article image, not the list thumbnail, which
+    can be a cropped panel; YouTube falls back to its computed thumbnail), author, and date."""
+    lead = lead_image_service.get_cached_lead_image_url(feed_url, entry_id) or lead_image_service.get_cached_entry_thumbnail(
+        feed_url, entry_id, str(entry.link or "")
+    )
+    published = entry_effective_date(entry)
+    return {
+        "lead_image_url": lead or None,
+        "author": str(getattr(entry, "author", None) or "").strip() or None,
+        "published": f"{published:%b} {published.day}, {published:%Y}" if published else None,
+    }
+
+
 @router.post("/entries/email")
 def email_entry(
     request: Request,
@@ -2602,6 +2616,7 @@ def email_entry(
         cc_addr=cc_addr,
         reply_to=reply_to,
         excerpt_html=excerpt_html,
+        **_email_article_extras(feed_url, entry_id, entry),
     )
     if ok:
         msg = f"Sent to {to_addr}" + (f" (Cc {cc_addr})" if cc_addr else "")

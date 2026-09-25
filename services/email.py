@@ -3,12 +3,142 @@
 from __future__ import annotations
 
 import html
+import re
 import textwrap
+from urllib.parse import urlparse
+
+# The app's own tokens (static/themes/light.css / dark.css), so a shared article reads like the entry pane it came from. Email clients
+# that honor prefers-color-scheme (Apple Mail, iOS, Outlook apps) get the dark theme too; Gmail ignores it and stays light. Web fonts
+# load where supported (Apple Mail) and fall back to system sans elsewhere.
+_LIGHT = {
+    "bg": "#f2efe7",
+    "surface": "#fcfbf7",
+    "ink": "#22201a",
+    "muted": "#6a6659",
+    "line": "#ddd6c6",
+    "accent": "#22577a",
+    "link": "#0f5f8f",
+}
+_DARK = {
+    "bg": "#15191d",
+    "surface": "#1d242a",
+    "ink": "#e7e0d2",
+    "muted": "#a6b0b8",
+    "line": "#374049",
+    "accent": "#4f89ab",
+    "link": "#7fb3d1",
+}
+_FONTS_LINK = (
+    '<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&family=Merriweather:wght@700&display=swap"'
+    ' rel="stylesheet">'
+)
+_SVG_RE = re.compile(r"<svg\b.*?</svg>", re.IGNORECASE | re.DOTALL)
+_SANS = "'Source Sans 3', 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif"
+_SERIF = "Merriweather, Georgia, 'Times New Roman', serif"
 
 
-def _build_html(title: str, feed_title: str, link: str, excerpt: str, excerpt_html: str | None = None) -> str:
+def _base_css() -> str:
+    L, D = _LIGHT, _DARK
+    return f"""
+          body {{ margin: 0; padding: 0; background: {L["bg"]}; color: {L["ink"]}; font-family: {_SANS}; -webkit-text-size-adjust: 100%; }}
+          .page {{ max-width: 680px; margin: 0 auto; padding: 20px 12px 28px; }}
+          .brandbar {{ display: flex; align-items: baseline; justify-content: space-between; padding: 0 6px 12px; }}
+          .wordmark {{ font-family: {_SERIF}; font-weight: 700; font-size: 20px; color: {L["accent"]}; text-decoration: none; }}
+          .brand-note {{ font-size: 12px; color: {L["muted"]}; }}
+          .card {{ background: {L["surface"]}; border: 1px solid {L["line"]}; border-radius: 12px; overflow: hidden; }}
+          .hero {{ display: block; width: 100%; height: auto; max-height: 420px; object-fit: cover; background: #ffffff; }}
+          .body {{ padding: 22px 24px 6px; }}
+          .meta {{ display: block; font-size: 13px; color: {L["muted"]}; margin: 0 0 8px; }}
+          .meta .feed {{ color: {L["accent"]}; font-weight: 600; }}
+          h1, h2 {{ font-family: {_SANS}; font-weight: 700; color: {L["ink"]}; margin: 0 0 14px; }}
+          h1 {{ font-size: 25px; line-height: 1.25; }}
+          h2 {{ font-size: 19px; line-height: 1.3; margin-bottom: 8px; }}
+          h1 a, h2 a {{ color: {L["ink"]}; text-decoration: none; }}
+          .excerpt {{ font-size: 16px; line-height: 1.55; color: {L["ink"]}; margin: 0 0 16px; }}
+          .excerpt a {{ color: {L["link"]}; }}
+          /* The card clips overflow rather than scrolling it, so a wide article image (feed HTML ships explicit width/height more
+             often than not) would lose its right edge instead of shrinking to the column. */
+          .excerpt img, .excerpt iframe {{ max-width: 100%; height: auto; }}
+          .excerpt img {{ background: #ffffff; border-radius: 6px; }}
+          .excerpt blockquote {{ margin: 0 0 16px; padding: 2px 0 2px 14px; border-left: 3px solid {L["line"]}; color: {L["muted"]}; }}
+          .cta-row {{ margin: 6px 0 24px; }}
+          .cta {{ display: inline-block; padding: 10px 20px; background: {L["accent"]}; color: #ffffff !important; font-size: 14px;
+            font-weight: 600; text-decoration: none; border-radius: 999px; }}
+          .item {{ padding: 18px 24px; border-top: 1px solid {L["line"]}; }}
+          .item:first-child {{ border-top: none; }}
+          .item-link {{ font-size: 13px; font-weight: 600; color: {L["link"]}; text-decoration: none; }}
+          .footer {{ padding: 14px 6px 0; font-size: 12px; color: {L["muted"]}; text-align: center; }}
+          .footer a {{ color: {L["muted"]}; }}
+          @media (prefers-color-scheme: dark) {{
+            body {{ background: {D["bg"]} !important; color: {D["ink"]} !important; }}
+            .card {{ background: {D["surface"]} !important; border-color: {D["line"]} !important; }}
+            .wordmark {{ color: {D["accent"]} !important; }}
+            .meta .feed {{ color: {D["accent"]} !important; }}
+            .brand-note, .meta, .footer, .footer a, .excerpt blockquote {{ color: {D["muted"]} !important; }}
+            h1, h2, h1 a, h2 a, .excerpt {{ color: {D["ink"]} !important; }}
+            .excerpt a, .item-link {{ color: {D["link"]} !important; }}
+            .item {{ border-top-color: {D["line"]} !important; }}
+            .cta {{ background: {D["accent"]} !important; }}
+          }}"""
+
+
+def _page(title: str, note: str, card_html: str) -> str:
+    return textwrap.dedent(f"""\
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="color-scheme" content="light dark">
+        <meta name="supported-color-schemes" content="light dark">
+        <title>{title}</title>
+        {_FONTS_LINK}
+        <style>{_base_css()}
+        </style>
+        </head>
+        <body>
+        <div class="page">
+          <div class="brandbar">
+            <a class="wordmark" href="https://github.com/joshg253/Lectio">Lectio</a><span class="brand-note">{note}</span>
+          </div>
+          <div class="card">
+        {card_html}
+          </div>
+          <div class="footer">Shared via <a href="https://github.com/joshg253/Lectio">Lectio</a></div>
+        </div>
+        </body>
+        </html>
+    """)
+
+
+def _meta_line(feed_title: str, published: str | None, author: str | None) -> str:
+    parts = []
+    if feed_title:
+        parts.append(f'<span class="feed">{html.escape(feed_title)}</span>')
+    if published:
+        parts.append(html.escape(published))
+    if author:
+        parts.append(f"by {html.escape(author)}")
+    return f'<span class="meta">{" · ".join(parts)}</span>' if parts else ""
+
+
+def _site_label(link: str) -> str:
+    host = urlparse(link or "").netloc.lower().removeprefix("www.")
+    return f"Read on {host}" if host else "Read article"
+
+
+def _build_html(
+    title: str,
+    feed_title: str,
+    link: str,
+    excerpt: str,
+    excerpt_html: str | None = None,
+    *,
+    lead_image_url: str | None = None,
+    author: str | None = None,
+    published: str | None = None,
+) -> str:
     safe_title = html.escape(title or "(untitled)")
-    safe_feed = html.escape(feed_title or "")
     safe_link = html.escape(link or "")
 
     # excerpt_html is pre-sanitized article HTML (the full-text case) and is
@@ -16,197 +146,40 @@ def _build_html(title: str, feed_title: str, link: str, excerpt: str, excerpt_ht
     # the app's own entry pane. Plain excerpt still needs escaping + manual
     # paragraph splitting, since it is unstructured stripped text.
     if excerpt_html:
+        # Inline SVG goes: most mail clients (Gmail included) drop it anyway, and what survives readability is icon furniture —
+        # a video-embed facade's play-button and wordmark logos render full-column-width with no size of their own.
+        excerpt_html = _SVG_RE.sub("", excerpt_html)
         excerpt_block = f'<div class="excerpt">{excerpt_html}</div>'
     else:
         safe_excerpt = html.escape(excerpt or "")
         excerpt_block = "".join(f'<p class="excerpt">{para}</p>' for para in safe_excerpt.split("\n\n") if para)
-    feed_line = f'<span class="meta">from <strong>{safe_feed}</strong></span>' if safe_feed else ""
-
-    return textwrap.dedent(f"""\
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-          body {{
-            margin: 0; padding: 0;
-            background: #f5f4f0;
-            font-family: Georgia, 'Times New Roman', serif;
-            color: #1a1a1a;
-          }}
-          .wrapper {{
-            max-width: 680px;
-            margin: 32px auto;
-            background: #ffffff;
-            border-radius: 6px;
-            overflow: hidden;
-            box-shadow: 0 1px 4px rgba(0,0,0,.10);
-          }}
-          .header {{
-            background: #1a1a1a;
-            padding: 18px 28px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-          }}
-          .wordmark {{
-            color: #f5f4f0;
-            font-family: Georgia, serif;
-            font-size: 22px;
-            font-weight: normal;
-            letter-spacing: .04em;
-            margin: 0;
-          }}
-          .tagline {{
-            color: #888;
-            font-family: -apple-system, sans-serif;
-            font-size: 12px;
-            margin: 2px 0 0;
-          }}
-          .body {{
-            padding: 28px 28px 8px;
-          }}
-          .meta {{
-            font-family: -apple-system, sans-serif;
-            font-size: 12px;
-            color: #888;
-            margin-bottom: 10px;
-            display: block;
-          }}
-          h1 {{
-            margin: 0 0 14px;
-            font-size: 22px;
-            font-weight: normal;
-            line-height: 1.35;
-            color: #111;
-          }}
-          h1 a {{
-            color: #111;
-            text-decoration: none;
-            border-bottom: 1px solid #ccc;
-          }}
-          h1 a:hover {{
-            border-bottom-color: #111;
-          }}
-          .excerpt {{
-            font-size: 15px;
-            line-height: 1.65;
-            color: #333;
-            margin: 0 0 20px;
-          }}
-          /* .wrapper clips overflow rather than scrolling it, so a full-width
-             article image (feed HTML ships explicit width/height attributes
-             more often than not) got its right edge cut off instead of
-             wrapping. Shrink to the column instead. */
-          .excerpt img, .excerpt iframe {{
-            max-width: 100%;
-            height: auto;
-          }}
-          .cta {{
-            display: inline-block;
-            margin: 4px 0 28px;
-            padding: 9px 18px;
-            background: #1a1a1a;
-            color: #f5f4f0 !important;
-            font-family: -apple-system, sans-serif;
-            font-size: 13px;
-            text-decoration: none;
-            border-radius: 4px;
-          }}
-          .footer {{
-            border-top: 1px solid #eee;
-            padding: 14px 28px;
-            font-family: -apple-system, sans-serif;
-            font-size: 11px;
-            color: #aaa;
-          }}
-        </style>
-        </head>
-        <body>
-        <div class="wrapper">
-          <div class="header">
-            <div>
-              <p class="wordmark">Lectio</p>
-              <p class="tagline">shared article</p>
-            </div>
-          </div>
-          <div class="body">
-            {feed_line}
-            <h1><a href="{safe_link}">{safe_title}</a></h1>
-            {excerpt_block}
-            <a class="cta" href="{safe_link}">Read article →</a>
-          </div>
-          <div class="footer">
-            Shared via <a href="https://github.com/joshg253/Lectio" style="color:#aaa">Lectio</a>
-          </div>
-        </div>
-        </body>
-        </html>
-    """)
+    # The lead image as a hero, like the entry pane — unless the body already carries it (the pane hoists it; here it would repeat).
+    hero = ""
+    if lead_image_url and lead_image_url.startswith(("http://", "https://")) and lead_image_url not in (excerpt_html or ""):
+        hero = f'<a href="{safe_link}"><img class="hero" src="{html.escape(lead_image_url)}" alt=""></a>'
+    card = (
+        f'{hero}<div class="body">{_meta_line(feed_title, published, author)}'
+        f'<h1><a href="{safe_link}">{safe_title}</a></h1>{excerpt_block}'
+        f'<p class="cta-row"><a class="cta" href="{safe_link}">{html.escape(_site_label(link))} →</a></p></div>'
+    )
+    return _page(safe_title, "shared article", card)
 
 
 def _build_digest_html(articles: list[dict]) -> str:
     """Build a digest email HTML body listing multiple articles."""
-    rows_html = ""
+    items = []
     for art in articles:
         safe_title = html.escape(str(art.get("title") or "(untitled)"))
-        safe_feed = html.escape(str(art.get("feed_title") or ""))
         safe_link = html.escape(str(art.get("link") or ""))
         safe_excerpt = html.escape(str(art.get("excerpt") or ""))
-        feed_span = f'<span class="art-feed">{safe_feed}</span> ' if safe_feed else ""
-        excerpt_p = f'<p class="art-excerpt">{safe_excerpt}</p>' if safe_excerpt else ""
-        rows_html += textwrap.dedent(f"""\
-            <div class="article">
-              <div class="art-meta">{feed_span}</div>
-              <h2><a href="{safe_link}">{safe_title}</a></h2>
-              {excerpt_p}
-              <a class="art-cta" href="{safe_link}">Read →</a>
-            </div>
-            <hr class="divider">
-        """)
-
+        excerpt_p = f'<p class="excerpt">{safe_excerpt}</p>' if safe_excerpt else ""
+        items.append(
+            f'<div class="item">{_meta_line(str(art.get("feed_title") or ""), None, None)}'
+            f'<h2><a href="{safe_link}">{safe_title}</a></h2>{excerpt_p}'
+            f'<a class="item-link" href="{safe_link}">Read →</a></div>'
+        )
     count = len(articles)
-    tagline = f"{count} article{'s' if count != 1 else ''}"
-    return textwrap.dedent(f"""\
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-          body {{ margin:0; padding:0; background:#f5f4f0; font-family:Georgia,'Times New Roman',serif; color:#1a1a1a; }}
-          .wrapper {{ max-width:680px; margin:32px auto; background:#fff; border-radius:6px;
-            overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.10); }}
-          .header {{ background:#1a1a1a; padding:18px 28px; }}
-          .wordmark {{ color:#f5f4f0; font-family:Georgia,serif; font-size:22px; font-weight:normal; letter-spacing:.04em; margin:0; }}
-          .tagline {{ color:#888; font-family:-apple-system,sans-serif; font-size:12px; margin:2px 0 0; }}
-          .body {{ padding:20px 28px 8px; }}
-          .article {{ padding:16px 0 4px; }}
-          .art-meta {{ font-family:-apple-system,sans-serif; font-size:11px; color:#888; margin-bottom:6px; }}
-          .art-feed {{ font-style:italic; }}
-          h2 {{ margin:0 0 8px; font-size:18px; font-weight:normal; line-height:1.35; color:#111; }}
-          h2 a {{ color:#111; text-decoration:none; border-bottom:1px solid #ccc; }}
-          .art-excerpt {{ font-size:14px; line-height:1.6; color:#444; margin:0 0 8px; }}
-          .art-cta {{ font-family:-apple-system,sans-serif; font-size:12px; color:#555; }}
-          .divider {{ border:none; border-top:1px solid #eee; margin:4px 0 0; }}
-          .footer {{ border-top:1px solid #eee; padding:14px 28px; font-family:-apple-system,sans-serif; font-size:11px; color:#aaa; }}
-        </style>
-        </head>
-        <body>
-        <div class="wrapper">
-          <div class="header">
-            <p class="wordmark">Lectio</p>
-            <p class="tagline">digest · {tagline}</p>
-          </div>
-          <div class="body">
-            {rows_html}
-          </div>
-          <div class="footer">Shared via Lectio</div>
-        </div>
-        </body>
-        </html>
-    """)
+    return _page("Lectio digest", f"digest · {count} article{'s' if count != 1 else ''}", "".join(items))
 
 
 def _build_text(title: str, feed_title: str, link: str, excerpt: str) -> str:
@@ -249,6 +222,10 @@ def send_article_email(
     cc_addr: str | None = None,
     reply_to: str | None = None,
     excerpt_html: str | None = None,
+    *,
+    lead_image_url: str | None = None,
+    author: str | None = None,
+    published: str | None = None,
 ) -> tuple[bool, str | None]:
     """Send a share email. Returns (ok, error_message).
 
@@ -265,7 +242,9 @@ def send_article_email(
         "from": from_addr,
         "to": [to_addr],
         "subject": subject,
-        "html": _build_html(title, feed_title, link, excerpt, excerpt_html),
+        "html": _build_html(
+            title, feed_title, link, excerpt, excerpt_html, lead_image_url=lead_image_url, author=author, published=published
+        ),
         "text": _build_text(title, feed_title, link, excerpt),
     }
     if cc_addr:

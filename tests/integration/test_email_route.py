@@ -321,3 +321,19 @@ def test_snippet_email_never_fetches(monkeypatch):
     with TestClient(app) as client:
         client.post("/entries/email", data={"feed_url": "f", "entry_id": "1", "to_addr": "a@b.com"})
     assert calls == []
+
+
+def test_share_carries_the_entry_pane_extras(monkeypatch):
+    """The lead image, author and date the email template shows next to the title."""
+    import datetime as dt
+
+    app = _build_app(monkeypatch, entry=_make_entry(summary="x"))
+    sent: dict = {}
+    monkeypatch.setattr(routes.entries, "send_article_email", lambda **kw: (sent.update(kw), (True, None))[1])
+    monkeypatch.setattr(routes.entries.lead_image_service, "get_cached_lead_image_url", lambda fu, eid: "https://cdn.test/lead.jpg")
+    monkeypatch.setattr(routes.entries, "entry_effective_date", lambda e: dt.datetime(2026, 9, 4, tzinfo=dt.timezone.utc))
+    entry = routes.entries.get_reader().get_entry(("f", "1"), None)
+    entry.author = "Morgan Park"
+    with TestClient(app) as client:
+        client.post("/entries/email", data={"feed_url": "f", "entry_id": "1", "to_addr": "a@b.com"})
+    assert (sent["lead_image_url"], sent["author"], sent["published"]) == ("https://cdn.test/lead.jpg", "Morgan Park", "Sep 4, 2026")

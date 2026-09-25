@@ -168,3 +168,48 @@ def test_send_article_email_returns_error_on_exception(monkeypatch):
     ok, err = send_article_email("key", "from@x.com", "to@x.com", "T", "F", "https://x.com", "")
     assert ok is False
     assert err and "API down" in err
+
+
+# --- the app look (2026-09-25) ----------------------------------------------------------------------------------------------------------
+
+LEAD = "https://cdn.example.com/hero.jpg"
+
+
+def test_lead_image_is_a_hero_unless_the_body_already_has_it():
+    with_hero = _build_html("T", "Feed", "https://example.com/a", "snippet", lead_image_url=LEAD)
+    assert f'<img class="hero" src="{LEAD}"' in with_hero
+    in_body = _build_html("T", "Feed", "https://example.com/a", "", excerpt_html=f'<p><img src="{LEAD}"></p>', lead_image_url=LEAD)
+    assert 'class="hero"' not in in_body
+
+
+def test_non_http_lead_image_is_ignored():
+    assert 'class="hero"' not in _build_html("T", "Feed", "https://example.com/a", "x", lead_image_url="javascript:alert(1)")
+
+
+def test_meta_line_carries_feed_date_and_author_like_the_entry_pane():
+    out = _build_html("T", "PC Gamer", "https://www.pcgamer.com/a", "x", author="Morgan & Park", published="Sep 24, 2026")
+    assert '<span class="feed">PC Gamer</span> · Sep 24, 2026 · by Morgan &amp; Park' in out
+
+
+def test_button_names_the_site():
+    assert "Read on pcgamer.com →" in _build_html("T", "F", "https://www.pcgamer.com/games/x/", "x")
+
+
+def test_inline_svg_is_dropped_from_full_text():
+    body = '<p>Text</p><svg width="100%" viewBox="0 0 10 10"><path d="M0 0"/></svg><p>More</p>'
+    out = _build_html("T", "F", "https://example.com/", "", excerpt_html=body)
+    assert "<svg" not in out and "<p>Text</p><p>More</p>" in out
+
+
+def test_dark_theme_follows_the_reader_app():
+    out = _build_html("T", "F", "https://example.com/", "x")
+    assert '<meta name="color-scheme" content="light dark">' in out
+    assert "@media (prefers-color-scheme: dark)" in out and "#1d242a" in out  # the app's dark surface
+
+
+def test_digest_uses_the_same_look():
+    from services.email import _build_digest_html
+
+    out = _build_digest_html([{"title": "One", "feed_title": "Feed A", "link": "https://a.test/1", "excerpt": "e"}, {"title": "Two"}])
+    assert out.count('class="item"') == 2
+    assert "digest · 2 articles" in out and "#fcfbf7" in out
