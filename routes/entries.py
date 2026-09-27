@@ -168,6 +168,7 @@ from main import (
     get_feed_tag_filter_rule,
     get_feed_tag_suggestions,
     get_folder_feed_urls,
+    get_inherited_tag_filter_signs,
     get_kept_feed_urls,
     get_manual_tags_for_entry,
     get_manual_tags_for_resource,
@@ -504,9 +505,11 @@ def entry_feed_tags_route(
         tags.append(normalized)
 
     signs: dict[str, str] = {}
+    inherited: dict[str, str] = {}
     if tags:
         with get_meta_connection() as conn:
             rule = get_feed_tag_filter_rule(conn, feed_url)
+            inherited = get_inherited_tag_filter_signs(conn, feed_url)
         if rule:
             _req, _good, _exc = parse_tag_filter_spec(str(rule["keyword"] or ""))
             signs = {t: "+" for t in (_req | _good)} | {t: "-" for t in _exc}
@@ -516,6 +519,8 @@ def entry_feed_tags_route(
             "ok": True,
             "tags": tags,
             "signs": signs,
+            # Set by an enabled folder/global rule, not this feed's own (display-only; see get_inherited_tag_filter_signs).
+            "inherited_signs": inherited,
             # Which of them are the user's own pinned tags, so the client can mark
             # them: they are a different KIND of suggestion (a standing decision
             # about the feed, not something the publisher said about this post).

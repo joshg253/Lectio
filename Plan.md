@@ -42,15 +42,10 @@ on more investigation. Once answered, each drops into Tier 2 or 3.
   Still needs a call: (a) where to surface it (Saved filter/badge for failed captures?); (c) whether transient kinds
   (`timeout`/`connect`/`http_5xx`) auto-retry.
 
-- **Post-header tag-filter chips don't reflect a folder/global-scoped rule** — `get_feed_tag_filter_rule`
-  only checks feed-scoped rules, so a feed covered only by a folder-scoped rule shows unlit chips,
-  and clicking one forks a brand-new disabled per-feed rule instead of touching the folder rule.
-  Partially discussed 2026-09-22: chips governed by a folder/global rule should look visually
-  distinct (a different color) from feed-scoped ones, so the governing level is visible before the
-  click-behavior question even comes up. The click-behavior decision itself (edit the shared rule
-  vs. fork a feed-level override) is still open — talk through with Josh before sizing. Once both
-  are settled: a lookup-order change to `get_feed_tag_filter_rule` plus one new branch in
-  `toggle_feed_tag_filter`, plus the chip-coloring CSS/markup.
+- **Post-header tag-filter chips: what a click does under a folder/global rule** — since 2026-09-27 the chips show a sign set by an
+  enabled folder/global rule, lit in the accent color (`get_inherited_tag_filter_signs`, display-only). Clicking one still edits
+  (or first creates, disabled) the feed's own rule. Open: should it edit the shared rule instead, or keep forking a feed-level
+  override? Once decided: a lookup-order change to `get_feed_tag_filter_rule` plus one branch in `toggle_feed_tag_filter`.
 
 ### main.py / index.html breakup — done
 

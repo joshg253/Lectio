@@ -19030,6 +19030,8 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         if ((nowForm.querySelector('input[name="entry_id"]')?.value || '') !== entryId) return;
         const manual = new Set(data.manual_tags || []);
         const signs = data.signs || {};
+        // Set by an enabled folder/global rule; shown only where this feed's own rule is silent on the tag.
+        const inheritedSigns = data.inherited_signs || {};
         // The user's own pinned tags. Marked because they are a different KIND
         // of suggestion — a standing decision about the feed, not something the
         // publisher said about this post. The server already put them first and
@@ -19071,10 +19073,11 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           for (const [sign, cls, glyph, verb] of (pinnedOnly.has(tag) ? [] : [['+', 'include', '▲', 'good tag — rescues'], ['-', 'exclude', '▼', 'drops']])) {
             const btn = document.createElement('button');
             btn.type = 'button';
-            btn.className = `feed-tag-filter-sign ${cls}` + (signs[tag] === sign ? ' active' : '');
+            const inherited = !signs[tag] && inheritedSigns[tag] === sign;
+            btn.className = `feed-tag-filter-sign ${cls}` + (signs[tag] === sign ? ' active' : inherited ? ' inherited' : '');
             btn.setAttribute('data-tag-filter-tag', tag);
             btn.setAttribute('data-tag-filter-sign', sign);
-            btn.title = `Feed filter: ${verb} #${tag} posts`;
+            btn.title = `Feed filter: ${verb} #${tag} posts` + (inherited ? ' (set by a folder/global rule; clicking sets it on this feed)' : '');
             btn.setAttribute('aria-label', btn.title);
             btn.setAttribute('aria-pressed', signs[tag] === sign ? 'true' : 'false');
             btn.textContent = glyph;
