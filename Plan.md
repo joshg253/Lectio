@@ -29,13 +29,6 @@ Empty.
 
 ## Tier 4 — real features, not blocking anything today
 
-### Follow-ups
-
-- **Automation emails don't carry the share-email extras** — the 2026-09-25 template gives shares a lead-image hero and an
-  entry-pane meta line (date · author), but only the manual Email route passes `lead_image_url`/`author`/`published`. The instant
-  and on-star automation sends (`services/automation_rules.py`, `_run_on_star_destinations` in main.py) and digests get the new look
-  without them. Pass the same `_email_article_extras` values through (digests: per-item lead image as a thumbnail, if wanted).
-
 ### Needs a decision from Josh before these can be built
 
 Everything below is sized or scoped already — each is waiting on one call only Josh can make, not

@@ -7429,6 +7429,25 @@ def _is_local_dev_feed(feed_url: str) -> bool:
         return False
 
 
+def email_lead_image_url(feed_url: str, entry_id: str, link: str) -> str | None:
+    """The raw article lead image for an email hero or digest thumbnail. The list thumbnail is not a fallback — it can be a cropped
+    panel or a promoted variant — except for YouTube, whose computed "thumbnail" is the full video frame."""
+    lead = lead_image_service.get_cached_lead_image_url(feed_url, entry_id)
+    if not lead and "youtube.com/feeds/videos.xml" in feed_url:
+        lead = lead_image_service.get_cached_entry_thumbnail(feed_url, entry_id, link)
+    return lead or None
+
+
+def email_article_extras(feed_url: str, entry_id: str, entry) -> dict:
+    """What makes a shared article look like the entry pane: its lead image, author, and date. Keyword args for send_article_email."""
+    published = entry_effective_date(entry)
+    return {
+        "lead_image_url": email_lead_image_url(feed_url, entry_id, str(getattr(entry, "link", None) or "")),
+        "author": str(getattr(entry, "authors_str", None) or "").strip() or None,
+        "published": f"{published:%b} {published.day}, {published:%Y}" if published else None,
+    }
+
+
 def _flush_email_batch_for_rule(
     conn: "sqlite3.Connection",
     scope: str,
@@ -7450,18 +7469,27 @@ def _flush_email_batch_for_rule(
     """
     if rule_uid:
         rows = conn.execute(
-            "SELECT id, title, link, feed_title, excerpt, cc_me FROM email_batch_queue WHERE rule_uid=? AND email_to=?",
+            "SELECT id, feed_url, entry_id, title, link, feed_title, excerpt, cc_me FROM email_batch_queue WHERE rule_uid=? AND email_to=?",
             (rule_uid, email_to),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT id, title, link, feed_title, excerpt, cc_me FROM email_batch_queue"
+            "SELECT id, feed_url, entry_id, title, link, feed_title, excerpt, cc_me FROM email_batch_queue"
             " WHERE rule_scope=? AND rule_scope_id=? AND rule_keyword=? AND email_to=?",
             (scope, scope_id, keyword, email_to),
         ).fetchall()
     if not rows:
         return
-    articles = [{"title": r["title"], "link": r["link"], "feed_title": r["feed_title"], "excerpt": r["excerpt"]} for r in rows]
+    articles = [
+        {
+            "title": r["title"],
+            "link": r["link"],
+            "feed_title": r["feed_title"],
+            "excerpt": r["excerpt"],
+            "lead_image_url": email_lead_image_url(r["feed_url"], r["entry_id"], str(r["link"] or "")) if r["entry_id"] else None,
+        }
+        for r in rows
+    ]
     use_cc = cc_addr if any(r["cc_me"] for r in rows) else None
     ok, err = send_digest_email(
         get_resend_api_key(),
@@ -23583,7 +23611,14 @@ def _run_on_star_destinations(feed_url: str, entry_id: str) -> None:
         if email_to and is_email_configured() and link:
             try:
                 ok, err = send_article_email(
-                    get_resend_api_key(), get_resend_from(), email_to, title, feed_title, link, _get_entry_excerpt(entry)
+                    get_resend_api_key(),
+                    get_resend_from(),
+                    email_to,
+                    title,
+                    feed_title,
+                    link,
+                    _get_entry_excerpt(entry),
+                    **email_article_extras(feed_url, entry_id, entry),
                 )
                 if not ok:
                     LOGGER.warning("[on-star] email failed: %s", err)

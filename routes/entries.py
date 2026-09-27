@@ -108,8 +108,6 @@ from main import (
     _RANGE_READ_LIMIT,
     _READER_VIEW_MEDIA_CSS,
     _VALID_THUMB_CROPS,
-    _archived_copy_is_plausible,
-    _reader_copy_is_richer,
     EMAIL_TO_SETTING_KEY,
     LOGGER,
     MAX_MANUAL_TAGS,
@@ -118,6 +116,7 @@ from main import (
     SETTING_INSTAPAPER_PASSWORD,
     SETTING_INSTAPAPER_USERNAME,
     STARRED_ASSET_URL_PREFIX,
+    _archived_copy_is_plausible,
     _autofetch_jobs,
     _bump_unread_counts_generation,
     _entry_query_suffix,
@@ -133,6 +132,7 @@ from main import (
     _move_entry_to_feed,
     _prune_entries,
     _quire_add_entry,
+    _reader_copy_is_richer,
     _resolve_archived_readability_html,
     _resolve_entry_audio_url,
     _resolve_entry_content_html,
@@ -153,10 +153,12 @@ from main import (
     candidate_attachment_links_in_html,
     content_edits,
     delete_entry_read_state,
+    email_article_extras,
     entry_effective_date,
     feed_refresh_service,
     feed_tag_service,
     feed_tags_service_mod,
+    fetch_readability_article,
     filter_feed_urls,
     get_all_reader_feed_urls,
     get_disabled_feed_urls,
@@ -219,7 +221,6 @@ from main import (
     unsubscribed_feed_urls_among,
     upsert_entry_read_state,
     url_guard,
-    fetch_readability_article,
 )
 from services import tenancy
 
@@ -2531,25 +2532,6 @@ def _email_full_body(feed_url: str, entry_id: str, link: str, stored: str) -> st
     return candidate if _reader_copy_is_richer(candidate, stored) else stored
 
 
-def _email_article_extras(feed_url: str, entry_id: str, entry) -> dict:
-    """What makes a shared article look like the entry pane: its lead image, author, and date."""
-    published = entry_effective_date(entry)
-    return {
-        "lead_image_url": email_lead_image_url(feed_url, entry_id, str(entry.link or "")),
-        "author": str(getattr(entry, "authors_str", None) or "").strip() or None,
-        "published": f"{published:%b} {published.day}, {published:%Y}" if published else None,
-    }
-
-
-def email_lead_image_url(feed_url: str, entry_id: str, link: str) -> str | None:
-    """The raw article lead image for an email hero. The list thumbnail is not a fallback — it can be a cropped panel or a promoted
-    variant — except for YouTube, whose computed "thumbnail" is the full video frame."""
-    lead = lead_image_service.get_cached_lead_image_url(feed_url, entry_id)
-    if not lead and "youtube.com/feeds/videos.xml" in feed_url:
-        lead = lead_image_service.get_cached_entry_thumbnail(feed_url, entry_id, link)
-    return lead or None
-
-
 @router.post("/entries/email")
 def email_entry(
     request: Request,
@@ -2621,7 +2603,7 @@ def email_entry(
         cc_addr=cc_addr,
         reply_to=reply_to,
         excerpt_html=excerpt_html,
-        **_email_article_extras(feed_url, entry_id, entry),
+        **email_article_extras(feed_url, entry_id, entry),
     )
     if ok:
         msg = f"Sent to {to_addr}" + (f" (Cc {cc_addr})" if cc_addr else "")
