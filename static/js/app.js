@@ -13251,7 +13251,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           label.className = 'hl-suggestion-label';
           const typeLabel = HL_TYPE_LABELS[r.type] || r.type;
           label.textContent = r.reason === 'no_op'
-            ? `${typeLabel} rule "${r.keyword}" on ${hlScopeLabel('feed', r.feed_url)} does nothing — a + tag only rescues from − tags in the same rule:`
+            ? `${typeLabel} rule "${r.keyword}" on ${hlScopeLabel('feed', r.feed_url)} does nothing — a + tag only rescues from − tags in the same rule (to keep only these tags, use ++ instead):`
             : `${typeLabel} rule "${r.keyword}" on ${hlScopeLabel('feed', r.feed_url)} is already covered by the ${hlScopeLabel('folder', String(r.covering_folder_id))} folder rule${r.type === 'tag_filter' ? 's' : ''}:`;
           card.appendChild(label);
           const btn = document.createElement('button');
@@ -14678,6 +14678,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
 
       window._hlLoadFalseMatches = hlLoadFalseMatches;
       window._hlRenderRules = hlRenderRules;
+      window._hlRefetchAndRender = _hlRefetchAndRender;
       window._hlHideDraft = hlHideDraft;
       window._hlMakeAddDraft = hlMakeAddDraft;
 
@@ -14748,7 +14749,10 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         if (tabName === 'stats') void loadStatsData();
         if (tabName === 'automation') {
           window._hlLoadFalseMatches?.();
+          // Paint the snapshot now, then refetch: rules also change outside this panel (the post-header tag chips create and edit
+          // tag_filter rules), so the page-load snapshot went stale until a reload.
           window._hlRenderRules?.();
+          void window._hlRefetchAndRender?.();
         }
       }
 

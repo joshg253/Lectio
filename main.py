@@ -15919,11 +15919,31 @@ def _inject_source_gallery(content_html, entry, lead_image_url):
         lead_image_service.wait_for_source_html_fetch(entry.link, timeout=0.8)
         _gallery = lead_image_service.extract_source_gallery_urls(entry.link, exclude_urls=_exclude_imgs)
     if _gallery:
+        content_html, _gallery = _fold_body_panel_into_gallery(content_html, entry.link, lead_image_url, _gallery)
         _figs = "".join(
             f'<figure><img src="{html.escape(u, quote=True)}" loading="lazy" referrerpolicy="no-referrer"></figure>' for u in _gallery
         )
         content_html = (content_html or "") + f'<div class="source-gallery">{_figs}</div>'
     return content_html
+
+
+def _fold_body_panel_into_gallery(content_html, entry_link, lead_image_url, gallery: list[str]) -> tuple[str, list[str]]:
+    """Move the body's one image into the gallery when it is one of the source page's panels.
+
+    A webcomic's first panel reaches the body on its own (_inject_webcomic_panel_into_bodyless_entry), and the gallery then holds
+    the rest — so panel 1 rendered full width above a 2-across grid of its siblings (tinyview, 2026-09-28). Only runs when the
+    gallery already has other panels, so a single-panel comic keeps its full-width image."""
+    srcs = [html.unescape(m.group(1)) for m in re.finditer(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\']', content_html or "", re.IGNORECASE)]
+    if len(srcs) != 1:
+        return content_html, gallery
+    full = lead_image_service.extract_source_gallery_urls(entry_link, exclude_urls={lead_image_url} if lead_image_url else set())
+    body_path = urlparse(srcs[0]).path
+    if not any(urlparse(u).path == body_path for u in full):
+        return content_html, gallery
+    stripped, n = re.subn(r"<p\b[^>]*>\s*<img\b[^>]*>\s*</p>", "", content_html, count=1, flags=re.IGNORECASE)
+    if not n:
+        stripped = re.sub(r"<img\b[^>]*>", "", content_html, count=1, flags=re.IGNORECASE)
+    return stripped, full
 
 
 _CAPTION_IMG_TAG_RE = re.compile(r"<img\b[^>]*/?>", re.IGNORECASE | re.DOTALL)

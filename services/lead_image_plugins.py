@@ -1310,6 +1310,9 @@ class TinyviewPlugin:
         host = urlparse(resolved_url).netloc.lower()
         if self._ASSETS in host:
             return -200
+        # The per-post share card (<post>/tinyview_preview.jpg) sits beside the panels on the CDN but isn't one.
+        if urlparse(resolved_url).path.lower().rsplit("/", 1)[-1].startswith("tinyview_preview."):
+            return -200
         if self._CDN in host:
             return 100
         return 0
