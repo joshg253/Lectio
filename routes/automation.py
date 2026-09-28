@@ -198,7 +198,11 @@ def _dry_run_pattern(
     with no cap at all -- exactly _run_now_pattern's own scan -- trading "preview can
     be slow on a huge unread backlog" for "preview mustn't lie about what Run Now will
     actually do." Other rule types sharing this function (highlight, in particular)
-    legitimately care about already-read entries too, so this defaults off."""
+    legitimately care about already-read entries too, so this defaults off.
+
+    With ``unread_only`` the preview still also scans the newest ``max_entries`` READ entries (2026-09-28): an unread-only preview
+    right after a Run Now shows nothing, which says nothing about how well the rule works. Those matches are reported apart
+    (``total_matches_read``, ``read: true`` rows, their own ``result_limit``) so the unread count stays exactly what Run Now does."""
 
     if not keyword:
         if not match_all_if_empty:
@@ -227,9 +231,23 @@ def _dry_run_pattern(
     matches: list[dict] = []
     total_scanned = 0
     total_matches = 0
+    read_matches: list[dict] = []
+    read_scanned = 0
+    total_matches_read = 0
 
     with get_reader() as reader:
         feed_title_map = {str(f.url): feed_display_title(f, str(f.url)) for f in reader.get_feeds()}
+
+        def _match_row(entry, title_text: str) -> dict:
+            published = entry_effective_date(entry)
+            return {
+                "title": title_text,
+                "link": str(entry.link or ""),
+                "feed_url": str(entry.feed_url or ""),
+                "feed_title": feed_title_map.get(str(entry.feed_url or ""), str(entry.feed_url or "")),
+                "published": published.isoformat() if published else None,
+                "read": bool(entry.read),
+            }
 
         def iter_entries():
             if unread_only:
@@ -238,9 +256,13 @@ def _dry_run_pattern(
                 # match this option exists to fix.
                 if feed_urls is None:
                     yield from reader.get_entries(read=False)
+                    yield from reader.get_entries(read=True, limit=max_entries)
                 else:
                     for furl in feed_urls:
                         yield from reader.get_entries(feed=furl, read=False)
+                    per_feed = max(1, max_entries // len(feed_urls))
+                    for furl in feed_urls:
+                        yield from reader.get_entries(feed=furl, read=True, limit=per_feed)
             elif feed_urls is None:
                 yield from reader.get_entries(limit=max_entries)
             elif len(feed_urls) == 1:
@@ -276,27 +298,27 @@ def _dry_run_pattern(
             else:
                 matched = match_fn(title_text) or match_fn(body_text)
 
+            if unread_only and entry.read:
+                read_scanned += 1
+                if matched:
+                    total_matches_read += 1
+                    if len(read_matches) < result_limit:
+                        read_matches.append(_match_row(entry, title_text))
+                continue
             if matched:
                 total_matches += 1
                 if len(matches) < result_limit:
-                    published = entry_effective_date(entry)
-                    matches.append(
-                        {
-                            "title": title_text,
-                            "link": str(entry.link or ""),
-                            "feed_url": str(entry.feed_url or ""),
-                            "feed_title": feed_title_map.get(str(entry.feed_url or ""), str(entry.feed_url or "")),
-                            "published": published.isoformat() if published else None,
-                            "read": bool(entry.read),
-                        }
-                    )
+                    matches.append(_match_row(entry, title_text))
 
     return {
-        "matches": matches,
-        "total_scanned": total_scanned,
+        "matches": matches + read_matches,
+        "total_scanned": total_scanned - read_scanned,
         "total_matches": total_matches,
         "truncated": total_matches > result_limit,
         "unread_only": unread_only,
+        "read_scanned": read_scanned,
+        "total_matches_read": total_matches_read,
+        "read_truncated": total_matches_read > result_limit,
     }
 
 

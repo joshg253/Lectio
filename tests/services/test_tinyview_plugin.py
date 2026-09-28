@@ -40,3 +40,30 @@ def test_a_cached_site_asset_is_bypassed():
 def test_non_tinyview_entries_keep_their_cache():
     p = TinyviewPlugin()
     assert p.should_bypass_cached_url(entry_link="https://example.com/post", cached_url=SKELETON) is False
+
+
+def test_the_share_card_is_chrome_not_a_panel():
+    """<post>/tinyview_preview.jpg sits beside the panels on the CDN and was tiled into the gallery as one."""
+    card = "https://cdn.tinyview.com/they-can-talk/2026/09/20/queen/tinyview_preview.jpg"
+    assert TinyviewPlugin().source_score_adjustment(source_url=ENTRY, attrs={}, resolved_url=card) <= -200
+
+
+def test_the_body_panel_folds_into_the_gallery(monkeypatch):
+    import main
+
+    base = "https://cdn.tinyview.com/they-can-talk/2026/09/20/queen/"
+    full = [base + f"cat_queen{i}.jpg" for i in (1, 2, 3, 4)]
+    monkeypatch.setattr(main.lead_image_service, "extract_source_gallery_urls", lambda link, exclude_urls=None: full)
+    body = f'<p>In her castle.</p><p><img src="{full[0]}" loading="lazy"></p>'
+    html_out, gallery = main._fold_body_panel_into_gallery(body, ENTRY, None, full[1:])
+    assert gallery == full
+    assert html_out == "<p>In her castle.</p>"
+
+
+def test_a_body_image_not_on_the_source_page_stays_put(monkeypatch):
+    import main
+
+    others = ["https://cdn.tinyview.com/x/2.jpg", "https://cdn.tinyview.com/x/3.jpg"]
+    monkeypatch.setattr(main.lead_image_service, "extract_source_gallery_urls", lambda link, exclude_urls=None: others)
+    body = '<p><img src="https://elsewhere.test/hero.jpg"></p>'
+    assert main._fold_body_panel_into_gallery(body, ENTRY, None, others) == (body, others)

@@ -125,17 +125,61 @@ def test_different_regex_flag_never_groups(env):
     assert groups == []
 
 
-def test_deduplicate_and_tag_filter_types_are_never_offered(env):
-    """deduplicate's keyword is a match-method enum; tag_filter's is a
-    +/-tag spec -- joining either as a plain OR-list would corrupt it."""
+def test_deduplicate_type_is_never_offered(env):
+    """deduplicate's keyword is a match-method enum -- joining it as a plain OR-list would corrupt it."""
     fid = _make_folder("Dup")
     _add_rule("folder", str(fid), "slug", type="deduplicate")
     _add_rule("folder", str(fid), "title", type="deduplicate")
-    _add_rule("feed", FEED, "+python", type="tag_filter")
-    _add_rule("feed", FEED, "-rust", type="tag_filter")
     with main.get_meta_connection() as conn:
         groups, _ = main.find_mergeable_rule_groups(conn)
     assert groups == []
+
+
+def test_pure_drop_tag_filters_merge_without_behavior_change(env):
+    fid = _make_folder("Dev")
+    _add_rule("folder", str(fid), "-go", type="tag_filter")
+    _add_rule("folder", str(fid), "-react, -go, -javascript", type="tag_filter")
+    with main.get_meta_connection() as conn:
+        groups, _ = main.find_mergeable_rule_groups(conn)
+    assert len(groups) == 1
+    assert groups[0]["type"] == "tag_filter" and groups[0]["behavior_change"] is False
+
+
+def test_tag_filters_with_different_rescues_are_flagged_as_behavior_change(env):
+    fid = _make_folder("Dev")
+    _add_rule("folder", str(fid), "+python", type="tag_filter")
+    _add_rule("folder", str(fid), "-go", type="tag_filter")
+    with main.get_meta_connection() as conn:
+        groups, _ = main.find_mergeable_rule_groups(conn)
+    assert len(groups) == 1 and groups[0]["behavior_change"] is True
+
+
+def test_disabled_tag_filters_are_neither_offered_nor_merged(env):
+    fid = _make_folder("Dev")
+    _add_rule("folder", str(fid), "-go", type="tag_filter")
+    _add_rule("folder", str(fid), "-rust", type="tag_filter")
+    _add_rule("folder", str(fid), "-java", type="tag_filter", enabled=0)
+    with main.get_meta_connection() as conn:
+        groups, _ = main.find_mergeable_rule_groups(conn)
+        assert len(groups[0]["rules"]) == 2
+        result = main.merge_highlight_rule_group(
+            conn, "tag_filter", "folder", str(fid), "title", False, "yellow", "immediately", "", "", 0, False
+        )
+        rows = {r["keyword"]: r["enabled"] for r in conn.execute("SELECT keyword, enabled FROM highlight_keywords")}
+    assert result is not None and result["keyword"] == "-go, -rust"
+    assert rows == {"-go, -rust": 1, "-java": 0}
+
+
+def test_tag_filter_merge_unions_specs_by_tag(env):
+    fid = _make_folder("Dev")
+    _add_rule("folder", str(fid), "-react, -go, +python", type="tag_filter")
+    _add_rule("folder", str(fid), "-go, python, -python, ++c++", type="tag_filter")
+    with main.get_meta_connection() as conn:
+        result = main.merge_highlight_rule_group(
+            conn, "tag_filter", "folder", str(fid), "title", False, "yellow", "immediately", "", "", 0, False
+        )
+    # Deduped by tag; on a sign conflict the drop wins.
+    assert result is not None and result["keyword"] == "-react, -go, -python, ++c++"
 
 
 def test_partial_color_agreement_forms_a_group_and_leaves_the_singleton_unreported(env):
@@ -437,6 +481,34 @@ def test_feed_rule_with_an_extra_keyword_is_not_flagged(env):
     with main.get_meta_connection() as conn:
         redundant = main.find_redundant_feed_rules(conn)
     assert redundant == []
+
+
+def test_tag_filter_feed_rule_covered_by_folder_drops_is_flagged(env):
+    fid = _make_folder("Dev")
+    _add_feed_to_folder(FEED, fid)
+    _add_rule("folder", str(fid), "-react, -go", type="tag_filter")
+    _add_rule("feed", FEED, "-go", type="tag_filter")
+    with main.get_meta_connection() as conn:
+        redundant = main.find_redundant_feed_rules(conn)
+    assert [(r["feed_url"], r["reason"], r["covering_folder_id"]) for r in redundant] == [(FEED, "covered", fid)]
+
+
+def test_tag_filter_feed_rule_not_covered_when_folder_rule_rescues_more(env):
+    """The folder rule's +python lets go+python posts through that the feed rule would drop."""
+    fid = _make_folder("Dev")
+    _add_feed_to_folder(FEED, fid)
+    _add_rule("folder", str(fid), "-go, +python", type="tag_filter")
+    _add_rule("feed", FEED, "-go", type="tag_filter")
+    with main.get_meta_connection() as conn:
+        assert main.find_redundant_feed_rules(conn) == []
+
+
+def test_rescue_only_tag_filter_feed_rule_is_a_no_op(env):
+    _add_rule("feed", FEED, "+python", type="tag_filter")
+    _add_rule("feed", FEED2, "++python", type="tag_filter")
+    with main.get_meta_connection() as conn:
+        redundant = main.find_redundant_feed_rules(conn)
+    assert [(r["feed_url"], r["reason"]) for r in redundant] == [(FEED, "no_op")]
 
 
 def test_regex_feed_rules_are_never_flagged(env):

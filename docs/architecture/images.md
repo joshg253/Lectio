@@ -306,6 +306,10 @@ broken):
   each panel at a dated path (200) and a bare path (404). Which is real cannot be
   known without fetching, but it can be inferred: prefer the URL carrying the
   entry's own slug. Falls back to first-seen order.
+- **The body's one panel folds into the gallery** (`_fold_body_panel_into_gallery`). The webcomic injector puts panel 1 in the
+  body and the gallery held the rest, so panel 1 rendered full width above a 2-across grid. When the body's single image is one
+  of the source page's gallery images (and there are others), it moves into the grid. Tinyview's per-post
+  `tinyview_preview.jpg` share card is plugin chrome.
 
 ### Two traps worth keeping
 

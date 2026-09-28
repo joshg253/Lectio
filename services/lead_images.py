@@ -3034,6 +3034,25 @@ class LeadImageService:
         except Exception:
             return None
 
+    def _in_open_author_context(self, context_before: str) -> bool:
+        """Whether an author/bio/byline element in the text before an <img> is still open at the img — a headshot.
+
+        One that closed first is a sibling: an ``<address class="article-author">`` before the article figure, or a WordPress
+        ``<span class="byline">…</span>`` a few hundred characters above the post's first image (dorktower.com, 2026-09-28,
+        whose every comic was being skipped as the author's photo)."""
+        for m in self._AUTHOR_CONTEXT_RE.finditer(context_before):
+            tag_start = context_before.rfind("<", 0, m.start())
+            name = re.match(r"<([a-z][a-z0-9]*)", context_before[tag_start:], re.IGNORECASE) if tag_start != -1 else None
+            if not name:
+                return True  # can't tell what element it is: keep treating it as a headshot container
+            tag = re.escape(name.group(1))
+            after = context_before[m.end() :]
+            opens = len(re.findall(rf"<{tag}\b", after, re.IGNORECASE))
+            closes = len(re.findall(rf"</{tag}\s*>", after, re.IGNORECASE))
+            if closes <= opens:
+                return True
+        return False
+
     def _extract_webcomic_panel_image(self, html_text: str, base_url: str, source_url: str) -> str | None:
         """Return the main comic-panel image for a webcomic source page, or None.
 
@@ -3112,17 +3131,8 @@ class LeadImageService:
             # Skip images inside author/speaker/bio sections — they are headshots.
             # Skip images inside site-chrome branding elements (logo, nav header).
             context_before = html_text[max(0, tag_match.start() - 500) : tag_match.start()]
-            _am = self._AUTHOR_CONTEXT_RE.search(context_before)
-            if _am and not _is_featured:
-                # If the matched element was an <address> that closed before reaching
-                # this img, the img is in a sibling element — don't skip it.
-                # (e.g. <address class="article-author">...</address> followed by
-                # <figure><img .../></figure> on the same page.)
-                _tag_start = context_before.rfind("<", 0, _am.start())
-                _in_address = _tag_start != -1 and context_before[_tag_start : _tag_start + 8].lower().startswith("<address")
-                _after = context_before[_am.end() :]
-                if not (_in_address and re.search(r"</address\b", _after, re.IGNORECASE)):
-                    continue
+            if not _is_featured and self._in_open_author_context(context_before):
+                continue
             if not _is_featured and self._SITE_CHROME_CONTEXT_RE.search(context_before):
                 continue
 
@@ -3180,7 +3190,7 @@ class LeadImageService:
         entry_path = urlparse(entry_link).path.rstrip("/").lower()
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             context_before = html_text[max(0, tag_match.start() - 500) : tag_match.start()]
-            if self._AUTHOR_CONTEXT_RE.search(context_before) or self._SITE_CHROME_CONTEXT_RE.search(context_before):
+            if self._in_open_author_context(context_before) or self._SITE_CHROME_CONTEXT_RE.search(context_before):
                 continue
             attrs = self._parse_img_attrs(tag_match.group(0))
             tag_urls: list[str] = []

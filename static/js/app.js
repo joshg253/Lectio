@@ -4525,7 +4525,12 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         if (video.dataset.portraitCapChecked) return;
         video.dataset.portraitCapChecked = '1';
         if (video.height > video.width) {
-          video.style.maxWidth = `min(${cap}px, 100%)`;
+          // Height-bound, not just width-bound: at an 800px cap a 9:16 clip was ~1420px tall, its controls off screen
+          // (tinysnek, 2026-09-28). The explicit aspect-ratio sizes the box before any frame loads (preload="none").
+          video.style.aspectRatio = `${video.width} / ${video.height}`;
+          video.style.width = 'auto';
+          video.style.height = `min(80vh, ${Math.round((cap * video.height) / video.width)}px)`;
+          video.style.maxWidth = '100%';
         }
       });
     }
@@ -12248,10 +12253,13 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           if (ids.length <= 2) return ids.map(id => folderNames[id] || `Folder ${id}`).join(', ');
           return `${ids.length} folders`;
         }
-        if (scope === 'feed') return feedTitles[scopeId] || scopeId;
+        // Once the server's full feed list is in, a URL missing from it is a feed no longer subscribed: the rule is kept (it may
+        // just need re-pointing at the feed's new URL), but its raw URL/file path is no name to show.
+        const feedLabel = u => feedTitles[u] || (hlServerFeedTitles ? '(unsubscribed feed)' : u);
+        if (scope === 'feed') return feedLabel(scopeId);
         if (scope === 'feeds') {
           const urls = String(scopeId || '').split('\n').map(s => s.trim()).filter(Boolean);
-          if (urls.length <= 2) return urls.map(u => feedTitles[u] || u).join(', ');
+          if (urls.length <= 2) return urls.map(feedLabel).join(', ');
           return `${urls.length} feeds`;
         }
         return scope;
@@ -13142,6 +13150,13 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           const typeLabel = HL_TYPE_LABELS[group.type] || group.type;
           label.textContent = `${group.rules.length} ${typeLabel} rules on ${hlScopeLabel(group.scope, group.scope_id)} could be one:`;
           card.appendChild(label);
+          if (group.behavior_change) {
+            // A +/++ tag only acts on its own rule's drops, so merging rules with different ones widens their reach.
+            const warn = document.createElement('div');
+            warn.className = 'hl-suggestion-label';
+            warn.textContent = '⚠ Changes behavior: each rule\'s + tags will start rescuing posts from every other rule\'s − tags (and ++ will apply to all of them).';
+            card.appendChild(warn);
+          }
           const chips = document.createElement('div');
           chips.className = 'hl-suggestion-chips';
           group.rules.forEach((r) => {
@@ -13240,7 +13255,9 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           const label = document.createElement('div');
           label.className = 'hl-suggestion-label';
           const typeLabel = HL_TYPE_LABELS[r.type] || r.type;
-          label.textContent = `${typeLabel} rule "${r.keyword}" on ${hlScopeLabel('feed', r.feed_url)} is already covered by the ${hlScopeLabel('folder', String(r.covering_folder_id))} folder rule:`;
+          label.textContent = r.reason === 'no_op'
+            ? `${typeLabel} rule "${r.keyword}" on ${hlScopeLabel('feed', r.feed_url)} does nothing — a + tag only rescues from − tags in the same rule (to keep only these tags, use ++ instead):`
+            : `${typeLabel} rule "${r.keyword}" on ${hlScopeLabel('feed', r.feed_url)} is already covered by the ${hlScopeLabel('folder', String(r.covering_folder_id))} folder rule${r.type === 'tag_filter' ? 's' : ''}:`;
           card.appendChild(label);
           const btn = document.createElement('button');
           btn.type = 'button';
@@ -13479,7 +13496,16 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           // _dry_run_pattern) -- saying "(read + unread)" when the scan was
           // actually unread-only claimed a broader check than really happened.
           const scopeLabel = data.unread_only ? 'unread entries' : 'entries (read + unread)';
-          if (matches.length === 0) {
+          if (data.unread_only) {
+            // Unread = exactly what Run Now marks (every unread entry checked); the recent read sample shows how well the rule
+            // matches at all, which an unread-only preview right after a run can't.
+            const n = data.total_matches || 0;
+            const r = data.total_matches_read || 0;
+            summary.textContent = n + ' of ' + (data.total_scanned || 0) + ' unread would be marked read' +
+              (data.truncated ? ' (showing first 20)' : '') +
+              ' · ' + r + ' match' + (r === 1 ? '' : 'es') + ' (✓) in the last ' + (data.read_scanned || 0) + ' read' +
+              (data.read_truncated ? ' (showing first 20)' : '');
+          } else if (matches.length === 0) {
             summary.textContent = 'No matches in last ' + (data.total_scanned || 0) + ' ' + scopeLabel;
           } else {
             summary.textContent = data.total_matches + ' match' + (data.total_matches === 1 ? '' : 'es') + (data.truncated ? ' (showing first 20)' : '') + ' in last ' + (data.total_scanned || 0) + ' ' + scopeLabel;
@@ -14666,6 +14692,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
 
       window._hlLoadFalseMatches = hlLoadFalseMatches;
       window._hlRenderRules = hlRenderRules;
+      window._hlRefetchAndRender = _hlRefetchAndRender;
       window._hlHideDraft = hlHideDraft;
       window._hlMakeAddDraft = hlMakeAddDraft;
 
@@ -14736,7 +14763,10 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         if (tabName === 'stats') void loadStatsData();
         if (tabName === 'automation') {
           window._hlLoadFalseMatches?.();
+          // Paint the snapshot now, then refetch: rules also change outside this panel (the post-header tag chips create and edit
+          // tag_filter rules), so the page-load snapshot went stale until a reload.
           window._hlRenderRules?.();
+          void window._hlRefetchAndRender?.();
         }
       }
 
