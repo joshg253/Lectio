@@ -78,8 +78,8 @@ short version:
   YouTube playlists, webhooks) at any scope, with dry-run and run history.
 - **Feed management that expects the real web.** Resilient auto-discovery,
   Page Feeds for feedless sites, dev.to and DeviantArt adapters (adding an
-  artist Watches them; the ✕ on a Watch-feed byline Unwatches), conditional
-  GET, per-feed and per-domain backoff, GUID-churn suppression, feed compare,
+  artist Watches them; on a Watch-feed byline, the name filters to that
+  artist and the ✕ Unwatches), conditional GET, per-feed and per-domain backoff, GUID-churn suppression, feed compare,
   duplicate scanning, unsubscribe that keeps your curation, and an optional
   outbound proxy with FlareSolverr/last-resort-backend escalation for feeds
   behind an anti-bot challenge.

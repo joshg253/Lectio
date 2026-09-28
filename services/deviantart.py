@@ -509,6 +509,9 @@ def _generate_rss_xml(feed_title: str, source_url: str, entries: list[dict]) -> 
     )
 
 
+_WATCH_PAGE_URL = "https://www.deviantart.com/notifications/watch/deviations"
+
+
 def _gallery_page_url(username: str) -> str:
     return f"https://www.deviantart.com/{username}/gallery/all"
 
@@ -534,7 +537,9 @@ def _write_feed_file(conn: sqlite3.Connection, feed_id: str) -> None:
         }
         for r in rows
     ]
-    xml = _generate_rss_xml(str(row["feed_title"]), _gallery_page_url(str(row["username"])), entries)
+    # The combined Watch feed's username is the placeholder "deviantsyouwatch" -- link DA's own Watch page, not a profile.
+    site_url = _WATCH_PAGE_URL if _feed_source(row) == "watch" else _gallery_page_url(str(row["username"]))
+    xml = _generate_rss_xml(str(row["feed_title"]), site_url, entries)
     (_dir() / f"{feed_id}.xml").write_text(xml, encoding="utf-8")
 
 
