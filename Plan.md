@@ -29,6 +29,13 @@ Empty.
 
 ## Tier 4 — real features, not blocking anything today
 
+### Follow-ups
+
+- **Automation emails don't carry the share-email extras** — the 2026-09-25 template gives shares a lead-image hero and an
+  entry-pane meta line (date · author), but only the manual Email route passes `lead_image_url`/`author`/`published`. The instant
+  and on-star automation sends (`services/automation_rules.py`, `_run_on_star_destinations` in main.py) and digests get the new look
+  without them. Pass the same `_email_article_extras` values through (digests: per-item lead image as a thumbnail, if wanted).
+
 ### Needs a decision from Josh before these can be built
 
 Everything below is sized or scoped already — each is waiting on one call only Josh can make, not
@@ -51,8 +58,6 @@ on more investigation. Once answered, each drops into Tier 2 or 3.
   vs. fork a feed-level override) is still open — talk through with Josh before sizing. Once both
   are settled: a lookup-order change to `get_feed_tag_filter_rule` plus one new branch in
   `toggle_feed_tag_filter`, plus the chip-coloring CSS/markup.
-- **Email template overhaul** — Josh wants to revisit the emailed-article template's look. No
-  specifics yet — needs his input on what to change before this can be scoped at all.
 
 ### main.py / index.html breakup — done
 
