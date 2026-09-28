@@ -16678,6 +16678,9 @@ def _inject_tapas_episode_panels(content_html, entry, feed_url: str, lead_image_
     return _panels_into_body(content_html, panels, _is_tapas_series_art)
 
 
+_IMG_TAG_ANY_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+
+
 def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_lead_in_article: bool):
     """Dedup the lead image against the article body. Returns (content_html, lead_image_url).
 
@@ -16793,7 +16796,14 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
                         content_html = _a_opener_m.group(0) + content_html
                     else:
                         content_html = content_html[_close_m.end() :].lstrip() or None
-        if content_html and lead_image_url and (lead_image_url in content_html or lead_image_url in html.unescape(content_html)):
+        # Another copy of the image left in the body means the hero would duplicate it. Only <img> tags count: an <a href> to the
+        # full-size file survives the strip when the author's link spans the image AND the text after it (dorktower.com,
+        # 2026-09-28), and counting it dropped the hero with the body's copy already gone — the comic showed nowhere.
+        if (
+            content_html
+            and lead_image_url
+            and any(lead_image_url in t or lead_image_url in html.unescape(t) for t in _IMG_TAG_ANY_RE.findall(content_html))
+        ):
             lead_image_url = None
     elif lead_image_url and (lead_image_url in content_html or lead_image_url in html.unescape(content_html)):
         _entry_strategy, _, _ = lead_image_service.get_feed_strategy(feed_url)

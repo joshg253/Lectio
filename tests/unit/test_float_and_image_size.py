@@ -230,3 +230,16 @@ def test_animations_are_left_alone():
 
 def test_garbage_bytes_are_passed_through():
     assert main._maybe_shrink_oversized_image(b"not an image", "image/png", 1) == (b"not an image", "image/png")
+
+
+def test_a_link_to_the_lead_left_after_the_strip_keeps_the_hero():
+    """dorktower.com: one <a href=comic.jpg> spans the comic AND the text after it, so the href survives the opener strip.
+    Counting that href as "already in the body" dropped the hero too, and the comic showed nowhere."""
+    lead = "https://www.dorktower.com/files/2026/09/DorkTower2382.jpg"
+    html = (
+        f'<p><a href="{lead}"><img class="aligncenter size-full" src="{lead}" width="1440" height="2439">'
+        "<strong>Charity ride!</strong> Please give.</a></p>"
+    )
+    body, out_lead = main._strip_lead_image_opener(html, lead, "https://www.dorktower.com/feed/", True)
+    assert out_lead == lead
+    assert "<img" not in body
