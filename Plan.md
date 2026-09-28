@@ -10,10 +10,8 @@ decision, real features not blocking anything today, and deliberately-deferred b
 Within a tier, related items are clustered under a bold sub-heading. Two watch-lists (CodeQL,
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
-Tiers 1-3 are empty (2026-09-24): archive fetch status, full-content fetch at ingest, and the `services/dedup.py` consolidation
-shipped; single-post capture quality was deferred to Tier 4. Tier 4 opens with items blocked on a product decision, not on code,
-plus the `/api/*` cluster split (deferred, undecided) and the shared rendering core (not started, deliberately). The main.py
-breakup and route-by-URL-prefix split are done (PRs #329-#342).
+Tiers 1-3 are empty (2026-09-28). Everything left needs a product decision (Tier 4's first list), is undecided (`/api/*` split),
+or is a deliberately unstarted project (shared rendering core, Tier 5).
 
 ## Tier 1 — actively impeding unread-clearing
 
@@ -39,28 +37,13 @@ on more investigation. Once answered, each drops into Tier 2 or 3.
   concrete example page before it can be scoped. (Workflow half superseded: such pages get filed into a related feed by auto-filing.)
 - **Archive fetch-status follow-ups** — `archived_entry.source_fetch_status` exists (2026-09-23) and the pre-column empty archives
   were backfilled by `scripts/probe_empty_archives.py --write` (2026-09-25; reachable-now rows left NULL as recapture candidates).
-  Still needs a call: (a) where to surface it (Saved filter/badge for failed captures?); (c) whether transient kinds
-  (`timeout`/`connect`/`http_5xx`) auto-retry.
-
+  Still needs a call: (a) where to surface it (Saved filter/badge for failed captures?); (b) whether transient kinds
+  (`timeout`/`connect`/`http_5xx`) auto-retry; (c) whether to recapture the 20 reachable-now rows
+  (`scripts/recapture_archived_entries.py`; it rewrites the capture).
 - **Post-header tag-filter chips: what a click does under a folder/global rule** — since 2026-09-27 the chips show a sign set by an
   enabled folder/global rule, lit in the accent color (`get_inherited_tag_filter_signs`, display-only). Clicking one still edits
   (or first creates, disabled) the feed's own rule. Open: should it edit the shared rule instead, or keep forking a feed-level
   override? Once decided: a lookup-order change to `get_feed_tag_filter_rule` plus one branch in `toggle_feed_tag_filter`.
-
-### main.py / index.html breakup — done
-
-`main.py` went from 40,474 lines to 25,757 across three chained projects (2026-09-19 through
-2026-09-22, PRs #329-#342): the Integration routes cluster + automation pipeline + index.html's
-last inline context menus moved out first, then all module-level singleton state moved into
-`state.py`, then all 256 remaining `@app.*` route handlers moved into `routes/*.py` by URL prefix
-(`system`, `compat_{fever,greader,v1}`, `tags`, `highlights`, `automation`, `admin`, `saved`,
-`settings`, `feeds` — the biggest at 61 routes, `entries` — 45 routes, `home` — 3 routes but the
-riskiest). The shared rendering core (`_home_inner`, `list_entries_for_feeds`, `get_entry_detail`,
-`build_reader_page`) deliberately stayed in `main.py` throughout — every route that calls into it
-just imports the functions back. Stage-by-stage detail lives in the PR history, not here; the
-durable gotchas (copied-reference monkeypatch traps, import-ordering rules, the `global`-vs-accessor
-landmine) are in [ARCHITECTURE.md](ARCHITECTURE.md)'s "Route modules" section since they apply to
-any future extraction, not just this one.
 
 ### `/api/*` cluster split — undecided
 
@@ -184,9 +167,7 @@ Give Read Mode a collapsible folder tree first, then add the guard.
 ### Page-weight reduction — optional follow-up
 
 Render-splitting/fragment endpoint for `.pane-posts`/`.pane-entry` — pane-swap currently
-re-renders the full page server-side per fetch (~200KB). Bigger and optional; the other follow-up
-from this same PR (#146) list, entry-pane loading state, shipped 2026-09-23 (loading bar + "still
-loading" hint + fetch timeout, see `docs/architecture/views.md`).
+re-renders the full page server-side per fetch (~200KB). Bigger and optional.
 
 ### Offline actions — stale-action guard
 
@@ -311,10 +292,8 @@ for the precedent) plus a paced walker. Worth a real plan before any code.
 - **Flaky test:** `test_add_route_accepts_blank_keyword` failed once, unreproduced since — likely
   a background thread racing the test DB. Not chased.
 - **Dead code:** the dormant in-app star-mode tree/JS the Read Mode hijack bypasses.
-- **`ruff format`'s opt-in `docstring-code-format`** is inert until (if) `ruff format` itself gets
-  adopted project-wide — that's the real decision, weighed against whatever the original reason
-  was for leaving formatting unenforced (most likely: noise-free diffs). If adopted: one isolated
-  reformat commit, hash added to `.git-blame-ignore-revs`.
+- **`ruff format`'s opt-in `docstring-code-format`** — `ruff format` is enforced (PR #311, gated per touched file); this option
+  is still off. Turning it on would reformat code examples inside docstrings as files get touched. Low value.
 - **Wrap saved-dedup storage access** (Sourcery) — the Saved duplicate scan reads reader's entries
   table directly; a thin storage-layer wrapper would localize breakage if reader's schema evolves.
 - **Hide-* refresh hygiene → `services/feed_hygiene.py`** — `_is_youtube_short`, `_apply_hide_shorts`, `_apply_hide_paywalled`,
